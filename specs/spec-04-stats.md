@@ -1556,6 +1556,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Usage statistics collection and aggregation for AURA OS"
 license = "MIT"
+rust-version = "1.75"  # Match workspace MSRV
 
 [dependencies]
 # Async runtime
@@ -1583,37 +1584,67 @@ hex = "0.4"
 thiserror = "2.0"
 anyhow = "1.0"
 
+# Logging/tracing
+tracing = "0.1"
+
 # Internal crates
 aura-core = { path = "../aura-core" }
 
 [dev-dependencies]
-tokio = { version = "1.41", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "test-util"] }
 tempfile = "3.0"
+proptest = "1.0"  # Optional: property-based testing
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Enforce strict lints
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+# Allow specific lints where justified
+module_name_repetitions = "allow"  # e.g., StatsStats is fine
+missing_errors_doc = "warn"        # Upgrade to deny after initial impl
+missing_panics_doc = "warn"        # Upgrade to deny after initial impl
 ```
 
 ---
 
 ## 12) Implementation Checklist
 
+### Phase 0: Crate Setup & Code Quality Foundation
+- [ ] Create `aura-stats` crate with proper `Cargo.toml`
+- [ ] Add to workspace `Cargo.toml`
+- [ ] Create `src/lib.rs` with module structure
+- [ ] Create `src/error.rs` with `thiserror` error types
+- [ ] Verify `cargo fmt` passes
+- [ ] Verify `cargo clippy --all-targets --all-features -- -D warnings` passes
+
 ### Phase 1: Core Types
-- [ ] Create `aura-stats` crate
 - [ ] Define `StatEvent` and `StatEventKind` types
 - [ ] Define `AggregatedStats` and all sub-types
 - [ ] Implement `merge()` for aggregations
 - [ ] Implement `TimeBucket` and time bucketing logic
+- [ ] Add `#[must_use]` and `const fn` where appropriate
+- [ ] Add doc comments with backticks for technical terms
+- [ ] Add `# Errors` and `# Panics` sections to public functions
 
 ### Phase 2: Storage
-- [ ] Define `StatsStore` trait
+- [ ] Define `StatsStore` trait with full documentation
 - [ ] Add column families to `aura-store`
-- [ ] Implement key encoding/decoding
-- [ ] Implement `RocksStatsStore`
-- [ ] Add retention/cleanup logic
+- [ ] Implement key encoding/decoding (handle truncation safely)
+- [ ] Implement `RocksStatsStore` with proper error context
+- [ ] Add retention/cleanup logic with timeouts
+- [ ] Use `tokio::task::spawn_blocking` for blocking RocksDB calls
 
 ### Phase 3: Collection
-- [ ] Implement `StatsCollector`
-- [ ] Implement `Aggregator`
+- [ ] Implement `StatsCollector` with `tracing` instrumentation
+- [ ] Implement `Aggregator` with `DashMap`
 - [ ] Add batching and flush logic
 - [ ] Add channel-based event ingestion
+- [ ] Handle channel backpressure gracefully (log warnings, don't panic)
 
 ### Phase 4: Integration
 - [ ] Emit token stats from `aura-reasoner`
@@ -1621,35 +1652,52 @@ tempfile = "3.0"
 - [ ] Emit code change stats from fs tools
 - [ ] Emit message stats from `aura-kernel`
 - [ ] Emit turn completion stats
+- [ ] Use `try_send` with logging for non-critical stat emission
 
 ### Phase 5: Query API
-- [ ] Implement `StatsQueryEngine`
+- [ ] Implement `StatsQueryEngine` with timeouts
 - [ ] Add HTTP endpoints to `aura-swarm`
 - [ ] Implement top-N queries
+- [ ] Add proper error responses (not panics)
 
 ### Phase 6: CLI & UI
 - [ ] Add `/stats` command to `aura-cli`
 - [ ] Add stats panel to `aura-terminal`
 - [ ] Update status bar with live tokens
 
-### Phase 7: Testing
+### Phase 7: Testing & Quality Gates
 - [ ] Unit tests for aggregation logic
-- [ ] Integration tests for store
+- [ ] Integration tests for store (using `tempfile`)
+- [ ] Serialization round-trip tests
 - [ ] End-to-end stats collection test
 - [ ] Retention policy tests
+- [ ] Verify all tests are deterministic (no flaky sleeps)
+- [ ] Run full CI checks: `fmt`, `clippy -D warnings`, `test`
 
 ---
 
 ## 13) Acceptance Criteria
 
-### Must Have
+### Code Quality (Must Pass)
+- [ ] `cargo fmt --all -- --check` passes with no changes
+- [ ] `cargo clippy --all-targets --all-features -- -D warnings` passes with zero warnings
+- [ ] `cargo test --all --all-features` passes with zero failures
+- [ ] No `unwrap()` or `expect()` in production code paths
+- [ ] All public items have doc comments
+- [ ] All `Result`-returning functions document errors
+- [ ] No blocking operations on async runtime threads
+- [ ] All external calls have timeouts
+
+### Must Have (Functional)
 - [ ] Token counts tracked per agent and per user
 - [ ] Message counts tracked (inbound/outbound)
 - [ ] Tool execution tracked (name, success, duration)
 - [ ] Lines of code changed tracked (add/remove/net)
-- [ ] Stats persisted to RocksDB
+- [ ] Stats persisted to `RocksDB`
 - [ ] Stats queryable via API
 - [ ] CLI command to view stats
+- [ ] Proper error types with `thiserror`
+- [ ] Structured logging with `tracing`
 
 ### Should Have
 - [ ] Time-bucketed aggregations (minute/hour/day)
@@ -1657,6 +1705,8 @@ tempfile = "3.0"
 - [ ] Breakdown by tool for tool stats
 - [ ] Breakdown by file extension for code stats
 - [ ] Real-time stats in terminal UI
+- [ ] `const fn` for pure computation functions
+- [ ] `#[must_use]` on builder methods
 
 ### Nice to Have
 - [ ] Historical trends visualization
@@ -1664,6 +1714,7 @@ tempfile = "3.0"
 - [ ] Top-N queries (agents, tools)
 - [ ] Alerts when thresholds exceeded
 - [ ] Cost estimation based on token usage
+- [ ] Property-based tests with `proptest`
 
 ---
 
@@ -1716,7 +1767,469 @@ Future web dashboard could display:
 
 ---
 
-## 15) Summary
+## 15) Code Quality & Clippy Compliance
+
+This section defines mandatory code quality standards for `aura-stats`. All code must comply with the project's `rules.md` and pass Clippy with warnings denied.
+
+### 15.1 Non-Negotiables
+
+The following are absolute requirements (from `rules.md`):
+
+- Code must compile in CI with **no warnings**
+- Formatting must be clean (`cargo fmt`)
+- Linting must be clean (`cargo clippy --all-targets --all-features -- -D warnings`)
+- Tests must pass (unit + integration)
+- No `unsafe` Rust unless explicitly approved, isolated, and tested
+- External side effects must be behind explicit boundaries
+
+### 15.2 Clippy Lint Categories
+
+Based on the project's Clippy analysis, watch for these common lint categories:
+
+#### Documentation Lints (`doc_markdown`)
+
+Use backticks for technical terms in doc comments:
+
+```rust
+// ❌ Bad
+/// Store stats in RocksDB using WriteBatch.
+
+// ✅ Good
+/// Store stats in `RocksDB` using `WriteBatch`.
+```
+
+Technical terms requiring backticks:
+- `RocksDB`, `WriteBatch`, `TimeBucket`
+- Field names: `agent_id`, `user_id`, `period_start_ms`
+- Type names when referenced in prose
+
+#### Missing Documentation Lints
+
+All public items must have documentation:
+
+```rust
+// ✅ Required doc comments
+/// Aggregated statistics for a time period.
+///
+/// # Errors
+///
+/// Returns an error if the store connection fails or serialization fails.
+pub async fn store_agent_stats(...) -> anyhow::Result<()>
+
+/// Creates a new stats collector.
+///
+/// # Panics
+///
+/// Panics if `buffer_size` is zero.
+pub fn new(buffer_size: usize) -> Self
+```
+
+#### Const Function Lints (`missing_const_for_fn`)
+
+Mark functions `const` when they don't require runtime:
+
+```rust
+// ❌ Clippy warning
+impl TimeBucket {
+    pub fn as_u8(&self) -> u8 { ... }
+}
+
+// ✅ Good
+impl TimeBucket {
+    #[must_use]
+    pub const fn as_u8(&self) -> u8 { ... }
+}
+```
+
+Candidates in `aura-stats`:
+- `TimeBucket::as_u8()`
+- `TimeBucket::bucket_start_ms()` (if pure computation)
+- Builder pattern methods like `with_retention()`
+- `StatsQueryEngine::new()`
+
+#### Cast Truncation Lints (`cast_possible_truncation`)
+
+Handle potential truncation explicitly:
+
+```rust
+// ❌ Clippy warning
+let duration_ms = instant.elapsed().as_millis() as u64;
+
+// ✅ Good - use try_from with fallback
+let duration_ms = u64::try_from(instant.elapsed().as_millis())
+    .unwrap_or(u64::MAX);
+
+// ✅ Good - use saturating conversion
+let duration_ms = instant.elapsed().as_millis().min(u64::MAX as u128) as u64;
+```
+
+#### Format String Lints (`uninlined_format_args`)
+
+Inline format arguments:
+
+```rust
+// ❌ Clippy warning
+format!("Agent {} has {} tokens", agent_id, tokens)
+
+// ✅ Good
+format!("Agent {agent_id} has {tokens} tokens")
+```
+
+#### Option/Result Handling Lints
+
+Use `map_or` instead of `map().unwrap_or()`:
+
+```rust
+// ❌ Clippy warning
+response.usage.cache_tokens.map(|t| t as u64).unwrap_or(0)
+
+// ✅ Good
+response.usage.cache_tokens.map_or(0, |t| t as u64)
+```
+
+Use `if let` instead of single-arm match:
+
+```rust
+// ❌ Clippy warning
+match event.user_id {
+    Some(uid) => self.update_user_bucket(uid, ...),
+    None => {}
+}
+
+// ✅ Good
+if let Some(uid) = event.user_id {
+    self.update_user_bucket(uid, ...);
+}
+```
+
+#### Derivable Impls (`derivable_impls`)
+
+Use `#[derive(Default)]` when possible:
+
+```rust
+// ❌ Clippy warning
+impl Default for TokenStats {
+    fn default() -> Self {
+        Self {
+            input_tokens: 0,
+            output_tokens: 0,
+            // ... all zeros
+        }
+    }
+}
+
+// ✅ Good
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenStats { ... }
+```
+
+### 15.3 Error Handling Rules
+
+#### No `unwrap()`/`expect()` in Production
+
+```rust
+// ❌ Never in production code
+let stats = self.store.get_agent_stats(id).unwrap();
+
+// ✅ Propagate errors
+let stats = self.store.get_agent_stats(id)?;
+
+// ✅ Or handle explicitly
+let stats = self.store.get_agent_stats(id)
+    .map_err(|e| StatsError::StoreFailed { source: e, agent_id: id })?;
+```
+
+#### Use `thiserror` for Library Errors
+
+```rust
+// aura-stats/src/error.rs
+
+use thiserror::Error;
+
+/// Errors that can occur in stats operations.
+#[derive(Error, Debug)]
+pub enum StatsError {
+    #[error("failed to store stats for agent {agent_id}")]
+    StoreFailed {
+        agent_id: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    
+    #[error("failed to deserialize stats: {0}")]
+    DeserializationFailed(#[from] serde_json::Error),
+    
+    #[error("invalid time range: from={from_ms} to={to_ms}")]
+    InvalidTimeRange { from_ms: u64, to_ms: u64 },
+    
+    #[error("agent not found: {0}")]
+    AgentNotFound(String),
+}
+```
+
+#### Context on Fallible Operations
+
+```rust
+// ✅ Include relevant context
+self.store
+    .store_events(batch)
+    .await
+    .map_err(|e| anyhow::anyhow!(
+        "failed to store {count} events for agent {agent_id}: {e}",
+        count = batch.len(),
+        agent_id = hex::encode(agent_id)
+    ))?;
+```
+
+### 15.4 Async Conventions
+
+#### Never Block the Runtime
+
+```rust
+// ❌ Blocking in async context
+async fn process_batch(&self, batch: &[StatEvent]) -> Result<()> {
+    std::fs::write("debug.log", format!("{:?}", batch))?; // BLOCKS!
+    Ok(())
+}
+
+// ✅ Use tokio's async IO
+async fn process_batch(&self, batch: &[StatEvent]) -> Result<()> {
+    tokio::fs::write("debug.log", format!("{batch:?}")).await?;
+    Ok(())
+}
+
+// ✅ Or spawn blocking for CPU-heavy work
+let aggregated = tokio::task::spawn_blocking(move || {
+    heavy_aggregation_computation(&events)
+}).await??;
+```
+
+#### Timeouts at Boundaries
+
+```rust
+// ✅ All external calls must have timeouts
+use tokio::time::timeout;
+
+let stats = timeout(
+    Duration::from_secs(5),
+    self.store.get_agent_stats(agent_id, bucket, from_ms, to_ms)
+).await
+    .map_err(|_| StatsError::Timeout { operation: "get_agent_stats" })??;
+```
+
+### 15.5 Visibility Rules
+
+Default to `pub(crate)`:
+
+```rust
+// ❌ Over-exposed
+pub struct Aggregator { ... }
+pub fn internal_helper() { ... }
+
+// ✅ Minimal public API
+pub(crate) struct Aggregator { ... }
+pub(crate) fn internal_helper() { ... }
+
+// Only expose what consumers need
+pub use types::{StatEvent, AggregatedStats, StatsQuery, StatsResponse};
+pub use collector::StatsCollector;
+pub use query::StatsQueryEngine;
+```
+
+### 15.6 Type Safety
+
+#### Use Newtypes for IDs
+
+```rust
+// ✅ Don't pass raw bytes - use domain types from aura-core
+use aura_core::{AgentId, UserId};
+
+// If aura-stats needs its own ID types:
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EventId([u8; 16]);
+
+impl EventId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4().into_bytes())
+    }
+}
+```
+
+#### Borrow by Default
+
+```rust
+// ❌ Unnecessary clone
+pub fn apply_event(&mut self, event: StatEvent) { ... }
+
+// ✅ Take reference
+pub fn apply_event(&mut self, event: &StatEvent) { ... }
+```
+
+### 15.7 Logging with Tracing
+
+```rust
+use tracing::{debug, info, warn, error, instrument};
+
+impl StatsCollector {
+    #[instrument(skip(self, batch), fields(batch_size = batch.len()))]
+    async fn process_batch(&self, batch: &mut Vec<StatEvent>) -> anyhow::Result<()> {
+        debug!("processing stats batch");
+        
+        self.store.store_events(batch).await.map_err(|e| {
+            error!(error = %e, "failed to store events");
+            e
+        })?;
+        
+        info!(count = batch.len(), "stats batch processed");
+        batch.clear();
+        Ok(())
+    }
+}
+```
+
+Log levels:
+- `info` — Lifecycle events (collector started, batch flushed)
+- `debug` — Detailed operations (individual events, aggregations)
+- `warn` — Recoverable issues (retention cleanup failed, will retry)
+- `error` — Failures that need attention
+
+### 15.8 Testing Requirements
+
+#### Required Test Coverage
+
+```rust
+// tests/aggregator_tests.rs
+
+#[test]
+fn test_token_stats_aggregation() {
+    let mut stats = AggregatedStats::default();
+    
+    let event = StatEvent {
+        kind: StatEventKind::TokenUsage {
+            model: "claude-sonnet-4-20250514".into(),
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+        },
+        ..test_event()
+    };
+    
+    stats.apply_event(&event);
+    
+    assert_eq!(stats.tokens.input_tokens, 100);
+    assert_eq!(stats.tokens.output_tokens, 50);
+    assert_eq!(stats.tokens.total_tokens, 150);
+    assert_eq!(stats.tokens.model_calls, 1);
+}
+
+#[test]
+fn test_stats_merge() {
+    let mut a = AggregatedStats::default();
+    let mut b = AggregatedStats::default();
+    
+    // ... setup ...
+    
+    a.merge(&b);
+    
+    // Verify merged correctly
+    assert_eq!(a.tokens.total_tokens, expected_total);
+}
+
+#[tokio::test]
+async fn test_serialization_roundtrip() {
+    let stats = create_test_stats();
+    let bytes = serde_json::to_vec(&stats).unwrap();
+    let deserialized: AggregatedStats = serde_json::from_slice(&bytes).unwrap();
+    
+    assert_eq!(stats.tokens.total_tokens, deserialized.tokens.total_tokens);
+}
+```
+
+#### Deterministic Tests
+
+```rust
+// ❌ Non-deterministic (flaky)
+#[tokio::test]
+async fn test_flush_interval() {
+    let collector = StatsCollector::new(...);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(collector.flushed());
+}
+
+// ✅ Deterministic with controlled time
+#[tokio::test]
+async fn test_flush_interval() {
+    tokio::time::pause(); // Control time
+    let collector = StatsCollector::new(...);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(collector.flushed());
+}
+```
+
+#### Use `tempfile` for Storage Tests
+
+```rust
+#[tokio::test]
+async fn test_rocks_stats_store() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = RocksStatsStore::open(temp_dir.path()).unwrap();
+    
+    // ... test ...
+    
+    // temp_dir automatically cleaned up
+}
+```
+
+### 15.9 Pre-Commit Checklist
+
+Before committing `aura-stats` code:
+
+```bash
+# Format
+cargo fmt --all
+
+# Lint (must pass with no warnings)
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Test
+cargo test --all --all-features
+
+# Optional: Check for unused deps
+cargo machete
+```
+
+### 15.10 Module Documentation Template
+
+Each module must document invariants:
+
+```rust
+//! # Stats Aggregator
+//!
+//! Aggregates raw stat events into time-bucketed summaries.
+//!
+//! ## Invariants
+//!
+//! - Events are processed in timestamp order within each bucket
+//! - Aggregations are immutable once the bucket period has passed
+//! - All numeric fields use saturating arithmetic to prevent overflow
+//!
+//! ## Thread Safety
+//!
+//! The aggregator uses `DashMap` for concurrent access. Multiple events
+//! can be processed in parallel as long as they target different buckets.
+//!
+//! ## Failure Modes
+//!
+//! - If storage fails, events remain in the in-memory buffer
+//! - Buffer overflow drops oldest events (logged as warning)
+//! - Deserialization errors skip the affected event (logged as error)
+```
+
+---
+
+## 16) Summary
 
 `aura-stats` provides comprehensive usage tracking for the AURA platform:
 
