@@ -2,7 +2,7 @@
 
 use crate::{
     app::{AppState, NotificationType, PanelFocus},
-    components::MessageRole,
+    components::{CodeBlock, MessageRole},
     App, Theme,
 };
 use ratatui::{
@@ -191,6 +191,85 @@ fn find_next_marker(text: &str) -> Option<(usize, MarkerType, usize)> {
     best
 }
 
+// ============================================================================
+// Code Block Parsing
+// ============================================================================
+
+/// Content segment - either regular text or a code block.
+#[derive(Debug)]
+enum ContentSegment {
+    /// Regular text content
+    Text(String),
+    /// Code block with language and content
+    CodeBlock { language: String, code: String },
+}
+
+/// Parse message content into segments of text and code blocks.
+fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
+    let mut segments = Vec::new();
+    let mut current_text = String::new();
+    let mut in_code_block = false;
+    let mut code_language = String::new();
+    let mut code_content = String::new();
+    
+    for line in content.lines() {
+        let trimmed = line.trim();
+        
+        if trimmed.starts_with("```") {
+            if in_code_block {
+                // End of code block
+                segments.push(ContentSegment::CodeBlock {
+                    language: std::mem::take(&mut code_language),
+                    code: std::mem::take(&mut code_content),
+                });
+                in_code_block = false;
+            } else {
+                // Start of code block
+                // Flush any pending text
+                if !current_text.is_empty() {
+                    segments.push(ContentSegment::Text(std::mem::take(&mut current_text)));
+                }
+                // Extract language from the opening fence
+                code_language = trimmed.trim_start_matches('`').to_string();
+                in_code_block = true;
+            }
+        } else if in_code_block {
+            // Inside a code block
+            if !code_content.is_empty() {
+                code_content.push('\n');
+            }
+            code_content.push_str(line);
+        } else {
+            // Regular text
+            if !current_text.is_empty() {
+                current_text.push('\n');
+            }
+            current_text.push_str(line);
+        }
+    }
+    
+    // Flush remaining content
+    if in_code_block {
+        // Unclosed code block - treat as text
+        if !current_text.is_empty() {
+            current_text.push_str("\n```");
+            current_text.push_str(&code_language);
+        } else {
+            current_text = format!("```{}", code_language);
+        }
+        if !code_content.is_empty() {
+            current_text.push('\n');
+            current_text.push_str(&code_content);
+        }
+    }
+    
+    if !current_text.is_empty() {
+        segments.push(ContentSegment::Text(current_text));
+    }
+    
+    segments
+}
+
 /// Render the full application UI in IRC style.
 pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
     let area = frame.area();
@@ -357,68 +436,117 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         let continuation_width = content_width.saturating_sub(prefix_width);
 
         let mut is_first_output_line = true;
-        for content_line in message.content().lines() {
-            if content_line.is_empty() {
-                // Empty line - just add the prefix or indent
-                if is_first_output_line {
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("[{timestamp}] "),
-                            Style::default().fg(theme.colors.muted),
-                        ),
-                        Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
-                    ]));
-                    is_first_output_line = false;
-                } else {
-                    lines.push(Line::from(""));
+        
+        // Parse content into segments (regular text or code blocks)
+        let segments = parse_content_segments(message.content());
+        
+        for segment in segments {
+            match segment {
+                ContentSegment::Text(text) => {
+                    for content_line in text.lines() {
+                        if content_line.is_empty() {
+                            // Empty line - just add the prefix or indent
+                            if is_first_output_line {
+                                lines.push(Line::from(vec![
+                                    Span::styled(
+                                        format!("[{timestamp}] "),
+                                        Style::default().fg(theme.colors.muted),
+                                    ),
+                                    Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+                                ]));
+                                is_first_output_line = false;
+                            } else {
+                                lines.push(Line::from(""));
+                            }
+                            continue;
+                        }
+
+                        // Word-wrap the content line
+                        let wrap_width = if is_first_output_line { first_line_width } else { continuation_width };
+                        let wrapped = wrap_words(content_line, wrap_width);
+                        
+                        for wrapped_line in wrapped {
+                            // Parse markdown for assistant messages
+                            let base_style = Style::default().fg(msg_color);
+                            let content_spans = if message.role() == MessageRole::Assistant {
+                                parse_markdown_line(&wrapped_line, base_style, theme)
+                            } else {
+                                vec![Span::styled(wrapped_line, base_style)]
+                            };
+                            
+                            if is_first_output_line {
+                                // First line: include timestamp and nick
+                                let mut line_spans = vec![
+                                    Span::styled(
+                                        format!("[{timestamp}] "),
+                                        Style::default().fg(theme.colors.muted),
+                                    ),
+                                    Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+                                    Span::raw(" "),
+                                ];
+                                line_spans.extend(content_spans);
+                                lines.push(Line::from(line_spans));
+                                is_first_output_line = false;
+                            } else {
+                                // Continuation: indent to align with message text
+                                let indent = " ".repeat(prefix_width);
+                                let mut line_spans = vec![Span::raw(indent)];
+                                line_spans.extend(content_spans);
+                                lines.push(Line::from(line_spans));
+                            }
+                        }
+                    }
                 }
-                continue;
-            }
-
-            // Word-wrap the content line
-            let wrap_width = if is_first_output_line { first_line_width } else { continuation_width };
-            let wrapped = wrap_words(content_line, wrap_width);
-
-            // Check if this is a code block marker
-            let is_code_block = content_line.trim().starts_with("```");
-            
-            for wrapped_line in wrapped {
-                // Parse markdown for assistant messages (they may contain formatting)
-                let base_style = Style::default().fg(msg_color);
-                let content_spans = if message.role() == MessageRole::Assistant && !is_code_block {
-                    parse_markdown_line(&wrapped_line, base_style, theme)
-                } else {
-                    vec![Span::styled(wrapped_line, base_style)]
-                };
-                
-                if is_first_output_line {
-                    // First line of first content line: include timestamp and nick
-                    let mut line_spans = vec![
-                        Span::styled(
-                            format!("[{timestamp}] "),
-                            Style::default().fg(theme.colors.muted),
-                        ),
-                        Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
-                        Span::raw(" "),
-                    ];
-                    line_spans.extend(content_spans);
-                    lines.push(Line::from(line_spans));
-                    is_first_output_line = false;
-                } else {
-                    // Continuation: indent to align with message text
+                ContentSegment::CodeBlock { language, code } => {
+                    // Add timestamp/nick if this is the first content
+                    if is_first_output_line {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                format!("[{timestamp}] "),
+                                Style::default().fg(theme.colors.muted),
+                            ),
+                            Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+                        ]));
+                        is_first_output_line = false;
+                    }
+                    
+                    // Add padding before code block
+                    lines.push(Line::from(""));
+                    
+                    // Render the code block with syntax highlighting
+                    let code_block = CodeBlock::new(&language, &code);
+                    let code_lines = code_block.render(theme, continuation_width);
+                    
+                    // Add code block lines with proper indentation
                     let indent = " ".repeat(prefix_width);
-                    let mut line_spans = vec![Span::raw(indent)];
-                    line_spans.extend(content_spans);
-                    lines.push(Line::from(line_spans));
+                    for code_line in code_lines {
+                        let mut line_spans = vec![Span::raw(indent.clone())];
+                        line_spans.extend(code_line.spans.into_iter().map(|s| {
+                            Span::styled(s.content.to_string(), s.style)
+                        }));
+                        lines.push(Line::from(line_spans));
+                    }
+                    
+                    // Add padding after code block
+                    lines.push(Line::from(""));
                 }
             }
         }
     }
 
-    // Scroll to show most recent messages at the bottom
+    // Apply scroll offset: scroll_offset=0 means show newest at bottom
+    // scroll_offset>0 means we want to see older content (scroll up)
     let visible_height = padded.height as usize;
-    let start = lines.len().saturating_sub(visible_height);
-    let visible_lines: Vec<Line> = lines.into_iter().skip(start).collect();
+    let scroll_offset = app.scroll_offset();
+    
+    // Calculate the starting line:
+    // - Without scroll: start from (total - visible_height) to show newest at bottom
+    // - With scroll: subtract scroll_offset to show older content
+    let total_lines = lines.len();
+    let bottom_start = total_lines.saturating_sub(visible_height);
+    let start = bottom_start.saturating_sub(scroll_offset);
+    
+    let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(visible_height).collect();
 
     let paragraph = Paragraph::new(visible_lines);
     frame.render_widget(paragraph, padded);
@@ -853,7 +981,7 @@ fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApprov
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 17;
+    let modal_height = 19;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -874,10 +1002,6 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         )),
         Line::from(Span::styled(
             "/clear     Clear messages",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/new       New session",
             Style::default().fg(theme.colors.foreground),
         )),
         Line::from(Span::styled(
@@ -903,6 +1027,14 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         )),
         Line::from(Span::styled(
             "↑/↓        Navigate / History",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
+            "PgUp/PgDn  Scroll chat history",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
+            "Shift+Mouse Select text to copy",
             Style::default().fg(theme.colors.foreground),
         )),
         Line::from(Span::styled(

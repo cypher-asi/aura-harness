@@ -5,7 +5,7 @@
 use crate::{layout::LayoutMode, renderer, App, Theme};
 use crossterm::{
     cursor::{SetCursorStyle, Show},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -34,6 +34,7 @@ impl Terminal {
         execute!(
             stdout,
             EnterAlternateScreen,
+            EnableMouseCapture,
             Show,
             SetCursorStyle::BlinkingBar
         )?;
@@ -134,6 +135,23 @@ impl Terminal {
                         self.width = width;
                         self.height = height;
                     }
+                    Event::Mouse(mouse) => {
+                        // When Shift is held, don't handle mouse events - let them
+                        // pass through to the terminal for native text selection/copy
+                        if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                            continue;
+                        }
+                        
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                app.scroll_up(3);
+                            }
+                            MouseEventKind::ScrollDown => {
+                                app.scroll_down(3);
+                            }
+                            _ => {}
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -166,7 +184,7 @@ impl Drop for Terminal {
         if let Err(e) = disable_raw_mode() {
             error!("Failed to disable raw mode: {}", e);
         }
-        if let Err(e) = execute!(self.inner.backend_mut(), LeaveAlternateScreen) {
+        if let Err(e) = execute!(self.inner.backend_mut(), DisableMouseCapture, LeaveAlternateScreen) {
             error!("Failed to leave alternate screen: {}", e);
         }
     }
