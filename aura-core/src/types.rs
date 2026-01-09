@@ -25,6 +25,8 @@ pub enum TransactionKind {
     ActionResult,
     /// System-generated transaction
     System,
+    /// Session/context reset marker
+    SessionStart,
 }
 
 /// An immutable transaction input to the system.
@@ -92,6 +94,25 @@ impl Transaction {
             agent_id,
             ts_ms,
             TransactionKind::ActionResult,
+            payload,
+        )
+    }
+
+    /// Create a session start transaction (context reset marker).
+    #[must_use]
+    pub fn session_start(agent_id: AgentId) -> Self {
+        let payload = Bytes::from_static(b"session_start");
+        let tx_id = TxId::from_content(&payload);
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+
+        Self::new(
+            tx_id,
+            agent_id,
+            ts_ms,
+            TransactionKind::SessionStart,
             payload,
         )
     }
@@ -521,7 +542,7 @@ impl Identity {
 /// A tool call request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Tool name (e.g., "fs.ls", "fs.read", "cmd.run")
+    /// Tool name (e.g., "fs_ls", "fs_read", "cmd_run")
     pub tool: String,
     /// Tool arguments (versioned JSON)
     pub args: serde_json::Value,
@@ -537,26 +558,26 @@ impl ToolCall {
         }
     }
 
-    /// Create an fs.ls tool call.
+    /// Create an fs_ls tool call.
     #[must_use]
     pub fn fs_ls(path: impl Into<String>) -> Self {
-        Self::new("fs.ls", serde_json::json!({ "path": path.into() }))
+        Self::new("fs_ls", serde_json::json!({ "path": path.into() }))
     }
 
-    /// Create an fs.read tool call.
+    /// Create an fs_read tool call.
     #[must_use]
     pub fn fs_read(path: impl Into<String>, max_bytes: Option<usize>) -> Self {
         let mut args = serde_json::json!({ "path": path.into() });
         if let Some(max) = max_bytes {
             args["max_bytes"] = serde_json::json!(max);
         }
-        Self::new("fs.read", args)
+        Self::new("fs_read", args)
     }
 
-    /// Create an fs.stat tool call.
+    /// Create an fs_stat tool call.
     #[must_use]
     pub fn fs_stat(path: impl Into<String>) -> Self {
-        Self::new("fs.stat", serde_json::json!({ "path": path.into() }))
+        Self::new("fs_stat", serde_json::json!({ "path": path.into() }))
     }
 }
 
@@ -736,7 +757,7 @@ mod tests {
     #[test]
     fn tool_result_roundtrip() {
         let result =
-            ToolResult::success("fs.read", b"file contents".to_vec()).with_metadata("size", "13");
+            ToolResult::success("fs_read", b"file contents".to_vec()).with_metadata("size", "13");
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, parsed);

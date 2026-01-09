@@ -39,17 +39,17 @@ impl DefaultToolRegistry {
         let mut tools = HashMap::new();
 
         // Filesystem tools
-        tools.insert("fs.ls".into(), fs_ls_schema());
-        tools.insert("fs.read".into(), fs_read_schema());
-        tools.insert("fs.stat".into(), fs_stat_schema());
-        tools.insert("fs.write".into(), fs_write_schema());
-        tools.insert("fs.edit".into(), fs_edit_schema());
+        tools.insert("fs_ls".into(), fs_ls_schema());
+        tools.insert("fs_read".into(), fs_read_schema());
+        tools.insert("fs_stat".into(), fs_stat_schema());
+        tools.insert("fs_write".into(), fs_write_schema());
+        tools.insert("fs_edit".into(), fs_edit_schema());
 
         // Search tools
-        tools.insert("search.code".into(), search_code_schema());
+        tools.insert("search_code".into(), search_code_schema());
 
         // Command tools
-        tools.insert("cmd.run".into(), cmd_run_schema());
+        tools.insert("cmd_run".into(), cmd_run_schema());
 
         Self { tools }
     }
@@ -60,10 +60,10 @@ impl DefaultToolRegistry {
         let mut tools = HashMap::new();
 
         // Only safe read-only tools
-        tools.insert("fs.ls".into(), fs_ls_schema());
-        tools.insert("fs.read".into(), fs_read_schema());
-        tools.insert("fs.stat".into(), fs_stat_schema());
-        tools.insert("search.code".into(), search_code_schema());
+        tools.insert("fs_ls".into(), fs_ls_schema());
+        tools.insert("fs_read".into(), fs_read_schema());
+        tools.insert("fs_stat".into(), fs_stat_schema());
+        tools.insert("search_code".into(), search_code_schema());
 
         Self { tools }
     }
@@ -107,10 +107,10 @@ impl ToolRegistry for DefaultToolRegistry {
 // Tool Schemas
 // ============================================================================
 
-/// Schema for fs.ls tool.
+/// Schema for fs_ls tool.
 fn fs_ls_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "fs.ls".into(),
+        name: "fs_ls".into(),
         description:
             "List directory contents. Returns files and directories with their types and sizes."
                 .into(),
@@ -127,10 +127,10 @@ fn fs_ls_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs.read tool.
+/// Schema for fs_read tool.
 fn fs_read_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "fs.read".into(),
+        name: "fs_read".into(),
         description: "Read the contents of a file. Use this to examine source code, configuration files, and other text files.".into(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -149,10 +149,10 @@ fn fs_read_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs.stat tool.
+/// Schema for fs_stat tool.
 fn fs_stat_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "fs.stat".into(),
+        name: "fs_stat".into(),
         description: "Get file or directory metadata including size, type, and permissions.".into(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -167,10 +167,10 @@ fn fs_stat_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs.write tool.
+/// Schema for fs_write tool.
 fn fs_write_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "fs.write".into(),
+        name: "fs_write".into(),
         description:
             "Write content to a file. Creates the file if it doesn't exist, overwrites if it does."
                 .into(),
@@ -195,10 +195,10 @@ fn fs_write_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs.edit tool.
+/// Schema for fs_edit tool.
 fn fs_edit_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "fs.edit".into(),
+        name: "fs_edit".into(),
         description: "Edit an existing file by replacing a specific portion of text. Use this for targeted modifications.".into(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -221,10 +221,10 @@ fn fs_edit_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for search.code tool.
+/// Schema for search_code tool.
 fn search_code_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "search.code".into(),
+        name: "search_code".into(),
         description: "Search for patterns in code using regex. Useful for finding function definitions, usages, and patterns across files.".into(),
         input_schema: serde_json::json!({
             "type": "object",
@@ -251,10 +251,10 @@ fn search_code_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for cmd.run tool.
+/// Schema for cmd_run tool.
 fn cmd_run_schema() -> ToolDefinition {
     ToolDefinition {
-        name: "cmd.run".into(),
+        name: "cmd_run".into(),
         description: "Run a shell command. Use with caution. Only allowed commands will execute."
             .into(),
         input_schema: serde_json::json!({
@@ -293,10 +293,10 @@ mod tests {
         let tools = registry.list();
 
         assert!(tools.len() >= 7);
-        assert!(registry.has("fs.read"));
-        assert!(registry.has("fs.write"));
-        assert!(registry.has("search.code"));
-        assert!(registry.has("cmd.run"));
+        assert!(registry.has("fs_read"));
+        assert!(registry.has("fs_write"));
+        assert!(registry.has("search_code"));
+        assert!(registry.has("cmd_run"));
     }
 
     #[test]
@@ -304,19 +304,19 @@ mod tests {
         let registry = DefaultToolRegistry::read_only();
         let _tools = registry.list();
 
-        assert!(registry.has("fs.read"));
-        assert!(registry.has("fs.ls"));
-        assert!(registry.has("search.code"));
-        assert!(!registry.has("fs.write"));
-        assert!(!registry.has("cmd.run"));
+        assert!(registry.has("fs_read"));
+        assert!(registry.has("fs_ls"));
+        assert!(registry.has("search_code"));
+        assert!(!registry.has("fs_write"));
+        assert!(!registry.has("cmd_run"));
     }
 
     #[test]
     fn test_get_tool() {
         let registry = DefaultToolRegistry::new();
-        let tool = registry.get("fs.read").unwrap();
+        let tool = registry.get("fs_read").unwrap();
 
-        assert_eq!(tool.name, "fs.read");
+        assert_eq!(tool.name, "fs_read");
         assert!(!tool.description.is_empty());
         assert!(tool.input_schema.get("properties").is_some());
     }
@@ -337,10 +337,10 @@ mod tests {
     #[test]
     fn test_unregister_tool() {
         let mut registry = DefaultToolRegistry::new();
-        assert!(registry.has("cmd.run"));
+        assert!(registry.has("cmd_run"));
 
-        registry.unregister("cmd.run");
-        assert!(!registry.has("cmd.run"));
+        registry.unregister("cmd_run");
+        assert!(!registry.has("cmd_run"));
     }
 
     #[test]

@@ -152,7 +152,7 @@ where
     R: ToolRegistry,
 {
     provider: Arc<P>,
-    _store: Arc<S>,
+    store: Arc<S>,
     executor: ExecutorRouter,
     policy: Policy,
     tool_registry: Arc<R>,
@@ -177,7 +177,7 @@ where
         let policy = Policy::new(PolicyConfig::default());
         Self {
             provider,
-            _store: store,
+            store,
             executor,
             policy,
             tool_registry,
@@ -202,11 +202,75 @@ where
         self.tool_registry.list()
     }
 
-    /// Build initial messages from a user transaction.
-    fn build_initial_messages(tx: &Transaction) -> Vec<Message> {
-        // Extract user prompt from transaction payload
+    /// Build initial messages including conversation history from the store.
+    ///
+    /// Loads up to `context_window` previous entries and converts them to messages,
+    /// then appends the current user prompt. Stops at any `SessionStart` transaction
+    /// to respect context boundaries.
+    fn build_initial_messages(&self, agent_id: AgentId, tx: &Transaction, current_seq: u64) -> Vec<Message> {
+        let mut messages = Vec::new();
+
+        // Load conversation history from store
+        if current_seq > 1 && self.config.context_window > 0 {
+            // Calculate how far back to scan (at most context_window entries, starting from seq 1)
+            let start_seq = current_seq.saturating_sub(self.config.context_window as u64).max(1);
+            let limit = self.config.context_window;
+
+            debug!(
+                agent_id = %agent_id,
+                start_seq = start_seq,
+                limit = limit,
+                "Loading conversation history"
+            );
+
+            if let Ok(entries) = self.store.scan_record(agent_id, start_seq, limit) {
+                // Find the most recent SessionStart to determine context boundary
+                let session_start_idx = entries
+                    .iter()
+                    .rposition(|e| e.tx.kind == aura_core::TransactionKind::SessionStart);
+
+                // Only process entries after the most recent SessionStart (if any)
+                let relevant_entries = if let Some(idx) = session_start_idx {
+                    debug!(session_start_seq = entries[idx].seq, "Found session boundary");
+                    &entries[idx + 1..]
+                } else {
+                    &entries[..]
+                };
+
+                for entry in relevant_entries {
+                    // Convert each record entry to messages
+                    // UserPrompt transactions become user messages
+                    // AgentMsg transactions become assistant messages
+                    match entry.tx.kind {
+                        aura_core::TransactionKind::UserPrompt => {
+                            let content = String::from_utf8_lossy(&entry.tx.payload);
+                            if !content.is_empty() {
+                                messages.push(Message::user(content.to_string()));
+                            }
+                        }
+                        aura_core::TransactionKind::AgentMsg => {
+                            let content = String::from_utf8_lossy(&entry.tx.payload);
+                            if !content.is_empty() {
+                                messages.push(Message::assistant(content.to_string()));
+                            }
+                        }
+                        _ => {
+                            // Skip other transaction types (System, ActionResult, Trigger, SessionStart)
+                        }
+                    }
+                }
+                debug!(
+                    loaded_messages = messages.len(),
+                    "Loaded conversation history"
+                );
+            }
+        }
+
+        // Append current user prompt
         let prompt = String::from_utf8_lossy(&tx.payload);
-        vec![Message::user(prompt.to_string())]
+        messages.push(Message::user(prompt.to_string()));
+
+        messages
     }
 
     /// Process a user transaction through the full turn loop.
@@ -225,11 +289,10 @@ where
         tx: Transaction,
         next_seq: u64,
     ) -> anyhow::Result<TurnResult> {
-        let _ = next_seq; // Reserved for future replay support
         info!("Starting turn processing");
 
         let mut entries = Vec::new();
-        let mut messages = Self::build_initial_messages(&tx);
+        let mut messages = self.build_initial_messages(agent_id, &tx, next_seq);
         let tools = self.build_tools();
 
         let mut total_input_tokens = 0u32;

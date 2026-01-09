@@ -17,12 +17,12 @@ use ratatui::{
 pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
     let area = frame.area();
 
-    // Layout: header + [chat | records] + input line
+    // Layout: header + content panels + input line
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Header (with padding)
-            Constraint::Min(3),    // Content area (chat + records)
+            Constraint::Min(3),    // Content area (Chat panel + optional Record panel)
             Constraint::Length(1), // Input line (with status on right)
         ])
         .split(area);
@@ -30,20 +30,23 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
     // Render header
     render_header(frame, main_chunks[0], theme);
 
-    // Split content area horizontally: chat (65%) | records (35%)
-    let content_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(65), // Chat
-            Constraint::Percentage(35), // Records
-        ])
-        .split(main_chunks[1]);
+    // Render panels based on Record panel visibility
+    if app.record_panel_visible() {
+        // Split content area horizontally: Chat panel (65%) | Record panel (35%)
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(65), // Chat panel
+                Constraint::Percentage(35), // Record panel
+            ])
+            .split(main_chunks[1]);
 
-    // Render chat panel
-    render_chat(frame, content_chunks[0], app, theme);
-
-    // Render records panel
-    render_records(frame, content_chunks[1], app, theme);
+        render_chat_panel(frame, content_chunks[0], app, theme);
+        render_record_panel(frame, content_chunks[1], app, theme);
+    } else {
+        // Only Chat panel (full width)
+        render_chat_panel(frame, main_chunks[1], app, theme);
+    }
 
     // Render input line with status on right
     render_input(frame, main_chunks[2], app, theme);
@@ -62,8 +65,8 @@ fn render_header(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(header), area);
 }
 
-/// Render the chat panel.
-fn render_chat(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// Render the Chat panel.
+fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let border_color = if is_focused {
         theme.colors.primary
@@ -79,6 +82,14 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    // Add padding: 2 chars left/right, 1 line top
+    let padded = Rect {
+        x: inner.x.saturating_add(2),
+        y: inner.y.saturating_add(1),
+        width: inner.width.saturating_sub(4),
+        height: inner.height.saturating_sub(1),
+    };
+
     let messages = app.messages();
 
     if messages.is_empty() {
@@ -86,17 +97,18 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         let welcome = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  Type a message to start chatting, or /help for commands.",
+                "Type a message to start chatting, or /help for commands.",
                 Style::default().fg(theme.colors.muted),
             )),
         ];
         let paragraph = Paragraph::new(welcome);
-        frame.render_widget(paragraph, inner);
+        frame.render_widget(paragraph, padded);
         return;
     }
 
-    // Build IRC-style message lines
+    // Build IRC-style message lines with proper word wrapping
     let mut lines: Vec<Line> = Vec::new();
+    let content_width = padded.width as usize;
 
     for message in messages.iter().skip(app.scroll_offset()) {
         // Format: [HH:MM:SS] <NICK> message
@@ -111,39 +123,152 @@ fn render_chat(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         // Use the message's stored timestamp
         let timestamp = message.timestamp_local();
 
-        for (i, content_line) in message.content().lines().enumerate() {
-            if i == 0 {
-                // First line with timestamp and <nick>
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("[{timestamp}] "),
-                        Style::default().fg(theme.colors.muted),
-                    ),
-                    Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
-                    Span::raw(" "),
-                    Span::styled(content_line, Style::default().fg(msg_color)),
-                ]));
-            } else {
-                // Continuation lines (indented to align with message text)
-                lines.push(Line::from(Span::styled(
-                    format!("                {content_line}"),
-                    Style::default().fg(msg_color),
-                )));
+        // Calculate prefix width: "[HH:MM:SS] <NICK> " 
+        // "[HH:MM:SS] " = 11 chars, "<NICK>" = nick.len() + 2 chars, " " = 1 char
+        let prefix_width = 11 + nick.len() + 2 + 1; // e.g., "[12:34:56] <YOU> " = 17, "<AURA> " = 18
+
+        // Available width for message content on first line
+        let first_line_width = content_width.saturating_sub(prefix_width);
+        // Continuation lines are indented to align with message text
+        let continuation_width = content_width.saturating_sub(prefix_width);
+
+        let mut is_first_output_line = true;
+        for content_line in message.content().lines() {
+            if content_line.is_empty() {
+                // Empty line - just add the prefix or indent
+                if is_first_output_line {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("[{timestamp}] "),
+                            Style::default().fg(theme.colors.muted),
+                        ),
+                        Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+                    ]));
+                    is_first_output_line = false;
+                } else {
+                    lines.push(Line::from(""));
+                }
+                continue;
+            }
+
+            // Word-wrap the content line
+            let wrap_width = if is_first_output_line { first_line_width } else { continuation_width };
+            let wrapped = wrap_words(content_line, wrap_width);
+
+            for wrapped_line in wrapped {
+                if is_first_output_line {
+                    // First line of first content line: include timestamp and nick
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("[{timestamp}] "),
+                            Style::default().fg(theme.colors.muted),
+                        ),
+                        Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+                        Span::raw(" "),
+                        Span::styled(wrapped_line, Style::default().fg(msg_color)),
+                    ]));
+                    is_first_output_line = false;
+                } else {
+                    // Continuation: indent to align with message text
+                    let indent = " ".repeat(prefix_width);
+                    lines.push(Line::from(vec![
+                        Span::raw(indent),
+                        Span::styled(wrapped_line, Style::default().fg(msg_color)),
+                    ]));
+                }
             }
         }
     }
 
     // Scroll to show most recent messages at the bottom
-    let visible_height = inner.height as usize;
+    let visible_height = padded.height as usize;
     let start = lines.len().saturating_sub(visible_height);
     let visible_lines: Vec<Line> = lines.into_iter().skip(start).collect();
 
     let paragraph = Paragraph::new(visible_lines);
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, padded);
 }
 
-/// Render the records panel.
-fn render_records(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// Wrap text at word boundaries to fit within max_width.
+/// Returns a vector of lines, each fitting within the width.
+fn wrap_words(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0;
+
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+
+        if current_width == 0 {
+            // First word on line
+            if word_len > max_width {
+                // Word is longer than max_width, need to break it
+                let mut chars = word.chars().peekable();
+                while chars.peek().is_some() {
+                    let chunk: String = chars.by_ref().take(max_width).collect();
+                    if chars.peek().is_some() {
+                        // More chars remaining, push this chunk as complete line
+                        lines.push(chunk);
+                    } else {
+                        // Last chunk, make it the current line
+                        current_width = chunk.chars().count();
+                        current_line = chunk;
+                    }
+                }
+            } else {
+                current_line = word.to_string();
+                current_width = word_len;
+            }
+        } else if current_width + 1 + word_len <= max_width {
+            // Word fits on current line with space
+            current_line.push(' ');
+            current_line.push_str(word);
+            current_width += 1 + word_len;
+        } else {
+            // Word doesn't fit, start new line
+            lines.push(std::mem::take(&mut current_line));
+            current_width = 0;
+
+            if word_len > max_width {
+                // Word is longer than max_width, need to break it
+                let mut chars = word.chars().peekable();
+                while chars.peek().is_some() {
+                    let chunk: String = chars.by_ref().take(max_width).collect();
+                    if chars.peek().is_some() {
+                        // More chars remaining, push this chunk as complete line
+                        lines.push(chunk);
+                    } else {
+                        // Last chunk, make it the current line
+                        current_width = chunk.chars().count();
+                        current_line = chunk;
+                    }
+                }
+            } else {
+                current_line = word.to_string();
+                current_width = word_len;
+            }
+        }
+    }
+
+    // Don't forget the last line
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    // If no lines were created (empty or whitespace-only input), return single empty line
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
+
+/// Render the Record panel.
+fn render_record_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
     let border_color = if is_focused {
         theme.colors.primary
@@ -242,14 +367,28 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // Build status indicator for right side
     let status = app.status();
     let is_ready = status == "Ready";
-    let status_color = if is_ready {
-        theme.colors.primary
+    let is_thinking = status.contains("Thinking");
+
+    // Determine status style: Ready = cyan, Thinking = gray with spinner, other = warning
+    let status_style = if is_ready {
+        Style::default().fg(theme.colors.primary)
+    } else if is_thinking {
+        Style::default().fg(theme.colors.muted)
     } else {
-        theme.colors.warning
+        Style::default().fg(theme.colors.warning)
     };
-    let status_icon = if is_ready { "●" } else { "◐" };
+
+    // Use spinner for thinking, solid dot for ready, half-moon for other
+    let status_icon = if is_ready {
+        "●"
+    } else if is_thinking {
+        app.spinner_char()
+    } else {
+        "◐"
+    };
     let status_text = format!("{} {}", status_icon, status);
-    let status_len = status_text.len() as u16;
+    // Use char count, not byte length (unicode chars like ⠙ are multi-byte)
+    let status_len = status_text.chars().count() as u16;
 
     // Calculate available width for input (leave space for status on right)
     let input_width = area.width.saturating_sub(status_len + 2);
@@ -261,10 +400,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         width: status_len,
         height: 1,
     };
-    let status_line = Line::from(Span::styled(
-        &status_text,
-        Style::default().fg(status_color),
-    ));
+    let status_line = Line::from(Span::styled(&status_text, status_style));
     frame.render_widget(Paragraph::new(status_line), status_area);
 
     // Build input line (no fake cursor - we use the real terminal cursor)
@@ -282,11 +418,14 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 
     frame.render_widget(Paragraph::new(content), input_area);
 
-    // Position the native terminal cursor (it blinks automatically)
-    // Prompt "> " is 2 chars, then cursor_pos chars into the input
-    let cursor_x = area.x + 2 + cursor_pos as u16;
-    let cursor_y = area.y;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    // Only show the blinking cursor when ready for input (not during thinking)
+    if is_ready {
+        // Position the native terminal cursor (it blinks automatically)
+        // Prompt "> " is 2 chars, then cursor_pos chars into the input
+        let cursor_x = area.x + 2 + cursor_pos as u16;
+        let cursor_y = area.y;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 /// Render overlay elements (modals, help).
@@ -353,7 +492,7 @@ fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApprov
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 14;
+    let modal_height = 17;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -369,7 +508,15 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
             Style::default().fg(theme.colors.foreground),
         )),
         Line::from(Span::styled(
+            "/new       New session (reset context)",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
             "/clear     Clear messages",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
+            "/record    Toggle Record panel",
             Style::default().fg(theme.colors.foreground),
         )),
         Line::from(Span::styled(

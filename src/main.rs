@@ -401,6 +401,36 @@ where
             UiEvent::Clear => {
                 let _ = commands.send(UiCommand::ClearConversation).await;
             }
+            UiEvent::NewSession => {
+                debug!("New session requested, seq={}", seq);
+
+                // Create a SessionStart transaction to mark the context boundary
+                let session_tx = Transaction::session_start(agent_id);
+
+                // Enqueue and persist the session start transaction
+                if let Err(e) = store.enqueue_tx(&session_tx) {
+                    error!(error = %e, "Failed to enqueue session start");
+                } else if let Ok(Some((inbox_seq, tx))) = store.dequeue_tx(agent_id) {
+                    // Create a minimal record entry for the session start
+                    let context_hash = compute_context_hash(seq, &tx);
+                    let entry = aura_core::RecordEntry::builder(seq, tx.clone())
+                        .context_hash(context_hash)
+                        .build();
+
+                    if let Err(e) = store.append_entry_atomic(agent_id, seq, &entry, inbox_seq) {
+                        error!(error = %e, "Failed to persist session start record");
+                    } else {
+                        debug!(seq = seq, "Session start record persisted");
+                        // Send to UI
+                        send_record_to_ui(&commands, seq, &tx, &entry).await;
+                        seq += 1;
+                    }
+                }
+
+                let _ = commands
+                    .send(UiCommand::SetStatus("Ready".to_string()))
+                    .await;
+            }
         }
     }
 
@@ -423,6 +453,7 @@ async fn send_record_to_ui(
         TransactionKind::System => ("System".to_string(), "SYSTEM".to_string()),
         TransactionKind::AgentMsg => ("Response".to_string(), "AURA".to_string()),
         TransactionKind::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
+        TransactionKind::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
     };
 
     // Extract message content from payload
@@ -554,6 +585,7 @@ async fn load_existing_records(
             TransactionKind::System => ("System".to_string(), "SYSTEM".to_string()),
             TransactionKind::AgentMsg => ("Response".to_string(), "AURA".to_string()),
             TransactionKind::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
+            TransactionKind::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
         };
 
         // Extract message content from payload

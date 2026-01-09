@@ -38,10 +38,10 @@ impl ToolExecutor {
         let tool = &tool_call.tool;
 
         // Check if tool is enabled
-        if tool.starts_with("fs.") && !self.config.enable_fs {
+        if tool.starts_with("fs_") && !self.config.enable_fs {
             return Err(ToolError::ToolDisabled(tool.clone()));
         }
-        if tool.starts_with("cmd.") && !self.config.enable_commands {
+        if tool.starts_with("cmd_") && !self.config.enable_commands {
             return Err(ToolError::ToolDisabled(tool.clone()));
         }
 
@@ -49,13 +49,13 @@ impl ToolExecutor {
         let sandbox = Sandbox::new(&ctx.workspace_root)?;
 
         match tool.as_str() {
-            "fs.ls" => {
+            "fs_ls" => {
                 let path = tool_call.args["path"]
                     .as_str()
                     .ok_or_else(|| ToolError::InvalidArguments("missing 'path' argument".into()))?;
                 fs_tools::fs_ls(&sandbox, path)
             }
-            "fs.read" => {
+            "fs_read" => {
                 let path = tool_call.args["path"]
                     .as_str()
                     .ok_or_else(|| ToolError::InvalidArguments("missing 'path' argument".into()))?;
@@ -67,16 +67,16 @@ impl ToolExecutor {
                 let max_bytes = max_bytes.min(self.config.max_read_bytes);
                 fs_tools::fs_read(&sandbox, path, max_bytes)
             }
-            "fs.stat" => {
+            "fs_stat" => {
                 let path = tool_call.args["path"]
                     .as_str()
                     .ok_or_else(|| ToolError::InvalidArguments("missing 'path' argument".into()))?;
                 fs_tools::fs_stat(&sandbox, path)
             }
-            "cmd.run" => {
+            "cmd_run" => {
                 // Commands are disabled by default and require explicit allowlisting
                 if !self.config.enable_commands {
-                    return Err(ToolError::ToolDisabled("cmd.run".into()));
+                    return Err(ToolError::ToolDisabled("cmd_run".into()));
                 }
 
                 let program = tool_call.args["program"].as_str().ok_or_else(|| {
@@ -93,7 +93,7 @@ impl ToolExecutor {
                 // For MVP, we don't implement command execution
                 // This would require careful timeout handling and output capture
                 warn!("Command execution not yet implemented");
-                Err(ToolError::ToolDisabled("cmd.run (not implemented)".into()))
+                Err(ToolError::ToolDisabled("cmd_run (not implemented)".into()))
             }
             _ => Err(ToolError::UnknownTool(tool.clone())),
         }
@@ -220,7 +220,7 @@ mod tests {
         let (ctx, _dir) = create_test_context();
 
         let executor = ToolExecutor::with_defaults();
-        let tool_call = ToolCall::new("cmd.run", serde_json::json!({"program": "ls"}));
+        let tool_call = ToolCall::new("cmd_run", serde_json::json!({"program": "ls"}));
         let action = Action::delegate_tool(&tool_call);
 
         let effect = executor.execute(&ctx, &action).await.unwrap();

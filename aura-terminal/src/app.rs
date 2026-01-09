@@ -1,7 +1,7 @@
 //! Application state machine for the terminal UI.
 //!
 //! Manages the overall application state, conversation history,
-//! and coordinates between input handling and rendering.
+//! panels (Chat and Record), and coordinates between input handling and rendering.
 
 use crate::{
     components::{Message, MessageRole, ToolCard, ToolStatus},
@@ -86,6 +86,10 @@ pub struct App {
     notification: Option<(String, NotificationType)>,
     /// Which panel has focus
     focus: PanelFocus,
+    /// Whether the Record panel is visible
+    record_panel_visible: bool,
+    /// Animation frame counter for spinners
+    animation_frame: usize,
     /// Kernel records list
     records: VecDeque<RecordSummary>,
     /// Selected record index in the list
@@ -127,6 +131,8 @@ impl App {
             streaming_content: String::new(),
             notification: None,
             focus: PanelFocus::default(),
+            record_panel_visible: true,
+            animation_frame: 0,
             records: VecDeque::new(),
             selected_record: 0,
             records_scroll: 0,
@@ -223,6 +229,19 @@ impl App {
     #[must_use]
     pub const fn focus(&self) -> PanelFocus {
         self.focus
+    }
+
+    /// Check if the Record panel is visible.
+    #[must_use]
+    pub const fn record_panel_visible(&self) -> bool {
+        self.record_panel_visible
+    }
+
+    /// Get the current spinner character for animations.
+    #[must_use]
+    pub fn spinner_char(&self) -> &'static str {
+        const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        SPINNER_FRAMES[self.animation_frame % SPINNER_FRAMES.len()]
     }
 
     /// Get the records list.
@@ -327,8 +346,8 @@ impl App {
 
     /// Handle key in normal mode.
     fn handle_normal_key(&mut self, key: KeyEvent) -> KeyResult {
-        // Tab switches focus between panels
-        if key.code == KeyCode::Tab {
+        // Tab switches focus between panels (only if Record panel is visible)
+        if key.code == KeyCode::Tab && self.record_panel_visible {
             self.focus = match self.focus {
                 PanelFocus::Chat => PanelFocus::Records,
                 PanelFocus::Records => PanelFocus::Chat,
@@ -511,6 +530,30 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
+            "record" | "r" => {
+                self.record_panel_visible = !self.record_panel_visible;
+                // If closing panel while it has focus, switch to chat
+                if !self.record_panel_visible && self.focus == PanelFocus::Records {
+                    self.focus = PanelFocus::Chat;
+                }
+            }
+            "new" | "n" => {
+                // Clear local UI state
+                self.messages.clear();
+                self.tools.clear();
+                self.records.clear();
+                self.scroll_offset = 0;
+                self.selected_record = 0;
+                self.streaming_content.clear();
+                // Notify kernel to reset context
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::NewSession);
+                }
+                self.notification = Some((
+                    "New session started".to_string(),
+                    NotificationType::Success,
+                ));
+            }
             _ => {
                 self.notification = Some((
                     format!("Unknown command: /{cmd}. Type /help for available commands."),
@@ -627,6 +670,9 @@ impl App {
 
     /// Process pending updates from the command channel.
     pub fn tick(&mut self) {
+        // Advance animation frame
+        self.animation_frame = self.animation_frame.wrapping_add(1);
+
         // Process any pending commands from the channel
         // We need to take the receiver temporarily to avoid borrow issues
         if let Some(mut rx) = self.command_rx.take() {

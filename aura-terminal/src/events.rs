@@ -35,6 +35,9 @@ pub enum UiEvent {
 
     /// User cancelled the current operation
     Cancel,
+
+    /// User requested a new session (reset context)
+    NewSession,
 }
 
 /// Commands sent from the application logic to the UI.
