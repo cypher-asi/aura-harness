@@ -53,6 +53,7 @@ impl Theme {
                 success: Color::Green,
                 warning: Color::Yellow,
                 error: Color::Red,
+                pending: Color::Rgb(136, 136, 136),
                 muted: Color::Rgb(136, 136, 136),
             },
         )
@@ -71,6 +72,7 @@ impl Theme {
                 success: Color::Rgb(0, 255, 0),
                 warning: Color::Rgb(0, 200, 0),
                 error: Color::Rgb(200, 0, 0),
+                pending: Color::Rgb(0, 180, 0),
                 muted: Color::Rgb(0, 100, 0),
             },
         )
@@ -89,6 +91,7 @@ impl Theme {
                 success: Color::Rgb(57, 255, 20),   // neon green
                 warning: Color::Rgb(255, 230, 109), // sunset yellow
                 error: Color::Rgb(255, 20, 147),    // deep pink
+                pending: Color::Rgb(180, 100, 255), // lavender
                 muted: Color::Rgb(136, 136, 136),
             },
         )
@@ -128,23 +131,37 @@ impl Default for Theme {
 }
 
 /// Color palette for a theme.
+///
+/// # Approved Colors (Cyber Theme)
+///
+/// | Color       | Hex Code | Usage                              |
+/// |-------------|----------|------------------------------------|
+/// | Cyan/Green  | #01f4cb  | Success states, neon accents       |
+/// | Blue        | #01a4f4  | Primary accent, info, provisioning |
+/// | Purple      | #cb01f4  | Pending states, secondary accent   |
+/// | Red         | #f4012a  | Errors, danger                     |
+/// | White       | #ffffff  | Primary text                       |
+/// | Gray        | #888888  | Muted text, secondary info         |
+/// | Black       | #0d0d0d  | Background                         |
 #[derive(Debug, Clone)]
 pub struct ThemeColors {
-    /// Background color
+    /// Background color (#0d0d0d black)
     pub background: Color,
-    /// Foreground (text) color
+    /// Foreground/primary text color (#ffffff white)
     pub foreground: Color,
-    /// Primary accent color (AI responses)
+    /// Primary accent color - blue (#01a4f4)
     pub primary: Color,
-    /// Secondary accent color (tool calls)
+    /// Secondary accent color - purple (#cb01f4)
     pub secondary: Color,
-    /// Success color
+    /// Success color - cyan/green (#01f4cb)
     pub success: Color,
-    /// Warning color
+    /// Warning/info color - blue (#01a4f4)
     pub warning: Color,
-    /// Error color
+    /// Error/danger color - red (#f4012a)
     pub error: Color,
-    /// Muted text color
+    /// Pending state color - purple (#cb01f4)
+    pub pending: Color,
+    /// Muted text color - gray (#888888)
     pub muted: Color,
 }
 
@@ -210,5 +227,112 @@ mod tests {
 
         assert_eq!(theme.border_style, BorderStyle::Double);
         assert!(!theme.show_timestamps);
+    }
+
+    // ========================================================================
+    // Additional Theme Tests
+    // ========================================================================
+
+    #[test]
+    fn test_all_named_themes() {
+        let cyber = Theme::by_name("cyber");
+        let matrix = Theme::by_name("matrix");
+        let synthwave = Theme::by_name("synthwave");
+        let minimal = Theme::by_name("minimal");
+
+        assert_eq!(cyber.name, "cyber");
+        assert_eq!(matrix.name, "matrix");
+        assert_eq!(synthwave.name, "synthwave");
+        assert_eq!(minimal.name, "minimal");
+    }
+
+    #[test]
+    fn test_theme_case_insensitive() {
+        let theme1 = Theme::by_name("MATRIX");
+        let theme2 = Theme::by_name("Matrix");
+        let theme3 = Theme::by_name("matrix");
+
+        assert_eq!(theme1.name, "matrix");
+        assert_eq!(theme2.name, "matrix");
+        assert_eq!(theme3.name, "matrix");
+    }
+
+    #[test]
+    fn test_theme_default() {
+        let theme = Theme::default();
+        assert_eq!(theme.name, "cyber");
+    }
+
+    #[test]
+    fn test_all_border_styles() {
+        let plain = BorderStyle::Plain;
+        let double = BorderStyle::Double;
+        let rounded = BorderStyle::Rounded;
+        let heavy = BorderStyle::Heavy;
+        let ascii = BorderStyle::Ascii;
+
+        // Just verify they convert without panicking
+        let _ = plain.to_border_type();
+        let _ = double.to_border_type();
+        let _ = rounded.to_border_type();
+        let _ = heavy.to_border_type();
+        let _ = ascii.to_border_type();
+    }
+
+    #[test]
+    fn test_theme_colors_are_set() {
+        let theme = Theme::cyber();
+
+        // Verify all colors are non-default (not black for everything)
+        // This is a basic sanity check
+        assert_ne!(theme.colors.primary, theme.colors.error);
+        assert_ne!(theme.colors.success, theme.colors.error);
+    }
+
+    #[test]
+    fn test_custom_theme() {
+        let colors = ThemeColors {
+            background: Color::Black,
+            foreground: Color::White,
+            primary: Color::Blue,
+            secondary: Color::Cyan,
+            success: Color::Green,
+            warning: Color::Yellow,
+            error: Color::Red,
+            pending: Color::Magenta,
+            muted: Color::Gray,
+        };
+
+        let theme = Theme::new("custom", colors);
+        assert_eq!(theme.name, "custom");
+        assert!(theme.show_icons);
+        assert!(theme.animate_spinners);
+        assert!(theme.show_timestamps);
+    }
+
+    #[test]
+    fn test_matrix_theme_is_green() {
+        let theme = Theme::matrix();
+        // Matrix theme should have green colors
+        match theme.colors.primary {
+            Color::Rgb(r, g, b) => {
+                // Green should be the dominant color
+                assert!(g > r && g > b);
+            }
+            _ => panic!("Expected RGB color for matrix theme"),
+        }
+    }
+
+    #[test]
+    fn test_synthwave_has_distinct_colors() {
+        let theme = Theme::synthwave();
+        // Synthwave should have distinct primary and secondary colors
+        assert_ne!(theme.colors.primary, theme.colors.secondary);
+    }
+
+    #[test]
+    fn test_border_style_default() {
+        let style = BorderStyle::default();
+        assert_eq!(style, BorderStyle::Rounded);
     }
 }

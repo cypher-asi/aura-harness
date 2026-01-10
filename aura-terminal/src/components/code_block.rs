@@ -1,42 +1,58 @@
 //! Code block component with syntax highlighting.
 //!
 //! Renders fenced code blocks with language labels, borders, and basic syntax highlighting.
+//!
+//! Uses only the approved color palette from the style guide:
+//! - Cyan (#01f4cb): Strings, types
+//! - Blue (#01a4f4): Functions, numbers
+//! - Purple (#cb01f4): Keywords
+//! - Red (#f4012a): Operators
+//! - Gray (#888888): Comments
 
-use crate::themes::Theme;
+use crate::themes::{Theme, BLUE, CYAN, GRAY, PURPLE, RED};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
 /// Language-specific syntax highlighting configuration.
+///
+/// Uses the approved color palette:
+/// - Keywords: Purple (#cb01f4)
+/// - Strings: Cyan (#01f4cb)
+/// - Comments: Gray (#888888)
+/// - Numbers: Blue (#01a4f4)
+/// - Functions: Blue (#01a4f4)
+/// - Types: Cyan (#01f4cb)
+/// - Operators: Red (#f4012a)
 #[derive(Debug, Clone, Copy)]
 pub struct LanguageConfig {
-    /// Keywords color
-    pub keyword_color: Color,
-    /// String literals color
-    pub string_color: Color,
-    /// Comments color
-    pub comment_color: Color,
-    /// Numbers color
-    pub number_color: Color,
-    /// Functions/methods color
-    pub function_color: Color,
-    /// Types color
-    pub type_color: Color,
-    /// Operators color
-    pub operator_color: Color,
+    /// Keywords
+    pub keyword: Color,
+    /// String literals
+    pub string: Color,
+    /// Comments
+    pub comment: Color,
+    /// Numbers
+    pub number: Color,
+    /// Functions/methods
+    pub function: Color,
+    /// Types
+    pub r#type: Color,
+    /// Operators
+    pub operator: Color,
 }
 
 impl Default for LanguageConfig {
     fn default() -> Self {
         Self {
-            keyword_color: Color::Magenta,
-            string_color: Color::Green,
-            comment_color: Color::DarkGray,
-            number_color: Color::Yellow,
-            function_color: Color::Blue,
-            type_color: Color::Cyan,
-            operator_color: Color::Red,
+            keyword: PURPLE,  // #cb01f4 - purple for keywords
+            string: CYAN,     // #01f4cb - cyan for strings
+            comment: GRAY,    // #888888 - gray for comments
+            number: BLUE,     // #01a4f4 - blue for numbers
+            function: BLUE,   // #01a4f4 - blue for functions
+            r#type: CYAN,     // #01f4cb - cyan for types
+            operator: RED,    // #f4012a - red for operators
         }
     }
 }
@@ -124,12 +140,8 @@ fn get_language_label(lang: &str) -> &'static str {
         "makefile" | "make" => "Makefile",
         "xml" => "XML",
         "graphql" | "gql" => "GraphQL",
-        "" => "Code",
-        other => {
-            // Return the input as-is for unknown languages
-            // We can't return a &'static str here, so return "Code"
-            if other.is_empty() { "Code" } else { "Code" }
-        }
+        // Unknown languages default to "Code"
+        _ => "Code"
     }
 }
 
@@ -163,7 +175,7 @@ impl CodeBlock {
         
         // Calculate the box width (content width + padding)
         let content_width = self.lines.iter()
-            .map(|l| l.len())
+            .map(String::len)
             .max()
             .unwrap_or(0)
             .max(label.len() + 4);
@@ -172,7 +184,7 @@ impl CodeBlock {
         let mut result: Vec<Line<'static>> = Vec::new();
         
         // Top border with language label
-        let label_str = format!(" {} ", label);
+        let label_str = format!(" {label} ");
         let border_after_label = "─".repeat(box_width.saturating_sub(label_str.len() + 3));
         result.push(Line::from(vec![
             Span::styled("╭─", Style::default().fg(theme.colors.muted)),
@@ -231,19 +243,19 @@ fn highlight_line(line: &str, keywords: &[&str], config: &LanguageConfig, theme:
                     break;
                 }
             }
-            spans.push(Span::styled(string_content, Style::default().fg(config.string_color)));
+            spans.push(Span::styled(string_content, Style::default().fg(config.string)));
             continue;
         }
         
         // Check for comments (// or #)
         if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
             let comment: String = chars[i..].iter().collect();
-            spans.push(Span::styled(comment, Style::default().fg(config.comment_color)));
+            spans.push(Span::styled(comment, Style::default().fg(config.comment)));
             break;
         }
         if c == '#' {
             let comment: String = chars[i..].iter().collect();
-            spans.push(Span::styled(comment, Style::default().fg(config.comment_color)));
+            spans.push(Span::styled(comment, Style::default().fg(config.comment)));
             break;
         }
         
@@ -255,7 +267,7 @@ fn highlight_line(line: &str, keywords: &[&str], config: &LanguageConfig, theme:
                 num.push(chars[i]);
                 i += 1;
             }
-            spans.push(Span::styled(num, Style::default().fg(config.number_color)));
+            spans.push(Span::styled(num, Style::default().fg(config.number)));
             continue;
         }
         
@@ -270,15 +282,15 @@ fn highlight_line(line: &str, keywords: &[&str], config: &LanguageConfig, theme:
             
             // Check if it's a keyword
             if keywords.contains(&word.as_str()) {
-                spans.push(Span::styled(word, Style::default().fg(config.keyword_color).add_modifier(Modifier::BOLD)));
+                spans.push(Span::styled(word, Style::default().fg(config.keyword).add_modifier(Modifier::BOLD)));
             }
             // Check if followed by ( - likely a function
             else if i < chars.len() && chars[i] == '(' {
-                spans.push(Span::styled(word, Style::default().fg(config.function_color)));
+                spans.push(Span::styled(word, Style::default().fg(config.function)));
             }
             // Check if it looks like a type (starts with uppercase)
-            else if word.chars().next().map_or(false, |c| c.is_uppercase()) {
-                spans.push(Span::styled(word, Style::default().fg(config.type_color)));
+            else if word.chars().next().is_some_and(char::is_uppercase) {
+                spans.push(Span::styled(word, Style::default().fg(config.r#type)));
             }
             else {
                 spans.push(Span::styled(word, Style::default().fg(theme.colors.foreground)));
@@ -295,7 +307,7 @@ fn highlight_line(line: &str, keywords: &[&str], config: &LanguageConfig, theme:
                 op.push(chars[i]);
                 i += 1;
             }
-            spans.push(Span::styled(op, Style::default().fg(config.operator_color)));
+            spans.push(Span::styled(op, Style::default().fg(config.operator)));
             continue;
         }
         

@@ -37,7 +37,7 @@ where
             inbox_seq,
             head_seq,
             next_seq,
-            tx_id = %tx.tx_id,
+            hash = %tx.hash,
             "Processing transaction"
         );
 

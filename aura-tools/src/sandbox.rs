@@ -93,6 +93,17 @@ impl Sandbox {
 
         Ok(canonical)
     }
+
+    /// Resolve a path for a new file (doesn't need to exist).
+    ///
+    /// This validates that the target path would be within the sandbox
+    /// but doesn't require the file to already exist.
+    ///
+    /// # Errors
+    /// Returns error if path would escape sandbox.
+    pub fn resolve_new(&self, path: impl AsRef<Path>) -> Result<PathBuf, ToolError> {
+        self.resolve(path)
+    }
 }
 
 /// Normalize a path by resolving `.` and `..` components.

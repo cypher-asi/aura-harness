@@ -6,6 +6,7 @@
 //! - `ToolRegistry` trait and `DefaultToolRegistry` implementation
 //! - `ToolExecutor` for executing tool calls
 //! - Sandboxed filesystem and command operations
+//! - Threshold-based async command execution
 //!
 //! ## Security
 //!
@@ -17,12 +18,13 @@
 
 mod error;
 mod executor;
-mod fs_tools;
+pub mod fs_tools;
 pub mod registry;
 mod sandbox;
 
 pub use error::ToolError;
 pub use executor::ToolExecutor;
+pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
 pub use registry::{DefaultToolRegistry, ToolRegistry};
 pub use sandbox::Sandbox;
 
@@ -37,18 +39,23 @@ pub struct ToolConfig {
     pub command_allowlist: Vec<String>,
     /// Maximum read bytes
     pub max_read_bytes: usize,
-    /// Maximum command timeout in milliseconds
-    pub max_command_timeout_ms: u64,
+    /// Sync threshold for command execution (milliseconds).
+    /// Commands that complete within this threshold return immediately.
+    /// Commands that exceed this threshold are moved to async execution.
+    pub sync_threshold_ms: u64,
+    /// Maximum timeout for async processes (milliseconds).
+    pub max_async_timeout_ms: u64,
 }
 
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {
             enable_fs: true,
-            enable_commands: false, // Disabled by default for safety
-            command_allowlist: vec![],
+            enable_commands: true, // Enabled by default for agentic workflows
+            command_allowlist: vec![], // Empty = all commands allowed
             max_read_bytes: 5 * 1024 * 1024, // 5MB
-            max_command_timeout_ms: 10_000,  // 10s
+            sync_threshold_ms: 5_000,         // 5s sync threshold
+            max_async_timeout_ms: 600_000,    // 10 minutes async timeout
         }
     }
 }

@@ -18,6 +18,8 @@ bytes = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 async-trait = "0.1"
+regex = "1.11"
+walkdir = "2.5"
 
 [dev-dependencies]
 tempfile = { workspace = true }

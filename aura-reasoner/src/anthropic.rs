@@ -54,7 +54,7 @@ impl AnthropicConfig {
             .map_err(|_| anyhow::anyhow!("AURA_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY not set"))?;
 
         let default_model = std::env::var("AURA_ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| "claude-opus-4-5-20251101".to_string());
+            .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
 
         let timeout_ms = std::env::var("AURA_MODEL_TIMEOUT_MS")
             .ok()
@@ -223,6 +223,24 @@ impl ModelProvider for AnthropicProvider {
 
     #[instrument(skip(self, request), fields(model = %request.model))]
     async fn complete_streaming(&self, request: ModelRequest) -> anyhow::Result<StreamEventStream> {
+        // Check if the model supports extended thinking (claude-3-7 and above, or opus-4, sonnet-4)
+        let supports_thinking = request.model.contains("claude-3-7")
+            || request.model.contains("claude-opus-4")
+            || request.model.contains("claude-sonnet-4");
+
+        // Configure thinking if supported - budget_tokens MUST be less than max_tokens
+        // and at least 1024. We need max_tokens > budget_tokens + some room for output.
+        let thinking = if supports_thinking && request.max_tokens > 2048 {
+            // Use half of max_tokens for thinking, clamped to valid range
+            let budget = (request.max_tokens / 2).clamp(1024, 16000);
+            Some(ThinkingConfig {
+                thinking_type: "enabled".to_string(),
+                budget_tokens: budget,
+            })
+        } else {
+            None
+        };
+
         // Build the API request with streaming enabled
         let api_request = StreamingApiRequest {
             model: request.model.clone(),
@@ -235,8 +253,10 @@ impl ModelProvider for AnthropicProvider {
             },
             tool_choice: convert_tool_choice(&request.tool_choice),
             max_tokens: request.max_tokens,
-            temperature: request.temperature,
+            // Temperature must be 1 when using extended thinking
+            temperature: if thinking.is_some() { Some(1.0) } else { request.temperature },
             stream: true,
+            thinking,
         };
 
         debug!(
@@ -306,6 +326,14 @@ enum ApiContent {
     Text {
         text: String,
     },
+    /// Thinking content block - required when extended thinking is enabled.
+    /// Must be echoed back to the API in multi-turn conversations.
+    Thinking {
+        thinking: String,
+        /// Signature is required when echoing thinking blocks back to the API
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -367,6 +395,19 @@ struct StreamingApiRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     stream: bool,
+    /// Extended thinking configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig>,
+}
+
+/// Configuration for extended thinking.
+#[derive(Debug, Serialize)]
+struct ThinkingConfig {
+    /// Type of thinking (always "enabled")
+    #[serde(rename = "type")]
+    thinking_type: String,
+    /// Budget tokens for thinking (between 1024 and `max_tokens`)
+    budget_tokens: u32,
 }
 
 /// SSE event types from Anthropic.
@@ -425,6 +466,10 @@ enum SseContentBlock {
         #[serde(default)]
         text: String,
     },
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -432,10 +477,16 @@ enum SseContentBlock {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
 enum SseDelta {
-    TextDelta { text: String },
-    InputJsonDelta { partial_json: String },
+    #[serde(rename = "text_delta")]
+    Text { text: String },
+    #[serde(rename = "thinking_delta")]
+    Thinking { thinking: String },
+    #[serde(rename = "signature_delta")]
+    Signature { signature: String },
+    #[serde(rename = "input_json_delta")]
+    InputJson { partial_json: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,7 +516,7 @@ struct SseStream<S> {
 }
 
 impl<S> SseStream<S> {
-    fn new(inner: S) -> Self {
+    const fn new(inner: S) -> Self {
         Self {
             inner,
             buffer: String::new(),
@@ -589,6 +640,7 @@ fn parse_sse_event(event_str: &str) -> Option<StreamEvent> {
         } => {
             let content_type = match content_block {
                 SseContentBlock::Text { .. } => StreamContentType::Text,
+                SseContentBlock::Thinking { .. } => StreamContentType::Thinking,
                 SseContentBlock::ToolUse { id, name } => StreamContentType::ToolUse { id, name },
             };
             Some(StreamEvent::ContentBlockStart {
@@ -597,8 +649,10 @@ fn parse_sse_event(event_str: &str) -> Option<StreamEvent> {
             })
         }
         SseEvent::ContentBlockDelta { delta, .. } => match delta {
-            SseDelta::TextDelta { text } => Some(StreamEvent::TextDelta { text }),
-            SseDelta::InputJsonDelta { partial_json } => {
+            SseDelta::Text { text } => Some(StreamEvent::TextDelta { text }),
+            SseDelta::Thinking { thinking } => Some(StreamEvent::ThinkingDelta { thinking }),
+            SseDelta::Signature { signature } => Some(StreamEvent::SignatureDelta { signature }),
+            SseDelta::InputJson { partial_json } => {
                 Some(StreamEvent::InputJsonDelta { partial_json })
             }
         },
@@ -639,13 +693,15 @@ fn convert_messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
             let content: Vec<ApiContent> = msg
                 .content
                 .iter()
-                .map(|block| match block {
-                    ContentBlock::Text { text } => ApiContent::Text { text: text.clone() },
-                    ContentBlock::ToolUse { id, name, input } => ApiContent::ToolUse {
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => {
+                        Some(ApiContent::Text { text: text.clone() })
+                    }
+                    ContentBlock::ToolUse { id, name, input } => Some(ApiContent::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
                         input: input.clone(),
-                    },
+                    }),
                     ContentBlock::ToolResult {
                         tool_use_id,
                         content,
@@ -657,11 +713,19 @@ fn convert_messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
                                 serde_json::to_string(v).unwrap_or_default()
                             }
                         };
-                        ApiContent::ToolResult {
+                        Some(ApiContent::ToolResult {
                             tool_use_id: tool_use_id.clone(),
                             content: content_text,
                             is_error: Some(*is_error),
-                        }
+                        })
+                    }
+                    // Thinking blocks MUST be echoed back to the API in multi-turn conversations
+                    // when extended thinking is enabled. Include the signature if available.
+                    ContentBlock::Thinking { thinking, signature } => {
+                        Some(ApiContent::Thinking {
+                            thinking: thinking.clone(),
+                            signature: signature.clone(),
+                        })
                     }
                 })
                 .collect();
@@ -699,6 +763,10 @@ fn convert_response_to_aura(content: &[ApiContent]) -> Message {
         .iter()
         .map(|c| match c {
             ApiContent::Text { text } => ContentBlock::Text { text: text.clone() },
+            ApiContent::Thinking { thinking, signature } => ContentBlock::Thinking {
+                thinking: thinking.clone(),
+                signature: signature.clone(),
+            },
             ApiContent::ToolUse { id, name, input } => ContentBlock::ToolUse {
                 id: id.clone(),
                 name: name.clone(),

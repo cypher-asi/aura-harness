@@ -73,6 +73,39 @@ impl ToolExecutor {
                     .ok_or_else(|| ToolError::InvalidArguments("missing 'path' argument".into()))?;
                 fs_tools::fs_stat(&sandbox, path)
             }
+            "fs_write" => {
+                let path = tool_call.args["path"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::InvalidArguments("missing 'path' argument".into()))?;
+                let content = tool_call.args["content"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::InvalidArguments("missing 'content' argument".into()))?;
+                let create_dirs = tool_call.args["create_dirs"].as_bool().unwrap_or(false);
+                fs_tools::fs_write(&sandbox, path, content, create_dirs)
+            }
+            "fs_edit" => {
+                let path = tool_call.args["path"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::InvalidArguments("missing 'path' argument".into()))?;
+                let old_text = tool_call.args["old_text"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::InvalidArguments("missing 'old_text' argument".into()))?;
+                let new_text = tool_call.args["new_text"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::InvalidArguments("missing 'new_text' argument".into()))?;
+                fs_tools::fs_edit(&sandbox, path, old_text, new_text)
+            }
+            "search_code" => {
+                let pattern = tool_call.args["pattern"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::InvalidArguments("missing 'pattern' argument".into()))?;
+                let path = tool_call.args["path"].as_str();
+                let file_pattern = tool_call.args["file_pattern"].as_str();
+                let max_results = tool_call.args["max_results"]
+                    .as_u64()
+                    .map_or(100, |n| usize::try_from(n).unwrap_or(100));
+                fs_tools::search_code(&sandbox, pattern, path, file_pattern, max_results)
+            }
             "cmd_run" => {
                 // Commands are disabled by default and require explicit allowlisting
                 if !self.config.enable_commands {
@@ -90,10 +123,26 @@ impl ToolExecutor {
                     return Err(ToolError::CommandNotAllowed(program.into()));
                 }
 
-                // For MVP, we don't implement command execution
-                // This would require careful timeout handling and output capture
-                warn!("Command execution not yet implemented");
-                Err(ToolError::ToolDisabled("cmd_run (not implemented)".into()))
+                // Parse arguments
+                let args: Vec<String> = tool_call.args["args"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                // Optional working directory
+                let cwd = tool_call.args["cwd"].as_str();
+
+                // For backwards compatibility, use sync_threshold for the default timeout
+                // The executor will use threshold-based execution in the future
+                let timeout_ms = tool_call.args["timeout_ms"]
+                    .as_u64()
+                    .unwrap_or(self.config.sync_threshold_ms);
+
+                fs_tools::cmd_run(&sandbox, program, &args, cwd, timeout_ms)
             }
             _ => Err(ToolError::UnknownTool(tool.clone())),
         }

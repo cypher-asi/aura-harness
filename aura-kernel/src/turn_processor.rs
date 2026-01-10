@@ -23,7 +23,7 @@
 
 use crate::policy::{PermissionLevel, Policy, PolicyConfig};
 use aura_core::{
-    Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectKind, EffectStatus, ProposalSet,
+    Action, AgentId, Decision, Effect, EffectKind, EffectStatus, ProposalSet,
     RecordEntry, ToolCall, ToolResult, Transaction,
 };
 use aura_executor::{ExecuteContext, ExecutorRouter};
@@ -90,15 +90,45 @@ impl Default for TurnConfig {
 
 /// Default system prompt for the agent.
 fn default_system_prompt() -> String {
-    r"You are an AI coding assistant with access to tools for reading, searching, and modifying files.
+    r"You are AURA, an autonomous AI coding assistant with FULL access to a real filesystem and command execution environment.
 
-When asked to help with coding tasks:
-1. First understand the codebase by reading relevant files
-2. Search for patterns and dependencies as needed
-3. Make precise, targeted changes
+## Your Environment
 
-Always explain your reasoning before taking actions.
-Be careful with file modifications - prefer small, focused changes.
+You are running inside the AURA runtime which provides you with REAL tool execution capabilities. When you invoke a tool, it WILL be executed on the actual system and you WILL receive real results. This is NOT a simulation.
+
+## Available Tools
+
+You have access to the following tools that execute in the user's workspace:
+
+### Filesystem Tools
+- `fs_ls`: List directory contents - returns files, directories, sizes
+- `fs_read`: Read file contents - use this to examine source code, configs, etc.
+- `fs_stat`: Get file/directory metadata (size, type, permissions)
+- `fs_write`: Write content to a file (creates or overwrites)
+- `fs_edit`: Edit an existing file by replacing specific text
+
+### Search Tools
+- `search_code`: Search for patterns in code using regex across files
+
+### Command Tools
+- `cmd_run`: Execute shell commands (may require approval for certain commands)
+
+## How to Work
+
+1. **Explore First**: Use `fs_ls` and `fs_read` to understand the codebase structure
+2. **Search When Needed**: Use `search_code` to find patterns, definitions, and usages
+3. **Make Targeted Changes**: Use `fs_edit` for modifications, `fs_write` for new files
+4. **Run Commands**: Use `cmd_run` to execute build tools, tests, git, etc.
+
+## Important Guidelines
+
+- All file paths are relative to the workspace root unless absolute
+- You CAN and SHOULD use these tools to complete the user's requests
+- When you request a tool, it will be executed and you'll receive the real output
+- Be thoughtful about file modifications - prefer small, focused changes
+- Explain your reasoning before making changes
+
+You are fully capable of reading, modifying, and creating files, as well as running commands. Use your tools proactively to help the user.
 "
     .to_string()
 }
@@ -133,6 +163,10 @@ pub type StreamCallback = Box<dyn Fn(StreamCallbackEvent) + Send + Sync>;
 /// Events that can be sent via the streaming callback.
 #[derive(Debug, Clone)]
 pub enum StreamCallbackEvent {
+    /// A chunk of thinking content was received
+    ThinkingDelta(String),
+    /// Thinking block completed
+    ThinkingComplete,
     /// A chunk of text was received
     TextDelta(String),
     /// A tool use started
@@ -142,8 +176,34 @@ pub enum StreamCallbackEvent {
         /// Tool name
         name: String,
     },
+    /// A tool use completed
+    ToolComplete {
+        /// Tool name
+        name: String,
+        /// Tool arguments (JSON)
+        args: serde_json::Value,
+        /// Tool result text
+        result: String,
+        /// Whether the tool failed
+        is_error: bool,
+    },
     /// Streaming is complete for this step
     StepComplete,
+}
+
+/// Information about an executed tool call.
+#[derive(Debug, Clone)]
+pub struct ExecutedToolCall {
+    /// Tool use ID from the model
+    pub tool_use_id: String,
+    /// Tool name
+    pub tool_name: String,
+    /// Tool arguments (JSON)
+    pub tool_args: serde_json::Value,
+    /// Tool result
+    pub result: ToolResultContent,
+    /// Whether the tool failed
+    pub is_error: bool,
 }
 
 /// A single step entry in a turn.
@@ -153,8 +213,10 @@ pub struct TurnEntry {
     pub turn_step: u32,
     /// Model response for this step
     pub model_response: ModelResponse,
-    /// Tool results from this step (if any)
+    /// Tool results from this step (if any) - legacy format for backwards compatibility
     pub tool_results: Vec<(String, ToolResultContent, bool)>,
+    /// Executed tool calls with full information
+    pub executed_tools: Vec<ExecutedToolCall>,
     /// Stop reason for this step
     pub stop_reason: StopReason,
 }
@@ -285,28 +347,29 @@ where
                 // Find the most recent SessionStart to determine context boundary
                 let session_start_idx = entries
                     .iter()
-                    .rposition(|e| e.tx.kind == aura_core::TransactionKind::SessionStart);
+                    .rposition(|e| e.tx.tx_type == aura_core::TransactionType::SessionStart);
 
                 // Only process entries after the most recent SessionStart (if any)
-                let relevant_entries = if let Some(idx) = session_start_idx {
-                    debug!(session_start_seq = entries[idx].seq, "Found session boundary");
-                    &entries[idx + 1..]
-                } else {
-                    &entries[..]
-                };
+                let relevant_entries = session_start_idx.map_or_else(
+                    || &entries[..],
+                    |idx| {
+                        debug!(session_start_seq = entries[idx].seq, "Found session boundary");
+                        &entries[idx + 1..]
+                    },
+                );
 
                 for entry in relevant_entries {
                     // Convert each record entry to messages
                     // UserPrompt transactions become user messages
                     // AgentMsg transactions become assistant messages
-                    match entry.tx.kind {
-                        aura_core::TransactionKind::UserPrompt => {
+                    match entry.tx.tx_type {
+                        aura_core::TransactionType::UserPrompt => {
                             let content = String::from_utf8_lossy(&entry.tx.payload);
                             if !content.is_empty() {
                                 messages.push(Message::user(content.to_string()));
                             }
                         }
-                        aura_core::TransactionKind::AgentMsg => {
+                        aura_core::TransactionType::AgentMsg => {
                             let content = String::from_utf8_lossy(&entry.tx.payload);
                             if !content.is_empty() {
                                 messages.push(Message::assistant(content.to_string()));
@@ -356,7 +419,7 @@ where
     ///
     /// Returns error if model completion or tool execution fails.
     #[allow(clippy::too_many_lines)] // Core orchestration logic - refactoring would hurt readability
-    #[instrument(skip(self, tx), fields(agent_id = %agent_id, tx_id = %tx.tx_id))]
+    #[instrument(skip(self, tx), fields(agent_id = %agent_id, hash = %tx.hash))]
     pub async fn process_turn(
         &self,
         agent_id: AgentId,
@@ -428,24 +491,46 @@ where
                         turn_step: step,
                         model_response: response,
                         tool_results: vec![],
+                        executed_tools: vec![],
                         stop_reason: StopReason::EndTurn,
                     });
                     break;
                 }
                 StopReason::ToolUse => {
                     // Extract and execute tool calls
-                    let tool_results = self.execute_tool_calls(&response.message, agent_id).await?;
+                    let executed_tools = self.execute_tool_calls(&response.message, agent_id).await?;
 
                     // Check for failures
-                    if tool_results.iter().any(|(_, _, is_error)| *is_error) {
+                    if executed_tools.iter().any(|t| t.is_error) {
                         had_failures = true;
                     }
+
+                    // Emit ToolComplete events for each executed tool
+                    for tool in &executed_tools {
+                        let result_text = match &tool.result {
+                            ToolResultContent::Text(s) => s.clone(),
+                            ToolResultContent::Json(v) => serde_json::to_string(v).unwrap_or_default(),
+                        };
+                        self.emit_stream_event(StreamCallbackEvent::ToolComplete {
+                            name: tool.tool_name.clone(),
+                            args: tool.tool_args.clone(),
+                            result: result_text,
+                            is_error: tool.is_error,
+                        });
+                    }
+
+                    // Convert to legacy format for backwards compatibility
+                    let tool_results: Vec<(String, ToolResultContent, bool)> = executed_tools
+                        .iter()
+                        .map(|t| (t.tool_use_id.clone(), t.result.clone(), t.is_error))
+                        .collect();
 
                     // Record this step
                     entries.push(TurnEntry {
                         turn_step: step,
                         model_response: response,
                         tool_results: tool_results.clone(),
+                        executed_tools,
                         stop_reason: StopReason::ToolUse,
                     });
 
@@ -460,6 +545,7 @@ where
                         turn_step: step,
                         model_response: response,
                         tool_results: vec![],
+                        executed_tools: vec![],
                         stop_reason: StopReason::MaxTokens,
                     });
                     break;
@@ -470,6 +556,7 @@ where
                         turn_step: step,
                         model_response: response,
                         tool_results: vec![],
+                        executed_tools: vec![],
                         stop_reason: StopReason::StopSequence,
                     });
                     break;
@@ -507,27 +594,49 @@ where
         // Accumulate the response while emitting text deltas
         let mut accumulator = StreamAccumulator::new();
         let input_tokens = 0u32;
+        let mut in_thinking_block = false;
 
         while let Some(event_result) = stream.next().await {
             match event_result {
                 Ok(event) => {
-                    // Emit text deltas to the callback
+                    // Emit events to the callback
                     match &event {
-                        StreamEvent::TextDelta { text } => {
-                            self.emit_stream_event(StreamCallbackEvent::TextDelta(text.clone()));
+                        StreamEvent::ContentBlockStart {
+                            content_type: aura_reasoner::StreamContentType::Thinking,
+                            ..
+                        } => {
+                            in_thinking_block = true;
                         }
                         StreamEvent::ContentBlockStart {
                             content_type: aura_reasoner::StreamContentType::ToolUse { id, name },
                             ..
                         } => {
+                            // If we were in a thinking block, signal it's complete
+                            if in_thinking_block {
+                                self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
+                                in_thinking_block = false;
+                            }
                             self.emit_stream_event(StreamCallbackEvent::ToolStart {
                                 id: id.clone(),
                                 name: name.clone(),
                             });
                         }
-                        StreamEvent::MessageStart { .. } => {
-                            // Could track input tokens from usage here
-                            // For now, we'll estimate from the accumulator
+                        StreamEvent::ContentBlockStart {
+                            content_type: aura_reasoner::StreamContentType::Text,
+                            ..
+                        }
+                        | StreamEvent::ContentBlockStop { .. } => {
+                            // If we were in a thinking block, signal it's complete
+                            if in_thinking_block {
+                                self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
+                                in_thinking_block = false;
+                            }
+                        }
+                        StreamEvent::ThinkingDelta { thinking } => {
+                            self.emit_stream_event(StreamCallbackEvent::ThinkingDelta(thinking.clone()));
+                        }
+                        StreamEvent::TextDelta { text } => {
+                            self.emit_stream_event(StreamCallbackEvent::TextDelta(text.clone()));
                         }
                         StreamEvent::Error { message } => {
                             error!(error = %message, "Stream error from provider");
@@ -565,7 +674,7 @@ where
         &self,
         message: &Message,
         agent_id: AgentId,
-    ) -> anyhow::Result<Vec<(String, ToolResultContent, bool)>> {
+    ) -> anyhow::Result<Vec<ExecutedToolCall>> {
         let mut results = Vec::new();
         let workspace = self.agent_workspace(&agent_id);
 
@@ -584,11 +693,13 @@ where
                 match permission {
                     PermissionLevel::Deny => {
                         warn!(tool = %name, "Tool denied by policy");
-                        results.push((
-                            id.clone(),
-                            ToolResultContent::text(format!("Tool '{name}' is not allowed")),
-                            true,
-                        ));
+                        results.push(ExecutedToolCall {
+                            tool_use_id: id.clone(),
+                            tool_name: name.clone(),
+                            tool_args: input.clone(),
+                            result: ToolResultContent::text(format!("Tool '{name}' is not allowed")),
+                            is_error: true,
+                        });
                         continue;
                     }
                     PermissionLevel::AlwaysAsk => {
@@ -623,13 +734,21 @@ where
                                     String::from_utf8_lossy(&tool_result.stdout).to_string(),
                                 )
                             };
-                            results.push((id.clone(), content, !tool_result.ok));
+                            results.push(ExecutedToolCall {
+                                tool_use_id: id.clone(),
+                                tool_name: name.clone(),
+                                tool_args: input.clone(),
+                                result: content,
+                                is_error: !tool_result.ok,
+                            });
                         } else {
-                            results.push((
-                                id.clone(),
-                                ToolResultContent::text("Tool executed successfully"),
-                                false,
-                            ));
+                            results.push(ExecutedToolCall {
+                                tool_use_id: id.clone(),
+                                tool_name: name.clone(),
+                                tool_args: input.clone(),
+                                result: ToolResultContent::text("Tool executed successfully"),
+                                is_error: false,
+                            });
                         }
                     }
                     effect => {
@@ -641,7 +760,13 @@ where
                         } else {
                             "Tool execution failed".to_string()
                         };
-                        results.push((id.clone(), ToolResultContent::text(error_msg), true));
+                        results.push(ExecutedToolCall {
+                            tool_use_id: id.clone(),
+                            tool_name: name.clone(),
+                            tool_args: input.clone(),
+                            result: ToolResultContent::text(error_msg),
+                            is_error: true,
+                        });
                     }
                 }
             }
@@ -650,9 +775,9 @@ where
         Ok(results)
     }
 
-    /// Convert turn results to a legacy `RecordEntry` for storage.
+    /// Convert turn results to a `RecordEntry` for storage.
     ///
-    /// This provides backwards compatibility with the existing storage format.
+    /// This properly records all tool calls with their full information (tool name, args, results).
     pub fn to_record_entry(
         &self,
         seq: u64,
@@ -664,32 +789,36 @@ where
         let proposals = ProposalSet::new();
 
         // Build decision
-        let decision = Decision::new();
+        let mut decision = Decision::new();
 
         // Build actions and effects from tool calls
         let mut actions = Vec::new();
         let mut effects = Vec::new();
 
         for entry in &turn_result.entries {
-            for (tool_use_id, result, is_error) in &entry.tool_results {
-                let action_id = ActionId::generate();
-
-                // Create action
-                let action = Action::new(
-                    action_id,
-                    ActionKind::Delegate,
-                    Bytes::from(tool_use_id.clone()),
+            for executed_tool in &entry.executed_tools {
+                // Create a proper ToolCall with full information
+                let tool_call = ToolCall::new(
+                    executed_tool.tool_name.clone(),
+                    executed_tool.tool_args.clone(),
                 );
+
+                // Create action using the delegate_tool helper which properly serializes
+                let action = Action::delegate_tool(&tool_call);
+                let action_id = action.action_id;
                 actions.push(action);
 
+                // Record acceptance in decision
+                decision.accept(action_id);
+
                 // Create effect
-                let effect_status = if *is_error {
+                let effect_status = if executed_tool.is_error {
                     EffectStatus::Failed
                 } else {
                     EffectStatus::Committed
                 };
 
-                let payload = match result {
+                let payload = match &executed_tool.result {
                     ToolResultContent::Text(s) => Bytes::from(s.clone()),
                     ToolResultContent::Json(v) => {
                         Bytes::from(serde_json::to_vec(v).unwrap_or_default())

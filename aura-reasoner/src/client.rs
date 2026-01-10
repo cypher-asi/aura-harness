@@ -82,3 +82,76 @@ impl Reasoner for HttpReasoner {
             .is_ok_and(|response| response.status().is_success())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reasoner_config_default() {
+        let config = ReasonerConfig::default();
+
+        assert!(!config.gateway_url.is_empty());
+        assert!(config.timeout_ms > 0);
+        // max_retries is u32, so it's always >= 0 by type
+        let _ = config.max_retries; // Just access to ensure field exists
+    }
+
+    #[test]
+    fn test_http_reasoner_new() {
+        let config = ReasonerConfig {
+            gateway_url: "http://localhost:8080".to_string(),
+            timeout_ms: 5000,
+            max_retries: 3,
+        };
+
+        let reasoner = HttpReasoner::new(config.clone());
+        assert!(reasoner.is_ok());
+
+        let reasoner = reasoner.unwrap();
+        assert_eq!(reasoner.config.gateway_url, "http://localhost:8080");
+        assert_eq!(reasoner.config.timeout_ms, 5000);
+        assert_eq!(reasoner.config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_http_reasoner_with_defaults() {
+        let result = HttpReasoner::with_defaults();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_http_reasoner_url_building() {
+        let config = ReasonerConfig {
+            gateway_url: "http://example.com:3000".to_string(),
+            timeout_ms: 1000,
+            max_retries: 1,
+        };
+
+        let reasoner = HttpReasoner::new(config).unwrap();
+        
+        // Test that the config is stored correctly
+        assert_eq!(reasoner.config.gateway_url, "http://example.com:3000");
+    }
+
+    #[tokio::test]
+    async fn test_health_check_unreachable() {
+        // Use a non-routable address to test failure handling
+        let config = ReasonerConfig {
+            gateway_url: "http://192.0.2.1:1".to_string(), // Non-routable TEST-NET address
+            timeout_ms: 100, // Short timeout
+            max_retries: 0,
+        };
+
+        let reasoner = HttpReasoner::new(config).unwrap();
+        let result = reasoner.health_check().await;
+
+        // Should fail because address is unreachable
+        assert!(!result);
+    }
+
+    // Note: Testing actual HTTP calls would require a mock server.
+    // The propose() method cannot be easily unit tested without
+    // setting up wiremock or similar HTTP mocking.
+    // Integration tests with a real server should cover those cases.
+}

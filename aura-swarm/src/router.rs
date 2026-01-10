@@ -1,7 +1,7 @@
 //! HTTP router for the swarm API.
 
 use crate::scheduler::Scheduler;
-use aura_core::{AgentId, Transaction, TransactionKind, TxId};
+use aura_core::{AgentId, Transaction, TransactionType};
 use aura_reasoner::Reasoner;
 use aura_store::Store;
 use axum::{
@@ -92,13 +92,13 @@ where
     let agent_id = AgentId::from_hex(&request.agent_id)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
 
-    // Parse kind
-    let kind = match request.kind.as_str() {
-        "user_prompt" => TransactionKind::UserPrompt,
-        "agent_msg" => TransactionKind::AgentMsg,
-        "trigger" => TransactionKind::Trigger,
-        "action_result" => TransactionKind::ActionResult,
-        "system" => TransactionKind::System,
+    // Parse tx_type
+    let tx_type = match request.kind.as_str() {
+        "user_prompt" => TransactionType::UserPrompt,
+        "agent_msg" => TransactionType::AgentMsg,
+        "trigger" => TransactionType::Trigger,
+        "action_result" => TransactionType::ActionResult,
+        "system" => TransactionType::System,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -118,14 +118,8 @@ where
             )
         })?;
 
-    // Create transaction
-    let tx_id = TxId::from_content(&payload);
-    let ts_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
-
-    let tx = Transaction::new(tx_id, agent_id, ts_ms, kind, Bytes::from(payload));
+    // Create transaction (chained with no previous hash for now - API doesn't support chaining yet)
+    let tx = Transaction::new_chained(agent_id, tx_type, Bytes::from(payload), None);
 
     // Enqueue transaction
     state.store.enqueue_tx(&tx).map_err(|e| {
@@ -135,7 +129,7 @@ where
         )
     })?;
 
-    info!(tx_id = %tx_id, agent_id = %agent_id, "Transaction enqueued");
+    info!(hash = %tx.hash, agent_id = %agent_id, "Transaction enqueued");
 
     // Trigger processing (fire and forget)
     let scheduler = state.scheduler.clone();
@@ -149,7 +143,7 @@ where
         StatusCode::ACCEPTED,
         Json(SubmitTxResponse {
             accepted: true,
-            tx_id: tx_id.to_hex(),
+            tx_id: tx.hash.to_hex(),
         }),
     ))
 }

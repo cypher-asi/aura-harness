@@ -257,3 +257,129 @@ impl Session {
         anyhow::bail!("No pending approval requests")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Mutex to serialize env var tests (env vars are process-global)
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_all_env_vars() {
+        std::env::remove_var("AURA_DATA_DIR");
+        std::env::remove_var("AURA_WORKSPACE_ROOT");
+        std::env::remove_var("AURA_MODEL_PROVIDER");
+        std::env::remove_var("AURA_AGENT_NAME");
+        std::env::remove_var("AURA_MAX_STEPS_PER_TURN");
+        std::env::remove_var("AURA_MAX_TOOL_CALLS_PER_STEP");
+        std::env::remove_var("AURA_MODEL_TIMEOUT_MS");
+        std::env::remove_var("AURA_ANTHROPIC_MODEL");
+    }
+
+    #[test]
+    fn test_session_config_from_env_defaults() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+
+        let config = SessionConfig::from_env().unwrap();
+
+        assert_eq!(config.data_dir, PathBuf::from("./aura_data"));
+        assert_eq!(config.provider, "anthropic");
+        assert_eq!(config.agent_name, "CLI Agent");
+    }
+
+    #[test]
+    fn test_session_config_custom_data_dir() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+        
+        std::env::set_var("AURA_DATA_DIR", "/custom/data");
+        
+        let config = SessionConfig::from_env().unwrap();
+        
+        assert_eq!(config.data_dir, PathBuf::from("/custom/data"));
+        // Workspace root should be relative to data dir when not set
+        assert_eq!(config.workspace_root, PathBuf::from("/custom/data/workspaces"));
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_custom_workspace() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+        
+        std::env::set_var("AURA_WORKSPACE_ROOT", "/my/workspaces");
+        
+        let config = SessionConfig::from_env().unwrap();
+        
+        assert_eq!(config.workspace_root, PathBuf::from("/my/workspaces"));
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_provider() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+        
+        std::env::set_var("AURA_MODEL_PROVIDER", "mock");
+        
+        let config = SessionConfig::from_env().unwrap();
+        
+        assert_eq!(config.provider, "mock");
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_agent_name() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+        
+        std::env::set_var("AURA_AGENT_NAME", "Test Agent");
+        
+        let config = SessionConfig::from_env().unwrap();
+        
+        assert_eq!(config.agent_name, "Test Agent");
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_turn_config_overrides() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+        
+        std::env::set_var("AURA_MAX_STEPS_PER_TURN", "20");
+        std::env::set_var("AURA_MAX_TOOL_CALLS_PER_STEP", "5");
+        std::env::set_var("AURA_MODEL_TIMEOUT_MS", "60000");
+        std::env::set_var("AURA_ANTHROPIC_MODEL", "claude-sonnet-4-20250514");
+        
+        let config = SessionConfig::from_env().unwrap();
+        
+        assert_eq!(config.turn_config.max_steps, 20);
+        assert_eq!(config.turn_config.max_tool_calls_per_step, 5);
+        assert_eq!(config.turn_config.model_timeout_ms, 60000);
+        assert_eq!(config.turn_config.model, "claude-sonnet-4-20250514");
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_invalid_number_uses_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+        
+        std::env::set_var("AURA_MAX_STEPS_PER_TURN", "not_a_number");
+        
+        let config = SessionConfig::from_env().unwrap();
+        
+        // Should use default value since parsing failed
+        let default_config = TurnConfig::default();
+        assert_eq!(config.turn_config.max_steps, default_config.max_steps);
+
+        clear_all_env_vars();
+    }
+}

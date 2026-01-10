@@ -26,6 +26,15 @@ pub enum ContentBlock {
     /// Text content
     Text { text: String },
 
+    /// Thinking content (extended thinking from Claude)
+    /// When echoing back to the API, the signature must be included.
+    Thinking {
+        thinking: String,
+        /// Signature for the thinking block - required when echoing back to API
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+
     /// Model requesting tool use (assistant only)
     ToolUse {
         id: String,
@@ -540,7 +549,7 @@ pub enum StreamEvent {
     ContentBlockStart {
         /// Index of the content block
         index: u32,
-        /// Type of content block (text, tool_use)
+        /// Type of content block (text, `tool_use`, thinking)
         content_type: StreamContentType,
     },
 
@@ -548,6 +557,18 @@ pub enum StreamEvent {
     TextDelta {
         /// The text chunk
         text: String,
+    },
+
+    /// Thinking delta (incremental thinking content)
+    ThinkingDelta {
+        /// The thinking text chunk
+        thinking: String,
+    },
+
+    /// Signature delta (for thinking block signatures)
+    SignatureDelta {
+        /// The signature chunk
+        signature: String,
     },
 
     /// Tool use input delta (incremental JSON)
@@ -588,6 +609,8 @@ pub enum StreamEvent {
 pub enum StreamContentType {
     /// Text content
     Text,
+    /// Thinking content (extended thinking)
+    Thinking,
     /// Tool use block
     ToolUse {
         /// Tool use ID
@@ -608,6 +631,12 @@ pub struct StreamAccumulator {
     pub model: String,
     /// Accumulated text content
     pub text_content: String,
+    /// Accumulated thinking content
+    pub thinking_content: String,
+    /// Signature for the thinking block (required for echoing back to API)
+    pub thinking_signature: Option<String>,
+    /// Whether we're currently in a thinking block
+    pub in_thinking_block: bool,
     /// Accumulated tool uses
     pub tool_uses: Vec<AccumulatedToolUse>,
     /// Current tool use being built
@@ -642,20 +671,40 @@ impl StreamAccumulator {
     pub fn process(&mut self, event: &StreamEvent) {
         match event {
             StreamEvent::MessageStart { message_id, model } => {
-                self.message_id = message_id.clone();
-                self.model = model.clone();
+                self.message_id.clone_from(message_id);
+                self.model.clone_from(model);
             }
             StreamEvent::ContentBlockStart { content_type, .. } => {
-                if let StreamContentType::ToolUse { id, name } = content_type {
-                    self.current_tool_use = Some(AccumulatedToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                        input_json: String::new(),
-                    });
+                match content_type {
+                    StreamContentType::ToolUse { id, name } => {
+                        self.current_tool_use = Some(AccumulatedToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input_json: String::new(),
+                        });
+                        self.in_thinking_block = false;
+                    }
+                    StreamContentType::Thinking => {
+                        self.in_thinking_block = true;
+                    }
+                    StreamContentType::Text => {
+                        self.in_thinking_block = false;
+                    }
                 }
             }
             StreamEvent::TextDelta { text } => {
                 self.text_content.push_str(text);
+            }
+            StreamEvent::ThinkingDelta { thinking } => {
+                self.thinking_content.push_str(thinking);
+            }
+            StreamEvent::SignatureDelta { signature } => {
+                // Accumulate signature chunks
+                if let Some(ref mut sig) = self.thinking_signature {
+                    sig.push_str(signature);
+                } else {
+                    self.thinking_signature = Some(signature.clone());
+                }
             }
             StreamEvent::InputJsonDelta { partial_json } => {
                 if let Some(tool) = &mut self.current_tool_use {
@@ -666,6 +715,7 @@ impl StreamAccumulator {
                 if let Some(tool) = self.current_tool_use.take() {
                     self.tool_uses.push(tool);
                 }
+                self.in_thinking_block = false;
             }
             StreamEvent::MessageDelta {
                 stop_reason,
@@ -685,6 +735,14 @@ impl StreamAccumulator {
     /// Returns error if tool use JSON is invalid.
     pub fn into_response(self, input_tokens: u32, latency_ms: u64) -> anyhow::Result<ModelResponse> {
         let mut content_blocks = Vec::new();
+
+        // Add thinking content first if present (it comes before text in the response)
+        if !self.thinking_content.is_empty() {
+            content_blocks.push(ContentBlock::Thinking {
+                thinking: self.thinking_content,
+                signature: self.thinking_signature,
+            });
+        }
 
         // Add text content if present
         if !self.text_content.is_empty() {
@@ -806,5 +864,522 @@ mod tests {
     fn test_usage() {
         let usage = Usage::new(100, 50);
         assert_eq!(usage.total(), 150);
+    }
+
+    // ========================================================================
+    // Message Tests
+    // ========================================================================
+
+    #[test]
+    fn test_message_with_multiple_content_blocks() {
+        let msg = Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::text("Let me help you."),
+                ContentBlock::tool_use("tool1", "fs_read", serde_json::json!({"path": "test.txt"})),
+            ],
+        );
+
+        assert!(msg.has_tool_use());
+        assert_eq!(msg.tool_uses().len(), 1);
+        assert_eq!(msg.text_content(), "Let me help you.");
+    }
+
+    #[test]
+    fn test_message_text_content_concatenation() {
+        let msg = Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::text("Hello "),
+                ContentBlock::text("world!"),
+            ],
+        );
+
+        assert_eq!(msg.text_content(), "Hello world!");
+    }
+
+    #[test]
+    fn test_message_no_tool_use() {
+        let msg = Message::assistant("Just text");
+        assert!(!msg.has_tool_use());
+        assert!(msg.tool_uses().is_empty());
+    }
+
+    // ========================================================================
+    // ContentBlock Tests
+    // ========================================================================
+
+    #[test]
+    fn test_content_block_as_text() {
+        let text = ContentBlock::text("hello");
+        assert_eq!(text.as_text(), Some("hello"));
+
+        let tool_use = ContentBlock::tool_use("id", "name", serde_json::json!({}));
+        assert_eq!(tool_use.as_text(), None);
+    }
+
+    #[test]
+    fn test_content_block_tool_result() {
+        let result = ContentBlock::tool_result(
+            "tool123",
+            ToolResultContent::text("success"),
+            false,
+        );
+
+        match result {
+            ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+                assert_eq!(tool_use_id, "tool123");
+                assert!(!is_error);
+                if let ToolResultContent::Text(t) = content {
+                    assert_eq!(t, "success");
+                } else {
+                    panic!("Expected Text content");
+                }
+            }
+            _ => panic!("Expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_thinking_block() {
+        let thinking = ContentBlock::Thinking {
+            thinking: "Let me think about this...".to_string(),
+            signature: Some("sig123".to_string()),
+        };
+
+        let json = serde_json::to_string(&thinking).unwrap();
+        assert!(json.contains("\"type\":\"thinking\""));
+        assert!(json.contains("sig123"));
+    }
+
+    // ========================================================================
+    // ToolResultContent Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tool_result_content_text() {
+        let content = ToolResultContent::text("result");
+        if let ToolResultContent::Text(t) = content {
+            assert_eq!(t, "result");
+        } else {
+            panic!("Expected Text");
+        }
+    }
+
+    #[test]
+    fn test_tool_result_content_json() {
+        let content = ToolResultContent::json(serde_json::json!({"key": "value"}));
+        if let ToolResultContent::Json(v) = content {
+            assert_eq!(v["key"], "value");
+        } else {
+            panic!("Expected Json");
+        }
+    }
+
+    #[test]
+    fn test_tool_result_content_from_string() {
+        let content: ToolResultContent = "hello".into();
+        if let ToolResultContent::Text(t) = content {
+            assert_eq!(t, "hello");
+        } else {
+            panic!("Expected Text");
+        }
+    }
+
+    #[test]
+    fn test_tool_result_content_from_value() {
+        let content: ToolResultContent = serde_json::json!({"a": 1}).into();
+        if let ToolResultContent::Json(v) = content {
+            assert_eq!(v["a"], 1);
+        } else {
+            panic!("Expected Json");
+        }
+    }
+
+    // ========================================================================
+    // ToolChoice Tests
+    // ========================================================================
+
+    #[test]
+    fn test_tool_choice_variants() {
+        let auto = ToolChoice::Auto;
+        let none = ToolChoice::None;
+        let required = ToolChoice::Required;
+        let specific = ToolChoice::tool("fs_read");
+
+        assert!(matches!(auto, ToolChoice::Auto));
+        assert!(matches!(none, ToolChoice::None));
+        assert!(matches!(required, ToolChoice::Required));
+        assert!(matches!(specific, ToolChoice::Tool { name } if name == "fs_read"));
+    }
+
+    // ========================================================================
+    // ModelRequest Builder Tests
+    // ========================================================================
+
+    #[test]
+    fn test_model_request_builder_with_tools() {
+        let tool = ToolDefinition::new(
+            "test_tool",
+            "A test tool",
+            serde_json::json!({"type": "object"}),
+        );
+
+        let request = ModelRequest::builder("model", "system")
+            .tools(vec![tool])
+            .tool_choice(ToolChoice::Required)
+            .build();
+
+        assert_eq!(request.tools.len(), 1);
+        assert!(matches!(request.tool_choice, ToolChoice::Required));
+    }
+
+    #[test]
+    fn test_model_request_builder_defaults() {
+        let request = ModelRequest::builder("model", "system").build();
+
+        assert_eq!(request.max_tokens, 4096);
+        assert!(request.temperature.is_none());
+        assert!(matches!(request.tool_choice, ToolChoice::Auto));
+        assert!(request.messages.is_empty());
+        assert!(request.tools.is_empty());
+    }
+
+    // ========================================================================
+    // ModelResponse Tests
+    // ========================================================================
+
+    #[test]
+    fn test_model_response_wants_tool_use() {
+        let response = ModelResponse::new(
+            StopReason::ToolUse,
+            Message::assistant(""),
+            Usage::new(100, 50),
+            ProviderTrace::new("model", 100),
+        );
+
+        assert!(response.wants_tool_use());
+        assert!(!response.is_end_turn());
+    }
+
+    #[test]
+    fn test_model_response_end_turn() {
+        let response = ModelResponse::new(
+            StopReason::EndTurn,
+            Message::assistant("Done"),
+            Usage::new(100, 50),
+            ProviderTrace::new("model", 100),
+        );
+
+        assert!(!response.wants_tool_use());
+        assert!(response.is_end_turn());
+    }
+
+    // ========================================================================
+    // StreamAccumulator Tests
+    // ========================================================================
+
+    #[test]
+    fn test_stream_accumulator_text_only() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.process(&StreamEvent::MessageStart {
+            message_id: "msg1".to_string(),
+            model: "claude".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Text,
+        });
+        acc.process(&StreamEvent::TextDelta { text: "Hello ".to_string() });
+        acc.process(&StreamEvent::TextDelta { text: "world!".to_string() });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+        acc.process(&StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::EndTurn),
+            output_tokens: 10,
+        });
+        acc.process(&StreamEvent::MessageStop);
+
+        assert_eq!(acc.message_id, "msg1");
+        assert_eq!(acc.model, "claude");
+        assert_eq!(acc.text_content, "Hello world!");
+        assert_eq!(acc.output_tokens, 10);
+        assert_eq!(acc.stop_reason, Some(StopReason::EndTurn));
+    }
+
+    #[test]
+    fn test_stream_accumulator_tool_use() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.process(&StreamEvent::MessageStart {
+            message_id: "msg1".to_string(),
+            model: "claude".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::ToolUse {
+                id: "tool1".to_string(),
+                name: "fs_read".to_string(),
+            },
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#"{"path":"#.to_string(),
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#""test.txt"}"#.to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+        acc.process(&StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::ToolUse),
+            output_tokens: 20,
+        });
+
+        assert_eq!(acc.tool_uses.len(), 1);
+        assert_eq!(acc.tool_uses[0].id, "tool1");
+        assert_eq!(acc.tool_uses[0].name, "fs_read");
+        assert_eq!(acc.tool_uses[0].input_json, r#"{"path":"test.txt"}"#);
+    }
+
+    #[test]
+    fn test_stream_accumulator_thinking() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Thinking,
+        });
+        acc.process(&StreamEvent::ThinkingDelta {
+            thinking: "Let me ".to_string(),
+        });
+        acc.process(&StreamEvent::ThinkingDelta {
+            thinking: "think...".to_string(),
+        });
+        acc.process(&StreamEvent::SignatureDelta {
+            signature: "sig_abc".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+
+        assert_eq!(acc.thinking_content, "Let me think...");
+        assert_eq!(acc.thinking_signature, Some("sig_abc".to_string()));
+    }
+
+    #[test]
+    fn test_stream_accumulator_mixed_content() {
+        let mut acc = StreamAccumulator::new();
+
+        // Thinking block
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Thinking,
+        });
+        acc.process(&StreamEvent::ThinkingDelta {
+            thinking: "Thinking...".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+
+        // Text block
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 1,
+            content_type: StreamContentType::Text,
+        });
+        acc.process(&StreamEvent::TextDelta {
+            text: "Response text".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 1 });
+
+        // Tool use block
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 2,
+            content_type: StreamContentType::ToolUse {
+                id: "tool1".to_string(),
+                name: "fs_ls".to_string(),
+            },
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#"{"path":"."}"#.to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 2 });
+
+        assert_eq!(acc.thinking_content, "Thinking...");
+        assert_eq!(acc.text_content, "Response text");
+        assert_eq!(acc.tool_uses.len(), 1);
+    }
+
+    #[test]
+    fn test_stream_accumulator_into_response() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.process(&StreamEvent::MessageStart {
+            message_id: "msg123".to_string(),
+            model: "claude-opus-4-5-20251101".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Text,
+        });
+        acc.process(&StreamEvent::TextDelta {
+            text: "Hello!".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+        acc.process(&StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::EndTurn),
+            output_tokens: 5,
+        });
+
+        let response = acc.into_response(100, 500).unwrap();
+
+        assert_eq!(response.stop_reason, StopReason::EndTurn);
+        assert_eq!(response.message.text_content(), "Hello!");
+        assert_eq!(response.usage.input_tokens, 100);
+        assert_eq!(response.usage.output_tokens, 5);
+        assert_eq!(response.trace.model, "claude-opus-4-5-20251101");
+        assert_eq!(response.trace.latency_ms, 500);
+    }
+
+    #[test]
+    fn test_stream_accumulator_into_response_with_thinking() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.thinking_content = "Deep thoughts...".to_string();
+        acc.thinking_signature = Some("sig123".to_string());
+        acc.text_content = "Here's my answer".to_string();
+        acc.stop_reason = Some(StopReason::EndTurn);
+        acc.model = "claude".to_string();
+
+        let response = acc.into_response(50, 200).unwrap();
+
+        // Thinking should come before text in content blocks
+        assert_eq!(response.message.content.len(), 2);
+        assert!(matches!(&response.message.content[0], ContentBlock::Thinking { .. }));
+        assert!(matches!(&response.message.content[1], ContentBlock::Text { .. }));
+    }
+
+    #[test]
+    fn test_stream_accumulator_into_response_with_tool() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.tool_uses.push(AccumulatedToolUse {
+            id: "tool1".to_string(),
+            name: "fs_read".to_string(),
+            input_json: r#"{"path":"test.txt"}"#.to_string(),
+        });
+        acc.stop_reason = Some(StopReason::ToolUse);
+
+        let response = acc.into_response(50, 100).unwrap();
+
+        assert_eq!(response.stop_reason, StopReason::ToolUse);
+        assert!(response.message.has_tool_use());
+        
+        if let ContentBlock::ToolUse { id, name, input } = &response.message.content[0] {
+            assert_eq!(id, "tool1");
+            assert_eq!(name, "fs_read");
+            assert_eq!(input["path"], "test.txt");
+        } else {
+            panic!("Expected ToolUse block");
+        }
+    }
+
+    #[test]
+    fn test_stream_accumulator_invalid_json_handling() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.tool_uses.push(AccumulatedToolUse {
+            id: "tool1".to_string(),
+            name: "test".to_string(),
+            input_json: "invalid json {{{".to_string(),
+        });
+
+        let response = acc.into_response(0, 0).unwrap();
+
+        // Invalid JSON should be wrapped in a "raw" field
+        if let ContentBlock::ToolUse { input, .. } = &response.message.content[0] {
+            assert!(input.get("raw").is_some());
+        } else {
+            panic!("Expected ToolUse block");
+        }
+    }
+
+    #[test]
+    fn test_stream_accumulator_empty_tool_json() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.tool_uses.push(AccumulatedToolUse {
+            id: "tool1".to_string(),
+            name: "test".to_string(),
+            input_json: "".to_string(),
+        });
+
+        let response = acc.into_response(0, 0).unwrap();
+
+        // Empty JSON should become empty object
+        if let ContentBlock::ToolUse { input, .. } = &response.message.content[0] {
+            assert!(input.is_object());
+            assert!(input.as_object().unwrap().is_empty());
+        } else {
+            panic!("Expected ToolUse block");
+        }
+    }
+
+    #[test]
+    fn test_stream_accumulator_multiple_tools() {
+        let mut acc = StreamAccumulator::new();
+
+        // First tool
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::ToolUse {
+                id: "tool1".to_string(),
+                name: "fs_ls".to_string(),
+            },
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#"{"path":"."}"#.to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+
+        // Second tool
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 1,
+            content_type: StreamContentType::ToolUse {
+                id: "tool2".to_string(),
+                name: "fs_read".to_string(),
+            },
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#"{"path":"file.txt"}"#.to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 1 });
+
+        assert_eq!(acc.tool_uses.len(), 2);
+        assert_eq!(acc.tool_uses[0].name, "fs_ls");
+        assert_eq!(acc.tool_uses[1].name, "fs_read");
+    }
+
+    #[test]
+    fn test_stream_accumulator_ping_and_error() {
+        let mut acc = StreamAccumulator::new();
+
+        // These should be handled gracefully
+        acc.process(&StreamEvent::Ping);
+        acc.process(&StreamEvent::Error {
+            message: "test error".to_string(),
+        });
+
+        // State should be unchanged
+        assert!(acc.text_content.is_empty());
+    }
+
+    // ========================================================================
+    // ProviderTrace Tests
+    // ========================================================================
+
+    #[test]
+    fn test_provider_trace() {
+        let trace = ProviderTrace::new("claude", 500)
+            .with_request_id("req123");
+
+        assert_eq!(trace.model, "claude");
+        assert_eq!(trace.latency_ms, 500);
+        assert_eq!(trace.request_id, Some("req123".to_string()));
     }
 }

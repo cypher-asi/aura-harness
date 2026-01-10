@@ -37,11 +37,16 @@
 mod context;
 mod kernel;
 mod policy;
+pub mod process_manager;
 mod turn_processor;
 
 pub use context::{Context, ContextBuilder};
 pub use kernel::{Kernel, KernelConfig, ProcessResult};
 pub use policy::{default_tool_permission, PermissionLevel, Policy, PolicyConfig, PolicyResult};
+pub use process_manager::{ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess};
 pub use turn_processor::{
-    StreamCallback, StreamCallbackEvent, TurnConfig, TurnEntry, TurnProcessor, TurnResult,
+    ExecutedToolCall, StreamCallback, StreamCallbackEvent, TurnConfig, TurnEntry, TurnProcessor, TurnResult,
 };
+
+// Re-export ToolResultContent for convenience
+pub use aura_reasoner::ToolResultContent;

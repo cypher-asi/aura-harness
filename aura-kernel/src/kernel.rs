@@ -91,7 +91,7 @@ where
     /// # Errors
     ///
     /// Returns error if storage operations or proposal processing fails.
-    #[instrument(skip(self, tx), fields(agent_id = %tx.agent_id, tx_id = %tx.tx_id))]
+    #[instrument(skip(self, tx), fields(agent_id = %tx.agent_id, hash = %tx.hash))]
     pub async fn process(&self, tx: Transaction, next_seq: u64) -> anyhow::Result<ProcessResult> {
         info!(seq = next_seq, "Processing transaction");
 

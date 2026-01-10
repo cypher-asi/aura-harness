@@ -2,7 +2,7 @@
 //!
 //! Includes Transaction, Action, Effect, `RecordEntry`, and related types.
 
-use crate::ids::{ActionId, AgentId, TxId};
+use crate::ids::{ActionId, AgentId, Hash, ProcessId, TxId};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -11,10 +11,10 @@ use std::collections::HashMap;
 // Transaction Types
 // ============================================================================
 
-/// The kind of transaction.
+/// The type of transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TransactionKind {
+pub enum TransactionType {
     /// User-initiated prompt/message
     UserPrompt,
     /// Message from another agent
@@ -27,94 +27,368 @@ pub enum TransactionKind {
     System,
     /// Session/context reset marker
     SessionStart,
+    /// Tool proposal from the reasoner (LLM suggestion, before policy check)
+    ToolProposal,
+    /// Tool execution result (after kernel policy decision)
+    ToolExecution,
+    /// Async process completion (callback from background process)
+    ProcessComplete,
 }
+
+/// Legacy alias for backwards compatibility.
+#[deprecated(since = "0.2.0", note = "Use TransactionType instead")]
+pub type TransactionKind = TransactionType;
 
 /// An immutable transaction input to the system.
 ///
 /// Transactions are the only way state can change in Aura.
+/// The `hash` is derived from content + previous tx hash, creating an immutable chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transaction {
-    /// Unique transaction identifier
-    pub tx_id: TxId,
+    /// Unique hash derived from content + previous tx hash (blockchain-style chain)
+    /// Uses default (zeroed) hash for backwards compatibility with old records.
+    #[serde(default, with = "hex_hash")]
+    pub hash: Hash,
     /// Target agent
     pub agent_id: AgentId,
     /// Timestamp in milliseconds since epoch
     pub ts_ms: u64,
     /// Type of transaction
-    pub kind: TransactionKind,
+    pub tx_type: TransactionType,
     /// Versioned payload (opaque bytes)
     #[serde(with = "bytes_serde")]
     pub payload: Bytes,
+    /// Optional reference to a related transaction (for callbacks from async processes)
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "option_hex_hash")]
+    pub reference_tx_hash: Option<Hash>,
 }
 
 impl Transaction {
-    /// Create a new transaction.
+    /// Get current timestamp in milliseconds.
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0)
+    }
+
+    /// Create a new transaction with explicit hash (for replay/import).
     #[must_use]
     pub fn new(
-        tx_id: TxId,
+        hash: Hash,
         agent_id: AgentId,
         ts_ms: u64,
-        kind: TransactionKind,
+        tx_type: TransactionType,
         payload: impl Into<Bytes>,
     ) -> Self {
         Self {
-            tx_id,
+            hash,
             agent_id,
             ts_ms,
-            kind,
+            tx_type,
             payload: payload.into(),
+            reference_tx_hash: None,
+        }
+    }
+
+    /// Create a new transaction chained to a previous transaction.
+    #[must_use]
+    pub fn new_chained(
+        agent_id: AgentId,
+        tx_type: TransactionType,
+        payload: impl Into<Bytes>,
+        prev_hash: Option<&Hash>,
+    ) -> Self {
+        let payload = payload.into();
+        let hash = Hash::from_content_chained(&payload, prev_hash);
+        let ts_ms = Self::now_ms();
+
+        Self {
+            hash,
+            agent_id,
+            ts_ms,
+            tx_type,
+            payload,
+            reference_tx_hash: None,
         }
     }
 
     /// Create a user prompt transaction.
     #[must_use]
     pub fn user_prompt(agent_id: AgentId, payload: impl Into<Bytes>) -> Self {
-        let payload = payload.into();
-        let tx_id = TxId::from_content(&payload);
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+        Self::new_chained(agent_id, TransactionType::UserPrompt, payload, None)
+    }
 
-        Self::new(tx_id, agent_id, ts_ms, TransactionKind::UserPrompt, payload)
+    /// Create a user prompt transaction chained to a previous transaction.
+    #[must_use]
+    pub fn user_prompt_chained(agent_id: AgentId, payload: impl Into<Bytes>, prev_hash: &Hash) -> Self {
+        Self::new_chained(agent_id, TransactionType::UserPrompt, payload, Some(prev_hash))
     }
 
     /// Create an action result transaction.
     #[must_use]
     pub fn action_result(agent_id: AgentId, payload: impl Into<Bytes>) -> Self {
-        let payload = payload.into();
-        let tx_id = TxId::from_content(&payload);
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+        Self::new_chained(agent_id, TransactionType::ActionResult, payload, None)
+    }
 
-        Self::new(
-            tx_id,
+    /// Create an action result with a reference to the originating transaction.
+    ///
+    /// Used for async process completions that need to reference their origin.
+    #[must_use]
+    pub fn action_result_with_reference(
+        agent_id: AgentId,
+        payload: impl Into<Bytes>,
+        reference_tx_hash: Hash,
+        prev_hash: Option<&Hash>,
+    ) -> Self {
+        let payload = payload.into();
+        let hash = Hash::from_content_chained(&payload, prev_hash);
+        let ts_ms = Self::now_ms();
+
+        Self {
+            hash,
             agent_id,
             ts_ms,
-            TransactionKind::ActionResult,
+            tx_type: TransactionType::ActionResult,
             payload,
-        )
+            reference_tx_hash: Some(reference_tx_hash),
+        }
     }
 
     /// Create a session start transaction (context reset marker).
     #[must_use]
     pub fn session_start(agent_id: AgentId) -> Self {
-        let payload = Bytes::from_static(b"session_start");
-        let tx_id = TxId::from_content(&payload);
-        let ts_ms = std::time::SystemTime::now()
+        Self::new_chained(agent_id, TransactionType::SessionStart, Bytes::from_static(b"session_start"), None)
+    }
+
+    /// Create a tool proposal transaction.
+    ///
+    /// Records a tool call suggested by the reasoner (LLM) before policy evaluation.
+    /// The payload contains the proposed tool call details.
+    #[must_use]
+    pub fn tool_proposal(agent_id: AgentId, proposal: &ToolProposal) -> Self {
+        let payload = serde_json::to_vec(proposal).unwrap_or_default();
+        Self::new_chained(agent_id, TransactionType::ToolProposal, payload, None)
+    }
+
+    /// Create a tool execution transaction.
+    ///
+    /// Records the kernel's decision and execution result for a tool proposal.
+    /// This captures what actually happened after policy evaluation.
+    #[must_use]
+    pub fn tool_execution(agent_id: AgentId, execution: &ToolExecution) -> Self {
+        let payload = serde_json::to_vec(execution).unwrap_or_default();
+        Self::new_chained(agent_id, TransactionType::ToolExecution, payload, None)
+    }
+
+    /// Create a process completion transaction.
+    ///
+    /// Records the result of an async process that completed after the initial
+    /// transaction was recorded. Links back to the originating transaction.
+    #[must_use]
+    pub fn process_complete(
+        agent_id: AgentId,
+        payload: &ActionResultPayload,
+        reference_tx_hash: Hash,
+        prev_hash: Option<&Hash>,
+    ) -> Self {
+        let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
+        let hash = Hash::from_content_chained(&payload_bytes, prev_hash);
+        let ts_ms = Self::now_ms();
+
+        Self {
+            hash,
+            agent_id,
+            ts_ms,
+            tx_type: TransactionType::ProcessComplete,
+            payload: payload_bytes.into(),
+            reference_tx_hash: Some(reference_tx_hash),
+        }
+    }
+
+    /// Get the transaction hash (legacy compatibility with tx_id).
+    #[must_use]
+    pub fn tx_id(&self) -> TxId {
+        TxId::new(*self.hash.as_bytes())
+    }
+}
+
+// ============================================================================
+// Tool Proposal and Execution Payloads
+// ============================================================================
+
+/// A tool proposal from the reasoner (LLM).
+///
+/// This records what the LLM suggested before any policy check.
+/// The kernel will decide whether to approve or deny this proposal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolProposal {
+    /// Tool use ID from the model
+    pub tool_use_id: String,
+    /// Tool name
+    pub tool: String,
+    /// Tool arguments
+    pub args: serde_json::Value,
+    /// Source of the proposal (e.g., model name)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl ToolProposal {
+    /// Create a new tool proposal.
+    #[must_use]
+    pub fn new(tool_use_id: impl Into<String>, tool: impl Into<String>, args: serde_json::Value) -> Self {
+        Self {
+            tool_use_id: tool_use_id.into(),
+            tool: tool.into(),
+            args,
+            source: None,
+        }
+    }
+
+    /// Set the source of the proposal.
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+}
+
+/// The kernel's decision on a tool proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDecision {
+    /// Approved and executed
+    Approved,
+    /// Denied by policy
+    Denied,
+    /// Requires user approval (pending)
+    PendingApproval,
+}
+
+/// Tool execution result from the kernel.
+///
+/// This records what actually happened after policy evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolExecution {
+    /// Reference to the original proposal's `tool_use_id`
+    pub tool_use_id: String,
+    /// Tool name
+    pub tool: String,
+    /// Tool arguments (copied from proposal for auditability)
+    pub args: serde_json::Value,
+    /// Kernel's decision
+    pub decision: ToolDecision,
+    /// Reason for the decision (especially for denials)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Execution result (if approved and executed)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    /// Whether the execution failed (only relevant if approved)
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+// ============================================================================
+// Async Process Types
+// ============================================================================
+
+/// Payload for a pending process effect.
+///
+/// This is stored in the Effect payload when a command exceeds the sync threshold
+/// and is moved to async execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessPending {
+    /// Unique process identifier for tracking
+    pub process_id: ProcessId,
+    /// The command being executed
+    pub command: String,
+    /// When the process started (milliseconds since epoch)
+    pub started_at_ms: u64,
+}
+
+impl ProcessPending {
+    /// Create a new pending process payload.
+    #[must_use]
+    pub fn new(process_id: ProcessId, command: impl Into<String>) -> Self {
+        let started_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
             .unwrap_or(0);
 
-        Self::new(
-            tx_id,
-            agent_id,
-            ts_ms,
-            TransactionKind::SessionStart,
-            payload,
-        )
+        Self {
+            process_id,
+            command: command.into(),
+            started_at_ms,
+        }
+    }
+}
+
+/// Payload for ActionResult transactions from completed async processes.
+///
+/// This is used when an async process completes and needs to be recorded
+/// as a continuation of the original transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionResultPayload {
+    /// The action_id this result continues
+    pub action_id: ActionId,
+    /// Process identifier for correlation
+    pub process_id: ProcessId,
+    /// Exit code from the process
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Standard output from the process
+    #[serde(default, with = "bytes_serde")]
+    pub stdout: Bytes,
+    /// Standard error from the process
+    #[serde(default, with = "bytes_serde")]
+    pub stderr: Bytes,
+    /// Whether the process succeeded
+    pub success: bool,
+    /// Duration in milliseconds
+    pub duration_ms: u64,
+}
+
+impl ActionResultPayload {
+    /// Create a successful result payload.
+    #[must_use]
+    pub fn success(
+        action_id: ActionId,
+        process_id: ProcessId,
+        exit_code: Option<i32>,
+        stdout: impl Into<Bytes>,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            action_id,
+            process_id,
+            exit_code,
+            stdout: stdout.into(),
+            stderr: Bytes::new(),
+            success: true,
+            duration_ms,
+        }
+    }
+
+    /// Create a failed result payload.
+    #[must_use]
+    pub fn failure(
+        action_id: ActionId,
+        process_id: ProcessId,
+        exit_code: Option<i32>,
+        stderr: impl Into<Bytes>,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            action_id,
+            process_id,
+            exit_code,
+            stdout: Bytes::new(),
+            stderr: stderr.into(),
+            success: false,
+            duration_ms,
+        }
     }
 }
 
@@ -542,7 +816,7 @@ impl Identity {
 /// A tool call request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Tool name (e.g., "fs_ls", "fs_read", "cmd_run")
+    /// Tool name (e.g., `fs_ls`, `fs_read`, `cmd_run`)
     pub tool: String,
     /// Tool arguments (versioned JSON)
     pub args: serde_json::Value,
@@ -558,13 +832,13 @@ impl ToolCall {
         }
     }
 
-    /// Create an fs_ls tool call.
+    /// Create an `fs_ls` tool call.
     #[must_use]
     pub fn fs_ls(path: impl Into<String>) -> Self {
         Self::new("fs_ls", serde_json::json!({ "path": path.into() }))
     }
 
-    /// Create an fs_read tool call.
+    /// Create an `fs_read` tool call.
     #[must_use]
     pub fn fs_read(path: impl Into<String>, max_bytes: Option<usize>) -> Self {
         let mut args = serde_json::json!({ "path": path.into() });
@@ -574,7 +848,7 @@ impl ToolCall {
         Self::new("fs_read", args)
     }
 
-    /// Create an fs_stat tool call.
+    /// Create an `fs_stat` tool call.
     #[must_use]
     pub fn fs_stat(path: impl Into<String>) -> Self {
         Self::new("fs_stat", serde_json::json!({ "path": path.into() }))
@@ -691,6 +965,54 @@ mod bytes_serde {
     }
 }
 
+/// Helper module for hex serialization of Hash type.
+mod hex_hash {
+    use crate::ids::Hash;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(hash: &Hash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hash.to_hex())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Hash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Hash::from_hex(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Helper module for optional hex serialization of Hash type.
+mod option_hex_hash {
+    use crate::ids::Hash;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(hash: &Option<Hash>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match hash {
+            Some(h) => serializer.serialize_some(&h.to_hex()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Hash>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        match opt {
+            Some(s) => Hash::from_hex(&s).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,6 +1023,51 @@ mod tests {
         let json = serde_json::to_string(&tx).unwrap();
         let parsed: Transaction = serde_json::from_str(&json).unwrap();
         assert_eq!(tx, parsed);
+    }
+
+    #[test]
+    fn transaction_with_reference() {
+        let agent_id = AgentId::generate();
+        let orig_tx = Transaction::user_prompt(agent_id, b"start process".to_vec());
+        let result_payload = ActionResultPayload::success(
+            ActionId::generate(),
+            ProcessId::generate(),
+            Some(0),
+            b"output".to_vec(),
+            1000,
+        );
+        let callback_tx = Transaction::process_complete(
+            agent_id,
+            &result_payload,
+            orig_tx.hash,
+            Some(&orig_tx.hash),
+        );
+
+        assert_eq!(callback_tx.reference_tx_hash, Some(orig_tx.hash));
+        assert_eq!(callback_tx.tx_type, TransactionType::ProcessComplete);
+
+        let json = serde_json::to_string(&callback_tx).unwrap();
+        let parsed: Transaction = serde_json::from_str(&json).unwrap();
+        assert_eq!(callback_tx, parsed);
+    }
+
+    #[test]
+    fn transaction_chaining() {
+        let agent_id = AgentId::generate();
+
+        // Genesis transaction (no prev)
+        let tx1 = Transaction::user_prompt(agent_id, b"first".to_vec());
+
+        // Chained transaction
+        let tx2 = Transaction::user_prompt_chained(agent_id, b"second".to_vec(), &tx1.hash);
+
+        // Same content with different prev produces different hash
+        let tx3 = Transaction::user_prompt(agent_id, b"second".to_vec());
+        assert_ne!(tx2.hash, tx3.hash);
+
+        // Deterministic - same inputs produce same hash
+        let tx4 = Transaction::user_prompt_chained(agent_id, b"second".to_vec(), &tx1.hash);
+        assert_eq!(tx2.hash, tx4.hash);
     }
 
     #[test]
@@ -761,5 +1128,65 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ToolResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, parsed);
+    }
+
+    #[test]
+    fn process_pending_roundtrip() {
+        let pending = ProcessPending::new(ProcessId::generate(), "cargo build --release");
+        let json = serde_json::to_string(&pending).unwrap();
+        let parsed: ProcessPending = serde_json::from_str(&json).unwrap();
+        assert_eq!(pending, parsed);
+    }
+
+    #[test]
+    fn action_result_payload_success_roundtrip() {
+        let payload = ActionResultPayload::success(
+            ActionId::generate(),
+            ProcessId::generate(),
+            Some(0),
+            b"build succeeded".to_vec(),
+            5000,
+        );
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: ActionResultPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload, parsed);
+        assert!(payload.success);
+    }
+
+    #[test]
+    fn action_result_payload_failure_roundtrip() {
+        let payload = ActionResultPayload::failure(
+            ActionId::generate(),
+            ProcessId::generate(),
+            Some(1),
+            b"build failed".to_vec(),
+            3000,
+        );
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: ActionResultPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload, parsed);
+        assert!(!payload.success);
+    }
+
+    #[test]
+    fn transaction_type_serialization() {
+        // Verify all transaction types serialize correctly
+        let types = vec![
+            TransactionType::UserPrompt,
+            TransactionType::AgentMsg,
+            TransactionType::Trigger,
+            TransactionType::ActionResult,
+            TransactionType::System,
+            TransactionType::SessionStart,
+            TransactionType::ToolProposal,
+            TransactionType::ToolExecution,
+            TransactionType::ProcessComplete,
+        ];
+
+        for tx_type in types {
+            let json = serde_json::to_string(&tx_type).unwrap();
+            let parsed: TransactionType = serde_json::from_str(&json).unwrap();
+            assert_eq!(tx_type, parsed);
+        }
     }
 }

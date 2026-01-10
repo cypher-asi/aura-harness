@@ -28,6 +28,8 @@ blake3 = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
 dotenvy = "0.15.7"
+axum = { workspace = true }
+tower-http = { workspace = true }
 
 [workspace]
 resolver = "2"
@@ -87,6 +89,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Testing
 tempfile = "3.10"
+proptest = "1.4"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -105,6 +108,11 @@ base64 = "0.22"
 
 # Directories
 dirs = "5.0"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+bytes = { workspace = true }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

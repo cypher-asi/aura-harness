@@ -20,6 +20,8 @@ pub struct Terminal {
     theme: Theme,
     width: u16,
     height: u16,
+    /// Whether mouse capture is currently enabled
+    mouse_capture_enabled: bool,
 }
 
 impl Terminal {
@@ -47,6 +49,7 @@ impl Terminal {
             theme,
             width: size.width,
             height: size.height,
+            mouse_capture_enabled: true,
         })
     }
 
@@ -94,6 +97,10 @@ impl Terminal {
     /// Returns error if rendering or event handling fails.
     pub fn run(&mut self, app: &mut App) -> anyhow::Result<()> {
         loop {
+            // Process any pending updates from the command channel FIRST
+            // This ensures records loaded at startup are displayed on the first frame
+            app.tick();
+
             // Update size in case of resize
             self.update_size()?;
 
@@ -107,6 +114,12 @@ impl Terminal {
             if event::poll(Duration::from_millis(50))? {
                 match event::read()? {
                     Event::Key(key) => {
+                        // Re-enable mouse capture if it was disabled for text selection
+                        if !self.mouse_capture_enabled {
+                            let _ = execute!(self.inner.backend_mut(), EnableMouseCapture);
+                            self.mouse_capture_enabled = true;
+                        }
+
                         // Only process key press events (not release or repeat)
                         // This fixes double-character input on Windows
                         if key.kind != KeyEventKind::Press {
@@ -136,12 +149,23 @@ impl Terminal {
                         self.height = height;
                     }
                     Event::Mouse(mouse) => {
-                        // When Shift is held, don't handle mouse events - let them
-                        // pass through to the terminal for native text selection/copy
+                        // When Shift is held, disable mouse capture to allow terminal's
+                        // native text selection (Shift+click+drag to select, auto-copies
+                        // to clipboard in most terminal emulators like Windows Terminal)
                         if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                            if self.mouse_capture_enabled {
+                                let _ = execute!(self.inner.backend_mut(), DisableMouseCapture);
+                                self.mouse_capture_enabled = false;
+                            }
                             continue;
                         }
-                        
+
+                        // Re-enable mouse capture if it was disabled for selection
+                        if !self.mouse_capture_enabled {
+                            let _ = execute!(self.inner.backend_mut(), EnableMouseCapture);
+                            self.mouse_capture_enabled = true;
+                        }
+
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
                                 app.scroll_up(3);
@@ -155,9 +179,6 @@ impl Terminal {
                     _ => {}
                 }
             }
-
-            // Process any pending updates from the command channel
-            app.tick();
         }
 
         Ok(())

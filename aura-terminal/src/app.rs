@@ -84,6 +84,10 @@ pub struct App {
     command_rx: Option<mpsc::Receiver<UiCommand>>,
     /// Current streaming message (being built)
     streaming_content: String,
+    /// Current thinking content (being built)
+    thinking_content: String,
+    /// Whether currently streaming thinking
+    is_thinking: bool,
     /// Notification message (ephemeral)
     notification: Option<(String, NotificationType)>,
     /// Which panel has focus
@@ -108,6 +112,10 @@ pub struct App {
     selected_agent: usize,
     /// Currently active agent ID
     active_agent_id: String,
+    /// API URL for the swarm
+    api_url: Option<String>,
+    /// Whether the API is currently active
+    api_active: bool,
 }
 
 /// Type of notification.
@@ -139,6 +147,8 @@ impl App {
             event_tx: None,
             command_rx: None,
             streaming_content: String::new(),
+            thinking_content: String::new(),
+            is_thinking: false,
             notification: None,
             focus: PanelFocus::default(),
             record_panel_visible: true,
@@ -151,6 +161,8 @@ impl App {
             agents: Vec::new(),
             selected_agent: 0,
             active_agent_id: String::new(),
+            api_url: None,
+            api_active: false,
         }
     }
 
@@ -203,6 +215,18 @@ impl App {
         &self.messages
     }
 
+    /// Get the current thinking content.
+    #[must_use]
+    pub fn thinking_content(&self) -> &str {
+        &self.thinking_content
+    }
+
+    /// Check if currently streaming thinking.
+    #[must_use]
+    pub const fn is_thinking(&self) -> bool {
+        self.is_thinking
+    }
+
     /// Get the active tool cards.
     #[must_use]
     pub fn tools(&self) -> &[ToolCard] {
@@ -225,6 +249,49 @@ impl App {
     #[must_use]
     pub const fn scroll_offset(&self) -> usize {
         self.scroll_offset
+    }
+
+    /// Scroll up by the given number of lines (panel-aware).
+    pub fn scroll_up(&mut self, lines: usize) {
+        match self.focus {
+            PanelFocus::Chat => {
+                // Scroll up means we want to see older messages (increase offset)
+                let max_scroll = self.messages.len().saturating_sub(1);
+                self.scroll_offset = self.scroll_offset.saturating_add(lines).min(max_scroll);
+            }
+            PanelFocus::Records => {
+                // Move selection up in records list
+                self.selected_record = self.selected_record.saturating_sub(lines);
+            }
+            PanelFocus::Swarm => {
+                // Move selection up in agents list
+                self.selected_agent = self.selected_agent.saturating_sub(lines);
+            }
+        }
+    }
+
+    /// Scroll down by the given number of lines (panel-aware).
+    pub fn scroll_down(&mut self, lines: usize) {
+        match self.focus {
+            PanelFocus::Chat => {
+                // Scroll down means we want to see newer messages (decrease offset)
+                self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+            }
+            PanelFocus::Records => {
+                // Move selection down in records list
+                if !self.records.is_empty() {
+                    self.selected_record =
+                        (self.selected_record + lines).min(self.records.len().saturating_sub(1));
+                }
+            }
+            PanelFocus::Swarm => {
+                // Move selection down in agents list
+                if !self.agents.is_empty() {
+                    self.selected_agent =
+                        (self.selected_agent + lines).min(self.agents.len().saturating_sub(1));
+                }
+            }
+        }
     }
 
     /// Get the pending approval.
@@ -273,6 +340,18 @@ impl App {
     #[must_use]
     pub fn active_agent_id(&self) -> &str {
         &self.active_agent_id
+    }
+
+    /// Get the API URL (if set).
+    #[must_use]
+    pub fn api_url(&self) -> Option<&str> {
+        self.api_url.as_deref()
+    }
+
+    /// Check if the API is active.
+    #[must_use]
+    pub const fn api_active(&self) -> bool {
+        self.api_active
     }
 
     /// Get the current spinner character for animations.
@@ -420,7 +499,7 @@ impl App {
 
     /// Get the next panel focus when Tab is pressed.
     /// Goes right-to-left: Chat → Record → Swarm → Chat
-    fn next_panel_focus(&self) -> PanelFocus {
+    const fn next_panel_focus(&self) -> PanelFocus {
         match self.focus {
             PanelFocus::Chat => {
                 if self.record_panel_visible {
@@ -448,7 +527,7 @@ impl App {
             KeyCode::Enter => {
                 // Don't allow submitting while already processing
                 if !self.input.is_empty() && self.state != AppState::Processing {
-                    self.submit_input();
+                    return self.submit_input();
                 }
             }
             KeyCode::Char(c) => {
@@ -617,15 +696,14 @@ impl App {
     }
 
     /// Submit the current input.
-    fn submit_input(&mut self) {
+    fn submit_input(&mut self) -> KeyResult {
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
         self.input_history.add(&text);
 
         // Check for slash commands
         if text.starts_with('/') {
-            self.handle_command(&text);
-            return;
+            return self.handle_command(&text);
         }
 
         // Regular message - add to conversation and send event
@@ -636,10 +714,11 @@ impl App {
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::UserMessage(text));
         }
+        KeyResult::continue_running()
     }
 
     /// Handle a slash command.
-    fn handle_command(&mut self, text: &str) {
+    fn handle_command(&mut self, text: &str) -> KeyResult {
         let parts: Vec<&str> = text[1..].splitn(2, ' ').collect();
         let cmd = parts[0].to_lowercase();
         let _arg = parts.get(1).unwrap_or(&"");
@@ -649,6 +728,7 @@ impl App {
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::Quit);
                 }
+                return KeyResult::quit();
             }
             "help" | "?" => {
                 self.state = AppState::ShowingHelp;
@@ -657,6 +737,8 @@ impl App {
                 self.messages.clear();
                 self.tools.clear();
                 self.scroll_offset = 0;
+                self.thinking_content.clear();
+                self.is_thinking = false;
             }
             "status" | "s" => {
                 if let Some(tx) = &self.event_tx {
@@ -694,6 +776,8 @@ impl App {
                 self.tools.clear();
                 self.scroll_offset = 0;
                 self.streaming_content.clear();
+                self.thinking_content.clear();
+                self.is_thinking = false;
                 // Notify kernel to reset context
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::NewSession);
@@ -710,6 +794,7 @@ impl App {
                 ));
             }
         }
+        KeyResult::continue_running()
     }
 
     /// Add a message to the conversation.
@@ -735,8 +820,10 @@ impl App {
                 self.status = status;
             }
             UiCommand::StartStreaming => {
-                // Clear any existing streaming content and start fresh
+                // Clear any existing streaming/thinking content and start fresh
                 self.streaming_content.clear();
+                self.thinking_content.clear();
+                self.is_thinking = false;
                 // Add a placeholder streaming message that we'll update
                 let mut msg = Message::new(MessageRole::Assistant, "");
                 msg.set_streaming(true);
@@ -766,6 +853,18 @@ impl App {
                 }
                 self.streaming_content.clear();
             }
+            UiCommand::StartThinking => {
+                // Clear any existing thinking content and start fresh
+                self.thinking_content.clear();
+                self.is_thinking = true;
+            }
+            UiCommand::AppendThinking(thinking) => {
+                self.thinking_content.push_str(&thinking);
+            }
+            UiCommand::FinishThinking => {
+                // Thinking complete - content is kept for display until next response
+                self.is_thinking = false;
+            }
             UiCommand::ShowMessage(data) => {
                 let role = match data.role {
                     crate::events::MessageRole::User => MessageRole::User,
@@ -781,14 +880,23 @@ impl App {
             UiCommand::ShowTool(data) => {
                 let tool = ToolCard::new(&data.id, &data.name).with_args(&data.args);
                 self.add_tool(tool);
+                
+                // Add tool execution to conversation as a system message
+                let tool_summary = format_tool_summary(&data.name, &data.args);
+                self.add_message(Message::new(
+                    MessageRole::System,
+                    &format!("🔧 {} : {}", data.name, tool_summary),
+                ));
             }
             UiCommand::CompleteTool {
                 id,
                 result,
                 success,
             } => {
+                let mut tool_name = String::new();
                 for tool in &mut self.tools {
                     if tool.id() == id {
+                        tool_name = tool.name().to_string();
                         tool.set_status(if success {
                             ToolStatus::Success
                         } else {
@@ -796,6 +904,25 @@ impl App {
                         });
                         tool.set_result(&result);
                     }
+                }
+                
+                // Add tool result to conversation
+                if !result.is_empty() {
+                    let (icon, prefix) = if success {
+                        ("✓", "")
+                    } else {
+                        ("✗", "Error: ")
+                    };
+                    // Truncate long results for display
+                    let display_result = if result.len() > 200 {
+                        format!("{}...", &result[..197])
+                    } else {
+                        result.clone()
+                    };
+                    self.add_message(Message::new(
+                        MessageRole::System,
+                        &format!("   {icon} {tool_name}: {prefix}{display_result}"),
+                    ));
                 }
             }
             UiCommand::RequestApproval {
@@ -811,12 +938,18 @@ impl App {
                 self.state = AppState::AwaitingApproval;
             }
             UiCommand::ShowError(msg) => {
+                // Add error to conversation as a system message
+                self.add_message(Message::new(MessageRole::System, &format!("⛔ Error: {msg}")));
                 self.notification = Some((msg, NotificationType::Error));
             }
             UiCommand::ShowSuccess(msg) => {
+                // Add success to conversation as a system message
+                self.add_message(Message::new(MessageRole::System, &format!("✓ {msg}")));
                 self.notification = Some((msg, NotificationType::Success));
             }
             UiCommand::ShowWarning(msg) => {
+                // Add warning to conversation as a system message
+                self.add_message(Message::new(MessageRole::System, &format!("⚠ Warning: {msg}")));
                 self.notification = Some((msg, NotificationType::Warning));
             }
             UiCommand::Complete => {
@@ -833,6 +966,9 @@ impl App {
                     }
                 }
                 self.streaming_content.clear();
+                // Clear thinking state - thinking content persists for display
+                // but is_thinking should be false since we're done
+                self.is_thinking = false;
                 self.state = AppState::Idle;
                 self.status = "Ready".to_string();
                 self.tools.clear();
@@ -840,6 +976,8 @@ impl App {
             UiCommand::ClearConversation => {
                 self.messages.clear();
                 self.tools.clear();
+                self.thinking_content.clear();
+                self.is_thinking = false;
             }
             UiCommand::NewRecord(record) => {
                 self.records.push_front(record);
@@ -877,6 +1015,10 @@ impl App {
                 self.records.clear();
                 self.selected_record = 0;
             }
+            UiCommand::SetApiStatus { url, active } => {
+                self.api_url = url;
+                self.api_active = active;
+            }
         }
     }
 
@@ -899,6 +1041,79 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Format a tool summary from tool name and JSON args for display.
+fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
+    // Try to parse args as JSON and extract relevant info
+    if let Ok(args) = serde_json::from_str::<serde_json::Value>(args_json) {
+        match tool_name {
+            "cmd_run" => {
+                // Show the command being run
+                let program = args.get("program").and_then(|v| v.as_str()).unwrap_or("");
+                let cmd_args = args.get("args").and_then(|v| {
+                    v.as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| a.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                }).unwrap_or_default();
+                if cmd_args.is_empty() {
+                    program.to_string()
+                } else {
+                    format!("{program} {cmd_args}")
+                }
+            }
+            "fs_read" | "file_read" => {
+                // Show the file path
+                args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string()
+            }
+            "fs_write" | "file_write" => {
+                // Show the file path
+                args.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string()
+            }
+            "fs_list" | "list_dir" => {
+                // Show the directory path
+                args.get("path").and_then(|v| v.as_str()).unwrap_or(".").to_string()
+            }
+            "fs_search" | "search" | "glob" => {
+                // Show the pattern
+                args.get("pattern").and_then(|v| v.as_str()).unwrap_or("").to_string()
+            }
+            _ => {
+                // For other tools, show a compact summary of args
+                let summary: Vec<String> = args.as_object()
+                    .map(|obj| {
+                        obj.iter()
+                            .take(3) // Limit to first 3 args
+                            .filter_map(|(k, v)| {
+                                let val_str = match v {
+                                    serde_json::Value::String(s) => {
+                                        if s.len() > 30 {
+                                            format!("{}...", &s[..27])
+                                        } else {
+                                            s.clone()
+                                        }
+                                    }
+                                    _ => v.to_string(),
+                                };
+                                Some(format!("{k}={val_str}"))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                summary.join(", ")
+            }
+        }
+    } else {
+        // If args isn't valid JSON, just show truncated raw args
+        if args_json.len() > 50 {
+            format!("{}...", &args_json[..47])
+        } else {
+            args_json.to_string()
+        }
     }
 }
 

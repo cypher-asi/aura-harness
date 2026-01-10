@@ -62,6 +62,16 @@ pub enum UiCommand {
     /// Finalize the streaming message and display it.
     FinishStreaming,
 
+    /// Append text to the current thinking block.
+    /// This is used for real-time display of extended thinking.
+    AppendThinking(String),
+
+    /// Start a new thinking block.
+    StartThinking,
+
+    /// Finalize the thinking block.
+    FinishThinking,
+
     /// Show a new message
     ShowMessage(MessageData),
 
@@ -114,6 +124,14 @@ pub enum UiCommand {
 
     /// Clear records (when switching agents)
     ClearRecords,
+
+    /// Set the API status (URL and whether it's active)
+    SetApiStatus {
+        /// API URL
+        url: Option<String>,
+        /// Whether the API is active
+        active: bool,
+    },
 }
 
 /// Data for displaying a message.
@@ -160,7 +178,7 @@ pub struct RecordSummary {
     pub full_hash: String,
     /// Last 4 characters of the context hash
     pub hash_suffix: String,
-    /// Transaction kind (e.g., "UserPrompt", "ActionResult")
+    /// Transaction kind (e.g., `UserPrompt`, `ActionResult`)
     pub tx_kind: String,
     /// Sender/user who initiated the transaction
     pub sender: String,
@@ -170,6 +188,38 @@ pub struct RecordSummary {
     pub action_count: usize,
     /// Effect status summary (e.g., "2 ok", "1 ok, 1 failed")
     pub effect_status: String,
+    /// Status indicator (ok, err, pending, or -)
+    pub status: RecordStatus,
+    /// Additional info (e.g., tool name)
+    pub info: String,
+    /// Error details if status is Error
+    #[serde(default)]
+    pub error_details: String,
+
+    // Transaction fields
+    /// Transaction ID (hex encoded)
+    #[serde(default)]
+    pub tx_id: String,
+    /// Agent ID (hex encoded)
+    #[serde(default)]
+    pub agent_id: String,
+    /// Raw timestamp in milliseconds since epoch
+    #[serde(default)]
+    pub ts_ms: u64,
+}
+
+/// Status of a record entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordStatus {
+    /// All effects completed successfully
+    Ok,
+    /// One or more effects failed
+    Error,
+    /// Effects are pending
+    Pending,
+    /// No effects (neutral status)
+    None,
 }
 
 /// Summary of an agent for display in the Swarm panel.

@@ -107,7 +107,7 @@ impl ToolRegistry for DefaultToolRegistry {
 // Tool Schemas
 // ============================================================================
 
-/// Schema for fs_ls tool.
+/// Schema for `fs_ls` tool.
 fn fs_ls_schema() -> ToolDefinition {
     ToolDefinition {
         name: "fs_ls".into(),
@@ -127,7 +127,7 @@ fn fs_ls_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs_read tool.
+/// Schema for `fs_read` tool.
 fn fs_read_schema() -> ToolDefinition {
     ToolDefinition {
         name: "fs_read".into(),
@@ -149,7 +149,7 @@ fn fs_read_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs_stat tool.
+/// Schema for `fs_stat` tool.
 fn fs_stat_schema() -> ToolDefinition {
     ToolDefinition {
         name: "fs_stat".into(),
@@ -167,7 +167,7 @@ fn fs_stat_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs_write tool.
+/// Schema for `fs_write` tool.
 fn fs_write_schema() -> ToolDefinition {
     ToolDefinition {
         name: "fs_write".into(),
@@ -195,7 +195,7 @@ fn fs_write_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for fs_edit tool.
+/// Schema for `fs_edit` tool.
 fn fs_edit_schema() -> ToolDefinition {
     ToolDefinition {
         name: "fs_edit".into(),
@@ -221,7 +221,7 @@ fn fs_edit_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for search_code tool.
+/// Schema for `search_code` tool.
 fn search_code_schema() -> ToolDefinition {
     ToolDefinition {
         name: "search_code".into(),
@@ -251,7 +251,7 @@ fn search_code_schema() -> ToolDefinition {
     }
 }
 
-/// Schema for cmd_run tool.
+/// Schema for `cmd_run` tool.
 fn cmd_run_schema() -> ToolDefinition {
     ToolDefinition {
         name: "cmd_run".into(),

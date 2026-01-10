@@ -63,3 +63,88 @@ impl ExecuteContext {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_execute_limits_default() {
+        let limits = ExecuteLimits::default();
+
+        assert_eq!(limits.read_bytes, 5 * 1024 * 1024); // 5MB
+        assert_eq!(limits.write_bytes, 1024 * 1024);    // 1MB
+        assert_eq!(limits.command_timeout, Duration::from_secs(10));
+        assert_eq!(limits.stdout_bytes, 256 * 1024);    // 256KB
+        assert_eq!(limits.stderr_bytes, 256 * 1024);    // 256KB
+    }
+
+    #[test]
+    fn test_execute_context_new() {
+        let agent_id = AgentId::generate();
+        let action_id = ActionId::generate();
+        let workspace = PathBuf::from("/tmp/workspace");
+
+        let ctx = ExecuteContext::new(agent_id, action_id, workspace.clone());
+
+        assert_eq!(ctx.agent_id, agent_id);
+        assert_eq!(ctx.action_id, action_id);
+        assert_eq!(ctx.workspace_root, workspace);
+        // Should have default limits
+        assert_eq!(ctx.limits.read_bytes, ExecuteLimits::default().read_bytes);
+    }
+
+    #[test]
+    fn test_execute_context_with_limits() {
+        let agent_id = AgentId::generate();
+        let action_id = ActionId::generate();
+        let workspace = PathBuf::from("/tmp/workspace");
+
+        let custom_limits = ExecuteLimits {
+            read_bytes: 1024,
+            write_bytes: 512,
+            command_timeout: Duration::from_secs(5),
+            stdout_bytes: 100,
+            stderr_bytes: 100,
+        };
+
+        let ctx = ExecuteContext::new(agent_id, action_id, workspace)
+            .with_limits(custom_limits.clone());
+
+        assert_eq!(ctx.limits.read_bytes, 1024);
+        assert_eq!(ctx.limits.write_bytes, 512);
+        assert_eq!(ctx.limits.command_timeout, Duration::from_secs(5));
+        assert_eq!(ctx.limits.stdout_bytes, 100);
+        assert_eq!(ctx.limits.stderr_bytes, 100);
+    }
+
+    #[test]
+    fn test_execute_context_clone() {
+        let agent_id = AgentId::generate();
+        let action_id = ActionId::generate();
+        let workspace = PathBuf::from("/tmp/workspace");
+
+        let ctx1 = ExecuteContext::new(agent_id, action_id, workspace);
+        let ctx2 = ctx1.clone();
+
+        assert_eq!(ctx1.agent_id, ctx2.agent_id);
+        assert_eq!(ctx1.action_id, ctx2.action_id);
+        assert_eq!(ctx1.workspace_root, ctx2.workspace_root);
+    }
+
+    #[test]
+    fn test_execute_limits_clone() {
+        let limits1 = ExecuteLimits {
+            read_bytes: 100,
+            write_bytes: 50,
+            command_timeout: Duration::from_millis(500),
+            stdout_bytes: 10,
+            stderr_bytes: 10,
+        };
+        let limits2 = limits1.clone();
+
+        assert_eq!(limits1.read_bytes, limits2.read_bytes);
+        assert_eq!(limits1.command_timeout, limits2.command_timeout);
+    }
+}

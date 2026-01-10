@@ -5,15 +5,20 @@
 
 use aura_core::{AgentId, Identity, Transaction};
 use aura_executor::ExecutorRouter;
-use aura_kernel::{StreamCallback, StreamCallbackEvent, TurnConfig, TurnProcessor, TurnResult};
+use aura_kernel::{
+    ProcessManager, ProcessManagerConfig, StreamCallback, StreamCallbackEvent, TurnConfig,
+    TurnProcessor, TurnResult,
+};
 use aura_reasoner::{AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
 use aura_terminal::{events::AgentSummary, App, Terminal, Theme, UiCommand, UiEvent};
 use aura_tools::{DefaultToolRegistry, ToolExecutor};
+use axum::{routing::get, Json, Router};
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -144,6 +149,9 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
     // Send initial agent info to UI (there's always at least one agent - the current one)
     send_initial_agent(&identity, &store, &cmd_tx);
 
+    // Start embedded API server
+    start_api_server(cmd_tx.clone()).await;
+
     // Create executor with tool support
     let mut executor = ExecutorRouter::new();
     executor.add_executor(std::sync::Arc::new(ToolExecutor::with_defaults()));
@@ -156,6 +164,21 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
         workspace_base: workspace_root,
         ..TurnConfig::default()
     };
+
+    // Create ProcessManager for async command handling
+    // The ProcessManager sends completion transactions through this channel
+    let (process_tx, mut process_rx_opt) = {
+        let (tx, rx) = mpsc::channel::<Transaction>(100);
+        (tx, Some(rx))
+    };
+    let process_manager = Arc::new(ProcessManager::new(process_tx, ProcessManagerConfig::default()));
+
+    // Helper macro to take the process_rx (can only be called once)
+    macro_rules! take_process_rx {
+        () => {
+            process_rx_opt.take().expect("process_rx already taken")
+        };
+    }
 
     // Create provider-specific processor and run
     let provider_name = args.provider.as_str();
@@ -174,8 +197,19 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
             let cmd_tx_clone = cmd_tx.clone();
             let store_clone = store.clone();
             let agent_id = identity.agent_id;
+            let process_manager_clone = Arc::clone(&process_manager);
+            let process_rx = take_process_rx!();
             let processor_handle = tokio::spawn(async move {
-                run_event_loop(&mut ui_rx, cmd_tx_clone, processor, store_clone, agent_id).await
+                run_event_loop(
+                    &mut ui_rx,
+                    process_rx,
+                    cmd_tx_clone,
+                    processor,
+                    store_clone,
+                    agent_id,
+                    process_manager_clone,
+                )
+                .await
             });
 
             // Run terminal UI (blocking)
@@ -201,9 +235,19 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
                     let cmd_tx_clone = cmd_tx.clone();
                     let store_clone = store.clone();
                     let agent_id = identity.agent_id;
+                    let process_manager_clone = Arc::clone(&process_manager);
+                    let process_rx = take_process_rx!();
                     let processor_handle = tokio::spawn(async move {
-                        run_event_loop(&mut ui_rx, cmd_tx_clone, processor, store_clone, agent_id)
-                            .await
+                        run_event_loop(
+                            &mut ui_rx,
+                            process_rx,
+                            cmd_tx_clone,
+                            processor,
+                            store_clone,
+                            agent_id,
+                            process_manager_clone,
+                        )
+                        .await
                     });
 
                     // Run terminal UI (blocking)
@@ -232,9 +276,19 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
                     let cmd_tx_clone = cmd_tx.clone();
                     let store_clone = store.clone();
                     let agent_id = identity.agent_id;
+                    let process_manager_clone = Arc::clone(&process_manager);
+                    let process_rx = take_process_rx!();
                     let processor_handle = tokio::spawn(async move {
-                        run_event_loop(&mut ui_rx, cmd_tx_clone, processor, store_clone, agent_id)
-                            .await
+                        run_event_loop(
+                            &mut ui_rx,
+                            process_rx,
+                            cmd_tx_clone,
+                            processor,
+                            store_clone,
+                            agent_id,
+                            process_manager_clone,
+                        )
+                        .await
                     });
 
                     // Run terminal UI (blocking)
@@ -251,12 +305,18 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
 }
 
 /// Run the event processing loop.
+///
+/// This loop handles:
+/// - User messages from the UI
+/// - Process completion events from the ProcessManager (for async commands)
 async fn run_event_loop<P>(
     events: &mut mpsc::Receiver<UiEvent>,
+    mut process_completions: mpsc::Receiver<Transaction>,
     commands: mpsc::Sender<UiCommand>,
     mut processor: TurnProcessor<P, RocksStore, DefaultToolRegistry>,
     store: Arc<RocksStore>,
     agent_id: AgentId,
+    _process_manager: Arc<ProcessManager>,
 ) -> anyhow::Result<()>
 where
     P: ModelProvider + Send + Sync + 'static,
@@ -268,8 +328,24 @@ where
 
     // Create a streaming callback that sends text deltas to the UI
     let cmd_tx_for_stream = commands.clone();
+    let thinking_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let thinking_started_clone = thinking_started.clone();
+    
     let stream_callback: StreamCallback = Box::new(move |event| {
         match event {
+            StreamCallbackEvent::ThinkingDelta(thinking) => {
+                // Start thinking block if not already started
+                if !thinking_started_clone.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    let _ = cmd_tx_for_stream.try_send(UiCommand::StartThinking);
+                }
+                // Send thinking delta to UI
+                let _ = cmd_tx_for_stream.try_send(UiCommand::AppendThinking(thinking));
+            }
+            StreamCallbackEvent::ThinkingComplete => {
+                // Thinking complete, finish the thinking block
+                let _ = cmd_tx_for_stream.try_send(UiCommand::FinishThinking);
+                thinking_started_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
             StreamCallbackEvent::TextDelta(text) => {
                 // Send text delta to UI in a fire-and-forget manner
                 let _ = cmd_tx_for_stream.try_send(UiCommand::AppendText(text));
@@ -279,15 +355,66 @@ where
                 let _ = cmd_tx_for_stream
                     .try_send(UiCommand::SetStatus(format!("Running {}...", name)));
             }
+            StreamCallbackEvent::ToolComplete { name, is_error, .. } => {
+                // Update status after tool completion
+                if is_error {
+                    let _ = cmd_tx_for_stream
+                        .try_send(UiCommand::SetStatus(format!("{} failed", name)));
+                } else {
+                    let _ = cmd_tx_for_stream
+                        .try_send(UiCommand::SetStatus(format!("{} complete", name)));
+                }
+            }
             StreamCallbackEvent::StepComplete => {
                 // Step complete, status will be updated by the main loop
+                // Reset thinking state for next step
+                thinking_started_clone.store(false, std::sync::atomic::Ordering::SeqCst);
             }
         }
     });
     processor.set_stream_callback(Arc::new(stream_callback));
 
-    while let Some(event) = events.recv().await {
-        match event {
+    loop {
+        // Use select! to handle both UI events and process completions
+        tokio::select! {
+            // Handle process completion events (async command results)
+            Some(completion_tx) = process_completions.recv() => {
+                info!(
+                    hash = %completion_tx.hash,
+                    tx_type = ?completion_tx.tx_type,
+                    "Processing async process completion"
+                );
+                
+                // Process completion transactions are already created by ProcessManager.
+                // They need to be enqueued, processed, and recorded.
+                if let Err(e) = store.enqueue_tx(&completion_tx) {
+                    error!(error = %e, "Failed to enqueue completion transaction");
+                    continue;
+                }
+
+                // Dequeue and record the completion
+                if let Ok(Some((inbox_seq, tx))) = store.dequeue_tx(agent_id) {
+                    let context_hash = compute_context_hash(seq, &tx);
+                    let entry = aura_core::RecordEntry::builder(seq, tx.clone())
+                        .context_hash(context_hash)
+                        .build();
+                    
+                    if let Err(e) = store.append_entry_atomic(agent_id, seq, &entry, inbox_seq) {
+                        error!(error = %e, "Failed to persist completion record");
+                    } else {
+                        debug!(seq = seq, "Completion record persisted");
+                        send_record_to_ui(&commands, seq, &tx, &entry).await;
+                        seq += 1;
+                        
+                        // Notify UI of completion
+                        let _ = commands.send(UiCommand::SetStatus("Process completed".to_string())).await;
+                    }
+                }
+            }
+            
+            // Handle UI events
+            Some(event) = events.recv() => {
+                match event {
             UiEvent::UserMessage(text) => {
                 info!(text = %text, seq = seq, "Processing user message");
 
@@ -304,7 +431,7 @@ where
                 while let Ok(Some((stale_inbox_seq, stale_tx))) = store.dequeue_tx(agent_id) {
                     warn!(
                         stale_inbox_seq = stale_inbox_seq,
-                        stale_tx_kind = ?stale_tx.kind,
+                        stale_tx_type = ?stale_tx.tx_type,
                         "Discarding stale inbox transaction"
                     );
                     // Create a dummy record entry to clear this from the inbox
@@ -349,7 +476,7 @@ where
                 };
 
                 // Verify we got what we enqueued (sanity check after draining stale entries)
-                if dequeued_tx.tx_id != tx.tx_id {
+                if dequeued_tx.hash != tx.hash {
                     error!("Transaction mismatch after draining stale entries - this should not happen");
                 }
 
@@ -383,7 +510,126 @@ where
                         send_record_to_ui(&commands, seq, &tx, &prompt_entry).await;
                         seq += 1;
 
-                        // === Transaction 2: Agent Response ===
+                        // === Tool Proposal & Execution Transactions ===
+                        // For each tool call, create TWO transactions:
+                        // 1. ToolProposal - What the LLM suggested (before policy)
+                        // 2. ToolExecution - What the Kernel decided and executed (after policy)
+                        for entry in &result.entries {
+                            for tool in &entry.executed_tools {
+                                // === Transaction: Tool Proposal ===
+                                // Records what the LLM suggested - the Kernel has not yet decided
+                                let proposal = aura_core::ToolProposal::new(
+                                    tool.tool_use_id.clone(),
+                                    tool.tool_name.clone(),
+                                    tool.tool_args.clone(),
+                                );
+                                let proposal_tx = Transaction::tool_proposal(agent_id, &proposal);
+
+                                if let Err(e) = store.enqueue_tx(&proposal_tx) {
+                                    error!(error = %e, "Failed to enqueue tool proposal transaction");
+                                    continue;
+                                }
+
+                                if let Ok(Some((proposal_inbox_seq, dequeued_proposal_tx))) = store.dequeue_tx(agent_id) {
+                                    let proposal_context_hash = compute_context_hash(seq, &dequeued_proposal_tx);
+                                    
+                                    // Proposal record has no actions/effects - just records the suggestion
+                                    let proposal_entry = aura_core::RecordEntry::builder(seq, dequeued_proposal_tx.clone())
+                                        .context_hash(proposal_context_hash)
+                                        .build();
+
+                                    if let Err(e) = store.append_entry_atomic(
+                                        agent_id,
+                                        seq,
+                                        &proposal_entry,
+                                        proposal_inbox_seq,
+                                    ) {
+                                        error!(error = %e, "Failed to persist tool proposal record");
+                                    } else {
+                                        debug!(seq = seq, tool = %tool.tool_name, "Tool proposal record persisted");
+                                    }
+
+                                    send_record_to_ui(&commands, seq, &dequeued_proposal_tx, &proposal_entry).await;
+                                    seq += 1;
+                                }
+
+                                // === Transaction: Tool Execution ===
+                                // Records the Kernel's decision and execution result
+                                let result_text = match &tool.result {
+                                    aura_kernel::ToolResultContent::Text(s) => s.clone(),
+                                    aura_kernel::ToolResultContent::Json(v) => {
+                                        serde_json::to_string(v).unwrap_or_default()
+                                    }
+                                };
+
+                                let execution = aura_core::ToolExecution {
+                                    tool_use_id: tool.tool_use_id.clone(),
+                                    tool: tool.tool_name.clone(),
+                                    args: tool.tool_args.clone(),
+                                    decision: aura_core::ToolDecision::Approved, // Was executed, so approved
+                                    reason: None,
+                                    result: Some(result_text.clone()),
+                                    is_error: tool.is_error,
+                                };
+                                let execution_tx = Transaction::tool_execution(agent_id, &execution);
+
+                                if let Err(e) = store.enqueue_tx(&execution_tx) {
+                                    error!(error = %e, "Failed to enqueue tool execution transaction");
+                                    continue;
+                                }
+
+                                if let Ok(Some((exec_inbox_seq, dequeued_exec_tx))) = store.dequeue_tx(agent_id) {
+                                    let exec_context_hash = compute_context_hash(seq, &dequeued_exec_tx);
+
+                                    // Create action and effect for the execution
+                                    let tool_call = aura_core::ToolCall::new(
+                                        tool.tool_name.clone(),
+                                        tool.tool_args.clone(),
+                                    );
+                                    let action = aura_core::Action::delegate_tool(&tool_call);
+                                    let action_id = action.action_id;
+
+                                    let effect_status = if tool.is_error {
+                                        aura_core::EffectStatus::Failed
+                                    } else {
+                                        aura_core::EffectStatus::Committed
+                                    };
+
+                                    let effect = aura_core::Effect::new(
+                                        action_id,
+                                        aura_core::EffectKind::Agreement,
+                                        effect_status,
+                                        result_text.into_bytes(),
+                                    );
+
+                                    let mut decision = aura_core::Decision::new();
+                                    decision.accept(action_id);
+
+                                    let exec_entry = aura_core::RecordEntry::builder(seq, dequeued_exec_tx.clone())
+                                        .context_hash(exec_context_hash)
+                                        .decision(decision)
+                                        .actions(vec![action])
+                                        .effects(vec![effect])
+                                        .build();
+
+                                    if let Err(e) = store.append_entry_atomic(
+                                        agent_id,
+                                        seq,
+                                        &exec_entry,
+                                        exec_inbox_seq,
+                                    ) {
+                                        error!(error = %e, "Failed to persist tool execution record");
+                                    } else {
+                                        debug!(seq = seq, tool = %tool.tool_name, "Tool execution record persisted");
+                                    }
+
+                                    send_record_to_ui(&commands, seq, &dequeued_exec_tx, &exec_entry).await;
+                                    seq += 1;
+                                }
+                            }
+                        }
+
+                        // === Agent Response Transaction ===
                         // Create a new transaction for the agent's response.
                         let response_text = result
                             .final_message
@@ -510,9 +756,12 @@ where
                 // TODO: Implement agent list refresh
                 debug!("Agent refresh not yet implemented");
             }
-        }
-    }
+        } // end match event
+            } // end Some(event) arm
+        } // end tokio::select!
+    } // end loop
 
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -523,16 +772,19 @@ async fn send_record_to_ui(
     tx: &Transaction,
     entry: &aura_core::RecordEntry,
 ) {
-    use aura_core::TransactionKind;
+    use aura_core::TransactionType;
 
     // Extract tx_kind and sender from the transaction type
-    let (tx_kind, sender) = match tx.kind {
-        TransactionKind::UserPrompt => ("Prompt".to_string(), "USER".to_string()),
-        TransactionKind::ActionResult => ("Action".to_string(), "SYSTEM".to_string()),
-        TransactionKind::System => ("System".to_string(), "SYSTEM".to_string()),
-        TransactionKind::AgentMsg => ("Response".to_string(), "AURA".to_string()),
-        TransactionKind::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
-        TransactionKind::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
+    let (tx_kind, sender) = match tx.tx_type {
+        TransactionType::UserPrompt => ("Prompt".to_string(), "USER".to_string()),
+        TransactionType::ActionResult => ("Action".to_string(), "SYSTEM".to_string()),
+        TransactionType::System => ("System".to_string(), "SYSTEM".to_string()),
+        TransactionType::AgentMsg => ("Response".to_string(), "AURA".to_string()),
+        TransactionType::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
+        TransactionType::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
+        TransactionType::ToolProposal => ("Propose".to_string(), "LLM".to_string()),
+        TransactionType::ToolExecution => ("Execute".to_string(), "KERNEL".to_string()),
+        TransactionType::ProcessComplete => ("Complete".to_string(), "SYSTEM".to_string()),
     };
 
     // Extract message content from payload
@@ -543,14 +795,19 @@ async fn send_record_to_ui(
         message
     };
 
-    // Count effects
+    // Count effects and determine status
     let effect_count = entry.effects.len();
     let ok_count = entry
         .effects
         .iter()
         .filter(|e| matches!(e.status, aura_core::EffectStatus::Committed))
         .count();
-    let err_count = effect_count - ok_count;
+    let pending_count = entry
+        .effects
+        .iter()
+        .filter(|e| matches!(e.status, aura_core::EffectStatus::Pending))
+        .count();
+    let err_count = effect_count - ok_count - pending_count;
 
     let effect_status = if effect_count == 0 {
         "-".to_string()
@@ -559,6 +816,31 @@ async fn send_record_to_ui(
     } else {
         format!("{} ok, {} err", ok_count, err_count)
     };
+
+    // Derive status from effects
+    // No effects = successfully recorded (Ok), errors = Error, pending = Pending
+    use aura_terminal::events::RecordStatus;
+    let status = if err_count > 0 {
+        RecordStatus::Error
+    } else if pending_count > 0 {
+        RecordStatus::Pending
+    } else {
+        RecordStatus::Ok
+    };
+
+    // Extract error details from failed effects
+    let error_details: String = entry
+        .effects
+        .iter()
+        .filter(|e| matches!(e.status, aura_core::EffectStatus::Failed))
+        .filter_map(|e| {
+            String::from_utf8(e.payload.to_vec()).ok()
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    // Extract info (tool name for tool-related transactions)
+    let info = extract_tool_info(tx);
 
     // Get full hash and suffix from context_hash
     let full_hash = hex::encode(entry.context_hash);
@@ -577,9 +859,63 @@ async fn send_record_to_ui(
         message,
         action_count: entry.actions.len(),
         effect_status,
+        status,
+        info,
+        error_details,
+        // Transaction fields
+        tx_id: hex::encode(tx.hash.as_bytes()),
+        agent_id: hex::encode(tx.agent_id.as_bytes()),
+        ts_ms: tx.ts_ms,
     };
 
     let _ = commands.send(UiCommand::NewRecord(record_summary)).await;
+}
+
+/// Extract tool name or other info from a transaction payload.
+/// For cmd_run tools, extracts the actual command that was executed.
+fn extract_tool_info(tx: &Transaction) -> String {
+    use aura_core::TransactionType;
+
+    match tx.tx_type {
+        TransactionType::ToolProposal => {
+            // Try to parse as ToolProposal
+            if let Ok(proposal) = serde_json::from_slice::<aura_core::ToolProposal>(&tx.payload) {
+                // For cmd_run, extract the actual command
+                if proposal.tool == "cmd_run" {
+                    return extract_cmd_run_command(&proposal.args);
+                }
+                return proposal.tool;
+            }
+        }
+        TransactionType::ToolExecution => {
+            // Try to parse as ToolExecution
+            if let Ok(execution) = serde_json::from_slice::<aura_core::ToolExecution>(&tx.payload) {
+                // For cmd_run, extract the actual command
+                if execution.tool == "cmd_run" {
+                    return extract_cmd_run_command(&execution.args);
+                }
+                return execution.tool;
+            }
+        }
+        _ => {}
+    }
+
+    String::new()
+}
+
+/// Extract the command string from cmd_run tool arguments.
+fn extract_cmd_run_command(args: &serde_json::Value) -> String {
+    let program = args["program"].as_str().unwrap_or("");
+    let cmd_args: Vec<&str> = args["args"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+
+    if cmd_args.is_empty() {
+        program.to_string()
+    } else {
+        format!("{} {}", program, cmd_args.join(" "))
+    }
 }
 
 /// Show turn result (chat message and stats) without creating new records.
@@ -610,15 +946,7 @@ async fn show_turn_result(
         }
     }
 
-    // Show stats as success message
-    let stats = format!(
-        "Steps: {}, Input: {}k, Output: {}k tokens",
-        result.steps,
-        result.total_input_tokens / 1000,
-        result.total_output_tokens / 1000
-    );
-    let _ = commands.send(UiCommand::ShowSuccess(stats)).await;
-
+    // Only show warning if there were failures
     if result.had_failures {
         let _ = commands
             .send(UiCommand::ShowWarning("Some tool calls failed".to_string()))
@@ -633,7 +961,7 @@ async fn show_turn_result(
 fn compute_context_hash(seq: u64, tx: &Transaction) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&seq.to_be_bytes());
-    hasher.update(tx.tx_id.as_bytes());
+    hasher.update(tx.hash.as_bytes());
     hasher.update(&tx.ts_ms.to_be_bytes());
     hasher.update(&tx.payload);
     *hasher.finalize().as_bytes()
@@ -641,16 +969,9 @@ fn compute_context_hash(seq: u64, tx: &Transaction) -> [u8; 32] {
 
 /// Create a response transaction for the assistant's message.
 fn create_response_transaction(agent_id: AgentId, response_text: &str) -> Transaction {
-    use aura_core::{TransactionKind, TxId};
+    use aura_core::TransactionType;
 
-    let payload = response_text.as_bytes().to_vec();
-    let tx_id = TxId::from_content(&payload);
-    let ts_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
-
-    Transaction::new(tx_id, agent_id, ts_ms, TransactionKind::AgentMsg, payload)
+    Transaction::new_chained(agent_id, TransactionType::AgentMsg, response_text.as_bytes().to_vec(), None)
 }
 
 /// Load existing records from the store and send to UI.
@@ -659,24 +980,53 @@ fn load_existing_records(
     agent_id: AgentId,
     commands: &mpsc::Sender<UiCommand>,
 ) {
-    use aura_core::TransactionKind;
+    use aura_core::TransactionType;
     use aura_store::Store;
 
-    // Scan for existing records starting from seq 1 (records are 1-indexed)
-    let records = match store.scan_record(agent_id, 1, 100) {
+    // Get the head sequence to know how many records exist
+    let head_seq = match store.get_head_seq(agent_id) {
+        Ok(seq) => seq,
+        Err(e) => {
+            // Log error and notify UI
+            eprintln!("Warning: Failed to get head sequence: {e}");
+            let _ = commands.try_send(UiCommand::ShowWarning(format!(
+                "Could not load record history: {e}"
+            )));
+            return;
+        }
+    };
+    
+    if head_seq == 0 {
+        return; // No records yet
+    }
+
+    // Load the most recent 100 records (or all if < 100)
+    // Records are 1-indexed, so if head_seq is 150, we want seq 51-150
+    let from_seq = head_seq.saturating_sub(99).max(1);
+    let records = match store.scan_record(agent_id, from_seq, 100) {
         Ok(entries) => entries,
-        Err(_) => return, // Silently skip if no records
+        Err(e) => {
+            // Log error and notify UI - this could be a deserialization issue
+            eprintln!("Warning: Failed to load records (seq {from_seq}..{head_seq}): {e}");
+            let _ = commands.try_send(UiCommand::ShowWarning(format!(
+                "Could not load {head_seq} historical records: {e}"
+            )));
+            return;
+        }
     };
 
     for entry in records {
         // Extract tx_kind and sender from the transaction type
-        let (tx_kind, sender) = match entry.tx.kind {
-            TransactionKind::UserPrompt => ("Prompt".to_string(), "USER".to_string()),
-            TransactionKind::ActionResult => ("Action".to_string(), "SYSTEM".to_string()),
-            TransactionKind::System => ("System".to_string(), "SYSTEM".to_string()),
-            TransactionKind::AgentMsg => ("Response".to_string(), "AURA".to_string()),
-            TransactionKind::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
-            TransactionKind::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
+        let (tx_kind, sender) = match entry.tx.tx_type {
+            TransactionType::UserPrompt => ("Prompt".to_string(), "USER".to_string()),
+            TransactionType::ActionResult => ("Action".to_string(), "SYSTEM".to_string()),
+            TransactionType::System => ("System".to_string(), "SYSTEM".to_string()),
+            TransactionType::AgentMsg => ("Response".to_string(), "AURA".to_string()),
+            TransactionType::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
+            TransactionType::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
+            TransactionType::ToolProposal => ("Propose".to_string(), "LLM".to_string()),
+            TransactionType::ToolExecution => ("Execute".to_string(), "KERNEL".to_string()),
+            TransactionType::ProcessComplete => ("Complete".to_string(), "SYSTEM".to_string()),
         };
 
         // Extract message content from payload
@@ -687,14 +1037,19 @@ fn load_existing_records(
             message
         };
 
-        // Count effects
+        // Count effects and determine status
         let effect_count = entry.effects.len();
         let ok_count = entry
             .effects
             .iter()
             .filter(|e| matches!(e.status, aura_core::EffectStatus::Committed))
             .count();
-        let err_count = effect_count - ok_count;
+        let pending_count = entry
+            .effects
+            .iter()
+            .filter(|e| matches!(e.status, aura_core::EffectStatus::Pending))
+            .count();
+        let err_count = effect_count - ok_count - pending_count;
 
         let effect_status = if effect_count == 0 {
             "-".to_string()
@@ -703,6 +1058,31 @@ fn load_existing_records(
         } else {
             format!("{} ok, {} err", ok_count, err_count)
         };
+
+        // Derive status from effects
+        // No effects = successfully recorded (Ok), errors = Error, pending = Pending
+        use aura_terminal::events::RecordStatus;
+        let status = if err_count > 0 {
+            RecordStatus::Error
+        } else if pending_count > 0 {
+            RecordStatus::Pending
+        } else {
+            RecordStatus::Ok
+        };
+
+        // Extract error details from failed effects
+        let error_details: String = entry
+            .effects
+            .iter()
+            .filter(|e| matches!(e.status, aura_core::EffectStatus::Failed))
+            .filter_map(|e| {
+                String::from_utf8(e.payload.to_vec()).ok()
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        // Extract info (tool name for tool-related transactions)
+        let info = extract_tool_info(&entry.tx);
 
         // Get full hash and suffix from context_hash
         let full_hash = hex::encode(entry.context_hash);
@@ -723,6 +1103,13 @@ fn load_existing_records(
             message,
             action_count: entry.actions.len(),
             effect_status,
+            status,
+            info,
+            error_details,
+            // Transaction fields
+            tx_id: hex::encode(entry.tx.hash.as_bytes()),
+            agent_id: hex::encode(entry.tx.agent_id.as_bytes()),
+            ts_ms: entry.tx.ts_ms,
         };
 
         // Use try_send to avoid blocking - channel may be full during init
@@ -760,6 +1147,83 @@ fn send_initial_agent(
     let _ = commands.try_send(UiCommand::SetActiveAgent(hex::encode(
         identity.agent_id.as_bytes(),
     )));
+}
+
+// ============================================================================
+// Embedded API Server
+// ============================================================================
+
+/// Default API server port
+const API_PORT: u16 = 8080;
+
+/// Fallback ports to try if the default is busy
+const FALLBACK_PORTS: &[u16] = &[8081, 8082, 8090, 3000];
+
+/// Start the embedded API server.
+/// Tries the default port first, then fallback ports if busy.
+/// Returns the address it's listening on.
+async fn start_api_server(cmd_tx: mpsc::Sender<UiCommand>) -> Option<String> {
+    // Create a simple health check router
+    let app = Router::new()
+        .route("/health", get(api_health_handler))
+        .layer(TraceLayer::new_for_http());
+
+    // Try default port first, then fallbacks
+    let ports_to_try = std::iter::once(API_PORT).chain(FALLBACK_PORTS.iter().copied());
+
+    for port in ports_to_try {
+        let addr = format!("127.0.0.1:{port}");
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                let url = format!("http://{addr}");
+                info!(%url, "API server listening");
+
+                // Show info if using fallback port
+                if port != API_PORT {
+                    let _ = cmd_tx.try_send(UiCommand::ShowWarning(format!(
+                        "Port {API_PORT} busy, API server using port {port}"
+                    )));
+                }
+
+                // Update UI with active status
+                let _ = cmd_tx.try_send(UiCommand::SetApiStatus {
+                    url: Some(url.clone()),
+                    active: true,
+                });
+
+                // Spawn the server (need to clone app for the move)
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(listener, app).await {
+                        error!(error = %e, "API server error");
+                    }
+                });
+
+                return Some(url);
+            }
+            Err(e) => {
+                debug!(port = port, error = %e, "Port unavailable, trying next");
+            }
+        }
+    }
+
+    // All ports failed
+    warn!("Failed to start API server on any port");
+    let _ = cmd_tx.try_send(UiCommand::SetApiStatus {
+        url: None,
+        active: false,
+    });
+    let _ = cmd_tx.try_send(UiCommand::ShowError(
+        "API server failed to start - all ports busy".to_string(),
+    ));
+    None
+}
+
+/// Health check endpoint handler.
+async fn api_health_handler() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
 }
 
 // ============================================================================
