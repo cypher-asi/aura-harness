@@ -113,7 +113,11 @@ impl Swarm {
         info!("Scheduler ready");
 
         // Create router
-        let state = RouterState { store, scheduler };
+        let state = RouterState {
+            store,
+            scheduler,
+            config: self.config.clone(),
+        };
         let app = create_router(state);
 
         // Start server

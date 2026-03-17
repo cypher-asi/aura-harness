@@ -1,11 +1,16 @@
-//! HTTP router for the swarm API.
+//! HTTP and WebSocket router for the swarm API.
 
+use crate::config::SwarmConfig;
 use crate::scheduler::Scheduler;
+use crate::session::{handle_ws_connection, WsContext};
 use aura_core::{AgentId, Transaction, TransactionType};
 use aura_reasoner::Reasoner;
 use aura_store::Store;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{
+        ws::WebSocketUpgrade,
+        Path, Query, State,
+    },
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -25,6 +30,7 @@ where
 {
     pub store: Arc<S>,
     pub scheduler: Arc<Scheduler<S, R>>,
+    pub config: SwarmConfig,
 }
 
 impl<S, R> Clone for RouterState<S, R>
@@ -36,6 +42,7 @@ where
         Self {
             store: self.store.clone(),
             scheduler: self.scheduler.clone(),
+            config: self.config.clone(),
         }
     }
 }
@@ -51,6 +58,7 @@ where
         .route("/tx", post(submit_tx_handler::<S, R>))
         .route("/agents/:agent_id/head", get(get_head_handler::<S, R>))
         .route("/agents/:agent_id/record", get(scan_record_handler::<S, R>))
+        .route("/stream", get(ws_upgrade_handler::<S, R>))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -225,4 +233,20 @@ where
         })?;
 
     Ok(Json(entries))
+}
+
+// === WebSocket ===
+
+async fn ws_upgrade_handler<S, R>(
+    ws: WebSocketUpgrade,
+    State(state): State<RouterState<S, R>>,
+) -> impl IntoResponse
+where
+    S: Store + 'static,
+    R: Reasoner + 'static,
+{
+    let ctx = WsContext {
+        workspace_base: state.config.workspaces_path(),
+    };
+    ws.on_upgrade(move |socket| handle_ws_connection(socket, ctx))
 }
