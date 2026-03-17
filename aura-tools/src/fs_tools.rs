@@ -1,7 +1,5 @@
 //! Filesystem tool implementations.
 
-#![allow(dead_code)] // Functions for future tool executor integration
-
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{Tool, ToolContext};
