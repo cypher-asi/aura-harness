@@ -40,6 +40,51 @@ pub enum ToolError {
 
     #[error("external tool error: {0}")]
     ExternalToolError(String),
+
+    #[error("external tool callback failed: {url} returned status {status}: {body}")]
+    ExternalToolCallbackFailed {
+        url: String,
+        status: u16,
+        body: String,
+    },
+
+    #[error("external tool callback unreachable: {url}: {reason}")]
+    ExternalToolCallbackUnreachable { url: String, reason: String },
+}
+
+impl ToolError {
+    /// Return a machine-readable error code for protocol-level reporting.
+    #[must_use]
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            Self::UnknownTool(_) => "unknown_tool",
+            Self::ToolDisabled(_) => "tool_disabled",
+            Self::SandboxViolation { .. } => "sandbox_violation",
+            Self::PathNotFound(_) => "path_not_found",
+            Self::Io(_) => "io_error",
+            Self::InvalidArguments(_) => "invalid_arguments",
+            Self::CommandNotAllowed(_) => "command_not_allowed",
+            Self::CommandTimeout { .. } => "tool_timeout",
+            Self::CommandFailed(_) => "command_failed",
+            Self::SizeLimitExceeded { .. } => "size_limit_exceeded",
+            Self::Serialization(_) => "serialization_error",
+            Self::ExternalToolError(_) => "external_tool_error",
+            Self::ExternalToolCallbackFailed { .. } => "external_tool_callback_failed",
+            Self::ExternalToolCallbackUnreachable { .. } => "external_tool_callback_unreachable",
+        }
+    }
+
+    /// Whether this error is recoverable (the session can continue).
+    #[must_use]
+    pub const fn is_recoverable(&self) -> bool {
+        match self {
+            Self::CommandTimeout { .. }
+            | Self::ExternalToolCallbackFailed { .. }
+            | Self::ExternalToolCallbackUnreachable { .. }
+            | Self::ExternalToolError(_) => true,
+            _ => true,
+        }
+    }
 }
 
 #[cfg(test)]

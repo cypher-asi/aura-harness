@@ -370,6 +370,10 @@ where
                 // Reset thinking state for next step
                 thinking_started_clone.store(false, std::sync::atomic::Ordering::SeqCst);
             }
+            StreamCallbackEvent::Error { code, message, .. } => {
+                let _ = cmd_tx_for_stream
+                    .try_send(UiCommand::SetStatus(format!("[{code}] {message}")));
+            }
         }
     });
     processor.set_stream_callback(Arc::new(stream_callback));

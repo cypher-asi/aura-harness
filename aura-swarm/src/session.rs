@@ -535,6 +535,15 @@ fn start_turn(
                     is_error,
                 }),
                 StreamCallbackEvent::StepComplete => continue,
+                StreamCallbackEvent::Error {
+                    code,
+                    message,
+                    recoverable,
+                } => OutboundMessage::Error(ErrorMsg {
+                    code,
+                    message,
+                    recoverable,
+                }),
             };
             if outbound_for_stream.send(out).is_err() {
                 break;

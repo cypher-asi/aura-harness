@@ -196,6 +196,15 @@ pub enum StreamCallbackEvent {
     },
     /// Streaming is complete for this step
     StepComplete,
+    /// An error occurred during the turn (LLM, tool callback, timeout, etc.).
+    Error {
+        /// Machine-readable error code.
+        code: String,
+        /// Human-readable description.
+        message: String,
+        /// Whether the session can continue after this error.
+        recoverable: bool,
+    },
 }
 
 /// Information about an executed tool call.
@@ -643,8 +652,19 @@ where
     async fn complete_with_streaming(&self, request: ModelRequest) -> anyhow::Result<ModelResponse> {
         let start = std::time::Instant::now();
 
-        // Get the streaming response
-        let mut stream = self.provider.complete_streaming(request).await?;
+        let mut stream = match self.provider.complete_streaming(request).await {
+            Ok(s) => s,
+            Err(e) => {
+                let err_msg = e.to_string();
+                let (code, recoverable) = classify_llm_error(&err_msg);
+                self.emit_stream_event(StreamCallbackEvent::Error {
+                    code: code.to_string(),
+                    message: err_msg,
+                    recoverable,
+                });
+                return Err(e);
+            }
+        };
 
         // Accumulate the response while emitting text deltas
         let mut accumulator = StreamAccumulator::new();
@@ -709,6 +729,12 @@ where
                         }
                         StreamEvent::Error { message } => {
                             error!(error = %message, "Stream error from provider");
+                            let (code, recoverable) = classify_llm_error(message);
+                            self.emit_stream_event(StreamCallbackEvent::Error {
+                                code: code.to_string(),
+                                message: message.clone(),
+                                recoverable,
+                            });
                             anyhow::bail!("Stream error: {message}");
                         }
                         _ => {}
@@ -722,7 +748,14 @@ where
                 }
                 Err(e) => {
                     error!(error = %e, "Stream error");
-                    anyhow::bail!("Stream error: {e}");
+                    let err_msg = e.to_string();
+                    let (code, recoverable) = classify_llm_error(&err_msg);
+                    self.emit_stream_event(StreamCallbackEvent::Error {
+                        code: code.to_string(),
+                        message: err_msg.clone(),
+                        recoverable,
+                    });
+                    anyhow::bail!("Stream error: {err_msg}");
                 }
             }
         }
@@ -904,6 +937,32 @@ where
             .actions(actions)
             .effects(effects)
             .build()
+    }
+}
+
+/// Classify an LLM error message into a machine-readable code and recoverability.
+///
+/// Returns `(code, recoverable)`. Common codes:
+/// - `"rate_limit"` — 429 / rate-limited, recoverable (retry after backoff)
+/// - `"auth_error"` — 401/403, not recoverable without config change
+/// - `"overloaded"` — 529 / server overloaded, recoverable
+/// - `"timeout"` — request timed out, recoverable
+/// - `"llm_error"` — catch-all for other LLM failures
+fn classify_llm_error(message: &str) -> (&'static str, bool) {
+    let lower = message.to_lowercase();
+    if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many requests")
+    {
+        ("rate_limit", true)
+    } else if lower.contains("401") || lower.contains("403") || lower.contains("unauthorized")
+        || lower.contains("forbidden") || lower.contains("authentication")
+    {
+        ("auth_error", false)
+    } else if lower.contains("overloaded") || lower.contains("529") || lower.contains("503") {
+        ("overloaded", true)
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        ("timeout", true)
+    } else {
+        ("llm_error", true)
     }
 }
 
