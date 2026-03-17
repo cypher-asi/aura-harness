@@ -140,12 +140,16 @@ pub fn fs_write(
 }
 
 /// Edit a file by replacing text.
+///
+/// When `replace_all` is `false` (default), only the first occurrence is replaced.
+/// When `true`, all occurrences are replaced.
 #[instrument(skip(sandbox, old_text, new_text), fields(path = %path))]
 pub fn fs_edit(
     sandbox: &Sandbox,
     path: &str,
     old_text: &str,
     new_text: &str,
+    replace_all: bool,
 ) -> Result<ToolResult, ToolError> {
     let resolved = sandbox.resolve_existing(path)?;
     debug!(?resolved, "Editing file");
@@ -156,7 +160,6 @@ pub fn fs_edit(
 
     let content = fs::read_to_string(&resolved)?;
 
-    // Check if the old_text exists in the file
     let count = content.matches(old_text).count();
     if count == 0 {
         return Err(ToolError::InvalidArguments(
@@ -164,15 +167,19 @@ pub fn fs_edit(
         ));
     }
 
-    // Replace and write back
-    let new_content = content.replace(old_text, new_text);
+    let (new_content, replacements) = if replace_all {
+        (content.replace(old_text, new_text), count)
+    } else {
+        (content.replacen(old_text, new_text, 1), 1)
+    };
+
     fs::write(&resolved, &new_content)?;
 
     Ok(ToolResult::success(
         "fs_edit",
-        format!("Replaced {count} occurrence(s) in {path}"),
+        format!("Replaced {replacements} occurrence(s) in {path}"),
     )
-    .with_metadata("replacements", count.to_string()))
+    .with_metadata("replacements", replacements.to_string()))
 }
 
 /// Search for patterns in code.
@@ -813,7 +820,7 @@ impl Tool for FsEditTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "fs_edit".into(),
-            description: "Edit an existing file by replacing a specific portion of text. Use this for targeted modifications.".into(),
+            description: "Edit an existing file by replacing a specific portion of text. By default replaces only the first occurrence.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -828,6 +835,10 @@ impl Tool for FsEditTool {
                     "new_text": {
                         "type": "string",
                         "description": "The text to replace it with"
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace all occurrences (default: false, replaces only first)"
                     }
                 },
                 "required": ["path", "old_text", "new_text"]
@@ -849,7 +860,8 @@ impl Tool for FsEditTool {
         let new_text = args["new_text"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("missing 'new_text' argument".into()))?;
-        fs_edit(&ctx.sandbox, path, old_text, new_text)
+        let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+        fs_edit(&ctx.sandbox, path, old_text, new_text, replace_all)
     }
 }
 
@@ -881,6 +893,10 @@ impl Tool for SearchCodeTool {
                         "type": "string",
                         "description": "Glob pattern for files to search (e.g., '*.rs', '*.ts')"
                     },
+                    "include": {
+                        "type": "string",
+                        "description": "Glob pattern for files to search (alias for file_pattern)"
+                    },
                     "max_results": {
                         "type": "integer",
                         "description": "Maximum number of results to return (default: 100)"
@@ -900,7 +916,9 @@ impl Tool for SearchCodeTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("missing 'pattern' argument".into()))?;
         let path = args["path"].as_str();
-        let file_pattern = args["file_pattern"].as_str();
+        let file_pattern = args["include"]
+            .as_str()
+            .or_else(|| args["file_pattern"].as_str());
         let max_results = args["max_results"]
             .as_u64()
             .map_or(100, |n| usize::try_from(n).unwrap_or(100));
@@ -990,6 +1008,13 @@ impl Tool for FsFindTool {
 }
 
 /// `cmd_run` tool: run a shell command.
+///
+/// Accepts two invocation styles:
+/// - `command` (string): a single shell string, shell-wrapped directly
+/// - `program` + `args` (legacy): program name with argument array
+///
+/// Also accepts `working_dir` as alias for `cwd`, and `timeout_secs` as
+/// alternative to `timeout_ms`.
 pub struct CmdRunTool;
 
 #[async_trait]
@@ -1001,30 +1026,40 @@ impl Tool for CmdRunTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "cmd_run".into(),
-            description: "Run a shell command. Use with caution. Only allowed commands will execute."
-                .into(),
+            description: "Run a shell command. Accepts either 'command' (shell string) or 'program'+'args'.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command string (e.g. 'cargo build --release'). Mutually exclusive with program/args."
+                    },
                     "program": {
                         "type": "string",
-                        "description": "The program/command to run"
+                        "description": "The program/command to run (legacy, prefer 'command')"
                     },
                     "args": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Command arguments"
+                        "description": "Command arguments (used with 'program')"
                     },
                     "cwd": {
                         "type": "string",
                         "description": "Working directory (default: workspace root)"
                     },
+                    "working_dir": {
+                        "type": "string",
+                        "description": "Working directory (alias for 'cwd')"
+                    },
                     "timeout_ms": {
                         "type": "integer",
                         "description": "Timeout in milliseconds (default: 30000)"
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (alternative to timeout_ms)"
                     }
-                },
-                "required": ["program"]
+                }
             }),
         }
     }
@@ -1034,8 +1069,28 @@ impl Tool for CmdRunTool {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
+        let cwd = args["cwd"]
+            .as_str()
+            .or_else(|| args["working_dir"].as_str());
+
+        let timeout_ms = if let Some(secs) = args["timeout_secs"].as_u64() {
+            secs * 1000
+        } else {
+            args["timeout_ms"]
+                .as_u64()
+                .unwrap_or(ctx.config.sync_threshold_ms)
+        };
+
+        // "command" mode: single shell string, shell-wrapped directly
+        if let Some(command) = args["command"].as_str() {
+            return cmd_run(&ctx.sandbox, command, &[], cwd, timeout_ms);
+        }
+
+        // "program" + "args" mode (legacy)
         let program = args["program"].as_str().ok_or_else(|| {
-            ToolError::InvalidArguments("missing 'program' argument".into())
+            ToolError::InvalidArguments(
+                "missing 'command' or 'program' argument".into(),
+            )
         })?;
 
         if !ctx.config.command_allowlist.is_empty()
@@ -1052,11 +1107,6 @@ impl Tool for CmdRunTool {
                     .collect()
             })
             .unwrap_or_default();
-
-        let cwd = args["cwd"].as_str();
-        let timeout_ms = args["timeout_ms"]
-            .as_u64()
-            .unwrap_or(ctx.config.sync_threshold_ms);
 
         cmd_run(&ctx.sandbox, program, &cmd_args, cwd, timeout_ms)
     }
@@ -1306,7 +1356,7 @@ mod tests {
 
         fs::write(dir.path().join("edit.txt"), "Hello, World!").unwrap();
 
-        let result = fs_edit(&sandbox, "edit.txt", "World", "Aura").unwrap();
+        let result = fs_edit(&sandbox, "edit.txt", "World", "Aura", false).unwrap();
         assert!(result.ok);
         assert_eq!(result.metadata.get("replacements").unwrap(), "1");
 
@@ -1315,12 +1365,12 @@ mod tests {
     }
 
     #[test]
-    fn test_fs_edit_multiple_replacements() {
+    fn test_fs_edit_replace_all() {
         let (sandbox, dir) = create_test_sandbox();
 
         fs::write(dir.path().join("edit.txt"), "foo bar foo baz foo").unwrap();
 
-        let result = fs_edit(&sandbox, "edit.txt", "foo", "qux").unwrap();
+        let result = fs_edit(&sandbox, "edit.txt", "foo", "qux", true).unwrap();
         assert!(result.ok);
         assert_eq!(result.metadata.get("replacements").unwrap(), "3");
 
@@ -1329,12 +1379,26 @@ mod tests {
     }
 
     #[test]
+    fn test_fs_edit_first_only_default() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        fs::write(dir.path().join("edit.txt"), "foo bar foo baz foo").unwrap();
+
+        let result = fs_edit(&sandbox, "edit.txt", "foo", "qux", false).unwrap();
+        assert!(result.ok);
+        assert_eq!(result.metadata.get("replacements").unwrap(), "1");
+
+        let content = fs::read_to_string(dir.path().join("edit.txt")).unwrap();
+        assert_eq!(content, "qux bar foo baz foo");
+    }
+
+    #[test]
     fn test_fs_edit_text_not_found() {
         let (sandbox, dir) = create_test_sandbox();
 
         fs::write(dir.path().join("edit.txt"), "Hello, World!").unwrap();
 
-        let result = fs_edit(&sandbox, "edit.txt", "NotFound", "Replacement");
+        let result = fs_edit(&sandbox, "edit.txt", "NotFound", "Replacement", false);
         assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
     }
 
@@ -1344,7 +1408,7 @@ mod tests {
 
         fs::create_dir(dir.path().join("dir")).unwrap();
 
-        let result = fs_edit(&sandbox, "dir", "old", "new");
+        let result = fs_edit(&sandbox, "dir", "old", "new", false);
         assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
     }
 
@@ -1355,7 +1419,7 @@ mod tests {
         let content = "line1\nold_content\nline3";
         fs::write(dir.path().join("multi.txt"), content).unwrap();
 
-        let result = fs_edit(&sandbox, "multi.txt", "old_content", "new_content").unwrap();
+        let result = fs_edit(&sandbox, "multi.txt", "old_content", "new_content", false).unwrap();
         assert!(result.ok);
 
         let updated = fs::read_to_string(dir.path().join("multi.txt")).unwrap();
