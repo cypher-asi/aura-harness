@@ -4,12 +4,13 @@
 //! state, tool configuration, and token accounting across turns.
 
 use crate::protocol::*;
-use aura_core::ExternalToolDefinition;
+use aura_core::{AgentId, ExternalToolDefinition};
 use aura_executor::ExecutorRouter;
-use aura_kernel::{StreamCallback, StreamCallbackEvent, TurnConfig};
+use aura_kernel::{StreamCallback, StreamCallbackEvent, TurnConfig, TurnProcessor};
 use aura_reasoner::{
     Message, ModelProvider, ModelRequest, ModelResponse, StreamEventStream, ToolDefinition,
 };
+use aura_store::{AgentStatus, Store, StoreError};
 use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolRegistry};
 use async_trait::async_trait;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
@@ -48,6 +49,78 @@ impl ModelProvider for DynProvider {
 }
 
 // ============================================================================
+// NullStore — lightweight store for WebSocket sessions
+// ============================================================================
+
+/// Minimal `Store` implementation for WebSocket sessions that manage
+/// their own message history and don't need persistent storage.
+pub(crate) struct NullStore;
+
+impl Store for NullStore {
+    fn enqueue_tx(&self, _tx: &aura_core::Transaction) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    fn dequeue_tx(
+        &self,
+        _agent_id: AgentId,
+    ) -> Result<Option<(u64, aura_core::Transaction)>, StoreError> {
+        Ok(None)
+    }
+
+    fn get_head_seq(&self, _agent_id: AgentId) -> Result<u64, StoreError> {
+        Ok(0)
+    }
+
+    fn append_entry_atomic(
+        &self,
+        _agent_id: AgentId,
+        _next_seq: u64,
+        _entry: &aura_core::RecordEntry,
+        _dequeued_inbox_seq: u64,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    fn scan_record(
+        &self,
+        _agent_id: AgentId,
+        _from_seq: u64,
+        _limit: usize,
+    ) -> Result<Vec<aura_core::RecordEntry>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    fn get_record_entry(
+        &self,
+        agent_id: AgentId,
+        seq: u64,
+    ) -> Result<aura_core::RecordEntry, StoreError> {
+        Err(StoreError::RecordEntryNotFound(agent_id, seq))
+    }
+
+    fn get_agent_status(&self, _agent_id: AgentId) -> Result<AgentStatus, StoreError> {
+        Ok(AgentStatus::Active)
+    }
+
+    fn set_agent_status(
+        &self,
+        _agent_id: AgentId,
+        _status: AgentStatus,
+    ) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    fn has_pending_tx(&self, _agent_id: AgentId) -> Result<bool, StoreError> {
+        Ok(false)
+    }
+
+    fn get_inbox_depth(&self, _agent_id: AgentId) -> Result<u64, StoreError> {
+        Ok(0)
+    }
+}
+
+// ============================================================================
 // Session
 // ============================================================================
 
@@ -55,6 +128,8 @@ impl ModelProvider for DynProvider {
 pub struct Session {
     /// Unique session identifier.
     pub session_id: String,
+    /// Stable agent ID for the lifetime of this session.
+    pub agent_id: AgentId,
     /// System prompt for the model.
     pub system_prompt: String,
     /// Model identifier.
@@ -86,6 +161,7 @@ impl Session {
     fn new(default_workspace: PathBuf) -> Self {
         Self {
             session_id: Uuid::new_v4().to_string(),
+            agent_id: AgentId::generate(),
             system_prompt: String::new(),
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 16384,
@@ -166,6 +242,7 @@ pub struct WsContext {
 /// 1. Client sends `session_init` as the first message.
 /// 2. Server responds with `session_ready`.
 /// 3. Client sends `user_message` events, server streams responses.
+/// 4. Message history accumulates across turns for multi-turn conversation.
 pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<OutboundMessage>();
@@ -293,7 +370,12 @@ fn handle_session_init(
     }));
 }
 
-/// Handle a `user_message` by running the agentic turn loop.
+/// Handle a `user_message` by running the agentic turn loop via `TurnProcessor`.
+///
+/// The session's `messages` vec is grown in-place across turns: the user message
+/// is appended before the turn, and the assistant's messages (text + tool use +
+/// tool results) are appended by the turn loop. On the next `user_message`,
+/// the full history is sent again, giving the model multi-turn context.
 async fn handle_user_message(
     session: &mut Session,
     msg: UserMessage,
@@ -310,12 +392,14 @@ async fn handle_user_message(
     }
 
     let message_id = Uuid::new_v4().to_string();
-
     let _ = outbound_tx.send(OutboundMessage::AssistantMessageStart(
         AssistantMessageStart {
             message_id: message_id.clone(),
         },
     ));
+
+    // Append the user message to the conversation history.
+    session.messages.push(Message::user(&msg.content));
 
     // Build per-turn tool executor with external tools.
     let mut tool_executor = ToolExecutor::new(ctx.tool_config.clone());
@@ -327,7 +411,6 @@ async fn handle_user_message(
             callback_url: ext.callback_url.clone(),
         });
     }
-
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(tool_executor));
 
@@ -341,7 +424,7 @@ async fn handle_user_message(
         ));
     }
 
-    // Set up streaming callback → channel bridge.
+    // Set up streaming callback → channel → WebSocket bridge.
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamCallbackEvent>();
     let outbound_for_stream = outbound_tx.clone();
 
@@ -380,33 +463,49 @@ async fn handle_user_message(
         let _ = event_tx.send(event);
     });
 
-    // Create the TurnProcessor for this turn.
+    // Create a TurnProcessor for this turn.
     let provider = Arc::new(DynProvider(ctx.provider.clone()));
-    // Use a temporary in-memory store placeholder via a temp RocksDB.
-    // The session manages its own message history, so the store is unused
-    // when calling process_turn_with_messages (Phase 2c).
-    // For now, create a simple turn by building messages and calling the model directly.
-
+    let store = Arc::new(NullStore);
     let turn_config = session.turn_config();
 
-    // Run the turn loop directly (without TurnProcessor) since we manage
-    // messages ourselves. This avoids needing a Store instance.
-    let result = run_session_turn(
+    let mut processor = TurnProcessor::new(
         provider,
+        store,
         executor_router,
-        &tool_registry,
-        &turn_config,
-        &msg.content,
-        &mut session.messages,
-        callback,
-    )
-    .await;
+        Arc::new(tool_registry),
+        turn_config,
+    );
+    processor.set_stream_callback(Arc::new(callback));
 
-    // Wait for streaming events to flush.
+    // Snapshot the messages for the turn. The processor will extend them
+    // internally (adding assistant messages + tool results), and we'll
+    // capture the final state afterwards.
+    let messages_for_turn = session.messages.clone();
+
+    let result = processor
+        .process_turn_with_messages(session.agent_id, messages_for_turn)
+        .await;
+
+    // Drop the processor (and its callback) so the event_tx sender is freed,
+    // which allows the stream_forward_task to complete.
+    drop(processor);
     let _ = stream_forward_task.await;
 
     match result {
         Ok(turn_result) => {
+            // Reconstruct the messages that the turn loop added (assistant
+            // messages and tool results) so the session history stays in sync.
+            for entry in &turn_result.entries {
+                session.messages.push(entry.model_response.message.clone());
+
+                let tool_results = &entry.tool_results;
+                if !tool_results.is_empty() {
+                    session
+                        .messages
+                        .push(Message::tool_results(tool_results.clone()));
+                }
+            }
+
             let input_tokens = u64::from(turn_result.total_input_tokens);
             let output_tokens = u64::from(turn_result.total_output_tokens);
             session.cumulative_input_tokens += input_tokens;
@@ -430,6 +529,14 @@ async fn handle_user_message(
                     },
                 },
             ));
+
+            info!(
+                session_id = %session.session_id,
+                history_len = session.messages.len(),
+                cumulative_in = session.cumulative_input_tokens,
+                cumulative_out = session.cumulative_output_tokens,
+                "Turn complete"
+            );
         }
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Turn processing failed");
@@ -440,232 +547,4 @@ async fn handle_user_message(
             }));
         }
     }
-}
-
-// ============================================================================
-// Session Turn Loop
-// ============================================================================
-
-/// Lightweight turn result returned by the session turn loop.
-struct SessionTurnResult {
-    total_input_tokens: u32,
-    total_output_tokens: u32,
-    had_failures: bool,
-}
-
-/// Run an agentic turn loop for a WebSocket session.
-///
-/// This is a self-contained loop that:
-/// 1. Appends the user message to the conversation history
-/// 2. Calls the model (streaming)
-/// 3. If tool_use: executes tools, adds results, continues
-/// 4. If end_turn: returns
-///
-/// Message history is maintained in-place on `messages` so multi-turn
-/// conversations accumulate naturally.
-#[allow(clippy::too_many_arguments)]
-async fn run_session_turn(
-    provider: Arc<DynProvider>,
-    executor_router: ExecutorRouter,
-    tool_registry: &DefaultToolRegistry,
-    config: &TurnConfig,
-    user_content: &str,
-    messages: &mut Vec<Message>,
-    callback: StreamCallback,
-) -> anyhow::Result<SessionTurnResult> {
-    use aura_core::{Action, AgentId, ToolCall};
-    use aura_executor::ExecuteContext;
-    use aura_reasoner::{ContentBlock, StopReason, ToolResultContent};
-
-    let agent_id = AgentId::generate();
-    let workspace = config.workspace_base.clone();
-
-    // Ensure workspace directory exists.
-    if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
-        warn!(error = %e, "Failed to create workspace directory");
-    }
-
-    // Append user message.
-    messages.push(Message::user(user_content));
-
-    let tools = tool_registry.list();
-    let callback = Arc::new(callback);
-
-    let mut total_input_tokens = 0u32;
-    let mut total_output_tokens = 0u32;
-    let mut had_failures = false;
-
-    for step in 0..config.max_steps {
-        debug!(step, messages = messages.len(), "Session turn step");
-
-        let request = ModelRequest::builder(&config.model, &config.system_prompt)
-            .messages(messages.clone())
-            .tools(tools.clone())
-            .max_tokens(config.max_tokens)
-            .temperature(config.temperature.unwrap_or(0.7))
-            .build();
-
-        // Stream the model response.
-        let response = stream_model_response(&provider, request, &callback).await?;
-
-        total_input_tokens += response.usage.input_tokens;
-        total_output_tokens += response.usage.output_tokens;
-
-        messages.push(response.message.clone());
-
-        match response.stop_reason {
-            StopReason::EndTurn | StopReason::MaxTokens | StopReason::StopSequence => {
-                callback(StreamCallbackEvent::StepComplete);
-                break;
-            }
-            StopReason::ToolUse => {
-                // Execute tool calls.
-                let mut tool_results: Vec<(String, ToolResultContent, bool)> = Vec::new();
-
-                for block in &response.message.content {
-                    if let ContentBlock::ToolUse { id, name, input } = block {
-                        let tool_call = ToolCall::new(name.clone(), input.clone());
-                        let action = Action::delegate_tool(&tool_call);
-                        let exec_ctx =
-                            ExecuteContext::new(agent_id, action.action_id, workspace.clone());
-
-                        let effect = executor_router.execute(&exec_ctx, &action).await;
-
-                        let (content, is_error) =
-                            if effect.status == aura_core::EffectStatus::Committed {
-                                if let Ok(tr) =
-                                    serde_json::from_slice::<aura_core::ToolResult>(&effect.payload)
-                                {
-                                    let text = if tr.stdout.is_empty() {
-                                        "Success (no output)".to_string()
-                                    } else {
-                                        String::from_utf8_lossy(&tr.stdout).to_string()
-                                    };
-                                    (ToolResultContent::text(text), !tr.ok)
-                                } else {
-                                    (ToolResultContent::text("Tool executed successfully"), false)
-                                }
-                            } else {
-                                let err = serde_json::from_slice::<aura_core::ToolResult>(
-                                    &effect.payload,
-                                )
-                                .map(|tr| String::from_utf8_lossy(&tr.stderr).to_string())
-                                .unwrap_or_else(|_| "Tool execution failed".into());
-                                (ToolResultContent::text(err), true)
-                            };
-
-                        if is_error {
-                            had_failures = true;
-                        }
-
-                        let result_text = match &content {
-                            ToolResultContent::Text(s) => s.clone(),
-                            ToolResultContent::Json(v) => {
-                                serde_json::to_string(v).unwrap_or_default()
-                            }
-                        };
-
-                        callback(StreamCallbackEvent::ToolComplete {
-                            name: name.clone(),
-                            args: input.clone(),
-                            result: result_text,
-                            is_error,
-                        });
-
-                        tool_results.push((id.clone(), content, is_error));
-                    }
-                }
-
-                if !tool_results.is_empty() {
-                    messages.push(Message::tool_results(tool_results));
-                }
-            }
-        }
-    }
-
-    Ok(SessionTurnResult {
-        total_input_tokens,
-        total_output_tokens,
-        had_failures,
-    })
-}
-
-/// Call the model with streaming, forwarding events through the callback.
-async fn stream_model_response(
-    provider: &DynProvider,
-    request: ModelRequest,
-    callback: &Arc<StreamCallback>,
-) -> anyhow::Result<ModelResponse> {
-    use aura_reasoner::{StreamAccumulator, StreamEvent};
-    use futures_util::StreamExt;
-
-    let mut stream = provider.complete_streaming(request).await?;
-    let mut accumulator = StreamAccumulator::new();
-    let input_tokens = 0u32;
-    let start = std::time::Instant::now();
-    let mut in_thinking_block = false;
-
-    while let Some(event_result) = stream.next().await {
-        match event_result {
-            Ok(event) => {
-                match &event {
-                    StreamEvent::ContentBlockStart {
-                        content_type:
-                            aura_reasoner::StreamContentType::Thinking,
-                        ..
-                    } => {
-                        in_thinking_block = true;
-                    }
-                    StreamEvent::ContentBlockStart {
-                        content_type:
-                            aura_reasoner::StreamContentType::ToolUse { id, name },
-                        ..
-                    } => {
-                        if in_thinking_block {
-                            callback(StreamCallbackEvent::ThinkingComplete);
-                            in_thinking_block = false;
-                        }
-                        callback(StreamCallbackEvent::ToolStart {
-                            id: id.clone(),
-                            name: name.clone(),
-                        });
-                    }
-                    StreamEvent::ContentBlockStart {
-                        content_type: aura_reasoner::StreamContentType::Text,
-                        ..
-                    }
-                    | StreamEvent::ContentBlockStop { .. } => {
-                        if in_thinking_block {
-                            callback(StreamCallbackEvent::ThinkingComplete);
-                            in_thinking_block = false;
-                        }
-                    }
-                    StreamEvent::ThinkingDelta { thinking } => {
-                        callback(StreamCallbackEvent::ThinkingDelta(
-                            thinking.clone(),
-                        ));
-                    }
-                    StreamEvent::TextDelta { text } => {
-                        callback(StreamCallbackEvent::TextDelta(text.clone()));
-                    }
-                    StreamEvent::Error { message } => {
-                        anyhow::bail!("Stream error: {message}");
-                    }
-                    _ => {}
-                }
-
-                accumulator.process(&event);
-
-                if matches!(event, StreamEvent::MessageStop) {
-                    break;
-                }
-            }
-            Err(e) => {
-                anyhow::bail!("Stream error: {e}");
-            }
-        }
-    }
-
-    let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-    accumulator.into_response(input_tokens, latency_ms)
 }

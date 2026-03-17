@@ -412,13 +412,13 @@ where
 
     /// Process a user transaction through the full turn loop.
     ///
-    /// This is the main entry point for processing a user message.
-    /// It loops until the model ends its turn or max steps is reached.
+    /// This is the main entry point for processing a user message when
+    /// conversation history is loaded from the store. For WebSocket sessions
+    /// that maintain their own message history, use [`process_turn_with_messages`].
     ///
     /// # Errors
     ///
     /// Returns error if model completion or tool execution fails.
-    #[allow(clippy::too_many_lines)] // Core orchestration logic - refactoring would hurt readability
     #[instrument(skip(self, tx), fields(agent_id = %agent_id, hash = %tx.hash))]
     pub async fn process_turn(
         &self,
@@ -426,12 +426,44 @@ where
         tx: Transaction,
         next_seq: u64,
     ) -> anyhow::Result<TurnResult> {
-        info!("Starting turn processing");
+        info!("Starting turn processing (store-based history)");
+        let messages = self.build_initial_messages(agent_id, &tx, next_seq);
+        self.run_turn_loop(messages, agent_id).await
+    }
 
-        let mut entries = Vec::new();
-        let mut messages = self.build_initial_messages(agent_id, &tx, next_seq);
+    /// Process a turn with pre-built message history.
+    ///
+    /// Unlike [`process_turn`], this method does not load history from the
+    /// store. The caller is responsible for providing the full conversation
+    /// context (including the current user message) in `messages`.
+    ///
+    /// This is the primary entry point for WebSocket sessions that maintain
+    /// their own `Vec<Message>` across turns.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if model completion or tool execution fails.
+    #[instrument(skip(self, messages), fields(agent_id = %agent_id))]
+    pub async fn process_turn_with_messages(
+        &self,
+        agent_id: AgentId,
+        messages: Vec<Message>,
+    ) -> anyhow::Result<TurnResult> {
+        info!("Starting turn processing (caller-provided history)");
+        self.run_turn_loop(messages, agent_id).await
+    }
+
+    /// Core agentic turn loop shared by both `process_turn` and
+    /// `process_turn_with_messages`.
+    #[allow(clippy::too_many_lines)]
+    async fn run_turn_loop(
+        &self,
+        mut messages: Vec<Message>,
+        agent_id: AgentId,
+    ) -> anyhow::Result<TurnResult> {
         let tools = self.build_tools();
 
+        let mut entries = Vec::new();
         let mut total_input_tokens = 0u32;
         let mut total_output_tokens = 0u32;
         let mut had_failures = false;
@@ -451,8 +483,6 @@ where
             // 2. Call model (skip in replay mode)
             let response = if self.config.replay_mode {
                 debug!("Replay mode: skipping model call");
-                // In replay mode, we would load from recorded entries
-                // For now, return an empty end-turn response
                 ModelResponse::new(
                     StopReason::EndTurn,
                     Message::assistant("(replay)"),
@@ -460,10 +490,8 @@ where
                     aura_reasoner::ProviderTrace::new("replay", 0),
                 )
             } else if self.stream_callback.is_some() {
-                // Use streaming completion with callback
                 self.complete_with_streaming(request).await?
             } else {
-                // Use non-streaming completion
                 self.provider.complete(request).await?
             };
 
@@ -485,7 +513,6 @@ where
             // 4. Check stop reason and handle accordingly
             match response.stop_reason {
                 StopReason::EndTurn => {
-                    // Turn complete
                     info!(step = step, "Turn completed (end_turn)");
                     entries.push(TurnEntry {
                         turn_step: step,
@@ -497,15 +524,12 @@ where
                     break;
                 }
                 StopReason::ToolUse => {
-                    // Extract and execute tool calls
                     let executed_tools = self.execute_tool_calls(&response.message, agent_id).await?;
 
-                    // Check for failures
                     if executed_tools.iter().any(|t| t.is_error) {
                         had_failures = true;
                     }
 
-                    // Emit ToolComplete events for each executed tool
                     for tool in &executed_tools {
                         let result_text = match &tool.result {
                             ToolResultContent::Text(s) => s.clone(),
@@ -519,13 +543,11 @@ where
                         });
                     }
 
-                    // Convert to legacy format for backwards compatibility
                     let tool_results: Vec<(String, ToolResultContent, bool)> = executed_tools
                         .iter()
                         .map(|t| (t.tool_use_id.clone(), t.result.clone(), t.is_error))
                         .collect();
 
-                    // Record this step
                     entries.push(TurnEntry {
                         turn_step: step,
                         model_response: response,
@@ -534,7 +556,6 @@ where
                         stop_reason: StopReason::ToolUse,
                     });
 
-                    // Add tool results to conversation for next iteration
                     if !tool_results.is_empty() {
                         messages.push(Message::tool_results(tool_results));
                     }
@@ -564,7 +585,7 @@ where
             }
         }
 
-        #[allow(clippy::cast_possible_truncation)] // entries count is bounded by max_steps
+        #[allow(clippy::cast_possible_truncation)]
         let steps = entries.len() as u32;
 
         info!(
