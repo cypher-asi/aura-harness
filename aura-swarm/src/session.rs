@@ -601,6 +601,14 @@ fn finalize_turn(
                 message: "Turn processing task panicked".into(),
                 recoverable: false,
             }));
+            let _ = outbound_tx.send(OutboundMessage::AssistantMessageEnd(
+                AssistantMessageEnd {
+                    message_id: message_id.to_string(),
+                    stop_reason: "error".into(),
+                    usage: SessionUsage::default(),
+                    files_changed: FilesChanged::default(),
+                },
+            ));
             return;
         }
     };
