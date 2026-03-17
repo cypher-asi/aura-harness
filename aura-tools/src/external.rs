@@ -6,23 +6,10 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::ToolResult;
+use aura_core::{ExternalToolDefinition, ToolResult};
 use aura_reasoner::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
-
-/// Definition for an external tool registered at runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExternalToolDefinition {
-    /// Tool name (must be unique across all tools).
-    pub name: String,
-    /// Human-readable description for the model.
-    pub description: String,
-    /// JSON Schema for input parameters.
-    pub input_schema: serde_json::Value,
-    /// HTTP endpoint that handles tool execution.
-    pub callback_url: String,
-}
 
 /// Request body POSTed to the external tool's callback URL.
 #[derive(Debug, Serialize)]

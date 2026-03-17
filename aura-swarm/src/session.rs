@@ -487,12 +487,7 @@ fn start_turn(
     // Build per-turn tool executor with external tools.
     let mut tool_executor = ToolExecutor::new(ctx.tool_config.clone());
     for ext in &session.external_tools {
-        tool_executor.register_external(aura_tools::ExternalToolDefinition {
-            name: ext.name.clone(),
-            description: ext.description.clone(),
-            input_schema: ext.input_schema.clone(),
-            callback_url: ext.callback_url.clone(),
-        });
+        tool_executor.register_external(ext.clone());
     }
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(tool_executor));

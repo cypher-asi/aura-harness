@@ -1,7 +1,8 @@
 //! Tool executor implementation.
 
 use crate::error::ToolError;
-use crate::external::{ExternalTool, ExternalToolDefinition};
+use crate::external::ExternalTool;
+use aura_core::ExternalToolDefinition;
 use crate::sandbox::Sandbox;
 use crate::tool::{builtin_tools, Tool, ToolContext};
 use crate::ToolConfig;
