@@ -10,6 +10,7 @@ use aura_core::ToolResult;
 use aura_reasoner::ToolDefinition;
 use std::collections::HashMap;
 use std::fs;
+#[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
 use tracing::{debug, instrument};
 
@@ -88,7 +89,7 @@ pub fn fs_stat(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError> {
         metadata.permissions().readonly().to_string(),
     );
 
-    // Windows-specific attributes
+    #[cfg(windows)]
     result_metadata.insert(
         "file_attributes".to_string(),
         metadata.file_attributes().to_string(),
