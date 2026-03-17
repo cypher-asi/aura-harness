@@ -37,6 +37,7 @@ use aura_tools::ToolRegistry;
 use bytes::Bytes;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
 // ============================================================================
@@ -152,6 +153,8 @@ pub struct TurnResult {
     pub steps: u32,
     /// Whether any tools failed
     pub had_failures: bool,
+    /// Whether the turn was cancelled.
+    pub cancelled: bool,
     /// Model identifier used for this turn.
     pub model: String,
     /// Provider name (e.g., "anthropic").
@@ -253,6 +256,8 @@ where
     config: TurnConfig,
     /// Optional callback for streaming text events
     stream_callback: Option<Arc<StreamCallback>>,
+    /// Optional cancellation token to abort the turn loop.
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl<P, S, R> TurnProcessor<P, S, R>
@@ -279,6 +284,7 @@ where
             tool_registry,
             config,
             stream_callback: None,
+            cancellation_token: None,
         }
     }
 
@@ -309,11 +315,23 @@ where
         self.stream_callback = None;
     }
 
+    /// Set a cancellation token that can abort the turn loop.
+    pub fn set_cancellation_token(&mut self, token: CancellationToken) {
+        self.cancellation_token = Some(token);
+    }
+
     /// Emit a streaming event to the callback (if set).
     fn emit_stream_event(&self, event: StreamCallbackEvent) {
         if let Some(callback) = &self.stream_callback {
             callback(event);
         }
+    }
+
+    /// Check whether the current turn has been cancelled.
+    fn is_cancelled(&self) -> bool {
+        self.cancellation_token
+            .as_ref()
+            .map_or(false, CancellationToken::is_cancelled)
     }
 
     /// Get the workspace path for an agent.
@@ -471,11 +489,18 @@ where
         let mut total_input_tokens = 0u32;
         let mut total_output_tokens = 0u32;
         let mut had_failures = false;
+        let mut cancelled = false;
         let mut final_message = None;
         let provider_name = self.provider.name().to_string();
         let model_name = self.config.model.clone();
 
         for step in 0..self.config.max_steps {
+            if self.is_cancelled() {
+                info!(step = step, "Turn cancelled before step");
+                cancelled = true;
+                break;
+            }
+
             debug!(step = step, messages = messages.len(), "Processing step");
 
             // 1. Build model request
@@ -608,6 +633,7 @@ where
             total_output_tokens,
             steps,
             had_failures,
+            cancelled,
             model: model_name,
             provider: provider_name,
         })
@@ -625,10 +651,26 @@ where
         let input_tokens = 0u32;
         let mut in_thinking_block = false;
 
-        while let Some(event_result) = stream.next().await {
+        loop {
+            let event_result = if let Some(token) = &self.cancellation_token {
+                tokio::select! {
+                    biased;
+                    () = token.cancelled() => {
+                        info!("Stream cancelled by cancellation token");
+                        break;
+                    }
+                    next = stream.next() => next,
+                }
+            } else {
+                stream.next().await
+            };
+
+            let Some(event_result) = event_result else {
+                break;
+            };
+
             match event_result {
                 Ok(event) => {
-                    // Emit events to the callback
                     match &event {
                         StreamEvent::ContentBlockStart {
                             content_type: aura_reasoner::StreamContentType::Thinking,
@@ -640,7 +682,6 @@ where
                             content_type: aura_reasoner::StreamContentType::ToolUse { id, name },
                             ..
                         } => {
-                            // If we were in a thinking block, signal it's complete
                             if in_thinking_block {
                                 self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
                                 in_thinking_block = false;
@@ -655,7 +696,6 @@ where
                             ..
                         }
                         | StreamEvent::ContentBlockStop { .. } => {
-                            // If we were in a thinking block, signal it's complete
                             if in_thinking_block {
                                 self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
                                 in_thinking_block = false;
@@ -674,10 +714,8 @@ where
                         _ => {}
                     }
 
-                    // Process the event to build the final response
                     accumulator.process(&event);
 
-                    // Check for terminal events
                     if matches!(event, StreamEvent::MessageStop) {
                         break;
                     }

@@ -70,6 +70,7 @@ anyhow = "1.0"
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP
 axum = { version = "0.7", features = ["ws"] }

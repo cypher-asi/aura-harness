@@ -18,7 +18,9 @@ use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 // ============================================================================
@@ -239,6 +241,44 @@ pub struct WsContext {
     pub tool_config: ToolConfig,
 }
 
+// ============================================================================
+// Active Turn
+// ============================================================================
+
+/// State for a turn that is currently being processed in the background.
+struct ActiveTurn {
+    /// Token to signal cancellation of the turn.
+    cancel_token: CancellationToken,
+    /// Handle to the spawned turn-processing task.
+    join_handle: JoinHandle<anyhow::Result<TurnResult>>,
+    /// Handle to the stream-forwarding task.
+    stream_forward_handle: JoinHandle<()>,
+    /// Message ID for this turn (used in assistant_message_end).
+    message_id: String,
+}
+
+/// Classification of a raw WebSocket frame.
+enum WsAction {
+    /// A text message was received.
+    Message(String),
+    /// The connection should be closed.
+    Close,
+    /// Non-actionable frame (ping/pong/binary); continue the loop.
+    Continue,
+}
+
+/// Classify a raw WebSocket receive result.
+fn classify_ws_frame(
+    msg_result: Option<Result<WsMessage, axum::Error>>,
+) -> WsAction {
+    match msg_result {
+        Some(Ok(WsMessage::Text(text))) => WsAction::Message(text.to_string()),
+        Some(Ok(WsMessage::Close(_))) | None => WsAction::Close,
+        Some(Ok(_)) => WsAction::Continue,
+        Some(Err(_)) => WsAction::Close,
+    }
+}
+
 /// Handle a WebSocket connection through its full lifecycle.
 ///
 /// Protocol:
@@ -246,11 +286,11 @@ pub struct WsContext {
 /// 2. Server responds with `session_ready`.
 /// 3. Client sends `user_message` events, server streams responses.
 /// 4. Message history accumulates across turns for multi-turn conversation.
+/// 5. Client can send `cancel` during a turn to abort it.
 pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<OutboundMessage>();
 
-    // Spawn a task that forwards outbound messages to the WebSocket sink.
     let send_task = tokio::spawn(async move {
         while let Some(msg) = outbound_rx.recv().await {
             match serde_json::to_string(&msg) {
@@ -269,51 +309,93 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let mut session = Session::new(ctx.workspace_base.clone());
     info!(session_id = %session.session_id, "WebSocket connection opened");
 
-    // Message receive loop.
-    while let Some(msg_result) = ws_rx.next().await {
-        let raw = match msg_result {
-            Ok(WsMessage::Text(text)) => text.to_string(),
-            Ok(WsMessage::Close(_)) => {
-                debug!(session_id = %session.session_id, "Client sent close frame");
-                break;
-            }
-            Ok(WsMessage::Ping(_) | WsMessage::Pong(_)) => continue,
-            Ok(_) => continue,
-            Err(e) => {
-                warn!(session_id = %session.session_id, error = %e, "WebSocket receive error");
-                break;
-            }
-        };
+    let mut active_turn: Option<ActiveTurn> = None;
 
-        let inbound: InboundMessage = match serde_json::from_str(&raw) {
-            Ok(msg) => msg,
-            Err(e) => {
-                let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
-                    code: "parse_error".into(),
-                    message: format!("Invalid message: {e}"),
-                    recoverable: true,
-                }));
-                continue;
-            }
-        };
+    loop {
+        if let Some(ref mut turn) = active_turn {
+            // A turn is in progress — select between incoming messages and
+            // turn completion so that `Cancel` is handled promptly.
+            tokio::select! {
+                biased;
 
-        match inbound {
-            InboundMessage::SessionInit(init) => {
-                handle_session_init(&mut session, init, &outbound_tx);
+                msg_result = ws_rx.next() => {
+                    match classify_ws_frame(msg_result) {
+                        WsAction::Message(raw) => {
+                            match serde_json::from_str::<InboundMessage>(&raw) {
+                                Ok(InboundMessage::Cancel) => {
+                                    info!(session_id = %session.session_id, "Cancelling active turn");
+                                    turn.cancel_token.cancel();
+                                }
+                                Ok(_) => {
+                                    let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+                                        code: "turn_in_progress".into(),
+                                        message: "A turn is currently in progress; send cancel first".into(),
+                                        recoverable: true,
+                                    }));
+                                }
+                                Err(e) => {
+                                    let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+                                        code: "parse_error".into(),
+                                        message: format!("Invalid message: {e}"),
+                                        recoverable: true,
+                                    }));
+                                }
+                            }
+                        }
+                        WsAction::Close => {
+                            debug!(session_id = %session.session_id, "Client closed during active turn");
+                            turn.cancel_token.cancel();
+                            break;
+                        }
+                        WsAction::Continue => {}
+                    }
+                }
+
+                join_result = &mut turn.join_handle => {
+                    let finished = active_turn.take().expect("active_turn was Some");
+                    let _ = finished.stream_forward_handle.await;
+                    finalize_turn(&mut session, join_result, &finished.message_id, &outbound_tx);
+                }
             }
-            InboundMessage::UserMessage(msg) => {
-                handle_user_message(&mut session, msg, &outbound_tx, &ctx).await;
-            }
-            InboundMessage::Cancel => {
-                debug!(session_id = %session.session_id, "Cancel requested (not yet implemented)");
-            }
-            InboundMessage::ApprovalResponse(resp) => {
-                debug!(
-                    session_id = %session.session_id,
-                    tool_use_id = %resp.tool_use_id,
-                    approved = resp.approved,
-                    "Approval response received (not yet implemented)"
-                );
+        } else {
+            // No active turn — block waiting for the next message.
+            match classify_ws_frame(ws_rx.next().await) {
+                WsAction::Message(raw) => {
+                    match serde_json::from_str::<InboundMessage>(&raw) {
+                        Ok(InboundMessage::SessionInit(init)) => {
+                            handle_session_init(&mut session, init, &outbound_tx);
+                        }
+                        Ok(InboundMessage::UserMessage(msg)) => {
+                            match start_turn(&mut session, msg, &outbound_tx, &ctx) {
+                                Some(turn) => active_turn = Some(turn),
+                                None => {} // start_turn already sent an error
+                            }
+                        }
+                        Ok(InboundMessage::Cancel) => {
+                            debug!(session_id = %session.session_id, "Cancel received but no turn is active");
+                        }
+                        Ok(InboundMessage::ApprovalResponse(resp)) => {
+                            debug!(
+                                session_id = %session.session_id,
+                                tool_use_id = %resp.tool_use_id,
+                                approved = resp.approved,
+                                "Approval response received (not yet implemented)"
+                            );
+                        }
+                        Err(e) => {
+                            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+                                code: "parse_error".into(),
+                                message: format!("Invalid message: {e}"),
+                                recoverable: true,
+                            }));
+                        }
+                    }
+                }
+                WsAction::Close => {
+                    debug!(session_id = %session.session_id, "Client sent close frame");
+                    break;
+                }
+                WsAction::Continue => {}
             }
         }
     }
@@ -373,25 +455,24 @@ fn handle_session_init(
     }));
 }
 
-/// Handle a `user_message` by running the agentic turn loop via `TurnProcessor`.
+/// Prepare and spawn a turn as a background task, returning an `ActiveTurn`
+/// that the main loop can select on alongside the WebSocket receiver.
 ///
-/// The session's `messages` vec is grown in-place across turns: the user message
-/// is appended before the turn, and the assistant's messages (text + tool use +
-/// tool results) are appended by the turn loop. On the next `user_message`,
-/// the full history is sent again, giving the model multi-turn context.
-async fn handle_user_message(
+/// Returns `None` if the session is not initialized (an error is sent on the
+/// outbound channel in that case).
+fn start_turn(
     session: &mut Session,
     msg: UserMessage,
     outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
     ctx: &WsContext,
-) {
+) -> Option<ActiveTurn> {
     if !session.initialized {
         let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
             code: "not_initialized".into(),
             message: "Send session_init before user_message".into(),
             recoverable: true,
         }));
-        return;
+        return None;
     }
 
     let message_id = Uuid::new_v4().to_string();
@@ -401,7 +482,6 @@ async fn handle_user_message(
         },
     ));
 
-    // Append the user message to the conversation history.
     session.messages.push(Message::user(&msg.content));
 
     // Build per-turn tool executor with external tools.
@@ -427,11 +507,11 @@ async fn handle_user_message(
         ));
     }
 
-    // Set up streaming callback → channel → WebSocket bridge.
+    // Streaming callback → channel → WebSocket bridge.
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamCallbackEvent>();
     let outbound_for_stream = outbound_tx.clone();
 
-    let stream_forward_task = tokio::spawn(async move {
+    let stream_forward_handle = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
             let out = match event {
                 StreamCallbackEvent::TextDelta(text) => {
@@ -466,7 +546,8 @@ async fn handle_user_message(
         let _ = event_tx.send(event);
     });
 
-    // Create a TurnProcessor for this turn.
+    let cancel_token = CancellationToken::new();
+
     let provider = Arc::new(DynProvider(ctx.provider.clone()));
     let store = Arc::new(NullStore);
     let turn_config = session.turn_config();
@@ -479,25 +560,49 @@ async fn handle_user_message(
         turn_config,
     );
     processor.set_stream_callback(Arc::new(callback));
+    processor.set_cancellation_token(cancel_token.clone());
 
-    // Snapshot the messages for the turn. The processor will extend them
-    // internally (adding assistant messages + tool results), and we'll
-    // capture the final state afterwards.
     let messages_for_turn = session.messages.clone();
+    let agent_id = session.agent_id;
 
-    let result = processor
-        .process_turn_with_messages(session.agent_id, messages_for_turn)
-        .await;
+    let join_handle = tokio::spawn(async move {
+        let result = processor
+            .process_turn_with_messages(agent_id, messages_for_turn)
+            .await;
+        drop(processor);
+        result
+    });
 
-    // Drop the processor (and its callback) so the event_tx sender is freed,
-    // which allows the stream_forward_task to complete.
-    drop(processor);
-    let _ = stream_forward_task.await;
+    Some(ActiveTurn {
+        cancel_token,
+        join_handle,
+        stream_forward_handle,
+        message_id,
+    })
+}
+
+/// Process the result of a completed (or cancelled) turn and update session state.
+fn finalize_turn(
+    session: &mut Session,
+    join_result: Result<anyhow::Result<TurnResult>, tokio::task::JoinError>,
+    message_id: &str,
+    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+) {
+    let result = match join_result {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!(session_id = %session.session_id, error = %e, "Turn task panicked");
+            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+                code: "internal_error".into(),
+                message: "Turn processing task panicked".into(),
+                recoverable: false,
+            }));
+            return;
+        }
+    };
 
     match result {
         Ok(turn_result) => {
-            // Reconstruct the messages that the turn loop added (assistant
-            // messages and tool results) so the session history stays in sync.
             for entry in &turn_result.entries {
                 session.messages.push(entry.model_response.message.clone());
 
@@ -514,7 +619,9 @@ async fn handle_user_message(
             session.cumulative_input_tokens += input_tokens;
             session.cumulative_output_tokens += output_tokens;
 
-            let stop_reason = if turn_result.had_failures {
+            let stop_reason = if turn_result.cancelled {
+                "cancelled"
+            } else if turn_result.had_failures {
                 "end_turn_with_errors"
             } else {
                 "end_turn"
@@ -533,7 +640,7 @@ async fn handle_user_message(
 
             let _ = outbound_tx.send(OutboundMessage::AssistantMessageEnd(
                 AssistantMessageEnd {
-                    message_id,
+                    message_id: message_id.to_string(),
                     stop_reason: stop_reason.into(),
                     usage: SessionUsage {
                         input_tokens,
@@ -550,6 +657,7 @@ async fn handle_user_message(
 
             info!(
                 session_id = %session.session_id,
+                cancelled = turn_result.cancelled,
                 history_len = session.messages.len(),
                 cumulative_in = session.cumulative_input_tokens,
                 cumulative_out = session.cumulative_output_tokens,
