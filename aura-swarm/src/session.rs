@@ -221,6 +221,7 @@ impl Session {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             workspace_base: self.workspace.clone(),
+            context_window_tokens: self.context_window_tokens as usize,
             ..TurnConfig::default()
         }
     }

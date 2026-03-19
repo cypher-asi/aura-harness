@@ -80,7 +80,19 @@ pub struct TurnConfig {
     pub temperature: Option<f32>,
     /// Max tokens per response
     pub max_tokens: u32,
+    /// Context window size in tokens. When the estimated token count of
+    /// `messages` exceeds `context_window_tokens * context_target_ratio`,
+    /// older tool-result messages are truncated to stay within budget.
+    pub context_window_tokens: usize,
+    /// Target utilization ratio (0.0–1.0). Truncation triggers when
+    /// estimated tokens exceed `context_window_tokens * context_target_ratio`.
+    pub context_target_ratio: f32,
 }
+
+/// Approximate tokens-per-character ratio for English text. Claude
+/// tokenisers average ~3.5–4 chars/token; we use 4 for a conservative
+/// (over-)estimate that biases toward earlier truncation.
+const CHARS_PER_TOKEN: usize = 4;
 
 impl Default for TurnConfig {
     fn default() -> Self {
@@ -96,6 +108,8 @@ impl Default for TurnConfig {
             replay_mode: false,
             temperature: Some(0.2),
             max_tokens: 16_384,
+            context_window_tokens: 200_000,
+            context_target_ratio: 0.80,
         }
     }
 }
@@ -470,6 +484,60 @@ where
         messages
     }
 
+    /// Estimate the total character count of messages (used as a proxy for tokens).
+    fn estimate_message_chars(messages: &[Message]) -> usize {
+        messages.iter().map(|m| m.text_content().len()).sum()
+    }
+
+    /// Truncate the message list to fit within the context-window budget.
+    ///
+    /// Strategy: keep the first message (original user prompt) and the
+    /// most-recent N messages. Middle messages — especially large
+    /// tool-result messages — are dropped and replaced with a single
+    /// "[truncated]" placeholder so the model knows context was trimmed.
+    fn truncate_messages_if_needed(messages: &mut Vec<Message>, config: &TurnConfig) {
+        let budget_chars = (config.context_window_tokens as f64
+            * config.context_target_ratio as f64
+            * CHARS_PER_TOKEN as f64) as usize;
+
+        let total_chars = Self::estimate_message_chars(messages);
+
+        if total_chars <= budget_chars || messages.len() <= 3 {
+            return;
+        }
+
+        debug!(
+            total_chars,
+            budget_chars,
+            message_count = messages.len(),
+            "Context approaching limit — truncating older messages"
+        );
+
+        // Always keep: first message (user prompt) + last `keep_tail` messages.
+        let keep_tail = 4usize;
+        let first = messages[0].clone();
+        let tail_start = messages.len().saturating_sub(keep_tail);
+        let tail: Vec<Message> = messages[tail_start..].to_vec();
+
+        let mut new_messages = Vec::with_capacity(2 + keep_tail);
+        new_messages.push(first);
+        new_messages.push(Message::user(
+            "[Earlier tool results were truncated to fit the context window. \
+             If you need to re-read a file, request it again.]"
+                .to_string(),
+        ));
+        new_messages.extend(tail);
+
+        let new_chars = Self::estimate_message_chars(&new_messages);
+        info!(
+            old_count = messages.len(),
+            new_count = new_messages.len(),
+            chars_saved = total_chars.saturating_sub(new_chars),
+            "Truncated context"
+        );
+        *messages = new_messages;
+    }
+
     /// Process a user transaction through the full turn loop.
     ///
     /// This is the main entry point for processing a user message when
@@ -541,6 +609,9 @@ where
             }
 
             debug!(step = step, messages = messages.len(), "Processing step");
+
+            // 0. Truncate if context is getting too large
+            Self::truncate_messages_if_needed(&mut messages, &self.config);
 
             // 1. Build model request
             let request = ModelRequest::builder(&self.config.model, &self.config.system_prompt)
