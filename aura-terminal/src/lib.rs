@@ -1,6 +1,6 @@
 //! # aura-terminal
 //!
-//! Cyber-retro terminal UI library for AURA OS.
+//! Cyber-retro terminal UI library for AURA CLI.
 //!
 //! This crate provides a standalone terminal UI that can be embedded in any
 //! Rust application wanting the AURA terminal experience.

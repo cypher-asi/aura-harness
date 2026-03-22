@@ -361,12 +361,12 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .constraints([Constraint::Min(10), Constraint::Length(30)])
         .split(area);
 
-    // Left side: AURA OS title
+    // Left side: AURA CLI title
     let title = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("AURA", Style::default().fg(theme.colors.foreground)),
-            Span::styled(" OS", Style::default().fg(theme.colors.muted)),
+            Span::styled(" CLI", Style::default().fg(theme.colors.muted)),
         ]),
         Line::from(""),
     ];
@@ -1099,9 +1099,15 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, left_of
         height: 1,
     };
 
+    let (prompt_str, display_input) = match app.state() {
+        AppState::LoginEmail => ("Email: ", input.to_string()),
+        AppState::LoginPassword => ("Password: ", "•".repeat(input.len())),
+        _ => ("> ", input.to_string()),
+    };
+
     let content = Line::from(vec![
-        Span::styled("> ", Style::default().fg(prompt_color)),
-        Span::styled(input, Style::default().fg(theme.colors.muted)),
+        Span::styled(prompt_str, Style::default().fg(prompt_color)),
+        Span::styled(display_input, Style::default().fg(theme.colors.muted)),
     ]);
 
     frame.render_widget(Paragraph::new(content), input_area);
@@ -1109,12 +1115,12 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, left_of
     // Only show cursor when not thinking (user can't type during processing)
     // Position the cursor in the input area, not at the status
     if !is_thinking {
-        // Apply left_offset + chat_padding, prompt "> " is 2 chars, then cursor_pos chars into input
         #[expect(
             clippy::cast_possible_truncation,
             reason = "cursor position fits in terminal width"
         )]
-        let cursor_x = area.x + left_offset + chat_padding + 2 + cursor_pos as u16;
+        let prompt_len = prompt_str.len() as u16;
+        let cursor_x = area.x + left_offset + chat_padding + prompt_len + cursor_pos as u16;
         let cursor_y = area.y;
         frame.set_cursor_position((cursor_x, cursor_y));
     }
@@ -1182,7 +1188,7 @@ fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApprov
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 19;
+    let modal_height = 22;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -1211,6 +1217,18 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         )),
         Line::from(Span::styled(
             "/record    Toggle Record panel",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
+            "/login     Login to zOS",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
+            "/logout    Clear credentials",
+            Style::default().fg(theme.colors.foreground),
+        )),
+        Line::from(Span::styled(
+            "/whoami     Show auth status",
             Style::default().fg(theme.colors.foreground),
         )),
         Line::from(Span::styled(

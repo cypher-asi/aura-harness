@@ -1,6 +1,6 @@
 [package]
 name = "aura-terminal"
-description = "Cyber-retro terminal UI library for AURA OS"
+description = "Cyber-retro terminal UI library for AURA CLI"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

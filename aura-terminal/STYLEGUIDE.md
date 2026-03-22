@@ -1,6 +1,6 @@
 # AURA Terminal Style Guide
 
-This document defines the approved color palette and styling conventions for the AURA OS terminal UI.
+This document defines the approved color palette and styling conventions for the AURA CLI terminal UI.
 
 ## Approved Color Palette
 

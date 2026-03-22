@@ -1,4 +1,4 @@
-//! Aura OS entry point.
+//! Aura CLI entry point.
 //!
 //! By default, starts the simple IRC-style terminal UI. Use `run --ui none`
 //! to start in headless/swarm mode. Subcommands `login`, `logout`, and
@@ -241,11 +241,12 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     let process_manager_clone = Arc::clone(&process_manager);
 
     let processor_handle = tokio::spawn(async move {
+        let mut agent_loop = agent_loop;
         let ctx = event_loop::EventLoopContext {
             events: &mut ui_rx,
             process_completions: process_rx,
             commands: cmd_tx_clone,
-            agent_loop: &agent_loop,
+            agent_loop: &mut agent_loop,
             provider: provider.as_ref(),
             executor: &kernel_executor,
             tools: &tools,
@@ -268,7 +269,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 // ============================================================================
 
 async fn run_headless() -> anyhow::Result<()> {
-    info!("Starting AURA OS in headless mode (node server)");
+    info!("Starting AURA CLI in headless mode (node server)");
 
     let config = aura_node::NodeConfig::from_env();
 

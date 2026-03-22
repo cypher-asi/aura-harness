@@ -27,7 +27,7 @@ impl HeaderBar {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            app_name: "AURA OS".to_string(),
+            app_name: "AURA CLI".to_string(),
             agent_id: None,
             session_id: None,
             connected: true,

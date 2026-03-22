@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     name = "aura",
-    about = "AURA OS - Autonomous Universal Reasoning Architecture"
+    about = "AURA CLI - Autonomous Universal Reasoning Architecture"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
