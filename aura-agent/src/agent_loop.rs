@@ -183,8 +183,8 @@ impl AgentLoop {
                 }
             };
 
-            result.total_input_tokens += u64::from(response.usage.input_tokens);
-            result.total_output_tokens += u64::from(response.usage.output_tokens);
+            result.total_input_tokens += response.usage.input_tokens;
+            result.total_output_tokens += response.usage.output_tokens;
 
             for block in &response.message.content {
                 match block {

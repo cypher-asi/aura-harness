@@ -214,9 +214,9 @@ pub struct TurnResult {
     /// Final assistant message
     pub final_message: Option<Message>,
     /// Total tokens used
-    pub total_input_tokens: u32,
+    pub total_input_tokens: u64,
     /// Total output tokens
-    pub total_output_tokens: u32,
+    pub total_output_tokens: u64,
     /// Number of steps taken
     pub steps: u32,
     /// Whether any tools failed
@@ -732,8 +732,8 @@ where
         agent_id: AgentId,
     ) -> anyhow::Result<TurnResult> {
         let mut entries = Vec::new();
-        let mut total_input_tokens = 0u32;
-        let mut total_output_tokens = 0u32;
+        let mut total_input_tokens = 0u64;
+        let mut total_output_tokens = 0u64;
         let mut had_failures = false;
         let mut cancelled = false;
         let mut final_message = None;
@@ -869,7 +869,7 @@ where
 
         // Accumulate the response while emitting text deltas
         let mut accumulator = StreamAccumulator::new();
-        let input_tokens = 0u32;
+        let input_tokens = 0u64;
         let mut in_thinking_block = false;
 
         loop {

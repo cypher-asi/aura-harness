@@ -15,7 +15,7 @@ pub struct StatusBar {
     /// Current status message
     status: String,
     /// Token count (if available)
-    tokens: Option<(u32, u32)>,
+    tokens: Option<(u64, u64)>,
     /// Tool call count
     tool_calls: Option<u32>,
     /// Elapsed time (if processing)
@@ -36,7 +36,7 @@ impl StatusBar {
 
     /// Set the token counts.
     #[must_use]
-    pub const fn with_tokens(mut self, used: u32, total: u32) -> Self {
+    pub const fn with_tokens(mut self, used: u64, total: u64) -> Self {
         self.tokens = Some((used, total));
         self
     }

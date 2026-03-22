@@ -401,12 +401,12 @@ struct ApiResponse {
 #[derive(Debug, Deserialize)]
 #[allow(clippy::struct_field_names)]
 struct ApiUsage {
-    input_tokens: u32,
-    output_tokens: u32,
+    input_tokens: u64,
+    output_tokens: u64,
     #[serde(default)]
-    cache_creation_input_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
-    cache_read_input_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u64>,
 }
 
 // ============================================================================
@@ -484,11 +484,11 @@ struct SseMessageStart {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code, clippy::struct_field_names)]
 struct SseUsageStart {
-    input_tokens: u32,
+    input_tokens: u64,
     #[serde(default)]
-    cache_creation_input_tokens: Option<u32>,
+    cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
-    cache_read_input_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -529,7 +529,7 @@ struct SseMessageDeltaContent {
 
 #[derive(Debug, Deserialize)]
 struct SseUsageDelta {
-    output_tokens: u32,
+    output_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]

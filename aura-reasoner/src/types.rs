@@ -479,21 +479,21 @@ pub enum StopReason {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     /// Number of input tokens
-    pub input_tokens: u32,
+    pub input_tokens: u64,
     /// Number of output tokens
-    pub output_tokens: u32,
+    pub output_tokens: u64,
     /// Cache creation input tokens (prompt caching).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_tokens: Option<u32>,
+    pub cache_creation_input_tokens: Option<u64>,
     /// Cache read input tokens (prompt caching).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u32>,
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 impl Usage {
     /// Create new usage information.
     #[must_use]
-    pub const fn new(input_tokens: u32, output_tokens: u32) -> Self {
+    pub const fn new(input_tokens: u64, output_tokens: u64) -> Self {
         Self {
             input_tokens,
             output_tokens,
@@ -504,13 +504,13 @@ impl Usage {
 
     /// Total tokens used.
     #[must_use]
-    pub const fn total(&self) -> u32 {
+    pub const fn total(&self) -> u64 {
         self.input_tokens + self.output_tokens
     }
 
     /// Set cache token counts.
     #[must_use]
-    pub const fn with_cache(mut self, creation: Option<u32>, read: Option<u32>) -> Self {
+    pub const fn with_cache(mut self, creation: Option<u64>, read: Option<u64>) -> Self {
         self.cache_creation_input_tokens = creation;
         self.cache_read_input_tokens = read;
         self
@@ -620,11 +620,11 @@ pub enum StreamEvent {
         /// Model being used
         model: String,
         /// Input tokens (from SSE `message_start` usage)
-        input_tokens: Option<u32>,
+        input_tokens: Option<u64>,
         /// Cache creation input tokens (prompt caching)
-        cache_creation_input_tokens: Option<u32>,
+        cache_creation_input_tokens: Option<u64>,
         /// Cache read input tokens (prompt caching)
-        cache_read_input_tokens: Option<u32>,
+        cache_read_input_tokens: Option<u64>,
     },
 
     /// Start of a new content block
@@ -670,7 +670,7 @@ pub enum StreamEvent {
         /// Why the model stopped
         stop_reason: Option<StopReason>,
         /// Output tokens used so far
-        output_tokens: u32,
+        output_tokens: u64,
     },
 
     /// Message complete
@@ -726,13 +726,13 @@ pub struct StreamAccumulator {
     /// Stop reason
     pub stop_reason: Option<StopReason>,
     /// Input tokens
-    pub input_tokens: u32,
+    pub input_tokens: u64,
     /// Output tokens
-    pub output_tokens: u32,
+    pub output_tokens: u64,
     /// Cache creation input tokens (prompt caching)
-    pub cache_creation_input_tokens: Option<u32>,
+    pub cache_creation_input_tokens: Option<u64>,
     /// Cache read input tokens (prompt caching)
-    pub cache_read_input_tokens: Option<u32>,
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 /// Tool use being accumulated from streaming events.
@@ -830,7 +830,7 @@ impl StreamAccumulator {
     /// Returns error if tool use JSON is invalid.
     pub fn into_response(
         self,
-        input_tokens: u32,
+        input_tokens: u64,
         latency_ms: u64,
     ) -> anyhow::Result<ModelResponse> {
         let effective_input_tokens = if self.input_tokens > 0 {
