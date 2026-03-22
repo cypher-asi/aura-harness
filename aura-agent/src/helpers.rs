@@ -67,6 +67,58 @@ pub fn is_exploration_tool(name: &str) -> bool {
     crate::constants::EXPLORATION_TOOLS.contains(&name)
 }
 
+/// Summarize write tool inputs to save context tokens.
+///
+/// For write_file/fs_write: replaces content with path + byte size.
+/// For edit_file/fs_edit: replaces old_text/new_text with path + edit description.
+/// For other tools: returns `None` (input unchanged).
+#[must_use]
+pub fn summarize_write_input(
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    match tool_name {
+        "fs_write" | "write_file" => {
+            let path = input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let content_len = input
+                .get("content")
+                .and_then(|v| v.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+            Some(serde_json::json!({
+                "path": path,
+                "_summarized": format!("Content: {} bytes written", content_len)
+            }))
+        }
+        "fs_edit" | "edit_file" => {
+            let path = input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let old_len = input
+                .get("old_text")
+                .or(input.get("old_string"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+            let new_len = input
+                .get("new_text")
+                .or(input.get("new_string"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.len())
+                .unwrap_or(0);
+            Some(serde_json::json!({
+                "path": path,
+                "_summarized": format!("Edit: replaced {} chars with {} chars", old_len, new_len)
+            }))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +169,57 @@ mod tests {
         push_or_replace_warning(&mut messages, "WARNING: new warning");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text_content(), "WARNING: new warning");
+    }
+
+    #[test]
+    fn test_summarize_write_file() {
+        let input = serde_json::json!({
+            "path": "src/main.rs",
+            "content": "fn main() { println!(\"hello\"); }"
+        });
+        let result = summarize_write_input("write_file", &input).unwrap();
+        assert_eq!(result["path"], "src/main.rs");
+        assert!(result["_summarized"].as_str().unwrap().contains("32 bytes written"));
+
+        let result_fs = summarize_write_input("fs_write", &input).unwrap();
+        assert_eq!(result_fs["path"], "src/main.rs");
+        assert!(result_fs["_summarized"].as_str().unwrap().contains("bytes written"));
+    }
+
+    #[test]
+    fn test_summarize_edit_file() {
+        let input = serde_json::json!({
+            "path": "src/lib.rs",
+            "old_text": "old content here",
+            "new_text": "new"
+        });
+        let result = summarize_write_input("edit_file", &input).unwrap();
+        assert_eq!(result["path"], "src/lib.rs");
+        let summary = result["_summarized"].as_str().unwrap();
+        assert!(summary.contains("replaced 16 chars with 3 chars"));
+
+        let input_alt = serde_json::json!({
+            "path": "src/lib.rs",
+            "old_string": "abc",
+            "new_string": "defgh"
+        });
+        let result_alt = summarize_write_input("fs_edit", &input_alt).unwrap();
+        let summary_alt = result_alt["_summarized"].as_str().unwrap();
+        assert!(summary_alt.contains("replaced 3 chars with 5 chars"));
+    }
+
+    #[test]
+    fn test_summarize_read_file_unchanged() {
+        let input = serde_json::json!({"path": "src/main.rs"});
+        assert!(summarize_write_input("fs_read", &input).is_none());
+        assert!(summarize_write_input("read_file", &input).is_none());
+    }
+
+    #[test]
+    fn test_summarize_unknown_tool() {
+        let input = serde_json::json!({"query": "some search"});
+        assert!(summarize_write_input("search_code", &input).is_none());
+        assert!(summarize_write_input("cmd_run", &input).is_none());
+        assert!(summarize_write_input("totally_unknown", &input).is_none());
     }
 }

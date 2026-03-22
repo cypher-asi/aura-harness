@@ -168,6 +168,7 @@ impl AgentLoop {
         let mut budget_state = BudgetState::default();
         let mut had_any_write = false;
         let mut checkpoint_emitted = false;
+        let mut exploration_compaction_done = false;
         let mut build_cooldown: usize = 0;
         let mut thinking_budget = self.config.max_tokens;
         let mut last_input_tokens: Option<u64> = None;
@@ -291,6 +292,17 @@ impl AgentLoop {
             }
 
             messages.push(response.message.clone());
+
+            if let Some(last_msg) = messages.last_mut() {
+                for block in &mut last_msg.content {
+                    if let ContentBlock::ToolUse { name, input, .. } = block {
+                        if let Some(summarized) = helpers::summarize_write_input(name, input) {
+                            *input = summarized;
+                        }
+                    }
+                }
+            }
+
             result.iterations = iteration + 1;
 
             emit(
@@ -500,6 +512,22 @@ impl AgentLoop {
                 let checkpoint_msg = "NOTE: You've made your first file change. Before making more changes, consider verifying your work (e.g., run the build or tests) to catch issues early.".to_string();
                 helpers::push_or_replace_warning(&mut messages, &checkpoint_msg);
                 emit(&event_tx, AgentLoopEvent::Warning(checkpoint_msg));
+            }
+
+            // Exploration-triggered proactive compaction
+            let exploration_threshold = (self.config.exploration_allowance * 2) / 3;
+            if exploration_state.count >= exploration_threshold && !exploration_compaction_done {
+                if let Some(_max_ctx) = self.config.max_context_tokens {
+                    let tier = compaction::CompactionConfig::history();
+                    compaction::compact_older_messages(&mut messages, &tier);
+                    sanitize::validate_and_repair(&mut messages);
+                    exploration_compaction_done = true;
+                    debug!(
+                        exploration_count = exploration_state.count,
+                        threshold = exploration_threshold,
+                        "Proactive compaction triggered by exploration usage"
+                    );
+                }
             }
 
             let utilization = (iteration + 1) as f64 / self.config.max_iterations as f64;
@@ -1201,6 +1229,120 @@ mod tests {
         assert!(
             has_stall_warning,
             "Messages should contain the stall recovery warning"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_exploration_compact_at_two_thirds() {
+        let long_content = "x".repeat(3000);
+        let executor = MockExecutor {
+            results: vec![ToolCallResult::success("placeholder", &long_content)],
+        };
+
+        let mut provider_builder = MockProvider::new();
+        for i in 0..8 {
+            provider_builder = provider_builder.with_response(MockResponse::tool_use(
+                format!("t{i}"),
+                "fs_read",
+                serde_json::json!({"path": format!("file{i}.txt")}),
+            ));
+        }
+        provider_builder = provider_builder.with_response(MockResponse::text("Done"));
+        let provider = provider_builder;
+
+        let config = AgentLoopConfig {
+            exploration_allowance: 12,
+            max_context_tokens: Some(200_000),
+            system_prompt: "test".to_string(),
+            ..AgentLoopConfig::default()
+        };
+        let agent = AgentLoop::new(config);
+        let messages = vec![Message::user("read many files")];
+        let tools = vec![ToolDefinition::new(
+            "fs_read",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        )];
+
+        let result = agent
+            .run(&provider, &executor, messages, tools)
+            .await
+            .unwrap();
+
+        assert_eq!(result.iterations, 9);
+
+        let has_truncation = result.messages.iter().any(|msg| {
+            msg.content.iter().any(|block| {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    match content {
+                        ToolResultContent::Text(t) => t.contains("content truncated"),
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            })
+        });
+        assert!(
+            has_truncation,
+            "Exploration-triggered compaction should have truncated older tool results"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_exploration_compact_when_low() {
+        let long_content = "y".repeat(3000);
+        let executor = MockExecutor {
+            results: vec![ToolCallResult::success("placeholder", &long_content)],
+        };
+
+        let mut provider_builder = MockProvider::new();
+        for i in 0..3 {
+            provider_builder = provider_builder.with_response(MockResponse::tool_use(
+                format!("t{i}"),
+                "fs_read",
+                serde_json::json!({"path": format!("file{i}.txt")}),
+            ));
+        }
+        provider_builder = provider_builder.with_response(MockResponse::text("Done"));
+        let provider = provider_builder;
+
+        let config = AgentLoopConfig {
+            exploration_allowance: 12,
+            max_context_tokens: Some(200_000),
+            system_prompt: "test".to_string(),
+            ..AgentLoopConfig::default()
+        };
+        let agent = AgentLoop::new(config);
+        let messages = vec![Message::user("read a few files")];
+        let tools = vec![ToolDefinition::new(
+            "fs_read",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        )];
+
+        let result = agent
+            .run(&provider, &executor, messages, tools)
+            .await
+            .unwrap();
+
+        assert_eq!(result.iterations, 4);
+
+        let has_truncation = result.messages.iter().any(|msg| {
+            msg.content.iter().any(|block| {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    match content {
+                        ToolResultContent::Text(t) => t.contains("content truncated"),
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            })
+        });
+        assert!(
+            !has_truncation,
+            "No compaction should occur with only 3 exploration calls (threshold is 8)"
         );
     }
 }
