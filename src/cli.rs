@@ -1,6 +1,6 @@
 //! CLI argument definitions and parsing.
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -8,7 +8,26 @@ use std::path::PathBuf;
     name = "aura",
     about = "AURA OS - Autonomous Universal Reasoning Architecture"
 )]
-pub(crate) struct Args {
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum Commands {
+    /// Run the agent (default when no subcommand is given).
+    Run(RunArgs),
+    /// Authenticate with zOS to obtain a JWT for proxy mode.
+    Login,
+    /// Clear stored authentication credentials.
+    Logout,
+    /// Show current authentication status.
+    Whoami,
+}
+
+/// Arguments for the `run` subcommand (also the default behaviour).
+#[derive(Parser)]
+pub(crate) struct RunArgs {
     /// UI mode (terminal or none)
     #[arg(long, default_value = "terminal")]
     pub ui: UiMode,
@@ -28,6 +47,18 @@ pub(crate) struct Args {
     /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+impl Default for RunArgs {
+    fn default() -> Self {
+        Self {
+            ui: UiMode::Terminal,
+            theme: "cyber".to_string(),
+            dir: None,
+            provider: "anthropic".to_string(),
+            verbose: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

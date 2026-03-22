@@ -1,14 +1,15 @@
 //! Aura OS entry point.
 //!
-//! By default, starts the simple IRC-style terminal UI. Use `--ui none` to run
-//! in headless/swarm mode.
+//! By default, starts the simple IRC-style terminal UI. Use `run --ui none`
+//! to start in headless/swarm mode. Subcommands `login`, `logout`, and
+//! `whoami` manage zOS authentication for proxy mode.
 
 mod api_server;
 mod cli;
 mod event_loop;
 mod record_loader;
 
-use cli::{Args, UiMode};
+use cli::{Cli, Commands, RunArgs, UiMode};
 
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
 use aura_core::{Identity, Transaction};
@@ -19,6 +20,7 @@ use aura_store::RocksStore;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
 use clap::Parser;
+use colored::Colorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -33,8 +35,18 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
 
+    match cli.command {
+        Some(Commands::Login) => cmd_login().await,
+        Some(Commands::Logout) => cmd_logout().await,
+        Some(Commands::Whoami) => cmd_whoami(),
+        Some(Commands::Run(args)) => run_with_args(args).await,
+        None => run_with_args(RunArgs::default()).await,
+    }
+}
+
+async fn run_with_args(args: RunArgs) -> anyhow::Result<()> {
     match args.ui {
         UiMode::Terminal => run_terminal(args).await,
         UiMode::None => {
@@ -49,16 +61,92 @@ async fn main() -> anyhow::Result<()> {
                 .with(filter)
                 .init();
 
-            run_headless(args).await
+            run_headless().await
         }
     }
+}
+
+// ============================================================================
+// Auth Commands
+// ============================================================================
+
+async fn cmd_login() -> anyhow::Result<()> {
+    use std::io::Write;
+
+    print!("Email: ");
+    std::io::stdout().flush()?;
+
+    let mut email = String::new();
+    std::io::stdin().read_line(&mut email)?;
+    let email = email.trim();
+
+    if email.is_empty() {
+        anyhow::bail!("Email cannot be empty");
+    }
+
+    let password = rpassword::prompt_password_stdout("Password: ")?;
+    if password.is_empty() {
+        anyhow::bail!("Password cannot be empty");
+    }
+
+    println!("{} Authenticating...", "▶".blue().bold());
+
+    let client = aura_auth::ZosClient::new()?;
+    let session = client.login(email, &password).await?;
+
+    let display = session.display_name.clone();
+    let zid = session.primary_zid.clone();
+
+    aura_auth::CredentialStore::save(&session)?;
+
+    println!(
+        "{} Logged in as {} ({})",
+        "✓".green().bold(),
+        display.green(),
+        zid,
+    );
+
+    Ok(())
+}
+
+async fn cmd_logout() -> anyhow::Result<()> {
+    if let Some(stored) = aura_auth::CredentialStore::load() {
+        let client = aura_auth::ZosClient::new()?;
+        client.logout(&stored.access_token).await;
+    }
+
+    aura_auth::CredentialStore::clear()?;
+    println!("{} Logged out", "✓".green().bold());
+    Ok(())
+}
+
+fn cmd_whoami() -> anyhow::Result<()> {
+    match aura_auth::CredentialStore::load() {
+        Some(session) => {
+            println!("{}", "Authentication".cyan().bold());
+            println!("  Name:    {}", session.display_name);
+            println!("  zID:     {}", session.primary_zid);
+            println!("  User ID: {}", session.user_id);
+            println!(
+                "  Since:   {}",
+                session.created_at.format("%Y-%m-%d %H:%M UTC")
+            );
+        }
+        None => {
+            println!(
+                "{} Not logged in. Run `aura login` to authenticate.",
+                "ℹ".blue().bold()
+            );
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================
 // Terminal Mode
 // ============================================================================
 
-async fn run_terminal(args: Args) -> anyhow::Result<()> {
+async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     let theme = Theme::by_name(&args.theme);
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(100);
@@ -111,7 +199,9 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
     let kernel_executor =
         KernelToolExecutor::new(executor_router, identity.agent_id, agent_workspace);
 
-    let auth_token = std::env::var("AURA_ROUTER_JWT").ok();
+    let auth_token = std::env::var("AURA_ROUTER_JWT")
+        .ok()
+        .or_else(aura_auth::CredentialStore::load_token);
 
     let config = AgentLoopConfig {
         system_prompt: TurnConfig::default().system_prompt,
@@ -177,7 +267,7 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
 // Headless Mode (Swarm)
 // ============================================================================
 
-async fn run_headless(_args: Args) -> anyhow::Result<()> {
+async fn run_headless() -> anyhow::Result<()> {
     info!("Starting AURA OS in headless mode (swarm server)");
 
     let config = aura_swarm::SwarmConfig::from_env();

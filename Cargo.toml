@@ -17,6 +17,7 @@ aura-executor = { path = "aura-executor" }
 aura-reasoner = { path = "aura-reasoner" }
 aura-tools = { path = "aura-tools" }
 aura-agent = { path = "aura-agent" }
+aura-auth = { path = "aura-auth" }
 anyhow = "1.0"
 tokio = { version = "1.35", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -30,6 +31,8 @@ serde_json = { workspace = true }
 dotenvy = "0.15.7"
 axum = { workspace = true }
 tower-http = { workspace = true }
+rpassword = "5.0"
+colored = "2.1"
 
 [workspace]
 resolver = "2"
