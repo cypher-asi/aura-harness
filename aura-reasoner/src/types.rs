@@ -35,6 +35,9 @@ pub enum ContentBlock {
         signature: Option<String>,
     },
 
+    /// Inline image content (user messages only).
+    Image { source: ImageSource },
+
     /// Model requesting tool use (assistant only)
     ToolUse {
         id: String,
@@ -48,6 +51,18 @@ pub enum ContentBlock {
         content: ToolResultContent,
         is_error: bool,
     },
+}
+
+/// Source data for an inline image content block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSource {
+    /// Source type (e.g., `"base64"`).
+    #[serde(rename = "type")]
+    pub source_type: String,
+    /// Media type (e.g., `"image/png"`, `"image/jpeg"`).
+    pub media_type: String,
+    /// Base64-encoded image data.
+    pub data: String,
 }
 
 impl ContentBlock {

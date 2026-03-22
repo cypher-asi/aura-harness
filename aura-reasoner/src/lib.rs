@@ -34,9 +34,9 @@ pub use mock::{MockProvider, MockReasoner, MockResponse};
 pub use request::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use retry::{complete_with_retry, RetryConfig};
 pub use types::{
-    AccumulatedToolUse, CacheControl, ContentBlock, Message, ModelRequest, ModelResponse,
-    ProviderTrace, Role, StopReason, StreamAccumulator, StreamContentType, StreamEvent,
-    ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContent, Usage,
+    AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, Message, ModelRequest,
+    ModelResponse, ProviderTrace, Role, StopReason, StreamAccumulator, StreamContentType,
+    StreamEvent, ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContent, Usage,
 };
 
 use futures_util::Stream;

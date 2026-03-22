@@ -7,9 +7,9 @@
 //! Supports both synchronous and streaming completions via SSE.
 
 use crate::{
-    ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, Role,
-    StopReason, StreamContentType, StreamEvent, StreamEventStream, ToolChoice, ToolDefinition,
-    ToolResultContent, Usage,
+    ContentBlock, ImageSource, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
+    Role, StopReason, StreamContentType, StreamEvent, StreamEventStream, ToolChoice,
+    ToolDefinition, ToolResultContent, Usage,
 };
 use async_trait::async_trait;
 use futures_util::Stream;
@@ -357,6 +357,9 @@ enum ApiContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+    Image {
+        source: ApiImageSource,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -370,6 +373,14 @@ enum ApiContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<serde_json::Value>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ApiImageSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    media_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -779,6 +790,13 @@ fn convert_messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
                         thinking: thinking.clone(),
                         signature: signature.clone(),
                     },
+                    ContentBlock::Image { source } => ApiContent::Image {
+                        source: ApiImageSource {
+                            source_type: source.source_type.clone(),
+                            media_type: source.media_type.clone(),
+                            data: source.data.clone(),
+                        },
+                    },
                 })
                 .collect();
 
@@ -868,6 +886,13 @@ fn convert_response_to_aura(content: &[ApiContent]) -> Message {
                 tool_use_id: tool_use_id.clone(),
                 content: ToolResultContent::Text(content.clone()),
                 is_error: is_error.unwrap_or(false),
+            },
+            ApiContent::Image { source } => ContentBlock::Image {
+                source: ImageSource {
+                    source_type: source.source_type.clone(),
+                    media_type: source.media_type.clone(),
+                    data: source.data.clone(),
+                },
             },
         })
         .collect();

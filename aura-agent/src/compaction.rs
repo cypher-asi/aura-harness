@@ -85,6 +85,7 @@ pub fn estimate_message_chars(messages: &[Message]) -> usize {
                             serde_json::to_string(v).map_or(0, |s| s.len())
                         }
                     },
+                    aura_reasoner::ContentBlock::Image { source } => source.data.len(),
                 })
                 .sum::<usize>()
         })
