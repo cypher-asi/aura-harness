@@ -1,0 +1,249 @@
+//! Core agent loop tests: config defaults, simple runs, error handling, max-tokens.
+
+use aura_reasoner::{
+    ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition, Usage,
+};
+
+use super::{AgentLoop, AgentLoopConfig};
+use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
+
+struct MockExecutor {
+    results: Vec<ToolCallResult>,
+}
+
+#[async_trait::async_trait]
+impl AgentToolExecutor for MockExecutor {
+    async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
+        tool_calls
+            .iter()
+            .zip(self.results.iter())
+            .map(|(tc, r)| ToolCallResult {
+                tool_use_id: tc.id.clone(),
+                ..r.clone()
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn test_agent_loop_config_defaults() {
+    let config = AgentLoopConfig::default();
+    assert_eq!(config.max_iterations, 25);
+    assert_eq!(config.exploration_allowance, 12);
+    assert_eq!(config.auto_build_cooldown, 2);
+    assert_eq!(config.thinking_taper_after, 2);
+    assert!((config.thinking_taper_factor - 0.6).abs() < f64::EPSILON);
+    assert_eq!(config.thinking_min_budget, 1024);
+}
+
+#[tokio::test]
+async fn test_agent_loop_simple_run() {
+    let config = AgentLoopConfig::default();
+    let agent = AgentLoop::new(config);
+    let executor = MockExecutor { results: vec![] };
+    let provider = MockProvider::simple_response("Hello!");
+    let messages = vec![Message::user("hello")];
+    let tools = vec![];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+    assert_eq!(result.iterations, 1);
+    assert!(result.total_text.contains("Hello!"));
+    assert!(result.total_input_tokens > 0);
+}
+
+#[tokio::test]
+async fn test_agent_loop_full_integration() {
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("placeholder", "file contents here")],
+    };
+
+    let provider = MockProvider::new()
+        .with_response(MockResponse::tool_use(
+            "tool_1",
+            "fs_read",
+            serde_json::json!({"path": "test.txt"}),
+        ))
+        .with_response(MockResponse::text("All done!"));
+
+    let config = AgentLoopConfig {
+        system_prompt: "You are a test agent".to_string(),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("Read test.txt")];
+    let tools = vec![ToolDefinition::new(
+        "fs_read",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(result.iterations, 2);
+    assert!(result.total_text.contains("All done!"));
+    assert!(result.total_input_tokens > 0);
+    assert!(result.total_output_tokens > 0);
+    assert!(!result.insufficient_credits);
+    assert!(result.llm_error.is_none());
+}
+
+#[tokio::test]
+async fn test_agent_loop_402_insufficient_credits() {
+    let executor = MockExecutor { results: vec![] };
+    let provider = MockProvider::new().with_failure();
+
+    let config = AgentLoopConfig::default();
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("hello")];
+    let tools = vec![];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+    assert!(result.llm_error.is_some());
+}
+
+#[tokio::test]
+async fn test_max_tokens_with_pending_tools_injects_errors() {
+    let executor = MockExecutor { results: vec![] };
+
+    let provider = MockProvider::new()
+        .with_response(
+            MockResponse::tool_use(
+                "tool_1",
+                "fs_read",
+                serde_json::json!({"path": "big_file.txt"}),
+            )
+            .with_stop_reason(StopReason::MaxTokens),
+        )
+        .with_response(MockResponse::text("Recovered after truncation."));
+
+    let config = AgentLoopConfig {
+        system_prompt: "Test agent".to_string(),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("Read big_file.txt")];
+    let tools = vec![ToolDefinition::new(
+        "fs_read",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.iterations, 2,
+        "Loop should continue after MaxTokens with pending tools"
+    );
+    assert!(result.total_text.contains("Recovered after truncation."));
+
+    let has_error_tool_result = result.messages.iter().any(|msg| {
+        msg.content.iter().any(|block| {
+            matches!(block, ContentBlock::ToolResult { is_error: true, .. })
+        })
+    });
+    assert!(
+        has_error_tool_result,
+        "Should have injected an error tool result"
+    );
+}
+
+#[tokio::test]
+async fn test_max_tokens_without_tools_breaks() {
+    let executor = MockExecutor { results: vec![] };
+
+    let provider = MockProvider::new()
+        .with_response(
+            MockResponse::text("Truncated text").with_stop_reason(StopReason::MaxTokens),
+        )
+        .with_response(MockResponse::text("Should not reach this"));
+
+    let config = AgentLoopConfig {
+        system_prompt: "Test agent".to_string(),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("hello")];
+    let tools = vec![];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.iterations, 1,
+        "Loop should break on MaxTokens with no pending tools"
+    );
+    assert!(result.total_text.contains("Truncated text"));
+    assert!(!result.total_text.contains("Should not reach this"));
+}
+
+#[test]
+fn test_tool_call_result_defaults() {
+    let result = ToolCallResult::success("id", "content");
+    assert!(!result.is_error);
+    assert!(!result.stop_loop);
+
+    let err = ToolCallResult::error("id", "error");
+    assert!(err.is_error);
+    assert!(!err.stop_loop);
+}
+
+#[tokio::test]
+async fn test_compaction_uses_api_input_tokens() {
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("placeholder", "ok")],
+    };
+
+    let high_usage_tool = MockResponse {
+        stop_reason: StopReason::ToolUse,
+        content: vec![ContentBlock::tool_use(
+            "tool_1",
+            "fs_read",
+            serde_json::json!({"path": "big.txt"}),
+        )],
+        usage: Usage::new(180_000, 50),
+    };
+    let final_resp = MockResponse {
+        stop_reason: StopReason::EndTurn,
+        content: vec![ContentBlock::text("Done")],
+        usage: Usage::new(185_000, 50),
+    };
+
+    let provider = MockProvider::new()
+        .with_response(high_usage_tool)
+        .with_response(final_resp);
+
+    let config = AgentLoopConfig {
+        max_context_tokens: Some(200_000),
+        system_prompt: "test".to_string(),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("go")];
+    let tools = vec![ToolDefinition::new(
+        "fs_read",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(result.iterations, 2);
+    assert_eq!(result.total_input_tokens, 180_000 + 185_000);
+}
