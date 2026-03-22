@@ -94,18 +94,25 @@ impl Swarm {
     /// Tries `AnthropicProvider` from environment, falls back to `MockProvider`.
     fn create_model_provider() -> Arc<dyn ModelProvider + Send + Sync> {
         match AnthropicConfig::from_env() {
-            Ok(config) => match AnthropicProvider::new(config) {
-                Ok(provider) => {
-                    info!("Anthropic model provider ready for WebSocket sessions");
-                    Arc::new(provider)
+            Ok(config) => {
+                let mode_label = if config.routing_mode == aura_reasoner::RoutingMode::Proxy {
+                    "proxy"
+                } else {
+                    "direct"
+                };
+                match AnthropicProvider::new(config) {
+                    Ok(provider) => {
+                        info!(mode = mode_label, "LLM provider ready ({mode_label} mode)");
+                        Arc::new(provider)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to create LLM provider, using mock");
+                        Arc::new(MockProvider::simple_response("(mock provider)"))
+                    }
                 }
-                Err(e) => {
-                    warn!(error = %e, "Failed to create Anthropic provider, using mock");
-                    Arc::new(MockProvider::simple_response("(mock provider)"))
-                }
-            },
-            Err(_) => {
-                warn!("No Anthropic API key configured, WebSocket sessions will use mock provider");
+            }
+            Err(e) => {
+                warn!(error = %e, "LLM provider not configured, using mock");
                 Arc::new(MockProvider::simple_response("(mock provider)"))
             }
         }
