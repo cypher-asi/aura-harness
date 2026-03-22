@@ -32,14 +32,16 @@ mod agent_loop;
 pub mod blocking;
 mod budget;
 pub mod policy;
-mod build;
+pub mod build;
 pub mod compaction;
 mod constants;
+pub mod planning;
 pub mod events;
 mod helpers;
 mod kernel_executor;
 mod read_guard;
 mod sanitize;
+pub mod self_review;
 pub mod types;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
