@@ -366,6 +366,131 @@ pub use hex;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn proptest_agent_id_different_inputs_produce_different_ids(
+            a in any::<[u8; 16]>(),
+            b in any::<[u8; 16]>(),
+        ) {
+            let uuid_a = uuid::Uuid::from_bytes(a);
+            let uuid_b = uuid::Uuid::from_bytes(b);
+            let id_a = AgentId::from_uuid(uuid_a);
+            let id_b = AgentId::from_uuid(uuid_b);
+            if a != b {
+                prop_assert_ne!(id_a, id_b);
+            } else {
+                prop_assert_eq!(id_a, id_b);
+            }
+        }
+
+        #[test]
+        fn proptest_tx_id_different_content_produces_different_ids(
+            a in proptest::collection::vec(any::<u8>(), 1..256),
+            b in proptest::collection::vec(any::<u8>(), 1..256),
+        ) {
+            let id_a = TxId::from_content(&a);
+            let id_b = TxId::from_content(&b);
+            if a != b {
+                prop_assert_ne!(id_a, id_b);
+            } else {
+                prop_assert_eq!(id_a, id_b);
+            }
+        }
+
+        #[test]
+        fn proptest_action_id_hex_roundtrip(bytes in any::<[u8; 16]>()) {
+            let id = ActionId::new(bytes);
+            let hex = id.to_hex();
+            let parsed = ActionId::from_hex(&hex).unwrap();
+            prop_assert_eq!(id, parsed);
+        }
+
+        #[test]
+        fn proptest_agent_id_hex_roundtrip(bytes in any::<[u8; 32]>()) {
+            let id = AgentId::new(bytes);
+            let hex = id.to_hex();
+            let parsed = AgentId::from_hex(&hex).unwrap();
+            prop_assert_eq!(id, parsed);
+        }
+
+        #[test]
+        fn proptest_hash_hex_roundtrip(bytes in any::<[u8; 32]>()) {
+            let hash = Hash::new(bytes);
+            let hex = hash.to_hex();
+            let parsed = Hash::from_hex(&hex).unwrap();
+            prop_assert_eq!(hash, parsed);
+        }
+
+        #[test]
+        fn proptest_process_id_hex_roundtrip(bytes in any::<[u8; 16]>()) {
+            let id = ProcessId::new(bytes);
+            let hex = id.to_hex();
+            let parsed = ProcessId::from_hex(&hex).unwrap();
+            prop_assert_eq!(id, parsed);
+        }
+    }
+
+    #[test]
+    fn agent_id_generate_uniqueness() {
+        let ids: Vec<AgentId> = (0..100).map(|_| AgentId::generate()).collect();
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                assert_ne!(ids[i], ids[j], "Generated IDs should be unique");
+            }
+        }
+    }
+
+    #[test]
+    fn action_id_generate_uniqueness() {
+        let ids: Vec<ActionId> = (0..100).map(|_| ActionId::generate()).collect();
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                assert_ne!(ids[i], ids[j], "Generated IDs should be unique");
+            }
+        }
+    }
+
+    #[test]
+    fn process_id_generate_uniqueness() {
+        let ids: Vec<ProcessId> = (0..100).map(|_| ProcessId::generate()).collect();
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                assert_ne!(ids[i], ids[j], "Generated IDs should be unique");
+            }
+        }
+    }
+
+    #[test]
+    fn hash_from_hex_invalid_length() {
+        assert!(Hash::from_hex("abcd").is_err());
+        assert!(Hash::from_hex("").is_err());
+    }
+
+    #[test]
+    fn hash_from_hex_invalid_chars() {
+        let bad_hex = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        assert!(Hash::from_hex(bad_hex).is_err());
+    }
+
+    #[test]
+    fn agent_id_display_and_debug() {
+        let id = AgentId::new([0xAB; 32]);
+        let display = format!("{id}");
+        let debug = format!("{id:?}");
+        assert!(display.len() == 16);
+        assert!(debug.contains("AgentId("));
+    }
+
+    #[test]
+    fn hash_display_and_debug() {
+        let hash = Hash::from_content(b"test");
+        let display = format!("{hash}");
+        let debug = format!("{hash:?}");
+        assert!(display.len() == 16);
+        assert!(debug.contains("Hash("));
+    }
 
     #[test]
     fn hash_genesis() {

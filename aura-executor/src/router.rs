@@ -334,4 +334,291 @@ mod tests {
         let effect = router.execute(&ctx, &action).await;
         assert_eq!(effect.action_id, action_id);
     }
+
+    // ========================================================================
+    // Concurrent Execution Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_concurrent_execution_multiple_actions() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+        CALL_COUNT.store(0, Ordering::SeqCst);
+
+        struct CountingExecutor;
+
+        #[async_trait::async_trait]
+        impl Executor for CountingExecutor {
+            async fn execute(
+                &self,
+                _ctx: &ExecuteContext,
+                action: &Action,
+            ) -> anyhow::Result<Effect> {
+                CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                Ok(Effect::committed_agreement(action.action_id, "counted"))
+            }
+            fn can_handle(&self, _action: &Action) -> bool {
+                true
+            }
+            fn name(&self) -> &'static str {
+                "counting"
+            }
+        }
+
+        let router = ExecutorRouter::with_executors(vec![Arc::new(CountingExecutor)]);
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let action = Action::new(ActionId::generate(), ActionKind::Delegate, Bytes::new());
+            let ctx_clone = ctx.clone();
+            let router_ref = &router;
+            handles.push(async move { router_ref.execute(&ctx_clone, &action).await });
+        }
+
+        let results = futures::future::join_all(handles).await;
+        assert_eq!(results.len(), 5);
+        for effect in &results {
+            assert_eq!(effect.status, EffectStatus::Committed);
+        }
+        assert_eq!(CALL_COUNT.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_different_action_kinds() {
+        let mut router = ExecutorRouter::new();
+        router.add_executor(Arc::new(SelectiveExecutor::new(ActionKind::Delegate)));
+        router.add_executor(Arc::new(SelectiveExecutor::new(ActionKind::Reason)));
+
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+
+        let delegate = Action::new(ActionId::generate(), ActionKind::Delegate, Bytes::new());
+        let reason = Action::new(ActionId::generate(), ActionKind::Reason, Bytes::new());
+        let memorize = Action::new(ActionId::generate(), ActionKind::Memorize, Bytes::new());
+
+        let (r1, r2, r3) = tokio::join!(
+            router.execute(&ctx, &delegate),
+            router.execute(&ctx, &reason),
+            router.execute(&ctx, &memorize),
+        );
+
+        assert_eq!(r1.status, EffectStatus::Committed);
+        assert_eq!(r2.status, EffectStatus::Committed);
+        assert_eq!(r3.status, EffectStatus::Failed); // no executor for Memorize
+    }
+
+    // ========================================================================
+    // Executor Timeout Behavior Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_slow_executor_completes_without_external_timeout() {
+        struct SlowExecutor;
+
+        #[async_trait::async_trait]
+        impl Executor for SlowExecutor {
+            async fn execute(
+                &self,
+                _ctx: &ExecuteContext,
+                action: &Action,
+            ) -> anyhow::Result<Effect> {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                Ok(Effect::committed_agreement(action.action_id, "slow_done"))
+            }
+            fn can_handle(&self, _action: &Action) -> bool {
+                true
+            }
+            fn name(&self) -> &'static str {
+                "slow"
+            }
+        }
+
+        let router = ExecutorRouter::with_executors(vec![Arc::new(SlowExecutor)]);
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+        let action = Action::new(ActionId::generate(), ActionKind::Delegate, Bytes::new());
+
+        let effect = router.execute(&ctx, &action).await;
+        assert_eq!(effect.status, EffectStatus::Committed);
+        assert_eq!(String::from_utf8_lossy(&effect.payload), "slow_done");
+    }
+
+    #[tokio::test]
+    async fn test_executor_with_tokio_timeout() {
+        struct VerySlowExecutor;
+
+        #[async_trait::async_trait]
+        impl Executor for VerySlowExecutor {
+            async fn execute(
+                &self,
+                _ctx: &ExecuteContext,
+                _action: &Action,
+            ) -> anyhow::Result<Effect> {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                unreachable!()
+            }
+            fn can_handle(&self, _action: &Action) -> bool {
+                true
+            }
+            fn name(&self) -> &'static str {
+                "very_slow"
+            }
+        }
+
+        let router = ExecutorRouter::with_executors(vec![Arc::new(VerySlowExecutor)]);
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+        let action = Action::new(ActionId::generate(), ActionKind::Delegate, Bytes::new());
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            router.execute(&ctx, &action),
+        )
+        .await;
+
+        assert!(result.is_err(), "Should have timed out");
+    }
+
+    // ========================================================================
+    // Effect Construction on Failure Modes
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_executor_anyhow_error_produces_failed_effect() {
+        struct AnyhowFailExecutor;
+
+        #[async_trait::async_trait]
+        impl Executor for AnyhowFailExecutor {
+            async fn execute(
+                &self,
+                _ctx: &ExecuteContext,
+                _action: &Action,
+            ) -> anyhow::Result<Effect> {
+                anyhow::bail!("database connection lost")
+            }
+            fn can_handle(&self, _action: &Action) -> bool {
+                true
+            }
+            fn name(&self) -> &'static str {
+                "anyhow_fail"
+            }
+        }
+
+        let router = ExecutorRouter::with_executors(vec![Arc::new(AnyhowFailExecutor)]);
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+        let action = Action::new(ActionId::generate(), ActionKind::Delegate, Bytes::new());
+
+        let effect = router.execute(&ctx, &action).await;
+        assert_eq!(effect.status, EffectStatus::Failed);
+        assert_eq!(effect.kind, EffectKind::Agreement);
+        let payload = String::from_utf8_lossy(&effect.payload);
+        assert!(payload.contains("database connection lost"));
+    }
+
+    #[tokio::test]
+    async fn test_no_executor_effect_has_agreement_kind() {
+        let router = ExecutorRouter::new();
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+        let action = Action::new(ActionId::generate(), ActionKind::Decide, Bytes::new());
+
+        let effect = router.execute(&ctx, &action).await;
+        assert_eq!(effect.status, EffectStatus::Failed);
+        assert_eq!(effect.kind, EffectKind::Agreement);
+        let payload = String::from_utf8_lossy(&effect.payload);
+        assert!(payload.contains("No executor available"));
+    }
+
+    #[tokio::test]
+    async fn test_failed_effect_preserves_action_id() {
+        let router = ExecutorRouter::with_executors(vec![Arc::new(
+            SelectiveExecutor::failing(ActionKind::Delegate),
+        )]);
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+
+        let action_id = ActionId::generate();
+        let action = Action::new(action_id, ActionKind::Delegate, Bytes::new());
+
+        let effect = router.execute(&ctx, &action).await;
+        assert_eq!(effect.action_id, action_id);
+        assert_eq!(effect.status, EffectStatus::Failed);
+    }
+
+    // ========================================================================
+    // Router with All ActionKind Variants
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_router_handles_all_action_kinds() {
+        let mut router = ExecutorRouter::new();
+        router.add_executor(Arc::new(SelectiveExecutor::new(ActionKind::Reason)));
+        router.add_executor(Arc::new(SelectiveExecutor::new(ActionKind::Memorize)));
+        router.add_executor(Arc::new(SelectiveExecutor::new(ActionKind::Decide)));
+        router.add_executor(Arc::new(SelectiveExecutor::new(ActionKind::Delegate)));
+
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+
+        for kind in [
+            ActionKind::Reason,
+            ActionKind::Memorize,
+            ActionKind::Decide,
+            ActionKind::Delegate,
+        ] {
+            let action = Action::new(ActionId::generate(), kind, Bytes::new());
+            let effect = router.execute(&ctx, &action).await;
+            assert_eq!(effect.status, EffectStatus::Committed, "Failed for {kind:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_router_with_all_action_kinds_fails() {
+        let router = ExecutorRouter::new();
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+
+        for kind in [
+            ActionKind::Reason,
+            ActionKind::Memorize,
+            ActionKind::Decide,
+            ActionKind::Delegate,
+        ] {
+            let action = Action::new(ActionId::generate(), kind, Bytes::new());
+            let effect = router.execute(&ctx, &action).await;
+            assert_eq!(effect.status, EffectStatus::Failed, "Should fail for {kind:?}");
+        }
+    }
 }

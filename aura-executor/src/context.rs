@@ -147,4 +147,47 @@ mod tests {
         assert_eq!(limits1.read_bytes, limits2.read_bytes);
         assert_eq!(limits1.command_timeout, limits2.command_timeout);
     }
+
+    #[test]
+    fn test_execute_context_workspace_root_preserved() {
+        let workspace = PathBuf::from("/custom/workspace/path");
+        let ctx = ExecuteContext::new(AgentId::generate(), ActionId::generate(), workspace.clone());
+        assert_eq!(ctx.workspace_root, workspace);
+    }
+
+    #[test]
+    fn test_execute_context_with_limits_replaces_defaults() {
+        let custom_limits = ExecuteLimits {
+            read_bytes: 42,
+            write_bytes: 42,
+            command_timeout: Duration::from_millis(42),
+            stdout_bytes: 42,
+            stderr_bytes: 42,
+        };
+
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        )
+        .with_limits(custom_limits);
+
+        assert_eq!(ctx.limits.read_bytes, 42);
+        assert_eq!(ctx.limits.write_bytes, 42);
+        assert_eq!(ctx.limits.command_timeout, Duration::from_millis(42));
+        assert_eq!(ctx.limits.stdout_bytes, 42);
+        assert_eq!(ctx.limits.stderr_bytes, 42);
+    }
+
+    #[test]
+    fn test_execute_context_debug_impl() {
+        let ctx = ExecuteContext::new(
+            AgentId::generate(),
+            ActionId::generate(),
+            PathBuf::from("/tmp"),
+        );
+        let debug_str = format!("{ctx:?}");
+        assert!(debug_str.contains("ExecuteContext"));
+        assert!(debug_str.contains("workspace_root"));
+    }
 }

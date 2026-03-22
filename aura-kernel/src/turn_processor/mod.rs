@@ -653,4 +653,165 @@ mod tests {
         assert!(config.model_override.is_none());
         assert!(config.max_tool_calls.is_none());
     }
+
+    #[tokio::test]
+    async fn test_multiple_sequential_tool_calls() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+
+        let provider = Arc::new(
+            MockProvider::new()
+                .with_response(MockResponse::tool_use(
+                    "tool_1",
+                    "fs_ls",
+                    serde_json::json!({ "path": "." }),
+                ))
+                .with_response(MockResponse::tool_use(
+                    "tool_2",
+                    "fs_read",
+                    serde_json::json!({ "path": "file.txt" }),
+                ))
+                .with_response(MockResponse::text("All done.")),
+        );
+
+        let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let executor = ExecutorRouter::new();
+        let tool_registry = Arc::new(DefaultToolRegistry::new());
+
+        let config = TurnConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            ..TurnConfig::default()
+        };
+
+        let processor = TurnProcessor::new(provider, store, executor, tool_registry, config);
+
+        let tx = Transaction::user_prompt(AgentId::generate(), "Read files");
+        let result = processor.process_turn(tx.agent_id, tx, 1).await.unwrap();
+
+        assert_eq!(result.steps, 3);
+        assert!(result.final_message.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_max_steps_budget_enforcement() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+
+        let provider = Arc::new(
+            MockProvider::new().with_default_response(MockResponse::tool_use(
+                "tool_loop",
+                "fs_ls",
+                serde_json::json!({ "path": "." }),
+            )),
+        );
+
+        let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let executor = ExecutorRouter::new();
+        let tool_registry = Arc::new(DefaultToolRegistry::new());
+
+        let config = TurnConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            max_steps: 2,
+            ..TurnConfig::default()
+        };
+
+        let processor = TurnProcessor::new(provider, store, executor, tool_registry, config);
+
+        let tx = Transaction::user_prompt(AgentId::generate(), "Loop forever");
+        let result = processor.process_turn(tx.agent_id, tx, 1).await.unwrap();
+
+        assert_eq!(result.steps, 2);
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_stops_turn() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+
+        let provider = Arc::new(
+            MockProvider::new()
+                .with_default_response(MockResponse::tool_use(
+                    "tool_1",
+                    "fs_ls",
+                    serde_json::json!({ "path": "." }),
+                ))
+                .with_latency(50),
+        );
+
+        let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let executor = ExecutorRouter::new();
+        let tool_registry = Arc::new(DefaultToolRegistry::new());
+
+        let config = TurnConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            max_steps: 100,
+            ..TurnConfig::default()
+        };
+
+        let token = CancellationToken::new();
+        let mut processor =
+            TurnProcessor::new(provider, store, executor, tool_registry, config);
+        processor.set_cancellation_token(token.clone());
+
+        // Cancel immediately
+        token.cancel();
+
+        let tx = Transaction::user_prompt(AgentId::generate(), "Do work");
+        let result = processor.process_turn(tx.agent_id, tx, 1).await.unwrap();
+
+        assert!(result.cancelled);
+        assert_eq!(result.steps, 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_turn_with_messages_entry_point() {
+        let (processor, _db_dir, _ws_dir) = create_test_processor();
+
+        let messages = vec![Message::user("Hello via messages API")];
+        let agent_id = AgentId::generate();
+
+        let result = processor
+            .process_turn_with_messages(agent_id, messages)
+            .await
+            .unwrap();
+
+        assert_eq!(result.steps, 1);
+        assert!(!result.had_failures);
+        assert!(result.final_message.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_turn_result_token_accounting() {
+        let (processor, _db_dir, _ws_dir) = create_test_processor();
+
+        let tx = Transaction::user_prompt(AgentId::generate(), "Hello");
+        let result = processor.process_turn(tx.agent_id, tx, 1).await.unwrap();
+
+        assert!(result.total_input_tokens > 0 || result.total_output_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn test_replay_mode_skips_model() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+
+        let provider = Arc::new(MockProvider::new().with_failure());
+        let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let executor = ExecutorRouter::new();
+        let tool_registry = Arc::new(DefaultToolRegistry::new());
+
+        let config = TurnConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            replay_mode: true,
+            ..TurnConfig::default()
+        };
+
+        let processor = TurnProcessor::new(provider, store, executor, tool_registry, config);
+
+        let tx = Transaction::user_prompt(AgentId::generate(), "Test replay");
+        let result = processor.process_turn(tx.agent_id, tx, 1).await.unwrap();
+
+        assert_eq!(result.steps, 1);
+        assert!(!result.had_failures);
+    }
 }

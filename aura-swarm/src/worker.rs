@@ -85,3 +85,143 @@ fn compute_context_hash(seq: u64, tx: &aura_core::Transaction) -> [u8; 32] {
     hasher.update(&tx.hash.0);
     *hasher.finalize().as_bytes()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_core::Transaction;
+    use aura_core::TransactionType;
+    use aura_reasoner::MockProvider;
+    use aura_store::RocksStore;
+    use bytes::Bytes;
+
+    #[test]
+    fn test_compute_context_hash_deterministic() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            Bytes::from("hello"),
+            None,
+        );
+        let h1 = compute_context_hash(1, &tx);
+        let h2 = compute_context_hash(1, &tx);
+        assert_eq!(h1, h2, "Same inputs must produce same hash");
+    }
+
+    #[test]
+    fn test_compute_context_hash_different_seq() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            Bytes::from("hello"),
+            None,
+        );
+        let h1 = compute_context_hash(1, &tx);
+        let h2 = compute_context_hash(2, &tx);
+        assert_ne!(h1, h2, "Different seq should produce different hash");
+    }
+
+    #[test]
+    fn test_compute_context_hash_different_tx() {
+        let agent_id = AgentId::generate();
+        let tx1 = Transaction::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            Bytes::from("hello"),
+            None,
+        );
+        let tx2 = Transaction::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            Bytes::from("world"),
+            None,
+        );
+        let h1 = compute_context_hash(1, &tx1);
+        let h2 = compute_context_hash(1, &tx2);
+        assert_ne!(h1, h2, "Different tx should produce different hash");
+    }
+
+    #[tokio::test]
+    async fn test_process_agent_empty_inbox() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> =
+            Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("response"));
+        let agent_id = AgentId::generate();
+
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+
+        let config = aura_agent::AgentLoopConfig::default();
+        let agent_loop = AgentLoop::new(config);
+        let router = aura_executor::ExecutorRouter::new();
+        let executor =
+            aura_agent::KernelToolExecutor::new(router, agent_id, ws_dir.join("test"));
+
+        let count = process_agent(
+            agent_id,
+            store,
+            provider,
+            &agent_loop,
+            &executor,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(count, 0, "Empty inbox should process 0 transactions");
+    }
+
+    #[tokio::test]
+    async fn test_process_agent_single_tx() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> =
+            Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("I processed your request."));
+
+        let agent_id = AgentId::generate();
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            Bytes::from("test prompt"),
+            None,
+        );
+        store.enqueue_tx(&tx).unwrap();
+
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+
+        let config = aura_agent::AgentLoopConfig::default();
+        let agent_loop = AgentLoop::new(config);
+        let router = aura_executor::ExecutorRouter::new();
+        let executor =
+            aura_agent::KernelToolExecutor::new(router, agent_id, ws_dir.join("agent"));
+
+        let count = process_agent(
+            agent_id,
+            store.clone(),
+            provider,
+            &agent_loop,
+            &executor,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(count, 1, "Should process exactly 1 transaction");
+        assert_eq!(
+            store.get_head_seq(agent_id).unwrap(),
+            1,
+            "Head should advance to 1"
+        );
+    }
+
+    #[test]
+    fn test_agent_loop_timeout_constant() {
+        assert_eq!(AGENT_LOOP_TIMEOUT, Duration::from_secs(300));
+    }
+}

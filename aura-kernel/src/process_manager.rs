@@ -595,4 +595,147 @@ mod tests {
         assert_eq!(payload.process_id, process_id);
         assert_eq!(payload.command, command);
     }
+
+    #[test]
+    fn test_process_manager_config_defaults() {
+        let config = ProcessManagerConfig::default();
+        assert_eq!(config.max_async_timeout_ms, 600_000);
+        assert_eq!(config.poll_interval_ms, 100);
+    }
+
+    #[test]
+    fn test_process_manager_config_custom() {
+        let config = ProcessManagerConfig {
+            max_async_timeout_ms: 1000,
+            poll_interval_ms: 10,
+        };
+        assert_eq!(config.max_async_timeout_ms, 1000);
+        assert_eq!(config.poll_interval_ms, 10);
+    }
+
+    #[tokio::test]
+    async fn test_is_running_false_for_unknown() {
+        let (tx, _rx) = mpsc::channel(10);
+        let manager = ProcessManager::with_defaults(tx);
+        let unknown_id = ProcessId::generate();
+        assert!(!manager.is_running(&unknown_id));
+    }
+
+    #[tokio::test]
+    async fn test_cancel_unknown_returns_false() {
+        let (tx, _rx) = mpsc::channel(10);
+        let manager = ProcessManager::with_defaults(tx);
+        let unknown_id = ProcessId::generate();
+        assert!(!manager.cancel(&unknown_id));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_processes_complete_concurrently() {
+        let (tx, mut rx) = mpsc::channel(100);
+        let manager = Arc::new(ProcessManager::new(
+            tx,
+            ProcessManagerConfig {
+                max_async_timeout_ms: 30_000,
+                poll_interval_ms: 10,
+            },
+        ));
+
+        let agent_id = AgentId::generate();
+        let reference_hash = Hash::from_content(b"concurrent test");
+
+        let count = 5;
+        for i in 0..count {
+            let process_id = ProcessId::generate();
+            let action_id = ActionId::generate();
+
+            #[cfg(windows)]
+            let child = std::process::Command::new("cmd.exe")
+                .args(["/C", &format!("echo concurrent_{i}")])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+
+            #[cfg(not(windows))]
+            let child = std::process::Command::new("sh")
+                .args(["-c", &format!("echo concurrent_{i}")])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+
+            manager.register(
+                agent_id,
+                reference_hash,
+                action_id,
+                process_id,
+                child,
+                format!("echo concurrent_{i}"),
+            );
+        }
+
+        let mut completions = Vec::new();
+        for _ in 0..count {
+            let completion = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .expect("Timeout waiting for completion")
+                .expect("Channel closed");
+            completions.push(completion);
+        }
+
+        assert_eq!(completions.len(), count);
+        for c in &completions {
+            assert_eq!(c.tx_type, aura_core::TransactionType::ProcessComplete);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_process_sends_failure() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let manager = Arc::new(ProcessManager::with_defaults(tx));
+
+        let agent_id = AgentId::generate();
+        let process_id = ProcessId::generate();
+        let action_id = ActionId::generate();
+        let reference_hash = Hash::from_content(b"fail test");
+
+        #[cfg(windows)]
+        let child = std::process::Command::new("cmd.exe")
+            .args(["/C", "exit 1"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        #[cfg(not(windows))]
+        let child = std::process::Command::new("sh")
+            .args(["-c", "exit 1"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        manager.register(
+            agent_id,
+            reference_hash,
+            action_id,
+            process_id,
+            child,
+            "exit 1".to_string(),
+        );
+
+        let completion = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("Timeout")
+            .expect("Channel closed");
+
+        assert_eq!(
+            completion.tx_type,
+            aura_core::TransactionType::ProcessComplete
+        );
+
+        let payload: ActionResultPayload =
+            serde_json::from_slice(&completion.payload).unwrap();
+        assert!(!payload.success);
+    }
 }

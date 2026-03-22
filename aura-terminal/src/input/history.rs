@@ -171,4 +171,64 @@ mod tests {
 
         assert_eq!(history.previous(), Some("second"));
     }
+
+    #[test]
+    fn test_history_overflow_at_max() {
+        let mut history = InputHistory::new();
+        for i in 0..MAX_HISTORY + 20 {
+            history.add(&format!("entry_{i}"));
+        }
+        assert_eq!(history.len(), MAX_HISTORY);
+    }
+
+    #[test]
+    fn test_history_single_char_entries() {
+        let mut history = InputHistory::new();
+        history.add("a");
+        history.add("b");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.previous(), Some("b"));
+        assert_eq!(history.previous(), Some("a"));
+    }
+
+    #[test]
+    fn test_history_whitespace_trimmed() {
+        let mut history = InputHistory::new();
+        history.add("  hello  ");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.previous(), Some("hello"));
+    }
+
+    #[test]
+    fn test_history_next_newer_at_none() {
+        let mut history = InputHistory::new();
+        history.add("first");
+        assert!(history.next_newer().is_none());
+    }
+
+    #[test]
+    fn test_history_entries_iterator() {
+        let mut history = InputHistory::new();
+        history.add("first");
+        history.add("second");
+        history.add("third");
+        let entries: Vec<&str> = history.entries().collect();
+        assert_eq!(entries, vec!["third", "second", "first"]);
+    }
+
+    #[test]
+    fn test_history_default_is_empty() {
+        let history = InputHistory::default();
+        assert!(history.is_empty());
+        assert_eq!(history.len(), 0);
+    }
+
+    #[test]
+    fn test_history_non_consecutive_duplicates_kept() {
+        let mut history = InputHistory::new();
+        history.add("alpha");
+        history.add("beta");
+        history.add("alpha");
+        assert_eq!(history.len(), 3);
+    }
 }

@@ -352,4 +352,87 @@ mod tests {
         assert!(types.contains(&"ToolExecution"));
         assert!(types.contains(&"ProcessComplete"));
     }
+
+    #[test]
+    fn test_context_large_record_window() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::user_prompt(agent_id, "current");
+
+        let entries: Vec<RecordEntry> = (1..=100)
+            .map(|seq| {
+                create_test_entry(
+                    seq,
+                    agent_id,
+                    TransactionType::UserPrompt,
+                    &format!("message {seq}"),
+                )
+            })
+            .collect();
+
+        let ctx = ContextBuilder::new(&tx).with_record_window(entries).build();
+
+        assert_eq!(ctx.record_summaries.len(), 100);
+        assert_eq!(ctx.record_summaries[0].seq, 1);
+        assert_eq!(ctx.record_summaries[99].seq, 100);
+    }
+
+    #[test]
+    fn test_context_preserves_action_kinds_in_summaries() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::user_prompt(agent_id, "current");
+
+        let entry = create_entry_with_actions(
+            1,
+            agent_id,
+            &[ActionKind::Reason, ActionKind::Memorize, ActionKind::Decide],
+        );
+
+        let ctx = ContextBuilder::new(&tx)
+            .with_record_window(vec![entry])
+            .build();
+
+        assert_eq!(ctx.record_summaries[0].action_kinds.len(), 3);
+        assert!(ctx.record_summaries[0]
+            .action_kinds
+            .contains(&ActionKind::Memorize));
+        assert!(ctx.record_summaries[0]
+            .action_kinds
+            .contains(&ActionKind::Decide));
+    }
+
+    #[test]
+    fn test_context_empty_payload_produces_summary() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::user_prompt(agent_id, "current");
+
+        let entry = create_test_entry(1, agent_id, TransactionType::SessionStart, "");
+
+        let ctx = ContextBuilder::new(&tx)
+            .with_record_window(vec![entry])
+            .build();
+
+        assert_eq!(ctx.record_summaries.len(), 1);
+        assert!(ctx.record_summaries[0].payload_summary.is_some());
+    }
+
+    #[test]
+    fn test_context_hash_stability_across_builds() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::user_prompt(agent_id, "stability");
+
+        let entries = vec![
+            create_test_entry(1, agent_id, TransactionType::UserPrompt, "hello"),
+            create_test_entry(2, agent_id, TransactionType::AgentMsg, "world"),
+        ];
+
+        let ctx1 = ContextBuilder::new(&tx)
+            .with_record_window(entries.clone())
+            .build();
+        let ctx2 = ContextBuilder::new(&tx)
+            .with_record_window(entries)
+            .build();
+
+        assert_eq!(ctx1.context_hash, ctx2.context_hash);
+        assert_eq!(ctx1.record_summaries.len(), ctx2.record_summaries.len());
+    }
 }

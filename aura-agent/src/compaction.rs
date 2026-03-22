@@ -518,6 +518,63 @@ fn helper_internal() {
     }
 
     #[test]
+    fn test_compact_skips_when_too_few_messages() {
+        let mut messages = vec![Message::user("only one")];
+        let config = CompactionConfig::micro();
+        compact_older_messages(&mut messages, &config);
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_compact_preserves_first_message() {
+        let long = "x".repeat(5000);
+        let mut messages = vec![
+            Message::user(&long),
+            Message::user(&long),
+            Message::user(&long),
+            Message::user(&long),
+            Message::user("recent 1"),
+            Message::user("recent 2"),
+        ];
+        let config = CompactionConfig {
+            tool_result_max_chars: 100,
+            text_max_chars: 100,
+            preserve_recent: 2,
+        };
+        compact_older_messages(&mut messages, &config);
+
+        if let aura_reasoner::ContentBlock::Text { text } = &messages[0].content[0] {
+            assert_eq!(text.len(), long.len(), "First message should be untouched");
+        }
+    }
+
+    #[test]
+    fn test_estimate_message_chars_empty() {
+        let messages: Vec<Message> = vec![];
+        assert_eq!(estimate_message_chars(&messages), 0);
+    }
+
+    #[test]
+    fn test_estimate_message_chars_text() {
+        let messages = vec![Message::user("hello world")];
+        assert!(estimate_message_chars(&messages) >= 11);
+    }
+
+    #[test]
+    fn test_truncate_exact_boundary() {
+        let content = "a".repeat(100);
+        let result = truncate_content(&content, 100, None, None);
+        assert_eq!(result, content, "Content at exact limit should not truncate");
+    }
+
+    #[test]
+    fn test_truncate_one_over_boundary() {
+        let content = "a".repeat(101);
+        let result = truncate_content(&content, 100, None, None);
+        assert!(result.contains("content truncated"));
+    }
+
+    #[test]
     fn test_configurable_head_tail() {
         let content = "a".repeat(10_000);
 

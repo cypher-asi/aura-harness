@@ -173,4 +173,86 @@ mod tests {
         assert_eq!(request.id, "1");
         assert!(queue.is_empty());
     }
+
+    #[test]
+    fn test_approval_queue_fifo_order() {
+        let mut queue = ApprovalQueue::new();
+        let tc1 = ToolCall::new("fs_write", serde_json::json!({"path": "a.txt"}));
+        let tc2 = ToolCall::new("fs_edit", serde_json::json!({"path": "b.txt"}));
+        let tc3 = ToolCall::new("cmd_run", serde_json::json!({"program": "ls"}));
+
+        queue.push(ApprovalRequest::new("1", &tc1, PermissionLevel::AskOnce));
+        queue.push(ApprovalRequest::new("2", &tc2, PermissionLevel::AlwaysAsk));
+        queue.push(ApprovalRequest::new("3", &tc3, PermissionLevel::AskOnce));
+
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue.pop().unwrap().id, "1");
+        assert_eq!(queue.pop().unwrap().id, "2");
+        assert_eq!(queue.pop().unwrap().id, "3");
+        assert!(queue.pop().is_none());
+    }
+
+    #[test]
+    fn test_approval_queue_peek_does_not_remove() {
+        let mut queue = ApprovalQueue::new();
+        let tc = ToolCall::new("fs_write", serde_json::json!({}));
+        queue.push(ApprovalRequest::new("1", &tc, PermissionLevel::AskOnce));
+
+        assert_eq!(queue.peek().unwrap().id, "1");
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.peek().unwrap().id, "1");
+    }
+
+    #[test]
+    fn test_approval_queue_clear() {
+        let mut queue = ApprovalQueue::new();
+        let tc = ToolCall::new("fs_write", serde_json::json!({}));
+        queue.push(ApprovalRequest::new("1", &tc, PermissionLevel::AskOnce));
+        queue.push(ApprovalRequest::new("2", &tc, PermissionLevel::AskOnce));
+        assert_eq!(queue.len(), 2);
+
+        queue.clear();
+        assert!(queue.is_empty());
+        assert_eq!(queue.len(), 0);
+        assert!(!queue.has_pending());
+    }
+
+    #[test]
+    fn test_approval_request_fs_edit_description() {
+        let tc = ToolCall::new(
+            "fs_edit",
+            serde_json::json!({"path": "src/main.rs", "old_text": "a", "new_text": "b"}),
+        );
+        let req = ApprovalRequest::new("1", &tc, PermissionLevel::AlwaysAsk);
+        assert!(req.description.contains("src/main.rs"));
+        assert!(req.description.contains("Edit"));
+    }
+
+    #[test]
+    fn test_approval_request_cmd_run_description() {
+        let tc = ToolCall::new(
+            "cmd_run",
+            serde_json::json!({"program": "cargo", "args": ["test", "--workspace"]}),
+        );
+        let req = ApprovalRequest::new("1", &tc, PermissionLevel::AskOnce);
+        assert!(req.description.contains("cargo"));
+        assert!(req.description.contains("test"));
+    }
+
+    #[test]
+    fn test_approval_request_unknown_tool_description() {
+        let tc = ToolCall::new("custom_tool", serde_json::json!({"foo": "bar"}));
+        let req = ApprovalRequest::new("1", &tc, PermissionLevel::AskOnce);
+        assert!(req.description.contains("custom_tool"));
+    }
+
+    #[test]
+    fn test_approval_decision_equality() {
+        assert_eq!(ApprovalDecision::Approve, ApprovalDecision::Approve);
+        assert_ne!(ApprovalDecision::Approve, ApprovalDecision::Deny);
+        assert_ne!(
+            ApprovalDecision::ApproveSession,
+            ApprovalDecision::Approve
+        );
+    }
 }

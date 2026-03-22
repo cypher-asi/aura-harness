@@ -431,4 +431,146 @@ mod tests {
             PermissionLevel::Deny
         );
     }
+
+    #[test]
+    fn test_revoke_session_approval() {
+        let policy = Policy::with_defaults();
+
+        policy.approve_for_session("fs_write");
+        assert!(policy.is_session_approved("fs_write"));
+
+        policy.revoke_session_approval("fs_write");
+        assert!(!policy.is_session_approved("fs_write"));
+        assert!(policy.requires_approval("fs_write"));
+    }
+
+    #[test]
+    fn test_clear_session_approvals_multiple() {
+        let policy = Policy::with_defaults();
+
+        policy.approve_for_session("fs_write");
+        policy.approve_for_session("fs_edit");
+        assert!(policy.is_session_approved("fs_write"));
+        assert!(policy.is_session_approved("fs_edit"));
+
+        policy.clear_session_approvals();
+        assert!(!policy.is_session_approved("fs_write"));
+        assert!(!policy.is_session_approved("fs_edit"));
+    }
+
+    #[test]
+    fn test_revoke_nonexistent_approval_is_noop() {
+        let policy = Policy::with_defaults();
+        policy.revoke_session_approval("fs_write");
+        assert!(!policy.is_session_approved("fs_write"));
+    }
+
+    #[test]
+    fn test_always_allow_does_not_require_approval() {
+        let policy = Policy::with_defaults();
+        assert!(!policy.requires_approval("fs_read"));
+        assert!(!policy.requires_approval("fs_ls"));
+        assert!(!policy.requires_approval("cmd_run"));
+    }
+
+    #[test]
+    fn test_denied_tool_requires_approval() {
+        let policy = Policy::with_defaults();
+        assert!(policy.requires_approval("some_unknown_tool"));
+    }
+
+    #[test]
+    fn test_check_tool_always_allow() {
+        let policy = Policy::with_defaults();
+        let result = policy.check_tool("fs_read", &serde_json::json!({}));
+        assert!(result.allowed);
+        assert!(result.reason.is_none());
+    }
+
+    #[test]
+    fn test_check_tool_denied() {
+        let policy = Policy::with_defaults();
+        let result = policy.check_tool("evil_tool", &serde_json::json!({}));
+        assert!(!result.allowed);
+        assert!(result.reason.unwrap().contains("not allowed"));
+    }
+
+    #[test]
+    fn test_check_tool_ask_once_not_approved() {
+        let policy = Policy::with_defaults();
+        let result = policy.check_tool("fs_write", &serde_json::json!({}));
+        assert!(!result.allowed);
+        assert!(result.reason.unwrap().contains("requires approval"));
+    }
+
+    #[test]
+    fn test_check_tool_ask_once_after_approval() {
+        let policy = Policy::with_defaults();
+        policy.approve_for_session("fs_write");
+        let result = policy.check_tool("fs_write", &serde_json::json!({}));
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn test_always_ask_permission_override() {
+        let config = PolicyConfig::default()
+            .with_tool_permission("fs_read", PermissionLevel::AlwaysAsk);
+        let policy = Policy::new(config);
+
+        let result = policy.check_tool("fs_read", &serde_json::json!({}));
+        assert!(!result.allowed);
+        assert!(result
+            .reason
+            .unwrap()
+            .contains("requires approval for each use"));
+    }
+
+    #[test]
+    fn test_max_proposals() {
+        let policy = Policy::with_defaults();
+        assert_eq!(policy.max_proposals(), 8);
+    }
+
+    #[test]
+    fn test_permissive_config_includes_cmd_run() {
+        let config = PolicyConfig::permissive();
+        assert!(config.allowed_tools.contains("cmd_run"));
+    }
+
+    #[test]
+    fn test_concurrent_session_approvals() {
+        use std::sync::Arc;
+        let policy = Arc::new(Policy::with_defaults());
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let p = Arc::clone(&policy);
+                std::thread::spawn(move || {
+                    let tool = format!("tool_{i}");
+                    p.approve_for_session(&tool);
+                    assert!(p.is_session_approved(&tool));
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_check_proposal_disallowed_action_kind() {
+        let mut allowed = HashSet::new();
+        allowed.insert(ActionKind::Reason);
+        let config = PolicyConfig {
+            allowed_action_kinds: allowed,
+            ..PolicyConfig::default()
+        };
+        let policy = Policy::new(config);
+
+        let proposal = Proposal::new(ActionKind::Delegate, Bytes::new());
+        let result = policy.check(&proposal);
+        assert!(!result.allowed);
+        assert!(result.reason.unwrap().contains("not allowed"));
+    }
 }

@@ -118,3 +118,59 @@ impl Swarm {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_swarm_new() {
+        let config = SwarmConfig::default();
+        let swarm = Swarm::new(config.clone());
+        assert_eq!(swarm.config.bind_addr, config.bind_addr);
+    }
+
+    #[test]
+    fn test_swarm_with_defaults() {
+        let swarm = Swarm::with_defaults();
+        assert_eq!(swarm.config.bind_addr, "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn test_swarm_custom_config() {
+        let config = SwarmConfig {
+            bind_addr: "0.0.0.0:9090".to_string(),
+            sync_writes: true,
+            record_window_size: 100,
+            ..SwarmConfig::default()
+        };
+        let swarm = Swarm::new(config);
+        assert_eq!(swarm.config.bind_addr, "0.0.0.0:9090");
+        assert!(swarm.config.sync_writes);
+        assert_eq!(swarm.config.record_window_size, 100);
+    }
+
+    #[test]
+    fn test_swarm_config_propagation() {
+        let config = SwarmConfig {
+            data_dir: std::path::PathBuf::from("/custom/data"),
+            enable_fs_tools: false,
+            enable_cmd_tools: true,
+            allowed_commands: vec!["ls".to_string(), "cat".to_string()],
+            ..SwarmConfig::default()
+        };
+        let swarm = Swarm::new(config);
+        assert_eq!(
+            swarm.config.data_dir,
+            std::path::PathBuf::from("/custom/data")
+        );
+        assert!(!swarm.config.enable_fs_tools);
+        assert!(swarm.config.enable_cmd_tools);
+        assert_eq!(swarm.config.allowed_commands.len(), 2);
+    }
+
+    #[test]
+    fn test_create_model_provider_returns_something() {
+        let _provider = Swarm::create_model_provider();
+    }
+}

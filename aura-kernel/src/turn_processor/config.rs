@@ -70,6 +70,82 @@ pub struct StepConfig {
     pub max_tool_calls: Option<u32>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_turn_config_defaults() {
+        let config = TurnConfig::default();
+        assert_eq!(config.max_steps, 25);
+        assert_eq!(config.max_tool_calls_per_step, 8);
+        assert_eq!(config.model_timeout_ms, 60_000);
+        assert_eq!(config.tool_timeout_ms, 30_000);
+        assert_eq!(config.context_window, 50);
+        assert_eq!(config.model, "claude-opus-4-6-20250514");
+        assert!(!config.replay_mode);
+        assert_eq!(config.temperature, Some(0.2));
+        assert_eq!(config.max_tokens, 16_384);
+        assert_eq!(config.context_window_tokens, 200_000);
+        assert!((config.context_target_ratio - 0.80).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_turn_config_custom() {
+        let config = TurnConfig {
+            max_steps: 5,
+            max_tool_calls_per_step: 2,
+            model: "custom-model".to_string(),
+            replay_mode: true,
+            temperature: None,
+            max_tokens: 8192,
+            ..TurnConfig::default()
+        };
+        assert_eq!(config.max_steps, 5);
+        assert_eq!(config.max_tool_calls_per_step, 2);
+        assert_eq!(config.model, "custom-model");
+        assert!(config.replay_mode);
+        assert!(config.temperature.is_none());
+        assert_eq!(config.max_tokens, 8192);
+    }
+
+    #[test]
+    fn test_step_config_defaults() {
+        let config = StepConfig::default();
+        assert!(config.thinking_budget.is_none());
+        assert!(config.model_override.is_none());
+        assert!(config.max_tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_step_config_with_overrides() {
+        let config = StepConfig {
+            thinking_budget: Some(2048),
+            model_override: Some("fast-model".to_string()),
+            max_tool_calls: Some(4),
+        };
+        assert_eq!(config.thinking_budget, Some(2048));
+        assert_eq!(config.model_override.as_deref(), Some("fast-model"));
+        assert_eq!(config.max_tool_calls, Some(4));
+    }
+
+    #[test]
+    fn test_turn_config_workspace_base() {
+        let config = TurnConfig {
+            workspace_base: PathBuf::from("/custom/path"),
+            ..TurnConfig::default()
+        };
+        assert_eq!(config.workspace_base, PathBuf::from("/custom/path"));
+    }
+
+    #[test]
+    fn test_default_system_prompt_non_empty() {
+        let config = TurnConfig::default();
+        assert!(!config.system_prompt.is_empty());
+        assert!(config.system_prompt.contains("AURA"));
+    }
+}
+
 /// Default system prompt for the agent.
 fn default_system_prompt() -> String {
     r"You are AURA, an autonomous AI coding assistant with FULL access to a real filesystem and command execution environment.

@@ -443,4 +443,106 @@ mod tests {
         assert_eq!(returns_result().unwrap(), 42);
         assert!(returns_error().is_err());
     }
+
+    #[test]
+    fn test_deserialization_error_with_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, "bad data");
+        let err = AuraError::deserialization_with_source("parse failed", io_err);
+        match err {
+            AuraError::Deserialization { message, source } => {
+                assert_eq!(message, "parse failed");
+                assert!(source.is_some());
+            }
+            _ => panic!("Expected Deserialization error"),
+        }
+    }
+
+    #[test]
+    fn test_serialization_with_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "write failed");
+        let err = AuraError::serialization_with_source("encode failed", io_err);
+        match err {
+            AuraError::Serialization { message, source } => {
+                assert_eq!(message, "encode failed");
+                assert!(source.is_some());
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
+
+    #[test]
+    fn test_error_display_contains_message_for_all_variants() {
+        let cases: Vec<(AuraError, &str)> = vec![
+            (AuraError::storage("msg"), "storage error: msg"),
+            (AuraError::kernel("msg"), "kernel error: msg"),
+            (AuraError::executor("msg"), "executor error: msg"),
+            (AuraError::reasoner("msg"), "reasoner error: msg"),
+            (AuraError::validation("msg"), "validation error: msg"),
+            (AuraError::configuration("msg"), "configuration error: msg"),
+            (AuraError::internal("msg"), "internal error: msg"),
+            (AuraError::serialization("msg"), "serialization error: msg"),
+            (AuraError::deserialization("msg"), "deserialization error: msg"),
+            (AuraError::policy_violation("msg"), "policy violation: msg"),
+        ];
+
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn test_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<AuraError>();
+    }
+
+    #[test]
+    fn test_reasoner_unavailable() {
+        let err = AuraError::ReasonerUnavailable {
+            reason: "rate limited".to_string(),
+        };
+        let display = err.to_string();
+        assert!(display.contains("reasoner unavailable"));
+        assert!(display.contains("rate limited"));
+    }
+
+    #[test]
+    fn test_action_not_allowed() {
+        let err = AuraError::ActionNotAllowed {
+            action_kind: "Delegate".to_string(),
+        };
+        let display = err.to_string();
+        assert!(display.contains("action not allowed"));
+        assert!(display.contains("Delegate"));
+    }
+
+    #[test]
+    fn test_inbox_empty() {
+        let agent_id = AgentId::new([0u8; 32]);
+        let err = AuraError::InboxEmpty { agent_id };
+        let display = err.to_string();
+        assert!(display.contains("inbox empty"));
+    }
+
+    #[test]
+    fn test_error_debug_format() {
+        let err = AuraError::internal("debug test");
+        let debug_str = format!("{err:?}");
+        assert!(debug_str.contains("Internal"));
+        assert!(debug_str.contains("debug test"));
+    }
+
+    #[test]
+    fn test_from_serde_json_preserves_source() {
+        let json_err = serde_json::from_str::<serde_json::Value>("{invalid").unwrap_err();
+        let err_msg = json_err.to_string();
+        let aura_err: AuraError = json_err.into();
+        match aura_err {
+            AuraError::Serialization { message, source } => {
+                assert_eq!(message, err_msg);
+                assert!(source.is_some());
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
 }

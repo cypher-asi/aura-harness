@@ -79,4 +79,44 @@ mod tests {
         assert!(!det.update(&targets, false)); // 2
         assert!(det.update(&targets, false)); // 3 = threshold
     }
+
+    #[test]
+    fn test_different_targets_reset_streak() {
+        let mut det = StallDetector::default();
+        let targets_a: HashSet<String> = ["a.rs".to_string()].into();
+        let targets_b: HashSet<String> = ["b.rs".to_string()].into();
+        assert!(!det.update(&targets_a, false)); // 1
+        assert!(!det.update(&targets_a, false)); // 2
+        assert!(!det.update(&targets_b, false)); // reset to 1
+        assert!(!det.update(&targets_b, false)); // 2
+        assert!(det.update(&targets_b, false)); // 3 = threshold
+    }
+
+    #[test]
+    fn test_success_resets_mid_streak() {
+        let mut det = StallDetector::default();
+        let targets: HashSet<String> = ["a.rs".to_string()].into();
+        assert!(!det.update(&targets, false)); // 1
+        assert!(!det.update(&targets, false)); // 2
+        assert!(!det.update(&targets, true)); // success resets
+        assert_eq!(det.streak(), 0);
+        assert!(!det.update(&targets, false)); // 1 again
+        assert!(!det.update(&targets, false)); // 2
+        assert!(det.update(&targets, false)); // 3 = threshold
+    }
+
+    #[test]
+    fn test_multiple_targets_same_set() {
+        let mut det = StallDetector::default();
+        let targets: HashSet<String> = ["a.rs".to_string(), "b.rs".to_string()].into();
+        assert!(!det.update(&targets, false));
+        assert!(!det.update(&targets, false));
+        assert!(det.update(&targets, false));
+    }
+
+    #[test]
+    fn test_streak_accessor() {
+        let det = StallDetector::default();
+        assert_eq!(det.streak(), 0);
+    }
 }

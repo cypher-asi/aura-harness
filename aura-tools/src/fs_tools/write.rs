@@ -263,4 +263,103 @@ mod tests {
         let read_back = fs::read_to_string(dir.path().join("unicode.txt")).unwrap();
         assert_eq!(read_back, content);
     }
+
+    #[test]
+    fn test_fs_write_large_file_over_1mb() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let content = "x".repeat(1_100_000);
+        let result = fs_write(&sandbox, "large.bin", &content, false).unwrap();
+        assert!(result.ok);
+
+        let on_disk = fs::read_to_string(dir.path().join("large.bin")).unwrap();
+        assert_eq!(on_disk.len(), 1_100_000);
+    }
+
+    #[test]
+    fn test_fs_write_special_chars_in_filename() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let result = fs_write(&sandbox, "file with spaces.txt", "data", false).unwrap();
+        assert!(result.ok);
+        assert!(dir.path().join("file with spaces.txt").exists());
+    }
+
+    #[test]
+    fn test_fs_write_empty_content() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let result = fs_write(&sandbox, "empty.txt", "", false).unwrap();
+        assert!(result.ok);
+
+        let content = fs::read_to_string(dir.path().join("empty.txt")).unwrap();
+        assert!(content.is_empty());
+    }
+
+    #[test]
+    fn test_fs_write_overwrite_with_exactly_10_percent() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let large = "x".repeat(1000);
+        fs::write(dir.path().join("boundary.txt"), &large).unwrap();
+
+        // 100 bytes = exactly 10% of 1000 — should be accepted
+        let small = "y".repeat(100);
+        let result = fs_write(&sandbox, "boundary.txt", &small, false).unwrap();
+        assert!(result.ok);
+    }
+
+    #[test]
+    fn test_fs_write_overwrite_with_just_under_10_percent() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let large = "x".repeat(1000);
+        fs::write(dir.path().join("boundary2.txt"), &large).unwrap();
+
+        // 99 bytes = just under 10% of 1000 — should be rejected
+        let small = "y".repeat(99);
+        let result = fs_write(&sandbox, "boundary2.txt", &small, false);
+        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    }
+
+    #[test]
+    fn test_fs_write_truncation_warning_unbalanced_braces() {
+        let (sandbox, _dir) = create_test_sandbox();
+
+        let content = "fn main() { if true {";
+        let result = fs_write(&sandbox, "warn.txt", content, false).unwrap();
+        assert!(result.ok);
+        assert!(result.metadata.get("warning").is_some());
+    }
+
+    #[test]
+    fn test_fs_write_no_truncation_warning_balanced() {
+        let (sandbox, _dir) = create_test_sandbox();
+
+        let content = "fn main() { println!(); }";
+        let result = fs_write(&sandbox, "ok.txt", content, false).unwrap();
+        assert!(result.ok);
+        assert!(result.metadata.get("warning").is_none());
+    }
+
+    #[test]
+    fn test_fs_write_file_existed_metadata() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let result = fs_write(&sandbox, "new_file.txt", "initial", false).unwrap();
+        assert_eq!(result.metadata.get("file_existed").unwrap(), "false");
+
+        fs::write(dir.path().join("old_file.txt"), "original").unwrap();
+        let result = fs_write(&sandbox, "old_file.txt", "replaced!", false).unwrap();
+        assert_eq!(result.metadata.get("file_existed").unwrap(), "true");
+    }
+
+    #[test]
+    fn test_fs_write_deeply_nested_path() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let result = fs_write(&sandbox, "a/b/c/d/e/f/deep.txt", "deep", true).unwrap();
+        assert!(result.ok);
+        assert!(dir.path().join("a/b/c/d/e/f/deep.txt").exists());
+    }
 }

@@ -119,3 +119,104 @@ impl Scheduler {
             .is_some_and(|lock| lock.try_lock().is_err())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_reasoner::MockProvider;
+    use aura_store::RocksStore;
+
+    fn create_test_scheduler() -> (Scheduler, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test"));
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir);
+        (scheduler, dir)
+    }
+
+    #[test]
+    fn test_scheduler_creation() {
+        let (_scheduler, _dir) = create_test_scheduler();
+    }
+
+    #[tokio::test]
+    async fn test_schedule_agent_no_pending() {
+        let (scheduler, _dir) = create_test_scheduler();
+        let agent_id = AgentId::generate();
+        let result = scheduler.schedule_agent(agent_id).await.unwrap();
+        assert_eq!(result, 0, "No pending txs should process 0");
+    }
+
+    #[tokio::test]
+    async fn test_schedule_paused_agent_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test"));
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+
+        let agent_id = AgentId::generate();
+        store
+            .set_agent_status(agent_id, AgentStatus::Paused)
+            .unwrap();
+
+        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir);
+        let result = scheduler.schedule_agent(agent_id).await.unwrap();
+        assert_eq!(result, 0, "Paused agents should be skipped");
+    }
+
+    #[tokio::test]
+    async fn test_schedule_dead_agent_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test"));
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+
+        let agent_id = AgentId::generate();
+        store
+            .set_agent_status(agent_id, AgentStatus::Dead)
+            .unwrap();
+
+        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir);
+        let result = scheduler.schedule_agent(agent_id).await.unwrap();
+        assert_eq!(result, 0, "Dead agents should be skipped");
+    }
+
+    #[test]
+    fn test_is_agent_busy_false_by_default() {
+        let (scheduler, _dir) = create_test_scheduler();
+        let agent_id = AgentId::generate();
+        assert!(!scheduler.is_agent_busy(agent_id));
+    }
+
+    #[test]
+    fn test_get_lock_returns_same_lock_for_same_agent() {
+        let (scheduler, _dir) = create_test_scheduler();
+        let agent_id = AgentId::generate();
+        let lock1 = scheduler.get_lock(agent_id);
+        let lock2 = scheduler.get_lock(agent_id);
+        assert!(Arc::ptr_eq(&lock1, &lock2));
+    }
+
+    #[test]
+    fn test_get_lock_different_agents_different_locks() {
+        let (scheduler, _dir) = create_test_scheduler();
+        let a1 = AgentId::generate();
+        let a2 = AgentId::generate();
+        let lock1 = scheduler.get_lock(a1);
+        let lock2 = scheduler.get_lock(a2);
+        assert!(!Arc::ptr_eq(&lock1, &lock2));
+    }
+
+    #[test]
+    fn test_build_executor_router() {
+        let (scheduler, _dir) = create_test_scheduler();
+        let _router = scheduler.build_executor_router();
+    }
+}

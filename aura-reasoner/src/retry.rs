@@ -201,4 +201,126 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("402"));
         assert_eq!(provider.call_count(), 1);
     }
+
+    #[tokio::test]
+    async fn test_429_retries_then_succeeds() {
+        let provider = RetryTestProvider::new(vec![
+            "429 rate limited".to_string(),
+        ]);
+        let request = ModelRequest::builder("test-model", "system").build();
+        let config = RetryConfig {
+            base_backoff: Duration::from_millis(1),
+            ..RetryConfig::default()
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_ok());
+        assert_eq!(provider.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_529_retries_then_succeeds() {
+        let provider = RetryTestProvider::new(vec![
+            "529 overloaded".to_string(),
+        ]);
+        let request = ModelRequest::builder("test-model", "system").build();
+        let config = RetryConfig {
+            base_backoff: Duration::from_millis(1),
+            ..RetryConfig::default()
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_ok());
+        assert_eq!(provider.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_400_does_not_retry() {
+        let provider = RetryTestProvider::new(vec![
+            "400 bad request".to_string(),
+        ]);
+        let request = ModelRequest::builder("test-model", "system").build();
+        let config = RetryConfig {
+            base_backoff: Duration::from_millis(1),
+            ..RetryConfig::default()
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_err());
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_500_does_not_retry() {
+        let provider = RetryTestProvider::new(vec![
+            "500 internal server error".to_string(),
+        ]);
+        let request = ModelRequest::builder("test-model", "system").build();
+        let config = RetryConfig {
+            base_backoff: Duration::from_millis(1),
+            ..RetryConfig::default()
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_err());
+        assert_eq!(provider.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_max_retries_exceeded_429() {
+        let provider = RetryTestProvider::new(vec![
+            "429 rate limited".to_string(),
+            "429 rate limited".to_string(),
+            "429 rate limited".to_string(),
+            "429 rate limited".to_string(),
+        ]);
+        let request = ModelRequest::builder("test-model", "system").build();
+        let config = RetryConfig {
+            max_retries_per_model: 2,
+            base_backoff: Duration::from_millis(1),
+            ..RetryConfig::default()
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_err());
+        // 1 initial + 2 retries = 3 calls
+        assert_eq!(provider.call_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_chain_on_rate_limit_exhaustion() {
+        let provider = RetryTestProvider::new(vec![
+            "429 rate limited".to_string(),
+            "429 rate limited".to_string(),
+            "429 rate limited".to_string(),
+        ]);
+        let request = ModelRequest::builder("primary-model", "system").build();
+        let config = RetryConfig {
+            fallback_chain: vec!["fallback-model".to_string()],
+            max_retries_per_model: 2,
+            base_backoff: Duration::from_millis(1),
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_ok());
+        // 3 calls on primary (1 + 2 retries) + 1 on fallback = 4
+        assert_eq!(provider.call_count(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_zero_retries_still_tries_once() {
+        let provider = RetryTestProvider::new(vec![
+            "429 rate limited".to_string(),
+        ]);
+        let request = ModelRequest::builder("test-model", "system").build();
+        let config = RetryConfig {
+            max_retries_per_model: 0,
+            base_backoff: Duration::from_millis(1),
+            ..RetryConfig::default()
+        };
+
+        let result = complete_with_retry(&provider, request, &config).await;
+        assert!(result.is_err());
+        assert_eq!(provider.call_count(), 1);
+    }
 }

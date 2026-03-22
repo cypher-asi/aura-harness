@@ -136,6 +136,133 @@ mod option_hex_hash {
 mod tests {
     use super::*;
     use crate::ids::{ActionId, AgentId, ProcessId};
+    use proptest::prelude::*;
+
+    fn arb_agent_id() -> impl Strategy<Value = AgentId> {
+        any::<[u8; 32]>().prop_map(AgentId::new)
+    }
+
+    fn arb_action_id() -> impl Strategy<Value = ActionId> {
+        any::<[u8; 16]>().prop_map(ActionId::new)
+    }
+
+    fn arb_action_kind() -> impl Strategy<Value = ActionKind> {
+        prop_oneof![
+            Just(ActionKind::Reason),
+            Just(ActionKind::Memorize),
+            Just(ActionKind::Decide),
+            Just(ActionKind::Delegate),
+        ]
+    }
+
+    fn arb_effect_kind() -> impl Strategy<Value = EffectKind> {
+        prop_oneof![
+            Just(EffectKind::Proposal),
+            Just(EffectKind::Artifact),
+            Just(EffectKind::Belief),
+            Just(EffectKind::Agreement),
+        ]
+    }
+
+    fn arb_effect_status() -> impl Strategy<Value = EffectStatus> {
+        prop_oneof![
+            Just(EffectStatus::Committed),
+            Just(EffectStatus::Pending),
+            Just(EffectStatus::Failed),
+        ]
+    }
+
+    fn arb_tx_type() -> impl Strategy<Value = TransactionType> {
+        prop_oneof![
+            Just(TransactionType::UserPrompt),
+            Just(TransactionType::AgentMsg),
+            Just(TransactionType::Trigger),
+            Just(TransactionType::ActionResult),
+            Just(TransactionType::System),
+            Just(TransactionType::SessionStart),
+            Just(TransactionType::ToolProposal),
+            Just(TransactionType::ToolExecution),
+            Just(TransactionType::ProcessComplete),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_transaction_serde_roundtrip(
+            agent_id in arb_agent_id(),
+            tx_type in arb_tx_type(),
+            payload in proptest::collection::vec(any::<u8>(), 0..256),
+            ts_ms in any::<u64>(),
+        ) {
+            let hash = crate::ids::Hash::from_content(&payload);
+            let tx = Transaction::new(hash, agent_id, ts_ms, tx_type, payload);
+            let json = serde_json::to_string(&tx).unwrap();
+            let parsed: Transaction = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(tx, parsed);
+        }
+
+        #[test]
+        fn proptest_action_serde_roundtrip(
+            action_id in arb_action_id(),
+            kind in arb_action_kind(),
+            payload in proptest::collection::vec(any::<u8>(), 0..256),
+        ) {
+            let action = Action::new(action_id, kind, payload);
+            let json = serde_json::to_string(&action).unwrap();
+            let parsed: Action = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(action, parsed);
+        }
+
+        #[test]
+        fn proptest_effect_serde_roundtrip(
+            action_id in arb_action_id(),
+            kind in arb_effect_kind(),
+            status in arb_effect_status(),
+            payload in proptest::collection::vec(any::<u8>(), 0..256),
+        ) {
+            let effect = Effect::new(action_id, kind, status, payload);
+            let json = serde_json::to_string(&effect).unwrap();
+            let parsed: Effect = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(effect, parsed);
+        }
+
+        #[test]
+        fn proptest_proposal_serde_roundtrip(
+            kind in arb_action_kind(),
+            payload in proptest::collection::vec(any::<u8>(), 0..128),
+            has_rationale in any::<bool>(),
+            rationale in "[a-zA-Z0-9 ]{0,64}",
+        ) {
+            let mut proposal = Proposal::new(kind, payload);
+            if has_rationale {
+                proposal = proposal.with_rationale(rationale);
+            }
+            let json = serde_json::to_string(&proposal).unwrap();
+            let parsed: Proposal = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(proposal, parsed);
+        }
+
+        #[test]
+        fn proptest_record_entry_serde_roundtrip(
+            agent_id in arb_agent_id(),
+            seq in 1..1000u64,
+            context_hash in any::<[u8; 32]>(),
+            payload in proptest::collection::vec(any::<u8>(), 1..128),
+        ) {
+            let hash = crate::ids::Hash::from_content(&payload);
+            let tx = Transaction::new(hash, agent_id, 1000, TransactionType::UserPrompt, payload);
+            let entry = RecordEntry::builder(seq, tx)
+                .context_hash(context_hash)
+                .proposals(ProposalSet::new())
+                .decision(Decision::new())
+                .actions(vec![])
+                .effects(vec![])
+                .build();
+            let json = serde_json::to_string(&entry).unwrap();
+            let parsed: RecordEntry = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(entry, parsed);
+        }
+    }
 
     #[test]
     fn transaction_roundtrip() {

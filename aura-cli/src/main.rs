@@ -264,6 +264,122 @@ fn print_help() {
     println!();
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_prompt_text() {
+        match Command::parse("hello world") {
+            Command::Prompt(t) => assert_eq!(t, "hello world"),
+            _ => panic!("Expected Prompt"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_input() {
+        match Command::parse("") {
+            Command::Prompt(t) => assert!(t.is_empty()),
+            _ => panic!("Expected empty Prompt"),
+        }
+    }
+
+    #[test]
+    fn test_parse_whitespace_only() {
+        match Command::parse("   ") {
+            Command::Prompt(t) => assert!(t.is_empty()),
+            _ => panic!("Expected empty Prompt"),
+        }
+    }
+
+    #[test]
+    fn test_parse_status_commands() {
+        assert!(matches!(Command::parse("/status"), Command::Status));
+        assert!(matches!(Command::parse("/s"), Command::Status));
+        assert!(matches!(Command::parse("/STATUS"), Command::Status));
+    }
+
+    #[test]
+    fn test_parse_history_default() {
+        match Command::parse("/history") {
+            Command::History(n) => assert_eq!(n, 10),
+            _ => panic!("Expected History"),
+        }
+    }
+
+    #[test]
+    fn test_parse_history_with_arg() {
+        match Command::parse("/history 5") {
+            Command::History(n) => assert_eq!(n, 5),
+            _ => panic!("Expected History"),
+        }
+    }
+
+    #[test]
+    fn test_parse_history_shortcut() {
+        match Command::parse("/h 20") {
+            Command::History(n) => assert_eq!(n, 20),
+            _ => panic!("Expected History"),
+        }
+    }
+
+    #[test]
+    fn test_parse_history_invalid_arg() {
+        match Command::parse("/history abc") {
+            Command::History(n) => assert_eq!(n, 10),
+            _ => panic!("Expected History with default"),
+        }
+    }
+
+    #[test]
+    fn test_parse_approve_commands() {
+        assert!(matches!(Command::parse("/approve"), Command::Approve));
+        assert!(matches!(Command::parse("/yes"), Command::Approve));
+        assert!(matches!(Command::parse("/y"), Command::Approve));
+    }
+
+    #[test]
+    fn test_parse_deny_commands() {
+        assert!(matches!(Command::parse("/deny"), Command::Deny));
+        assert!(matches!(Command::parse("/no"), Command::Deny));
+        assert!(matches!(Command::parse("/n"), Command::Deny));
+    }
+
+    #[test]
+    fn test_parse_diff() {
+        assert!(matches!(Command::parse("/diff"), Command::Diff));
+        assert!(matches!(Command::parse("/d"), Command::Diff));
+    }
+
+    #[test]
+    fn test_parse_help() {
+        assert!(matches!(Command::parse("/help"), Command::Help));
+        assert!(matches!(Command::parse("/?"), Command::Help));
+    }
+
+    #[test]
+    fn test_parse_quit_commands() {
+        assert!(matches!(Command::parse("/quit"), Command::Quit));
+        assert!(matches!(Command::parse("/exit"), Command::Quit));
+        assert!(matches!(Command::parse("/q"), Command::Quit));
+    }
+
+    #[test]
+    fn test_parse_unknown_command() {
+        match Command::parse("/foobar") {
+            Command::Unknown(cmd) => assert_eq!(cmd, "foobar"),
+            _ => panic!("Expected Unknown"),
+        }
+    }
+
+    #[test]
+    fn test_parse_case_insensitive() {
+        assert!(matches!(Command::parse("/QUIT"), Command::Quit));
+        assert!(matches!(Command::parse("/Help"), Command::Help));
+        assert!(matches!(Command::parse("/DIFF"), Command::Diff));
+    }
+}
+
 fn banner() -> String {
     format!(
         r"

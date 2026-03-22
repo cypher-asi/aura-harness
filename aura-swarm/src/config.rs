@@ -246,4 +246,122 @@ mod tests {
 
         clear_swarm_env_vars();
     }
+
+    #[test]
+    fn test_reasoner_url_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("REASONER_URL", "http://custom:5000");
+        let config = SwarmConfig::from_env();
+        assert_eq!(config.reasoner_url, "http://custom:5000");
+
+        clear_swarm_env_vars();
+    }
+
+    #[test]
+    fn test_reasoner_timeout_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("REASONER_TIMEOUT_MS", "60000");
+        let config = SwarmConfig::from_env();
+        assert_eq!(config.reasoner_timeout_ms, 60_000);
+
+        std::env::set_var("REASONER_TIMEOUT_MS", "not_a_number");
+        let config = SwarmConfig::from_env();
+        assert_eq!(config.reasoner_timeout_ms, 30_000);
+
+        clear_swarm_env_vars();
+    }
+
+    #[test]
+    fn test_bind_addr_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("BIND_ADDR", "0.0.0.0:3000");
+        let config = SwarmConfig::from_env();
+        assert_eq!(config.bind_addr, "0.0.0.0:3000");
+
+        clear_swarm_env_vars();
+    }
+
+    #[test]
+    fn test_enable_cmd_tools_parsing() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("ENABLE_CMD_TOOLS", "true");
+        let config = SwarmConfig::from_env();
+        assert!(config.enable_cmd_tools);
+
+        std::env::set_var("ENABLE_CMD_TOOLS", "1");
+        let config = SwarmConfig::from_env();
+        assert!(config.enable_cmd_tools);
+
+        std::env::set_var("ENABLE_CMD_TOOLS", "false");
+        let config = SwarmConfig::from_env();
+        assert!(!config.enable_cmd_tools);
+
+        std::env::set_var("ENABLE_CMD_TOOLS", "anything_else");
+        let config = SwarmConfig::from_env();
+        assert!(!config.enable_cmd_tools);
+
+        clear_swarm_env_vars();
+    }
+
+    #[test]
+    fn test_allowed_commands_empty_string() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("ALLOWED_COMMANDS", "");
+        let config = SwarmConfig::from_env();
+        assert_eq!(config.allowed_commands, vec![""]);
+
+        clear_swarm_env_vars();
+    }
+
+    #[test]
+    fn test_allowed_commands_single_command() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("ALLOWED_COMMANDS", "cargo");
+        let config = SwarmConfig::from_env();
+        assert_eq!(config.allowed_commands, vec!["cargo"]);
+
+        clear_swarm_env_vars();
+    }
+
+    #[test]
+    fn test_full_env_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_swarm_env_vars();
+
+        std::env::set_var("DATA_DIR", "/opt/aura");
+        std::env::set_var("BIND_ADDR", "0.0.0.0:4000");
+        std::env::set_var("SYNC_WRITES", "true");
+        std::env::set_var("RECORD_WINDOW_SIZE", "200");
+        std::env::set_var("REASONER_URL", "http://reasoner:8080");
+        std::env::set_var("REASONER_TIMEOUT_MS", "45000");
+        std::env::set_var("ENABLE_FS_TOOLS", "false");
+        std::env::set_var("ENABLE_CMD_TOOLS", "true");
+        std::env::set_var("ALLOWED_COMMANDS", "git,cargo,npm");
+
+        let config = SwarmConfig::from_env();
+
+        assert_eq!(config.data_dir, PathBuf::from("/opt/aura"));
+        assert_eq!(config.bind_addr, "0.0.0.0:4000");
+        assert!(config.sync_writes);
+        assert_eq!(config.record_window_size, 200);
+        assert_eq!(config.reasoner_url, "http://reasoner:8080");
+        assert_eq!(config.reasoner_timeout_ms, 45_000);
+        assert!(!config.enable_fs_tools);
+        assert!(config.enable_cmd_tools);
+        assert_eq!(config.allowed_commands, vec!["git", "cargo", "npm"]);
+
+        clear_swarm_env_vars();
+    }
 }

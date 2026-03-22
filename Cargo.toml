@@ -119,6 +119,7 @@ dirs = "5.0"
 proptest = { workspace = true }
 tempfile = { workspace = true }
 bytes = { workspace = true }
+futures = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

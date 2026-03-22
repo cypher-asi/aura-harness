@@ -210,4 +210,93 @@ mod tests {
         let result = sandbox.resolve_existing("nonexistent.txt");
         assert!(matches!(result, Err(ToolError::PathNotFound(_))));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_pointing_outside_sandbox_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let (sandbox, dir) = create_sandbox();
+
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+
+        symlink(outside.path().join("secret.txt"), dir.path().join("escape_link")).unwrap();
+
+        let result = sandbox.resolve_existing("escape_link");
+        assert!(
+            matches!(result, Err(ToolError::SandboxViolation { .. })),
+            "Symlink to outside should be blocked, got: {result:?}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_symlink_directory_junction_outside_blocked() {
+        // On Windows, directory junctions don't require elevated privileges
+        let (sandbox, dir) = create_sandbox();
+
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+
+        // Create a junction point (requires std::process::Command)
+        let junction_path = dir.path().join("escape_junction");
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &junction_path.to_string_lossy(),
+                &outside.path().to_string_lossy(),
+            ])
+            .output();
+
+        if let Ok(output) = status {
+            if output.status.success() {
+                let result = sandbox.resolve_existing("escape_junction/secret.txt");
+                assert!(
+                    matches!(result, Err(ToolError::SandboxViolation { .. })),
+                    "Junction to outside should be blocked, got: {result:?}"
+                );
+            }
+            // If mklink fails (e.g. permissions), skip the test gracefully
+        }
+    }
+
+    #[test]
+    fn test_resolve_new_allows_nonexistent_path() {
+        let (sandbox, _dir) = create_sandbox();
+
+        let result = sandbox.resolve_new("brand/new/file.txt");
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert!(resolved.starts_with(sandbox.root()));
+    }
+
+    #[test]
+    fn test_resolve_new_blocks_escape() {
+        let (sandbox, _dir) = create_sandbox();
+
+        let result = sandbox.resolve_new("../../etc/passwd");
+        assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
+    }
+
+    #[test]
+    fn test_sandbox_root_is_canonical() {
+        let dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::new(dir.path()).unwrap();
+        let root = sandbox.root();
+        // Canonical path should not contain "." or ".."
+        for component in root.components() {
+            assert_ne!(component, std::path::Component::CurDir);
+            assert_ne!(component, std::path::Component::ParentDir);
+        }
+    }
+
+    #[test]
+    fn test_sandbox_clone() {
+        let (sandbox, _dir) = create_sandbox();
+        let cloned = sandbox.clone();
+        assert_eq!(sandbox.root(), cloned.root());
+    }
 }

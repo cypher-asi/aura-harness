@@ -1308,6 +1308,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_tool_cache_hit_skips_execution() {
+        let executor = MockExecutor {
+            results: vec![ToolCallResult::success("placeholder", "cached content")],
+        };
+
+        let mut provider_builder = MockProvider::new();
+        // Two identical fs_read calls then done
+        provider_builder = provider_builder.with_response(MockResponse::tool_use(
+            "t1",
+            "fs_read",
+            serde_json::json!({"path": "same.txt"}),
+        ));
+        provider_builder = provider_builder.with_response(MockResponse::tool_use(
+            "t2",
+            "fs_read",
+            serde_json::json!({"path": "same.txt"}),
+        ));
+        provider_builder = provider_builder.with_response(MockResponse::text("Done"));
+
+        let config = AgentLoopConfig {
+            system_prompt: "test".to_string(),
+            ..AgentLoopConfig::default()
+        };
+        let agent = AgentLoop::new(config);
+        let messages = vec![Message::user("read same file twice")];
+        let tools = vec![ToolDefinition::new(
+            "fs_read",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        )];
+
+        let result = agent
+            .run(&provider_builder, &executor, messages, tools)
+            .await
+            .unwrap();
+        assert_eq!(result.iterations, 3);
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_stops_loop() {
+        let executor = MockExecutor { results: vec![] };
+        let provider = MockProvider::new().with_default_response(MockResponse::text("looping"));
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let config = AgentLoopConfig {
+            max_iterations: 10,
+            system_prompt: "test".to_string(),
+            ..AgentLoopConfig::default()
+        };
+        let agent = AgentLoop::new(config);
+        let messages = vec![Message::user("go")];
+
+        let result = agent
+            .run_with_events(&provider, &executor, messages, vec![], None, Some(cancel))
+            .await
+            .unwrap();
+
+        assert_eq!(result.iterations, 0, "Cancelled before first iteration");
+    }
+
+    #[tokio::test]
+    async fn test_budget_exhaustion_stops_loop() {
+        let executor = MockExecutor { results: vec![] };
+        let provider = MockProvider::new().with_default_response(MockResponse::text("thinking..."));
+
+        let config = AgentLoopConfig {
+            max_iterations: 3,
+            credit_budget: Some(100),
+            system_prompt: "test".to_string(),
+            ..AgentLoopConfig::default()
+        };
+        let agent = AgentLoop::new(config);
+        let messages = vec![Message::user("go")];
+
+        let result = agent
+            .run(&provider, &executor, messages, vec![])
+            .await
+            .unwrap();
+
+        assert!(
+            result.timed_out || result.iterations <= 3,
+            "Should stop from budget or max_iterations"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_loop_flag_terminates() {
+        let executor = MockExecutor {
+            results: vec![ToolCallResult {
+                tool_use_id: "placeholder".to_string(),
+                content: "task completed".to_string(),
+                is_error: false,
+                stop_loop: true,
+            }],
+        };
+
+        let provider = MockProvider::new()
+            .with_response(MockResponse::tool_use(
+                "t1",
+                "task_done",
+                serde_json::json!({}),
+            ))
+            .with_response(MockResponse::text("Should not reach"));
+
+        let config = AgentLoopConfig {
+            system_prompt: "test".to_string(),
+            ..AgentLoopConfig::default()
+        };
+        let agent = AgentLoop::new(config);
+        let messages = vec![Message::user("finish")];
+        let tools = vec![ToolDefinition::new(
+            "task_done",
+            "Signal completion",
+            serde_json::json!({"type": "object"}),
+        )];
+
+        let result = agent
+            .run(&provider, &executor, messages, tools)
+            .await
+            .unwrap();
+        assert_eq!(result.iterations, 1, "Should stop after stop_loop tool");
+    }
+
+    #[tokio::test]
     async fn test_no_exploration_compact_when_low() {
         let long_content = "y".repeat(3000);
         let executor = MockExecutor {

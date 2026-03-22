@@ -710,4 +710,101 @@ mod tests {
         let stderr_text = String::from_utf8_lossy(&result.stderr);
         assert!(stderr_text.contains("error message"));
     }
+
+    // ========================================================================
+    // truncate_output boundary tests
+    // ========================================================================
+
+    #[test]
+    fn test_truncate_output_under_limit() {
+        let s = "short";
+        let result = truncate_output(s, 100);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn test_truncate_output_exact_limit() {
+        let s = "x".repeat(STDOUT_TRUNCATE_LIMIT);
+        let result = truncate_output(&s, STDOUT_TRUNCATE_LIMIT);
+        assert_eq!(result.len(), STDOUT_TRUNCATE_LIMIT);
+        assert!(!result.contains("truncated"));
+    }
+
+    #[test]
+    fn test_truncate_output_over_limit() {
+        let s = "x".repeat(STDOUT_TRUNCATE_LIMIT + 500);
+        let result = truncate_output(&s, STDOUT_TRUNCATE_LIMIT);
+        assert!(result.contains("truncated"));
+        assert!(result.len() <= STDOUT_TRUNCATE_LIMIT + 100);
+    }
+
+    #[test]
+    fn test_truncate_output_multibyte_boundary() {
+        // 3-byte UTF-8 char: €
+        let s = "€".repeat(4000);
+        let result = truncate_output(&s, 10);
+        assert!(result.is_char_boundary(result.find('\n').unwrap_or(result.len())));
+    }
+
+    #[test]
+    fn test_truncate_output_empty() {
+        let result = truncate_output("", 100);
+        assert_eq!(result, "");
+    }
+
+    // ========================================================================
+    // check_command_allowlist tests
+    // ========================================================================
+
+    #[test]
+    fn test_command_allowlist_empty_allows_all() {
+        assert!(check_command_allowlist("anything", &[]).is_ok());
+    }
+
+    #[test]
+    fn test_command_allowlist_blocks_unlisted() {
+        let allowlist = vec!["echo".to_string(), "ls".to_string()];
+        let result = check_command_allowlist("rm -rf /", &allowlist);
+        assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+    }
+
+    #[test]
+    fn test_command_allowlist_allows_listed() {
+        let allowlist = vec!["echo".to_string(), "ls".to_string()];
+        assert!(check_command_allowlist("echo hello", &allowlist).is_ok());
+        assert!(check_command_allowlist("ls -la", &allowlist).is_ok());
+    }
+
+    #[test]
+    fn test_command_allowlist_extracts_first_token() {
+        let allowlist = vec!["cargo".to_string()];
+        assert!(check_command_allowlist("cargo build --release", &allowlist).is_ok());
+    }
+
+    #[test]
+    fn test_output_to_tool_result_exit_code_metadata() {
+        #[cfg(windows)]
+        let status = {
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/C", "exit 0"])
+                .output()
+                .unwrap();
+            output.status
+        };
+
+        #[cfg(not(windows))]
+        let status = {
+            let output = std::process::Command::new("true").output().unwrap();
+            output.status
+        };
+
+        let output = std::process::Output {
+            status,
+            stdout: b"ok".to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let result = output_to_tool_result(output).unwrap();
+        assert_eq!(result.metadata.get("exit_code").unwrap(), "0");
+    }
 }

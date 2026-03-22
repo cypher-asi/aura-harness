@@ -386,4 +386,113 @@ mod tests {
         assert!(updated.contains("replaced"));
         assert!(!updated.contains("line2"));
     }
+
+    #[test]
+    fn test_fs_edit_empty_file_text_not_found() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        fs::write(dir.path().join("empty.txt"), "").unwrap();
+
+        let result = fs_edit(&sandbox, "empty.txt", "anything", "new", false);
+        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    }
+
+    #[test]
+    fn test_fs_edit_old_text_with_regex_special_chars() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let content = "value = arr[0].map(|x| x + 1);";
+        fs::write(dir.path().join("regex_chars.rs"), content).unwrap();
+
+        let result = fs_edit(
+            &sandbox,
+            "regex_chars.rs",
+            "arr[0].map(|x| x + 1)",
+            "arr[0].filter(|x| x > 0)",
+            false,
+        )
+        .unwrap();
+        assert!(result.ok);
+
+        let updated = fs::read_to_string(dir.path().join("regex_chars.rs")).unwrap();
+        assert_eq!(updated, "value = arr[0].filter(|x| x > 0);");
+    }
+
+    #[test]
+    fn test_fs_edit_old_text_with_parentheses_and_braces() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let content = "fn foo() { bar(baz{}) }";
+        fs::write(dir.path().join("parens.txt"), content).unwrap();
+
+        let result = fs_edit(
+            &sandbox,
+            "parens.txt",
+            "bar(baz{})",
+            "qux()",
+            false,
+        )
+        .unwrap();
+        assert!(result.ok);
+
+        let updated = fs::read_to_string(dir.path().join("parens.txt")).unwrap();
+        assert_eq!(updated, "fn foo() { qux() }");
+    }
+
+    #[test]
+    fn test_fs_edit_nonexistent_file() {
+        let (sandbox, _dir) = create_test_sandbox();
+
+        let result = fs_edit(&sandbox, "nope.txt", "old", "new", false);
+        assert!(matches!(
+            result,
+            Err(ToolError::PathNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn test_fs_edit_replace_all_zero_occurrences() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        fs::write(dir.path().join("none.txt"), "hello world").unwrap();
+
+        let result = fs_edit(&sandbox, "none.txt", "zzz", "xxx", true);
+        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    }
+
+    #[test]
+    fn test_fs_edit_single_char_replacement() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        fs::write(dir.path().join("char.txt"), "a+b=c").unwrap();
+
+        let result = fs_edit(&sandbox, "char.txt", "+", "-", false).unwrap();
+        assert!(result.ok);
+
+        let updated = fs::read_to_string(dir.path().join("char.txt")).unwrap();
+        assert_eq!(updated, "a-b=c");
+    }
+
+    #[test]
+    fn test_fs_edit_multiline_replacement_preserves_context() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let content = "header\nfn old() {\n    body();\n}\nfooter\n";
+        fs::write(dir.path().join("multi.rs"), content).unwrap();
+
+        let result = fs_edit(
+            &sandbox,
+            "multi.rs",
+            "fn old() {\n    body();\n}",
+            "fn new() {\n    new_body();\n}",
+            false,
+        )
+        .unwrap();
+        assert!(result.ok);
+
+        let updated = fs::read_to_string(dir.path().join("multi.rs")).unwrap();
+        assert!(updated.starts_with("header\n"));
+        assert!(updated.ends_with("footer\n"));
+        assert!(updated.contains("fn new()"));
+    }
 }

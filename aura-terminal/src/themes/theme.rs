@@ -335,4 +335,56 @@ mod tests {
         let style = BorderStyle::default();
         assert_eq!(style, BorderStyle::Rounded);
     }
+
+    #[test]
+    fn test_switch_theme_changes_colors() {
+        let cyber = Theme::cyber();
+        let matrix = Theme::matrix();
+        assert_ne!(cyber.colors.primary, matrix.colors.primary);
+        assert_ne!(cyber.colors.background, matrix.colors.background);
+    }
+
+    #[test]
+    fn test_switch_theme_preserves_builder_settings() {
+        let theme = Theme::matrix()
+            .with_border_style(BorderStyle::Heavy)
+            .with_timestamps(false);
+        assert_eq!(theme.name, "matrix");
+        assert_eq!(theme.border_style, BorderStyle::Heavy);
+        assert!(!theme.show_timestamps);
+    }
+
+    #[test]
+    fn test_all_themes_have_distinct_names() {
+        let names: Vec<String> = ["cyber", "matrix", "synthwave", "minimal"]
+            .iter()
+            .map(|n| Theme::by_name(n).name)
+            .collect();
+        let unique: std::collections::HashSet<&str> = names.iter().map(|s| s.as_str()).collect();
+        assert_eq!(names.len(), unique.len());
+    }
+
+    #[test]
+    fn test_minimal_theme_colors() {
+        let theme = Theme::minimal();
+        assert_eq!(theme.colors.foreground, Color::White);
+        assert_eq!(theme.colors.success, Color::Green);
+        assert_eq!(theme.colors.error, Color::Red);
+    }
+
+    #[test]
+    fn test_border_style_roundtrip_serde() {
+        let styles = [
+            BorderStyle::Plain,
+            BorderStyle::Double,
+            BorderStyle::Rounded,
+            BorderStyle::Heavy,
+            BorderStyle::Ascii,
+        ];
+        for style in styles {
+            let json = serde_json::to_string(&style).unwrap();
+            let back: BorderStyle = serde_json::from_str(&json).unwrap();
+            assert_eq!(style, back);
+        }
+    }
 }

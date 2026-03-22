@@ -674,4 +674,217 @@ mod tests {
         assert_eq!(response.usage.cache_read_input_tokens, Some(50));
         assert_eq!(response.model_used, "claude");
     }
+
+    // ========================================================================
+    // StreamAccumulator — interleaved content / tool_use
+    // ========================================================================
+
+    #[test]
+    fn test_stream_accumulator_interleaved_text_tool_text() {
+        let mut acc = StreamAccumulator::new();
+
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Text,
+        });
+        acc.process(&StreamEvent::TextDelta {
+            text: "Before tool. ".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 1,
+            content_type: StreamContentType::ToolUse {
+                id: "t1".to_string(),
+                name: "fs_read".to_string(),
+            },
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#"{"path":"a.txt"}"#.to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 1 });
+
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 2,
+            content_type: StreamContentType::ToolUse {
+                id: "t2".to_string(),
+                name: "fs_ls".to_string(),
+            },
+        });
+        acc.process(&StreamEvent::InputJsonDelta {
+            partial_json: r#"{"path":"."}"#.to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 2 });
+
+        assert_eq!(acc.text_content, "Before tool. ");
+        assert_eq!(acc.tool_uses.len(), 2);
+        assert_eq!(acc.tool_uses[0].id, "t1");
+        assert_eq!(acc.tool_uses[1].id, "t2");
+    }
+
+    #[test]
+    fn test_stream_accumulator_no_events() {
+        let acc = StreamAccumulator::new();
+        assert!(acc.message_id.is_empty());
+        assert!(acc.text_content.is_empty());
+        assert!(acc.tool_uses.is_empty());
+        assert!(acc.stop_reason.is_none());
+        assert_eq!(acc.output_tokens, 0);
+    }
+
+    #[test]
+    fn test_stream_accumulator_finalize_uses_fallback_input_tokens() {
+        let acc = StreamAccumulator::new();
+        let response = acc.into_response(999, 50).unwrap();
+        assert_eq!(response.usage.input_tokens, 999);
+        assert_eq!(response.stop_reason, StopReason::EndTurn);
+        assert!(response.message.content.is_empty());
+    }
+
+    #[test]
+    fn test_stream_accumulator_signature_appends() {
+        let mut acc = StreamAccumulator::new();
+        acc.process(&StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Thinking,
+        });
+        acc.process(&StreamEvent::SignatureDelta {
+            signature: "part1".to_string(),
+        });
+        acc.process(&StreamEvent::SignatureDelta {
+            signature: "part2".to_string(),
+        });
+        acc.process(&StreamEvent::ContentBlockStop { index: 0 });
+        assert_eq!(acc.thinking_signature, Some("part1part2".to_string()));
+    }
+
+    // ========================================================================
+    // ContentBlock — serialization round-trips
+    // ========================================================================
+
+    #[test]
+    fn test_content_block_thinking_serialization_round_trip() {
+        let block = ContentBlock::Thinking {
+            thinking: "hmm".to_string(),
+            signature: Some("sig".to_string()),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let parsed: ContentBlock = serde_json::from_str(&json).unwrap();
+        match parsed {
+            ContentBlock::Thinking { thinking, signature } => {
+                assert_eq!(thinking, "hmm");
+                assert_eq!(signature, Some("sig".to_string()));
+            }
+            _ => panic!("Expected Thinking"),
+        }
+    }
+
+    #[test]
+    fn test_content_block_thinking_without_signature_skips_field() {
+        let block = ContentBlock::Thinking {
+            thinking: "hmm".to_string(),
+            signature: None,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(!json.contains("signature"));
+    }
+
+    #[test]
+    fn test_content_block_tool_use_serialization_round_trip() {
+        let block = ContentBlock::tool_use("id1", "cmd_run", serde_json::json!({"cmd": "ls"}));
+        let json = serde_json::to_string(&block).unwrap();
+        let parsed: ContentBlock = serde_json::from_str(&json).unwrap();
+        match parsed {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "id1");
+                assert_eq!(name, "cmd_run");
+                assert_eq!(input["cmd"], "ls");
+            }
+            _ => panic!("Expected ToolUse"),
+        }
+    }
+
+    #[test]
+    fn test_content_block_tool_result_serialization() {
+        let block = ContentBlock::tool_result(
+            "tu_1",
+            ToolResultContent::text("file contents here"),
+            false,
+        );
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("tool_result"));
+        assert!(json.contains("tu_1"));
+    }
+
+    // ========================================================================
+    // ModelRequest builder — additional edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_model_request_builder_with_thinking() {
+        use request::ThinkingConfig;
+
+        let request = ModelRequest::builder("model", "system")
+            .thinking(ThinkingConfig { budget_tokens: 4096 })
+            .build();
+
+        assert!(request.thinking.is_some());
+        assert_eq!(request.thinking.unwrap().budget_tokens, 4096);
+    }
+
+    #[test]
+    fn test_model_request_builder_with_auth_token() {
+        let request = ModelRequest::builder("model", "system")
+            .auth_token(Some("tok_abc".to_string()))
+            .build();
+
+        assert_eq!(request.auth_token, Some("tok_abc".to_string()));
+    }
+
+    #[test]
+    fn test_model_request_builder_multiple_messages() {
+        let request = ModelRequest::builder("model", "system")
+            .message(Message::user("first"))
+            .message(Message::assistant("response"))
+            .message(Message::user("second"))
+            .build();
+
+        assert_eq!(request.messages.len(), 3);
+        assert_eq!(request.messages[0].role, Role::User);
+        assert_eq!(request.messages[1].role, Role::Assistant);
+        assert_eq!(request.messages[2].role, Role::User);
+    }
+
+    // ========================================================================
+    // StopReason serialization
+    // ========================================================================
+
+    #[test]
+    fn test_stop_reason_serialization() {
+        let reasons = [
+            (StopReason::EndTurn, "\"end_turn\""),
+            (StopReason::ToolUse, "\"tool_use\""),
+            (StopReason::MaxTokens, "\"max_tokens\""),
+            (StopReason::StopSequence, "\"stop_sequence\""),
+        ];
+        for (reason, expected) in reasons {
+            let json = serde_json::to_string(&reason).unwrap();
+            assert_eq!(json, expected);
+            let parsed: StopReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, reason);
+        }
+    }
+
+    // ========================================================================
+    // Role serialization
+    // ========================================================================
+
+    #[test]
+    fn test_role_serialization() {
+        assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
+        assert_eq!(
+            serde_json::to_string(&Role::Assistant).unwrap(),
+            "\"assistant\""
+        );
+    }
 }

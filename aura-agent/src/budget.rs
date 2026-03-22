@@ -187,4 +187,61 @@ mod tests {
         assert!(!should_stop_for_budget(10, 25, 1000, 0, None));
         assert!(should_stop_for_budget(5, 25, 1000, 9500, Some(10000)));
     }
+
+    #[test]
+    fn test_should_stop_at_exact_max_iterations() {
+        assert!(should_stop_for_budget(24, 25, 0, 0, None));
+        assert!(!should_stop_for_budget(23, 25, 0, 0, None));
+    }
+
+    #[test]
+    fn test_should_stop_credit_budget_exact_boundary() {
+        assert!(should_stop_for_budget(1, 25, 500, 9600, Some(10000)));
+        assert!(!should_stop_for_budget(1, 25, 500, 9400, Some(10000)));
+    }
+
+    #[test]
+    fn test_should_stop_no_budget_only_iterations() {
+        assert!(!should_stop_for_budget(0, 25, 0, 0, None));
+        assert!(should_stop_for_budget(24, 25, 0, 999_999, None));
+    }
+
+    #[test]
+    fn test_budget_warnings_idempotent() {
+        let mut budget = BudgetState::default();
+        let msg1 = check_budget_warning(&mut budget, 0.31, true);
+        assert!(msg1.is_some());
+        let msg2 = check_budget_warning(&mut budget, 0.35, true);
+        assert!(msg2.is_none(), "Should not repeat 30% warning");
+    }
+
+    #[test]
+    fn test_budget_warning_60_overrides_30() {
+        let mut budget = BudgetState::default();
+        let msg = check_budget_warning(&mut budget, 0.65, true);
+        assert!(msg.is_some());
+        assert!(msg.unwrap().contains("60%"));
+    }
+
+    #[test]
+    fn test_budget_no_warning_below_30() {
+        let mut budget = BudgetState::default();
+        let msg = check_budget_warning(&mut budget, 0.25, true);
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_exploration_warning_small_allowance() {
+        let mut state = ExplorationState::default();
+        let msg = check_exploration_warning(&mut state, 2);
+        assert!(msg.is_none(), "Small allowance should not trigger warnings");
+    }
+
+    #[test]
+    fn test_exploration_state_defaults() {
+        let state = ExplorationState::default();
+        assert_eq!(state.count, 0);
+        assert!(!state.warned_mild);
+        assert!(!state.warned_strong);
+    }
 }

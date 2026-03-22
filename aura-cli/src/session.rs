@@ -238,6 +238,7 @@ mod tests {
         std::env::remove_var("AURA_MAX_TOOL_CALLS_PER_STEP");
         std::env::remove_var("AURA_MODEL_TIMEOUT_MS");
         std::env::remove_var("AURA_ANTHROPIC_MODEL");
+        std::env::remove_var("AURA_ROUTER_JWT");
     }
 
     #[test]
@@ -342,6 +343,61 @@ mod tests {
             config.loop_config.max_iterations,
             default_config.max_iterations
         );
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_jwt_token() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+
+        std::env::set_var("AURA_ROUTER_JWT", "my-secret-jwt");
+
+        let config = SessionConfig::from_env();
+        assert_eq!(
+            config.loop_config.auth_token.as_deref(),
+            Some("my-secret-jwt")
+        );
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_no_jwt_by_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+
+        let config = SessionConfig::from_env();
+        assert!(config.loop_config.auth_token.is_none());
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_workspace_inherits_data_dir() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+
+        std::env::set_var("AURA_DATA_DIR", "/mydata");
+
+        let config = SessionConfig::from_env();
+        assert_eq!(config.workspace_root, PathBuf::from("/mydata/workspaces"));
+
+        clear_all_env_vars();
+    }
+
+    #[test]
+    fn test_session_config_workspace_override_independent() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_all_env_vars();
+
+        std::env::set_var("AURA_DATA_DIR", "/mydata");
+        std::env::set_var("AURA_WORKSPACE_ROOT", "/other/ws");
+
+        let config = SessionConfig::from_env();
+        assert_eq!(config.data_dir, PathBuf::from("/mydata"));
+        assert_eq!(config.workspace_root, PathBuf::from("/other/ws"));
 
         clear_all_env_vars();
     }

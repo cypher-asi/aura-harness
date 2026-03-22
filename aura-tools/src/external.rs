@@ -171,4 +171,69 @@ mod tests {
         assert_eq!(tool_def.description, "Search external index");
         assert!(tool_def.input_schema["properties"]["query"].is_object());
     }
+
+    #[test]
+    fn test_external_tool_with_client_constructor() {
+        let def = ExternalToolDefinition {
+            name: "custom_client_tool".into(),
+            description: "Tool with custom client".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            callback_url: "http://localhost:9999/callback".into(),
+        };
+
+        let client = reqwest::Client::new();
+        let tool = ExternalTool::with_client(def, client);
+        assert_eq!(tool.name(), "custom_client_tool");
+    }
+
+    #[test]
+    fn test_external_tool_definition_cache_control_is_none() {
+        let def = ExternalToolDefinition {
+            name: "no_cache".into(),
+            description: "No cache".into(),
+            input_schema: serde_json::json!({}),
+            callback_url: "http://localhost/tool".into(),
+        };
+
+        let tool = ExternalTool::new(def).unwrap();
+        assert!(tool.definition().cache_control.is_none());
+    }
+
+    #[test]
+    fn test_external_tool_response_deserialization_defaults() {
+        let json = r#"{"output": "hello"}"#;
+        let resp: ExternalToolResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.ok); // default_true
+        assert!(resp.error.is_none());
+        assert_eq!(resp.output, "hello");
+    }
+
+    #[test]
+    fn test_external_tool_response_deserialization_failure() {
+        let json = r#"{"ok": false, "error": "bad input"}"#;
+        let resp: ExternalToolResponse = serde_json::from_str(json).unwrap();
+        assert!(!resp.ok);
+        assert_eq!(resp.error.as_deref(), Some("bad input"));
+        assert!(resp.output.is_empty());
+    }
+
+    #[test]
+    fn test_external_tool_response_deserialization_empty() {
+        let json = r#"{}"#;
+        let resp: ExternalToolResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.ok);
+        assert!(resp.output.is_empty());
+        assert!(resp.error.is_none());
+    }
+
+    #[test]
+    fn test_external_tool_request_serialization() {
+        let req = ExternalToolRequest {
+            tool_name: "my_tool".into(),
+            input: serde_json::json!({"key": "value"}),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["tool_name"], "my_tool");
+        assert_eq!(json["input"]["key"], "value");
+    }
 }
