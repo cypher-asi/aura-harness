@@ -251,6 +251,15 @@ pub enum StreamCallbackEvent {
         /// Tool name
         name: String,
     },
+    /// Incremental snapshot of tool input JSON as it streams in.
+    ToolInputSnapshot {
+        /// Tool use ID
+        id: String,
+        /// Tool name
+        name: String,
+        /// Accumulated input JSON so far (may be partial/incomplete)
+        input: String,
+    },
     /// A tool use completed
     ToolComplete {
         /// Tool name
@@ -921,6 +930,9 @@ where
                         StreamEvent::TextDelta { text } => {
                             self.emit_stream_event(StreamCallbackEvent::TextDelta(text.clone()));
                         }
+                        StreamEvent::InputJsonDelta { .. } => {
+                            // Processed after accumulator.process() below
+                        }
                         StreamEvent::Error { message } => {
                             error!(error = %message, "Stream error from provider");
                             let (code, recoverable) = classify_llm_error(message);
@@ -935,6 +947,16 @@ where
                     }
 
                     accumulator.process(&event);
+
+                    if matches!(event, StreamEvent::InputJsonDelta { .. }) {
+                        if let Some(tool) = &accumulator.current_tool_use {
+                            self.emit_stream_event(StreamCallbackEvent::ToolInputSnapshot {
+                                id: tool.id.clone(),
+                                name: tool.name.clone(),
+                                input: tool.input_json.clone(),
+                            });
+                        }
+                    }
 
                     if matches!(event, StreamEvent::MessageStop) {
                         break;
