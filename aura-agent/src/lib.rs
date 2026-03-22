@@ -48,3 +48,6 @@ pub use types::{
     AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo,
     ToolCallResult,
 };
+
+#[cfg(test)]
+mod event_sequence_tests;
