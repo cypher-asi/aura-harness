@@ -62,6 +62,10 @@ impl SessionConfig {
             loop_config.model = v;
         }
 
+        if let Ok(jwt) = std::env::var("AURA_ROUTER_JWT") {
+            loop_config.auth_token = Some(jwt);
+        }
+
         Self {
             data_dir,
             workspace_root,
@@ -122,16 +126,16 @@ impl Session {
             match config.provider.as_str() {
                 "mock" => {
                     let p = MockProvider::simple_response(
-                        "I'm a mock assistant. Real model integration requires ANTHROPIC_API_KEY.",
+                        "I'm a mock assistant. Set AURA_LLM_ROUTING and required credentials.",
                     );
                     (Box::new(p), "mock")
                 }
                 _ => match AnthropicProvider::from_env() {
                     Ok(p) => (Box::new(p), "anthropic"),
                     Err(e) => {
-                        tracing::warn!("Failed to create Anthropic provider: {e}. Using mock.");
+                        tracing::warn!("LLM provider not configured: {e}. Using mock.");
                         let p = MockProvider::simple_response(
-                            "Mock mode: Set ANTHROPIC_API_KEY to use real model.",
+                            "Mock mode: Set AURA_LLM_ROUTING and required credentials.",
                         );
                         (Box::new(p), "mock (fallback)")
                     }
