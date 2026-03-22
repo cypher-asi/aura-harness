@@ -23,6 +23,7 @@
 
 mod anthropic;
 mod client;
+mod error;
 mod mock;
 mod request;
 mod retry;
@@ -30,6 +31,7 @@ pub mod types;
 
 pub use anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
 pub use client::HttpReasoner;
+pub use error::ReasonerError;
 pub use mock::{MockProvider, MockReasoner, MockResponse};
 pub use request::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use retry::{complete_with_retry, RetryConfig};

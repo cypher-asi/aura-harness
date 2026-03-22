@@ -110,6 +110,7 @@ impl Scheduler {
     /// Check if an agent is currently being processed.
     ///
     /// Returns `true` if the agent's lock is held (processing in progress).
+    /// Retained for use by future status/health endpoints.
     #[must_use]
     #[allow(dead_code)]
     pub fn is_agent_busy(&self, agent_id: AgentId) -> bool {

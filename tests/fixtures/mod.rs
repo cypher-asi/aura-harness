@@ -66,7 +66,7 @@ pub fn conversation_transactions(agent_id: AgentId, exchanges: &[(&str, &str)]) 
 /// Create a delegate action for a tool call.
 pub fn tool_action(tool: &str, args: serde_json::Value) -> Action {
     let tool_call = ToolCall::new(tool, args);
-    Action::delegate_tool(&tool_call)
+    Action::delegate_tool(&tool_call).unwrap()
 }
 
 /// Create a reason action.

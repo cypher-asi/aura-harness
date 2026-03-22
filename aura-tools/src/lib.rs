@@ -26,11 +26,11 @@
 
 mod error;
 mod executor;
-pub mod external;
-pub mod fs_tools;
-pub mod registry;
+mod external;
+pub(crate) mod fs_tools;
+pub(crate) mod registry;
 mod sandbox;
-pub mod tool;
+pub(crate) mod tool;
 
 pub use aura_core::ExternalToolDefinition;
 pub use error::ToolError;

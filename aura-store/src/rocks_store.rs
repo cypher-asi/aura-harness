@@ -231,8 +231,7 @@ impl Store for RocksStore {
             }
 
             // Decode and verify key
-            let record_key =
-                RecordKey::decode(&key).map_err(|e| StoreError::InvalidKey(e.to_string()))?;
+            let record_key = RecordKey::decode(&key)?;
 
             if record_key.agent_id != agent_id {
                 break;
@@ -305,12 +304,14 @@ impl Store for RocksStore {
         Ok(())
     }
 
+    #[instrument(skip(self), fields(agent_id = %agent_id))]
     fn has_pending_tx(&self, agent_id: AgentId) -> Result<bool, StoreError> {
         let head = self.read_meta_u64(&AgentMetaKey::inbox_head(agent_id))?;
         let tail = self.read_meta_u64(&AgentMetaKey::inbox_tail(agent_id))?;
         Ok(tail > head)
     }
 
+    #[instrument(skip(self), fields(agent_id = %agent_id))]
     fn get_inbox_depth(&self, agent_id: AgentId) -> Result<u64, StoreError> {
         let head = self.read_meta_u64(&AgentMetaKey::inbox_head(agent_id))?;
         let tail = self.read_meta_u64(&AgentMetaKey::inbox_tail(agent_id))?;

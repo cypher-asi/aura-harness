@@ -1,8 +1,43 @@
-//! Key encoding and decoding for `RocksDB`.
+//! Storage key encoding and decoding for `RocksDB`.
 //!
-//! All keys use big-endian encoding for proper byte ordering.
+//! # Key Format
+//!
+//! Every key starts with a single-byte prefix that identifies the column family
+//! it belongs to, followed by a 32-byte `AgentId`, then a type-specific suffix:
+//!
+//! | Column   | Prefix | Layout                                    | Size    |
+//! |----------|--------|-------------------------------------------|---------|
+//! | Record   | `R`    | `R` · `agent_id[32]` · `seq[u64be]`      | 41 B    |
+//! | Metadata | `M`    | `M` · `agent_id[32]` · `field[u8]`       | 34 B    |
+//! | Inbox    | `Q`    | `Q` · `agent_id[32]` · `inbox_seq[u64be]`| 41 B    |
+//!
+//! # Ordering Guarantees
+//!
+//! All integer fields use **big-endian** encoding so that `RocksDB`'s default
+//! byte-wise comparator produces ascending numeric order.  This means:
+//!
+//! - Record entries for a given agent are physically sorted by `seq`.
+//! - Inbox entries for a given agent are physically sorted by `inbox_seq`.
+//! - A prefix scan with `agent_id` returns entries in sequence order.
+//!
+//! # Column Family Semantics
+//!
+//! - **Record** (`R`): Append-only log of `RecordEntry` values, keyed by
+//!   `(agent_id, seq)`.  Entries are never deleted.
+//! - **Metadata** (`M`): Per-agent scalars (`head_seq`, `inbox_head`,
+//!   `inbox_tail`, `status`, `schema_version`).  Updated in-place.
+//! - **Inbox** (`Q`): FIFO queue of pending `Transaction` values.  Entries are
+//!   deleted after being committed to the record via `append_entry_atomic`.
+//!
+//! # Failure Modes
+//!
+//! `KeyCodec::decode` returns `StoreError::InvalidKey` when the byte slice has
+//! the wrong length, an unrecognised prefix byte, or an unknown metadata field
+//! discriminant.
 
 use aura_core::AgentId;
+
+use crate::error::StoreError;
 
 /// Key prefix bytes.
 pub mod prefix {
@@ -59,8 +94,8 @@ pub trait KeyCodec: Sized {
     /// Decode from bytes.
     ///
     /// # Errors
-    /// Returns error if bytes don't represent a valid key.
-    fn decode(bytes: &[u8]) -> Result<Self, &'static str>;
+    /// Returns `StoreError::InvalidKey` if bytes don't represent a valid key.
+    fn decode(bytes: &[u8]) -> Result<Self, StoreError>;
 }
 
 /// Record key: `R | agent_id(32) | seq(u64be)`
@@ -78,6 +113,7 @@ impl RecordKey {
     }
 
     /// Create the start key for scanning an agent's records.
+    #[cfg(test)]
     #[must_use]
     pub fn scan_start(agent_id: AgentId) -> Vec<u8> {
         Self::new(agent_id, 0).encode()
@@ -105,18 +141,20 @@ impl KeyCodec for RecordKey {
         key
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+    fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != 1 + 32 + 8 {
-            return Err("invalid record key length");
+            return Err(StoreError::InvalidKey("invalid record key length".into()));
         }
         if bytes[0] != prefix::RECORD {
-            return Err("invalid record key prefix");
+            return Err(StoreError::InvalidKey("invalid record key prefix".into()));
         }
 
         let agent_bytes: [u8; 32] = bytes[1..33]
             .try_into()
-            .map_err(|_| "invalid agent_id bytes")?;
-        let seq_bytes: [u8; 8] = bytes[33..41].try_into().map_err(|_| "invalid seq bytes")?;
+            .map_err(|_| StoreError::InvalidKey("invalid agent_id bytes".into()))?;
+        let seq_bytes: [u8; 8] = bytes[33..41]
+            .try_into()
+            .map_err(|_| StoreError::InvalidKey("invalid seq bytes".into()))?;
 
         Ok(Self {
             agent_id: AgentId::new(agent_bytes),
@@ -173,18 +211,19 @@ impl KeyCodec for AgentMetaKey {
         key
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+    fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != 1 + 32 + 1 {
-            return Err("invalid agent meta key length");
+            return Err(StoreError::InvalidKey("invalid agent meta key length".into()));
         }
         if bytes[0] != prefix::AGENT_META {
-            return Err("invalid agent meta key prefix");
+            return Err(StoreError::InvalidKey("invalid agent meta key prefix".into()));
         }
 
         let agent_bytes: [u8; 32] = bytes[1..33]
             .try_into()
-            .map_err(|_| "invalid agent_id bytes")?;
-        let field = MetaField::from_byte(bytes[33]).ok_or("invalid meta field")?;
+            .map_err(|_| StoreError::InvalidKey("invalid agent_id bytes".into()))?;
+        let field =
+            MetaField::from_byte(bytes[33]).ok_or_else(|| StoreError::InvalidKey("invalid meta field".into()))?;
 
         Ok(Self {
             agent_id: AgentId::new(agent_bytes),
@@ -211,12 +250,14 @@ impl InboxKey {
     }
 
     /// Create the start key for scanning an agent's inbox.
+    #[cfg(test)]
     #[must_use]
     pub fn scan_start(agent_id: AgentId) -> Vec<u8> {
         Self::new(agent_id, 0).encode()
     }
 
     /// Create the end key for scanning an agent's inbox (exclusive).
+    #[cfg(test)]
     #[must_use]
     pub fn scan_end(agent_id: AgentId) -> Vec<u8> {
         Self::new(agent_id, u64::MAX).encode()
@@ -232,20 +273,20 @@ impl KeyCodec for InboxKey {
         key
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
+    fn decode(bytes: &[u8]) -> Result<Self, StoreError> {
         if bytes.len() != 1 + 32 + 8 {
-            return Err("invalid inbox key length");
+            return Err(StoreError::InvalidKey("invalid inbox key length".into()));
         }
         if bytes[0] != prefix::INBOX {
-            return Err("invalid inbox key prefix");
+            return Err(StoreError::InvalidKey("invalid inbox key prefix".into()));
         }
 
         let agent_bytes: [u8; 32] = bytes[1..33]
             .try_into()
-            .map_err(|_| "invalid agent_id bytes")?;
+            .map_err(|_| StoreError::InvalidKey("invalid agent_id bytes".into()))?;
         let seq_bytes: [u8; 8] = bytes[33..41]
             .try_into()
-            .map_err(|_| "invalid inbox_seq bytes")?;
+            .map_err(|_| StoreError::InvalidKey("invalid inbox_seq bytes".into()))?;
 
         Ok(Self {
             agent_id: AgentId::new(agent_bytes),

@@ -5,7 +5,10 @@ use aura_core::AgentId;
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_store::Store;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
+
+const AGENT_LOOP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Process all pending transactions for an agent using `AgentLoop`.
 ///
@@ -41,12 +44,17 @@ pub async fn process_agent(
             "Processing transaction"
         );
 
-        let prompt = String::from_utf8_lossy(&tx.payload).to_string();
+        let prompt = String::from_utf8(tx.payload.to_vec()).map_err(|e| {
+            anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}")
+        })?;
         let messages = vec![Message::user(prompt)];
 
-        let result = agent_loop
-            .run(provider.as_ref(), executor, messages, tools.to_vec())
-            .await?;
+        let result = tokio::time::timeout(
+            AGENT_LOOP_TIMEOUT,
+            agent_loop.run(provider.as_ref(), executor, messages, tools.to_vec()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Agent loop timed out after {AGENT_LOOP_TIMEOUT:?}"))??;
 
         let context_hash = compute_context_hash(next_seq, &tx);
         let entry = aura_core::RecordEntry::builder(next_seq, tx)

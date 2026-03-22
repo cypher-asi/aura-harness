@@ -106,7 +106,19 @@ where
                 let workspace = workspace.clone();
                 async move {
                     let tool_call = ToolCall::new(name.clone(), input.clone());
-                    let action = Action::delegate_tool(&tool_call);
+                    let action = match Action::delegate_tool(&tool_call) {
+                        Ok(a) => a,
+                        Err(e) => {
+                            return ExecutedToolCall {
+                                tool_use_id: id,
+                                tool_name: name,
+                                tool_args: input,
+                                result: ToolResultContent::text(format!("Failed to create action: {e}")),
+                                is_error: true,
+                                metadata: HashMap::default(),
+                            };
+                        }
+                    };
                     let ctx = ExecuteContext::new(agent_id, action.action_id, workspace);
 
                     let effect = self.executor.execute(&ctx, &action).await;

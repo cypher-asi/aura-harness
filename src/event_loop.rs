@@ -14,22 +14,36 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+/// Bundled dependencies for the event loop, reducing parameter count.
+pub(crate) struct EventLoopContext<'a> {
+    pub events: &'a mut mpsc::Receiver<UiEvent>,
+    pub process_completions: mpsc::Receiver<Transaction>,
+    pub commands: mpsc::Sender<UiCommand>,
+    pub agent_loop: &'a AgentLoop,
+    pub provider: &'a dyn ModelProvider,
+    pub executor: &'a KernelToolExecutor,
+    pub tools: &'a [ToolDefinition],
+    pub store: Arc<RocksStore>,
+    pub agent_id: AgentId,
+    pub _process_manager: Arc<ProcessManager>,
+}
+
 /// Run the event processing loop.
 ///
 /// Handles user messages from the UI and process completion events.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_event_loop(
-    events: &mut mpsc::Receiver<UiEvent>,
-    mut process_completions: mpsc::Receiver<Transaction>,
-    commands: mpsc::Sender<UiCommand>,
-    agent_loop: &AgentLoop,
-    provider: &dyn ModelProvider,
-    executor: &KernelToolExecutor,
-    tools: &[ToolDefinition],
-    store: Arc<RocksStore>,
-    agent_id: AgentId,
-    _process_manager: Arc<ProcessManager>,
-) -> anyhow::Result<()> {
+pub(crate) async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
+    let EventLoopContext {
+        events,
+        mut process_completions,
+        commands,
+        agent_loop,
+        provider,
+        executor,
+        tools,
+        store,
+        agent_id,
+        _process_manager,
+    } = ctx;
     let mut seq = store.get_head_seq(agent_id).unwrap_or(0) + 1;
     let mut messages: Vec<Message> = Vec::new();
 

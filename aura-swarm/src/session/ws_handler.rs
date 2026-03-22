@@ -121,9 +121,10 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
                 }
 
                 join_result = &mut turn.join_handle => {
-                    let finished = active_turn.take().expect("active_turn was Some");
-                    let _ = finished.stream_forward_handle.await;
-                    finalize_turn(&mut session, join_result, &finished.message_id, &outbound_tx);
+                    if let Some(finished) = active_turn.take() {
+                        let _ = finished.stream_forward_handle.await;
+                        finalize_turn(&mut session, join_result, &finished.message_id, &outbound_tx);
+                    }
                 }
             }
         } else {
@@ -250,7 +251,9 @@ fn start_turn(
 
     let mut tool_executor = ToolExecutor::new(ctx.tool_config.clone());
     for ext in &session.external_tools {
-        tool_executor.register_external(ext.clone());
+        if let Err(e) = tool_executor.register_external(ext.clone()) {
+            tracing::warn!(tool = %ext.name, error = %e, "Failed to register external tool");
+        }
     }
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(tool_executor));

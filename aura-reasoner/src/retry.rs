@@ -3,6 +3,7 @@
 //! Provides exponential backoff for rate-limit errors (429/529)
 //! and automatic fallback to alternative models when retries are exhausted.
 
+use crate::error::ReasonerError;
 use crate::{ModelProvider, ModelRequest, ModelResponse};
 use std::time::Duration;
 use tracing::{debug, warn};
@@ -58,14 +59,14 @@ pub async fn complete_with_retry(
             match provider.complete(request.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
-                    let err_str = e.to_string();
+                    let classification = e.downcast_ref::<ReasonerError>();
 
-                    // 402: insufficient credits -- stop immediately
-                    if err_str.contains("402") {
+                    if matches!(classification, Some(ReasonerError::InsufficientCredits(_))) {
                         return Err(e);
                     }
 
-                    let is_retryable = err_str.contains("429") || err_str.contains("529");
+                    let is_retryable =
+                        matches!(classification, Some(ReasonerError::RateLimited(_)));
 
                     if is_retryable && attempt < config.max_retries_per_model {
                         let backoff = config.base_backoff * 2u32.pow(attempt);
@@ -82,7 +83,6 @@ pub async fn complete_with_retry(
                     last_error = Some(e);
 
                     if is_retryable {
-                        // Retries exhausted -- fall back to next model
                         warn!(
                             model = %model,
                             next_model = models.get(model_idx + 1).map(String::as_str),
@@ -91,7 +91,6 @@ pub async fn complete_with_retry(
                         break;
                     }
 
-                    // Non-retryable, non-402 -- return error
                     return Err(last_error
                         .take()
                         .ok_or_else(|| anyhow::anyhow!("unexpected missing error"))?);
@@ -130,6 +129,17 @@ mod tests {
         }
     }
 
+    /// Classify a test error string into a typed `ReasonerError`.
+    fn classify_test_error(err: String) -> anyhow::Error {
+        if err.contains("402") {
+            ReasonerError::InsufficientCredits(err).into()
+        } else if err.contains("429") || err.contains("529") {
+            ReasonerError::RateLimited(err).into()
+        } else {
+            anyhow::anyhow!(err)
+        }
+    }
+
     #[async_trait]
     impl ModelProvider for RetryTestProvider {
         fn name(&self) -> &'static str {
@@ -150,7 +160,7 @@ mod tests {
             } else {
                 let err = errors.remove(0);
                 drop(errors);
-                Err(anyhow::anyhow!(err))
+                Err(classify_test_error(err))
             }
         }
 

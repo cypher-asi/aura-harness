@@ -32,3 +32,19 @@ mod worker;
 
 pub use config::SwarmConfig;
 pub use swarm::Swarm;
+
+/// Top-level error type for the aura-swarm crate.
+#[derive(Debug, thiserror::Error)]
+pub enum SwarmError {
+    /// Server bind or runtime error.
+    #[error("server error: {0}")]
+    Server(#[from] std::io::Error),
+
+    /// Storage layer failure.
+    #[error("store error: {0}")]
+    Store(#[from] anyhow::Error),
+
+    /// Address parse failure.
+    #[error("invalid bind address: {0}")]
+    InvalidAddress(#[from] std::net::AddrParseError),
+}

@@ -1,5 +1,6 @@
 //! Action types: kinds and authorized actions.
 
+use crate::error::AuraError;
 use crate::ids::ActionId;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -44,9 +45,11 @@ impl Action {
     }
 
     /// Create a delegate action for a tool call.
-    #[must_use]
-    pub fn delegate_tool(tool_call: &ToolCall) -> Self {
-        let payload = serde_json::to_vec(tool_call).unwrap_or_default();
-        Self::new(ActionId::generate(), ActionKind::Delegate, payload)
+    ///
+    /// # Errors
+    /// Returns `AuraError::Serialization` if the tool call cannot be serialized.
+    pub fn delegate_tool(tool_call: &ToolCall) -> Result<Self, AuraError> {
+        let payload = serde_json::to_vec(tool_call)?;
+        Ok(Self::new(ActionId::generate(), ActionKind::Delegate, payload))
     }
 }

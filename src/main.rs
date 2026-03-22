@@ -120,20 +120,11 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
     };
     let agent_loop = AgentLoop::new(config);
 
-    let (process_tx, mut process_rx_opt) = {
-        let (tx, rx) = mpsc::channel::<Transaction>(100);
-        (tx, Some(rx))
-    };
+    let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
     let process_manager = Arc::new(ProcessManager::new(
         process_tx,
         ProcessManagerConfig::default(),
     ));
-
-    macro_rules! take_process_rx {
-        () => {
-            process_rx_opt.take().expect("process_rx already taken")
-        };
-    }
 
     let provider: Arc<dyn ModelProvider> = match args.provider.as_str() {
         "mock" => {
@@ -154,26 +145,25 @@ async fn run_terminal(args: Args) -> anyhow::Result<()> {
         },
     };
 
-    let process_rx = take_process_rx!();
     let cmd_tx_clone = cmd_tx.clone();
     let store_clone = store.clone();
     let agent_id = identity.agent_id;
     let process_manager_clone = Arc::clone(&process_manager);
 
     let processor_handle = tokio::spawn(async move {
-        event_loop::run_event_loop(
-            &mut ui_rx,
-            process_rx,
-            cmd_tx_clone,
-            &agent_loop,
-            provider.as_ref(),
-            &kernel_executor,
-            &tools,
-            store_clone,
+        let ctx = event_loop::EventLoopContext {
+            events: &mut ui_rx,
+            process_completions: process_rx,
+            commands: cmd_tx_clone,
+            agent_loop: &agent_loop,
+            provider: provider.as_ref(),
+            executor: &kernel_executor,
+            tools: &tools,
+            store: store_clone,
             agent_id,
-            process_manager_clone,
-        )
-        .await
+            _process_manager: process_manager_clone,
+        };
+        event_loop::run_event_loop(ctx).await
     });
 
     terminal.run(&mut app)?;

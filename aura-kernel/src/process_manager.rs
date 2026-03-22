@@ -173,11 +173,11 @@ impl ProcessManager {
                     let success = status.success();
                     drop(process); // Release the lock before removing
 
-                    // Remove from tracking
                     if let Some((_, mut running)) = self.processes.remove(&process_id) {
-                        // Collect output
-                        let stdout = collect_output(running.child.stdout.take());
-                        let stderr = collect_output(running.child.stderr.take());
+                        let (stdout, stderr) = tokio::join!(
+                            collect_output(running.child.stdout.take()),
+                            collect_output(running.child.stderr.take()),
+                        );
 
                         info!(exit_code = ?exit_code, success = success, duration_ms = duration_ms, "Process completed");
 
@@ -236,12 +236,18 @@ impl ProcessManager {
         // Note: We pass None for prev_hash because the app will need to provide
         // the current chain head when actually processing this transaction.
         // The transaction will be re-created with proper chaining when received.
-        let tx = Transaction::process_complete(
+        let tx = match Transaction::process_complete(
             running.agent_id,
             &payload,
             running.reference_tx_hash,
             None, // prev_hash will be set by the receiver
-        );
+        ) {
+            Ok(tx) => tx,
+            Err(e) => {
+                error!(error = %e, "Failed to create completion transaction");
+                return;
+            }
+        };
 
         if let Err(e) = self.tx_sender.send(tx).await {
             error!(error = %e, "Failed to send completion transaction");
@@ -280,13 +286,19 @@ impl ProcessManager {
     }
 }
 
-/// Helper to collect output from a process pipe.
-fn collect_output<R: std::io::Read>(pipe: Option<R>) -> Vec<u8> {
-    pipe.map_or_else(Vec::new, |mut p| {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut p, &mut buf);
-        buf
-    })
+/// Collect output from a process pipe without blocking the async runtime.
+async fn collect_output<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> Vec<u8> {
+    match pipe {
+        None => Vec::new(),
+        Some(pipe) => tokio::task::spawn_blocking(move || {
+            let mut pipe = pipe;
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buf);
+            buf
+        })
+        .await
+        .unwrap_or_default(),
+    }
 }
 
 #[cfg(test)]

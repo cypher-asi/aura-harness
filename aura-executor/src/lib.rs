@@ -39,8 +39,10 @@ pub trait Executor: Send + Sync {
 }
 
 /// A no-op executor that accepts all actions and returns empty committed effects.
-pub struct NoOpExecutor;
+#[cfg(test)]
+pub(crate) struct NoOpExecutor;
 
+#[cfg(test)]
 #[async_trait]
 impl Executor for NoOpExecutor {
     async fn execute(&self, _ctx: &ExecuteContext, action: &Action) -> anyhow::Result<Effect> {

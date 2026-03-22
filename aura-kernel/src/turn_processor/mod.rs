@@ -31,8 +31,8 @@ pub use streaming::{StreamCallback, StreamCallbackEvent};
 
 use crate::policy::{Policy, PolicyConfig};
 use aura_core::{
-    Action, AgentId, Decision, Effect, EffectKind, EffectStatus, ProposalSet, RecordEntry,
-    ToolCall, Transaction,
+    Action, AgentId, AuraError, Decision, Effect, EffectKind, EffectStatus, ProposalSet,
+    RecordEntry, ToolCall, Transaction,
 };
 use aura_executor::ExecutorRouter;
 use aura_reasoner::{
@@ -382,7 +382,7 @@ where
         tx: Transaction,
         turn_result: &TurnResult,
         context_hash: [u8; 32],
-    ) -> RecordEntry {
+    ) -> Result<RecordEntry, AuraError> {
         let proposals = ProposalSet::new();
         let mut decision = Decision::new();
         let mut actions = Vec::new();
@@ -395,7 +395,7 @@ where
                     executed_tool.tool_args.clone(),
                 );
 
-                let action = Action::delegate_tool(&tool_call);
+                let action = Action::delegate_tool(&tool_call)?;
                 let action_id = action.action_id;
                 actions.push(action);
 
@@ -409,9 +409,7 @@ where
 
                 let payload = match &executed_tool.result {
                     ToolResultContent::Text(s) => Bytes::from(s.clone()),
-                    ToolResultContent::Json(v) => {
-                        Bytes::from(serde_json::to_vec(v).unwrap_or_default())
-                    }
+                    ToolResultContent::Json(v) => Bytes::from(serde_json::to_vec(v)?),
                 };
 
                 let effect = Effect::new(action_id, EffectKind::Agreement, effect_status, payload);
@@ -419,13 +417,13 @@ where
             }
         }
 
-        RecordEntry::builder(seq, tx)
+        Ok(RecordEntry::builder(seq, tx)
             .context_hash(context_hash)
             .proposals(proposals)
             .decision(decision)
             .actions(actions)
             .effects(effects)
-            .build()
+            .build())
     }
 }
 

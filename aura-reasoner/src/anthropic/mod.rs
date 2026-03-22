@@ -20,6 +20,7 @@ use convert::{
 };
 use sse::SseStream;
 
+use crate::error::ReasonerError;
 use crate::{
     ModelProvider, ModelRequest, ModelResponse, ProviderTrace, StopReason, StreamEventStream, Usage,
 };
@@ -45,9 +46,8 @@ enum ApiError {
 impl From<ApiError> for anyhow::Error {
     fn from(e: ApiError) -> Self {
         match e {
-            ApiError::Overloaded(msg) | ApiError::InsufficientCredits(msg) => {
-                anyhow::anyhow!("{msg}")
-            }
+            ApiError::Overloaded(msg) => ReasonerError::RateLimited(msg).into(),
+            ApiError::InsufficientCredits(msg) => ReasonerError::InsufficientCredits(msg).into(),
             ApiError::Other(e) => e,
         }
     }
@@ -264,19 +264,21 @@ impl ModelProvider for AnthropicProvider {
                         });
                     }
                     Err(ApiError::InsufficientCredits(msg)) => {
-                        return Err(anyhow::anyhow!("{msg}"));
+                        return Err(ReasonerError::InsufficientCredits(msg).into());
                     }
                     Err(ApiError::Overloaded(ref msg))
                         if attempt < self.config.max_retries =>
                     {
                         warn!(model = %model, attempt, "API overloaded, will retry");
-                        last_err = Some(anyhow::anyhow!("{msg}"));
+                        last_err =
+                            Some(ReasonerError::RateLimited(msg.clone()).into());
                     }
                     Err(ApiError::Overloaded(ref msg))
                         if model_idx < models.len() - 1 =>
                     {
                         warn!(model = %model, "Retries exhausted, falling back to next model");
-                        last_err = Some(anyhow::anyhow!("{msg}"));
+                        last_err =
+                            Some(ReasonerError::RateLimited(msg.clone()).into());
                         break;
                     }
                     Err(e) => return Err(e.into()),
@@ -288,6 +290,8 @@ impl ModelProvider for AnthropicProvider {
             .unwrap_or_else(|| anyhow::anyhow!("All models in fallback chain exhausted")))
     }
 
+    /// TODO: Actually ping the Anthropic API (e.g. a lightweight models-list
+    /// request) so health checks reflect real availability.
     async fn health_check(&self) -> bool {
         true
     }
@@ -350,19 +354,21 @@ impl ModelProvider for AnthropicProvider {
                         return Ok(Box::pin(sse_stream));
                     }
                     Err(ApiError::InsufficientCredits(msg)) => {
-                        return Err(anyhow::anyhow!("{msg}"));
+                        return Err(ReasonerError::InsufficientCredits(msg).into());
                     }
                     Err(ApiError::Overloaded(ref msg))
                         if attempt < self.config.max_retries =>
                     {
                         warn!(model = %model, attempt, "Streaming API overloaded, will retry");
-                        last_err = Some(anyhow::anyhow!("{msg}"));
+                        last_err =
+                            Some(ReasonerError::RateLimited(msg.clone()).into());
                     }
                     Err(ApiError::Overloaded(ref msg))
                         if model_idx < models.len() - 1 =>
                     {
                         warn!(model = %model, "Streaming retries exhausted, falling back");
-                        last_err = Some(anyhow::anyhow!("{msg}"));
+                        last_err =
+                            Some(ReasonerError::RateLimited(msg.clone()).into());
                         break;
                     }
                     Err(e) => return Err(e.into()),

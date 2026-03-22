@@ -38,8 +38,8 @@ impl Swarm {
         info!("Starting Aura Swarm");
         info!(data_dir = ?self.config.data_dir, "Data directory");
 
-        std::fs::create_dir_all(self.config.db_path())?;
-        std::fs::create_dir_all(self.config.workspaces_path())?;
+        tokio::fs::create_dir_all(self.config.db_path()).await?;
+        tokio::fs::create_dir_all(self.config.workspaces_path()).await?;
 
         let store = Arc::new(RocksStore::open(
             self.config.db_path(),

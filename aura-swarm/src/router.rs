@@ -57,6 +57,7 @@ pub fn create_router(state: RouterState) -> Router {
 
 // === Health ===
 
+/// Return a simple health-check response with version info.
 async fn health_handler() -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
@@ -79,6 +80,7 @@ struct SubmitTxResponse {
     tx_id: String,
 }
 
+/// Accept a transaction submission, enqueue it, and schedule the agent for processing.
 #[instrument(skip(state, request))]
 async fn submit_tx_handler(
     State(state): State<RouterState>,
@@ -146,6 +148,7 @@ struct GetHeadResponse {
     head_seq: u64,
 }
 
+/// Return the current head sequence number for a given agent.
 #[instrument(skip(state))]
 async fn get_head_handler(
     State(state): State<RouterState>,
@@ -185,6 +188,7 @@ const fn default_limit() -> usize {
     100
 }
 
+/// Scan an agent's record from a given sequence number, returning up to `limit` entries.
 #[instrument(skip(state))]
 async fn scan_record_handler(
     State(state): State<RouterState>,
@@ -211,6 +215,7 @@ async fn scan_record_handler(
 
 // === WebSocket ===
 
+/// Upgrade an HTTP connection to a WebSocket for interactive agent sessions.
 async fn ws_upgrade_handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,

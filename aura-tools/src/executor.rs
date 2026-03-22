@@ -45,9 +45,13 @@ impl ToolExecutor {
     }
 
     /// Register an external tool that dispatches via HTTP POST.
-    pub fn register_external(&mut self, def: ExternalToolDefinition) {
-        let tool = ExternalTool::new(def);
+    ///
+    /// # Errors
+    /// Returns `ToolError` if the external tool's HTTP client cannot be built.
+    pub fn register_external(&mut self, def: ExternalToolDefinition) -> Result<(), ToolError> {
+        let tool = ExternalTool::new(def)?;
         self.tools.insert(tool.name().to_string(), Box::new(tool));
+        Ok(())
     }
 
     /// Execute a tool call.
@@ -148,7 +152,7 @@ mod tests {
 
         let executor = ToolExecutor::with_defaults();
         let tool_call = ToolCall::fs_ls(".");
-        let action = Action::delegate_tool(&tool_call);
+        let action = Action::delegate_tool(&tool_call).unwrap();
 
         let effect = executor.execute(&ctx, &action).await.unwrap();
         assert_eq!(effect.status, EffectStatus::Committed);
@@ -166,7 +170,7 @@ mod tests {
 
         let executor = ToolExecutor::with_defaults();
         let tool_call = ToolCall::fs_read("test.txt", None);
-        let action = Action::delegate_tool(&tool_call);
+        let action = Action::delegate_tool(&tool_call).unwrap();
 
         let effect = executor.execute(&ctx, &action).await.unwrap();
         assert_eq!(effect.status, EffectStatus::Committed);
@@ -182,7 +186,7 @@ mod tests {
 
         let executor = ToolExecutor::with_defaults();
         let tool_call = ToolCall::fs_read("../../../etc/passwd", None);
-        let action = Action::delegate_tool(&tool_call);
+        let action = Action::delegate_tool(&tool_call).unwrap();
 
         let effect = executor.execute(&ctx, &action).await.unwrap();
         assert_eq!(effect.status, EffectStatus::Failed);
@@ -199,7 +203,7 @@ mod tests {
         config.enable_commands = false;
         let executor = ToolExecutor::new(config);
         let tool_call = ToolCall::new("cmd_run", serde_json::json!({"program": "ls"}));
-        let action = Action::delegate_tool(&tool_call);
+        let action = Action::delegate_tool(&tool_call).unwrap();
 
         let effect = executor.execute(&ctx, &action).await.unwrap();
         assert_eq!(effect.status, EffectStatus::Failed);
@@ -211,7 +215,7 @@ mod tests {
 
         let executor = ToolExecutor::with_defaults();
         let tool_call = ToolCall::new("nonexistent_tool", serde_json::json!({}));
-        let action = Action::delegate_tool(&tool_call);
+        let action = Action::delegate_tool(&tool_call).unwrap();
 
         let effect = executor.execute(&ctx, &action).await.unwrap();
         assert_eq!(effect.status, EffectStatus::Failed);

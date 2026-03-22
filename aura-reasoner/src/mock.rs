@@ -85,7 +85,7 @@ impl MockResponse {
 
     /// Override the stop reason on an existing response.
     #[must_use]
-    pub fn with_stop_reason(mut self, stop_reason: StopReason) -> Self {
+    pub const fn with_stop_reason(mut self, stop_reason: StopReason) -> Self {
         self.stop_reason = stop_reason;
         self
     }
@@ -123,24 +123,22 @@ impl MockProvider {
     }
 
     /// Add a response to return on the next call.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn with_response(self, response: MockResponse) -> Self {
-        self.responses.lock().unwrap().push(response);
+        self.responses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(response);
         self
     }
 
     /// Add multiple responses to return in sequence.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
     #[must_use]
     pub fn with_responses(self, responses: Vec<MockResponse>) -> Self {
-        self.responses.lock().unwrap().extend(responses);
+        self.responses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(responses);
         self
     }
 
@@ -219,9 +217,11 @@ impl ModelProvider for MockProvider {
             tokio::time::sleep(tokio::time::Duration::from_millis(self.latency_ms)).await;
         }
 
-        // Get next response or use default
         let response = {
-            let mut responses = self.responses.lock().unwrap();
+            let mut responses = self
+                .responses
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if responses.is_empty() {
                 self.default_response.clone()
             } else {

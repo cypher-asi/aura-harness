@@ -211,7 +211,6 @@ dependencies = [
  "async-trait",
  "aura-core",
  "bytes",
- "thiserror",
  "tokio",
  "tracing",
 ]
@@ -234,7 +233,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
  "tokio",
  "tokio-util",
  "tracing",
@@ -263,7 +261,6 @@ dependencies = [
 name = "aura-store"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "aura-core",
  "bytes",
  "rocksdb",

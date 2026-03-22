@@ -1,5 +1,6 @@
 //! Transaction types: the immutable input to the Aura system.
 
+use crate::error::AuraError;
 use crate::ids::{AgentId, Hash, TxId};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -178,45 +179,51 @@ impl Transaction {
     ///
     /// Records a tool call suggested by the reasoner (LLM) before policy evaluation.
     /// The payload contains the proposed tool call details.
-    #[must_use]
-    pub fn tool_proposal(agent_id: AgentId, proposal: &ToolProposal) -> Self {
-        let payload = serde_json::to_vec(proposal).unwrap_or_default();
-        Self::new_chained(agent_id, TransactionType::ToolProposal, payload, None)
+    ///
+    /// # Errors
+    /// Returns `AuraError::Serialization` if the proposal cannot be serialized.
+    pub fn tool_proposal(agent_id: AgentId, proposal: &ToolProposal) -> Result<Self, AuraError> {
+        let payload = serde_json::to_vec(proposal)?;
+        Ok(Self::new_chained(agent_id, TransactionType::ToolProposal, payload, None))
     }
 
     /// Create a tool execution transaction.
     ///
     /// Records the kernel's decision and execution result for a tool proposal.
     /// This captures what actually happened after policy evaluation.
-    #[must_use]
-    pub fn tool_execution(agent_id: AgentId, execution: &ToolExecution) -> Self {
-        let payload = serde_json::to_vec(execution).unwrap_or_default();
-        Self::new_chained(agent_id, TransactionType::ToolExecution, payload, None)
+    ///
+    /// # Errors
+    /// Returns `AuraError::Serialization` if the execution cannot be serialized.
+    pub fn tool_execution(agent_id: AgentId, execution: &ToolExecution) -> Result<Self, AuraError> {
+        let payload = serde_json::to_vec(execution)?;
+        Ok(Self::new_chained(agent_id, TransactionType::ToolExecution, payload, None))
     }
 
     /// Create a process completion transaction.
     ///
     /// Records the result of an async process that completed after the initial
     /// transaction was recorded. Links back to the originating transaction.
-    #[must_use]
+    ///
+    /// # Errors
+    /// Returns `AuraError::Serialization` if the payload cannot be serialized.
     pub fn process_complete(
         agent_id: AgentId,
         payload: &ActionResultPayload,
         reference_tx_hash: Hash,
         prev_hash: Option<&Hash>,
-    ) -> Self {
-        let payload_bytes = serde_json::to_vec(payload).unwrap_or_default();
+    ) -> Result<Self, AuraError> {
+        let payload_bytes = serde_json::to_vec(payload)?;
         let hash = Hash::from_content_chained(&payload_bytes, prev_hash);
         let ts_ms = Self::now_ms();
 
-        Self {
+        Ok(Self {
             hash,
             agent_id,
             ts_ms,
             tx_type: TransactionType::ProcessComplete,
             payload: payload_bytes.into(),
             reference_tx_hash: Some(reference_tx_hash),
-        }
+        })
     }
 
     /// Get the transaction hash (legacy compatibility with `tx_id`).

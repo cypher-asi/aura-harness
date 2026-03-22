@@ -1,4 +1,28 @@
 //! Kernel implementation.
+//!
+//! ## Processing Invariants
+//!
+//! Every call to [`Kernel::process`] upholds the following guarantees:
+//!
+//! 1. **Deterministic context** — the context hash is derived solely from the
+//!    incoming transaction and the record window loaded from the store.
+//!    Re-processing the same inputs always yields the same context hash.
+//!
+//! 2. **Complete recording** — every intermediate artifact (proposals, policy
+//!    decisions, actions, effects) is captured in the returned [`RecordEntry`]
+//!    so the step can be replayed without a live reasoner or executor.
+//!
+//! 3. **Replay fidelity** — when `replay_mode` is enabled the kernel skips
+//!    the reasoner and executor entirely, reading the recorded artifacts
+//!    instead. This allows offline verification of the event chain.
+//!
+//! ## Replay Semantics
+//!
+//! In replay mode (`KernelConfig::replay_mode = true`):
+//! - The reasoner is **not** called; proposals are empty.
+//! - Actions are **not** executed; effects are empty.
+//! - The record entry is still constructed with a valid context hash so that
+//!   downstream consumers can verify chain integrity.
 
 use crate::context::ContextBuilder;
 use crate::policy::{Policy, PolicyConfig};
@@ -209,8 +233,7 @@ where
         let mut effects = Vec::new();
         let workspace = self.agent_workspace(agent_id);
 
-        // Ensure workspace exists
-        if let Err(e) = std::fs::create_dir_all(&workspace) {
+        if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
             error!(error = %e, "Failed to create workspace");
         }
 

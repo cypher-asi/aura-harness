@@ -161,7 +161,8 @@ mod tests {
             &result_payload,
             orig_tx.hash,
             Some(&orig_tx.hash),
-        );
+        )
+        .unwrap();
 
         assert_eq!(callback_tx.reference_tx_hash, Some(orig_tx.hash));
         assert_eq!(callback_tx.tx_type, TransactionType::ProcessComplete);

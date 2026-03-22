@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use aura_core::ToolResult;
 use aura_reasoner::ToolDefinition;
 use std::fs;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 /// Skip directories that shouldn't be included in find results.
 fn should_skip_dir(name: &str) -> bool {
@@ -45,8 +45,12 @@ pub fn fs_find(
         results: &mut Vec<String>,
         max: usize,
     ) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                warn!(path = %dir.display(), error = %e, "Failed to read directory during find");
+                return;
+            }
         };
         for entry in entries.flatten() {
             if results.len() >= max {

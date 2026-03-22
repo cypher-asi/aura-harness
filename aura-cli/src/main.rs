@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
+// Approval types are tested via unit tests and will be integrated into the
+// interactive approval flow once the approval UI is implemented.
 #[allow(dead_code)]
 mod approval;
 mod session;
@@ -24,26 +26,29 @@ use tracing_subscriber::EnvFilter;
 // Commands
 // ============================================================================
 
-/// Parsed CLI command.
+/// Parsed CLI command from user input.
+///
+/// Input that doesn't start with `/` is treated as a [`Command::Prompt`].
+/// Slash-prefixed input is parsed as a named command (e.g. `/status`, `/quit`).
 #[derive(Debug)]
 enum Command {
-    /// User prompt to the agent
+    /// Free-text prompt sent to the agent for processing.
     Prompt(String),
-    /// Show agent status
+    /// Display session status (agent ID, sequence, provider).
     Status,
-    /// Show history
+    /// Show the last *n* history entries.
     History(usize),
-    /// Approve pending tool request
+    /// Approve the current pending tool-execution request.
     Approve,
-    /// Deny pending tool request
+    /// Deny the current pending tool-execution request.
     Deny,
-    /// Show pending changes
+    /// Show pending file-level changes (diff).
     Diff,
-    /// Show help
+    /// Print the help message listing available commands.
     Help,
-    /// Exit CLI
+    /// Exit the CLI gracefully.
     Quit,
-    /// Unknown command
+    /// Unrecognised slash-command.
     Unknown(String),
 }
 
@@ -165,6 +170,7 @@ async fn main() -> Result<()> {
 // Command Handlers
 // ============================================================================
 
+/// Submit a user prompt to the agent and display the response.
 async fn handle_prompt(session: &mut Session, text: &str) {
     println!("{} Processing...\n", "▶".blue().bold());
 
@@ -200,6 +206,7 @@ async fn handle_prompt(session: &mut Session, text: &str) {
     println!();
 }
 
+/// Print current session status (agent ID, sequence, provider).
 fn handle_status(session: &Session) {
     println!("{}", "Session Status".cyan().bold());
     println!("  Agent ID: {}", session.agent_id());
@@ -208,11 +215,13 @@ fn handle_status(session: &Session) {
     println!();
 }
 
+/// Display the last `n` conversation history entries.
 fn handle_history(_session: &Session, _n: usize) {
     println!("{} History display not yet implemented", "ℹ".blue().bold());
     println!();
 }
 
+/// Approve the currently pending tool-execution request.
 fn handle_approve(session: &Session) {
     if let Err(e) = session.approve_pending() {
         eprintln!("{} {}", "Error:".red().bold(), e);
@@ -222,6 +231,7 @@ fn handle_approve(session: &Session) {
     println!();
 }
 
+/// Deny the currently pending tool-execution request.
 fn handle_deny(session: &Session) {
     if let Err(e) = session.deny_pending() {
         eprintln!("{} {}", "Error:".red().bold(), e);
@@ -231,11 +241,13 @@ fn handle_deny(session: &Session) {
     println!();
 }
 
+/// Display pending file-level changes (not yet implemented).
 fn handle_diff(_session: &Session) {
     println!("{} Diff display not yet implemented", "ℹ".blue().bold());
     println!();
 }
 
+/// Print the available commands and their descriptions.
 fn print_help() {
     println!("{}", "Available Commands".cyan().bold());
     println!();

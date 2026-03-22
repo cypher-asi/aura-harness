@@ -4,35 +4,48 @@ use aura_core::{AgentId, TxId};
 use thiserror::Error;
 
 /// Storage-specific error type.
+///
+/// Covers all failure modes for the RocksDB-backed store: I/O failures,
+/// data corruption, missing entities, and protocol violations (e.g. sequence gaps).
 #[derive(Error, Debug)]
 pub enum StoreError {
+    /// Low-level `RocksDB` I/O or corruption error.
     #[error("RocksDB error: {0}")]
     RocksDb(#[from] rocksdb::Error),
 
+    /// Failed to serialize a value before writing to storage.
     #[error("serialization error: {0}")]
     Serialization(String),
 
+    /// Failed to deserialize a value read from storage (possible schema drift).
     #[error("deserialization error: {0}")]
     Deserialization(String),
 
+    /// No metadata exists for the requested agent.
     #[error("agent not found: {0}")]
     AgentNotFound(AgentId),
 
+    /// The requested record entry does not exist at the given sequence number.
     #[error("record entry not found: agent={0}, seq={1}")]
     RecordEntryNotFound(AgentId, u64),
 
+    /// The requested transaction hash was not found in the store.
     #[error("transaction not found: {0}")]
     TransactionNotFound(TxId),
 
+    /// The agent's inbox contains no pending transactions.
     #[error("inbox empty for agent: {0}")]
     InboxEmpty(AgentId),
 
+    /// Attempted to append a record entry at a non-contiguous sequence number.
     #[error("sequence mismatch: expected {expected}, got {actual}")]
     SequenceMismatch { expected: u64, actual: u64 },
 
+    /// A required `RocksDB` column family handle could not be resolved.
     #[error("column family not found: {0}")]
     ColumnFamilyNotFound(String),
 
+    /// A storage key could not be decoded (wrong length, prefix, or field).
     #[error("invalid key format: {0}")]
     InvalidKey(String),
 }

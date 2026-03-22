@@ -55,7 +55,7 @@ async fn test_fs_ls_integration() {
     let ctx = create_context(&workspace);
 
     let tool_call = ToolCall::fs_ls(".");
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -72,7 +72,7 @@ async fn test_fs_read_integration() {
     let ctx = create_context(&workspace);
 
     let tool_call = ToolCall::fs_read("hello.txt", None);
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -95,7 +95,7 @@ async fn test_fs_write_integration() {
             "content": "New content here!"
         }),
     );
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -120,7 +120,7 @@ async fn test_fs_edit_integration() {
             "new_text": "AURA"
         }),
     );
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -144,7 +144,7 @@ async fn test_search_code_integration() {
             "file_pattern": "*.rs"
         }),
     );
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -165,7 +165,7 @@ async fn test_path_traversal_blocked() {
     let ctx = create_context(&workspace);
 
     let tool_call = ToolCall::fs_read("../../../etc/passwd", None);
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -180,7 +180,7 @@ async fn test_absolute_path_outside_workspace() {
     let ctx = create_context(&workspace);
 
     let tool_call = ToolCall::fs_read("/etc/passwd", None);
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -196,7 +196,7 @@ async fn test_nested_path_traversal() {
 
     // Try to escape via nested traversal
     let tool_call = ToolCall::fs_read("subdir/../../secret.txt", None);
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -215,7 +215,7 @@ async fn test_file_not_found() {
     let ctx = create_context(&workspace);
 
     let tool_call = ToolCall::fs_read("nonexistent.txt", None);
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -229,7 +229,7 @@ async fn test_unknown_tool() {
     let ctx = create_context(&workspace);
 
     let tool_call = ToolCall::new("unknown_tool", serde_json::json!({}));
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -244,7 +244,7 @@ async fn test_missing_required_argument() {
 
     // fs_read requires 'path' argument
     let tool_call = ToolCall::new("fs_read", serde_json::json!({}));
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -269,7 +269,7 @@ async fn test_cmd_run_simple() {
             "args": ["hello"]
         }),
     );
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
 
     let effect = executor.execute(&ctx, &action).await;
 
@@ -299,7 +299,7 @@ async fn test_cmd_run_in_workspace_dir() {
         }),
     );
 
-    let action = Action::delegate_tool(&tool_call);
+    let action = Action::delegate_tool(&tool_call).unwrap();
     let effect = executor.execute(&ctx, &action).await;
 
     assert_eq!(effect.status, aura_core::EffectStatus::Committed);

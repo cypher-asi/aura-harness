@@ -186,7 +186,7 @@ async fn test_turn_record_entry_creation() {
     let result = processor.process_turn(agent_id, tx.clone(), 1).await.unwrap();
 
     // Create a record entry from the result
-    let entry = processor.to_record_entry(1, tx, &result, [0u8; 32]);
+    let entry = processor.to_record_entry(1, tx, &result, [0u8; 32]).unwrap();
 
     assert_eq!(entry.seq, 1);
     assert_eq!(entry.tx.agent_id, agent_id);

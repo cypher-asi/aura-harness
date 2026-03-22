@@ -178,42 +178,43 @@ impl Policy {
 
     /// Check if a tool is approved for this session.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
+    /// Recovers gracefully from mutex poisoning by accessing the inner data.
     #[must_use]
     pub fn is_session_approved(&self, tool: &str) -> bool {
-        self.session_approvals.lock().unwrap().contains(tool)
+        self.session_approvals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(tool)
     }
 
     /// Approve a tool for this session.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
+    /// Recovers gracefully from mutex poisoning by accessing the inner data.
     pub fn approve_for_session(&self, tool: &str) {
         self.session_approvals
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(tool.to_string());
     }
 
     /// Revoke session approval for a tool.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
+    /// Recovers gracefully from mutex poisoning by accessing the inner data.
     pub fn revoke_session_approval(&self, tool: &str) {
-        self.session_approvals.lock().unwrap().remove(tool);
+        self.session_approvals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(tool);
     }
 
     /// Clear all session approvals.
     ///
-    /// # Panics
-    ///
-    /// Panics if the internal mutex is poisoned.
+    /// Recovers gracefully from mutex poisoning by accessing the inner data.
     pub fn clear_session_approvals(&self) {
-        self.session_approvals.lock().unwrap().clear();
+        self.session_approvals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Check if a tool call requires approval.

@@ -548,7 +548,8 @@ mod transaction_chain_tests {
                 &result_payload,
                 orig_tx.hash,
                 Some(&orig_tx.hash), // prev_hash
-            );
+            )
+            .unwrap();
 
             // Reference should be preserved
             prop_assert_eq!(callback_tx.reference_tx_hash, Some(orig_tx.hash));

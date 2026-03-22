@@ -46,18 +46,21 @@ const DEFAULT_CALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_
 
 impl ExternalTool {
     /// Create a new external tool from a definition.
-    #[must_use]
-    pub fn new(def: ExternalToolDefinition) -> Self {
+    ///
+    /// # Errors
+    /// Returns `ToolError::ExternalToolError` if the HTTP client cannot be built.
+    pub(crate) fn new(def: ExternalToolDefinition) -> Result<Self, ToolError> {
         let client = reqwest::Client::builder()
             .timeout(DEFAULT_CALLBACK_TIMEOUT)
             .build()
-            .unwrap_or_default();
-        Self { def, client }
+            .map_err(|e| ToolError::ExternalToolError(format!("Failed to build HTTP client: {e}")))?;
+        Ok(Self { def, client })
     }
 
     /// Create a new external tool with a custom HTTP client.
     #[must_use]
-    pub fn with_client(def: ExternalToolDefinition, client: reqwest::Client) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn with_client(def: ExternalToolDefinition, client: reqwest::Client) -> Self {
         Self { def, client }
     }
 }
@@ -160,7 +163,7 @@ mod tests {
             callback_url: "http://example.com/search".into(),
         };
 
-        let tool = ExternalTool::new(def);
+        let tool = ExternalTool::new(def).unwrap();
         assert_eq!(tool.name(), "ext_search");
 
         let tool_def = tool.definition();

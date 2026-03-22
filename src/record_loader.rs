@@ -8,6 +8,7 @@ use aura_terminal::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 /// Load existing records from the store and send to UI.
 pub(crate) fn load_existing_records(
@@ -18,7 +19,7 @@ pub(crate) fn load_existing_records(
     let head_seq = match store.get_head_seq(agent_id) {
         Ok(seq) => seq,
         Err(e) => {
-            eprintln!("Warning: Failed to get head sequence: {e}");
+            warn!(error = %e, "Failed to get head sequence");
             let _ = commands.try_send(UiCommand::ShowWarning(format!(
                 "Could not load record history: {e}"
             )));
@@ -34,7 +35,7 @@ pub(crate) fn load_existing_records(
     let records = match store.scan_record(agent_id, from_seq, 100) {
         Ok(entries) => entries,
         Err(e) => {
-            eprintln!("Warning: Failed to load records (seq {from_seq}..{head_seq}): {e}");
+            warn!(from_seq, head_seq, error = %e, "Failed to load records");
             let _ = commands.try_send(UiCommand::ShowWarning(format!(
                 "Could not load {head_seq} historical records: {e}"
             )));

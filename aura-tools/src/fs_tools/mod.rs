@@ -10,24 +10,21 @@ mod search;
 mod stat;
 mod write;
 
-pub use cmd::{
-    cmd_run, cmd_run_with_threshold, cmd_spawn, output_to_tool_result, CmdRunTool,
-    ThresholdResult,
-};
-pub use delete::{fs_delete, FsDeleteTool};
-pub use edit::{fs_edit, FsEditTool};
-pub use find::{fs_find, FsFindTool};
-pub use ls::{fs_ls, FsLsTool};
-pub use read::{fs_read, FsReadTool};
-pub use search::{search_code, SearchCodeTool};
-pub use stat::{fs_stat, FsStatTool};
-pub use write::{fs_write, FsWriteTool};
+pub use cmd::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, CmdRunTool, ThresholdResult};
+pub use delete::FsDeleteTool;
+pub use edit::FsEditTool;
+pub use find::FsFindTool;
+pub use ls::FsLsTool;
+pub use read::FsReadTool;
+pub use search::SearchCodeTool;
+pub use stat::FsStatTool;
+pub use write::FsWriteTool;
 
 use crate::error::ToolError;
 use aura_core::ToolResult;
 
 /// Run a blocking tool closure on the tokio blocking threadpool.
-pub(crate) async fn spawn_blocking_tool<F>(f: F) -> Result<ToolResult, ToolError>
+pub async fn spawn_blocking_tool<F>(f: F) -> Result<ToolResult, ToolError>
 where
     F: FnOnce() -> Result<ToolResult, ToolError> + Send + 'static,
 {

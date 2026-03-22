@@ -5,6 +5,7 @@
 use crate::tool::{builtin_tools, read_only_builtin_tools};
 use aura_reasoner::ToolDefinition;
 use std::collections::HashMap;
+use tracing::{debug, instrument};
 
 // ============================================================================
 // ToolRegistry Trait
@@ -39,23 +40,27 @@ pub struct DefaultToolRegistry {
 impl DefaultToolRegistry {
     /// Create a new registry with all default tools.
     #[must_use]
+    #[instrument(skip_all)]
     pub fn new() -> Self {
         let mut tools = HashMap::new();
         for tool in builtin_tools() {
             let def = tool.definition();
             tools.insert(def.name.clone(), def);
         }
+        debug!(tool_count = tools.len(), "Initialized default tool registry");
         Self { tools }
     }
 
     /// Create a registry with only read-only tools.
     #[must_use]
+    #[instrument(skip_all)]
     pub fn read_only() -> Self {
         let mut tools = HashMap::new();
         for tool in read_only_builtin_tools() {
             let def = tool.definition();
             tools.insert(def.name.clone(), def);
         }
+        debug!(tool_count = tools.len(), "Initialized read-only tool registry");
         Self { tools }
     }
 
@@ -68,12 +73,16 @@ impl DefaultToolRegistry {
     }
 
     /// Add a custom tool.
+    #[instrument(skip(self, tool), fields(tool_name = %tool.name))]
     pub fn register(&mut self, tool: ToolDefinition) {
+        debug!("Registering custom tool");
         self.tools.insert(tool.name.clone(), tool);
     }
 
     /// Remove a tool.
+    #[instrument(skip(self), fields(tool_name = %name))]
     pub fn unregister(&mut self, name: &str) -> Option<ToolDefinition> {
+        debug!("Unregistering tool");
         self.tools.remove(name)
     }
 }
@@ -89,6 +98,7 @@ impl ToolRegistry for DefaultToolRegistry {
         self.tools.values().cloned().collect()
     }
 
+    #[instrument(skip(self), fields(tool_name = %name))]
     fn get(&self, name: &str) -> Option<ToolDefinition> {
         self.tools.get(name).cloned()
     }

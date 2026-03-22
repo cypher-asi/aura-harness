@@ -40,7 +40,18 @@ impl AgentToolExecutor for KernelToolExecutor {
         for tool in tool_calls {
             let normalized_name = normalize_tool_name(&tool.name);
             let tool_call = ToolCall::new(normalized_name.to_string(), tool.input.clone());
-            let action = Action::delegate_tool(&tool_call);
+            let action = match Action::delegate_tool(&tool_call) {
+                Ok(a) => a,
+                Err(e) => {
+                    results.push(ToolCallResult {
+                        tool_use_id: tool.id.clone(),
+                        content: format!("Internal serialization error: {e}"),
+                        is_error: true,
+                        stop_loop: false,
+                    });
+                    continue;
+                }
+            };
             let ctx = ExecuteContext::new(self.agent_id, action.action_id, self.workspace.clone());
 
             let effect = self.executor.execute(&ctx, &action).await;
