@@ -259,13 +259,17 @@ impl App {
         self.scroll_offset
     }
 
+    /// Clamp the scroll offset to a maximum value.
+    /// Called by the renderer after computing the actual content height in lines.
+    pub fn clamp_scroll(&mut self, max: usize) {
+        self.scroll_offset = self.scroll_offset.min(max);
+    }
+
     /// Scroll up by the given number of lines (panel-aware).
     pub fn scroll_up(&mut self, lines: usize) {
         match self.focus {
             PanelFocus::Chat => {
-                // Scroll up means we want to see older messages (increase offset)
-                let max_scroll = self.messages.len().saturating_sub(1);
-                self.scroll_offset = self.scroll_offset.saturating_add(lines).min(max_scroll);
+                self.scroll_offset = self.scroll_offset.saturating_add(lines);
             }
             PanelFocus::Records => {
                 // Move selection up in records list
@@ -651,10 +655,10 @@ impl App {
                 }
             }
             KeyCode::PageUp => {
-                self.scroll_offset = self.scroll_offset.saturating_add(5);
+                self.scroll_up(5);
             }
             KeyCode::PageDown => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(5);
+                self.scroll_down(5);
             }
             _ => {}
         }

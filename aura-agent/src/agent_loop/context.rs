@@ -39,7 +39,7 @@ pub(super) fn compact_if_needed(config: &AgentLoopConfig, state: &mut LoopState)
 
 /// Emit the first-write checkpoint warning once.
 pub(super) fn emit_checkpoint_if_needed(
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     state: &mut LoopState,
 ) {
     if !state.had_any_write || state.checkpoint_emitted {
@@ -82,7 +82,7 @@ pub(super) fn compact_exploration_if_needed(config: &AgentLoopConfig, state: &mu
 #[allow(clippy::cast_precision_loss)]
 pub(super) fn check_budget_warnings(
     config: &AgentLoopConfig,
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     state: &mut LoopState,
     iteration: usize,
 ) {

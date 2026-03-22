@@ -267,7 +267,7 @@ fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
 }
 
 /// Render the full application UI in IRC style.
-pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
+pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let area = frame.area();
 
     // Layout: header + content panels + input line
@@ -309,7 +309,7 @@ pub fn render(frame: &mut Frame, app: &App, theme: &Theme) {
 }
 
 /// Render the content panels (Swarm, Chat, Record) based on visibility.
-fn render_content_panels(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let swarm_visible = app.swarm_panel_visible();
     let record_visible = app.record_panel_visible();
 
@@ -474,7 +474,7 @@ fn render_thinking_section(frame: &mut Frame, area: Rect, app: &App, theme: &The
     clippy::too_many_lines,
     reason = "UI rendering function with many visual components"
 )]
-fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let border_color = if is_focused {
         theme.colors.primary
@@ -542,7 +542,7 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let mut lines: Vec<Line> = Vec::new();
     let content_width = padded.width as usize;
 
-    for message in messages.iter().skip(app.scroll_offset()) {
+    for message in messages {
         // Format: [HH:MM:SS] <NICK> message
         // User: <YOU> in white, message in neon cyan
         // AURA: <AURA> in white, message in gray
@@ -694,13 +694,13 @@ fn render_chat_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // Apply scroll offset: scroll_offset=0 means show newest at bottom
     // scroll_offset>0 means we want to see older content (scroll up)
     let visible_height = padded.height as usize;
-    let scroll_offset = app.scroll_offset();
-
-    // Calculate the starting line:
-    // - Without scroll: start from (total - visible_height) to show newest at bottom
-    // - With scroll: subtract scroll_offset to show older content
     let total_lines = lines.len();
     let bottom_start = total_lines.saturating_sub(visible_height);
+
+    // Clamp scroll_offset so the user can't overshoot past the top
+    app.clamp_scroll(bottom_start);
+    let scroll_offset = app.scroll_offset();
+
     let start = bottom_start.saturating_sub(scroll_offset);
 
     let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(visible_height).collect();
@@ -1120,7 +1120,11 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, left_of
             reason = "cursor position fits in terminal width"
         )]
         let prompt_len = prompt_str.len() as u16;
-        let cursor_x = area.x + left_offset + chat_padding + prompt_len + cursor_pos as u16;
+        let cursor_x = area.x
+            + left_offset
+            + chat_padding
+            + prompt_len
+            + u16::try_from(cursor_pos).unwrap_or(u16::MAX);
         let cursor_y = area.y;
         frame.set_cursor_position((cursor_x, cursor_y));
     }

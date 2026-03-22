@@ -30,7 +30,7 @@ impl LlmCallError {
     pub(super) fn apply(
         self,
         result: &mut AgentLoopResult,
-        event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     ) {
         match self {
             Self::InsufficientCredits(msg) => {
@@ -60,7 +60,7 @@ impl LlmCallError {
     }
 }
 
-fn classify_error(e: anyhow::Error) -> LlmCallError {
+fn classify_error(e: &anyhow::Error) -> LlmCallError {
     let msg = e.to_string();
     if msg.contains("402") {
         LlmCallError::InsufficientCredits(msg)
@@ -81,22 +81,25 @@ impl AgentLoop {
         &self,
         provider: &dyn ModelProvider,
         request: ModelRequest,
-        event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
     ) -> Result<ModelResponse, LlmCallError> {
         if let Some(delegate) = &self.model_delegate {
             return delegate
                 .call_model(request)
                 .await
-                .map_err(classify_error);
+                .map_err(|e| classify_error(&e));
         }
 
         if event_tx.is_some() {
             self.complete_with_streaming(provider, request, event_tx, cancellation_token)
                 .await
-                .map_err(classify_error)
+                .map_err(|e| classify_error(&e))
         } else {
-            provider.complete(request).await.map_err(classify_error)
+            provider
+                .complete(request)
+                .await
+                .map_err(|e| classify_error(&e))
         }
     }
 }

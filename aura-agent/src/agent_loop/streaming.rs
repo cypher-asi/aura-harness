@@ -15,7 +15,7 @@ use crate::events::AgentLoopEvent;
 use super::AgentLoop;
 
 /// Send an event through the channel if present.
-pub(super) fn emit(tx: &Option<UnboundedSender<AgentLoopEvent>>, event: AgentLoopEvent) {
+pub(super) fn emit(tx: Option<&UnboundedSender<AgentLoopEvent>>, event: AgentLoopEvent) {
     if let Some(tx) = tx {
         let _ = tx.send(event);
     }
@@ -23,7 +23,7 @@ pub(super) fn emit(tx: &Option<UnboundedSender<AgentLoopEvent>>, event: AgentLoo
 
 /// Emit an [`AgentLoopEvent::IterationComplete`] event.
 pub(super) fn emit_iteration_complete(
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     iteration: usize,
     response: &ModelResponse,
 ) {
@@ -39,7 +39,7 @@ pub(super) fn emit_iteration_complete(
 
 /// Map a [`StreamEvent`] to the corresponding [`AgentLoopEvent`] and emit it.
 fn emit_stream_event(
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     stream_event: &StreamEvent,
     accumulator: &StreamAccumulator,
 ) {
@@ -102,7 +102,7 @@ impl AgentLoop {
         &self,
         provider: &dyn ModelProvider,
         request: ModelRequest,
-        event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
     ) -> anyhow::Result<ModelResponse> {
         let start = Instant::now();
@@ -114,7 +114,7 @@ impl AgentLoop {
                 loop {
                     let next = if let Some(token) = cancellation_token {
                         tokio::select! {
-                            _ = token.cancelled() => {
+                            () = token.cancelled() => {
                                 return Err(anyhow::anyhow!("Cancelled"));
                             }
                             item = stream.next() => item,

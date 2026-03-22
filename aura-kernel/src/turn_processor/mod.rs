@@ -216,7 +216,7 @@ where
     ///
     /// Designed for external orchestrators (e.g., `AgentLoop`) that manage
     /// their own tool execution and request building, but want to leverage
-    /// TurnProcessor's streaming, cancellation, and replay infrastructure.
+    /// `TurnProcessor`'s streaming, cancellation, and replay infrastructure.
     ///
     /// # Errors
     ///
@@ -245,7 +245,7 @@ where
         } else if self.stream_callback.is_some() {
             self.complete_with_streaming(request).await
         } else {
-            self.provider.complete(request).await.map_err(Into::into)
+            self.provider.complete(request).await
         }
     }
 

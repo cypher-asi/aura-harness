@@ -381,7 +381,9 @@ mod tests {
         clear_all_env_vars();
 
         let config = SessionConfig::from_env();
-        assert!(config.loop_config.auth_token.is_none());
+        // Without AURA_ROUTER_JWT the token falls back to the credential store.
+        let stored = aura_auth::CredentialStore::load_token();
+        assert_eq!(config.loop_config.auth_token, stored);
 
         clear_all_env_vars();
     }

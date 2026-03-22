@@ -41,7 +41,7 @@ pub(super) async fn handle_tool_use(
     agent: &AgentLoop,
     response: &ModelResponse,
     executor: &dyn AgentToolExecutor,
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     state: &mut LoopState,
 ) -> bool {
     let tool_calls = extract_tool_calls(response);
@@ -159,7 +159,7 @@ fn update_cache(
 // ---------------------------------------------------------------------------
 
 fn emit_tool_results(
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     all_results: &[ToolCallResult],
     tool_calls: &[ToolCallInfo],
 ) {
@@ -190,7 +190,7 @@ fn push_tool_result_message(messages: &mut Vec<Message>, results: Vec<ToolCallRe
     }
 }
 
-fn handle_stall(event_tx: &Option<UnboundedSender<AgentLoopEvent>>, state: &mut LoopState) {
+fn handle_stall(event_tx: Option<&UnboundedSender<AgentLoopEvent>>, state: &mut LoopState) {
     let msg = "CRITICAL: Agent appears stalled — repeatedly failing \
                to write to the same files. Stopping to prevent \
                infinite loop. Try a different approach or ask for help.";
@@ -223,8 +223,8 @@ impl AgentLoop {
     ) -> (Vec<ToolCallResult>, bool) {
         let (blocked_results, to_execute) = partition_blocked(
             tool_calls,
-            &mut state.blocking_ctx,
-            &mut state.read_guard,
+            &state.blocking_ctx,
+            &state.read_guard,
             &mut state.messages,
         );
 
@@ -268,8 +268,8 @@ impl AgentLoop {
 
 fn partition_blocked(
     tool_calls: &[ToolCallInfo],
-    blocking_ctx: &mut BlockingContext,
-    read_guard: &mut ReadGuardState,
+    blocking_ctx: &BlockingContext,
+    read_guard: &ReadGuardState,
     messages: &mut Vec<Message>,
 ) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
     let mut blocked = Vec::new();

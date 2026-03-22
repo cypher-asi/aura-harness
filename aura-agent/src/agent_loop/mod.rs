@@ -89,7 +89,7 @@ impl Default for AgentLoopConfig {
             thinking_min_budget: THINKING_MIN_BUDGET,
             extra_tools: Vec::new(),
             system_prompt: String::new(),
-            model: "claude-opus-4-6".to_string(),
+            model: "claude-opus-4-6-20250514".to_string(),
             auth_token: None,
         }
     }
@@ -115,11 +115,6 @@ impl AgentLoop {
         }
     }
 
-    /// Update the auth token used for subsequent model requests.
-    pub fn set_auth_token(&mut self, token: Option<String>) {
-        self.config.auth_token = token;
-    }
-
     /// Set a [`ModelCallDelegate`] to handle model calls.
     ///
     /// When a delegate is set, [`AgentLoop`] routes all model completions
@@ -136,6 +131,11 @@ impl AgentLoop {
     pub fn with_model_delegate(mut self, delegate: Arc<dyn ModelCallDelegate>) -> Self {
         self.model_delegate = Some(delegate);
         self
+    }
+
+    /// Update the auth token for subsequent model requests.
+    pub fn set_auth_token(&mut self, token: Option<String>) {
+        self.config.auth_token = token;
     }
 
     /// Run the agent loop with the given provider, executor, and initial messages.
@@ -191,7 +191,7 @@ impl AgentLoop {
         );
 
         for iteration in 0..self.config.max_iterations {
-            if is_cancelled(&cancellation_token) {
+            if is_cancelled(cancellation_token.as_ref()) {
                 debug!("Cancellation requested, stopping loop");
                 break;
             }
@@ -200,27 +200,27 @@ impl AgentLoop {
 
             let request = state.build_request(&self.config, &tools);
             let response = match self
-                .call_model(provider, request, &event_tx, cancellation_token.as_ref())
+                .call_model(provider, request, event_tx.as_ref(), cancellation_token.as_ref())
                 .await
             {
                 Ok(r) => r,
                 Err(e) => {
-                    e.apply(&mut state.result, &event_tx);
+                    e.apply(&mut state.result, event_tx.as_ref());
                     break;
                 }
             };
 
             iteration::accumulate_response(&mut state, &response);
             state.result.iterations = iteration + 1;
-            streaming::emit_iteration_complete(&event_tx, iteration, &response);
+            streaming::emit_iteration_complete(event_tx.as_ref(), iteration, &response);
 
             if self
-                .dispatch_stop_reason(&response, executor, &event_tx, &mut state)
+                .dispatch_stop_reason(&response, executor, event_tx.as_ref(), &mut state)
                 .await
             {
                 break;
             }
-            if post_iteration_checks(&self.config, &event_tx, &mut state, iteration) {
+            if post_iteration_checks(&self.config, event_tx.as_ref(), &mut state, iteration) {
                 break;
             }
         }
@@ -234,7 +234,7 @@ impl AgentLoop {
         &self,
         response: &aura_reasoner::ModelResponse,
         executor: &dyn AgentToolExecutor,
-        event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
         state: &mut LoopState,
     ) -> bool {
         match response.stop_reason {
@@ -250,22 +250,22 @@ impl AgentLoop {
 }
 
 /// Mutable state carried across iterations of the agent loop.
-pub(crate) struct LoopState {
-    pub(crate) result: AgentLoopResult,
-    pub(crate) tool_cache: HashMap<String, String>,
-    pub(crate) blocking_ctx: BlockingContext,
-    pub(crate) read_guard: ReadGuardState,
-    pub(crate) exploration_state: ExplorationState,
-    pub(crate) stall_detector: StallDetector,
-    pub(crate) budget_state: BudgetState,
-    pub(crate) had_any_write: bool,
-    pub(crate) checkpoint_emitted: bool,
-    pub(crate) exploration_compaction_done: bool,
-    pub(crate) build_cooldown: usize,
-    pub(crate) thinking_budget: u32,
-    pub(crate) last_input_tokens: Option<u64>,
-    pub(crate) messages: Vec<Message>,
-    pub(crate) build_baseline: Option<BuildBaseline>,
+pub struct LoopState {
+    pub result: AgentLoopResult,
+    pub tool_cache: HashMap<String, String>,
+    pub blocking_ctx: BlockingContext,
+    pub read_guard: ReadGuardState,
+    pub exploration_state: ExplorationState,
+    pub stall_detector: StallDetector,
+    pub budget_state: BudgetState,
+    pub had_any_write: bool,
+    pub checkpoint_emitted: bool,
+    pub exploration_compaction_done: bool,
+    pub build_cooldown: usize,
+    pub thinking_budget: u32,
+    pub last_input_tokens: Option<u64>,
+    pub messages: Vec<Message>,
+    pub build_baseline: Option<BuildBaseline>,
 }
 
 impl LoopState {
@@ -289,7 +289,11 @@ impl LoopState {
         }
     }
 
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     fn begin_iteration(&mut self, config: &AgentLoopConfig, iteration: usize) {
         self.build_cooldown = self.build_cooldown.saturating_sub(1);
         self.blocking_ctx.decrement_cooldowns();
@@ -313,7 +317,7 @@ impl LoopState {
 /// Run post-iteration checks (checkpoint, compaction, budget). Returns `true` to break.
 fn post_iteration_checks(
     config: &AgentLoopConfig,
-    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
     state: &mut LoopState,
     iteration: usize,
 ) -> bool {
@@ -327,6 +331,6 @@ fn post_iteration_checks(
     false
 }
 
-fn is_cancelled(token: &Option<CancellationToken>) -> bool {
-    token.as_ref().is_some_and(|t| t.is_cancelled())
+fn is_cancelled(token: Option<&CancellationToken>) -> bool {
+    token.is_some_and(CancellationToken::is_cancelled)
 }
