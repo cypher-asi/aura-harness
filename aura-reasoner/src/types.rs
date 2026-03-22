@@ -364,6 +364,8 @@ pub struct ModelRequest {
     /// thinking with the given budget. When `None`, provider-default behavior
     /// applies.
     pub thinking: Option<ThinkingConfig>,
+    /// Optional JWT auth token for proxy routing.
+    pub auth_token: Option<String>,
 }
 
 impl ModelRequest {
@@ -384,6 +386,7 @@ pub struct ModelRequestBuilder {
     max_tokens: u32,
     temperature: Option<f32>,
     thinking: Option<ThinkingConfig>,
+    auth_token: Option<String>,
 }
 
 impl ModelRequestBuilder {
@@ -399,6 +402,7 @@ impl ModelRequestBuilder {
             max_tokens: 4096,
             temperature: None,
             thinking: None,
+            auth_token: None,
         }
     }
 
@@ -451,6 +455,13 @@ impl ModelRequestBuilder {
         self
     }
 
+    /// Set the auth token for proxy routing.
+    #[must_use]
+    pub fn auth_token(mut self, token: Option<String>) -> Self {
+        self.auth_token = token;
+        self
+    }
+
     /// Build the request.
     #[must_use]
     pub fn build(self) -> ModelRequest {
@@ -463,6 +474,7 @@ impl ModelRequestBuilder {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             thinking: self.thinking,
+            auth_token: self.auth_token,
         }
     }
 }

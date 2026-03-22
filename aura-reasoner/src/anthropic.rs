@@ -23,6 +23,15 @@ use tracing::{debug, error, instrument, trace};
 // Configuration
 // ============================================================================
 
+/// LLM routing mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoutingMode {
+    /// Call the LLM provider directly (e.g., api.anthropic.com).
+    Direct,
+    /// Route through the aura-router proxy with JWT auth.
+    Proxy,
+}
+
 /// Anthropic provider configuration.
 #[derive(Debug, Clone)]
 pub struct AnthropicConfig {
@@ -36,6 +45,7 @@ pub struct AnthropicConfig {
     pub max_retries: u32,
     /// API base URL
     pub base_url: String,
+    pub routing_mode: RoutingMode,
 }
 
 impl AnthropicConfig {
@@ -49,9 +59,28 @@ impl AnthropicConfig {
     ///
     /// Returns error if API key is not set.
     pub fn from_env() -> anyhow::Result<Self> {
-        let api_key = std::env::var("AURA_ANTHROPIC_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .map_err(|_| anyhow::anyhow!("AURA_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY not set"))?;
+        let routing_mode = match std::env::var("AURA_LLM_ROUTING").as_deref() {
+            Ok("direct") => RoutingMode::Direct,
+            _ => RoutingMode::Proxy,
+        };
+
+        let (api_key, base_url) = match routing_mode {
+            RoutingMode::Direct => {
+                let key = std::env::var("AURA_ANTHROPIC_API_KEY")
+                    .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+                    .map_err(|_| anyhow::anyhow!(
+                        "Direct mode requires AURA_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY"
+                    ))?;
+                let url = std::env::var("AURA_ANTHROPIC_BASE_URL")
+                    .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+                (key, url)
+            }
+            RoutingMode::Proxy => {
+                let url = std::env::var("AURA_ROUTER_URL")
+                    .unwrap_or_else(|_| "https://aura-router.onrender.com".to_string());
+                (String::new(), url)
+            }
+        };
 
         let default_model = std::env::var("AURA_ANTHROPIC_MODEL")
             .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
@@ -61,15 +90,13 @@ impl AnthropicConfig {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60_000);
 
-        let base_url = std::env::var("AURA_ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-
         Ok(Self {
             api_key,
             default_model,
             timeout_ms,
             max_retries: 2,
             base_url,
+            routing_mode,
         })
     }
 
@@ -82,6 +109,7 @@ impl AnthropicConfig {
             timeout_ms: 60_000,
             max_retries: 2,
             base_url: "https://api.anthropic.com".to_string(),
+            routing_mode: RoutingMode::Direct,
         }
     }
 }
@@ -157,14 +185,28 @@ impl ModelProvider for AnthropicProvider {
         );
 
         // Make the API call
-        let response = self
+        let mut req_builder = self
             .client
             .post(format!("{}/v1/messages", self.config.base_url))
-            .header("x-api-key", &self.config.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("anthropic-beta", "prompt-caching-2024-07-31")
             .header("content-type", "application/json")
-            .json(&api_request)
+            .json(&api_request);
+
+        match self.config.routing_mode {
+            RoutingMode::Direct => {
+                req_builder = req_builder
+                    .header("x-api-key", &self.config.api_key)
+                    .header("anthropic-beta", "prompt-caching-2024-07-31");
+            }
+            RoutingMode::Proxy => {
+                let token = request.auth_token.as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Proxy mode requires a JWT auth token"))?;
+                req_builder = req_builder
+                    .header("authorization", format!("Bearer {token}"));
+            }
+        }
+
+        let response = req_builder
             .send()
             .await
             .map_err(|e| {
@@ -286,14 +328,28 @@ impl ModelProvider for AnthropicProvider {
         );
 
         // Make the streaming API call
-        let response = self
+        let mut req_builder = self
             .client
             .post(format!("{}/v1/messages", self.config.base_url))
-            .header("x-api-key", &self.config.api_key)
             .header("anthropic-version", "2023-06-01")
-            .header("anthropic-beta", "prompt-caching-2024-07-31")
             .header("content-type", "application/json")
-            .json(&api_request)
+            .json(&api_request);
+
+        match self.config.routing_mode {
+            RoutingMode::Direct => {
+                req_builder = req_builder
+                    .header("x-api-key", &self.config.api_key)
+                    .header("anthropic-beta", "prompt-caching-2024-07-31");
+            }
+            RoutingMode::Proxy => {
+                let token = request.auth_token.as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Proxy mode requires a JWT auth token"))?;
+                req_builder = req_builder
+                    .header("authorization", format!("Bearer {token}"));
+            }
+        }
+
+        let response = req_builder
             .send()
             .await
             .map_err(|e| {
@@ -912,6 +968,7 @@ mod tests {
         let config = AnthropicConfig::new("test-key", "claude-3-haiku");
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.default_model, "claude-3-haiku");
+        assert_eq!(config.routing_mode, RoutingMode::Direct);
     }
 
     #[test]
