@@ -1,0 +1,52 @@
+//! Action types: kinds and authorized actions.
+
+use crate::ids::ActionId;
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+
+use super::ToolCall;
+
+/// The kind of action (whitepaper-aligned).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionKind {
+    /// Reasoning/thinking action
+    Reason,
+    /// Store information for future use
+    Memorize,
+    /// Make a decision
+    Decide,
+    /// Delegate to external system (tools, other agents)
+    Delegate,
+}
+
+/// An authorized action to be executed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Action {
+    /// Unique action identifier
+    pub action_id: ActionId,
+    /// Type of action
+    pub kind: ActionKind,
+    /// Versioned payload (opaque bytes)
+    #[serde(with = "super::bytes_serde")]
+    pub payload: Bytes,
+}
+
+impl Action {
+    /// Create a new action.
+    #[must_use]
+    pub fn new(action_id: ActionId, kind: ActionKind, payload: impl Into<Bytes>) -> Self {
+        Self {
+            action_id,
+            kind,
+            payload: payload.into(),
+        }
+    }
+
+    /// Create a delegate action for a tool call.
+    #[must_use]
+    pub fn delegate_tool(tool_call: &ToolCall) -> Self {
+        let payload = serde_json::to_vec(tool_call).unwrap_or_default();
+        Self::new(ActionId::generate(), ActionKind::Delegate, payload)
+    }
+}

@@ -179,11 +179,17 @@ mod tests {
         });
         let result = summarize_write_input("write_file", &input).unwrap();
         assert_eq!(result["path"], "src/main.rs");
-        assert!(result["_summarized"].as_str().unwrap().contains("32 bytes written"));
+        assert!(result["_summarized"]
+            .as_str()
+            .unwrap()
+            .contains("32 bytes written"));
 
         let result_fs = summarize_write_input("fs_write", &input).unwrap();
         assert_eq!(result_fs["path"], "src/main.rs");
-        assert!(result_fs["_summarized"].as_str().unwrap().contains("bytes written"));
+        assert!(result_fs["_summarized"]
+            .as_str()
+            .unwrap()
+            .contains("bytes written"));
     }
 
     #[test]

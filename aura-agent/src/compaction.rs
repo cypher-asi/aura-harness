@@ -91,9 +91,7 @@ pub fn truncate_content(
         .collect();
 
     let omitted = content.len().saturating_sub(head + tail);
-    format!(
-        "{head_part}\n\n[...content truncated ({omitted} chars omitted)...]\n\n{tail_part}",
-    )
+    format!("{head_part}\n\n[...content truncated ({omitted} chars omitted)...]\n\n{tail_part}",)
 }
 
 /// Estimate total character count of messages.
@@ -127,8 +125,8 @@ pub fn estimate_message_chars(messages: &[Message]) -> usize {
 /// Higher utilization → more aggressive compaction. Returns `None` below 15%.
 pub fn select_tier(utilization: f64) -> Option<CompactionConfig> {
     use crate::constants::{
-        COMPACTION_TIER_30, COMPACTION_TIER_60, COMPACTION_TIER_AGGRESSIVE, COMPACTION_TIER_HISTORY,
-        COMPACTION_TIER_MICRO,
+        COMPACTION_TIER_30, COMPACTION_TIER_60, COMPACTION_TIER_AGGRESSIVE,
+        COMPACTION_TIER_HISTORY, COMPACTION_TIER_MICRO,
     };
     if utilization >= COMPACTION_TIER_HISTORY {
         Some(CompactionConfig::micro())
@@ -287,7 +285,9 @@ pub fn compact_older_messages(messages: &mut [Message], config: &CompactionConfi
                                 tail_chars,
                             )
                         });
-                        if compacted.len() <= config.tool_result_max_chars || compacted.len() < text.len() {
+                        if compacted.len() <= config.tool_result_max_chars
+                            || compacted.len() < text.len()
+                        {
                             *content = aura_reasoner::ToolResultContent::Text(compacted);
                         } else {
                             *content = aura_reasoner::ToolResultContent::Text(truncate_content(
@@ -368,8 +368,14 @@ mod tests {
         let tier = select_tier(0.85);
         assert!(tier.is_some());
         let config = tier.unwrap();
-        assert_eq!(config.preserve_recent, CompactionConfig::micro().preserve_recent);
-        assert_eq!(config.tool_result_max_chars, CompactionConfig::micro().tool_result_max_chars);
+        assert_eq!(
+            config.preserve_recent,
+            CompactionConfig::micro().preserve_recent
+        );
+        assert_eq!(
+            config.tool_result_max_chars,
+            CompactionConfig::micro().tool_result_max_chars
+        );
     }
 
     #[test]

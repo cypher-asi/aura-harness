@@ -1,158 +1,22 @@
-//! WebSocket session state and lifecycle.
-//!
-//! Each WebSocket connection maps to a `Session` that maintains conversation
-//! state, tool configuration, and token accounting across turns.
+//! WebSocket connection handler and turn management.
 
+use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageEnd, AssistantMessageStart, ErrorMsg, FilesChanged, InboundMessage,
     OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ToolInfo, UserMessage,
 };
-use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult, KernelToolExecutor};
-use aura_core::{AgentId, ExternalToolDefinition};
+use aura_agent::{AgentLoop, AgentLoopResult, KernelToolExecutor};
 use aura_executor::ExecutorRouter;
-use aura_kernel::TurnConfig;
-use aura_reasoner::{Message, ModelProvider, ToolDefinition};
-use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolRegistry};
+use aura_reasoner::Message;
+use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-
-// ============================================================================
-// Session
-// ============================================================================
-
-/// Per-connection session state.
-pub struct Session {
-    /// Unique session identifier.
-    pub session_id: String,
-    /// Stable agent ID for the lifetime of this session.
-    pub agent_id: AgentId,
-    /// System prompt for the model.
-    pub system_prompt: String,
-    /// Model identifier.
-    pub model: String,
-    /// Max tokens per response.
-    pub max_tokens: u32,
-    /// Sampling temperature.
-    pub temperature: Option<f32>,
-    /// Maximum agentic steps per turn.
-    pub max_turns: u32,
-    /// External tools registered for this session.
-    pub external_tools: Vec<ExternalToolDefinition>,
-    /// Conversation history (accumulated across turns).
-    pub messages: Vec<Message>,
-    /// Cumulative input tokens across all turns.
-    pub cumulative_input_tokens: u64,
-    /// Cumulative output tokens across all turns.
-    pub cumulative_output_tokens: u64,
-    /// Workspace directory for this session.
-    pub workspace: PathBuf,
-    /// Whether `session_init` has been received.
-    pub initialized: bool,
-    /// Available tool definitions (builtin + external).
-    pub tool_definitions: Vec<ToolDefinition>,
-    /// Context window size in tokens (for utilization calculation).
-    pub context_window_tokens: u64,
-    /// JWT auth token for proxy routing.
-    pub auth_token: Option<String>,
-}
-
-impl Session {
-    /// Create a new uninitialized session with defaults.
-    fn new(default_workspace: PathBuf) -> Self {
-        Self {
-            session_id: Uuid::new_v4().to_string(),
-            agent_id: AgentId::generate(),
-            system_prompt: String::new(),
-            model: "claude-opus-4-6-20250514".to_string(),
-            max_tokens: 16384,
-            temperature: None,
-            max_turns: 25,
-            external_tools: Vec::new(),
-            messages: Vec::new(),
-            cumulative_input_tokens: 0,
-            cumulative_output_tokens: 0,
-            workspace: default_workspace,
-            initialized: false,
-            tool_definitions: Vec::new(),
-            context_window_tokens: 200_000,
-            auth_token: None,
-        }
-    }
-
-    /// Apply a `session_init` message to configure this session.
-    fn apply_init(&mut self, init: SessionInit) {
-        if let Some(prompt) = init.system_prompt {
-            self.system_prompt = prompt;
-        }
-        if let Some(model) = init.model {
-            self.model = model;
-        }
-        if let Some(max_tokens) = init.max_tokens {
-            self.max_tokens = max_tokens;
-        }
-        if let Some(temperature) = init.temperature {
-            self.temperature = Some(temperature);
-        }
-        if let Some(max_turns) = init.max_turns {
-            self.max_turns = max_turns;
-        }
-        if let Some(tools) = init.external_tools {
-            self.external_tools = tools;
-        }
-        if let Some(workspace) = init.workspace {
-            self.workspace = PathBuf::from(workspace);
-        }
-        if let Some(token) = init.token {
-            self.auth_token = Some(token);
-        }
-        self.initialized = true;
-    }
-
-    /// Build an `AgentLoopConfig` from session state.
-    fn agent_loop_config(&self) -> AgentLoopConfig {
-        AgentLoopConfig {
-            max_iterations: self.max_turns as usize,
-            model: self.model.clone(),
-            system_prompt: if self.system_prompt.is_empty() {
-                TurnConfig::default().system_prompt
-            } else {
-                self.system_prompt.clone()
-            },
-            max_tokens: self.max_tokens,
-            max_context_tokens: Some(self.context_window_tokens),
-            auth_token: self.auth_token.clone(),
-            ..AgentLoopConfig::default()
-        }
-    }
-}
-
-// ============================================================================
-// WebSocket Handler
-// ============================================================================
-
-/// Configuration passed to the WebSocket handler from the router state.
-#[derive(Clone)]
-pub struct WsContext {
-    /// Default workspace base path.
-    pub workspace_base: PathBuf,
-    /// Shared model provider (type-erased).
-    pub provider: Arc<dyn ModelProvider + Send + Sync>,
-    /// Tool configuration (fs/cmd permissions).
-    pub tool_config: ToolConfig,
-    /// JWT auth token from the WebSocket upgrade request.
-    pub auth_token: Option<String>,
-}
-
-// ============================================================================
-// Active Turn
-// ============================================================================
 
 /// State for a turn that is currently being processed in the background.
 struct ActiveTurn {
@@ -328,7 +192,7 @@ fn handle_session_init(
     session.tool_definitions = builtin_tools.list();
 
     for ext in &session.external_tools {
-        session.tool_definitions.push(ToolDefinition::new(
+        session.tool_definitions.push(aura_reasoner::ToolDefinition::new(
             &ext.name,
             &ext.description,
             ext.input_schema.clone(),

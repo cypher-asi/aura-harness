@@ -1,0 +1,86 @@
+//! Effect types: kinds, statuses, and action results.
+
+use crate::ids::ActionId;
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+
+/// The kind of effect produced by an action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectKind {
+    /// A proposal was generated
+    Proposal,
+    /// An artifact was created/stored
+    Artifact,
+    /// A belief was updated
+    Belief,
+    /// An agreement was reached (tool result, etc.)
+    Agreement,
+}
+
+/// The status of an effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectStatus {
+    /// Successfully committed
+    Committed,
+    /// Pending external completion
+    Pending,
+    /// Failed
+    Failed,
+}
+
+/// The result of executing an action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Effect {
+    /// Reference to the action that produced this effect
+    pub action_id: ActionId,
+    /// Type of effect
+    pub kind: EffectKind,
+    /// Status of the effect
+    pub status: EffectStatus,
+    /// Result payload (opaque bytes)
+    #[serde(with = "super::bytes_serde")]
+    pub payload: Bytes,
+}
+
+impl Effect {
+    /// Create a new effect.
+    #[must_use]
+    pub fn new(
+        action_id: ActionId,
+        kind: EffectKind,
+        status: EffectStatus,
+        payload: impl Into<Bytes>,
+    ) -> Self {
+        Self {
+            action_id,
+            kind,
+            status,
+            payload: payload.into(),
+        }
+    }
+
+    /// Create a committed agreement effect (e.g., tool result).
+    #[must_use]
+    pub fn committed_agreement(action_id: ActionId, payload: impl Into<Bytes>) -> Self {
+        Self::new(
+            action_id,
+            EffectKind::Agreement,
+            EffectStatus::Committed,
+            payload,
+        )
+    }
+
+    /// Create a failed effect.
+    #[must_use]
+    pub fn failed(action_id: ActionId, kind: EffectKind, error: impl Into<Bytes>) -> Self {
+        Self::new(action_id, kind, EffectStatus::Failed, error)
+    }
+
+    /// Create a pending effect.
+    #[must_use]
+    pub fn pending(action_id: ActionId, kind: EffectKind) -> Self {
+        Self::new(action_id, kind, EffectStatus::Pending, Bytes::new())
+    }
+}

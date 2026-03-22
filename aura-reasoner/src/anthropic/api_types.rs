@@ -1,0 +1,236 @@
+use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// API Types (matching Anthropic's JSON schema)
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub(super) struct ApiRequest {
+    pub model: String,
+    pub system: serde_json::Value,
+    pub messages: Vec<ApiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ApiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ApiToolChoice>,
+    pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ApiMessage {
+    pub role: String,
+    pub content: Vec<ApiContent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum ApiContent {
+    Text {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<serde_json::Value>,
+    },
+    /// Thinking content block - required when extended thinking is enabled.
+    /// Must be echoed back to the API in multi-turn conversations.
+    Thinking {
+        thinking: String,
+        /// Signature is required when echoing thinking blocks back to the API
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    Image {
+        source: ApiImageSource,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_control: Option<serde_json::Value>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ApiImageSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub media_type: String,
+    pub data: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ApiTool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum ApiToolChoice {
+    Auto,
+    Any,
+    Tool { name: String },
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ApiResponse {
+    pub id: String,
+    pub model: String,
+    pub content: Vec<ApiContent>,
+    pub stop_reason: Option<String>,
+    pub usage: ApiUsage,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(clippy::struct_field_names)]
+pub(super) struct ApiUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+}
+
+// ============================================================================
+// Streaming API Types
+// ============================================================================
+
+/// Request with streaming enabled.
+#[derive(Debug, Serialize)]
+pub(super) struct StreamingApiRequest {
+    pub model: String,
+    pub system: serde_json::Value,
+    pub messages: Vec<ApiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ApiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ApiToolChoice>,
+    pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ApiThinkingConfig>,
+}
+
+/// Internal API representation of the extended thinking configuration.
+#[derive(Debug, Serialize)]
+pub(super) struct ApiThinkingConfig {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    pub budget_tokens: u32,
+}
+
+// ============================================================================
+// SSE Event Types
+// ============================================================================
+
+/// SSE event types from Anthropic.
+///
+/// These types are used for deserializing SSE events from the Anthropic API.
+/// Some fields are parsed but not directly used (they're used for proper deserialization).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(super) enum SseEvent {
+    MessageStart {
+        message: SseMessageStart,
+    },
+    ContentBlockStart {
+        index: u32,
+        content_block: SseContentBlock,
+    },
+    ContentBlockDelta {
+        index: u32,
+        delta: SseDelta,
+    },
+    ContentBlockStop {
+        index: u32,
+    },
+    MessageDelta {
+        delta: SseMessageDeltaContent,
+        usage: Option<SseUsageDelta>,
+    },
+    MessageStop,
+    Ping,
+    Error {
+        error: SseError,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(super) struct SseMessageStart {
+    pub id: String,
+    pub model: String,
+    #[serde(default)]
+    pub usage: Option<SseUsageStart>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code, clippy::struct_field_names)]
+pub(super) struct SseUsageStart {
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
+pub(super) enum SseContentBlock {
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub(super) enum SseDelta {
+    #[serde(rename = "text_delta")]
+    Text { text: String },
+    #[serde(rename = "thinking_delta")]
+    Thinking { thinking: String },
+    #[serde(rename = "signature_delta")]
+    Signature { signature: String },
+    #[serde(rename = "input_json_delta")]
+    InputJson { partial_json: String },
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SseMessageDeltaContent {
+    pub stop_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SseUsageDelta {
+    pub output_tokens: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SseError {
+    pub message: String,
+}

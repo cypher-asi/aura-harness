@@ -437,8 +437,9 @@ impl AgentLoop {
 
                     // Cache successful results from cacheable tools
                     for exec_result in &executed_results {
-                        if let Some(tc) =
-                            uncached_calls.iter().find(|t| t.id == exec_result.tool_use_id)
+                        if let Some(tc) = uncached_calls
+                            .iter()
+                            .find(|t| t.id == exec_result.tool_use_id)
                         {
                             if is_cacheable(&tc.name) && !exec_result.is_error {
                                 let key = cache_key(&tc.name, &tc.input);
@@ -965,15 +966,21 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.iterations, 2, "Loop should continue after MaxTokens with pending tools");
+        assert_eq!(
+            result.iterations, 2,
+            "Loop should continue after MaxTokens with pending tools"
+        );
         assert!(result.total_text.contains("Recovered after truncation."));
 
         let has_error_tool_result = result.messages.iter().any(|msg| {
-            msg.content.iter().any(|block| {
-                matches!(block, ContentBlock::ToolResult { is_error: true, .. })
-            })
+            msg.content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolResult { is_error: true, .. }))
         });
-        assert!(has_error_tool_result, "Should have injected an error tool result");
+        assert!(
+            has_error_tool_result,
+            "Should have injected an error tool result"
+        );
     }
 
     #[tokio::test]
@@ -981,7 +988,9 @@ mod tests {
         let executor = MockExecutor { results: vec![] };
 
         let provider = MockProvider::new()
-            .with_response(MockResponse::text("Truncated text").with_stop_reason(StopReason::MaxTokens))
+            .with_response(
+                MockResponse::text("Truncated text").with_stop_reason(StopReason::MaxTokens),
+            )
             .with_response(MockResponse::text("Should not reach this"));
 
         let config = AgentLoopConfig {
@@ -997,7 +1006,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.iterations, 1, "Loop should break on MaxTokens with no pending tools");
+        assert_eq!(
+            result.iterations, 1,
+            "Loop should break on MaxTokens with no pending tools"
+        );
         assert!(result.total_text.contains("Truncated text"));
         assert!(!result.total_text.contains("Should not reach this"));
     }
@@ -1111,7 +1123,10 @@ mod tests {
                 }
             })
         });
-        assert!(has_checkpoint, "Messages should contain the checkpoint note after first write");
+        assert!(
+            has_checkpoint,
+            "Messages should contain the checkpoint note after first write"
+        );
     }
 
     #[tokio::test]
@@ -1165,7 +1180,10 @@ mod tests {
                 }
             })
             .count();
-        assert_eq!(checkpoint_count, 1, "Checkpoint message should appear exactly once");
+        assert_eq!(
+            checkpoint_count, 1,
+            "Checkpoint message should appear exactly once"
+        );
     }
 
     #[tokio::test]
