@@ -100,6 +100,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # UUID
 uuid = { version = "1.7", features = ["v4", "serde"] }
 
+# Futures
+futures-util = "0.3"
+
 # Bytes
 bytes = "1.5"
 

@@ -4,13 +4,16 @@
 //! the model provider in a loop with intelligence: blocking detection,
 //! compaction, sanitization, budget management, etc.
 
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use aura_reasoner::{
-    ContentBlock, Message, ModelProvider, ModelRequest, StopReason, ToolDefinition,
-    ToolResultContent,
+    ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, StopReason,
+    StreamAccumulator, StreamContentType, StreamEvent, ToolDefinition, ToolResultContent,
 };
+use futures_util::StreamExt;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::blocking::detection::{detect_all_blocked, BlockingContext};
@@ -22,12 +25,16 @@ use crate::constants::{
     AUTO_BUILD_COOLDOWN, CHARS_PER_TOKEN, DEFAULT_EXPLORATION_ALLOWANCE, MAX_ITERATIONS,
     THINKING_MIN_BUDGET, THINKING_TAPER_AFTER, THINKING_TAPER_FACTOR,
 };
+use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::read_guard::ReadGuardState;
 use crate::sanitize;
 use crate::types::{
     AgentLoopResult, AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
+
+/// Tools whose successful results can be cached within a single agent run.
+const CACHEABLE_TOOLS: &[&str] = &["fs_read", "fs_ls", "fs_stat", "fs_find", "search_code"];
 
 /// Configuration for the agent loop.
 #[derive(Debug, Clone)]
@@ -103,9 +110,35 @@ impl AgentLoop {
 
     /// Run the agent loop with the given provider, executor, and initial messages.
     ///
-    /// This is the main entry point. It drives the multi-step conversation
-    /// by calling the model provider, processing tool calls, managing context,
-    /// and applying intelligence (blocking, compaction, budget, etc.).
+    /// Backward-compatible entry point that delegates to
+    /// [`run_with_events`](Self::run_with_events) with no event channel
+    /// or cancellation token.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if a model call or tool execution fails fatally.
+    pub async fn run(
+        &self,
+        provider: &dyn ModelProvider,
+        executor: &dyn AgentToolExecutor,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+    ) -> anyhow::Result<AgentLoopResult> {
+        self.run_with_events(provider, executor, messages, tools, None, None)
+            .await
+    }
+
+    /// Run the agent loop with streaming events and cancellation support.
+    ///
+    /// When `event_tx` is `Some`, model calls use streaming and emit
+    /// real-time [`AgentLoopEvent`]s through the channel. When `None`, the
+    /// loop uses non-streaming `provider.complete()`.
+    ///
+    /// When `cancellation_token` is `Some`, the loop checks for cancellation
+    /// at the start of each iteration and during streaming.
+    ///
+    /// A per-run tool cache avoids re-executing read-only tools with identical
+    /// arguments. The cache is invalidated when any write tool succeeds.
     ///
     /// # Errors
     ///
@@ -116,14 +149,17 @@ impl AgentLoop {
         clippy::cast_sign_loss,
         clippy::too_many_lines
     )]
-    pub async fn run(
+    pub async fn run_with_events(
         &self,
         provider: &dyn ModelProvider,
         executor: &dyn AgentToolExecutor,
         mut messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        event_tx: Option<UnboundedSender<AgentLoopEvent>>,
+        cancellation_token: Option<CancellationToken>,
     ) -> anyhow::Result<AgentLoopResult> {
         let mut result = AgentLoopResult::default();
+        let mut tool_cache: HashMap<String, String> = HashMap::new();
 
         let mut blocking_ctx = BlockingContext::new(self.config.exploration_allowance);
         let mut read_guard = ReadGuardState::default();
@@ -143,6 +179,13 @@ impl AgentLoop {
         );
 
         for iteration in 0..self.config.max_iterations {
+            if let Some(ref token) = cancellation_token {
+                if token.is_cancelled() {
+                    debug!("Cancellation requested, stopping loop");
+                    break;
+                }
+            }
+
             build_cooldown = build_cooldown.saturating_sub(1);
             blocking_ctx.decrement_cooldowns();
 
@@ -173,17 +216,57 @@ impl AgentLoop {
                 .auth_token(self.config.auth_token.clone())
                 .build();
 
-            let response = match provider.complete(request).await {
-                Ok(r) => r,
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    if err_msg.contains("402") {
-                        result.insufficient_credits = true;
-                        warn!("Insufficient credits (402), stopping loop");
+            let response = if event_tx.is_some() {
+                match self
+                    .complete_with_streaming(
+                        provider,
+                        request,
+                        &event_tx,
+                        cancellation_token.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err_msg = e.to_string();
+                        if err_msg.contains("402") {
+                            result.insufficient_credits = true;
+                            warn!("Insufficient credits (402), stopping loop");
+                            emit(
+                                &event_tx,
+                                AgentLoopEvent::Error {
+                                    code: "insufficient_credits".to_string(),
+                                    message: err_msg,
+                                    recoverable: false,
+                                },
+                            );
+                            break;
+                        }
+                        emit(
+                            &event_tx,
+                            AgentLoopEvent::Error {
+                                code: "llm_error".to_string(),
+                                message: err_msg.clone(),
+                                recoverable: false,
+                            },
+                        );
+                        result.llm_error = Some(err_msg);
                         break;
                     }
-                    result.llm_error = Some(err_msg);
-                    break;
+                }
+            } else {
+                match provider.complete(request).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err_msg = e.to_string();
+                        if err_msg.contains("402") {
+                            result.insufficient_credits = true;
+                            warn!("Insufficient credits (402), stopping loop");
+                            break;
+                        }
+                        result.llm_error = Some(err_msg);
+                        break;
+                    }
                 }
             };
 
@@ -202,6 +285,15 @@ impl AgentLoop {
 
             messages.push(response.message.clone());
             result.iterations = iteration + 1;
+
+            emit(
+                &event_tx,
+                AgentLoopEvent::IterationComplete {
+                    iteration,
+                    input_tokens: response.usage.input_tokens,
+                    output_tokens: response.usage.output_tokens,
+                },
+            );
 
             match response.stop_reason {
                 StopReason::EndTurn | StopReason::MaxTokens | StopReason::StopSequence => {
@@ -229,9 +321,31 @@ impl AgentLoop {
                         break;
                     }
 
-                    let tool_results = self
-                        .process_tool_results(
-                            &tool_calls,
+                    // Separate cached from uncached tool calls
+                    let mut cached_results = Vec::new();
+                    let mut uncached_calls = Vec::new();
+
+                    for tc in &tool_calls {
+                        if is_cacheable(&tc.name) {
+                            let key = cache_key(&tc.name, &tc.input);
+                            if let Some(cached) = tool_cache.get(&key) {
+                                cached_results.push(ToolCallResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: cached.clone(),
+                                    is_error: false,
+                                    stop_loop: false,
+                                });
+                                continue;
+                            }
+                        }
+                        uncached_calls.push(tc.clone());
+                    }
+
+                    let executed_results = if uncached_calls.is_empty() {
+                        Vec::new()
+                    } else {
+                        self.process_tool_results(
+                            &uncached_calls,
                             executor,
                             &mut blocking_ctx,
                             &mut read_guard,
@@ -242,11 +356,55 @@ impl AgentLoop {
                             &mut build_cooldown,
                             build_baseline.as_ref(),
                         )
-                        .await;
+                        .await
+                    };
 
-                    let should_stop = tool_results.iter().any(|r| r.stop_loop);
+                    // Invalidate cache when a write tool succeeds
+                    let any_write_succeeded = uncached_calls.iter().any(|tc| {
+                        helpers::is_write_tool(&tc.name)
+                            && executed_results
+                                .iter()
+                                .any(|r| r.tool_use_id == tc.id && !r.is_error)
+                    });
+                    if any_write_succeeded {
+                        tool_cache.clear();
+                    }
 
-                    let results: Vec<(String, ToolResultContent, bool)> = tool_results
+                    // Cache successful results from cacheable tools
+                    for exec_result in &executed_results {
+                        if let Some(tc) =
+                            uncached_calls.iter().find(|t| t.id == exec_result.tool_use_id)
+                        {
+                            if is_cacheable(&tc.name) && !exec_result.is_error {
+                                let key = cache_key(&tc.name, &tc.input);
+                                tool_cache.insert(key, exec_result.content.clone());
+                            }
+                        }
+                    }
+
+                    // Emit ToolResult events for all results
+                    for r in cached_results.iter().chain(executed_results.iter()) {
+                        let tool_name = tool_calls
+                            .iter()
+                            .find(|t| t.id == r.tool_use_id)
+                            .map_or_else(String::new, |t| t.name.clone());
+                        emit(
+                            &event_tx,
+                            AgentLoopEvent::ToolResult {
+                                tool_use_id: r.tool_use_id.clone(),
+                                tool_name,
+                                content: r.content.clone(),
+                                is_error: r.is_error,
+                            },
+                        );
+                    }
+
+                    let mut all_tool_results = cached_results;
+                    all_tool_results.extend(executed_results);
+
+                    let should_stop = all_tool_results.iter().any(|r| r.stop_loop);
+
+                    let results: Vec<(String, ToolResultContent, bool)> = all_tool_results
                         .into_iter()
                         .map(|r| {
                             (
@@ -272,6 +430,7 @@ impl AgentLoop {
                 budget::check_budget_warning(&mut budget_state, utilization, had_any_write)
             {
                 helpers::push_or_replace_warning(&mut messages, &warning);
+                emit(&event_tx, AgentLoopEvent::Warning(warning));
             }
 
             if let Some(warning) = budget::check_exploration_warning(
@@ -279,6 +438,7 @@ impl AgentLoop {
                 self.config.exploration_allowance,
             ) {
                 helpers::push_or_replace_warning(&mut messages, &warning);
+                emit(&event_tx, AgentLoopEvent::Warning(warning));
             }
 
             let total_tokens = result.total_input_tokens + result.total_output_tokens;
@@ -298,6 +458,71 @@ impl AgentLoop {
 
         result.messages = messages;
         Ok(result)
+    }
+
+    /// Perform a model completion using streaming, emitting events as they arrive.
+    ///
+    /// Falls back to non-streaming `provider.complete()` if the streaming call
+    /// itself returns an error.
+    #[allow(clippy::cast_possible_truncation)]
+    async fn complete_with_streaming(
+        &self,
+        provider: &dyn ModelProvider,
+        request: ModelRequest,
+        event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+        cancellation_token: Option<&CancellationToken>,
+    ) -> anyhow::Result<ModelResponse> {
+        let start = Instant::now();
+
+        match provider.complete_streaming(request.clone()).await {
+            Ok(mut stream) => {
+                let mut accumulator = StreamAccumulator::new();
+
+                loop {
+                    let next = if let Some(token) = cancellation_token {
+                        tokio::select! {
+                            _ = token.cancelled() => {
+                                return Err(anyhow::anyhow!("Cancelled"));
+                            }
+                            item = stream.next() => item,
+                        }
+                    } else {
+                        stream.next().await
+                    };
+
+                    match next {
+                        Some(Ok(event)) => {
+                            accumulator.process(&event);
+                            emit_stream_event(event_tx, &event, &accumulator);
+                        }
+                        Some(Err(e)) => {
+                            debug!("Stream error, falling back to non-streaming: {e}");
+                            emit(
+                                event_tx,
+                                AgentLoopEvent::Warning(format!(
+                                    "Stream error, retrying without streaming: {e}"
+                                )),
+                            );
+                            return provider.complete(request).await;
+                        }
+                        None => break,
+                    }
+                }
+
+                let latency_ms = start.elapsed().as_millis() as u64;
+                accumulator.into_response(0, latency_ms)
+            }
+            Err(e) => {
+                debug!("complete_streaming failed, falling back: {e}");
+                emit(
+                    event_tx,
+                    AgentLoopEvent::Warning(format!(
+                        "Streaming unavailable, using non-streaming: {e}"
+                    )),
+                );
+                provider.complete(request).await
+            }
+        }
     }
 
     /// Process tool call results from one iteration.
@@ -410,6 +635,83 @@ impl AgentLoop {
         all_results.extend(executed);
         all_results
     }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Send an event through the channel if present.
+fn emit(tx: &Option<UnboundedSender<AgentLoopEvent>>, event: AgentLoopEvent) {
+    if let Some(tx) = tx {
+        let _ = tx.send(event);
+    }
+}
+
+/// Map a [`StreamEvent`] to the corresponding [`AgentLoopEvent`] and emit it.
+fn emit_stream_event(
+    event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
+    stream_event: &StreamEvent,
+    accumulator: &StreamAccumulator,
+) {
+    if event_tx.is_none() {
+        return;
+    }
+
+    match stream_event {
+        StreamEvent::TextDelta { text } => {
+            emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+        }
+        StreamEvent::ThinkingDelta { thinking } => {
+            emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+        }
+        StreamEvent::ContentBlockStart {
+            content_type: StreamContentType::ToolUse { id, name },
+            ..
+        } => {
+            emit(
+                event_tx,
+                AgentLoopEvent::ToolStart {
+                    id: id.clone(),
+                    name: name.clone(),
+                },
+            );
+        }
+        StreamEvent::InputJsonDelta { .. } => {
+            if let Some(ref tool) = accumulator.current_tool_use {
+                emit(
+                    event_tx,
+                    AgentLoopEvent::ToolInputSnapshot {
+                        id: tool.id.clone(),
+                        name: tool.name.clone(),
+                        input: tool.input_json.clone(),
+                    },
+                );
+            }
+        }
+        StreamEvent::Error { message } => {
+            emit(
+                event_tx,
+                AgentLoopEvent::Error {
+                    code: "stream_error".to_string(),
+                    message: message.clone(),
+                    recoverable: true,
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Check whether a tool's results are eligible for caching.
+fn is_cacheable(tool_name: &str) -> bool {
+    CACHEABLE_TOOLS.contains(&tool_name)
+}
+
+/// Build a deterministic cache key for a tool invocation.
+fn cache_key(tool_name: &str, input: &serde_json::Value) -> String {
+    let canonical = serde_json::to_string(input).unwrap_or_default();
+    format!("{tool_name}\0{canonical}")
 }
 
 #[cfg(test)]
