@@ -35,6 +35,7 @@ todos:
   - id: property-tests
     content: Add property-based tests for hash determinism and chain properties
     status: pending
+isProject: false
 ---
 
 # Async Process Management with Transaction Chaining
@@ -44,7 +45,6 @@ todos:
 Agent records are **pure, atomic, immutable, and append-only**. The Transaction model enforces this via:
 
 1. **Hash Chain** - The `hash` is derived from content + previous transaction's hash, creating a cryptographic chain like a blockchain. Modifying any past transaction breaks the chain.
-
 2. **Reference Linkage** (`reference_tx_hash`) - Callback transactions (async tool results) reference their originating transaction, creating a DAG for logical relationships.
 
 ## Transaction Model
@@ -93,6 +93,8 @@ flowchart LR
     end
     T1 --> T2 --> T3 --> T4
 ```
+
+
 
 The chain is **implicit** in the hash derivation. Modifying T2 would:
 
@@ -144,6 +146,8 @@ sequenceDiagram
         Note over TX: Callback tx references H1
     end
 ```
+
+
 
 ## Async Process Chaining Example
 
@@ -390,13 +394,11 @@ Add `wait_with_threshold()` that returns `Result<Output, Child>`:
   - `test_hash_chaining` - Same content + different prev_hash produces different hash
   - `test_hash_chain_integrity` - Modifying middle tx changes all downstream hashes
   - `test_hash_serialization` - Hex serialization roundtrip
-
 - **Transaction tests**
   - `test_transaction_new_chained` - Constructor sets hash correctly
   - `test_transaction_with_reference` - reference_tx_hash is set correctly
   - `test_transaction_serialization` - JSON roundtrip with all new fields
   - `test_transaction_type_rename` - TransactionType enum values serialize correctly
-
 - **ProcessPending/ActionResultPayload tests**
   - `test_process_pending_roundtrip` - Serialization roundtrip
   - `test_action_result_payload_roundtrip` - Serialization roundtrip
@@ -426,12 +428,10 @@ Add `wait_with_threshold()` that returns `Result<Output, Child>`:
   - `test_async_command_pending_then_complete` - Slow command produces Effect::Pending, then ActionResult tx
   - `test_async_completion_has_valid_chain` - Completion tx hash is correctly chained
   - `test_async_completion_references_original` - Completion tx.reference_tx_hash points to original
-
 - **Transaction chain integrity tests**
   - `test_chain_verification` - Can verify entire chain by recomputing hashes
   - `test_tampered_chain_detection` - Modifying stored tx is detectable
   - `test_replay_produces_same_hashes` - Replaying transactions produces identical hashes
-
 - **Concurrent process tests**
   - `test_multiple_async_processes` - Multiple pending processes complete correctly
   - `test_interleaved_sync_async` - Mix of sync and async commands maintains chain integrity
@@ -442,7 +442,6 @@ Add `wait_with_threshold()` that returns `Result<Output, Child>`:
   - `prop_hash_deterministic` - Same inputs always produce same hash
   - `prop_hash_chain_order_matters` - Different orderings produce different chains
   - `prop_hash_content_sensitive` - Any content change changes hash
-
 - **Transaction chain properties**
   - `prop_chain_is_append_only` - Can only add to end, not modify middle
   - `prop_reference_tx_hash_valid` - reference_tx_hash always points to existing tx
@@ -456,3 +455,4 @@ Add `wait_with_threshold()` that returns `Result<Output, Child>`:
 - **Auditability**: Full history with verifiable chain integrity
 - **Replayability**: Replay all transactions in order, verify hashes match
 - **Canonical naming**: `hash`, `tx_type`, `reference_tx_hash` are clear and unambiguous
+

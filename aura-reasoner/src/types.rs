@@ -283,6 +283,22 @@ impl ToolChoice {
 }
 
 // ============================================================================
+// Thinking Configuration
+// ============================================================================
+
+/// Per-request extended thinking configuration.
+///
+/// When set on a `ModelRequest`, the provider will enable extended thinking
+/// with the specified budget. When `None`, the provider may apply its own
+/// heuristic (e.g., auto-enable for capable models).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    /// Token budget allocated for the thinking phase.
+    /// Must be >= 1024 and < `max_tokens`.
+    pub budget_tokens: u32,
+}
+
+// ============================================================================
 // Model Request
 // ============================================================================
 
@@ -303,6 +319,10 @@ pub struct ModelRequest {
     pub max_tokens: u32,
     /// Sampling temperature
     pub temperature: Option<f32>,
+    /// Extended thinking configuration. When `Some`, the provider enables
+    /// thinking with the given budget. When `None`, provider-default behavior
+    /// applies.
+    pub thinking: Option<ThinkingConfig>,
 }
 
 impl ModelRequest {
@@ -322,6 +342,7 @@ pub struct ModelRequestBuilder {
     tool_choice: ToolChoice,
     max_tokens: u32,
     temperature: Option<f32>,
+    thinking: Option<ThinkingConfig>,
 }
 
 impl ModelRequestBuilder {
@@ -336,6 +357,7 @@ impl ModelRequestBuilder {
             tool_choice: ToolChoice::Auto,
             max_tokens: 4096,
             temperature: None,
+            thinking: None,
         }
     }
 
@@ -381,6 +403,13 @@ impl ModelRequestBuilder {
         self
     }
 
+    /// Set extended thinking configuration.
+    #[must_use]
+    pub fn thinking(mut self, config: ThinkingConfig) -> Self {
+        self.thinking = Some(config);
+        self
+    }
+
     /// Build the request.
     #[must_use]
     pub fn build(self) -> ModelRequest {
@@ -392,6 +421,7 @@ impl ModelRequestBuilder {
             tool_choice: self.tool_choice,
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            thinking: self.thinking,
         }
     }
 }

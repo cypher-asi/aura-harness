@@ -35,8 +35,8 @@ pub use request::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use retry::{complete_with_retry, RetryConfig};
 pub use types::{
     AccumulatedToolUse, ContentBlock, Message, ModelRequest, ModelResponse, ProviderTrace, Role,
-    StopReason, StreamAccumulator, StreamContentType, StreamEvent, ToolChoice, ToolDefinition,
-    ToolResultContent, Usage,
+    StopReason, StreamAccumulator, StreamContentType, StreamEvent, ThinkingConfig, ToolChoice,
+    ToolDefinition, ToolResultContent, Usage,
 };
 
 use futures_util::Stream;

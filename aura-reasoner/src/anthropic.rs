@@ -232,22 +232,26 @@ impl ModelProvider for AnthropicProvider {
 
     #[instrument(skip(self, request), fields(model = %request.model))]
     async fn complete_streaming(&self, request: ModelRequest) -> anyhow::Result<StreamEventStream> {
-        // Check if the model supports extended thinking (claude-3-7 and above, or opus-4, sonnet-4)
-        let supports_thinking = request.model.contains("claude-3-7")
-            || request.model.contains("claude-opus-4")
-            || request.model.contains("claude-sonnet-4");
-
-        // Configure thinking if supported - budget_tokens MUST be less than max_tokens
-        // and at least 1024. We need max_tokens > budget_tokens + some room for output.
-        let thinking = if supports_thinking && request.max_tokens > 2048 {
-            // Use half of max_tokens for thinking, clamped to valid range
-            let budget = (request.max_tokens / 2).clamp(1024, 16000);
-            Some(ThinkingConfig {
+        // Use caller-supplied thinking config when present, otherwise auto-detect.
+        let thinking = if let Some(ref cfg) = request.thinking {
+            Some(ApiThinkingConfig {
                 thinking_type: "enabled".to_string(),
-                budget_tokens: budget,
+                budget_tokens: cfg.budget_tokens,
             })
         } else {
-            None
+            let supports_thinking = request.model.contains("claude-3-7")
+                || request.model.contains("claude-opus-4")
+                || request.model.contains("claude-sonnet-4");
+
+            if supports_thinking && request.max_tokens > 2048 {
+                let budget = (request.max_tokens / 2).clamp(1024, 16000);
+                Some(ApiThinkingConfig {
+                    thinking_type: "enabled".to_string(),
+                    budget_tokens: budget,
+                })
+            } else {
+                None
+            }
         };
 
         // Build system block with cache_control
@@ -423,18 +427,15 @@ struct StreamingApiRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     stream: bool,
-    /// Extended thinking configuration
     #[serde(skip_serializing_if = "Option::is_none")]
-    thinking: Option<ThinkingConfig>,
+    thinking: Option<ApiThinkingConfig>,
 }
 
-/// Configuration for extended thinking.
+/// Internal API representation of the extended thinking configuration.
 #[derive(Debug, Serialize)]
-struct ThinkingConfig {
-    /// Type of thinking (always "enabled")
+struct ApiThinkingConfig {
     #[serde(rename = "type")]
     thinking_type: String,
-    /// Budget tokens for thinking (between 1024 and `max_tokens`)
     budget_tokens: u32,
 }
 
