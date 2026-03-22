@@ -446,7 +446,7 @@ impl ModelRequestBuilder {
 
     /// Set extended thinking configuration.
     #[must_use]
-    pub fn thinking(mut self, config: ThinkingConfig) -> Self {
+    pub const fn thinking(mut self, config: ThinkingConfig) -> Self {
         self.thinking = Some(config);
         self
     }

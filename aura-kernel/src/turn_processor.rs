@@ -930,9 +930,6 @@ where
                         StreamEvent::TextDelta { text } => {
                             self.emit_stream_event(StreamCallbackEvent::TextDelta(text.clone()));
                         }
-                        StreamEvent::InputJsonDelta { .. } => {
-                            // Processed after accumulator.process() below
-                        }
                         StreamEvent::Error { message } => {
                             error!(error = %message, "Stream error from provider");
                             let (code, recoverable) = classify_llm_error(message);
