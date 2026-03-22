@@ -1,13 +1,12 @@
 //! HTTP and WebSocket router for the swarm API.
 
-//! HTTP and WebSocket router for the swarm API.
-
 use crate::config::SwarmConfig;
 use crate::scheduler::Scheduler;
 use crate::session::{handle_ws_connection, WsContext};
 use aura_core::{AgentId, Transaction, TransactionType};
-use aura_reasoner::{ModelProvider, Reasoner};
+use aura_reasoner::ModelProvider;
 use aura_store::Store;
+use aura_tools::ToolConfig;
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
     http::StatusCode,
@@ -22,45 +21,36 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, info, instrument};
 
 /// Shared state for the router.
-pub struct RouterState<S, R>
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
-    pub store: Arc<S>,
-    pub scheduler: Arc<Scheduler<S, R>>,
+pub struct RouterState {
+    pub store: Arc<dyn Store>,
+    pub scheduler: Arc<Scheduler>,
     pub config: SwarmConfig,
     /// Model provider for WebSocket sessions (type-erased).
     pub provider: Arc<dyn ModelProvider + Send + Sync>,
+    /// Tool configuration for WebSocket sessions.
+    pub tool_config: ToolConfig,
 }
 
-impl<S, R> Clone for RouterState<S, R>
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
+impl Clone for RouterState {
     fn clone(&self) -> Self {
         Self {
             store: self.store.clone(),
             scheduler: self.scheduler.clone(),
             config: self.config.clone(),
             provider: self.provider.clone(),
+            tool_config: self.tool_config.clone(),
         }
     }
 }
 
 /// Create the router.
-pub fn create_router<S, R>(state: RouterState<S, R>) -> Router
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
+pub fn create_router(state: RouterState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
-        .route("/tx", post(submit_tx_handler::<S, R>))
-        .route("/agents/:agent_id/head", get(get_head_handler::<S, R>))
-        .route("/agents/:agent_id/record", get(scan_record_handler::<S, R>))
-        .route("/stream", get(ws_upgrade_handler::<S, R>))
+        .route("/tx", post(submit_tx_handler))
+        .route("/agents/:agent_id/head", get(get_head_handler))
+        .route("/agents/:agent_id/record", get(scan_record_handler))
+        .route("/stream", get(ws_upgrade_handler))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -77,32 +67,26 @@ async fn health_handler() -> impl IntoResponse {
 // === Submit Transaction ===
 
 #[derive(Debug, Deserialize)]
-pub struct SubmitTxRequest {
-    pub agent_id: String,
-    pub kind: String,
-    pub payload: String, // base64 encoded
+struct SubmitTxRequest {
+    agent_id: String,
+    kind: String,
+    payload: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct SubmitTxResponse {
-    pub accepted: bool,
-    pub tx_id: String,
+struct SubmitTxResponse {
+    accepted: bool,
+    tx_id: String,
 }
 
 #[instrument(skip(state, request))]
-async fn submit_tx_handler<S, R>(
-    State(state): State<RouterState<S, R>>,
+async fn submit_tx_handler(
+    State(state): State<RouterState>,
     Json(request): Json<SubmitTxRequest>,
-) -> Result<impl IntoResponse, (StatusCode, String)>
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
-    // Parse agent ID
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let agent_id = AgentId::from_hex(&request.agent_id)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
 
-    // Parse tx_type
     let tx_type = match request.kind.as_str() {
         "user_prompt" => TransactionType::UserPrompt,
         "agent_msg" => TransactionType::AgentMsg,
@@ -117,7 +101,6 @@ where
         }
     };
 
-    // Decode payload
     use base64::Engine;
     let payload = base64::engine::general_purpose::STANDARD
         .decode(&request.payload)
@@ -128,10 +111,8 @@ where
             )
         })?;
 
-    // Create transaction (chained with no previous hash for now - API doesn't support chaining yet)
     let tx = Transaction::new_chained(agent_id, tx_type, Bytes::from(payload), None);
 
-    // Enqueue transaction
     state.store.enqueue_tx(&tx).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,7 +122,6 @@ where
 
     info!(hash = %tx.hash, agent_id = %agent_id, "Transaction enqueued");
 
-    // Trigger processing (fire and forget)
     let scheduler = state.scheduler.clone();
     tokio::spawn(async move {
         if let Err(e) = scheduler.schedule_agent(agent_id).await {
@@ -161,20 +141,16 @@ where
 // === Get Head ===
 
 #[derive(Debug, Serialize)]
-pub struct GetHeadResponse {
-    pub agent_id: String,
-    pub head_seq: u64,
+struct GetHeadResponse {
+    agent_id: String,
+    head_seq: u64,
 }
 
 #[instrument(skip(state))]
-async fn get_head_handler<S, R>(
-    State(state): State<RouterState<S, R>>,
+async fn get_head_handler(
+    State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, String)>
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let agent_id = AgentId::from_hex(&agent_id_hex)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
 
@@ -194,11 +170,11 @@ where
 // === Scan Record ===
 
 #[derive(Debug, Deserialize)]
-pub struct ScanRecordQuery {
+struct ScanRecordQuery {
     #[serde(default = "default_from_seq")]
-    pub from_seq: u64,
+    from_seq: u64,
     #[serde(default = "default_limit")]
-    pub limit: usize,
+    limit: usize,
 }
 
 const fn default_from_seq() -> u64 {
@@ -210,19 +186,15 @@ const fn default_limit() -> usize {
 }
 
 #[instrument(skip(state))]
-async fn scan_record_handler<S, R>(
-    State(state): State<RouterState<S, R>>,
+async fn scan_record_handler(
+    State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
     Query(query): Query<ScanRecordQuery>,
-) -> Result<impl IntoResponse, (StatusCode, String)>
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     let agent_id = AgentId::from_hex(&agent_id_hex)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
 
-    let limit = query.limit.min(1000); // Cap at 1000
+    let limit = query.limit.min(1000);
 
     let entries = state
         .store
@@ -239,23 +211,14 @@ where
 
 // === WebSocket ===
 
-async fn ws_upgrade_handler<S, R>(
+async fn ws_upgrade_handler(
     ws: WebSocketUpgrade,
-    State(state): State<RouterState<S, R>>,
-) -> impl IntoResponse
-where
-    S: Store + 'static,
-    R: Reasoner + 'static,
-{
+    State(state): State<RouterState>,
+) -> impl IntoResponse {
     let ctx = WsContext {
         workspace_base: state.config.workspaces_path(),
         provider: state.provider.clone(),
-        tool_config: aura_tools::ToolConfig {
-            enable_fs: state.config.enable_fs_tools,
-            enable_commands: state.config.enable_cmd_tools,
-            command_allowlist: state.config.allowed_commands.clone(),
-            ..Default::default()
-        },
+        tool_config: state.tool_config.clone(),
     };
     ws.on_upgrade(move |socket| handle_ws_connection(socket, ctx))
 }

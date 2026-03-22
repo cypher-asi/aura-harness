@@ -1,13 +1,14 @@
 //! Session management for the CLI.
 //!
-//! Manages the agent session, including the turn processor and state.
+//! Manages the agent session using `AgentLoop` for multi-step orchestration.
 
-use aura_core::{AgentId, Identity, Transaction};
+use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult, KernelToolExecutor};
+use aura_core::{AgentId, Identity};
 use aura_executor::ExecutorRouter;
-use aura_kernel::{TurnConfig, TurnProcessor, TurnResult};
-use aura_reasoner::{AnthropicProvider, MockProvider};
+use aura_kernel::TurnConfig;
+use aura_reasoner::{AnthropicProvider, Message, MockProvider, ModelProvider, ToolDefinition};
 use aura_store::RocksStore;
-use aura_tools::{DefaultToolRegistry, ToolExecutor};
+use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -27,24 +28,19 @@ pub struct SessionConfig {
     pub provider: String,
     /// Agent name
     pub agent_name: String,
-    /// Turn processor config
-    pub turn_config: TurnConfig,
+    /// Agent loop configuration
+    pub loop_config: AgentLoopConfig,
 }
 
 impl SessionConfig {
     /// Load configuration from environment variables.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if required configuration is missing.
-    pub fn from_env() -> anyhow::Result<Self> {
+    #[must_use]
+    pub fn from_env() -> Self {
         let data_dir = std::env::var("AURA_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("./aura_data"));
+            .map_or_else(|_| PathBuf::from("./aura_data"), PathBuf::from);
 
         let workspace_root = std::env::var("AURA_WORKSPACE_ROOT")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| data_dir.join("workspaces"));
+            .map_or_else(|_| data_dir.join("workspaces"), PathBuf::from);
 
         let provider =
             std::env::var("AURA_MODEL_PROVIDER").unwrap_or_else(|_| "anthropic".to_string());
@@ -52,36 +48,27 @@ impl SessionConfig {
         let agent_name =
             std::env::var("AURA_AGENT_NAME").unwrap_or_else(|_| "CLI Agent".to_string());
 
-        let mut turn_config = TurnConfig::default();
-        turn_config.workspace_base = workspace_root.clone();
+        let mut loop_config = AgentLoopConfig {
+            system_prompt: TurnConfig::default().system_prompt,
+            ..AgentLoopConfig::default()
+        };
 
-        // Override turn config from env
         if let Ok(v) = std::env::var("AURA_MAX_STEPS_PER_TURN") {
             if let Ok(n) = v.parse() {
-                turn_config.max_steps = n;
-            }
-        }
-        if let Ok(v) = std::env::var("AURA_MAX_TOOL_CALLS_PER_STEP") {
-            if let Ok(n) = v.parse() {
-                turn_config.max_tool_calls_per_step = n;
-            }
-        }
-        if let Ok(v) = std::env::var("AURA_MODEL_TIMEOUT_MS") {
-            if let Ok(n) = v.parse() {
-                turn_config.model_timeout_ms = n;
+                loop_config.max_iterations = n;
             }
         }
         if let Ok(v) = std::env::var("AURA_ANTHROPIC_MODEL") {
-            turn_config.model = v;
+            loop_config.model = v;
         }
 
-        Ok(Self {
+        Self {
             data_dir,
             workspace_root,
             provider,
             agent_name,
-            turn_config,
-        })
+            loop_config,
+        }
     }
 }
 
@@ -92,19 +79,15 @@ impl SessionConfig {
 /// An interactive CLI session.
 pub struct Session {
     identity: Identity,
-    /// Store for persistence (reserved for state persistence)
     #[allow(dead_code)]
     store: Arc<RocksStore>,
     provider_name: String,
     current_seq: u64,
-    // We need to box the processor since it's generic
-    processor: SessionProcessor,
-}
-
-/// Boxed processor to handle different provider types.
-enum SessionProcessor {
-    Anthropic(Box<TurnProcessor<AnthropicProvider, RocksStore, DefaultToolRegistry>>),
-    Mock(Box<TurnProcessor<MockProvider, RocksStore, DefaultToolRegistry>>),
+    agent_loop: AgentLoop,
+    provider: Box<dyn ModelProvider>,
+    executor: KernelToolExecutor,
+    tools: Vec<ToolDefinition>,
+    messages: Vec<Message>,
 }
 
 impl Session {
@@ -114,79 +97,48 @@ impl Session {
     ///
     /// Returns error if initialization fails.
     pub async fn new(config: SessionConfig) -> anyhow::Result<Self> {
-        // Ensure directories exist
         tokio::fs::create_dir_all(&config.data_dir).await?;
         tokio::fs::create_dir_all(&config.workspace_root).await?;
 
-        // Create identity
         let zns_id = format!("0://cli/{}", uuid::Uuid::new_v4());
         let identity = Identity::new(&zns_id, &config.agent_name);
         info!(agent_id = %identity.agent_id, name = %identity.name, "Created identity");
 
-        // Open store
         let store_path = config.data_dir.join("store");
         let store = Arc::new(RocksStore::open(&store_path, false)?);
         debug!(?store_path, "Opened store");
 
-        // Create executor with tool support
-        let mut executor = ExecutorRouter::new();
-        executor.add_executor(std::sync::Arc::new(ToolExecutor::with_defaults()));
+        let mut executor_router = ExecutorRouter::new();
+        executor_router.add_executor(std::sync::Arc::new(ToolExecutor::with_defaults()));
 
-        // Create tool registry
-        let tool_registry = Arc::new(DefaultToolRegistry::new());
+        let tool_registry = DefaultToolRegistry::new();
+        let tools = tool_registry.list();
 
-        // Create provider and processor
-        let (processor, provider_name) = match config.provider.as_str() {
-            "mock" => {
-                let provider = Arc::new(MockProvider::simple_response(
-                    "I'm a mock assistant. Real model integration requires ANTHROPIC_API_KEY.",
-                ));
-                let processor = TurnProcessor::new(
-                    provider,
-                    store.clone(),
-                    executor,
-                    tool_registry,
-                    config.turn_config.clone(),
-                );
-                (SessionProcessor::Mock(Box::new(processor)), "mock")
-            }
-            "anthropic" | _ => {
-                // Try to create Anthropic provider, fall back to mock
-                match AnthropicProvider::from_env() {
-                    Ok(provider) => {
-                        let provider = Arc::new(provider);
-                        let processor = TurnProcessor::new(
-                            provider,
-                            store.clone(),
-                            executor,
-                            tool_registry,
-                            config.turn_config.clone(),
-                        );
-                        (
-                            SessionProcessor::Anthropic(Box::new(processor)),
-                            "anthropic",
-                        )
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to create Anthropic provider: {}. Using mock.", e);
-                        let provider = Arc::new(MockProvider::simple_response(
-                            "Mock mode: Set ANTHROPIC_API_KEY to use real model.",
-                        ));
-                        let processor = TurnProcessor::new(
-                            provider,
-                            store.clone(),
-                            executor,
-                            tool_registry,
-                            config.turn_config.clone(),
-                        );
-                        (
-                            SessionProcessor::Mock(Box::new(processor)),
-                            "mock (fallback)",
-                        )
-                    }
+        let workspace = config.workspace_root.join(identity.agent_id.to_hex());
+        let kernel_executor =
+            KernelToolExecutor::new(executor_router, identity.agent_id, workspace);
+
+        let (provider, provider_name): (Box<dyn ModelProvider>, &str) =
+            match config.provider.as_str() {
+                "mock" => {
+                    let p = MockProvider::simple_response(
+                        "I'm a mock assistant. Real model integration requires ANTHROPIC_API_KEY.",
+                    );
+                    (Box::new(p), "mock")
                 }
-            }
-        };
+                _ => match AnthropicProvider::from_env() {
+                    Ok(p) => (Box::new(p), "anthropic"),
+                    Err(e) => {
+                        tracing::warn!("Failed to create Anthropic provider: {e}. Using mock.");
+                        let p = MockProvider::simple_response(
+                            "Mock mode: Set ANTHROPIC_API_KEY to use real model.",
+                        );
+                        (Box::new(p), "mock (fallback)")
+                    }
+                },
+            };
+
+        let agent_loop = AgentLoop::new(config.loop_config);
 
         info!(provider = provider_name, "Session initialized");
 
@@ -195,19 +147,23 @@ impl Session {
             store,
             provider_name: provider_name.to_string(),
             current_seq: 1,
-            processor,
+            agent_loop,
+            provider,
+            executor: kernel_executor,
+            tools,
+            messages: Vec::new(),
         })
     }
 
     /// Get the agent ID.
     #[must_use]
-    pub fn agent_id(&self) -> AgentId {
+    pub const fn agent_id(&self) -> AgentId {
         self.identity.agent_id
     }
 
     /// Get the current sequence number.
     #[must_use]
-    pub fn current_seq(&self) -> u64 {
+    pub const fn current_seq(&self) -> u64 {
         self.current_seq
     }
 
@@ -222,17 +178,21 @@ impl Session {
     /// # Errors
     ///
     /// Returns error if processing fails.
-    pub async fn submit_prompt(&mut self, text: &str) -> anyhow::Result<TurnResult> {
-        let tx = Transaction::user_prompt(self.identity.agent_id, text.to_string());
-        let seq = self.current_seq;
+    pub async fn submit_prompt(&mut self, text: &str) -> anyhow::Result<AgentLoopResult> {
+        self.messages.push(Message::user(text));
         self.current_seq += 1;
 
-        let result = match &self.processor {
-            SessionProcessor::Anthropic(p) => {
-                p.process_turn(self.identity.agent_id, tx, seq).await?
-            }
-            SessionProcessor::Mock(p) => p.process_turn(self.identity.agent_id, tx, seq).await?,
-        };
+        let result = self
+            .agent_loop
+            .run(
+                self.provider.as_ref(),
+                &self.executor,
+                self.messages.clone(),
+                self.tools.clone(),
+            )
+            .await?;
+
+        self.messages.clone_from(&result.messages);
 
         Ok(result)
     }
@@ -242,8 +202,8 @@ impl Session {
     /// # Errors
     ///
     /// Returns error if no pending request or approval fails.
-    pub async fn approve_pending(&mut self) -> anyhow::Result<()> {
-        // TODO: Implement approval queue
+    #[allow(clippy::unused_self)]
+    pub fn approve_pending(&self) -> anyhow::Result<()> {
         anyhow::bail!("No pending approval requests")
     }
 
@@ -252,8 +212,8 @@ impl Session {
     /// # Errors
     ///
     /// Returns error if no pending request.
-    pub async fn deny_pending(&mut self) -> anyhow::Result<()> {
-        // TODO: Implement approval queue
+    #[allow(clippy::unused_self)]
+    pub fn deny_pending(&self) -> anyhow::Result<()> {
         anyhow::bail!("No pending approval requests")
     }
 }
@@ -263,7 +223,6 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    // Mutex to serialize env var tests (env vars are process-global)
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn clear_all_env_vars() {
@@ -282,7 +241,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_all_env_vars();
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
         assert_eq!(config.data_dir, PathBuf::from("./aura_data"));
         assert_eq!(config.provider, "anthropic");
@@ -296,10 +255,9 @@ mod tests {
 
         std::env::set_var("AURA_DATA_DIR", "/custom/data");
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
         assert_eq!(config.data_dir, PathBuf::from("/custom/data"));
-        // Workspace root should be relative to data dir when not set
         assert_eq!(
             config.workspace_root,
             PathBuf::from("/custom/data/workspaces")
@@ -315,7 +273,7 @@ mod tests {
 
         std::env::set_var("AURA_WORKSPACE_ROOT", "/my/workspaces");
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
         assert_eq!(config.workspace_root, PathBuf::from("/my/workspaces"));
 
@@ -329,7 +287,7 @@ mod tests {
 
         std::env::set_var("AURA_MODEL_PROVIDER", "mock");
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
         assert_eq!(config.provider, "mock");
 
@@ -343,7 +301,7 @@ mod tests {
 
         std::env::set_var("AURA_AGENT_NAME", "Test Agent");
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
         assert_eq!(config.agent_name, "Test Agent");
 
@@ -351,21 +309,17 @@ mod tests {
     }
 
     #[test]
-    fn test_session_config_turn_config_overrides() {
+    fn test_session_config_loop_config_overrides() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_all_env_vars();
 
         std::env::set_var("AURA_MAX_STEPS_PER_TURN", "20");
-        std::env::set_var("AURA_MAX_TOOL_CALLS_PER_STEP", "5");
-        std::env::set_var("AURA_MODEL_TIMEOUT_MS", "60000");
         std::env::set_var("AURA_ANTHROPIC_MODEL", "claude-sonnet-4-20250514");
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
-        assert_eq!(config.turn_config.max_steps, 20);
-        assert_eq!(config.turn_config.max_tool_calls_per_step, 5);
-        assert_eq!(config.turn_config.model_timeout_ms, 60000);
-        assert_eq!(config.turn_config.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.loop_config.max_iterations, 20);
+        assert_eq!(config.loop_config.model, "claude-sonnet-4-20250514");
 
         clear_all_env_vars();
     }
@@ -377,11 +331,13 @@ mod tests {
 
         std::env::set_var("AURA_MAX_STEPS_PER_TURN", "not_a_number");
 
-        let config = SessionConfig::from_env().unwrap();
+        let config = SessionConfig::from_env();
 
-        // Should use default value since parsing failed
-        let default_config = TurnConfig::default();
-        assert_eq!(config.turn_config.max_steps, default_config.max_steps);
+        let default_config = AgentLoopConfig::default();
+        assert_eq!(
+            config.loop_config.max_iterations,
+            default_config.max_iterations
+        );
 
         clear_all_env_vars();
     }

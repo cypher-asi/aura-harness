@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
+#[allow(dead_code)]
 mod approval;
 mod session;
 
@@ -84,7 +85,6 @@ impl Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -93,22 +93,18 @@ async fn main() -> Result<()> {
 
     println!("{}", banner());
 
-    // Create session
-    let config = SessionConfig::from_env()?;
+    let config = SessionConfig::from_env();
     let mut session = Session::new(config).await?;
 
     info!(agent_id = %session.agent_id(), "Session started");
 
-    // Create readline editor
     let mut rl: Editor<(), DefaultHistory> = Editor::new()?;
     let history_path = dirs::data_local_dir().map(|p| p.join("aura").join("history.txt"));
 
-    // Load history if available
     if let Some(ref path) = history_path {
         let _ = rl.load_history(path);
     }
 
-    // REPL loop
     loop {
         let prompt = format!("{} ", "aura>".cyan().bold());
         match rl.readline(&prompt) {
@@ -124,8 +120,8 @@ async fn main() -> Result<()> {
                     }
                     Command::Status => handle_status(&session),
                     Command::History(n) => handle_history(&session, n),
-                    Command::Approve => handle_approve(&mut session).await,
-                    Command::Deny => handle_deny(&mut session).await,
+                    Command::Approve => handle_approve(&session),
+                    Command::Deny => handle_deny(&session),
                     Command::Diff => handle_diff(&session),
                     Command::Help => print_help(),
                     Command::Quit => {
@@ -155,7 +151,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Save history
     if let Some(ref path) = history_path {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -175,25 +170,27 @@ async fn handle_prompt(session: &mut Session, text: &str) {
 
     match session.submit_prompt(text).await {
         Ok(result) => {
-            // Print the assistant's response
-            if let Some(message) = &result.final_message {
-                let text = message.text_content();
-                if !text.is_empty() {
-                    println!("{}", text);
-                }
+            if !result.total_text.is_empty() {
+                println!("{}", result.total_text);
             }
 
-            // Print stats
+            if let Some(ref err) = result.llm_error {
+                println!("{} LLM error: {}", "⚠".yellow().bold(), err);
+            }
+
             println!(
-                "\n{} Steps: {}, Input tokens: {}, Output tokens: {}",
+                "\n{} Iterations: {}, Input tokens: {}, Output tokens: {}",
                 "✓".green().bold(),
-                result.steps,
+                result.iterations,
                 result.total_input_tokens,
                 result.total_output_tokens
             );
 
-            if result.had_failures {
-                println!("{} Some tool calls failed", "⚠".yellow().bold());
+            if result.timed_out {
+                println!("{} Agent loop timed out", "⚠".yellow().bold());
+            }
+            if result.insufficient_credits {
+                println!("{} Insufficient credits", "⚠".yellow().bold());
             }
         }
         Err(e) => {
@@ -216,8 +213,8 @@ fn handle_history(_session: &Session, _n: usize) {
     println!();
 }
 
-async fn handle_approve(session: &mut Session) {
-    if let Err(e) = session.approve_pending().await {
+fn handle_approve(session: &Session) {
+    if let Err(e) = session.approve_pending() {
         eprintln!("{} {}", "Error:".red().bold(), e);
     } else {
         println!("{} Approved", "✓".green().bold());
@@ -225,8 +222,8 @@ async fn handle_approve(session: &mut Session) {
     println!();
 }
 
-async fn handle_deny(session: &mut Session) {
-    if let Err(e) = session.deny_pending().await {
+fn handle_deny(session: &Session) {
+    if let Err(e) = session.deny_pending() {
         eprintln!("{} {}", "Error:".red().bold(), e);
     } else {
         println!("{} Denied", "✗".red().bold());
@@ -257,18 +254,18 @@ fn print_help() {
 
 fn banner() -> String {
     format!(
-        r#"
+        r"
 {}
 Version: {}
 Type /help for available commands.
-"#,
-        r#"
+",
+        r"
     _   _   _ ____      _    
    / \ | | | |  _ \    / \   
   / _ \| | | | |_) |  / _ \  
  / ___ \ |_| |  _ <  / ___ \ 
 /_/   \_\___/|_| \_\/_/   \_\
-"#
+"
         .cyan()
         .bold(),
         env!("CARGO_PKG_VERSION")

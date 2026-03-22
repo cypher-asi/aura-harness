@@ -18,10 +18,8 @@ pub struct ApprovalRequest {
     /// Tool name
     pub tool: String,
     /// Tool arguments (reserved for approval UI)
-    #[allow(dead_code)]
     pub args: serde_json::Value,
     /// Permission level (reserved for approval UI)
-    #[allow(dead_code)]
     pub permission: PermissionLevel,
     /// Description for the user
     pub description: String,
@@ -47,11 +45,11 @@ fn format_tool_description(tool: &str, args: &serde_json::Value) -> String {
     match tool {
         "fs.write" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("Write to file: {}", path)
+            format!("Write to file: {path}")
         }
         "fs.edit" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            format!("Edit file: {}", path)
+            format!("Edit file: {path}")
         }
         "cmd.run" => {
             let program = args.get("program").and_then(|v| v.as_str()).unwrap_or("?");
@@ -65,9 +63,9 @@ fn format_tool_description(tool: &str, args: &serde_json::Value) -> String {
                         .join(" ")
                 })
                 .unwrap_or_default();
-            format!("Run command: {} {}", program, cmd_args)
+            format!("Run command: {program} {cmd_args}")
         }
-        _ => format!("Execute tool: {}", tool),
+        _ => format!("Execute tool: {tool}"),
     }
 }
 
@@ -77,7 +75,6 @@ fn format_tool_description(tool: &str, args: &serde_json::Value) -> String {
 
 /// Approval decision (reserved for approval UI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Reserved for future approval UI
 pub enum ApprovalDecision {
     /// Approve the request
     Approve,
@@ -107,7 +104,6 @@ impl ApprovalQueue {
 
     /// Get the next pending request without removing it.
     #[must_use]
-    #[allow(dead_code)] // Reserved for approval UI
     pub fn peek(&self) -> Option<&ApprovalRequest> {
         self.pending.front()
     }
@@ -136,7 +132,6 @@ impl ApprovalQueue {
     }
 
     /// Clear all pending requests.
-    #[allow(dead_code)] // Reserved for approval UI
     pub fn clear(&mut self) {
         self.pending.clear();
     }

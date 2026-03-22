@@ -279,6 +279,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aura-agent",
  "aura-core",
  "aura-executor",
  "aura-kernel",
@@ -287,6 +288,7 @@ dependencies = [
  "aura-tools",
  "axum",
  "base64 0.22.1",
+ "blake3",
  "bytes",
  "dashmap 5.5.3",
  "futures-util",

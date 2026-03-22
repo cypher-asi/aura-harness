@@ -147,8 +147,10 @@ mod tests {
 
     #[test]
     fn test_custom_data_dir() {
-        let mut config = SwarmConfig::default();
-        config.data_dir = PathBuf::from("/custom/path");
+        let config = SwarmConfig {
+            data_dir: PathBuf::from("/custom/path"),
+            ..SwarmConfig::default()
+        };
 
         assert_eq!(config.db_path(), PathBuf::from("/custom/path/db"));
         assert_eq!(

@@ -5,17 +5,13 @@
 
 use crate::protocol::{
     AssistantMessageEnd, AssistantMessageStart, ErrorMsg, FilesChanged, InboundMessage,
-    OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolInfo,
-    ToolResultMsg, ToolUseStart, UserMessage,
+    OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ToolInfo, UserMessage,
 };
-use async_trait::async_trait;
+use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult, KernelToolExecutor};
 use aura_core::{AgentId, ExternalToolDefinition};
 use aura_executor::ExecutorRouter;
-use aura_kernel::{StreamCallback, StreamCallbackEvent, TurnConfig, TurnProcessor, TurnResult};
-use aura_reasoner::{
-    Message, ModelProvider, ModelRequest, ModelResponse, StreamEventStream, ToolDefinition,
-};
-use aura_store::{AgentStatus, Store, StoreError};
+use aura_kernel::TurnConfig;
+use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolRegistry};
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -26,101 +22,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-
-// ============================================================================
-// DynProvider — type-erased ModelProvider wrapper
-// ============================================================================
-
-/// Wraps `Arc<dyn ModelProvider + Send + Sync>` so it can be used as
-/// a concrete `P` type parameter in `TurnProcessor<P, S, R>`.
-pub(crate) struct DynProvider(pub Arc<dyn ModelProvider + Send + Sync>);
-
-#[async_trait]
-impl ModelProvider for DynProvider {
-    fn name(&self) -> &'static str {
-        self.0.name()
-    }
-
-    async fn complete(&self, request: ModelRequest) -> anyhow::Result<ModelResponse> {
-        self.0.complete(request).await
-    }
-
-    async fn complete_streaming(&self, request: ModelRequest) -> anyhow::Result<StreamEventStream> {
-        self.0.complete_streaming(request).await
-    }
-
-    async fn health_check(&self) -> bool {
-        self.0.health_check().await
-    }
-}
-
-// ============================================================================
-// NullStore — lightweight store for WebSocket sessions
-// ============================================================================
-
-/// Minimal `Store` implementation for WebSocket sessions that manage
-/// their own message history and don't need persistent storage.
-pub(crate) struct NullStore;
-
-impl Store for NullStore {
-    fn enqueue_tx(&self, _tx: &aura_core::Transaction) -> Result<(), StoreError> {
-        Ok(())
-    }
-
-    fn dequeue_tx(
-        &self,
-        _agent_id: AgentId,
-    ) -> Result<Option<(u64, aura_core::Transaction)>, StoreError> {
-        Ok(None)
-    }
-
-    fn get_head_seq(&self, _agent_id: AgentId) -> Result<u64, StoreError> {
-        Ok(0)
-    }
-
-    fn append_entry_atomic(
-        &self,
-        _agent_id: AgentId,
-        _next_seq: u64,
-        _entry: &aura_core::RecordEntry,
-        _dequeued_inbox_seq: u64,
-    ) -> Result<(), StoreError> {
-        Ok(())
-    }
-
-    fn scan_record(
-        &self,
-        _agent_id: AgentId,
-        _from_seq: u64,
-        _limit: usize,
-    ) -> Result<Vec<aura_core::RecordEntry>, StoreError> {
-        Ok(Vec::new())
-    }
-
-    fn get_record_entry(
-        &self,
-        agent_id: AgentId,
-        seq: u64,
-    ) -> Result<aura_core::RecordEntry, StoreError> {
-        Err(StoreError::RecordEntryNotFound(agent_id, seq))
-    }
-
-    fn get_agent_status(&self, _agent_id: AgentId) -> Result<AgentStatus, StoreError> {
-        Ok(AgentStatus::Active)
-    }
-
-    fn set_agent_status(&self, _agent_id: AgentId, _status: AgentStatus) -> Result<(), StoreError> {
-        Ok(())
-    }
-
-    fn has_pending_tx(&self, _agent_id: AgentId) -> Result<bool, StoreError> {
-        Ok(false)
-    }
-
-    fn get_inbox_depth(&self, _agent_id: AgentId) -> Result<u64, StoreError> {
-        Ok(0)
-    }
-}
 
 // ============================================================================
 // Session
@@ -208,10 +109,10 @@ impl Session {
         self.initialized = true;
     }
 
-    /// Build a `TurnConfig` from session state.
-    fn turn_config(&self) -> TurnConfig {
-        TurnConfig {
-            max_steps: self.max_turns,
+    /// Build an `AgentLoopConfig` from session state.
+    fn agent_loop_config(&self) -> AgentLoopConfig {
+        AgentLoopConfig {
+            max_iterations: self.max_turns as usize,
             model: self.model.clone(),
             system_prompt: if self.system_prompt.is_empty() {
                 TurnConfig::default().system_prompt
@@ -219,11 +120,8 @@ impl Session {
                 self.system_prompt.clone()
             },
             max_tokens: self.max_tokens,
-            temperature: self.temperature,
-            workspace_base: self.workspace.clone(),
-            #[allow(clippy::cast_possible_truncation)]
-            context_window_tokens: self.context_window_tokens as usize,
-            ..TurnConfig::default()
+            max_context_tokens: Some(self.context_window_tokens),
+            ..AgentLoopConfig::default()
         }
     }
 }
@@ -252,8 +150,8 @@ struct ActiveTurn {
     /// Token to signal cancellation of the turn.
     cancel_token: CancellationToken,
     /// Handle to the spawned turn-processing task.
-    join_handle: JoinHandle<anyhow::Result<TurnResult>>,
-    /// Handle to the stream-forwarding task.
+    join_handle: JoinHandle<anyhow::Result<AgentLoopResult>>,
+    /// Handle to the (no-op) stream-forwarding task.
     stream_forward_handle: JoinHandle<()>,
     /// Message ID for this turn (used in `assistant_message_end`).
     message_id: String,
@@ -312,8 +210,6 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
 
     loop {
         if let Some(ref mut turn) = active_turn {
-            // A turn is in progress — select between incoming messages and
-            // turn completion so that `Cancel` is handled promptly.
             tokio::select! {
                 biased;
 
@@ -357,39 +253,36 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
                 }
             }
         } else {
-            // No active turn — block waiting for the next message.
             match classify_ws_frame(ws_rx.next().await) {
-                WsAction::Message(raw) => {
-                    match serde_json::from_str::<InboundMessage>(&raw) {
-                        Ok(InboundMessage::SessionInit(init)) => {
-                            handle_session_init(&mut session, init, &outbound_tx);
-                        }
-                        Ok(InboundMessage::UserMessage(msg)) => {
-                            match start_turn(&mut session, msg, &outbound_tx, &ctx) {
-                                Some(turn) => active_turn = Some(turn),
-                                None => {} // start_turn already sent an error
-                            }
-                        }
-                        Ok(InboundMessage::Cancel) => {
-                            debug!(session_id = %session.session_id, "Cancel received but no turn is active");
-                        }
-                        Ok(InboundMessage::ApprovalResponse(resp)) => {
-                            debug!(
-                                session_id = %session.session_id,
-                                tool_use_id = %resp.tool_use_id,
-                                approved = resp.approved,
-                                "Approval response received (not yet implemented)"
-                            );
-                        }
-                        Err(e) => {
-                            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
-                                code: "parse_error".into(),
-                                message: format!("Invalid message: {e}"),
-                                recoverable: true,
-                            }));
+                WsAction::Message(raw) => match serde_json::from_str::<InboundMessage>(&raw) {
+                    Ok(InboundMessage::SessionInit(init)) => {
+                        handle_session_init(&mut session, init, &outbound_tx);
+                    }
+                    Ok(InboundMessage::UserMessage(msg)) => {
+                        match start_turn(&mut session, msg, &outbound_tx, &ctx) {
+                            Some(turn) => active_turn = Some(turn),
+                            None => {}
                         }
                     }
-                }
+                    Ok(InboundMessage::Cancel) => {
+                        debug!(session_id = %session.session_id, "Cancel received but no turn is active");
+                    }
+                    Ok(InboundMessage::ApprovalResponse(resp)) => {
+                        debug!(
+                            session_id = %session.session_id,
+                            tool_use_id = %resp.tool_use_id,
+                            approved = resp.approved,
+                            "Approval response received (not yet implemented)"
+                        );
+                    }
+                    Err(e) => {
+                        let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+                            code: "parse_error".into(),
+                            message: format!("Invalid message: {e}"),
+                            recoverable: true,
+                        }));
+                    }
+                },
                 WsAction::Close => {
                     debug!(session_id = %session.session_id, "Client sent close frame");
                     break;
@@ -421,11 +314,9 @@ fn handle_session_init(
 
     session.apply_init(init);
 
-    // Build tool list from builtins.
     let builtin_tools = DefaultToolRegistry::new();
     session.tool_definitions = builtin_tools.list();
 
-    // Add external tool definitions.
     for ext in &session.external_tools {
         session.tool_definitions.push(ToolDefinition::new(
             &ext.name,
@@ -483,7 +374,6 @@ fn start_turn(
 
     session.messages.push(Message::user(&msg.content));
 
-    // Build per-turn tool executor with external tools.
     let mut tool_executor = ToolExecutor::new(ctx.tool_config.clone());
     for ext in &session.external_tools {
         tool_executor.register_external(ext.clone());
@@ -491,90 +381,41 @@ fn start_turn(
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(tool_executor));
 
-    // Build per-turn tool registry with external tools.
-    let mut tool_registry = DefaultToolRegistry::new();
-    for ext in &session.external_tools {
-        tool_registry.register(ToolDefinition::new(
-            &ext.name,
-            &ext.description,
-            ext.input_schema.clone(),
-        ));
-    }
+    let workspace = session.workspace.join(session.agent_id.to_hex());
+    let kernel_executor = KernelToolExecutor::new(executor_router, session.agent_id, workspace);
 
-    // Streaming callback → channel → WebSocket bridge.
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamCallbackEvent>();
-    let outbound_for_stream = outbound_tx.clone();
+    let config = session.agent_loop_config();
+    let agent_loop = AgentLoop::new(config);
 
-    let stream_forward_handle = tokio::spawn(async move {
-        while let Some(event) = event_rx.recv().await {
-            let out = match event {
-                StreamCallbackEvent::TextDelta(text) => {
-                    OutboundMessage::TextDelta(TextDelta { text })
+    let tools = session.tool_definitions.clone();
+    let messages = session.messages.clone();
+    let provider = ctx.provider.clone();
+
+    let cancel_token = CancellationToken::new();
+    let cancel_clone = cancel_token.clone();
+
+    let outbound_for_turn = outbound_tx.clone();
+
+    let join_handle = tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            () = cancel_clone.cancelled() => {
+                Ok(AgentLoopResult { timed_out: true, ..AgentLoopResult::default() })
+            }
+            result = agent_loop.run(provider.as_ref(), &kernel_executor, messages, tools) => {
+                if let Ok(ref r) = result {
+                    if !r.total_text.is_empty() {
+                        let _ = outbound_for_turn.send(OutboundMessage::TextDelta(TextDelta {
+                            text: r.total_text.clone(),
+                        }));
+                    }
                 }
-                StreamCallbackEvent::ThinkingDelta(thinking) => {
-                    OutboundMessage::ThinkingDelta(ThinkingDelta { thinking })
-                }
-                StreamCallbackEvent::ThinkingComplete => continue,
-                StreamCallbackEvent::ToolStart { id, name } => {
-                    OutboundMessage::ToolUseStart(ToolUseStart { id, name })
-                }
-                StreamCallbackEvent::ToolComplete {
-                    name,
-                    result,
-                    is_error,
-                    ..
-                } => OutboundMessage::ToolResult(ToolResultMsg {
-                    name,
-                    result,
-                    is_error,
-                }),
-                StreamCallbackEvent::StepComplete => continue,
-                StreamCallbackEvent::Error {
-                    code,
-                    message,
-                    recoverable,
-                } => OutboundMessage::Error(ErrorMsg {
-                    code,
-                    message,
-                    recoverable,
-                }),
-            };
-            if outbound_for_stream.send(out).is_err() {
-                break;
+                result
             }
         }
     });
 
-    let callback: StreamCallback = Box::new(move |event| {
-        let _ = event_tx.send(event);
-    });
-
-    let cancel_token = CancellationToken::new();
-
-    let provider = Arc::new(DynProvider(ctx.provider.clone()));
-    let store = Arc::new(NullStore);
-    let turn_config = session.turn_config();
-
-    let mut processor = TurnProcessor::new(
-        provider,
-        store,
-        executor_router,
-        Arc::new(tool_registry),
-        turn_config,
-    );
-    processor.set_stream_callback(Arc::new(callback));
-    processor.set_cancellation_token(cancel_token.clone());
-
-    let messages_for_turn = session.messages.clone();
-    let agent_id = session.agent_id;
-
-    let join_handle = tokio::spawn(async move {
-        let result = processor
-            .process_turn_with_messages(agent_id, messages_for_turn)
-            .await;
-        drop(processor);
-        result
-    });
+    let stream_forward_handle = tokio::spawn(async {});
 
     Some(ActiveTurn {
         cancel_token,
@@ -587,7 +428,7 @@ fn start_turn(
 /// Process the result of a completed (or cancelled) turn and update session state.
 fn finalize_turn(
     session: &mut Session,
-    join_result: Result<anyhow::Result<TurnResult>, tokio::task::JoinError>,
+    join_result: Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
     message_id: &str,
     outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
 ) {
@@ -611,26 +452,19 @@ fn finalize_turn(
     };
 
     match result {
-        Ok(turn_result) => {
-            for entry in &turn_result.entries {
-                session.messages.push(entry.model_response.message.clone());
+        Ok(loop_result) => {
+            session.messages = loop_result.messages;
 
-                let tool_results = &entry.tool_results;
-                if !tool_results.is_empty() {
-                    session
-                        .messages
-                        .push(Message::tool_results(tool_results.clone()));
-                }
-            }
-
-            let input_tokens = u64::from(turn_result.total_input_tokens);
-            let output_tokens = u64::from(turn_result.total_output_tokens);
+            let input_tokens = loop_result.total_input_tokens;
+            let output_tokens = loop_result.total_output_tokens;
             session.cumulative_input_tokens += input_tokens;
             session.cumulative_output_tokens += output_tokens;
 
-            let stop_reason = if turn_result.cancelled {
+            let stop_reason = if loop_result.timed_out {
                 "cancelled"
-            } else if turn_result.had_failures {
+            } else if loop_result.insufficient_credits {
+                "insufficient_credits"
+            } else if loop_result.llm_error.is_some() {
                 "end_turn_with_errors"
             } else {
                 "end_turn"
@@ -644,8 +478,6 @@ fn finalize_turn(
                 0.0
             };
 
-            let files_changed = extract_files_changed(&turn_result);
-
             let _ = outbound_tx.send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
                 message_id: message_id.to_string(),
                 stop_reason: stop_reason.into(),
@@ -655,15 +487,16 @@ fn finalize_turn(
                     cumulative_input_tokens: session.cumulative_input_tokens,
                     cumulative_output_tokens: session.cumulative_output_tokens,
                     context_utilization,
-                    model: turn_result.model.clone(),
-                    provider: turn_result.provider.clone(),
+                    model: session.model.clone(),
+                    provider: String::new(),
                 },
-                files_changed,
+                files_changed: FilesChanged::default(),
             }));
 
             info!(
                 session_id = %session.session_id,
-                cancelled = turn_result.cancelled,
+                timed_out = loop_result.timed_out,
+                iterations = loop_result.iterations,
                 history_len = session.messages.len(),
                 cumulative_in = session.cumulative_input_tokens,
                 cumulative_out = session.cumulative_output_tokens,
@@ -678,59 +511,5 @@ fn finalize_turn(
                 recoverable: true,
             }));
         }
-    }
-}
-
-/// Extract file mutation information from a turn result by inspecting
-/// tool names and their arguments.
-fn extract_files_changed(turn_result: &TurnResult) -> FilesChanged {
-    let mut created = Vec::new();
-    let mut modified = Vec::new();
-    let mut deleted = Vec::new();
-
-    for entry in &turn_result.entries {
-        for tool in &entry.executed_tools {
-            if tool.is_error {
-                continue;
-            }
-            let path = tool
-                .tool_args
-                .get("path")
-                .or_else(|| tool.tool_args.get("file_path"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            if path.is_empty() {
-                continue;
-            }
-
-            match tool.tool_name.as_str() {
-                "fs_write" => {
-                    let existed = tool
-                        .metadata
-                        .get("file_existed")
-                        .is_some_and(|v| v == "true");
-                    if existed {
-                        modified.push(path);
-                    } else {
-                        created.push(path);
-                    }
-                }
-                "fs_edit" => modified.push(path),
-                "fs_delete" => deleted.push(path),
-                _ => {}
-            }
-        }
-    }
-
-    // Deduplicate: if a file was created and then modified, keep only "created"
-    modified.retain(|p| !created.contains(p));
-    deleted.retain(|p| !created.contains(p));
-
-    FilesChanged {
-        created,
-        modified,
-        deleted,
     }
 }
