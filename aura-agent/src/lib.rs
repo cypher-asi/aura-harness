@@ -25,8 +25,6 @@
 
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
-// Phase 1: most code is staged for wiring in Phase 4.
-#![allow(dead_code)]
 
 mod agent_loop;
 pub mod blocking;

@@ -48,12 +48,6 @@ pub const EXPLORATION_WARNING_MILD_OFFSET: usize = 4;
 /// Exploration warning (strong) at allowance minus this value.
 pub const EXPLORATION_WARNING_STRONG_OFFSET: usize = 2;
 
-/// Stdout truncation limit for command output.
-pub const CMD_STDOUT_TRUNCATE_CHARS: usize = 8000;
-
-/// Stderr truncation limit for command output.
-pub const CMD_STDERR_TRUNCATE_CHARS: usize = 4000;
-
 /// Characters per token estimate for context budget calculations.
 pub const CHARS_PER_TOKEN: usize = 4;
 

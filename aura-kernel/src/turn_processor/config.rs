@@ -44,7 +44,7 @@ impl Default for TurnConfig {
             model_timeout_ms: 60_000,
             tool_timeout_ms: 30_000,
             context_window: 50,
-            model: "claude-opus-4-6-20250514".to_string(),
+            model: "claude-opus-4-6".to_string(),
             system_prompt: default_system_prompt(),
             workspace_base: PathBuf::from("./workspaces"),
             replay_mode: false,
@@ -82,7 +82,7 @@ mod tests {
         assert_eq!(config.model_timeout_ms, 60_000);
         assert_eq!(config.tool_timeout_ms, 30_000);
         assert_eq!(config.context_window, 50);
-        assert_eq!(config.model, "claude-opus-4-6-20250514");
+        assert_eq!(config.model, "claude-opus-4-6");
         assert!(!config.replay_mode);
         assert_eq!(config.temperature, Some(0.2));
         assert_eq!(config.max_tokens, 16_384);

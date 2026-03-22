@@ -19,7 +19,7 @@ This gateway wraps the Claude API to provide a "propose-only" reasoning interfac
    ```bash
    export ANTHROPIC_API_KEY="your-api-key"
    export PORT=3000  # optional, default 3000
-   export CLAUDE_MODEL="claude-opus-4-6-20250514"  # optional
+   export CLAUDE_MODEL="claude-opus-4-6"  # optional
    export MAX_TOKENS=4096  # optional
    ```
 
@@ -44,7 +44,7 @@ Response:
 {
   "status": "ok",
   "version": "0.1.0",
-  "model": "claude-opus-4-6-20250514"
+  "model": "claude-opus-4-6"
 }
 ```
 
@@ -86,7 +86,7 @@ Response:
     }
   ],
   "trace": {
-    "model": "claude-opus-4-6-20250514",
+    "model": "claude-opus-4-6",
     "latency_ms": 1234,
     "metadata": {
       "input_tokens": "100",

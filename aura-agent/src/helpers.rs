@@ -40,21 +40,6 @@ pub fn normalize_tool_name(name: &str) -> &str {
     }
 }
 
-/// Strip property descriptions from tool definitions to reduce token usage.
-pub fn compact_tools(tools: &mut [aura_reasoner::ToolDefinition]) {
-    for tool in tools {
-        if let Some(props) = tool.input_schema.get_mut("properties") {
-            if let Some(obj) = props.as_object_mut() {
-                for (_, prop_schema) in obj.iter_mut() {
-                    if let Some(inner) = prop_schema.as_object_mut() {
-                        inner.remove("description");
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Check if a tool name is a write tool (mutation).
 #[must_use]
 pub fn is_write_tool(name: &str) -> bool {
@@ -135,29 +120,6 @@ mod tests {
         assert_eq!(normalize_tool_name("search_code"), "search_code");
         assert_eq!(normalize_tool_name("cmd_run"), "cmd_run");
         assert_eq!(normalize_tool_name("unknown_tool"), "unknown_tool");
-    }
-
-    #[test]
-    fn test_compact_tools_strips_descriptions() {
-        let mut tools = vec![aura_reasoner::ToolDefinition::new(
-            "test",
-            "A tool",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The file path"
-                    }
-                }
-            }),
-        )];
-        compact_tools(&mut tools);
-        let props = tools[0].input_schema["properties"]["path"]
-            .as_object()
-            .unwrap();
-        assert!(!props.contains_key("description"));
-        assert!(props.contains_key("type"));
     }
 
     #[test]

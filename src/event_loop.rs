@@ -19,7 +19,7 @@ pub(crate) struct EventLoopContext<'a> {
     pub events: &'a mut mpsc::Receiver<UiEvent>,
     pub process_completions: mpsc::Receiver<Transaction>,
     pub commands: mpsc::Sender<UiCommand>,
-    pub agent_loop: &'a AgentLoop,
+    pub agent_loop: &'a mut AgentLoop,
     pub provider: &'a dyn ModelProvider,
     pub executor: &'a KernelToolExecutor,
     pub tools: &'a [ToolDefinition],
@@ -286,6 +286,76 @@ pub(crate) async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<
             }
             UiEvent::RefreshAgents => {
                 debug!("Agent refresh not yet implemented");
+            }
+            UiEvent::LoginCredentials { email, password } => {
+                let _ = commands.send(UiCommand::SetStatus("Authenticating...".to_string())).await;
+                match aura_auth::ZosClient::new() {
+                    Ok(client) => match client.login(&email, &password).await {
+                        Ok(stored) => {
+                            let display = stored.display_name.clone();
+                            let zid = stored.primary_zid.clone();
+                            let token = stored.access_token.clone();
+                            if let Err(e) = aura_auth::CredentialStore::save(&stored) {
+                                let _ = commands.send(UiCommand::ShowError(format!("Failed to save credentials: {e}"))).await;
+                            } else {
+                                agent_loop.set_auth_token(Some(token));
+                                let _ = commands.send(UiCommand::ShowSuccess(format!("Logged in as {display} ({zid})"))).await;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = commands.send(UiCommand::ShowError(format!("Login failed: {e}"))).await;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = commands.send(UiCommand::ShowError(format!("Auth client error: {e}"))).await;
+                    }
+                }
+                let _ = commands.send(UiCommand::Complete).await;
+            }
+            UiEvent::Logout => {
+                if let Some(stored) = aura_auth::CredentialStore::load() {
+                    if let Ok(client) = aura_auth::ZosClient::new() {
+                        client.logout(&stored.access_token).await;
+                    }
+                }
+                match aura_auth::CredentialStore::clear() {
+                    Ok(()) => {
+                        agent_loop.set_auth_token(None);
+                        let _ = commands.send(UiCommand::ShowSuccess("Logged out".to_string())).await;
+                    }
+                    Err(e) => {
+                        let _ = commands.send(UiCommand::ShowError(format!("Failed to clear credentials: {e}"))).await;
+                    }
+                }
+            }
+            UiEvent::Whoami => {
+                match aura_auth::CredentialStore::load() {
+                    Some(session) => {
+                        let msg = format!(
+                            "Logged in as {} (zID: {}, User: {}, Since: {})",
+                            session.display_name,
+                            session.primary_zid,
+                            session.user_id,
+                            session.created_at.format("%Y-%m-%d %H:%M UTC"),
+                        );
+                        let _ = commands
+                            .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
+                                role: aura_terminal::events::MessageRole::System,
+                                content: msg,
+                                is_streaming: false,
+                            }))
+                            .await;
+                    }
+                    None => {
+                        let _ = commands
+                            .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
+                                role: aura_terminal::events::MessageRole::System,
+                                content: "Not logged in. Use /login to authenticate.".to_string(),
+                                is_streaming: false,
+                            }))
+                            .await;
+                    }
+                }
             }
         } // end match event
             } // end Some(event) arm

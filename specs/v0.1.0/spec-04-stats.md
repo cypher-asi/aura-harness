@@ -2107,7 +2107,7 @@ fn test_token_stats_aggregation() {
     
     let event = StatEvent {
         kind: StatEventKind::TokenUsage {
-            model: "claude-opus-4-6-20250514".into(),
+            model: "claude-opus-4-6".into(),
             input_tokens: 100,
             output_tokens: 50,
             cache_read_tokens: None,

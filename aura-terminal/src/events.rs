@@ -44,6 +44,20 @@ pub enum UiEvent {
 
     /// User requested the agent list
     RefreshAgents,
+
+    /// User submitted login credentials from the TUI
+    LoginCredentials {
+        /// Email address
+        email: String,
+        /// Password
+        password: String,
+    },
+
+    /// User requested logout
+    Logout,
+
+    /// User requested auth status
+    Whoami,
 }
 
 /// Commands sent from the application logic to the UI.

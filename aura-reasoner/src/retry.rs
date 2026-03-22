@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 /// Configuration for retry and fallback behavior.
 pub struct RetryConfig {
-    /// Fallback chain of model names (e.g., `["claude-opus-4-6-20250514", "claude-sonnet-4-20250514"]`).
+    /// Fallback chain of model names (e.g., `["claude-opus-4-6", "claude-sonnet-4-20250514"]`).
     pub fallback_chain: Vec<String>,
     /// Maximum retries per model before falling back.
     pub max_retries_per_model: u32,

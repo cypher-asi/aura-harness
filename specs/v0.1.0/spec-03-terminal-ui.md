@@ -671,7 +671,7 @@ For developers who want to see everything:
 ╠═════════════════════════════════════════════════════════════════════════╣
 ║                                                                         ║
 ║  [14:32:02.123] ← REQ ModelProvider::complete                          ║
-║    model: claude-opus-4-6-20250514                                      ║
+║    model: claude-opus-4-6                                      ║
 ║    messages: 4                                                          ║
 ║    tools: 7                                                             ║
 ║    max_tokens: 4096                                                     ║

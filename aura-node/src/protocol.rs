@@ -31,7 +31,7 @@ pub struct SessionInit {
     /// Override the default system prompt.
     #[serde(default)]
     pub system_prompt: Option<String>,
-    /// Model identifier (e.g., "claude-opus-4-6-20250514").
+    /// Model identifier (e.g., "claude-opus-4-6").
     #[serde(default)]
     pub model: Option<String>,
     /// Maximum tokens per model response.
@@ -172,7 +172,7 @@ pub struct SessionUsage {
     pub cumulative_output_tokens: u64,
     /// Fraction of the model's context window consumed (0.0–1.0).
     pub context_utilization: f32,
-    /// Model identifier used for this turn (e.g., "claude-opus-4-6-20250514").
+    /// Model identifier used for this turn (e.g., "claude-opus-4-6").
     pub model: String,
     /// Provider name (e.g., "anthropic").
     pub provider: String,
@@ -223,7 +223,7 @@ mod tests {
         let json = serde_json::json!({
             "type": "session_init",
             "system_prompt": "You are helpful",
-            "model": "claude-opus-4-6-20250514",
+            "model": "claude-opus-4-6",
             "max_tokens": 4096,
             "temperature": 0.7,
             "max_turns": 10,
@@ -234,7 +234,7 @@ mod tests {
         match msg {
             InboundMessage::SessionInit(init) => {
                 assert_eq!(init.system_prompt.as_deref(), Some("You are helpful"));
-                assert_eq!(init.model.as_deref(), Some("claude-opus-4-6-20250514"));
+                assert_eq!(init.model.as_deref(), Some("claude-opus-4-6"));
                 assert_eq!(init.max_tokens, Some(4096));
                 assert!((init.temperature.unwrap() - 0.7).abs() < f32::EPSILON);
                 assert_eq!(init.max_turns, Some(10));
@@ -431,7 +431,7 @@ mod tests {
                 cumulative_input_tokens: 200,
                 cumulative_output_tokens: 100,
                 context_utilization: 0.5,
-                model: "claude-opus-4-6-20250514".to_string(),
+                model: "claude-opus-4-6".to_string(),
                 provider: "anthropic".to_string(),
             },
             files_changed: FilesChanged {
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(json["stop_reason"], "end_turn");
         assert_eq!(json["usage"]["input_tokens"], 100);
         assert_eq!(json["usage"]["output_tokens"], 50);
-        assert_eq!(json["usage"]["model"], "claude-opus-4-6-20250514");
+        assert_eq!(json["usage"]["model"], "claude-opus-4-6");
         assert_eq!(json["files_changed"]["created"][0], "new.txt");
         assert_eq!(json["files_changed"]["modified"][0], "old.txt");
         assert!(json["files_changed"]["deleted"]

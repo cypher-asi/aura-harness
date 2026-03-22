@@ -43,6 +43,10 @@ pub enum AppState {
     AwaitingApproval,
     /// Displaying help
     ShowingHelp,
+    /// Login flow: waiting for email
+    LoginEmail,
+    /// Login flow: waiting for password
+    LoginPassword,
 }
 
 /// Pending approval request.
@@ -117,6 +121,8 @@ pub struct App {
     api_url: Option<String>,
     /// Whether the API is currently active
     api_active: bool,
+    /// Stored email during login flow (between email and password steps)
+    login_email: String,
 }
 
 /// Type of notification.
@@ -164,6 +170,7 @@ impl App {
             active_agent_id: String::new(),
             api_url: None,
             api_active: false,
+            login_email: String::new(),
         }
     }
 
@@ -428,6 +435,7 @@ impl App {
                 self.state = AppState::Idle;
                 KeyResult::continue_running()
             }
+            AppState::LoginEmail | AppState::LoginPassword => self.handle_login_key(key),
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
         }
     }
@@ -457,6 +465,71 @@ impl App {
                 self.pending_approval = None;
                 self.state = AppState::Idle;
             }
+            _ => {}
+        }
+        KeyResult::continue_running()
+    }
+
+    /// Handle key during login flow (email or password entry).
+    fn handle_login_key(&mut self, key: KeyEvent) -> KeyResult {
+        match key.code {
+            KeyCode::Esc => {
+                self.state = AppState::Idle;
+                self.status = "Ready".to_string();
+                self.input.clear();
+                self.cursor_pos = 0;
+                self.login_email.clear();
+                self.notification =
+                    Some(("Login cancelled".to_string(), NotificationType::Warning));
+            }
+            KeyCode::Enter => {
+                let value = std::mem::take(&mut self.input);
+                self.cursor_pos = 0;
+
+                if value.trim().is_empty() {
+                    self.notification =
+                        Some(("Cannot be empty".to_string(), NotificationType::Warning));
+                    return KeyResult::continue_running();
+                }
+
+                match self.state {
+                    AppState::LoginEmail => {
+                        self.login_email = value.trim().to_string();
+                        self.state = AppState::LoginPassword;
+                        self.status = "Login — enter password".to_string();
+                    }
+                    AppState::LoginPassword => {
+                        let email = std::mem::take(&mut self.login_email);
+                        self.state = AppState::Processing;
+                        self.status = "Authenticating...".to_string();
+                        if let Some(tx) = &self.event_tx {
+                            let _ =
+                                tx.try_send(UiEvent::LoginCredentials { email, password: value });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char(c) => {
+                self.input.insert(self.cursor_pos, c);
+                self.cursor_pos += 1;
+            }
+            KeyCode::Backspace => {
+                if self.cursor_pos > 0 {
+                    self.cursor_pos -= 1;
+                    self.input.remove(self.cursor_pos);
+                }
+            }
+            KeyCode::Left => {
+                self.cursor_pos = self.cursor_pos.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                if self.cursor_pos < self.input.len() {
+                    self.cursor_pos += 1;
+                }
+            }
+            KeyCode::Home => self.cursor_pos = 0,
+            KeyCode::End => self.cursor_pos = self.input.len(),
             _ => {}
         }
         KeyResult::continue_running()
@@ -769,6 +842,21 @@ impl App {
                     if let Some(tx) = &self.event_tx {
                         let _ = tx.try_send(UiEvent::RefreshAgents);
                     }
+                }
+            }
+            "login" => {
+                self.state = AppState::LoginEmail;
+                self.login_email.clear();
+                self.status = "Login — enter email".to_string();
+            }
+            "logout" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::Logout);
+                }
+            }
+            "whoami" | "me" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::Whoami);
                 }
             }
             "new" | "n" => {

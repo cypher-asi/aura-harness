@@ -8,7 +8,7 @@ import type { GatewayConfig } from './types';
 const config: GatewayConfig = {
   port: parseInt(process.env.PORT || '3000', 10),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
-  model: process.env.CLAUDE_MODEL || 'claude-opus-4-6-20250514',
+  model: process.env.CLAUDE_MODEL || 'claude-opus-4-6',
   maxTokens: parseInt(process.env.MAX_TOKENS || '4096', 10),
 };
 

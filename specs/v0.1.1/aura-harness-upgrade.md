@@ -87,7 +87,7 @@ When the LLM calls an external tool, the runtime POSTs to `callback_url` with `{
 {
   "type": "session_init",
   "system_prompt": "You are an AI assistant working on project...",
-  "model": { "provider": "anthropic", "name": "claude-opus-4-6-20250514", "max_tokens": 16384 },
+  "model": { "provider": "anthropic", "name": "claude-opus-4-6", "max_tokens": 16384 },
   "external_tools": [...]
 }
 ```
@@ -115,7 +115,7 @@ The runtime's kernel uses this system prompt instead of the static one from `age
   "type": "session_init",
   "model": {
     "provider": "anthropic",
-    "name": "claude-opus-4-6-20250514",
+    "name": "claude-opus-4-6",
     "max_tokens": 16384,
     "thinking": { "enabled": true, "budget_tokens": 10000 }
   }
@@ -170,7 +170,7 @@ The runtime's kernel uses this system prompt instead of the static one from `age
     "context_window_size": 200000,
     "context_utilization": 0.285
   },
-  "model": "claude-opus-4-6-20250514",
+  "model": "claude-opus-4-6",
   "provider": "anthropic"
 }
 ```
@@ -325,7 +325,7 @@ This is the key new protocol message that bundles R1, R2, and R3. Sent once afte
   "system_prompt": "You are Aura, an AI development assistant...",
   "model": {
     "provider": "anthropic",
-    "name": "claude-opus-4-6-20250514",
+    "name": "claude-opus-4-6",
     "max_tokens": 16384,
     "thinking": { "enabled": true, "budget_tokens": 10000 }
   },

@@ -136,7 +136,7 @@ Environment variables or config file:
 |----------|---------|-------------|
 | `PORT` | `3000` | Gateway port |
 | `ANTHROPIC_API_KEY` | - | Required API key |
-| `CLAUDE_MODEL` | `claude-opus-4-6-20250514` | Model to use |
+| `CLAUDE_MODEL` | `claude-opus-4-6` | Model to use |
 | `MAX_TOKENS` | `4096` | Max response tokens |
 
 ## Development

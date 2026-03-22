@@ -1,6 +1,6 @@
 //! Build integration — auto-build checks and error annotation.
 
-use crate::types::{AutoBuildResult, BuildBaseline};
+use crate::types::BuildBaseline;
 
 /// Extract error signatures from build output.
 ///
@@ -73,15 +73,6 @@ pub fn annotate_build_output(output: &str, baseline: &BuildBaseline) -> String {
     annotated
 }
 
-/// Check if an auto-build should be triggered.
-pub const fn should_auto_build(
-    had_write_this_iteration: bool,
-    cooldown_remaining: usize,
-    _build_result: Option<&AutoBuildResult>,
-) -> bool {
-    had_write_this_iteration && cooldown_remaining == 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,12 +91,5 @@ mod tests {
         let baseline = BuildBaseline::default();
         let result = annotate_build_output(output, &baseline);
         assert_eq!(result, output);
-    }
-
-    #[test]
-    fn test_should_auto_build_checks_conditions() {
-        assert!(should_auto_build(true, 0, None));
-        assert!(!should_auto_build(false, 0, None));
-        assert!(!should_auto_build(true, 1, None));
     }
 }

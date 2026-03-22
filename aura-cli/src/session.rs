@@ -237,6 +237,10 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn clear_all_env_vars() {
         std::env::remove_var("AURA_DATA_DIR");
         std::env::remove_var("AURA_WORKSPACE_ROOT");
@@ -251,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_session_config_from_env_defaults() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         let config = SessionConfig::from_env();
@@ -263,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_session_config_custom_data_dir() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_DATA_DIR", "/custom/data");
@@ -281,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_session_config_custom_workspace() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_WORKSPACE_ROOT", "/my/workspaces");
@@ -295,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_session_config_provider() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_MODEL_PROVIDER", "mock");
@@ -309,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_session_config_agent_name() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_AGENT_NAME", "Test Agent");
@@ -323,23 +327,23 @@ mod tests {
 
     #[test]
     fn test_session_config_loop_config_overrides() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_MAX_STEPS_PER_TURN", "20");
-        std::env::set_var("AURA_ANTHROPIC_MODEL", "claude-opus-4-6-20250514");
+        std::env::set_var("AURA_ANTHROPIC_MODEL", "claude-opus-4-6");
 
         let config = SessionConfig::from_env();
 
         assert_eq!(config.loop_config.max_iterations, 20);
-        assert_eq!(config.loop_config.model, "claude-opus-4-6-20250514");
+        assert_eq!(config.loop_config.model, "claude-opus-4-6");
 
         clear_all_env_vars();
     }
 
     #[test]
     fn test_session_config_invalid_number_uses_default() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_MAX_STEPS_PER_TURN", "not_a_number");
@@ -357,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_session_config_jwt_token() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_ROUTER_JWT", "my-secret-jwt");
@@ -373,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_session_config_no_jwt_by_default() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         let config = SessionConfig::from_env();
@@ -384,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_session_config_workspace_inherits_data_dir() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_DATA_DIR", "/mydata");
@@ -397,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_session_config_workspace_override_independent() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = lock_env();
         clear_all_env_vars();
 
         std::env::set_var("AURA_DATA_DIR", "/mydata");

@@ -25,7 +25,7 @@ pub struct ThinkingConfig {
 /// Request to the model.
 #[derive(Debug, Clone)]
 pub struct ModelRequest {
-    /// Model identifier (e.g., "claude-opus-4-6-20250514")
+    /// Model identifier (e.g., "claude-opus-4-6")
     pub model: String,
     /// System prompt
     pub system: String,

@@ -838,7 +838,7 @@ AURA_MODEL_PROVIDER=anthropic
 
 # Anthropic settings
 AURA_ANTHROPIC_API_KEY=sk-ant-...
-AURA_ANTHROPIC_MODEL=claude-opus-4-6-20250514
+AURA_ANTHROPIC_MODEL=claude-opus-4-6
 
 # Turn processor settings
 AURA_MAX_STEPS_PER_TURN=25
