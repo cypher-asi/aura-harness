@@ -154,6 +154,7 @@ dependencies = [
  "async-trait",
  "aura-core",
  "aura-executor",
+ "aura-kernel",
  "aura-reasoner",
  "futures-util",
  "serde_json",
@@ -236,6 +237,7 @@ name = "aura-kernel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aura-core",
  "aura-executor",
  "aura-reasoner",

@@ -13,6 +13,7 @@ aura-executor = { path = "../aura-executor" }
 aura-reasoner = { path = "../aura-reasoner" }
 aura-tools = { path = "../aura-tools" }
 anyhow = { workspace = true }
+async-trait = "0.1"
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }

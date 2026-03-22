@@ -70,7 +70,13 @@ fn classify_error(e: anyhow::Error) -> LlmCallError {
 }
 
 impl AgentLoop {
-    /// Call the model (streaming or non-streaming) and translate errors.
+    /// Call the model and translate errors.
+    ///
+    /// When a [`ModelCallDelegate`](aura_kernel::ModelCallDelegate) is set,
+    /// the call is routed through the delegate (gaining its streaming,
+    /// cancellation, and replay). Otherwise falls back to the direct
+    /// provider path (streaming when `event_tx` is present, non-streaming
+    /// otherwise).
     pub(super) async fn call_model(
         &self,
         provider: &dyn ModelProvider,
@@ -78,6 +84,13 @@ impl AgentLoop {
         event_tx: &Option<UnboundedSender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
     ) -> Result<ModelResponse, LlmCallError> {
+        if let Some(delegate) = &self.model_delegate {
+            return delegate
+                .call_model(request)
+                .await
+                .map_err(classify_error);
+        }
+
         if event_tx.is_some() {
             self.complete_with_streaming(provider, request, event_tx, cancellation_token)
                 .await

@@ -22,6 +22,7 @@
 //! ensuring deterministic state reconstruction.
 
 mod config;
+mod delegate;
 mod loop_runner;
 mod record;
 mod streaming;
@@ -29,6 +30,7 @@ mod tool_execution;
 mod types;
 
 pub use config::{StepConfig, TurnConfig};
+pub use delegate::ModelCallDelegate;
 pub use streaming::{StreamCallback, StreamCallbackEvent};
 pub use types::{ExecutedToolCall, StepResult, ToolCache, TurnEntry, TurnResult};
 
@@ -203,6 +205,27 @@ where
     ) -> anyhow::Result<TurnResult> {
         info!("Starting turn processing (caller-provided history)");
         self.run_turn_loop(messages, agent_id).await
+    }
+
+    /// Make a model call through the turn processor's infrastructure.
+    ///
+    /// Uses the same streaming, cancellation, and error handling as
+    /// `process_step()`, but does **not** build its own request or execute
+    /// tools. The caller provides a pre-built [`ModelRequest`] and receives
+    /// the raw [`ModelResponse`].
+    ///
+    /// Designed for external orchestrators (e.g., `AgentLoop`) that manage
+    /// their own tool execution and request building, but want to leverage
+    /// TurnProcessor's streaming, cancellation, and replay infrastructure.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the model completion fails.
+    pub async fn resolve_model_call(
+        &self,
+        request: ModelRequest,
+    ) -> anyhow::Result<ModelResponse> {
+        self.resolve_model_response(request).await
     }
 
     /// Resolve a model response: replay stub, streaming completion, or
