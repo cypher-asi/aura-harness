@@ -200,13 +200,13 @@ fn handle_session_init(
     let builtin_tools = DefaultToolRegistry::new();
     session.tool_definitions = builtin_tools.list();
 
-    for ext in &session.external_tools {
+    for tool in &session.installed_tools {
         session
             .tool_definitions
             .push(aura_reasoner::ToolDefinition::new(
-                &ext.name,
-                &ext.description,
-                ext.input_schema.clone(),
+                &tool.name,
+                &tool.description,
+                tool.input_schema.clone(),
             ));
     }
 
@@ -260,9 +260,9 @@ fn start_turn(
     session.messages.push(Message::user(&msg.content));
 
     let mut tool_executor = ToolExecutor::new(ctx.tool_config.clone());
-    for ext in &session.external_tools {
-        if let Err(e) = tool_executor.register_external(ext.clone()) {
-            tracing::warn!(tool = %ext.name, error = %e, "Failed to register external tool");
+    for tool in &session.installed_tools {
+        if let Err(e) = tool_executor.register_external(tool.clone()) {
+            tracing::warn!(tool = %tool.name, error = %e, "Failed to register installed tool");
         }
     }
     let mut executor_router = ExecutorRouter::new();

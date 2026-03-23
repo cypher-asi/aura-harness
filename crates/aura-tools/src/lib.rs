@@ -34,7 +34,7 @@ pub(crate) mod registry;
 mod sandbox;
 pub(crate) mod tool;
 
-pub use aura_core::ExternalToolDefinition;
+pub use aura_core::InstalledToolDefinition;
 pub use error::ToolError;
 pub use executor::ToolExecutor;
 pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};

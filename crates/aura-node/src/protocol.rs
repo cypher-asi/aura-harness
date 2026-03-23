@@ -3,7 +3,7 @@
 //! Defines the inbound (client → server) and outbound (server → client)
 //! message format for the `/stream` WebSocket endpoint.
 
-use aura_core::ExternalToolDefinition;
+use aura_core::InstalledToolDefinition;
 use aura_reasoner::ToolDefinition;
 use serde::{Deserialize, Serialize};
 
@@ -43,9 +43,9 @@ pub struct SessionInit {
     /// Maximum agentic steps per turn.
     #[serde(default)]
     pub max_turns: Option<u32>,
-    /// External tools to register for this session.
+    /// Installed tools to register for this session.
     #[serde(default)]
-    pub external_tools: Option<Vec<ExternalToolDefinition>>,
+    pub installed_tools: Option<Vec<InstalledToolDefinition>>,
     /// Workspace directory path.
     #[serde(default)]
     pub workspace: Option<String>,
@@ -256,7 +256,7 @@ mod tests {
                 assert!(init.max_tokens.is_none());
                 assert!(init.temperature.is_none());
                 assert!(init.max_turns.is_none());
-                assert!(init.external_tools.is_none());
+                assert!(init.installed_tools.is_none());
                 assert!(init.workspace.is_none());
                 assert!(init.token.is_none());
             }

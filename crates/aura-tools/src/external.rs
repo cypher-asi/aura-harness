@@ -6,7 +6,7 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{ExternalToolDefinition, ToolResult};
+use aura_core::{InstalledToolDefinition, ToolResult};
 use aura_reasoner::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
@@ -38,7 +38,7 @@ const fn default_true() -> bool {
 
 /// An external tool that dispatches execution via HTTP POST.
 pub struct ExternalTool {
-    def: ExternalToolDefinition,
+    def: InstalledToolDefinition,
     client: reqwest::Client,
 }
 
@@ -49,7 +49,7 @@ impl ExternalTool {
     ///
     /// # Errors
     /// Returns `ToolError::ExternalToolError` if the HTTP client cannot be built.
-    pub(crate) fn new(def: ExternalToolDefinition) -> Result<Self, ToolError> {
+    pub(crate) fn new(def: InstalledToolDefinition) -> Result<Self, ToolError> {
         let client = reqwest::Client::builder()
             .timeout(DEFAULT_CALLBACK_TIMEOUT)
             .build()
@@ -62,7 +62,7 @@ impl ExternalTool {
     /// Create a new external tool with a custom HTTP client.
     #[must_use]
     #[allow(dead_code)]
-    pub(crate) fn with_client(def: ExternalToolDefinition, client: reqwest::Client) -> Self {
+    pub(crate) fn with_client(def: InstalledToolDefinition, client: reqwest::Client) -> Self {
         Self { def, client }
     }
 }
@@ -82,7 +82,7 @@ impl Tool for ExternalTool {
         }
     }
 
-    #[instrument(skip(self, _ctx, args), fields(tool = %self.def.name, url = %self.def.callback_url))]
+    #[instrument(skip(self, _ctx, args), fields(tool = %self.def.name, url = %self.def.endpoint))]
     async fn execute(
         &self,
         _ctx: &ToolContext,
@@ -97,14 +97,14 @@ impl Tool for ExternalTool {
 
         let response = self
             .client
-            .post(&self.def.callback_url)
+            .post(&self.def.endpoint)
             .json(&request_body)
             .send()
             .await
             .map_err(|e| {
                 ToolError::ExternalToolError(format!(
                     "HTTP request to {} failed: {e}",
-                    self.def.callback_url
+                    self.def.endpoint
                 ))
             })?;
 
@@ -137,23 +137,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_external_tool_definition_roundtrip() {
-        let def = ExternalToolDefinition {
+    fn test_installed_tool_definition_roundtrip() {
+        let def = InstalledToolDefinition {
             name: "my_tool".into(),
             description: "Does things".into(),
             input_schema: serde_json::json!({"type": "object"}),
-            callback_url: "http://localhost:8080/tool".into(),
+            endpoint: "http://localhost:8080/tool".into(),
+            auth: Default::default(),
+            timeout_ms: None,
+            namespace: None,
+            metadata: Default::default(),
         };
 
         let json = serde_json::to_string(&def).unwrap();
-        let parsed: ExternalToolDefinition = serde_json::from_str(&json).unwrap();
+        let parsed: InstalledToolDefinition = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "my_tool");
-        assert_eq!(parsed.callback_url, "http://localhost:8080/tool");
+        assert_eq!(parsed.endpoint, "http://localhost:8080/tool");
     }
 
     #[test]
     fn test_external_tool_produces_correct_definition() {
-        let def = ExternalToolDefinition {
+        let def = InstalledToolDefinition {
             name: "ext_search".into(),
             description: "Search external index".into(),
             input_schema: serde_json::json!({
@@ -163,7 +167,11 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            callback_url: "http://example.com/search".into(),
+            endpoint: "http://example.com/search".into(),
+            auth: Default::default(),
+            timeout_ms: None,
+            namespace: None,
+            metadata: Default::default(),
         };
 
         let tool = ExternalTool::new(def).unwrap();
@@ -177,11 +185,15 @@ mod tests {
 
     #[test]
     fn test_external_tool_with_client_constructor() {
-        let def = ExternalToolDefinition {
+        let def = InstalledToolDefinition {
             name: "custom_client_tool".into(),
             description: "Tool with custom client".into(),
             input_schema: serde_json::json!({"type": "object"}),
-            callback_url: "http://localhost:9999/callback".into(),
+            endpoint: "http://localhost:9999/callback".into(),
+            auth: Default::default(),
+            timeout_ms: None,
+            namespace: None,
+            metadata: Default::default(),
         };
 
         let client = reqwest::Client::new();
@@ -191,11 +203,15 @@ mod tests {
 
     #[test]
     fn test_external_tool_definition_cache_control_is_none() {
-        let def = ExternalToolDefinition {
+        let def = InstalledToolDefinition {
             name: "no_cache".into(),
             description: "No cache".into(),
             input_schema: serde_json::json!({}),
-            callback_url: "http://localhost/tool".into(),
+            endpoint: "http://localhost/tool".into(),
+            auth: Default::default(),
+            timeout_ms: None,
+            namespace: None,
+            metadata: Default::default(),
         };
 
         let tool = ExternalTool::new(def).unwrap();

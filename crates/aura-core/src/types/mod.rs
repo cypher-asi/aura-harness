@@ -20,7 +20,8 @@ pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
 pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 pub use status::AgentStatus;
 pub use tool::{
-    ExternalToolDefinition, ToolCall, ToolDecision, ToolExecution, ToolProposal, ToolResult,
+    InstalledToolDefinition, ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolExecution,
+    ToolProposal, ToolResult,
 };
 pub use transaction::{Transaction, TransactionType};
 

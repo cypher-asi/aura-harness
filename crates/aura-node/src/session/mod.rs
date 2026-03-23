@@ -9,7 +9,7 @@ pub use ws_handler::handle_ws_connection;
 
 use crate::protocol::SessionInit;
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
-use aura_core::{AgentId, ExternalToolDefinition};
+use aura_core::{AgentId, InstalledToolDefinition};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_tools::ToolConfig;
 use std::path::PathBuf;
@@ -36,8 +36,8 @@ pub struct Session {
     pub temperature: Option<f32>,
     /// Maximum agentic steps per turn.
     pub max_turns: u32,
-    /// External tools registered for this session.
-    pub external_tools: Vec<ExternalToolDefinition>,
+    /// Installed tools registered for this session.
+    pub installed_tools: Vec<InstalledToolDefinition>,
     /// Conversation history (accumulated across turns).
     pub messages: Vec<Message>,
     /// Cumulative input tokens across all turns.
@@ -69,7 +69,7 @@ impl Session {
             max_tokens: 16384,
             temperature: None,
             max_turns: 25,
-            external_tools: Vec::new(),
+            installed_tools: Vec::new(),
             messages: Vec::new(),
             cumulative_input_tokens: 0,
             cumulative_output_tokens: 0,
@@ -99,8 +99,8 @@ impl Session {
         if let Some(max_turns) = init.max_turns {
             self.max_turns = max_turns;
         }
-        if let Some(tools) = init.external_tools {
-            self.external_tools = tools;
+        if let Some(tools) = init.installed_tools {
+            self.installed_tools = tools;
         }
         if let Some(workspace) = init.workspace {
             let candidate = PathBuf::from(&workspace);

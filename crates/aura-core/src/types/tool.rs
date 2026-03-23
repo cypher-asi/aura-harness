@@ -81,20 +81,47 @@ pub struct ToolExecution {
     pub is_error: bool,
 }
 
-/// Definition for an external tool registered at runtime via `session_init`.
-///
-/// External tools are dispatched via HTTP POST to a callback URL.
-/// This type is shared between the session protocol and the tool executor.
+/// Authentication configuration for installed tools.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExternalToolDefinition {
-    /// Tool name (must be unique across all tools).
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolAuth {
+    None,
+    Bearer { token: String },
+    ApiKey { header: String, key: String },
+    Headers { headers: HashMap<String, String> },
+}
+
+impl Default for ToolAuth {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// Definition for an installed tool (replaces ExternalToolDefinition).
+///
+/// Installed tools are dispatched via HTTP POST to an endpoint.
+/// They can come from tools.toml, the HTTP install API, or session_init.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledToolDefinition {
     pub name: String,
-    /// Human-readable description for the model.
     pub description: String,
-    /// JSON Schema for input parameters.
     pub input_schema: serde_json::Value,
-    /// HTTP endpoint that handles tool execution.
-    pub callback_url: String,
+    pub endpoint: String,
+    #[serde(default)]
+    pub auth: ToolAuth,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Context passed alongside tool calls to installed tool endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallContext {
+    pub workspace: String,
+    pub agent_id: String,
 }
 
 /// A tool call request.
