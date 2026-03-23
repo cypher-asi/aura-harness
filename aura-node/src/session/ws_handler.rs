@@ -3,9 +3,10 @@
 use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageEnd, AssistantMessageStart, ErrorMsg, FilesChanged, InboundMessage,
-    OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ToolInfo, UserMessage,
+    OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolInfo,
+    ToolResultMsg, ToolUseStart, UserMessage,
 };
-use aura_agent::{AgentLoop, AgentLoopResult, KernelToolExecutor};
+use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
 use aura_executor::ExecutorRouter;
 use aura_reasoner::Message;
 use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
@@ -24,7 +25,7 @@ struct ActiveTurn {
     cancel_token: CancellationToken,
     /// Handle to the spawned turn-processing task.
     join_handle: JoinHandle<anyhow::Result<AgentLoopResult>>,
-    /// Handle to the (no-op) stream-forwarding task.
+    /// Handle to the task that forwards `AgentLoopEvent`s to the WebSocket as `OutboundMessage`s.
     stream_forward_handle: JoinHandle<()>,
     /// Message ID for this turn (used in `assistant_message_end`).
     message_id: String,
@@ -271,30 +272,73 @@ fn start_turn(
     let provider = ctx.provider.clone();
 
     let cancel_token = CancellationToken::new();
-    let cancel_clone = cancel_token.clone();
+    let cancel_for_loop = cancel_token.clone();
+    let cancel_for_check = cancel_token.clone();
 
-    let outbound_for_turn = outbound_tx.clone();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AgentLoopEvent>();
 
     let join_handle = tokio::spawn(async move {
-        tokio::select! {
-            biased;
-            () = cancel_clone.cancelled() => {
-                Ok(AgentLoopResult { timed_out: true, ..AgentLoopResult::default() })
+        let mut result = agent_loop
+            .run_with_events(
+                provider.as_ref(),
+                &kernel_executor,
+                messages,
+                tools,
+                Some(event_tx),
+                Some(cancel_for_loop),
+            )
+            .await;
+
+        if cancel_for_check.is_cancelled() {
+            if let Ok(ref mut r) = result {
+                r.timed_out = true;
             }
-            result = agent_loop.run(provider.as_ref(), &kernel_executor, messages, tools) => {
-                if let Ok(ref r) = result {
-                    if !r.total_text.is_empty() {
-                        let _ = outbound_for_turn.send(OutboundMessage::TextDelta(TextDelta {
-                            text: r.total_text.clone(),
-                        }));
-                    }
+        }
+
+        result
+    });
+
+    let outbound_for_stream = outbound_tx.clone();
+    let stream_forward_handle = tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            let msg = match event {
+                AgentLoopEvent::TextDelta(text) => {
+                    OutboundMessage::TextDelta(TextDelta { text })
                 }
-                result
+                AgentLoopEvent::ThinkingDelta(thinking) => {
+                    OutboundMessage::ThinkingDelta(ThinkingDelta { thinking })
+                }
+                AgentLoopEvent::ToolStart { id, name } => {
+                    OutboundMessage::ToolUseStart(ToolUseStart { id, name })
+                }
+                AgentLoopEvent::ToolComplete {
+                    name,
+                    result,
+                    is_error,
+                } => OutboundMessage::ToolResult(ToolResultMsg {
+                    name,
+                    result,
+                    is_error,
+                }),
+                AgentLoopEvent::Error {
+                    code,
+                    message,
+                    recoverable,
+                } => OutboundMessage::Error(ErrorMsg {
+                    code,
+                    message,
+                    recoverable,
+                }),
+                AgentLoopEvent::ToolInputSnapshot { .. }
+                | AgentLoopEvent::ToolResult { .. }
+                | AgentLoopEvent::IterationComplete { .. }
+                | AgentLoopEvent::Warning(_) => continue,
+            };
+            if outbound_for_stream.send(msg).is_err() {
+                break;
             }
         }
     });
-
-    let stream_forward_handle = tokio::spawn(async {});
 
     Some(ActiveTurn {
         cancel_token,
