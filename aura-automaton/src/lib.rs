@@ -21,3 +21,5 @@ pub use runtime::AutomatonRuntime;
 pub use schedule::Schedule;
 pub use state::AutomatonState;
 pub use types::{AutomatonId, AutomatonInfo, AutomatonStatus};
+
+pub use builtins::{ChatAutomaton, DevLoopAutomaton, SpecGenAutomaton, TaskRunAutomaton};
