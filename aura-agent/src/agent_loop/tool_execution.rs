@@ -210,7 +210,7 @@ fn handle_stall(event_tx: Option<&UnboundedSender<AgentLoopEvent>>, state: &mut 
     let msg = "CRITICAL: Agent appears stalled — repeatedly failing \
                to write to the same files. Stopping to prevent \
                infinite loop. Try a different approach or ask for help.";
-    append_warning_to_last_user_message(&mut state.messages, msg);
+    helpers::append_warning(&mut state.messages, msg);
     streaming::emit(
         event_tx,
         AgentLoopEvent::Error {
@@ -220,20 +220,6 @@ fn handle_stall(event_tx: Option<&UnboundedSender<AgentLoopEvent>>, state: &mut 
         },
     );
     state.result.stalled = true;
-}
-
-/// Append a warning text block to the last user message if one exists,
-/// otherwise push a new user message. This avoids inserting a separate
-/// user message that could break tool_use/tool_result adjacency.
-fn append_warning_to_last_user_message(messages: &mut Vec<Message>, warning: &str) {
-    if let Some(last) = messages.last_mut() {
-        if last.role == aura_reasoner::Role::User {
-            last.content
-                .push(ContentBlock::Text { text: warning.to_string() });
-            return;
-        }
-    }
-    messages.push(Message::user(warning));
 }
 
 // ---------------------------------------------------------------------------

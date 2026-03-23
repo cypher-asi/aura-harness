@@ -50,7 +50,7 @@ pub(super) fn emit_checkpoint_if_needed(
                consider verifying your work (e.g., run the build or tests) to catch \
                issues early."
         .to_string();
-    helpers::push_or_replace_warning(&mut state.messages, &msg);
+    helpers::append_warning(&mut state.messages, &msg);
     streaming::emit(event_tx, AgentLoopEvent::Warning(msg));
 }
 
@@ -90,14 +90,14 @@ pub(super) fn check_budget_warnings(
     if let Some(warning) =
         budget::check_budget_warning(&mut state.budget_state, utilization, state.had_any_write)
     {
-        helpers::push_or_replace_warning(&mut state.messages, &warning);
+        helpers::append_warning(&mut state.messages, &warning);
         streaming::emit(event_tx, AgentLoopEvent::Warning(warning));
     }
 
     if let Some(warning) =
         budget::check_exploration_warning(&mut state.exploration_state, config.exploration_allowance)
     {
-        helpers::push_or_replace_warning(&mut state.messages, &warning);
+        helpers::append_warning(&mut state.messages, &warning);
         streaming::emit(event_tx, AgentLoopEvent::Warning(warning));
     }
 }

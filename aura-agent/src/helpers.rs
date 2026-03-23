@@ -2,27 +2,20 @@
 
 use aura_reasoner::{ContentBlock, Message, Role};
 
-/// Push a warning message or replace the last warning if present.
+/// Append a warning as a text block to the last user message, or push a new
+/// user message if the last message isn't a user message.
 ///
-/// This prevents accumulating multiple warning messages in the context.
-pub fn push_or_replace_warning(messages: &mut Vec<Message>, warning: &str) {
-    let is_warning = |text: &str| -> bool {
-        text.starts_with("WARNING:")
-            || text.starts_with("NOTE:")
-            || text.starts_with("CRITICAL")
-            || text.starts_with("STRONG WARNING:")
-    };
-
-    if let Some(last) = messages.last() {
+/// This is safe to call after tool_result messages because it appends to
+/// the existing user message rather than inserting a new one that would
+/// break the tool_use/tool_result adjacency required by Anthropic.
+pub fn append_warning(messages: &mut Vec<Message>, warning: &str) {
+    if let Some(last) = messages.last_mut() {
         if last.role == Role::User {
-            if let Some(ContentBlock::Text { text }) = last.content.first() {
-                if is_warning(text) {
-                    messages.pop();
-                }
-            }
+            last.content
+                .push(ContentBlock::Text { text: warning.to_string() });
+            return;
         }
     }
-
     messages.push(Message::user(warning));
 }
 
@@ -133,11 +126,19 @@ mod tests {
     }
 
     #[test]
-    fn test_push_or_replace_warning() {
-        let mut messages = vec![Message::user("WARNING: old warning")];
-        push_or_replace_warning(&mut messages, "WARNING: new warning");
+    fn test_append_warning_to_existing_user_message() {
+        let mut messages = vec![Message::user("hello")];
+        append_warning(&mut messages, "WARNING: something");
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].text_content(), "WARNING: new warning");
+        assert_eq!(messages[0].content.len(), 2);
+    }
+
+    #[test]
+    fn test_append_warning_after_assistant() {
+        let mut messages = vec![Message::assistant("response")];
+        append_warning(&mut messages, "WARNING: something");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, Role::User);
     }
 
     #[test]
