@@ -50,6 +50,11 @@ pub mod shell_parse;
 pub mod types;
 pub mod verify;
 
+pub mod agent_runner;
+pub mod task_context;
+pub mod task_executor;
+pub mod message_conversion;
+
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use aura_kernel::ModelCallDelegate;
 pub use events::AgentLoopEvent;

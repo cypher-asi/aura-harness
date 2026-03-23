@@ -152,6 +152,7 @@ dependencies = [
  "aura-executor",
  "aura-kernel",
  "aura-reasoner",
+ "base64 0.22.1",
  "futures-util",
  "regex",
  "serde",
