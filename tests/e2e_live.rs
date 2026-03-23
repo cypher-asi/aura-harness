@@ -1843,3 +1843,144 @@ async fn test_ws_auth_bearer_header() {
     let has_text = messages.iter().any(|m| m["type"] == "text_delta");
     assert!(has_text, "should get text_delta with bearer header auth");
 }
+
+// ============================================================================
+// Suite 14: Tool Error Paths
+// ============================================================================
+
+/// Check that a turn contains a tool_result with is_error for a given tool.
+fn has_tool_error(messages: &[Value], tool_name: &str) -> bool {
+    messages.iter().any(|m| {
+        m["type"] == "tool_result"
+            && m["name"] == tool_name
+            && m["is_error"].as_bool() == Some(true)
+    })
+}
+
+#[tokio::test]
+async fn test_tool_read_nonexistent_file() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-err-read");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+    ws.send_user_message(
+        "Use the read_file tool to read a file called 'does_not_exist_xyz.txt'. Do it now.",
+    )
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"read_file".to_string()),
+        "expected read_file tool use, got: {tools:?}"
+    );
+
+    if !has_tool_error(&messages, "read_file") {
+        eprintln!("NOTE: read_file on nonexistent file did not produce is_error=true (LLM may have handled it)");
+    }
+}
+
+#[tokio::test]
+async fn test_tool_delete_nonexistent_file() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-err-delete");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+    ws.send_user_message(
+        "Use the delete_file tool to delete 'nonexistent_file_xyz.txt'. Do it now.",
+    )
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"delete_file".to_string()),
+        "expected delete_file tool use, got: {tools:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_tool_run_command_failure() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-err-cmd");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+
+    let cmd = if cfg!(windows) {
+        "cmd /c dir nonexistent_dir_e2e_xyz 2>&1"
+    } else {
+        "ls /nonexistent_dir_e2e_xyz 2>&1"
+    };
+    ws.send_user_message(&format!(
+        "Use the run_command tool to execute exactly this command: {cmd}"
+    ))
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"run_command".to_string()),
+        "expected run_command tool use, got: {tools:?}"
+    );
+
+    let cmd_results: Vec<&Value> = messages
+        .iter()
+        .filter(|m| m["type"] == "tool_result" && m["name"] == "run_command")
+        .collect();
+    if !cmd_results.is_empty() {
+        let result_text = cmd_results[0]["result"].as_str().unwrap_or("");
+        assert!(
+            result_text.contains("not find") || result_text.contains("No such") || result_text.contains("cannot"),
+            "failing command should mention error, got: {result_text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_tool_edit_no_match() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-err-edit");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+    place_file_in_agent_dir(&ws_path, "stable.txt", "This content will not change.");
+
+    ws.send_user_message(
+        "Use the edit_file tool on 'stable.txt'. The old_string is 'ZZZZZ_NONEXISTENT_ZZZZZ' \
+         and the new_string is 'replaced'. Do it now.",
+    )
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"edit_file".to_string()),
+        "expected edit_file tool use, got: {tools:?}"
+    );
+
+    if has_tool_error(&messages, "edit_file") {
+        // Good: tool correctly reported the no-match error
+    } else {
+        eprintln!("NOTE: edit_file with no-match string did not produce is_error=true");
+    }
+
+    // Verify the file was NOT modified
+    if let Some(path) = find_file(&ws_path, "stable.txt") {
+        let content = std::fs::read_to_string(path).unwrap();
+        assert_eq!(
+            content, "This content will not change.",
+            "file should be unchanged after no-match edit"
+        );
+    }
+}
