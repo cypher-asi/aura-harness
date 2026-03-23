@@ -42,7 +42,10 @@ mod helpers;
 mod kernel_executor;
 mod read_guard;
 mod sanitize;
+pub mod git;
+pub mod parser;
 pub mod self_review;
+pub mod shell_parse;
 pub mod types;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
