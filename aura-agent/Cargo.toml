@@ -19,6 +19,8 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures-util = { workspace = true }
 async-trait = "0.1"
+regex = "1"
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

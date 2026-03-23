@@ -8,7 +8,6 @@ name = "aura"
 path = "src/main.rs"
 
 [dependencies]
-aura-swarm = { path = "aura-swarm" }
 aura-terminal = { path = "aura-terminal" }
 aura-core = { path = "aura-core" }
 aura-kernel = { path = "aura-kernel" }
@@ -41,7 +40,6 @@ members = [
     "aura-tools",
     "aura-reasoner",
     "aura-kernel",
-    "aura-swarm",
     "aura-terminal",
     "aura-cli",
     "aura-agent",

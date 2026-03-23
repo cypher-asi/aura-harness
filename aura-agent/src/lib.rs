@@ -35,6 +35,7 @@ pub mod policy;
 pub mod build;
 pub mod compaction;
 mod constants;
+pub mod file_ops;
 pub mod planning;
 pub mod events;
 mod helpers;
