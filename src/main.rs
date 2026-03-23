@@ -11,21 +11,17 @@ mod record_loader;
 
 use cli::{Cli, Commands, RunArgs, UiMode};
 
-use aura_agent::prompts::default_system_prompt;
-use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
+use aura_agent::AgentLoop;
 use aura_core::{Identity, Transaction};
-use aura_executor::ExecutorRouter;
+use aura_reasoner::ModelProvider;
 use aura_runtime::{ProcessManager, ProcessManagerConfig};
-use aura_reasoner::{AnthropicProvider, MockProvider, ModelProvider};
-use aura_store::RocksStore;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
-use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
 use clap::Parser;
 use colored::Colorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // ============================================================================
@@ -184,31 +180,17 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     let identity = Identity::new(&zns_id, "Terminal Agent");
 
     let store_path = data_dir.join("store");
-    let store = Arc::new(RocksStore::open(&store_path, false)?);
+    let store = aura_session::open_store(&store_path)?;
 
     record_loader::load_existing_records(&store, identity.agent_id, &cmd_tx);
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
     api_server::start_api_server(cmd_tx.clone()).await;
 
-    let mut executor_router = ExecutorRouter::new();
-    executor_router.add_executor(std::sync::Arc::new(ToolExecutor::with_defaults()));
-
-    let tool_registry = DefaultToolRegistry::new();
-    let tools = tool_registry.list();
-
     let agent_workspace = workspace_root.join(identity.agent_id.to_hex());
-    let kernel_executor =
-        KernelToolExecutor::new(executor_router, identity.agent_id, agent_workspace);
+    let (kernel_executor, tools) =
+        aura_session::build_tool_executor(identity.agent_id, agent_workspace);
 
-    let auth_token = std::env::var("AURA_ROUTER_JWT")
-        .ok()
-        .or_else(aura_auth::CredentialStore::load_token);
-
-    let config = AgentLoopConfig {
-        system_prompt: default_system_prompt(),
-        auth_token: auth_token.clone(),
-        ..AgentLoopConfig::default()
-    };
+    let config = aura_session::default_agent_config();
     let agent_loop = AgentLoop::new(config);
 
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
@@ -217,24 +199,11 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
         ProcessManagerConfig::default(),
     ));
 
-    let provider: Arc<dyn ModelProvider> = match args.provider.as_str() {
-        "mock" => {
-            let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
-            Arc::new(MockProvider::simple_response(
-                "Mock mode: Set AURA_LLM_ROUTING and required credentials to enable real AI responses.",
-            ))
-        }
-        _ => match AnthropicProvider::from_env() {
-            Ok(p) => Arc::new(p),
-            Err(e) => {
-                warn!(error = %e, "LLM provider not configured, using mock");
-                let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
-                Arc::new(MockProvider::simple_response(
-                    "Mock mode: Set AURA_LLM_ROUTING and required credentials to enable real AI responses.",
-                ))
-            }
-        },
-    };
+    let selection = aura_session::select_provider(&args.provider);
+    if selection.name != "anthropic" {
+        let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
+    }
+    let provider: Arc<dyn ModelProvider> = Arc::from(selection.provider);
 
     let cmd_tx_clone = cmd_tx.clone();
     let store_clone = store.clone();

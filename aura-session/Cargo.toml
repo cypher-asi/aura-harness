@@ -1,14 +1,10 @@
 [package]
-name = "aura-cli"
-description = "Interactive CLI for Aura"
+name = "aura-session"
+description = "Shared session wiring for AURA entry points"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-
-[[bin]]
-name = "aura-cli"
-path = "src/main.rs"
 
 [dependencies]
 aura-core = { path = "../aura-core" }
@@ -18,20 +14,9 @@ aura-store = { path = "../aura-store" }
 aura-executor = { path = "../aura-executor" }
 aura-reasoner = { path = "../aura-reasoner" }
 aura-tools = { path = "../aura-tools" }
-aura-kernel = { path = "../aura-kernel" }
-aura-session = { path = "../aura-session" }
 anyhow = { workspace = true }
-serde_json = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-tokio = { workspace = true }
-
-# CLI dependencies
-rustyline = "14.0"
-colored = "2.1"
-rpassword = "5.0"
 uuid = { workspace = true }
-dirs = { workspace = true }
 
 [lints]
 workspace = true

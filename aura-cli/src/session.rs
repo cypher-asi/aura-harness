@@ -6,10 +6,8 @@ use aura_agent::{
     prompts::default_system_prompt, AgentLoop, AgentLoopConfig, AgentLoopResult, KernelToolExecutor,
 };
 use aura_core::{AgentId, Identity};
-use aura_executor::ExecutorRouter;
-use aura_reasoner::{AnthropicProvider, Message, MockProvider, ModelProvider, ToolDefinition};
+use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_store::RocksStore;
-use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -63,9 +61,7 @@ impl SessionConfig {
             loop_config.model = v;
         }
 
-        loop_config.auth_token = std::env::var("AURA_ROUTER_JWT")
-            .ok()
-            .or_else(aura_auth::CredentialStore::load_token);
+        loop_config.auth_token = aura_session::load_auth_token();
 
         Self {
             data_dir,
@@ -110,47 +106,25 @@ impl Session {
         info!(agent_id = %identity.agent_id, name = %identity.name, "Created identity");
 
         let store_path = config.data_dir.join("store");
-        let store = Arc::new(RocksStore::open(&store_path, false)?);
+        let store = aura_session::open_store(&store_path)?;
         debug!(?store_path, "Opened store");
 
-        let mut executor_router = ExecutorRouter::new();
-        executor_router.add_executor(std::sync::Arc::new(ToolExecutor::with_defaults()));
-
-        let tool_registry = DefaultToolRegistry::new();
-        let tools = tool_registry.list();
-
         let workspace = config.workspace_root.join(identity.agent_id.to_hex());
-        let kernel_executor =
-            KernelToolExecutor::new(executor_router, identity.agent_id, workspace);
+        let (kernel_executor, tools) =
+            aura_session::build_tool_executor(identity.agent_id, workspace);
 
-        let (provider, provider_name): (Box<dyn ModelProvider>, &str) =
-            match config.provider.as_str() {
-                "mock" => {
-                    let p = MockProvider::simple_response(
-                        "I'm a mock assistant. Set AURA_LLM_ROUTING and required credentials.",
-                    );
-                    (Box::new(p), "mock")
-                }
-                _ => match AnthropicProvider::from_env() {
-                    Ok(p) => (Box::new(p), "anthropic"),
-                    Err(e) => {
-                        tracing::warn!("LLM provider not configured: {e}. Using mock.");
-                        let p = MockProvider::simple_response(
-                            "Mock mode: Set AURA_LLM_ROUTING and required credentials.",
-                        );
-                        (Box::new(p), "mock (fallback)")
-                    }
-                },
-            };
+        let selection = aura_session::select_provider(&config.provider);
+        let provider: Box<dyn ModelProvider> = selection.provider;
+        let provider_name = selection.name;
 
         let agent_loop = AgentLoop::new(config.loop_config);
 
-        info!(provider = provider_name, "Session initialized");
+        info!(provider = %provider_name, "Session initialized");
 
         Ok(Self {
             identity,
             store,
-            provider_name: provider_name.to_string(),
+            provider_name,
             current_seq: 1,
             agent_loop,
             provider,
