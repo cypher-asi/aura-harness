@@ -24,19 +24,23 @@
     clippy::doc_markdown
 )]
 
+pub mod config;
 pub mod definitions;
 pub mod domain_tools;
 mod error;
 mod executor;
 mod installed;
+pub mod installer;
 pub(crate) mod fs_tools;
 pub(crate) mod registry;
 mod sandbox;
 pub(crate) mod tool;
 
 pub use aura_core::InstalledToolDefinition;
+pub use config::ToolConfigError;
 pub use error::ToolError;
 pub use executor::ToolExecutor;
+pub use installer::ToolInstaller;
 pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
 pub use registry::{DefaultToolRegistry, ToolRegistry};
 pub use sandbox::Sandbox;

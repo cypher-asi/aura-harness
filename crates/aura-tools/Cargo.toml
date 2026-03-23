@@ -21,6 +21,7 @@ async-trait = "0.1"
 glob = "0.3"
 regex = "1.11"
 reqwest = { workspace = true }
+toml = "0.8"
 walkdir = "2.5"
 
 [dev-dependencies]
