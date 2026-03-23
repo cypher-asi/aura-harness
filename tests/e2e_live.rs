@@ -1984,3 +1984,170 @@ async fn test_tool_edit_no_match() {
         );
     }
 }
+
+// ============================================================================
+// Suite 15: Tool Parameter Variations
+// ============================================================================
+
+#[tokio::test]
+async fn test_tool_read_file_line_range() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-line-range");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+
+    let content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n";
+    place_file_in_agent_dir(&ws_path, "lines.txt", content);
+
+    ws.send_user_message(
+        "Use the read_file tool to read 'lines.txt' with start_line=3 and end_line=5. \
+         Only read those specific lines.",
+    )
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"read_file".to_string()),
+        "expected read_file tool use, got: {tools:?}"
+    );
+
+    let tool_results: Vec<&Value> = messages
+        .iter()
+        .filter(|m| m["type"] == "tool_result" && m["name"] == "read_file")
+        .collect();
+    if !tool_results.is_empty() {
+        let result = tool_results[0]["result"].as_str().unwrap_or("");
+        assert!(
+            result.contains("line3"),
+            "line range result should include line3, got: {result}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_tool_run_command_with_cwd() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-cwd");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+
+    if let Some(agent_dir) = find_agent_dir(&ws_path) {
+        std::fs::create_dir_all(agent_dir.join("subdir")).unwrap();
+    }
+
+    let cmd = if cfg!(windows) { "cd" } else { "pwd" };
+    ws.send_user_message(&format!(
+        "Use the run_command tool to execute '{cmd}' with the working_dir (or cwd) set to 'subdir'."
+    ))
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"run_command".to_string()),
+        "expected run_command tool use, got: {tools:?}"
+    );
+
+    let cmd_results: Vec<&Value> = messages
+        .iter()
+        .filter(|m| m["type"] == "tool_result" && m["name"] == "run_command")
+        .collect();
+    if !cmd_results.is_empty() {
+        let result = cmd_results[0]["result"].as_str().unwrap_or("");
+        assert!(
+            result.contains("subdir"),
+            "cwd should reference subdir, got: {result}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_tool_write_file_overwrite() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-overwrite");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+    place_file_in_agent_dir(&ws_path, "overwrite.txt", "ORIGINAL CONTENT");
+
+    ws.send_user_message(
+        "Use the write_file tool to write 'OVERWRITTEN CONTENT' to the file 'overwrite.txt'. \
+         This should overwrite the existing file.",
+    )
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"write_file".to_string()),
+        "expected write_file tool use, got: {tools:?}"
+    );
+
+    if let Some(path) = find_file(&ws_path, "overwrite.txt") {
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(
+            content.contains("OVERWRITTEN"),
+            "file should have overwritten content, got: {content}"
+        );
+        assert!(
+            !content.contains("ORIGINAL"),
+            "original content should be gone, got: {content}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_tool_search_code_regex() {
+    let _ = dotenvy::dotenv();
+    let token = require_llm!();
+    let server = TestServer::start().await;
+    let ws_path = server.workspaces_path().join("tool-regex");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let mut ws = connect_llm_session(&server, &ws_path, &token).await;
+
+    place_file_in_agent_dir(
+        &ws_path,
+        "math.rs",
+        "fn add_numbers(a: i32, b: i32) -> i32 { a + b }\nfn subtract_numbers(a: i32, b: i32) -> i32 { a - b }\n",
+    );
+    place_file_in_agent_dir(
+        &ws_path,
+        "utils.rs",
+        "fn multiply_numbers(a: i32, b: i32) -> i32 { a * b }\n",
+    );
+
+    ws.send_user_message(
+        "Use the search_code tool with the regex pattern 'fn \\w+_numbers' to find all \
+         functions ending with '_numbers'. Search the current directory.",
+    )
+    .await;
+
+    let messages = ws.collect_turn(Duration::from_secs(120)).await;
+    let tools = tool_names_used(&messages);
+    assert!(
+        tools.contains(&"search_code".to_string()),
+        "expected search_code tool use, got: {tools:?}"
+    );
+
+    let tool_results: Vec<&Value> = messages
+        .iter()
+        .filter(|m| m["type"] == "tool_result" && m["name"] == "search_code")
+        .collect();
+    if !tool_results.is_empty() {
+        let result = tool_results[0]["result"].as_str().unwrap_or("");
+        assert!(
+            result.contains("add_numbers") || result.contains("subtract_numbers") || result.contains("multiply_numbers"),
+            "regex search should find _numbers functions, got: {result}"
+        );
+    }
+}
