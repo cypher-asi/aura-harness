@@ -2151,3 +2151,290 @@ async fn test_tool_search_code_regex() {
         );
     }
 }
+
+// ============================================================================
+// Suite 16: Expanded Read-Only Proxy Route Coverage
+// ============================================================================
+
+// --- Storage: additional read-only routes ---
+
+#[tokio::test]
+async fn test_proxy_storage_get_task() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/storage/get_task", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "get_task",
+            "input": {"task_id": TEST_UUID}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "get_task");
+}
+
+#[tokio::test]
+async fn test_proxy_storage_get_spec() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/storage/get_spec", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "get_spec",
+            "input": {"spec_id": TEST_UUID}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "get_spec");
+}
+
+#[tokio::test]
+async fn test_proxy_storage_create_log() {
+    let _ = dotenvy::dotenv();
+    require_env!("INTERNAL_SERVICE_TOKEN");
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/storage/create_log", server.base_url()))
+        .json(&json!({
+            "tool_name": "create_log",
+            "input": {
+                "project_id": TEST_UUID,
+                "message": "e2e test log entry",
+                "level": "info"
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "create_log");
+}
+
+// --- Network: additional routes ---
+
+#[tokio::test]
+async fn test_proxy_network_get_project() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/network/get_project", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "get_project",
+            "input": {"project_id": TEST_UUID}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "get_project");
+}
+
+#[tokio::test]
+async fn test_proxy_network_post_to_feed() {
+    let _ = dotenvy::dotenv();
+    require_env!("INTERNAL_SERVICE_TOKEN");
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/network/post_to_feed", server.base_url()))
+        .json(&json!({
+            "tool_name": "post_to_feed",
+            "input": {
+                "profile_id": TEST_UUID,
+                "title": "E2E Test Post",
+                "summary": "Automated test"
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "post_to_feed");
+}
+
+// --- Orbit: additional read-only routes ---
+
+#[tokio::test]
+async fn test_proxy_orbit_list_branches() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/orbit/list_branches", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "list_branches",
+            "input": {"org_id": TEST_UUID, "repo": "test-repo"}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "list_branches");
+}
+
+#[tokio::test]
+async fn test_proxy_orbit_list_commits() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/orbit/list_commits", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "list_commits",
+            "input": {"org_id": TEST_UUID, "repo": "test-repo", "ref": "main", "limit": 5}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "list_commits");
+}
+
+#[tokio::test]
+async fn test_proxy_orbit_list_prs() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/orbit/list_prs", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "list_prs",
+            "input": {"org_id": TEST_UUID, "repo": "test-repo"}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "list_prs");
+}
+
+#[tokio::test]
+async fn test_proxy_orbit_get_diff() {
+    let _ = dotenvy::dotenv();
+    let jwt = match obtain_jwt().await {
+        Some(j) => j,
+        None => {
+            eprintln!("SKIP: no JWT available");
+            return;
+        }
+    };
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/orbit/get_diff", server.base_url()))
+        .bearer_auth(&jwt)
+        .json(&json!({
+            "tool_name": "get_diff",
+            "input": {"org_id": TEST_UUID, "repo": "test-repo", "sha": TEST_UUID}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "get_diff");
+}
+
+#[tokio::test]
+async fn test_proxy_orbit_create_repo() {
+    let _ = dotenvy::dotenv();
+    require_env!("INTERNAL_SERVICE_TOKEN");
+    let server = TestServer::start().await;
+    let http = http_client();
+
+    let resp = http
+        .post(format!("{}/api/orbit/create_repo", server.base_url()))
+        .json(&json!({
+            "tool_name": "create_repo",
+            "input": {"org_id": TEST_UUID, "name": "e2e-test-repo"}
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_proxy_forwarded(&body, "create_repo");
+}
