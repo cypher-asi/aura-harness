@@ -24,6 +24,8 @@
     clippy::doc_markdown
 )]
 
+pub mod definitions;
+pub mod domain_tools;
 mod error;
 mod executor;
 mod external;

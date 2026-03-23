@@ -1,0 +1,82 @@
+//! Spec domain tool handlers.
+
+use serde_json::{json, Value};
+use tracing::debug;
+
+use super::api::DomainApi;
+use super::helpers::{require_str, str_field};
+
+pub async fn list_specs(api: &dyn DomainApi, project_id: &str, _input: &Value) -> String {
+    debug!(project_id, "domain_tools: list_specs");
+    match api.list_specs(project_id).await {
+        Ok(specs) => {
+            let summaries: Vec<Value> = specs
+                .iter()
+                .map(|s| {
+                    json!({
+                        "spec_id": s.id,
+                        "title": s.title,
+                        "order": s.order,
+                    })
+                })
+                .collect();
+            json!({ "ok": true, "specs": summaries }).to_string()
+        }
+        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+pub async fn get_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -> String {
+    debug!(project_id, "domain_tools: get_spec");
+    let spec_id = match require_str(input, "spec_id") {
+        Ok(id) => id,
+        Err(e) => return json!({ "ok": false, "error": e }).to_string(),
+    };
+    match api.get_spec(&spec_id).await {
+        Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+pub async fn create_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -> String {
+    debug!(project_id, "domain_tools: create_spec");
+    let title = str_field(input, "title").unwrap_or_default();
+    let content = str_field(input, "markdown_contents")
+        .or_else(|| str_field(input, "content"))
+        .unwrap_or_default();
+
+    match api.create_spec(project_id, &title, &content).await {
+        Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+pub async fn update_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
+    debug!("domain_tools: update_spec");
+    let spec_id = match require_str(input, "spec_id") {
+        Ok(id) => id,
+        Err(e) => return json!({ "ok": false, "error": e }).to_string(),
+    };
+    let title = str_field(input, "title");
+    let content = str_field(input, "markdown_contents").or_else(|| str_field(input, "content"));
+
+    match api
+        .update_spec(&spec_id, title.as_deref(), content.as_deref())
+        .await
+    {
+        Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
+
+pub async fn delete_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
+    debug!("domain_tools: delete_spec");
+    let spec_id = match require_str(input, "spec_id") {
+        Ok(id) => id,
+        Err(e) => return json!({ "ok": false, "error": e }).to_string(),
+    };
+    match api.delete_spec(&spec_id).await {
+        Ok(()) => json!({ "ok": true, "deleted": spec_id }).to_string(),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+    }
+}
