@@ -23,6 +23,16 @@ pub struct NodeConfig {
     pub enable_cmd_tools: bool,
     /// Allowed commands (if cmd tools enabled)
     pub allowed_commands: Vec<String>,
+    /// Path to the tools.toml config file
+    pub tools_config_path: Option<String>,
+    /// Orbit service URL
+    pub orbit_url: String,
+    /// Aura Storage service URL
+    pub aura_storage_url: String,
+    /// Aura Network service URL
+    pub aura_network_url: String,
+    /// Internal service token for inter-service auth
+    pub internal_service_token: Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -37,6 +47,11 @@ impl Default for NodeConfig {
             enable_fs_tools: true,
             enable_cmd_tools: false,
             allowed_commands: vec![],
+            tools_config_path: None,
+            orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
+            aura_storage_url: "https://aura-storage.onrender.com".to_string(),
+            aura_network_url: "https://aura-network.onrender.com".to_string(),
+            internal_service_token: None,
         }
     }
 }
@@ -78,6 +93,21 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("ALLOWED_COMMANDS") {
             config.allowed_commands = val.split(',').map(String::from).collect();
         }
+        if let Ok(val) = std::env::var("TOOLS_CONFIG") {
+            config.tools_config_path = Some(val);
+        }
+        if let Ok(val) = std::env::var("ORBIT_URL") {
+            config.orbit_url = val;
+        }
+        if let Ok(val) = std::env::var("AURA_STORAGE_URL") {
+            config.aura_storage_url = val;
+        }
+        if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
+            config.aura_network_url = val;
+        }
+        if let Ok(val) = std::env::var("INTERNAL_SERVICE_TOKEN") {
+            config.internal_service_token = Some(val);
+        }
 
         config
     }
@@ -113,6 +143,11 @@ mod tests {
         std::env::remove_var("ENABLE_FS_TOOLS");
         std::env::remove_var("ENABLE_CMD_TOOLS");
         std::env::remove_var("ALLOWED_COMMANDS");
+        std::env::remove_var("TOOLS_CONFIG");
+        std::env::remove_var("ORBIT_URL");
+        std::env::remove_var("AURA_STORAGE_URL");
+        std::env::remove_var("AURA_NETWORK_URL");
+        std::env::remove_var("INTERNAL_SERVICE_TOKEN");
     }
 
     #[test]
@@ -128,6 +163,11 @@ mod tests {
         assert!(config.enable_fs_tools);
         assert!(!config.enable_cmd_tools);
         assert!(config.allowed_commands.is_empty());
+        assert!(config.tools_config_path.is_none());
+        assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
+        assert_eq!(config.aura_storage_url, "https://aura-storage.onrender.com");
+        assert_eq!(config.aura_network_url, "https://aura-network.onrender.com");
+        assert!(config.internal_service_token.is_none());
     }
 
     #[test]
@@ -349,6 +389,11 @@ mod tests {
         std::env::set_var("ENABLE_FS_TOOLS", "false");
         std::env::set_var("ENABLE_CMD_TOOLS", "true");
         std::env::set_var("ALLOWED_COMMANDS", "git,cargo,npm");
+        std::env::set_var("TOOLS_CONFIG", "/etc/aura/tools.toml");
+        std::env::set_var("ORBIT_URL", "https://orbit.example.com");
+        std::env::set_var("AURA_STORAGE_URL", "https://storage.example.com");
+        std::env::set_var("AURA_NETWORK_URL", "https://network.example.com");
+        std::env::set_var("INTERNAL_SERVICE_TOKEN", "secret-token-123");
 
         let config = NodeConfig::from_env();
 
@@ -361,6 +406,11 @@ mod tests {
         assert!(!config.enable_fs_tools);
         assert!(config.enable_cmd_tools);
         assert_eq!(config.allowed_commands, vec!["git", "cargo", "npm"]);
+        assert_eq!(config.tools_config_path.as_deref(), Some("/etc/aura/tools.toml"));
+        assert_eq!(config.orbit_url, "https://orbit.example.com");
+        assert_eq!(config.aura_storage_url, "https://storage.example.com");
+        assert_eq!(config.aura_network_url, "https://network.example.com");
+        assert_eq!(config.internal_service_token.as_deref(), Some("secret-token-123"));
 
         clear_node_env_vars();
     }

@@ -6,7 +6,7 @@ use crate::session::{handle_ws_connection, WsContext};
 use aura_core::{AgentId, Transaction, TransactionType};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
-use aura_tools::ToolConfig;
+use aura_tools::{ToolConfig, ToolInstaller};
 use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -29,6 +29,8 @@ pub struct RouterState {
     pub provider: Arc<dyn ModelProvider + Send + Sync>,
     /// Tool configuration for WebSocket sessions.
     pub tool_config: ToolConfig,
+    /// Harness-level tool installer (shared across sessions).
+    pub tool_installer: Arc<ToolInstaller>,
 }
 
 impl Clone for RouterState {
@@ -39,6 +41,7 @@ impl Clone for RouterState {
             config: self.config.clone(),
             provider: self.provider.clone(),
             tool_config: self.tool_config.clone(),
+            tool_installer: self.tool_installer.clone(),
         }
     }
 }
@@ -232,6 +235,7 @@ async fn ws_upgrade_handler(
         provider: state.provider.clone(),
         tool_config: state.tool_config.clone(),
         auth_token,
+        tool_installer: state.tool_installer.clone(),
     };
     ws.on_upgrade(move |socket| handle_ws_connection(socket, ctx))
 }
@@ -262,6 +266,7 @@ mod tests {
             config: NodeConfig::default(),
             provider,
             tool_config: ToolConfig::default(),
+            tool_installer: Arc::new(ToolInstaller::new()),
         }
     }
 

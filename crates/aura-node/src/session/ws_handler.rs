@@ -132,7 +132,7 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
             match classify_ws_frame(ws_rx.next().await) {
                 WsAction::Message(raw) => match serde_json::from_str::<InboundMessage>(&raw) {
                     Ok(InboundMessage::SessionInit(init)) => {
-                        handle_session_init(&mut session, init, &outbound_tx);
+                        handle_session_init(&mut session, init, &outbound_tx, &ctx);
                     }
                     Ok(InboundMessage::UserMessage(msg)) => {
                         match start_turn(&mut session, msg, &outbound_tx, &ctx) {
@@ -178,6 +178,7 @@ fn handle_session_init(
     session: &mut Session,
     init: SessionInit,
     outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    ctx: &WsContext,
 ) {
     if session.initialized {
         let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
@@ -199,6 +200,9 @@ fn handle_session_init(
 
     let builtin_tools = DefaultToolRegistry::new();
     session.tool_definitions = builtin_tools.list();
+
+    let harness_defs = ctx.tool_installer.definitions();
+    session.tool_definitions.extend(harness_defs);
 
     for tool in &session.installed_tools {
         session
@@ -260,6 +264,14 @@ fn start_turn(
     session.messages.push(Message::user(&msg.content));
 
     let mut tool_executor = ToolExecutor::new(ctx.tool_config.clone());
+
+    let harness_tools = ctx.tool_installer.snapshot();
+    for tool_def in &harness_tools {
+        if let Err(e) = tool_executor.register_installed(tool_def.clone()) {
+            tracing::warn!(tool = %tool_def.name, error = %e, "Failed to register harness tool");
+        }
+    }
+
     for tool in &session.installed_tools {
         if let Err(e) = tool_executor.register_installed(tool.clone()) {
             tracing::warn!(tool = %tool.name, error = %e, "Failed to register installed tool");

@@ -6,7 +6,7 @@ use crate::scheduler::Scheduler;
 use aura_executor::Executor;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
-use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolRegistry};
+use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolInstaller, ToolRegistry};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -60,6 +60,15 @@ impl Node {
         let tool_registry = DefaultToolRegistry::new();
         let tools = tool_registry.list();
 
+        let tool_installer = Arc::new(ToolInstaller::new());
+        if let Some(ref path) = self.config.tools_config_path {
+            match tool_installer.load_from_file(std::path::Path::new(path)) {
+                Ok(count) => info!(count, path, "Loaded tools from config"),
+                Err(e) => warn!(error = %e, path, "Failed to load tools config"),
+            }
+        }
+        info!(tool_count = tool_installer.len(), "Tool installer ready");
+
         let provider = Self::create_model_provider();
 
         let scheduler = Arc::new(Scheduler::new(
@@ -77,6 +86,7 @@ impl Node {
             config: self.config.clone(),
             provider,
             tool_config,
+            tool_installer,
         };
         let app = create_router(state);
 
