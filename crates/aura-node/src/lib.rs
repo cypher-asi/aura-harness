@@ -26,8 +26,8 @@ pub mod api;
 mod config;
 mod node;
 pub mod protocol;
-mod router;
-mod scheduler;
+pub mod router;
+pub mod scheduler;
 pub mod session;
 mod worker;
 

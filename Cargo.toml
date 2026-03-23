@@ -105,6 +105,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Testing
 tempfile = "3.10"
 proptest = "1.4"
+tokio-tungstenite = "0.26"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -132,6 +133,10 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 bytes = { workspace = true }
 futures = "0.3"
+tokio-tungstenite = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+base64 = { workspace = true }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
