@@ -22,6 +22,7 @@
     clippy::unnecessary_map_or
 )]
 
+pub mod api;
 mod config;
 mod node;
 pub mod protocol;

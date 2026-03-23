@@ -1,5 +1,6 @@
 //! HTTP and WebSocket router for the node API.
 
+use crate::api;
 use crate::config::NodeConfig;
 use crate::scheduler::Scheduler;
 use crate::session::{handle_ws_connection, WsContext};
@@ -11,7 +12,7 @@ use axum::{
     extract::{ws::WebSocketUpgrade, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use bytes::Bytes;
@@ -48,6 +49,12 @@ impl Clone for RouterState {
 
 /// Create the router.
 pub fn create_router(state: RouterState) -> Router {
+    let tool_routes = Router::new()
+        .route("/tools/install", post(api::install_tool_handler))
+        .route("/tools/:name", delete(api::delete_tool_handler))
+        .route("/tools", get(api::get_tools_handler))
+        .with_state(state.tool_installer.clone());
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/tx", post(submit_tx_handler))
@@ -55,6 +62,7 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/agents/:agent_id/record", get(scan_record_handler))
         .route("/stream", get(ws_upgrade_handler))
         .with_state(state)
+        .merge(tool_routes)
         .layer(TraceLayer::new_for_http())
 }
 
