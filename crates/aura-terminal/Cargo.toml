@@ -1,0 +1,38 @@
+[package]
+name = "aura-terminal"
+description = "Cyber-retro terminal UI library for AURA CLI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# TUI Framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization (for themes)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time handling
+chrono = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+# Unicode display width
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

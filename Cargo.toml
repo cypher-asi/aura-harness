@@ -8,18 +8,18 @@ name = "aura"
 path = "src/main.rs"
 
 [dependencies]
-aura-terminal = { path = "aura-terminal" }
-aura-core = { path = "aura-core" }
-aura-kernel = { path = "aura-kernel" }
-aura-runtime = { path = "aura-runtime" }
-aura-store = { path = "aura-store" }
-aura-executor = { path = "aura-executor" }
-aura-reasoner = { path = "aura-reasoner" }
-aura-tools = { path = "aura-tools" }
-aura-agent = { path = "aura-agent" }
-aura-auth = { path = "aura-auth" }
-aura-node = { path = "aura-node" }
-aura-session = { path = "aura-session" }
+aura-terminal = { path = "crates/aura-terminal" }
+aura-core = { path = "crates/aura-core" }
+aura-kernel = { path = "crates/aura-kernel" }
+aura-runtime = { path = "crates/aura-runtime" }
+aura-store = { path = "crates/aura-store" }
+aura-executor = { path = "crates/aura-executor" }
+aura-reasoner = { path = "crates/aura-reasoner" }
+aura-tools = { path = "crates/aura-tools" }
+aura-agent = { path = "crates/aura-agent" }
+aura-auth = { path = "crates/aura-auth" }
+aura-node = { path = "crates/aura-node" }
+aura-session = { path = "crates/aura-session" }
 anyhow = "1.0"
 tokio = { version = "1.35", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -36,26 +36,27 @@ serde_json = { workspace = true }
 dotenvy = "0.15.7"
 axum = { workspace = true }
 tower-http = { workspace = true }
+tokio-util = { workspace = true }
 
 [workspace]
 resolver = "2"
 members = [
-    "aura-core",
-    "aura-store",
-    "aura-executor",
-    "aura-tools",
-    "aura-reasoner",
-    "aura-kernel",
-    "aura-runtime",
-    "aura-terminal",
-    "aura-cli",
-    "aura-agent",
-    "aura-agent-fileops",
-    "aura-agent-verify",
-    "aura-auth",
-    "aura-automaton",
-    "aura-node",
-    "aura-session",
+    "crates/aura-core",
+    "crates/aura-store",
+    "crates/aura-executor",
+    "crates/aura-tools",
+    "crates/aura-reasoner",
+    "crates/aura-kernel",
+    "crates/aura-runtime",
+    "crates/aura-terminal",
+    "crates/aura-cli",
+    "crates/aura-agent",
+    "crates/aura-agent-fileops",
+    "crates/aura-agent-verify",
+    "crates/aura-auth",
+    "crates/aura-automaton",
+    "crates/aura-node",
+    "crates/aura-session",
 ]
 
 [workspace.package]
@@ -130,6 +131,7 @@ dirs = "5.0"
 proptest = { workspace = true }
 tempfile = { workspace = true }
 bytes = { workspace = true }
+futures = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

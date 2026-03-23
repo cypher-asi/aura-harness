@@ -12,7 +12,10 @@ use aura_terminal::{
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+
+const TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// Bundled dependencies for the event loop, reducing parameter count.
 pub(crate) struct EventLoopContext<'a> {
@@ -146,16 +149,28 @@ pub(crate) async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<
                     forward_agent_events(agent_event_rx, fwd_commands),
                 );
 
-                let process_result = agent_loop
-                    .run_with_events(
+                let cancel_token = CancellationToken::new();
+                let cancel_for_timeout = cancel_token.clone();
+
+                let process_result = match tokio::time::timeout(
+                    TURN_TIMEOUT,
+                    agent_loop.run_with_events(
                         provider,
                         executor,
                         messages.clone(),
                         tools.to_vec(),
                         Some(agent_event_tx),
-                        None,
-                    )
-                    .await;
+                        Some(cancel_token),
+                    ),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        cancel_for_timeout.cancel();
+                        Err(aura_agent::AgentError::Timeout(format!("Agent turn timed out after {} minutes", TURN_TIMEOUT.as_secs() / 60)))
+                    }
+                };
 
                 let streamed_text = match forwarder.await {
                     Ok(state) => {
