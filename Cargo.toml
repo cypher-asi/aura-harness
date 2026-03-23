@@ -8,7 +8,7 @@ name = "aura"
 path = "src/main.rs"
 
 [dependencies]
-aura-node = { path = "aura-node" }
+aura-swarm = { path = "aura-swarm" }
 aura-terminal = { path = "aura-terminal" }
 aura-core = { path = "aura-core" }
 aura-kernel = { path = "aura-kernel" }
@@ -17,12 +17,12 @@ aura-executor = { path = "aura-executor" }
 aura-reasoner = { path = "aura-reasoner" }
 aura-tools = { path = "aura-tools" }
 aura-agent = { path = "aura-agent" }
-aura-auth = { path = "aura-auth" }
 anyhow = "1.0"
 tokio = { version = "1.35", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
+dirs = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 blake3 = { workspace = true }
@@ -31,8 +31,6 @@ serde_json = { workspace = true }
 dotenvy = "0.15.7"
 axum = { workspace = true }
 tower-http = { workspace = true }
-rpassword = "5.0"
-colored = "2.1"
 
 [workspace]
 resolver = "2"
@@ -43,11 +41,11 @@ members = [
     "aura-tools",
     "aura-reasoner",
     "aura-kernel",
-    "aura-node",
+    "aura-swarm",
     "aura-terminal",
     "aura-cli",
     "aura-agent",
-    "aura-auth",
+    "aura-automaton",
 ]
 
 [workspace.package]
@@ -122,7 +120,6 @@ dirs = "5.0"
 proptest = { workspace = true }
 tempfile = { workspace = true }
 bytes = { workspace = true }
-futures = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

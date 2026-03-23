@@ -1,0 +1,32 @@
+[package]
+name = "aura-automaton"
+description = "Automaton lifecycle, scheduling, and built-in automaton types for Aura"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core = { path = "../aura-core" }
+aura-agent = { path = "../aura-agent" }
+aura-tools = { path = "../aura-tools" }
+aura-reasoner = { path = "../aura-reasoner" }
+aura-store = { path = "../aura-store" }
+aura-executor = { path = "../aura-executor" }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = "0.1"
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
