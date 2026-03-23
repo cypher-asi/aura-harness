@@ -1,0 +1,272 @@
+//! Shared wire protocol types for the Aura harness WebSocket API.
+//!
+//! Defines the inbound (client → server) and outbound (server → client)
+//! message format for the `/stream` WebSocket endpoint.
+//!
+//! This crate is consumed by both the harness server (`aura-node`) and
+//! any client implementation (e.g. `aura-os-link`).
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[cfg(feature = "typescript")]
+use ts_rs::TS;
+
+// ============================================================================
+// Inbound Messages (Client → Server)
+// ============================================================================
+
+/// Top-level inbound message envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub enum InboundMessage {
+    /// Initialize the session (must be the first message).
+    SessionInit(SessionInit),
+    /// Send a user message for processing.
+    UserMessage(UserMessage),
+    /// Cancel the current turn.
+    Cancel,
+    /// Respond to an approval request.
+    ApprovalResponse(ApprovalResponse),
+}
+
+/// Payload for `session_init`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct SessionInit {
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Model identifier (e.g., "claude-opus-4-6").
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Maximum tokens per model response.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Sampling temperature.
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Maximum agentic steps per turn.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    /// Installed tools to register for this session.
+    #[serde(default)]
+    pub installed_tools: Option<Vec<InstalledTool>>,
+    /// Workspace directory path.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// JWT auth token for proxy routing.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// Payload for `user_message`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct UserMessage {
+    pub content: String,
+}
+
+/// Payload for `approval_response`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ApprovalResponse {
+    pub tool_use_id: String,
+    pub approved: bool,
+}
+
+// ============================================================================
+// Outbound Messages (Server → Client)
+// ============================================================================
+
+/// Top-level outbound message envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub enum OutboundMessage {
+    /// Session initialized and ready.
+    SessionReady(SessionReady),
+    /// Start of an assistant message.
+    AssistantMessageStart(AssistantMessageStart),
+    /// Incremental text content from the model.
+    TextDelta(TextDelta),
+    /// Incremental thinking content from the model.
+    ThinkingDelta(ThinkingDelta),
+    /// A tool use has started.
+    ToolUseStart(ToolUseStart),
+    /// Result of a tool execution.
+    ToolResult(ToolResultMsg),
+    /// End of an assistant message (turn complete).
+    AssistantMessageEnd(AssistantMessageEnd),
+    /// An error occurred.
+    Error(ErrorMsg),
+}
+
+/// Payload for `session_ready`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct SessionReady {
+    pub session_id: String,
+    pub tools: Vec<ToolInfo>,
+}
+
+/// Minimal tool info for the session_ready response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// Payload for `assistant_message_start`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct AssistantMessageStart {
+    pub message_id: String,
+}
+
+/// Payload for `text_delta`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct TextDelta {
+    pub text: String,
+}
+
+/// Payload for `thinking_delta`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ThinkingDelta {
+    pub thinking: String,
+}
+
+/// Payload for `tool_use_start`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ToolUseStart {
+    pub id: String,
+    pub name: String,
+}
+
+/// Payload for `tool_result`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ToolResultMsg {
+    pub name: String,
+    pub result: String,
+    pub is_error: bool,
+}
+
+/// Payload for `assistant_message_end`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct AssistantMessageEnd {
+    pub message_id: String,
+    pub stop_reason: String,
+    pub usage: SessionUsage,
+    pub files_changed: FilesChanged,
+}
+
+/// Token usage information for a session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct SessionUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cumulative_input_tokens: u64,
+    pub cumulative_output_tokens: u64,
+    /// Fraction of the model's context window consumed (0.0–1.0).
+    pub context_utilization: f32,
+    /// Model identifier used for this turn.
+    pub model: String,
+    /// Provider name (e.g., "anthropic").
+    pub provider: String,
+}
+
+/// A single file mutation observed during a turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct FileOp {
+    pub path: String,
+    pub operation: String,
+}
+
+/// Summary of file mutations during a turn.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct FilesChanged {
+    pub created: Vec<String>,
+    pub modified: Vec<String>,
+    pub deleted: Vec<String>,
+}
+
+impl FilesChanged {
+    pub fn is_empty(&self) -> bool {
+        self.created.is_empty() && self.modified.is_empty() && self.deleted.is_empty()
+    }
+}
+
+/// Payload for `error`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ErrorMsg {
+    pub code: String,
+    pub message: String,
+    pub recoverable: bool,
+}
+
+// ============================================================================
+// Installed Tool Types (self-contained, wire-compatible with aura-core)
+// ============================================================================
+
+/// Authentication configuration for installed tools.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub enum ToolAuth {
+    None,
+    Bearer { token: String },
+    ApiKey { header: String, key: String },
+    Headers { headers: HashMap<String, String> },
+}
+
+impl Default for ToolAuth {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// Definition for an installed tool, sent over the wire in `session_init`.
+///
+/// Wire-compatible with `aura_core::InstalledToolDefinition` but
+/// self-contained so this crate has no dependency on `aura-core`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledTool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    pub endpoint: String,
+    #[serde(default)]
+    pub auth: ToolAuth,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+// ============================================================================
+// TypeScript export (behind `typescript` feature)
+// ============================================================================
+
+#[cfg(all(test, feature = "typescript"))]
+mod ts_export {
+    use super::*;
+
+    #[test]
+    fn export_typescript_bindings() {
+        InboundMessage::export_all().unwrap();
+        OutboundMessage::export_all().unwrap();
+    }
+}

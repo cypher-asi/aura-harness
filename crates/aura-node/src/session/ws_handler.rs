@@ -2,7 +2,7 @@
 
 use super::{Session, WsContext};
 use crate::protocol::{
-    AssistantMessageEnd, AssistantMessageStart, ErrorMsg, FilesChanged, InboundMessage,
+    self, AssistantMessageEnd, AssistantMessageStart, ErrorMsg, FilesChanged, InboundMessage,
     OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolInfo,
     ToolResultMsg, ToolUseStart, UserMessage,
 };
@@ -217,8 +217,7 @@ fn handle_session_init(
     let tools: Vec<ToolInfo> = session
         .tool_definitions
         .iter()
-        .cloned()
-        .map(ToolInfo::from)
+        .map(protocol::tool_info_from_definition)
         .collect();
 
     info!(

@@ -7,7 +7,7 @@ mod ws_handler;
 
 pub use ws_handler::handle_ws_connection;
 
-use crate::protocol::SessionInit;
+use crate::protocol::{self, SessionInit};
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{AgentId, InstalledToolDefinition};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
@@ -100,7 +100,10 @@ impl Session {
             self.max_turns = max_turns;
         }
         if let Some(tools) = init.installed_tools {
-            self.installed_tools = tools;
+            self.installed_tools = tools
+                .into_iter()
+                .map(protocol::installed_tool_to_core)
+                .collect();
         }
         if let Some(workspace) = init.workspace {
             let candidate = PathBuf::from(&workspace);

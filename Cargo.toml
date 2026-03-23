@@ -56,6 +56,7 @@ members = [
     "crates/aura-auth",
     "crates/aura-automaton",
     "crates/aura-node",
+    "crates/aura-protocol",
     "crates/aura-session",
 ]
 
