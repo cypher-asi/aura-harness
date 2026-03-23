@@ -3,9 +3,9 @@
 use super::{ExecutedToolCall, ToolCache, TurnProcessor};
 use aura_kernel::PermissionLevel;
 use aura_core::{
-    tool_result_cache_key, Action, AgentId, EffectStatus, ToolCall, ToolResult, CACHEABLE_TOOLS,
+    tool_result_cache_key, Action, AgentId, ToolCall, CACHEABLE_TOOLS,
 };
-use aura_executor::ExecuteContext;
+use aura_executor::{ExecuteContext, decode_tool_effect};
 use aura_reasoner::{ContentBlock, Message, ModelProvider, ToolResultContent};
 use aura_store::Store;
 use aura_tools::ToolRegistry;
@@ -137,51 +137,14 @@ where
                         }
                     };
 
-                    if effect.status == EffectStatus::Committed {
-                        if let Ok(tool_result) =
-                            serde_json::from_slice::<ToolResult>(&effect.payload)
-                        {
-                            let content = if tool_result.stdout.is_empty() {
-                                ToolResultContent::text("Success (no output)")
-                            } else {
-                                ToolResultContent::text(
-                                    String::from_utf8_lossy(&tool_result.stdout).to_string(),
-                                )
-                            };
-                            ExecutedToolCall {
-                                tool_use_id: id,
-                                tool_name: name,
-                                tool_args: input,
-                                result: content,
-                                is_error: !tool_result.ok,
-                                metadata: tool_result.metadata,
-                            }
-                        } else {
-                            ExecutedToolCall {
-                                tool_use_id: id,
-                                tool_name: name,
-                                tool_args: input,
-                                result: ToolResultContent::text("Tool executed successfully"),
-                                is_error: false,
-                                metadata: HashMap::default(),
-                            }
-                        }
-                    } else {
-                        let error_msg = if let Ok(tool_result) =
-                            serde_json::from_slice::<ToolResult>(&effect.payload)
-                        {
-                            String::from_utf8_lossy(&tool_result.stderr).to_string()
-                        } else {
-                            "Tool execution failed".to_string()
-                        };
-                        ExecutedToolCall {
-                            tool_use_id: id,
-                            tool_name: name,
-                            tool_args: input,
-                            result: ToolResultContent::text(error_msg),
-                            is_error: true,
-                            metadata: HashMap::default(),
-                        }
+                    let decoded = decode_tool_effect(&effect);
+                    ExecutedToolCall {
+                        tool_use_id: id,
+                        tool_name: name,
+                        tool_args: input,
+                        result: ToolResultContent::text(decoded.content),
+                        is_error: decoded.is_error,
+                        metadata: decoded.metadata,
                     }
                 }
             })

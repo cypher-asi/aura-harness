@@ -5,8 +5,8 @@
 
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
-use aura_core::{Action, AgentId, EffectStatus, ToolCall, ToolResult};
-use aura_executor::{ExecuteContext, ExecutorRouter};
+use aura_core::{Action, AgentId, ToolCall};
+use aura_executor::{ExecuteContext, ExecutorRouter, decode_tool_effect};
 use std::path::PathBuf;
 
 /// Bridges the `AgentToolExecutor` trait to the kernel's `ExecutorRouter`.
@@ -53,34 +53,8 @@ impl AgentToolExecutor for KernelToolExecutor {
             let ctx = ExecuteContext::new(self.agent_id, action.action_id, self.workspace.clone());
 
             let effect = self.executor.execute(&ctx, &action).await;
-
-            let (content, is_error) = if effect.status == EffectStatus::Committed {
-                match serde_json::from_slice::<ToolResult>(&effect.payload) {
-                    Ok(tool_result) => {
-                        let text = if tool_result.stdout.is_empty() {
-                            "Success (no output)".to_string()
-                        } else {
-                            String::from_utf8_lossy(&tool_result.stdout).to_string()
-                        };
-                        (text, !tool_result.ok)
-                    }
-                    Err(_) => ("Tool executed successfully".to_string(), false),
-                }
-            } else {
-                let err_msg = if let Ok(tool_result) =
-                    serde_json::from_slice::<ToolResult>(&effect.payload)
-                {
-                    String::from_utf8_lossy(&tool_result.stderr).to_string()
-                } else {
-                    let raw = String::from_utf8_lossy(&effect.payload);
-                    if raw.is_empty() {
-                        "Tool execution failed".to_string()
-                    } else {
-                        raw.to_string()
-                    }
-                };
-                (err_msg, true)
-            };
+            let decoded = decode_tool_effect(&effect);
+            let (content, is_error) = (decoded.content, decoded.is_error);
 
             results.push(ToolCallResult {
                 tool_use_id: tool.id.clone(),

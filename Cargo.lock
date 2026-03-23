@@ -291,6 +291,7 @@ dependencies = [
  "aura-core",
  "bytes",
  "futures",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",
