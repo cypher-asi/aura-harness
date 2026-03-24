@@ -93,7 +93,7 @@ impl Automaton for TaskRunAutomaton {
         // ------------------------------------------------------------------
         let tasks = self
             .domain
-            .list_tasks(&cfg.project_id, None)
+            .list_tasks(&cfg.project_id, None, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -104,13 +104,13 @@ impl Automaton for TaskRunAutomaton {
 
         let project = self
             .domain
-            .get_project(&cfg.project_id)
+            .get_project(&cfg.project_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
         let spec = self
             .domain
-            .get_spec(&task.spec_id)
+            .get_spec(&task.spec_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -123,7 +123,7 @@ impl Automaton for TaskRunAutomaton {
         // 2. Transition task to in-progress
         // ------------------------------------------------------------------
         self.domain
-            .transition_task(&task.id, "in_progress")
+            .transition_task(&task.id, "in_progress", None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -240,7 +240,7 @@ impl TaskRunAutomaton {
         match result {
             Ok(exec) => {
                 self.domain
-                    .transition_task(task_id, "done")
+                    .transition_task(task_id, "done", None)
                     .await
                     .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -258,7 +258,7 @@ impl TaskRunAutomaton {
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");
 
-                let _ = self.domain.transition_task(task_id, "failed").await;
+                let _ = self.domain.transition_task(task_id, "failed", None).await;
 
                 ctx.emit(AutomatonEvent::TaskFailed {
                     task_id: task_id.to_string(),

@@ -78,7 +78,7 @@ impl Automaton for SpecGenAutomaton {
 
         let _project = self
             .domain
-            .get_project(&cfg.project_id)
+            .get_project(&cfg.project_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -190,19 +190,19 @@ impl Automaton for SpecGenAutomaton {
         // Clear existing specs
         let existing = self
             .domain
-            .list_specs(&cfg.project_id)
+            .list_specs(&cfg.project_id, None)
             .await
             .unwrap_or_default();
         for s in &existing {
-            if let Err(e) = self.domain.delete_spec(&s.id).await {
+            if let Err(e) = self.domain.delete_spec(&s.id, None).await {
                 error!(spec_id = %s.id, error = %e, "failed to delete old spec");
             }
         }
 
-        for spec in &specs {
+        for (idx, spec) in specs.iter().enumerate() {
             let saved = self
                 .domain
-                .create_spec(&cfg.project_id, &spec.title, &spec.content)
+                .create_spec(&cfg.project_id, &spec.title, &spec.content, idx as u32, None)
                 .await
                 .map_err(|e| AutomatonError::DomainApi(format!("save spec: {e}")))?;
 

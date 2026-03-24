@@ -124,6 +124,7 @@ pub trait DomainApi: Send + Sync {
         project_id: &str,
         title: &str,
         content: &str,
+        order: u32,
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor>;
     async fn update_spec(

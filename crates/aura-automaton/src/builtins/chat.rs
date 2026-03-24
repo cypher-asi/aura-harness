@@ -117,7 +117,7 @@ impl Automaton for ChatAutomaton {
 
         let project = self
             .domain
-            .get_project(&cfg.project_id)
+            .get_project(&cfg.project_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 

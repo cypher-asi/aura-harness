@@ -142,7 +142,7 @@ impl Automaton for DevLoopAutomaton {
         // ------------------------------------------------------------------
         // 1. Claim next task
         // ------------------------------------------------------------------
-        let task = match self.domain.claim_next_task(&project_id, &agent_id).await {
+        let task = match self.domain.claim_next_task(&project_id, &agent_id, None).await {
             Ok(Some(t)) => t,
             Ok(None) => {
                 if self.try_retry_failed(ctx, &project_id).await? {
@@ -172,7 +172,7 @@ impl Automaton for DevLoopAutomaton {
         match result {
             Ok(exec) => {
                 self.domain
-                    .transition_task(&task.id, "done")
+                    .transition_task(&task.id, "done", None)
                     .await
                     .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -199,7 +199,7 @@ impl Automaton for DevLoopAutomaton {
             Err(e) => {
                 warn!(task_id = %task.id, error = %e, "task execution failed");
 
-                let _ = self.domain.transition_task(&task.id, "failed").await;
+                let _ = self.domain.transition_task(&task.id, "failed", None).await;
 
                 let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0) + 1;
                 ctx.state.set(STATE_FAILED_COUNT, &failed);
@@ -241,13 +241,13 @@ impl DevLoopAutomaton {
     ) -> Result<TaskExecutionResult, AutomatonError> {
         let project = self
             .domain
-            .get_project(&cfg.project_id)
+            .get_project(&cfg.project_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
         let spec = self
             .domain
-            .get_spec(&task.spec_id)
+            .get_spec(&task.spec_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -355,7 +355,7 @@ impl DevLoopAutomaton {
     ) -> Result<bool, AutomatonError> {
         let tasks = self
             .domain
-            .list_tasks(project_id, None)
+            .list_tasks(project_id, None, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -380,7 +380,7 @@ impl DevLoopAutomaton {
             info!(task_id = %t.id, title = %t.title, attempt = *count, "retrying failed task");
 
             self.domain
-                .transition_task(&t.id, "ready")
+                .transition_task(&t.id, "ready", None)
                 .await
                 .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 

@@ -48,7 +48,14 @@ pub async fn create_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -
         .unwrap_or_default();
     let jwt = str_field(input, "jwt");
 
-    match api.create_spec(project_id, &title, &content, jwt.as_deref()).await {
+    // Auto-derive orderIndex from existing spec count so specs are
+    // numbered in creation order without the caller needing to track it.
+    let order = match api.list_specs(project_id, jwt.as_deref()).await {
+        Ok(specs) => specs.len() as u32,
+        Err(_) => 0,
+    };
+
+    match api.create_spec(project_id, &title, &content, order, jwt.as_deref()).await {
         Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
         Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
     }

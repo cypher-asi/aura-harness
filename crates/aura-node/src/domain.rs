@@ -212,6 +212,7 @@ impl DomainApi for HttpDomainApi {
         project_id: &str,
         title: &str,
         content: &str,
+        order: u32,
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
@@ -219,6 +220,7 @@ impl DomainApi for HttpDomainApi {
         let body = serde_json::json!({
             "title": title,
             "markdownContents": content,
+            "orderIndex": order,
         });
         self.api_post(&url, &body, jwt).await
     }
