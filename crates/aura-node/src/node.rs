@@ -57,6 +57,14 @@ impl Node {
             ..Default::default()
         };
 
+        // Ensure BIND_PORT is available for ${BIND_PORT} interpolation in tools.toml
+        // before loading the catalog. Derive it from BIND_ADDR if not already set.
+        if std::env::var("BIND_PORT").is_err() {
+            if let Some(port) = self.config.bind_addr.rsplit(':').next() {
+                std::env::set_var("BIND_PORT", port);
+            }
+        }
+
         let catalog = Arc::new(ToolCatalog::new());
         if let Some(ref path) = self.config.tools_config_path {
             let p = std::path::Path::new(path);
