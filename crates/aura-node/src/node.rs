@@ -69,6 +69,13 @@ impl Node {
                     token,
                 )) as Arc<dyn DomainApi>
             });
+        // #region agent log
+        info!(
+            has_token = self.config.internal_service_token.is_some(),
+            storage_url = %self.config.aura_storage_url,
+            "Domain API config check"
+        );
+        // #endregion
         if domain_api.is_some() {
             info!("Domain API ready (internal token auth)");
         } else {

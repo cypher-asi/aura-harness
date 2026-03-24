@@ -118,6 +118,8 @@ impl ToolResolver {
                     .await;
                 return Ok(ToolResult::success(tool_name, result_json));
             }
+        } else if crate::domain_tools::is_domain_tool(tool_name) {
+            return Err(ToolError::DomainUnavailable(tool_name.clone()));
         }
 
         Err(ToolError::UnknownTool(tool_name.clone()))
@@ -251,6 +253,29 @@ mod tests {
         let action = Action::delegate_tool(&tc).unwrap();
         let effect = resolver.execute(&ctx, &action).await.unwrap();
         assert_eq!(effect.status, EffectStatus::Failed);
+        let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+        let err_msg = std::str::from_utf8(&result.stderr).unwrap();
+        assert!(
+            err_msg.contains("unknown tool"),
+            "truly unknown tool should say 'unknown tool', got: {err_msg}",
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_tool_without_executor_returns_domain_unavailable() {
+        let (_cat, resolver) = make_catalog_and_resolver();
+        let (ctx, _dir) = test_context();
+
+        let tc = ToolCall::new("create_spec", serde_json::json!({"project_id": "p1"}));
+        let action = Action::delegate_tool(&tc).unwrap();
+        let effect = resolver.execute(&ctx, &action).await.unwrap();
+        assert_eq!(effect.status, EffectStatus::Failed);
+        let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+        let err_msg = std::str::from_utf8(&result.stderr).unwrap();
+        assert!(
+            err_msg.contains("unavailable") && err_msg.contains("INTERNAL_SERVICE_TOKEN"),
+            "domain tool without executor should mention config, got: {err_msg}",
+        );
     }
 
     #[tokio::test]

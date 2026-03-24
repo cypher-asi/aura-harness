@@ -5,13 +5,13 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(EnvFilter::from_default_env().add_directive("aura=info".parse()?))
         .init();
 
-    // Load config from environment
     let config = NodeConfig::from_env();
 
     // Run the node

@@ -8,6 +8,9 @@ pub enum ToolError {
     #[error("unknown tool: {0}")]
     UnknownTool(String),
 
+    #[error("domain tool '{0}' is unavailable — INTERNAL_SERVICE_TOKEN is not configured")]
+    DomainUnavailable(String),
+
     #[error("tool disabled: {0}")]
     ToolDisabled(String),
 
@@ -58,6 +61,7 @@ impl ToolError {
     pub fn error_code(&self) -> &'static str {
         match self {
             Self::UnknownTool(_) => "unknown_tool",
+            Self::DomainUnavailable(_) => "domain_unavailable",
             Self::ToolDisabled(_) => "tool_disabled",
             Self::SandboxViolation { .. } => "sandbox_violation",
             Self::PathNotFound(_) => "path_not_found",
@@ -79,6 +83,7 @@ impl ToolError {
     pub const fn is_recoverable(&self) -> bool {
         match self {
             Self::UnknownTool(_)
+            | Self::DomainUnavailable(_)
             | Self::ToolDisabled(_)
             | Self::SandboxViolation { .. }
             | Self::CommandNotAllowed(_) => false,
