@@ -81,6 +81,7 @@ impl Node {
             let api = HttpDomainApi::new(
                 &self.config.aura_storage_url,
                 &self.config.aura_network_url,
+                &self.config.orbit_url,
                 token,
             );
             Arc::new(DomainToolExecutor::new(Arc::new(api)))

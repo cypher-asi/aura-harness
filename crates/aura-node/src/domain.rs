@@ -17,15 +17,17 @@ pub struct HttpDomainApi {
     http: Client,
     storage_url: String,
     network_url: String,
+    orbit_url: String,
     internal_token: String,
 }
 
 impl HttpDomainApi {
-    pub fn new(storage_url: &str, network_url: &str, internal_token: &str) -> Self {
+    pub fn new(storage_url: &str, network_url: &str, orbit_url: &str, internal_token: &str) -> Self {
         Self {
             http: Client::new(),
             storage_url: storage_url.trim_end_matches('/').to_string(),
             network_url: network_url.trim_end_matches('/').to_string(),
+            orbit_url: orbit_url.trim_end_matches('/').to_string(),
             internal_token: internal_token.to_string(),
         }
     }
@@ -288,5 +290,78 @@ impl DomainApi for HttpDomainApi {
         _instance_id: &str,
     ) -> anyhow::Result<Option<SessionDescriptor>> {
         Ok(None)
+    }
+
+    // -- Orbit (raw JSON pass-through) ----------------------------------------
+
+    async fn orbit_api_call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let url = format!("{}{path}", self.orbit_url);
+        debug!(url, method, "HttpDomainApi orbit call");
+        let mut req = match method {
+            "POST" => self.http.post(&url),
+            "PUT" => self.http.put(&url),
+            "DELETE" => self.http.delete(&url),
+            _ => self.http.get(&url),
+        };
+        if let Some(jwt) = jwt {
+            req = req.bearer_auth(jwt);
+        } else {
+            req = req.header("X-Internal-Token", &self.internal_token);
+        }
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let resp = req.send().await.with_context(|| format!("{method} {url}"))?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            let truncated: String = text.chars().take(500).collect();
+            return Err(anyhow!("HTTP {status}: {truncated}"));
+        }
+        Ok(text)
+    }
+
+    fn orbit_url(&self) -> &str {
+        &self.orbit_url
+    }
+
+    // -- Network (raw JSON pass-through) --------------------------------------
+
+    async fn network_api_call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let url = format!("{}{path}", self.network_url);
+        debug!(url, method, "HttpDomainApi network call");
+        let mut req = match method {
+            "POST" => self.http.post(&url),
+            "PUT" => self.http.put(&url),
+            _ => self.http.get(&url),
+        };
+        if let Some(jwt) = jwt {
+            req = req.bearer_auth(jwt);
+        } else {
+            req = req.header("X-Internal-Token", &self.internal_token);
+        }
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let resp = req.send().await.with_context(|| format!("{method} {url}"))?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            let truncated: String = text.chars().take(500).collect();
+            return Err(anyhow!("HTTP {status}: {truncated}"));
+        }
+        Ok(text)
     }
 }

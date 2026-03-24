@@ -230,7 +230,33 @@ pub(crate) fn chat_management_tools() -> Vec<ToolDefinition> {
     tools.extend(task_tool_definitions());
     tools.extend(project_tool_definitions());
     tools.extend(dev_loop_tool_definitions());
+    tools.extend(orbit_tool_definitions());
+    tools.extend(network_tool_definitions());
     tools
+}
+
+pub(crate) fn orbit_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        compact_tool("orbit_push", "Push a branch from the workspace to an orbit git repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"branch":{"type":"string"},"force":{"type":"boolean"}},"required":["org_id","repo","branch"]})),
+        compact_tool("orbit_create_repo", "Create a new orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"project_id":{"type":"string"},"owner_id":{"type":"string"},"name":{"type":"string"},"visibility":{"type":"string"}},"required":["org_id","project_id","owner_id","name"]})),
+        compact_tool("orbit_list_repos", "List accessible orbit repositories.", serde_json::json!({"type":"object","properties":{},"required":[]})),
+        compact_tool("orbit_list_branches", "List branches in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"}},"required":["org_id","repo"]})),
+        compact_tool("orbit_create_branch", "Create a branch in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"name":{"type":"string"},"source":{"type":"string"}},"required":["org_id","repo","name"]})),
+        compact_tool("orbit_list_commits", "List recent commits in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"ref":{"type":"string"},"limit":{"type":"integer"}},"required":["org_id","repo"]})),
+        compact_tool("orbit_get_diff", "Get diff for a commit in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"sha":{"type":"string"}},"required":["org_id","repo","sha"]})),
+        compact_tool("orbit_create_pr", "Open a pull request in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"source_branch":{"type":"string"},"target_branch":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"}},"required":["org_id","repo","source_branch","target_branch","title"]})),
+        compact_tool("orbit_list_prs", "List pull requests in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"status":{"type":"string"}},"required":["org_id","repo"]})),
+        compact_tool("orbit_merge_pr", "Merge a pull request in an orbit repository.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"repo":{"type":"string"},"pr_id":{"type":"string"},"strategy":{"type":"string"}},"required":["org_id","repo","pr_id"]})),
+    ]
+}
+
+pub(crate) fn network_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        compact_tool("post_to_feed", "Post a status update to the activity feed.", serde_json::json!({"type":"object","properties":{"profile_id":{"type":"string"},"title":{"type":"string"},"summary":{"type":"string"},"post_type":{"type":"string"},"agent_id":{"type":"string"},"user_id":{"type":"string"},"metadata":{"type":"object"}},"required":["profile_id","title"]})),
+        compact_tool("list_projects", "List projects in an organization.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"}},"required":["org_id"]})),
+        compact_tool("check_budget", "Check remaining credit budget for a user.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"user_id":{"type":"string"}},"required":["org_id","user_id"]})),
+        compact_tool("record_usage", "Record token usage for billing.", serde_json::json!({"type":"object","properties":{"org_id":{"type":"string"},"user_id":{"type":"string"},"input_tokens":{"type":"integer"},"output_tokens":{"type":"integer"},"agent_id":{"type":"string"},"model":{"type":"string"}},"required":["org_id","user_id","input_tokens","output_tokens"]})),
+    ]
 }
 
 fn spec_tool_definitions() -> Vec<ToolDefinition> {

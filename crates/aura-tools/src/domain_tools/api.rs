@@ -168,4 +168,11 @@ pub trait DomainApi: Send + Sync {
         &self,
         instance_id: &str,
     ) -> anyhow::Result<Option<SessionDescriptor>>;
+
+    // Orbit (raw JSON pass-through)
+    async fn orbit_api_call(&self, method: &str, path: &str, body: Option<&serde_json::Value>, jwt: Option<&str>) -> anyhow::Result<String>;
+    fn orbit_url(&self) -> &str { "" }
+
+    // Network (raw JSON pass-through)
+    async fn network_api_call(&self, method: &str, path: &str, body: Option<&serde_json::Value>, jwt: Option<&str>) -> anyhow::Result<String>;
 }

@@ -6,6 +6,8 @@
 
 pub mod api;
 pub mod helpers;
+pub mod network;
+pub mod orbit;
 pub mod project;
 pub mod specs;
 pub mod tasks;
@@ -15,6 +17,16 @@ pub use api::*;
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
+
+const DOMAIN_TOOL_NAMES: &[&str] = &[
+    "list_specs", "get_spec", "create_spec", "update_spec", "delete_spec",
+    "list_tasks", "create_task", "update_task", "delete_task", "transition_task",
+    "get_project", "update_project",
+    "orbit_push", "orbit_create_repo", "orbit_list_repos", "orbit_list_branches",
+    "orbit_create_branch", "orbit_list_commits", "orbit_get_diff",
+    "orbit_create_pr", "orbit_list_prs", "orbit_merge_pr",
+    "post_to_feed", "list_projects", "check_budget", "record_usage",
+];
 
 /// Dispatches domain tool calls to the appropriate handler via `DomainApi`.
 pub struct DomainToolExecutor {
@@ -50,6 +62,24 @@ impl DomainToolExecutor {
             "get_project" => project::get_project(self.api.as_ref(), project_id, input).await,
             "update_project" => project::update_project(self.api.as_ref(), project_id, input).await,
 
+            // Orbit
+            "orbit_push" => orbit::orbit_push(self.api.as_ref(), project_id, input).await,
+            "orbit_create_repo" => orbit::orbit_create_repo(self.api.as_ref(), project_id, input).await,
+            "orbit_list_repos" => orbit::orbit_list_repos(self.api.as_ref(), project_id, input).await,
+            "orbit_list_branches" => orbit::orbit_list_branches(self.api.as_ref(), project_id, input).await,
+            "orbit_create_branch" => orbit::orbit_create_branch(self.api.as_ref(), project_id, input).await,
+            "orbit_list_commits" => orbit::orbit_list_commits(self.api.as_ref(), project_id, input).await,
+            "orbit_get_diff" => orbit::orbit_get_diff(self.api.as_ref(), project_id, input).await,
+            "orbit_create_pr" => orbit::orbit_create_pr(self.api.as_ref(), project_id, input).await,
+            "orbit_list_prs" => orbit::orbit_list_prs(self.api.as_ref(), project_id, input).await,
+            "orbit_merge_pr" => orbit::orbit_merge_pr(self.api.as_ref(), project_id, input).await,
+
+            // Network
+            "post_to_feed" => network::post_to_feed(self.api.as_ref(), project_id, input).await,
+            "list_projects" => network::network_list_projects(self.api.as_ref(), project_id, input).await,
+            "check_budget" => network::check_budget(self.api.as_ref(), project_id, input).await,
+            "record_usage" => network::record_usage(self.api.as_ref(), project_id, input).await,
+
             other => {
                 warn!(tool = other, "unknown domain tool");
                 serde_json::json!({
@@ -63,38 +93,11 @@ impl DomainToolExecutor {
 
     /// Returns true if `tool_name` is a domain tool handled by this executor.
     pub fn handles(&self, tool_name: &str) -> bool {
-        matches!(
-            tool_name,
-            "list_specs"
-                | "get_spec"
-                | "create_spec"
-                | "update_spec"
-                | "delete_spec"
-                | "list_tasks"
-                | "create_task"
-                | "update_task"
-                | "delete_task"
-                | "transition_task"
-                | "get_project"
-                | "update_project"
-        )
+        DOMAIN_TOOL_NAMES.contains(&tool_name)
     }
 
     /// List all domain tool names handled by this executor.
     pub fn tool_names(&self) -> &[&'static str] {
-        &[
-            "list_specs",
-            "get_spec",
-            "create_spec",
-            "update_spec",
-            "delete_spec",
-            "list_tasks",
-            "create_task",
-            "update_task",
-            "delete_task",
-            "transition_task",
-            "get_project",
-            "update_project",
-        ]
+        DOMAIN_TOOL_NAMES
     }
 }
