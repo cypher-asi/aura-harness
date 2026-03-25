@@ -166,35 +166,10 @@ impl Automaton for DevLoopAutomaton {
 
     async fn on_install(&self, ctx: &TickContext) -> Result<(), AutomatonError> {
         let cfg = DevLoopConfig::from_json(&ctx.config)?;
-
-        match self
-            .domain
-            .create_session(aura_tools::domain_tools::CreateSessionParams {
-                instance_id: cfg.agent_instance_id.clone(),
-                project_id: cfg.project_id.clone(),
-                model: Some(cfg.model.clone()),
-            })
-            .await
-        {
-            Ok(session) => {
-                ctx.emit(AutomatonEvent::LogLine {
-                    message: format!(
-                        "session {} created for project {}",
-                        session.id, cfg.project_id
-                    ),
-                });
-            }
-            Err(e) => {
-                warn!(project_id = %cfg.project_id, error = %e, "session creation unavailable, proceeding without");
-                ctx.emit(AutomatonEvent::LogLine {
-                    message: format!(
-                        "dev loop starting for project {} (no session)",
-                        cfg.project_id
-                    ),
-                });
-            }
-        }
-
+        info!(project_id = %cfg.project_id, "Dev loop automaton installed");
+        ctx.emit(AutomatonEvent::LogLine {
+            message: format!("dev loop starting for project {}", cfg.project_id),
+        });
         Ok(())
     }
 
