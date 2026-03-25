@@ -17,6 +17,7 @@ COPY crates/aura-reasoner     crates/aura-reasoner/
 COPY crates/aura-kernel       crates/aura-kernel/
 COPY crates/aura-runtime      crates/aura-runtime/
 COPY crates/aura-node         crates/aura-node/
+COPY crates/aura-protocol    crates/aura-protocol/
 COPY crates/aura-terminal     crates/aura-terminal/
 COPY crates/aura-cli          crates/aura-cli/
 COPY crates/aura-agent        crates/aura-agent/
