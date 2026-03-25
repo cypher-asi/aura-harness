@@ -129,11 +129,12 @@ impl AutomatonBridge {
         broadcast_tx
     }
 
-    fn build_runner_config(&self, model: Option<&str>) -> AgentRunnerConfig {
+    fn build_runner_config(&self, model: Option<&str>, auth_token: Option<&str>) -> AgentRunnerConfig {
         let mut config = AgentRunnerConfig::default();
         if let Some(m) = model {
             config.default_model = m.to_string();
         }
+        config.auth_token = auth_token.map(String::from);
         config
     }
 
@@ -219,7 +220,7 @@ impl AutomatonController for AutomatonBridge {
             self.build_tool_executor(domain.clone(), auth_token.as_deref(), std::path::Path::new("."))
         };
 
-        let runner_config = self.build_runner_config(model.as_deref());
+        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
 
         let automaton = DevLoopAutomaton::new(
             domain,
@@ -297,7 +298,7 @@ impl AutomatonController for AutomatonBridge {
             self.build_tool_executor(domain.clone(), auth_token.as_deref(), std::path::Path::new("."))
         };
 
-        let runner_config = self.build_runner_config(model.as_deref());
+        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
 
         let automaton = TaskRunAutomaton::new(
             domain,

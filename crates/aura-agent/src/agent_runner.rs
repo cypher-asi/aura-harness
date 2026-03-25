@@ -67,6 +67,8 @@ pub struct AgentRunnerConfig {
     pub max_task_credits: Option<u64>,
     pub default_model: String,
     pub simple_model: String,
+    /// JWT auth token for proxy-mode LLM routing.
+    pub auth_token: Option<String>,
 }
 
 impl Default for AgentRunnerConfig {
@@ -81,6 +83,7 @@ impl Default for AgentRunnerConfig {
             max_task_credits: None,
             default_model: aura_core::DEFAULT_MODEL.to_string(),
             simple_model: aura_core::FALLBACK_MODEL.to_string(),
+            auth_token: None,
         }
     }
 }
@@ -371,6 +374,7 @@ pub fn configure_loop_config(
         credit_budget: config.max_task_credits,
         exploration_allowance,
         auto_build_cooldown: 1,
+        auth_token: config.auth_token.clone(),
         system_prompt,
         model,
         ..AgentLoopConfig::default()
