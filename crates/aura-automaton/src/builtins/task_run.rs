@@ -138,12 +138,14 @@ impl Automaton for TaskRunAutomaton {
         });
 
         // ------------------------------------------------------------------
-        // 2. Transition task to in-progress
+        // 2. Transition task to in-progress (pending → ready → in_progress)
         // ------------------------------------------------------------------
-        self.domain
-            .transition_task(&task.id, "in_progress", None)
-            .await
-            .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
+        if task.status == "pending" {
+            let _ = self.domain.transition_task(&task.id, "ready", None).await;
+        }
+        if let Err(e) = self.domain.transition_task(&task.id, "in_progress", None).await {
+            warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
+        }
 
         // ------------------------------------------------------------------
         // 3. Execute
@@ -168,10 +170,17 @@ impl Automaton for TaskRunAutomaton {
             return self.finalize_task(ctx, &task.id, &task.title, result.map_err(Into::into)).await;
         }
 
+        let effective_path = ctx
+            .workspace_root
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| project.path.clone());
+
         let project_info = ProjectInfo {
             name: &project.name,
             description: project.description.as_deref().unwrap_or(""),
-            folder_path: &project.path,
+            folder_path: &effective_path,
             build_command: project.build_command.as_deref(),
             test_command: project.test_command.as_deref(),
         };
@@ -222,7 +231,7 @@ impl Automaton for TaskRunAutomaton {
             .unwrap_or_else(|| Arc::new(NoOpExecutor));
         let executor = aura_agent::task_executor::TaskToolExecutor {
             inner: inner_executor,
-            project_folder: project.path.clone(),
+            project_folder: effective_path.clone(),
             build_command: project.build_command.clone(),
             task_context: String::new(),
             tracked_file_ops: Default::default(),
