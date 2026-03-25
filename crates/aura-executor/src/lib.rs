@@ -69,8 +69,14 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
     if effect.status == EffectStatus::Committed {
         match serde_json::from_slice::<ToolResult>(&effect.payload) {
             Ok(tool_result) => {
-                let content = if tool_result.stdout.is_empty() {
-                    "Success (no output)".to_string()
+                let content = if !tool_result.ok && !tool_result.stderr.is_empty() {
+                    String::from_utf8_lossy(&tool_result.stderr).to_string()
+                } else if tool_result.stdout.is_empty() {
+                    if tool_result.ok {
+                        "Success (no output)".to_string()
+                    } else {
+                        "Tool execution failed (no details)".to_string()
+                    }
                 } else {
                     String::from_utf8_lossy(&tool_result.stdout).to_string()
                 };

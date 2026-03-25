@@ -141,6 +141,7 @@ impl AutomatonRuntime {
                 automaton_id: id.to_string(),
                 message: e.to_string(),
             });
+            let _ = event_tx.send(AutomatonEvent::Done);
             instances.remove(id.as_str());
             return;
         }

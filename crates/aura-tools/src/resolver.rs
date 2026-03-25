@@ -116,6 +116,13 @@ impl ToolResolver {
                 let result_json = domain
                     .execute(tool_name, project_id, &tool_call.args)
                     .await;
+                let is_error = serde_json::from_str::<serde_json::Value>(&result_json)
+                    .ok()
+                    .and_then(|v| v.get("ok")?.as_bool())
+                    .map_or(false, |ok| !ok);
+                if is_error {
+                    return Ok(ToolResult::failure(tool_name, result_json));
+                }
                 return Ok(ToolResult::success(tool_name, result_json));
             }
         } else if crate::domain_tools::is_domain_tool(tool_name) {

@@ -212,14 +212,12 @@ impl AutomatonController for AutomatonBridge {
         }
 
         let domain = self.domain_with_jwt(auth_token.as_deref());
-        let workspace = workspace_root
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("."));
-        let tool_executor = self.build_tool_executor(
-            domain.clone(),
-            auth_token.as_deref(),
-            &workspace,
-        );
+        let effective_workspace = workspace_root.clone();
+        let tool_executor = if let Some(ref ws) = effective_workspace {
+            self.build_tool_executor(domain.clone(), auth_token.as_deref(), ws)
+        } else {
+            self.build_tool_executor(domain.clone(), auth_token.as_deref(), std::path::Path::new("."))
+        };
 
         let runner_config = self.build_runner_config(model.as_deref());
 
@@ -237,7 +235,7 @@ impl AutomatonController for AutomatonBridge {
 
         let (handle, event_rx) = self
             .runtime
-            .install(Box::new(automaton), config, workspace_root)
+            .install(Box::new(automaton), config, effective_workspace)
             .await
             .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
 
@@ -292,14 +290,12 @@ impl AutomatonController for AutomatonBridge {
         model: Option<String>,
     ) -> Result<String, String> {
         let domain = self.domain_with_jwt(auth_token.as_deref());
-        let workspace = workspace_root
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("."));
-        let tool_executor = self.build_tool_executor(
-            domain.clone(),
-            auth_token.as_deref(),
-            &workspace,
-        );
+        let effective_workspace = workspace_root.clone();
+        let tool_executor = if let Some(ref ws) = effective_workspace {
+            self.build_tool_executor(domain.clone(), auth_token.as_deref(), ws)
+        } else {
+            self.build_tool_executor(domain.clone(), auth_token.as_deref(), std::path::Path::new("."))
+        };
 
         let runner_config = self.build_runner_config(model.as_deref());
 
@@ -318,7 +314,7 @@ impl AutomatonController for AutomatonBridge {
 
         let (handle, event_rx) = self
             .runtime
-            .install(Box::new(automaton), config, workspace_root)
+            .install(Box::new(automaton), config, effective_workspace)
             .await
             .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
 

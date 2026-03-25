@@ -29,6 +29,7 @@ const STATE_COMPLETED_COUNT: &str = "completed_count";
 const STATE_FAILED_COUNT: &str = "failed_count";
 const STATE_WORK_LOG: &str = "work_log";
 const STATE_RETRY_COUNTS: &str = "retry_counts";
+const STATE_LOOP_FINISHED: &str = "loop_finished";
 
 const MAX_RETRIES_PER_TASK: u32 = 2;
 
@@ -216,7 +217,9 @@ impl Automaton for DevLoopAutomaton {
             Err(e) => {
                 warn!(task_id = %task.id, error = %e, "task execution failed");
 
-                let _ = self.domain.transition_task(&task.id, "failed", None).await;
+                if let Err(e) = self.domain.transition_task(&task.id, "failed", None).await {
+                    warn!(task_id = %task.id, error = %e, "failed to transition task to failed status");
+                }
 
                 let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0) + 1;
                 ctx.state.set(STATE_FAILED_COUNT, &failed);
@@ -236,14 +239,17 @@ impl Automaton for DevLoopAutomaton {
     }
 
     async fn on_stop(&self, ctx: &TickContext) -> Result<(), AutomatonError> {
-        let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0);
-        let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0);
+        let already_finished: bool = ctx.state.get(STATE_LOOP_FINISHED).unwrap_or(false);
+        if !already_finished {
+            let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0);
+            let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0);
 
-        ctx.emit(AutomatonEvent::LoopFinished {
-            outcome: "stopped".into(),
-            completed_count: completed,
-            failed_count: failed,
-        });
+            ctx.emit(AutomatonEvent::LoopFinished {
+                outcome: "stopped".into(),
+                completed_count: completed,
+                failed_count: failed,
+            });
+        }
 
         Ok(())
     }
@@ -256,6 +262,12 @@ impl DevLoopAutomaton {
         cfg: &DevLoopConfig,
         task: &TaskDescriptor,
     ) -> Result<TaskExecutionResult, AutomatonError> {
+        if self.tool_executor.is_none() {
+            return Err(AutomatonError::InvalidConfig(
+                "no tool executor configured — the agent cannot perform file or command operations".into(),
+            ));
+        }
+
         let project = self
             .domain
             .get_project(&cfg.project_id, None)
@@ -429,6 +441,7 @@ impl DevLoopAutomaton {
             completed_count: completed,
             failed_count: failed,
         });
+        ctx.state.set(STATE_LOOP_FINISHED, &true);
 
         Ok(TickOutcome::Done)
     }

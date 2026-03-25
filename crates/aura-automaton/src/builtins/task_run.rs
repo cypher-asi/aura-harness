@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use aura_agent::agent_runner::{
     AgentRunner, AgentRunnerConfig, AgenticTaskParams, ShellTaskParams,
@@ -98,6 +98,12 @@ impl Automaton for TaskRunAutomaton {
     }
 
     async fn tick(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
+        if self.tool_executor.is_none() {
+            return Err(AutomatonError::InvalidConfig(
+                "no tool executor configured — the agent cannot perform file or command operations".into(),
+            ));
+        }
+
         let cfg = TaskRunConfig::from_json(&ctx.config)?;
 
         // ------------------------------------------------------------------
@@ -274,7 +280,9 @@ impl TaskRunAutomaton {
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");
 
-                let _ = self.domain.transition_task(task_id, "failed", None).await;
+                if let Err(e) = self.domain.transition_task(task_id, "failed", None).await {
+                    warn!(task_id, error = %e, "failed to transition task to failed status");
+                }
 
                 ctx.emit(AutomatonEvent::TaskFailed {
                     task_id: task_id.to_string(),

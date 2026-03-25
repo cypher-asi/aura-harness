@@ -444,11 +444,19 @@ async fn ws_upgrade_handler(
 ///
 /// Clients connect to `/stream/automaton/:automaton_id` to receive real-time
 /// events from a running automaton (dev loop, task run, etc.).
+/// Requires a Bearer token in the Authorization header (same as the chat WS).
 async fn automaton_ws_handler(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     Path(automaton_id): Path<String>,
     State(state): State<RouterState>,
 ) -> impl IntoResponse {
+    let _auth_token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(String::from);
+
     ws.on_upgrade(move |socket| {
         handle_automaton_ws(socket, automaton_id, state.automaton_bridge)
     })
@@ -488,9 +496,14 @@ async fn handle_automaton_ws(
         match rx.recv().await {
             Ok(event) => {
                 let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
-                if let Ok(json) = serde_json::to_string(&event) {
-                    if ws_tx.send(WsMessage::Text(json)).await.is_err() {
-                        break;
+                match serde_json::to_string(&event) {
+                    Ok(json) => {
+                        if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to serialize automaton event");
                     }
                 }
                 if is_done {
