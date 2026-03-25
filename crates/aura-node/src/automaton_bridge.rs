@@ -136,6 +136,59 @@ impl AutomatonBridge {
         }
         config
     }
+
+    // ------------------------------------------------------------------
+    // Direct REST-friendly methods (by automaton_id, not project_id)
+    // ------------------------------------------------------------------
+
+    /// Pause an automaton by its ID.
+    pub fn pause_by_id(&self, automaton_id: &str) -> Result<(), String> {
+        for entry in self.project_handles.iter() {
+            let (ref aid, ref handle) = *entry.value();
+            if aid == automaton_id {
+                if handle.is_finished() {
+                    return Err("Automaton has already finished".into());
+                }
+                handle.pause();
+                info!(automaton_id, "Automaton paused via REST");
+                return Ok(());
+            }
+        }
+        Err(format!("Automaton {automaton_id} not found"))
+    }
+
+    /// Stop an automaton by its ID.
+    pub fn stop_by_id(&self, automaton_id: &str) -> Result<(), String> {
+        for entry in self.project_handles.iter() {
+            let (ref aid, ref handle) = *entry.value();
+            if aid == automaton_id {
+                if handle.is_finished() {
+                    let project_id = entry.key().clone();
+                    drop(entry);
+                    self.project_handles.remove(&project_id);
+                    return Err("Automaton has already finished".into());
+                }
+                handle.stop();
+                let project_id = entry.key().clone();
+                drop(entry);
+                self.project_handles.remove(&project_id);
+                info!(automaton_id, "Automaton stopped via REST");
+                return Ok(());
+            }
+        }
+        // Also try the runtime directly (for task runs not in project_handles).
+        self.runtime.stop(automaton_id).map_err(|e| e.to_string())
+    }
+
+    /// Get the status of an automaton by its ID.
+    pub fn get_status(&self, automaton_id: &str) -> Option<aura_automaton::AutomatonInfo> {
+        self.runtime.get_info(automaton_id)
+    }
+
+    /// List all running automatons.
+    pub fn list_automatons(&self) -> Vec<aura_automaton::AutomatonInfo> {
+        self.runtime.list()
+    }
 }
 
 #[async_trait]
