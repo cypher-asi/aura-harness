@@ -29,8 +29,6 @@ pub struct NodeConfig {
     pub aura_storage_url: String,
     /// Aura Network service URL
     pub aura_network_url: String,
-    /// Internal service token for inter-service auth
-    pub internal_service_token: Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -48,7 +46,6 @@ impl Default for NodeConfig {
             orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
-            internal_service_token: None,
         }
     }
 }
@@ -103,12 +100,6 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
             config.aura_network_url = val;
         }
-        if let Ok(val) = std::env::var("INTERNAL_SERVICE_TOKEN") {
-            if !val.trim().is_empty() {
-                config.internal_service_token = Some(val);
-            }
-        }
-
         config
     }
 
@@ -146,7 +137,6 @@ mod tests {
         std::env::remove_var("ORBIT_URL");
         std::env::remove_var("AURA_STORAGE_URL");
         std::env::remove_var("AURA_NETWORK_URL");
-        std::env::remove_var("INTERNAL_SERVICE_TOKEN");
     }
 
     #[test]
@@ -165,7 +155,6 @@ mod tests {
         assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
         assert_eq!(config.aura_storage_url, "https://aura-storage.onrender.com");
         assert_eq!(config.aura_network_url, "https://aura-network.onrender.com");
-        assert!(config.internal_service_token.is_none());
     }
 
     #[test]
@@ -390,7 +379,6 @@ mod tests {
         std::env::set_var("ORBIT_URL", "https://orbit.example.com");
         std::env::set_var("AURA_STORAGE_URL", "https://storage.example.com");
         std::env::set_var("AURA_NETWORK_URL", "https://network.example.com");
-        std::env::set_var("INTERNAL_SERVICE_TOKEN", "secret-token-123");
 
         let config = NodeConfig::from_env();
 
@@ -406,7 +394,6 @@ mod tests {
         assert_eq!(config.orbit_url, "https://orbit.example.com");
         assert_eq!(config.aura_storage_url, "https://storage.example.com");
         assert_eq!(config.aura_network_url, "https://network.example.com");
-        assert_eq!(config.internal_service_token.as_deref(), Some("secret-token-123"));
 
         clear_node_env_vars();
     }

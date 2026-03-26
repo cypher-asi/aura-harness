@@ -149,6 +149,184 @@ sequenceDiagram
 
 
 
+## End-State Control Flow and Architecture (Detailed)
+
+The target design at completion uses a single deterministic transaction pipeline, with async process completion as a first-class transaction source. Every persisted transaction must be chained to the latest head hash at commit time.
+
+### 1) Runtime Component Topology
+
+```mermaid
+flowchart TB
+    subgraph Interfaces["Client Interfaces"]
+        UI["TUI / CLI / API"]
+    end
+
+    subgraph Runtime["Runtime Orchestration"]
+        EL["Event Loop / Session Orchestrator"]
+        TP["TurnProcessor (single turn engine)"]
+        POL["Policy Engine"]
+        PM["ProcessManager"]
+    end
+
+    subgraph Tools["Tooling & Execution"]
+        REG["Tool Registry"]
+        EXE["Executor Router"]
+        FS["FS + Search Tools"]
+        CMD["cmd.run threshold executor"]
+    end
+
+    subgraph Model["Reasoning"]
+        LLM["ModelProvider"]
+    end
+
+    subgraph Persistence["Persistence"]
+        STORE["Store (RocksDB)"]
+        INBOX["Inbox queue per agent"]
+        RECORD["Append-only Record"]
+        HEAD["Agent chain head cache/read"]
+    end
+
+    UI --> EL
+    EL --> INBOX
+    EL --> TP
+    TP --> LLM
+    TP --> POL
+    TP --> REG
+    TP --> EXE
+    EXE --> FS
+    EXE --> CMD
+    TP --> HEAD
+    TP --> RECORD
+    TP --> STORE
+
+    CMD -- "pending child > threshold" --> PM
+    PM -- "completion tx" --> INBOX
+    EL -- "dequeue + process completion tx" --> TP
+
+    STORE --- INBOX
+    STORE --- RECORD
+    STORE --- HEAD
+```
+
+
+
+### 2) End-to-End Turn Flow (Sync + Async Branch)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User
+    participant EL as EventLoop
+    participant ST as Store/Inbox
+    participant TP as TurnProcessor
+    participant MP as ModelProvider
+    participant EX as Executor/Tools
+    participant PM as ProcessManager
+
+    User->>EL: submit prompt
+    EL->>ST: enqueue_tx(UserPrompt)
+    EL->>ST: dequeue_tx(agent)
+    EL->>TP: process_turn(tx, next_seq)
+    TP->>ST: read current head hash
+    TP->>MP: complete(messages, tools)
+    MP-->>TP: tool_use/run_command
+    TP->>EX: execute cmd.run with sync_threshold_ms
+
+    alt command finishes within threshold
+        EX-->>TP: Completed(output)
+        TP->>TP: build Effect::Committed
+        TP->>TP: build chained tx using current head hash
+        TP->>ST: append_entry_atomic(seq, entry, inbox_seq)
+        TP-->>EL: turn result committed
+    else command exceeds threshold
+        EX-->>TP: Pending(child, command)
+        TP->>PM: register(agent_id, action_id, reference_tx_hash, process_id, child)
+        TP->>TP: build Effect::Pending(ProcessPending)
+        TP->>TP: build chained tx using current head hash
+        TP->>ST: append_entry_atomic(seq, entry, inbox_seq)
+        TP-->>EL: pending result committed
+        PM-->>ST: enqueue_tx(ProcessComplete / ActionResult)
+    end
+```
+
+
+
+### 3) Async Completion Ingestion and Continuation Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant PM as ProcessManager
+    participant ST as Store/Inbox
+    participant EL as EventLoop
+    participant TP as TurnProcessor
+    participant RC as Record/Chain
+
+    PM->>PM: monitor child process
+    PM->>PM: collect stdout/stderr + exit status
+    PM->>ST: enqueue completion tx (reference_tx_hash=origin)
+
+    EL->>ST: dequeue_tx(agent)
+    EL->>TP: process completion transaction as new turn input
+    TP->>ST: read latest head hash (at completion processing time)
+    TP->>TP: derive hash = H(payload + latest_head_hash)
+    TP->>ST: append_entry_atomic(new_seq, completion_entry, inbox_seq)
+    TP->>RC: chain head advances
+
+    Note over TP,RC: reference_tx_hash links to origin tx<br/>hash links to previous committed tx
+```
+
+
+
+### 4) Hash Chain + Reference DAG (Orthogonal Guarantees)
+
+```mermaid
+flowchart LR
+    subgraph Chain["Strict Sequential Hash Chain"]
+        C1["Tx#101\nhash=H(payload101+H100)"]
+        C2["Tx#102\nhash=H(payload102+H101)"]
+        C3["Tx#103\nhash=H(payload103+H102)"]
+        C4["Tx#104\nhash=H(payload104+H103)"]
+    end
+    C1 --> C2 --> C3 --> C4
+
+    subgraph Refs["Logical Callback References (DAG)"]
+        O["Origin Tx#102\n(tx_type=ToolExecution/UserPrompt)"]
+        P["Completion Tx#104\n(tx_type=ProcessComplete/ActionResult)"]
+    end
+    P -. reference_tx_hash .-> O
+
+    NoteA["Hash chain enforces append-only ordering"]
+    NoteB["Reference edge preserves causal linkage"]
+    C4 --> NoteA
+    P --> NoteB
+```
+
+
+
+### 5) Commit-Time Hashing Contract (Non-Negotiable)
+
+```mermaid
+flowchart TD
+    A["About to append tx for agent A"] --> B["Read head_seq + head_hash from store"]
+    B --> C{"head exists?"}
+    C -- no --> D["hash = H(payload)"]
+    C -- yes --> E["hash = H(payload + head_hash)"]
+    D --> F["append_entry_atomic"]
+    E --> F["append_entry_atomic"]
+    F --> G["new head_hash = tx.hash"]
+    G --> H["all downstream tx depend on this hash"]
+```
+
+
+
+This contract applies equally to:
+
+- user prompt transactions
+- assistant/agent message transactions
+- tool proposal/execution transactions
+- async completion transactions
+
 ## Async Process Chaining Example
 
 **Original RecordEntry (seq=N) - starts a long-running process:**

@@ -63,34 +63,20 @@ impl Node {
         let catalog = Arc::new(ToolCatalog::new());
         info!(static_tools = catalog.static_count(), "Tool catalog ready");
 
-        let domain_api: Option<Arc<dyn DomainApi>> =
-            self.config.internal_service_token.as_ref().map(|token| {
-                Arc::new(HttpDomainApi::new(
-                    &self.config.aura_storage_url,
-                    &self.config.aura_network_url,
-                    &self.config.orbit_url,
-                    token,
-                )) as Arc<dyn DomainApi>
-            });
-        // #region agent log
+        let domain_api: Arc<dyn DomainApi> = Arc::new(HttpDomainApi::new(
+            &self.config.aura_storage_url,
+            &self.config.aura_network_url,
+            &self.config.orbit_url,
+        ));
         info!(
-            has_token = self.config.internal_service_token.is_some(),
             storage_url = %self.config.aura_storage_url,
-            "Domain API config check"
+            "Domain API ready (JWT auth)"
         );
-        // #endregion
-        if domain_api.is_some() {
-            info!("Domain API ready (internal token auth)");
-        } else {
-            warn!("No INTERNAL_SERVICE_TOKEN — domain tools will be unavailable");
-        }
 
         let tools = catalog.visible_tools(ToolProfile::Core, &tool_config);
-        let mut resolver = ToolResolver::new(catalog.clone(), tool_config.clone());
-        if let Some(ref api) = domain_api {
-            let domain_exec = Arc::new(DomainToolExecutor::new(api.clone()));
-            resolver = resolver.with_domain_executor(domain_exec);
-        }
+        let domain_exec = Arc::new(DomainToolExecutor::new(domain_api.clone()));
+        let resolver = ToolResolver::new(catalog.clone(), tool_config.clone())
+            .with_domain_executor(domain_exec);
         let resolver: Arc<dyn Executor> = Arc::new(resolver);
         let executors = vec![resolver];
         info!("Executors configured");
@@ -108,15 +94,13 @@ impl Node {
 
         let automaton_runtime = Arc::new(AutomatonRuntime::new());
         let automaton_bridge: Option<Arc<AutomatonBridge>> =
-            domain_api.as_ref().map(|api| {
-                Arc::new(AutomatonBridge::new(
-                    automaton_runtime.clone(),
-                    api.clone(),
-                    provider.clone(),
-                    catalog.clone(),
-                    tool_config.clone(),
-                ))
-            });
+            Some(Arc::new(AutomatonBridge::new(
+                automaton_runtime.clone(),
+                domain_api.clone(),
+                provider.clone(),
+                catalog.clone(),
+                tool_config.clone(),
+            )));
         let automaton_controller: Option<Arc<dyn AutomatonController>> =
             automaton_bridge.clone().map(|b| b as Arc<dyn AutomatonController>);
         if automaton_controller.is_some() {
@@ -130,7 +114,7 @@ impl Node {
             provider,
             tool_config,
             catalog,
-            domain_api,
+            domain_api: Some(domain_api),
             automaton_controller,
             automaton_bridge,
         };

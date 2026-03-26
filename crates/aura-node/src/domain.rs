@@ -1,8 +1,6 @@
 //! HTTP-backed `DomainApi` implementation.
 //!
-//! Routes to the correct endpoint + auth based on the operation:
-//! - `/api/` routes use `Authorization: Bearer <jwt>` (user JWT from front-end)
-//! - `/internal/` routes use `X-Internal-Token` header (service-to-service)
+//! All routes use `Authorization: Bearer <jwt>` (user JWT from session).
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -19,83 +17,16 @@ pub struct HttpDomainApi {
     storage_url: String,
     network_url: String,
     orbit_url: String,
-    internal_token: String,
 }
 
 impl HttpDomainApi {
-    pub fn new(storage_url: &str, network_url: &str, orbit_url: &str, internal_token: &str) -> Self {
+    pub fn new(storage_url: &str, network_url: &str, orbit_url: &str) -> Self {
         Self {
             http: Client::new(),
             storage_url: storage_url.trim_end_matches('/').to_string(),
             network_url: network_url.trim_end_matches('/').to_string(),
             orbit_url: orbit_url.trim_end_matches('/').to_string(),
-            internal_token: internal_token.to_string(),
         }
-    }
-
-    // -------------------------------------------------------------------------
-    // Internal-token helpers (X-Internal-Token, for /internal/ routes)
-    // -------------------------------------------------------------------------
-
-    #[allow(dead_code)]
-    async fn internal_get<T: DeserializeOwned>(&self, url: &str) -> anyhow::Result<T> {
-        debug!(url, "HttpDomainApi internal GET");
-        let resp = self
-            .http
-            .get(url)
-            .header("X-Internal-Token", &self.internal_token)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = body.chars().take(300).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
-        serde_json::from_str(&body).with_context(|| format!("parse response from {url}"))
-    }
-
-    async fn internal_post<T: DeserializeOwned>(
-        &self,
-        url: &str,
-        body: &serde_json::Value,
-    ) -> anyhow::Result<T> {
-        debug!(url, "HttpDomainApi internal POST");
-        let resp = self
-            .http
-            .post(url)
-            .header("X-Internal-Token", &self.internal_token)
-            .json(body)
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = resp.status();
-        let text = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = text.chars().take(300).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
-        serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
-    }
-
-    #[allow(dead_code)]
-    async fn internal_delete(&self, url: &str) -> anyhow::Result<()> {
-        debug!(url, "HttpDomainApi internal DELETE");
-        let resp = self
-            .http
-            .delete(url)
-            .header("X-Internal-Token", &self.internal_token)
-            .send()
-            .await
-            .with_context(|| format!("DELETE {url}"))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            let truncated: String = body.chars().take(300).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
-        Ok(())
     }
 
     // -------------------------------------------------------------------------
@@ -376,7 +307,7 @@ impl DomainApi for HttpDomainApi {
         self.api_put(&url, &body, jwt).await
     }
 
-    // -- Storage: logs (create = /internal/, list = /api/) --------------------
+    // -- Storage: logs (JWT /api/) --------------------------------------------
 
     async fn create_log(
         &self,
@@ -385,10 +316,11 @@ impl DomainApi for HttpDomainApi {
         level: &str,
         agent_id: Option<&str>,
         metadata: Option<&serde_json::Value>,
+        jwt: Option<&str>,
     ) -> anyhow::Result<serde_json::Value> {
-        let url = format!("{}/internal/logs", self.storage_url);
+        let jwt = Self::require_jwt(jwt)?;
+        let url = format!("{}/api/projects/{project_id}/logs", self.storage_url);
         let mut body = serde_json::json!({
-            "projectId": project_id,
             "message": message,
             "level": level,
         });
@@ -398,7 +330,7 @@ impl DomainApi for HttpDomainApi {
         if let Some(meta) = metadata {
             body["metadata"] = meta.clone();
         }
-        self.internal_post(&url, &body).await
+        self.api_post(&url, &body, jwt).await
     }
 
     async fn list_logs(
@@ -482,8 +414,6 @@ impl DomainApi for HttpDomainApi {
         };
         if let Some(jwt) = jwt {
             req = req.bearer_auth(jwt);
-        } else {
-            req = req.header("X-Internal-Token", &self.internal_token);
         }
         if let Some(body) = body {
             req = req.json(body);
@@ -520,8 +450,6 @@ impl DomainApi for HttpDomainApi {
         };
         if let Some(jwt) = jwt {
             req = req.bearer_auth(jwt);
-        } else {
-            req = req.header("X-Internal-Token", &self.internal_token);
         }
         if let Some(body) = body {
             req = req.json(body);

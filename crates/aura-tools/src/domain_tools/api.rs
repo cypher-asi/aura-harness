@@ -182,7 +182,7 @@ pub trait DomainApi: Send + Sync {
         jwt: Option<&str>,
     ) -> anyhow::Result<ProjectDescriptor>;
 
-    // Storage: logs — create uses /internal/ (token auth), list uses /api/ (JWT)
+    // Storage: logs — JWT auth via /api/ routes
     async fn create_log(
         &self,
         project_id: &str,
@@ -190,6 +190,7 @@ pub trait DomainApi: Send + Sync {
         level: &str,
         agent_id: Option<&str>,
         metadata: Option<&serde_json::Value>,
+        jwt: Option<&str>,
     ) -> anyhow::Result<serde_json::Value>;
     async fn list_logs(
         &self,

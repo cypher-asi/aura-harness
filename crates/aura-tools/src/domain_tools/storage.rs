@@ -6,15 +6,15 @@ use tracing::debug;
 use super::api::DomainApi;
 use super::helpers::str_field;
 
-/// create_log uses the /internal/ endpoint (X-Internal-Token, no JWT needed).
 pub async fn create_log(api: &dyn DomainApi, project_id: &str, input: &Value) -> String {
     debug!(project_id, "domain_tools: create_log");
     let message = input["message"].as_str().unwrap_or_default();
     let level = input["level"].as_str().unwrap_or("info");
     let metadata = input.get("metadata");
     let agent_id = str_field(input, "project_agent_id");
+    let jwt = str_field(input, "jwt");
 
-    match api.create_log(project_id, message, level, agent_id.as_deref(), metadata).await {
+    match api.create_log(project_id, message, level, agent_id.as_deref(), metadata, jwt.as_deref()).await {
         Ok(result) => json!({ "ok": true, "result": result }).to_string(),
         Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
     }
