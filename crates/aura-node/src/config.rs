@@ -379,7 +379,6 @@ mod tests {
         std::env::set_var("ORBIT_URL", "https://orbit.example.com");
         std::env::set_var("AURA_STORAGE_URL", "https://storage.example.com");
         std::env::set_var("AURA_NETWORK_URL", "https://network.example.com");
-
         let config = NodeConfig::from_env();
 
         assert_eq!(config.data_dir, PathBuf::from("/opt/aura"));
@@ -394,7 +393,6 @@ mod tests {
         assert_eq!(config.orbit_url, "https://orbit.example.com");
         assert_eq!(config.aura_storage_url, "https://storage.example.com");
         assert_eq!(config.aura_network_url, "https://network.example.com");
-
         clear_node_env_vars();
     }
 }

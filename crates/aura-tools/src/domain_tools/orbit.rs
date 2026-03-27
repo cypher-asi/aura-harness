@@ -25,7 +25,7 @@ pub async fn orbit_create_repo(api: &dyn DomainApi, _project_id: &str, input: &V
         "visibility": input["visibility"].as_str().unwrap_or("private"),
     });
     let jwt = str_field(input, "jwt");
-    match api.orbit_api_call("POST", "/internal/repos", Some(&body), jwt.as_deref()).await {
+    match api.orbit_api_call("POST", "/api/repos", Some(&body), jwt.as_deref()).await {
         Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
         Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
     }
