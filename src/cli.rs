@@ -23,6 +23,8 @@ pub(crate) enum Commands {
     Logout,
     /// Show current authentication status.
     Whoami,
+    /// Print "Hello, World!" and exit (Spec 01).
+    Hello,
 }
 
 /// Arguments for the `run` subcommand (also the default behaviour).

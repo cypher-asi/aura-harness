@@ -25,6 +25,18 @@ use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // ============================================================================
+// Hello World (Spec 01)
+// ============================================================================
+
+pub fn hello_world_message() -> &'static str {
+    "Hello, World!"
+}
+
+pub fn hello_world() {
+    println!("{}", hello_world_message());
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -35,6 +47,10 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Commands::Hello) => {
+            hello_world();
+            Ok(())
+        }
         Some(Commands::Login) => cmd_login().await,
         Some(Commands::Logout) => cmd_logout().await,
         Some(Commands::Whoami) => cmd_whoami(),
@@ -244,4 +260,19 @@ async fn run_headless() -> anyhow::Result<()> {
     let config = aura_node::NodeConfig::from_env();
 
     aura_node::Node::new(config).run().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hello_world_message_exact() {
+        assert_eq!(hello_world_message(), "Hello, World!");
+    }
+
+    #[test]
+    fn test_hello_world_prints() {
+        hello_world();
+    }
 }

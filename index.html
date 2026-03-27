@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hello World - Red Cat</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(135deg, #FFF3E0 0%, #FFCCBC 100%);
+        font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      }
+
+      main {
+        text-align: center;
+        background: white;
+        padding: 2.5rem 3rem 3rem;
+        border-radius: 1.5rem;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+      }
+
+      h1 {
+        font-size: 2.4rem;
+        color: #37474F;
+        margin-bottom: 1.5rem;
+        letter-spacing: 0.02em;
+      }
+
+      #red-cat-container {
+        display: flex;
+        justify-content: center;
+      }
+
+      #red-cat-container svg {
+        width: 280px;
+        height: 280px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hello, World!</h1>
+      <section id="red-cat-container">
+        <svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300" role="img" aria-label="Red cat illustration">
+          <!-- Tail -->
+          <path d="M 60 210 Q 20 180, 25 140 Q 30 110, 50 120" stroke="#C62828" stroke-width="10" stroke-linecap="round" fill="none" />
+
+          <!-- Body -->
+          <ellipse cx="150" cy="220" rx="80" ry="55" fill="#E53935" />
+
+          <!-- Head -->
+          <circle cx="150" cy="130" r="55" fill="#E53935" />
+
+          <!-- Left ear -->
+          <polygon points="108,90 85,40 125,75" fill="#E53935" />
+          <polygon points="112,88 95,52 124,78" fill="#FFCDD2" />
+
+          <!-- Right ear -->
+          <polygon points="192,90 215,40 175,75" fill="#E53935" />
+          <polygon points="188,88 205,52 176,78" fill="#FFCDD2" />
+
+          <!-- Left eye -->
+          <ellipse cx="130" cy="125" rx="12" ry="13" fill="white" />
+          <ellipse cx="132" cy="126" rx="6" ry="7" fill="#212121" />
+          <circle cx="134" cy="123" r="2.5" fill="white" />
+
+          <!-- Right eye -->
+          <ellipse cx="170" cy="125" rx="12" ry="13" fill="white" />
+          <ellipse cx="172" cy="126" rx="6" ry="7" fill="#212121" />
+          <circle cx="174" cy="123" r="2.5" fill="white" />
+
+          <!-- Nose -->
+          <polygon points="150,142 145,150 155,150" fill="#C62828" />
+
+          <!-- Mouth -->
+          <path d="M 145,150 Q 140,160 132,158" stroke="#C62828" stroke-width="2" fill="none" stroke-linecap="round" />
+          <path d="M 155,150 Q 160,160 168,158" stroke="#C62828" stroke-width="2" fill="none" stroke-linecap="round" />
+
+          <!-- Whiskers (left) -->
+          <line x1="95" y1="140" x2="130" y2="145" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="93" y1="150" x2="130" y2="150" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="95" y1="160" x2="130" y2="155" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+
+          <!-- Whiskers (right) -->
+          <line x1="205" y1="140" x2="170" y2="145" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="207" y1="150" x2="170" y2="150" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="205" y1="160" x2="170" y2="155" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+
+          <!-- Front paws -->
+          <ellipse cx="120" cy="268" rx="18" ry="10" fill="#E53935" />
+          <ellipse cx="180" cy="268" rx="18" ry="10" fill="#E53935" />
+
+          <!-- Paw lines (left) -->
+          <line x1="112" y1="265" x2="112" y2="272" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="120" y1="264" x2="120" y2="272" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="128" y1="265" x2="128" y2="272" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+
+          <!-- Paw lines (right) -->
+          <line x1="172" y1="265" x2="172" y2="272" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="180" y1="264" x2="180" y2="272" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="188" y1="265" x2="188" y2="272" stroke="#C62828" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+      </section>
+    </main>
+  </body>
+</html>

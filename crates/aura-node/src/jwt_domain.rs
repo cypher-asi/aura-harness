@@ -72,8 +72,8 @@ impl DomainApi for JwtDomainApi {
     async fn update_project(&self, project_id: &str, updates: ProjectUpdate, jwt: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
         self.inner.update_project(project_id, updates, self.jwt_or(jwt)).await
     }
-    async fn create_log(&self, project_id: &str, message: &str, level: &str, agent_id: Option<&str>, metadata: Option<&serde_json::Value>) -> anyhow::Result<serde_json::Value> {
-        self.inner.create_log(project_id, message, level, agent_id, metadata).await
+    async fn create_log(&self, project_id: &str, message: &str, level: &str, agent_id: Option<&str>, metadata: Option<&serde_json::Value>, jwt: Option<&str>) -> anyhow::Result<serde_json::Value> {
+        self.inner.create_log(project_id, message, level, agent_id, metadata, self.jwt_or(jwt)).await
     }
     async fn list_logs(&self, project_id: &str, level: Option<&str>, limit: Option<u64>, jwt: Option<&str>) -> anyhow::Result<serde_json::Value> {
         self.inner.list_logs(project_id, level, limit, self.jwt_or(jwt)).await
