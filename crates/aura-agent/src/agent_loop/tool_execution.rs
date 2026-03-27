@@ -65,8 +65,8 @@ pub(super) async fn handle_tool_use(
         "Resolved cached vs executable tool calls"
     );
 
-    let (executed_results, side_messages, is_stalled) = if uncached_calls.is_empty() {
-        (Vec::new(), Vec::new(), false)
+    let (executed_results, side_messages, is_stalled, blocked_ids) = if uncached_calls.is_empty() {
+        (Vec::new(), Vec::new(), false, HashSet::new())
     } else {
         agent
             .process_tool_results(&uncached_calls, executor, state)
@@ -84,6 +84,8 @@ pub(super) async fn handle_tool_use(
             .map_or("unknown", |t| t.name.as_str());
         let source = if cached_ids.contains(&r.tool_use_id) {
             "cache"
+        } else if blocked_ids.contains(&r.tool_use_id) {
+            "blocked"
         } else {
             "executor"
         };
@@ -308,16 +310,18 @@ fn handle_stall(event_tx: Option<&UnboundedSender<AgentLoopEvent>>, state: &mut 
 impl AgentLoop {
     /// Process tool call results from one iteration.
     ///
-    /// Returns `(results, side_messages, is_stalled)` where `side_messages`
-    /// are warning/build texts that should be embedded into the tool_result
-    /// user message rather than pushed as separate messages (which would
-    /// violate Anthropic's tool_use/tool_result adjacency requirement).
+    /// Returns `(results, side_messages, is_stalled, blocked_ids)` where
+    /// `side_messages` are warning/build texts that should be embedded into
+    /// the tool_result user message rather than pushed as separate messages
+    /// (which would violate Anthropic's tool_use/tool_result adjacency
+    /// requirement), and `blocked_ids` tracks which tool calls were blocked
+    /// by detection policy (for accurate source labelling in logs).
     pub(crate) async fn process_tool_results(
         &self,
         tool_calls: &[ToolCallInfo],
         executor: &dyn AgentToolExecutor,
         state: &mut LoopState,
-    ) -> (Vec<ToolCallResult>, Vec<String>, bool) {
+    ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>) {
         let mut side_messages: Vec<String> = Vec::new();
 
         let (blocked_results, to_execute) = partition_blocked(
@@ -326,6 +330,11 @@ impl AgentLoop {
             &state.read_guard,
             &mut side_messages,
         );
+
+        let blocked_ids: HashSet<String> = blocked_results
+            .iter()
+            .map(|r| r.tool_use_id.clone())
+            .collect();
 
         let executed = if to_execute.is_empty() {
             Vec::new()
@@ -363,7 +372,7 @@ impl AgentLoop {
 
         let mut all_results = blocked_results;
         all_results.extend(executed);
-        (all_results, side_messages, stalled)
+        (all_results, side_messages, stalled, blocked_ids)
     }
 }
 
@@ -382,10 +391,18 @@ fn partition_blocked(
             let msg = check
                 .recovery_message
                 .unwrap_or_else(|| "Blocked".to_string());
+            let path_hint = tool.input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            warn!(
+                tool_use_id = %tool.id,
+                tool_name = %tool.name,
+                path = path_hint,
+                reason = %msg,
+                "Tool call blocked by detection policy"
+            );
             side_messages.push(msg.clone());
             blocked.push(ToolCallResult {
                 tool_use_id: tool.id.clone(),
-                content: msg,
+                content: format!("[BLOCKED] {msg}"),
                 is_error: true,
                 stop_loop: false,
             });

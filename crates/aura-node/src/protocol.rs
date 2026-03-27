@@ -229,11 +229,13 @@ mod tests {
             name: "read_file".to_string(),
             result: "file contents here".to_string(),
             is_error: false,
+            tool_use_id: Some("tu_1".to_string()),
         });
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "tool_result");
         assert_eq!(json["name"], "read_file");
         assert!(!json["is_error"].as_bool().unwrap());
+        assert_eq!(json["tool_use_id"], "tu_1");
     }
 
     #[test]
@@ -242,10 +244,12 @@ mod tests {
             name: "write_file".to_string(),
             result: "permission denied".to_string(),
             is_error: true,
+            tool_use_id: None,
         });
         let json = serde_json::to_value(&msg).unwrap();
         assert!(json["is_error"].as_bool().unwrap());
         assert_eq!(json["result"], "permission denied");
+        assert!(json.get("tool_use_id").is_none());
     }
 
     #[test]
@@ -401,6 +405,7 @@ mod tests {
                 name: "n".into(),
                 result: "r".into(),
                 is_error: false,
+                tool_use_id: None,
             }),
             OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
                 message_id: "m".into(),

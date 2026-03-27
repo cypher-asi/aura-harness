@@ -173,6 +173,8 @@ pub struct ToolResultMsg {
     pub name: String,
     pub result: String,
     pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
 }
 
 /// Payload for `assistant_message_end`.

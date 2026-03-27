@@ -157,9 +157,12 @@ fn extract_path(tool: &ToolCallInfo) -> Option<String> {
         .map(String::from)
 }
 
-/// Detector 1: Block duplicate writes to paths already written in this turn.
+/// Detector 1: Block duplicate full-file writes to paths already written in this turn.
+///
+/// Only blocks `write_file` (full rewrites). `edit_file` and `delete_file`
+/// are allowed so the agent can make targeted changes after an initial write.
 fn detect_blocked_writes(tool: &ToolCallInfo, ctx: &BlockingContext) -> Option<BlockCheckResult> {
-    if !WRITE_TOOLS.contains(&tool.name.as_str()) {
+    if tool.name != "write_file" {
         return None;
     }
     let path = extract_path(tool)?;
@@ -342,6 +345,24 @@ mod tests {
         let result = detect_blocked_writes(&tool, &ctx).unwrap();
         assert!(result.blocked);
         assert!(result.recovery_message.unwrap().contains("already wrote"));
+    }
+
+    #[test]
+    fn test_detect_blocked_writes_allows_edit_file_on_written_path() {
+        let mut ctx = BlockingContext::new(12);
+        ctx.written_paths.insert("test.rs".to_string());
+        let tool = make_tool("edit_file", serde_json::json!({"path": "test.rs"}));
+        let result = detect_blocked_writes(&tool, &ctx);
+        assert!(result.is_none(), "edit_file should bypass the duplicate-write detector");
+    }
+
+    #[test]
+    fn test_detect_blocked_writes_allows_delete_file_on_written_path() {
+        let mut ctx = BlockingContext::new(12);
+        ctx.written_paths.insert("test.rs".to_string());
+        let tool = make_tool("delete_file", serde_json::json!({"path": "test.rs"}));
+        let result = detect_blocked_writes(&tool, &ctx);
+        assert!(result.is_none(), "delete_file should bypass the duplicate-write detector");
     }
 
     #[test]

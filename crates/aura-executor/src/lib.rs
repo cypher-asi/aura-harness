@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use aura_core::{Action, Effect, EffectStatus, ToolResult};
+use tracing::warn;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutorError {
@@ -86,11 +87,19 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
                     metadata: tool_result.metadata,
                 }
             }
-            Err(_) => DecodedToolResult {
-                content: "Tool executed successfully".to_string(),
-                is_error: false,
-                metadata: HashMap::new(),
-            },
+            Err(e) => {
+                let raw = String::from_utf8_lossy(&effect.payload);
+                warn!(
+                    error = %e,
+                    payload_len = effect.payload.len(),
+                    "Failed to parse Committed tool effect payload as ToolResult"
+                );
+                DecodedToolResult {
+                    content: format!("Tool result could not be parsed: {e}. Raw: {raw}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                }
+            }
         }
     } else {
         let content = if let Ok(tool_result) =

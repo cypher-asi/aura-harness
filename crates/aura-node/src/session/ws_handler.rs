@@ -341,14 +341,15 @@ fn start_turn(
                     OutboundMessage::ToolUseStart(ToolUseStart { id, name })
                 }
                 AgentLoopEvent::ToolResult {
+                    tool_use_id,
                     tool_name,
                     content,
                     is_error,
-                    ..
                 } => OutboundMessage::ToolResult(ToolResultMsg {
                     name: tool_name,
                     result: content,
                     is_error,
+                    tool_use_id: Some(tool_use_id),
                 }),
                 AgentLoopEvent::Error {
                     code,

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use aura_core::{Action, AgentId, ToolCall};
 use aura_executor::{ExecuteContext, ExecutorRouter, decode_tool_effect};
 use std::path::PathBuf;
+use tracing::{debug, error, info};
 
 /// Bridges the `AgentToolExecutor` trait to the kernel's `ExecutorRouter`.
 ///
@@ -37,10 +38,22 @@ impl AgentToolExecutor for KernelToolExecutor {
         let mut results = Vec::new();
 
         for tool in tool_calls {
+            debug!(
+                tool_use_id = %tool.id,
+                tool_name = %tool.name,
+                workspace = %self.workspace.display(),
+                "Executing tool via KernelToolExecutor"
+            );
             let tool_call = ToolCall::new(tool.name.clone(), tool.input.clone());
             let action = match Action::delegate_tool(&tool_call) {
                 Ok(a) => a,
                 Err(e) => {
+                    error!(
+                        tool_use_id = %tool.id,
+                        tool_name = %tool.name,
+                        error = %e,
+                        "Failed to serialize tool call to Action"
+                    );
                     results.push(ToolCallResult {
                         tool_use_id: tool.id.clone(),
                         content: format!("Internal serialization error: {e}"),
@@ -55,6 +68,16 @@ impl AgentToolExecutor for KernelToolExecutor {
             let effect = self.executor.execute(&ctx, &action).await;
             let decoded = decode_tool_effect(&effect);
             let (content, is_error) = (decoded.content, decoded.is_error);
+
+            info!(
+                tool_use_id = %tool.id,
+                tool_name = %tool.name,
+                is_error = is_error,
+                effect_status = ?effect.status,
+                result_len = content.len(),
+                workspace = %self.workspace.display(),
+                "Tool execution completed"
+            );
 
             results.push(ToolCallResult {
                 tool_use_id: tool.id.clone(),
