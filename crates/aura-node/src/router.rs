@@ -288,7 +288,7 @@ async fn automaton_start_handler(
         .ok_or_else(|| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "automaton controller unavailable (no INTERNAL_SERVICE_TOKEN)"})),
+                Json(serde_json::json!({"error": "automaton controller unavailable"})),
             )
         })?;
 

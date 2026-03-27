@@ -224,7 +224,6 @@ Environment variables (see [`.env.example`](.env.example)):
 | `AURA_MODEL_TIMEOUT_MS` | `60000` | LLM request timeout |
 | `AURA_DATA_DIR` | `./aura_data` | Data directory for RocksDB and workspaces |
 | `BIND_ADDR` | `127.0.0.1:8080` | HTTP server bind address |
-| `INTERNAL_SERVICE_TOKEN` | -- | Token for service-to-service calls (Orbit, Storage, Network) |
 
 ### Gateway (optional)
 
