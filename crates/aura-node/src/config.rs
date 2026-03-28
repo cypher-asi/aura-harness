@@ -144,6 +144,56 @@ impl NodeConfig {
             incoming.to_path_buf()
         }
     }
+
+    /// Resolve the canonical workspace directory for a project by name.
+    ///
+    /// This is the single source of truth for where a project's files live.
+    /// - Remote VMs (`project_base` set): `{project_base}/{slug}` e.g. `/home/aura/testaaa`
+    /// - Local dev (`project_base` unset): `{data_dir}/workspaces/{slug}`
+    #[must_use]
+    pub fn resolve_workspace_for_project(&self, project_name: &str) -> PathBuf {
+        let slug = slugify(project_name);
+        if let Some(ref base) = self.project_base {
+            base.join(&slug)
+        } else {
+            self.workspaces_path().join(&slug)
+        }
+    }
+
+    /// Check whether a path is allowed for file operations.
+    ///
+    /// Accepts paths under `project_base` (remote) or `workspaces_path` (local).
+    #[must_use]
+    pub fn is_allowed_path(&self, path: &std::path::Path) -> bool {
+        if let Some(ref base) = self.project_base {
+            path.starts_with(base)
+        } else {
+            path.starts_with(&self.workspaces_path())
+        }
+    }
+
+    /// Return the root directory for file browsing (project_base or workspaces).
+    #[must_use]
+    pub fn file_root(&self) -> PathBuf {
+        if let Some(ref base) = self.project_base {
+            base.clone()
+        } else {
+            self.workspaces_path()
+        }
+    }
+}
+
+fn slugify(name: &str) -> String {
+    let s = name
+        .trim()
+        .to_lowercase()
+        .replace(char::is_whitespace, "-")
+        .replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "");
+    if s.is_empty() {
+        "unnamed-project".to_string()
+    } else {
+        s
+    }
 }
 
 #[cfg(test)]

@@ -64,6 +64,8 @@ pub fn create_router(state: RouterState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/files", get(list_files_handler))
+        .route("/api/read-file", get(read_file_handler))
+        .route("/workspace/resolve", get(resolve_workspace_handler))
         .route("/tx", post(submit_tx_handler))
         .route("/agents/:agent_id/head", get(get_head_handler))
         .route("/agents/:agent_id/record", get(scan_record_handler))
@@ -186,14 +188,19 @@ async fn list_files_handler(
     State(state): State<RouterState>,
     Query(query): Query<ListFilesQuery>,
 ) -> impl IntoResponse {
-    let workspaces = state.config.workspaces_path();
+    let root = state.config.file_root();
     let depth = query.depth.min(20);
 
     let base = if query.path == "." || query.path.is_empty() {
-        workspaces.clone()
+        root.clone()
     } else {
-        let candidate = workspaces.join(&query.path);
-        if !candidate.starts_with(&workspaces) {
+        let path = std::path::Path::new(&query.path);
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        if !state.config.is_allowed_path(&candidate) {
             return Json(serde_json::json!({ "ok": false, "error": "path escapes workspace" }));
         }
         candidate
@@ -209,6 +216,54 @@ async fn list_files_handler(
         .unwrap_or_default();
 
     Json(serde_json::json!({ "ok": true, "entries": entries }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadFileQuery {
+    path: String,
+}
+
+async fn read_file_handler(
+    State(state): State<RouterState>,
+    Query(query): Query<ReadFileQuery>,
+) -> impl IntoResponse {
+    let path = std::path::Path::new(&query.path);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        state.config.file_root().join(path)
+    };
+
+    if !state.config.is_allowed_path(&resolved) {
+        return Json(serde_json::json!({ "ok": false, "error": "path escapes workspace" }));
+    }
+
+    match tokio::fs::read_to_string(&resolved).await {
+        Ok(content) => Json(serde_json::json!({
+            "ok": true,
+            "content": content,
+            "path": resolved.to_string_lossy(),
+        })),
+        Err(e) => Json(serde_json::json!({
+            "ok": false,
+            "error": format!("failed to read file: {e}"),
+        })),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveWorkspaceQuery {
+    project_name: String,
+}
+
+async fn resolve_workspace_handler(
+    State(state): State<RouterState>,
+    Query(query): Query<ResolveWorkspaceQuery>,
+) -> impl IntoResponse {
+    let path = state.config.resolve_workspace_for_project(&query.project_name);
+    Json(serde_json::json!({
+        "path": path.to_string_lossy(),
+    }))
 }
 
 // === Submit Transaction ===
