@@ -57,6 +57,16 @@ pub struct TaskToolExecutor {
     /// Set to true when the agent explicitly declares no file changes are
     /// required for this task (via `no_changes_needed` in `task_done` input).
     pub no_changes_needed: Arc<Mutex<bool>>,
+    /// Rolling counters for recent tool call outcomes (success / error).
+    pub recent_tool_outcomes: Arc<Mutex<RecentToolOutcomes>>,
+}
+
+/// Tracks a rolling window of tool call success/error outcomes.
+#[derive(Debug, Default)]
+pub struct RecentToolOutcomes {
+    pub total: usize,
+    pub errors: usize,
+    pub last_command_failed: bool,
 }
 
 #[async_trait]
@@ -132,6 +142,16 @@ impl AgentToolExecutor for TaskToolExecutor {
                 _ => {
                     if let Some(result) = delegated_iter.next() {
                         self.emit_tool_status(tc, &result);
+                        {
+                            let mut outcomes = self.recent_tool_outcomes.lock().await;
+                            outcomes.total += 1;
+                            if result.is_error {
+                                outcomes.errors += 1;
+                            }
+                            if tc.name == "run_command" {
+                                outcomes.last_command_failed = result.is_error;
+                            }
+                        }
                         results.push(result);
                     }
                 }
@@ -278,6 +298,16 @@ impl TaskToolExecutor {
     ) {
         self.extract_notes_and_follow_ups(tc).await;
 
+        if let Some(error_prompt) = self.check_pervasive_errors().await {
+            results.push(ToolCallResult {
+                tool_use_id: tc.id.clone(),
+                content: error_prompt,
+                is_error: true,
+                stop_loop: false,
+            });
+            return;
+        }
+
         if let Some(review_prompt) = self.check_self_review().await {
             results.push(ToolCallResult {
                 tool_use_id: tc.id.clone(),
@@ -367,6 +397,31 @@ impl TaskToolExecutor {
         {
             *self.no_changes_needed.lock().await = true;
         }
+    }
+
+    async fn check_pervasive_errors(&self) -> Option<String> {
+        let outcomes = self.recent_tool_outcomes.lock().await;
+        if outcomes.last_command_failed {
+            return Some(
+                "ERROR: The last run_command failed (non-zero exit code). \
+                 Your build or test is broken. Fix the errors before completing the task."
+                    .to_string(),
+            );
+        }
+        let min_calls = 6;
+        let error_threshold = 0.7;
+        if outcomes.total >= min_calls {
+            let error_ratio = outcomes.errors as f64 / outcomes.total as f64;
+            if error_ratio >= error_threshold {
+                return Some(format!(
+                    "ERROR: {}/{} recent tool calls returned errors ({:.0}% failure rate). \
+                     The task is likely incomplete. Review the errors, fix the underlying \
+                     issue, then try completing again.",
+                    outcomes.errors, outcomes.total, error_ratio * 100.0,
+                ));
+            }
+        }
+        None
     }
 
     async fn check_self_review(&self) -> Option<String> {
@@ -594,6 +649,7 @@ mod tests {
             self_review: Default::default(),
             event_tx: None,
             no_changes_needed: Default::default(),
+            recent_tool_outcomes: Default::default(),
         }
     }
 
@@ -726,6 +782,98 @@ mod tests {
         executor.merge_into_result(&mut result).await;
 
         assert!(result.no_changes_needed);
+    }
+
+    // ------------------------------------------------------------------
+    // pervasive error guard tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn task_done_rejects_when_last_command_failed() {
+        let executor = make_executor();
+        {
+            let mut ops = executor.tracked_file_ops.lock().await;
+            ops.push(FileOp::Create {
+                path: "src/main.rs".to_string(),
+                content: "fn main() {}".to_string(),
+            });
+        }
+        {
+            let mut sr = executor.self_review.lock().await;
+            sr.record_write("src/main.rs");
+            sr.record_read("src/main.rs");
+        }
+        {
+            let mut outcomes = executor.recent_tool_outcomes.lock().await;
+            outcomes.total = 5;
+            outcomes.errors = 1;
+            outcomes.last_command_failed = true;
+        }
+        let calls = [task_done_call("all done")];
+        let results = executor.execute(&calls).await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_error);
+        assert!(!results[0].stop_loop);
+        assert!(results[0].content.contains("run_command failed"));
+    }
+
+    #[tokio::test]
+    async fn task_done_rejects_when_error_ratio_high() {
+        let executor = make_executor();
+        {
+            let mut ops = executor.tracked_file_ops.lock().await;
+            ops.push(FileOp::Create {
+                path: "src/main.rs".to_string(),
+                content: "fn main() {}".to_string(),
+            });
+        }
+        {
+            let mut sr = executor.self_review.lock().await;
+            sr.record_write("src/main.rs");
+            sr.record_read("src/main.rs");
+        }
+        {
+            let mut outcomes = executor.recent_tool_outcomes.lock().await;
+            outcomes.total = 10;
+            outcomes.errors = 8;
+            outcomes.last_command_failed = false;
+        }
+        let calls = [task_done_call("done")];
+        let results = executor.execute(&calls).await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_error);
+        assert!(results[0].content.contains("failure rate"));
+    }
+
+    #[tokio::test]
+    async fn task_done_accepts_when_errors_low() {
+        let executor = make_executor();
+        {
+            let mut ops = executor.tracked_file_ops.lock().await;
+            ops.push(FileOp::Create {
+                path: "src/main.rs".to_string(),
+                content: "fn main() {}".to_string(),
+            });
+        }
+        {
+            let mut sr = executor.self_review.lock().await;
+            sr.record_write("src/main.rs");
+            sr.record_read("src/main.rs");
+        }
+        {
+            let mut outcomes = executor.recent_tool_outcomes.lock().await;
+            outcomes.total = 10;
+            outcomes.errors = 2;
+            outcomes.last_command_failed = false;
+        }
+        let calls = [task_done_call("done")];
+        let results = executor.execute(&calls).await;
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].is_error);
+        assert!(results[0].stop_loop);
     }
 
     // ------------------------------------------------------------------

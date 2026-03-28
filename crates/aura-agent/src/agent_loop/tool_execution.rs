@@ -103,6 +103,14 @@ pub(super) async fn handle_tool_use(
     emit_tool_results(event_tx, &all_results, &tool_calls);
 
     let should_stop = all_results.iter().any(|r| r.stop_loop);
+
+    let all_errors = !all_results.is_empty() && all_results.iter().all(|r| r.is_error);
+    if all_errors {
+        state.consecutive_all_error_iterations += 1;
+    } else {
+        state.consecutive_all_error_iterations = 0;
+    }
+
     push_tool_result_message_with_context(&mut state.messages, all_results, side_messages);
 
     if should_stop {
@@ -111,6 +119,27 @@ pub(super) async fn handle_tool_use(
 
     if is_stalled {
         handle_stall(event_tx, state);
+        return true;
+    }
+
+    if state.consecutive_all_error_iterations
+        >= crate::constants::CONSECUTIVE_ERROR_ITERATIONS_LIMIT
+    {
+        let msg = format!(
+            "CRITICAL: All tool calls have returned errors for {} consecutive iterations. \
+             The agent appears stuck. Stopping to prevent waste.",
+            state.consecutive_all_error_iterations
+        );
+        helpers::append_warning(&mut state.messages, &msg);
+        streaming::emit(
+            event_tx,
+            AgentLoopEvent::Error {
+                code: "consecutive_errors".to_string(),
+                message: msg,
+                recoverable: false,
+            },
+        );
+        state.result.stalled = true;
         return true;
     }
 
@@ -449,6 +478,8 @@ fn track_tool_effects(
                     any_write_success = true;
                     *had_any_write = true;
                 }
+            } else if exec_result.is_error {
+                blocking_ctx.on_malformed_write();
             }
         }
 
@@ -467,10 +498,12 @@ fn check_stall_detection(
 ) -> bool {
     let mut write_targets = HashSet::new();
     let mut any_write_success = false;
+    let mut writes_attempted = false;
 
     for exec_result in executed {
         if let Some(tool) = to_execute.iter().find(|t| t.id == exec_result.tool_use_id) {
             if helpers::is_write_tool(&tool.name) {
+                writes_attempted = true;
                 if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
                     write_targets.insert(path.to_string());
                     if !exec_result.is_error {
@@ -481,7 +514,7 @@ fn check_stall_detection(
         }
     }
 
-    let stalled = stall_detector.update(&write_targets, any_write_success);
+    let stalled = stall_detector.update(&write_targets, any_write_success, writes_attempted);
     if stalled {
         warn!(
             streak = stall_detector.streak(),

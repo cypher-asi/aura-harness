@@ -83,3 +83,6 @@ pub const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "delete_file"];
 
 /// Tools that run commands.
 pub const COMMAND_TOOLS: &[&str] = &["run_command"];
+
+/// Consecutive iterations where every tool call errors before forcing a stop.
+pub const CONSECUTIVE_ERROR_ITERATIONS_LIMIT: usize = 5;

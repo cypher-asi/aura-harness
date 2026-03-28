@@ -70,6 +70,10 @@ pub struct AgentLoopConfig {
     pub model: String,
     /// JWT auth token for proxy routing.
     pub auth_token: Option<String>,
+    /// Tool names the user wants prioritized for the current turn.
+    /// On the first iteration, tools are filtered to this set and
+    /// `tool_choice` is set to force tool usage.
+    pub tool_hints: Option<Vec<String>>,
 }
 
 impl Default for AgentLoopConfig {
@@ -91,6 +95,7 @@ impl Default for AgentLoopConfig {
             system_prompt: String::new(),
             model: aura_core::DEFAULT_MODEL.to_string(),
             auth_token: None,
+            tool_hints: None,
         }
     }
 }
@@ -198,7 +203,7 @@ impl AgentLoop {
             state.begin_iteration(&self.config, iteration);
             context::compact_if_needed(&self.config, &mut state);
 
-            let request = state.build_request(&self.config, &tools);
+            let request = state.build_request(&self.config, &tools, iteration);
             let response = match self
                 .call_model(
                     provider,
@@ -269,6 +274,8 @@ pub(crate) struct LoopState {
     pub(crate) last_input_tokens: Option<u64>,
     pub(crate) messages: Vec<Message>,
     pub(crate) build_baseline: Option<BuildBaseline>,
+    /// Consecutive iterations where every tool call returned an error.
+    pub(crate) consecutive_all_error_iterations: usize,
 }
 
 impl LoopState {
@@ -289,6 +296,7 @@ impl LoopState {
             last_input_tokens: None,
             messages,
             build_baseline: None,
+            consecutive_all_error_iterations: 0,
         }
     }
 
@@ -307,10 +315,30 @@ impl LoopState {
         }
     }
 
-    fn build_request(&self, config: &AgentLoopConfig, tools: &[ToolDefinition]) -> ModelRequest {
+    fn build_request(&self, config: &AgentLoopConfig, tools: &[ToolDefinition], iteration: usize) -> ModelRequest {
+        let (effective_tools, tool_choice) = match (&config.tool_hints, iteration) {
+            (Some(hints), 0) if !hints.is_empty() => {
+                let filtered: Vec<_> = tools
+                    .iter()
+                    .filter(|t| hints.iter().any(|h| h == &t.name))
+                    .cloned()
+                    .collect();
+                if filtered.is_empty() {
+                    (tools.to_vec(), aura_reasoner::ToolChoice::Auto)
+                } else if filtered.len() == 1 {
+                    let name = filtered[0].name.clone();
+                    (filtered, aura_reasoner::ToolChoice::Tool { name })
+                } else {
+                    (filtered, aura_reasoner::ToolChoice::Required)
+                }
+            }
+            _ => (tools.to_vec(), aura_reasoner::ToolChoice::Auto),
+        };
+
         ModelRequest::builder(&config.model, &config.system_prompt)
             .messages(self.messages.clone())
-            .tools(tools.to_vec())
+            .tools(effective_tools)
+            .tool_choice(tool_choice)
             .max_tokens(self.thinking_budget)
             .auth_token(config.auth_token.clone())
             .build()

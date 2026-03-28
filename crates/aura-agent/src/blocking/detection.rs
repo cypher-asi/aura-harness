@@ -26,6 +26,8 @@ pub struct BlockingContext {
     pub(crate) exploration_count: usize,
     /// Exploration allowance (may be extended on successful writes).
     pub(crate) exploration_allowance: usize,
+    /// Count of write tool calls that had no extractable path (malformed args).
+    pub(crate) malformed_write_count: usize,
 }
 
 impl BlockingContext {
@@ -62,6 +64,11 @@ impl BlockingContext {
             self.write_cooldowns
                 .insert(path.to_string(), WRITE_COOLDOWN_ITERATIONS);
         }
+    }
+
+    /// Record a write tool call with missing/invalid path.
+    pub(crate) fn on_malformed_write(&mut self) {
+        self.malformed_write_count += 1;
     }
 
     /// Record a command result (success or failure).
@@ -105,6 +112,12 @@ pub fn detect_all_blocked(
     ctx: &BlockingContext,
     read_guard: &ReadGuardState,
 ) -> BlockCheckResult {
+    if let Some(result) = detect_missing_required_args(tool) {
+        if result.blocked {
+            return result;
+        }
+    }
+
     if let Some(result) = detect_blocked_writes(tool, ctx) {
         if result.blocked {
             return result;
@@ -148,6 +161,23 @@ pub fn detect_all_blocked(
     }
 
     BlockCheckResult::allowed()
+}
+
+/// Detector 0: Block write/command tools that are missing required arguments.
+///
+/// When a model emits a tool call with empty input `{}`, path-based detectors
+/// all return `None` (inapplicable) instead of blocking, letting the call
+/// through. This detector catches that case upfront.
+fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult> {
+    if WRITE_TOOLS.contains(&tool.name.as_str()) {
+        if extract_path(tool).is_none() {
+            return Some(BlockCheckResult::blocked(format!(
+                "`{}` requires a `path` argument. Provide the file path to operate on.",
+                tool.name
+            )));
+        }
+    }
+    None
 }
 
 fn extract_path(tool: &ToolCallInfo) -> Option<String> {
@@ -432,6 +462,51 @@ mod tests {
         assert!(!is_shell_read_cmd("cargo build"));
         assert!(!is_shell_read_cmd("ls -la"));
         assert!(!is_shell_read_cmd("npm install"));
+    }
+
+    #[test]
+    fn test_detect_missing_args_blocks_write_file_without_path() {
+        let tool = make_tool("write_file", serde_json::json!({}));
+        let result = detect_missing_required_args(&tool).unwrap();
+        assert!(result.blocked);
+        assert!(result.recovery_message.unwrap().contains("requires a `path`"));
+    }
+
+    #[test]
+    fn test_detect_missing_args_blocks_edit_file_without_path() {
+        let tool = make_tool("edit_file", serde_json::json!({}));
+        let result = detect_missing_required_args(&tool).unwrap();
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn test_detect_missing_args_blocks_delete_file_without_path() {
+        let tool = make_tool("delete_file", serde_json::json!({}));
+        let result = detect_missing_required_args(&tool).unwrap();
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn test_detect_missing_args_allows_write_file_with_path() {
+        let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
+        let result = detect_missing_required_args(&tool);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_missing_args_skips_non_write_tools() {
+        let tool = make_tool("read_file", serde_json::json!({}));
+        let result = detect_missing_required_args(&tool);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_all_blocked_catches_empty_args_write() {
+        let ctx = BlockingContext::new(12);
+        let read_guard = ReadGuardState::default();
+        let tool = make_tool("delete_file", serde_json::json!({}));
+        let result = detect_all_blocked(&tool, &ctx, &read_guard);
+        assert!(result.blocked);
     }
 
     #[test]

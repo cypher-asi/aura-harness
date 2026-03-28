@@ -244,6 +244,7 @@ impl Automaton for TaskRunAutomaton {
             self_review: Default::default(),
             event_tx: Some(event_tx.clone()),
             no_changes_needed: Default::default(),
+            recent_tool_outcomes: Default::default(),
         };
 
         let result = self
