@@ -336,6 +336,8 @@ impl Automaton for DevLoopAutomaton {
                     output_tokens: exec.output_tokens,
                 });
 
+                commit_and_push(ctx, &task.id).await;
+
                 info!(task_id = %task.id, title = %task.title, "Task completed successfully");
             }
             Err(e) => {
@@ -655,6 +657,63 @@ pub(crate) fn forward_agent_event(
         _ => return,
     };
     let _ = tx.send(automaton_event);
+}
+
+/// Commit staged changes and push to the Orbit remote if the automaton config
+/// includes `git_repo_url`. Called after each successful task completion.
+pub(super) async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
+    let workspace = match ctx.workspace_root.as_ref() {
+        Some(ws) => ws.to_string_lossy().to_string(),
+        None => return,
+    };
+
+    if !aura_agent::git::is_git_repo(&workspace) {
+        return;
+    }
+
+    let commit_msg = format!("task({}): completed", task_id);
+    let sha = match aura_agent::git::git_commit(&workspace, &commit_msg).await {
+        Ok(Some(sha)) => sha,
+        Ok(None) => return, // nothing to commit
+        Err(e) => {
+            warn!(task_id, error = %e, "auto-commit after task completion failed");
+            return;
+        }
+    };
+
+    ctx.emit(AutomatonEvent::GitCommitted {
+        task_id: task_id.to_string(),
+        commit_sha: sha,
+    });
+
+    let git_repo_url = ctx.config.get("git_repo_url").and_then(|v| v.as_str());
+    let git_branch = ctx
+        .config
+        .get("git_branch")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main");
+    let auth_token = ctx.config.get("auth_token").and_then(|v| v.as_str());
+
+    if let (Some(repo_url), Some(jwt)) = (git_repo_url, auth_token) {
+        match aura_agent::git::git_push(&workspace, repo_url, git_branch, jwt).await {
+            Ok(commits) => {
+                let commit_values: Vec<serde_json::Value> = commits
+                    .iter()
+                    .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
+                    .collect();
+                ctx.emit(AutomatonEvent::GitPushed {
+                    task_id: task_id.to_string(),
+                    repo: repo_url.to_string(),
+                    branch: git_branch.to_string(),
+                    commits: commit_values,
+                });
+                info!(task_id, branch = git_branch, "auto-pushed to orbit");
+            }
+            Err(e) => {
+                warn!(task_id, error = %e, "auto-push to orbit failed");
+            }
+        }
+    }
 }
 
 struct NoOpToolExecutor;

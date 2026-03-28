@@ -200,6 +200,8 @@ impl AutomatonController for AutomatonBridge {
         workspace_root: Option<PathBuf>,
         auth_token: Option<String>,
         model: Option<String>,
+        git_repo_url: Option<String>,
+        git_branch: Option<String>,
     ) -> Result<String, String> {
         if let Some(entry) = self.project_handles.get(project_id) {
             let (ref id, ref handle) = *entry;
@@ -232,6 +234,9 @@ impl AutomatonController for AutomatonBridge {
 
         let config = serde_json::json!({
             "project_id": project_id,
+            "git_repo_url": git_repo_url,
+            "git_branch": git_branch,
+            "auth_token": auth_token.as_deref(),
         });
 
         let (handle, event_rx) = self
@@ -289,6 +294,8 @@ impl AutomatonController for AutomatonBridge {
         workspace_root: Option<PathBuf>,
         auth_token: Option<String>,
         model: Option<String>,
+        git_repo_url: Option<String>,
+        git_branch: Option<String>,
     ) -> Result<String, String> {
         let domain = self.domain_with_jwt(auth_token.as_deref());
         let effective_workspace = workspace_root.clone();
@@ -311,6 +318,9 @@ impl AutomatonController for AutomatonBridge {
         let config = serde_json::json!({
             "project_id": project_id,
             "task_id": task_id,
+            "git_repo_url": git_repo_url,
+            "git_branch": git_branch,
+            "auth_token": auth_token.as_deref(),
         });
 
         let (handle, event_rx) = self

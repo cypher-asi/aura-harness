@@ -21,6 +21,8 @@ use crate::events::AutomatonEvent;
 use crate::runtime::{Automaton, TickOutcome};
 use crate::schedule::Schedule;
 
+use super::dev_loop::commit_and_push;
+
 pub struct TaskRunAutomaton {
     domain: Arc<dyn DomainApi>,
     provider: Arc<dyn ModelProvider>,
@@ -301,6 +303,8 @@ impl TaskRunAutomaton {
                     input_tokens: exec.input_tokens,
                     output_tokens: exec.output_tokens,
                 });
+
+                commit_and_push(ctx, task_id).await;
             }
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");

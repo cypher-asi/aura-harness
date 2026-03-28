@@ -31,6 +31,8 @@ pub trait AutomatonController: Send + Sync {
         workspace_root: Option<PathBuf>,
         auth_token: Option<String>,
         model: Option<String>,
+        git_repo_url: Option<String>,
+        git_branch: Option<String>,
     ) -> Result<String, String>;
 
     /// Pause the running dev-loop for `project_id`.
@@ -48,6 +50,8 @@ pub trait AutomatonController: Send + Sync {
         workspace_root: Option<PathBuf>,
         auth_token: Option<String>,
         model: Option<String>,
+        git_repo_url: Option<String>,
+        git_branch: Option<String>,
     ) -> Result<String, String>;
 }
 
@@ -113,6 +117,8 @@ impl Tool for StartDevLoopTool {
                 self.workspace_root.clone(),
                 self.auth_token.clone(),
                 model,
+                None,
+                None,
             )
             .await
         {
@@ -282,6 +288,8 @@ impl Tool for RunTaskTool {
                 self.workspace_root.clone(),
                 self.auth_token.clone(),
                 model,
+                None,
+                None,
             )
             .await
         {

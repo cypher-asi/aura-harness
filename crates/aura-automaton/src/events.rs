@@ -117,6 +117,18 @@ pub enum AutomatonEvent {
         files_deleted: u32,
     },
 
+    // Git
+    GitCommitted {
+        task_id: String,
+        commit_sha: String,
+    },
+    GitPushed {
+        task_id: String,
+        repo: String,
+        branch: String,
+        commits: Vec<serde_json::Value>,
+    },
+
     // Session
     SessionRolledOver {
         old_session_id: String,

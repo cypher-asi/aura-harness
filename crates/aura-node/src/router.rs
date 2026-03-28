@@ -427,6 +427,10 @@ struct AutomatonStartRequest {
     workspace_root: Option<String>,
     #[serde(default)]
     task_id: Option<String>,
+    #[serde(default)]
+    git_repo_url: Option<String>,
+    #[serde(default)]
+    git_branch: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -475,6 +479,8 @@ async fn automaton_start_handler(
                 workspace_root,
                 auth_token,
                 req.model,
+                req.git_repo_url,
+                req.git_branch,
             )
             .await
     } else {
@@ -484,6 +490,8 @@ async fn automaton_start_handler(
                 workspace_root,
                 auth_token,
                 req.model,
+                req.git_repo_url,
+                req.git_branch,
             )
             .await
     }
