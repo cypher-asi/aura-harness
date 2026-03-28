@@ -202,4 +202,14 @@ mod tests {
         let result = fs_find(&sandbox, "[invalid", None, 200);
         assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
     }
+
+    #[test]
+    fn test_fs_find_workspace_root_alias() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("hello.rs"), "fn main() {}").unwrap();
+
+        let result = fs_find(&sandbox, "*.rs", Some("/"), 200).unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(output.contains("hello.rs"));
+    }
 }
