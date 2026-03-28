@@ -302,7 +302,8 @@ fn start_turn(
     };
     let kernel_executor = KernelToolExecutor::new(executor_router, session.agent_id, workspace);
 
-    let config = session.agent_loop_config();
+    let mut config = session.agent_loop_config();
+    config.tool_hints = msg.tool_hints;
     let agent_loop = AgentLoop::new(config);
 
     let tools = session.tool_definitions.clone();

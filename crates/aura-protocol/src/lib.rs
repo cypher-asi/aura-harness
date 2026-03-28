@@ -84,6 +84,11 @@ pub struct SessionInit {
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct UserMessage {
     pub content: String,
+    /// Optional list of tool names the user wants prioritized for this message.
+    /// When set, the agent loop will filter tools and set `tool_choice` on the
+    /// first iteration to explicitly direct the model toward these tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_hints: Option<Vec<String>>,
 }
 
 /// Payload for `approval_response`.

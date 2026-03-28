@@ -163,11 +163,12 @@ pub fn detect_all_blocked(
     BlockCheckResult::allowed()
 }
 
-/// Detector 0: Block write/command tools that are missing required arguments.
+/// Detector 0: Block tools that are missing required arguments.
 ///
-/// When a model emits a tool call with empty input `{}`, path-based detectors
+/// When a model emits a tool call with empty input `{}`, downstream detectors
 /// all return `None` (inapplicable) instead of blocking, letting the call
-/// through. This detector catches that case upfront.
+/// through to the executor where it fails and disrupts stall detection.
+/// This detector catches that case upfront for all tool families.
 fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult> {
     if WRITE_TOOLS.contains(&tool.name.as_str()) {
         if extract_path(tool).is_none() {
@@ -175,6 +176,27 @@ fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult>
                 "`{}` requires a `path` argument. Provide the file path to operate on.",
                 tool.name
             )));
+        }
+    }
+    if COMMAND_TOOLS.contains(&tool.name.as_str()) {
+        let has_command = tool
+            .input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty());
+        if !has_command {
+            return Some(BlockCheckResult::blocked(format!(
+                "`{}` requires a `command` argument. Provide the shell command to execute.",
+                tool.name
+            )));
+        }
+    }
+    if EXPLORATION_TOOLS.contains(&tool.name.as_str()) && tool.name == "read_file" {
+        if extract_path(tool).is_none() {
+            return Some(BlockCheckResult::blocked(
+                "`read_file` requires a `path` argument. Provide the file path to read."
+                    .to_string(),
+            ));
         }
     }
     None
@@ -494,8 +516,37 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_missing_args_skips_non_write_tools() {
+    fn test_detect_missing_args_blocks_run_command_without_command() {
+        let tool = make_tool("run_command", serde_json::json!({}));
+        let result = detect_missing_required_args(&tool).unwrap();
+        assert!(result.blocked);
+        assert!(result.recovery_message.unwrap().contains("requires a `command`"));
+    }
+
+    #[test]
+    fn test_detect_missing_args_blocks_run_command_with_empty_command() {
+        let tool = make_tool("run_command", serde_json::json!({"command": "  "}));
+        let result = detect_missing_required_args(&tool).unwrap();
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn test_detect_missing_args_allows_run_command_with_command() {
+        let tool = make_tool("run_command", serde_json::json!({"command": "cargo build"}));
+        let result = detect_missing_required_args(&tool);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_missing_args_blocks_read_file_without_path() {
         let tool = make_tool("read_file", serde_json::json!({}));
+        let result = detect_missing_required_args(&tool).unwrap();
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn test_detect_missing_args_skips_unrelated_tools() {
+        let tool = make_tool("list_files", serde_json::json!({}));
         let result = detect_missing_required_args(&tool);
         assert!(result.is_none());
     }
