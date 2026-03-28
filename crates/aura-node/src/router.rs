@@ -63,6 +63,7 @@ impl Clone for RouterState {
 pub fn create_router(state: RouterState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
+        .route("/api/files", get(list_files_handler))
         .route("/tx", post(submit_tx_handler))
         .route("/agents/:agent_id/head", get(get_head_handler))
         .route("/agents/:agent_id/record", get(scan_record_handler))
@@ -104,6 +105,110 @@ async fn health_handler() -> impl IntoResponse {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION")
     }))
+}
+
+// === Files ===
+
+const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".next", "dist", "build", ".svn", ".hg", "vendor"];
+
+#[derive(Debug, Deserialize)]
+struct ListFilesQuery {
+    #[serde(default = "default_files_path")]
+    path: String,
+    #[serde(default = "default_files_depth")]
+    depth: usize,
+}
+
+fn default_files_path() -> String { ".".into() }
+fn default_files_depth() -> usize { 3 }
+
+#[derive(Debug, Serialize)]
+struct FileDirEntry {
+    name: String,
+    path: String,
+    is_dir: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    children: Option<Vec<FileDirEntry>>,
+}
+
+fn walk_directory(base: &std::path::Path, rel: &std::path::Path, depth: usize, max_depth: usize) -> Vec<FileDirEntry> {
+    if depth >= max_depth {
+        return Vec::new();
+    }
+    let abs = base.join(rel);
+    let Ok(read_dir) = std::fs::read_dir(&abs) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+
+    for entry in read_dir.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        let entry_rel = rel.join(&name);
+        if is_dir {
+            if !IGNORED_DIRS.contains(&name.as_str()) {
+                dirs.push((name, entry_rel));
+            }
+        } else {
+            files.push((name, entry_rel));
+        }
+    }
+
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut entries = Vec::with_capacity(dirs.len() + files.len());
+    for (name, entry_rel) in dirs {
+        let children = walk_directory(base, &entry_rel, depth + 1, max_depth);
+        entries.push(FileDirEntry {
+            name,
+            path: entry_rel.to_string_lossy().into_owned().replace('\\', "/"),
+            is_dir: true,
+            children: Some(children),
+        });
+    }
+    for (name, entry_rel) in files {
+        entries.push(FileDirEntry {
+            name,
+            path: entry_rel.to_string_lossy().into_owned().replace('\\', "/"),
+            is_dir: false,
+            children: None,
+        });
+    }
+    entries
+}
+
+async fn list_files_handler(
+    State(state): State<RouterState>,
+    Query(query): Query<ListFilesQuery>,
+) -> impl IntoResponse {
+    let workspaces = state.config.workspaces_path();
+    let depth = query.depth.min(20);
+
+    let base = if query.path == "." || query.path.is_empty() {
+        workspaces.clone()
+    } else {
+        let candidate = workspaces.join(&query.path);
+        if !candidate.starts_with(&workspaces) {
+            return Json(serde_json::json!({ "ok": false, "error": "path escapes workspace" }));
+        }
+        candidate
+    };
+
+    if !base.is_dir() {
+        return Json(serde_json::json!({ "ok": false, "error": "path not found" }));
+    }
+
+    let rel = std::path::PathBuf::from(".");
+    let entries = tokio::task::spawn_blocking(move || walk_directory(&base, &rel, 0, depth))
+        .await
+        .unwrap_or_default();
+
+    Json(serde_json::json!({ "ok": true, "entries": entries }))
 }
 
 // === Submit Transaction ===
@@ -302,7 +407,10 @@ async fn automaton_start_handler(
                 .map(String::from)
         });
 
-    let workspace_root = req.workspace_root.map(std::path::PathBuf::from);
+    let workspace_root = req.workspace_root.map(|s| {
+        let path = std::path::PathBuf::from(s);
+        state.config.resolve_project_path(&path)
+    });
 
     let automaton_id = if let Some(task_id) = req.task_id {
         bridge
@@ -444,6 +552,7 @@ async fn ws_upgrade_handler(
         catalog: state.catalog.clone(),
         domain_api: state.domain_api.clone(),
         automaton_controller: state.automaton_controller.clone(),
+        project_base: state.config.project_base.clone(),
     };
     ws.on_upgrade(move |socket| handle_ws_connection(socket, ctx))
 }

@@ -7,6 +7,12 @@ use std::path::PathBuf;
 pub struct NodeConfig {
     /// Data directory for `RocksDB` and workspaces
     pub data_dir: PathBuf,
+    /// Base directory for project workspaces on remote VMs.
+    /// When set (e.g. `/home/aura`), incoming `project_path` / `workspace_root`
+    /// values are remapped to `{project_base}/{slug}` where slug is the last
+    /// path component of the incoming path.  When `None` paths pass through
+    /// unchanged (local development).
+    pub project_base: Option<PathBuf>,
     /// HTTP server bind address
     pub bind_addr: String,
     /// Enable sync writes to `RocksDB`
@@ -35,6 +41,7 @@ impl Default for NodeConfig {
     fn default() -> Self {
         Self {
             data_dir: PathBuf::from("./aura_data"),
+            project_base: None,
             bind_addr: "127.0.0.1:8080".to_string(),
             sync_writes: false,
             record_window_size: 50,
@@ -100,6 +107,11 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
             config.aura_network_url = val;
         }
+        if let Ok(val) = std::env::var("AURA_PROJECT_BASE") {
+            if !val.is_empty() {
+                config.project_base = Some(PathBuf::from(val));
+            }
+        }
         config
     }
 
@@ -114,6 +126,24 @@ impl NodeConfig {
     pub fn workspaces_path(&self) -> PathBuf {
         self.data_dir.join("workspaces")
     }
+
+    /// Remap an incoming project path through `project_base` when configured.
+    ///
+    /// Extracts the last path component (the project slug) and returns
+    /// `{project_base}/{slug}`. When `project_base` is `None` the path passes
+    /// through unchanged.
+    #[must_use]
+    pub fn resolve_project_path(&self, incoming: &std::path::Path) -> PathBuf {
+        if let Some(ref base) = self.project_base {
+            let slug = incoming
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("default");
+            base.join(slug)
+        } else {
+            incoming.to_path_buf()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -126,7 +156,9 @@ mod tests {
 
     fn clear_node_env_vars() {
         std::env::remove_var("DATA_DIR");
+        std::env::remove_var("AURA_DATA_DIR");
         std::env::remove_var("BIND_ADDR");
+        std::env::remove_var("AURA_LISTEN_ADDR");
         std::env::remove_var("SYNC_WRITES");
         std::env::remove_var("RECORD_WINDOW_SIZE");
         std::env::remove_var("REASONER_URL");
@@ -137,6 +169,7 @@ mod tests {
         std::env::remove_var("ORBIT_URL");
         std::env::remove_var("AURA_STORAGE_URL");
         std::env::remove_var("AURA_NETWORK_URL");
+        std::env::remove_var("AURA_PROJECT_BASE");
     }
 
     #[test]
@@ -155,6 +188,7 @@ mod tests {
         assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
         assert_eq!(config.aura_storage_url, "https://aura-storage.onrender.com");
         assert_eq!(config.aura_network_url, "https://aura-network.onrender.com");
+        assert!(config.project_base.is_none());
     }
 
     #[test]
@@ -379,6 +413,7 @@ mod tests {
         std::env::set_var("ORBIT_URL", "https://orbit.example.com");
         std::env::set_var("AURA_STORAGE_URL", "https://storage.example.com");
         std::env::set_var("AURA_NETWORK_URL", "https://network.example.com");
+
         let config = NodeConfig::from_env();
 
         assert_eq!(config.data_dir, PathBuf::from("/opt/aura"));
@@ -393,6 +428,64 @@ mod tests {
         assert_eq!(config.orbit_url, "https://orbit.example.com");
         assert_eq!(config.aura_storage_url, "https://storage.example.com");
         assert_eq!(config.aura_network_url, "https://network.example.com");
+
         clear_node_env_vars();
+    }
+
+    #[test]
+    fn test_project_base_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_node_env_vars();
+
+        std::env::set_var("AURA_PROJECT_BASE", "/home/aura");
+        let config = NodeConfig::from_env();
+        assert_eq!(config.project_base, Some(PathBuf::from("/home/aura")));
+
+        clear_node_env_vars();
+    }
+
+    #[test]
+    fn test_project_base_empty_string_ignored() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_node_env_vars();
+
+        std::env::set_var("AURA_PROJECT_BASE", "");
+        let config = NodeConfig::from_env();
+        assert!(config.project_base.is_none());
+
+        clear_node_env_vars();
+    }
+
+    #[test]
+    fn test_resolve_project_path_with_base() {
+        let config = NodeConfig {
+            project_base: Some(PathBuf::from("/home/aura")),
+            ..NodeConfig::default()
+        };
+        let incoming = std::path::Path::new("/state/workspaces/my-app");
+        assert_eq!(config.resolve_project_path(incoming), PathBuf::from("/home/aura/my-app"));
+    }
+
+    #[test]
+    fn test_resolve_project_path_without_base() {
+        let config = NodeConfig::default();
+        let incoming = std::path::Path::new("/state/workspaces/my-app");
+        assert_eq!(
+            config.resolve_project_path(incoming),
+            PathBuf::from("/state/workspaces/my-app")
+        );
+    }
+
+    #[test]
+    fn test_resolve_project_path_local_absolute() {
+        let config = NodeConfig {
+            project_base: Some(PathBuf::from("/home/aura")),
+            ..NodeConfig::default()
+        };
+        let incoming = std::path::Path::new("/some/deep/nested/cool-project");
+        assert_eq!(
+            config.resolve_project_path(incoming),
+            PathBuf::from("/home/aura/cool-project")
+        );
     }
 }

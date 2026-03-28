@@ -231,4 +231,6 @@ pub struct WsContext {
     pub domain_api: Option<Arc<dyn DomainApi>>,
     /// Automaton controller for dev-loop lifecycle (None when domain API unavailable).
     pub automaton_controller: Option<Arc<dyn AutomatonController>>,
+    /// Optional project base for remapping project paths (from `AURA_PROJECT_BASE`).
+    pub project_base: Option<PathBuf>,
 }

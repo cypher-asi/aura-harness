@@ -199,6 +199,14 @@ fn handle_session_init(
         return;
     }
 
+    if let (Some(ref base), Some(ref pp)) = (&ctx.project_base, &session.project_path) {
+        let slug = pp
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("default");
+        session.project_path = Some(base.join(slug));
+    }
+
     session.tool_definitions =
         ctx.catalog.visible_tools(ToolProfile::Agent, &ctx.tool_config);
 
