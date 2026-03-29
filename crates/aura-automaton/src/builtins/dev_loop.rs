@@ -674,9 +674,19 @@ pub(super) async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
     let commit_msg = format!("task({}): completed", task_id);
     let sha = match aura_agent::git::git_commit(&workspace, &commit_msg).await {
         Ok(Some(sha)) => sha,
-        Ok(None) => return, // nothing to commit
+        Ok(None) => {
+            ctx.emit(AutomatonEvent::GitCommitFailed {
+                task_id: task_id.to_string(),
+                reason: "No changes to commit".to_string(),
+            });
+            return;
+        }
         Err(e) => {
             warn!(task_id, error = %e, "auto-commit after task completion failed");
+            ctx.emit(AutomatonEvent::GitCommitFailed {
+                task_id: task_id.to_string(),
+                reason: format!("Commit failed: {e}"),
+            });
             return;
         }
     };
@@ -711,6 +721,10 @@ pub(super) async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
             }
             Err(e) => {
                 warn!(task_id, error = %e, "auto-push to orbit failed");
+                ctx.emit(AutomatonEvent::GitPushFailed {
+                    task_id: task_id.to_string(),
+                    reason: format!("Push failed: {e}"),
+                });
             }
         }
     }

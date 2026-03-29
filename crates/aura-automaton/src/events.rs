@@ -122,11 +122,19 @@ pub enum AutomatonEvent {
         task_id: String,
         commit_sha: String,
     },
+    GitCommitFailed {
+        task_id: String,
+        reason: String,
+    },
     GitPushed {
         task_id: String,
         repo: String,
         branch: String,
         commits: Vec<serde_json::Value>,
+    },
+    GitPushFailed {
+        task_id: String,
+        reason: String,
     },
 
     // Session
