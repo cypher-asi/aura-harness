@@ -650,7 +650,7 @@ async fn handle_automaton_ws(
     use axum::extract::ws::Message as WsMessage;
     use futures_util::{SinkExt, StreamExt};
 
-    let (mut ws_tx, _ws_rx) = socket.split();
+    let (mut ws_tx, mut ws_rx) = socket.split();
 
     let bridge = match bridge {
         Some(b) => b,
@@ -671,6 +671,20 @@ async fn handle_automaton_ws(
     };
 
     info!(automaton_id = %automaton_id, "Automaton event stream connected");
+
+    // Drain the read side so the WebSocket layer can process ping/pong
+    // and close frames. Without this the connection may be dropped by
+    // intermediaries that expect pong responses.
+    let drain_aid = automaton_id.clone();
+    let drain_handle = tokio::spawn(async move {
+        while let Some(msg) = ws_rx.next().await {
+            match msg {
+                Ok(WsMessage::Close(_)) | Err(_) => break,
+                _ => continue,
+            }
+        }
+        tracing::debug!(automaton_id = %drain_aid, "Automaton WS read side closed");
+    });
 
     loop {
         match rx.recv().await {
@@ -698,6 +712,7 @@ async fn handle_automaton_ws(
         }
     }
 
+    drain_handle.abort();
     info!(automaton_id = %automaton_id, "Automaton event stream disconnected");
 }
 

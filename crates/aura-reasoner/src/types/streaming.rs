@@ -223,7 +223,7 @@ impl StreamAccumulator {
     ///
     /// Returns error if tool use JSON is invalid.
     pub fn into_response(
-        self,
+        mut self,
         input_tokens: u64,
         latency_ms: u64,
     ) -> anyhow::Result<ModelResponse> {
@@ -232,6 +232,24 @@ impl StreamAccumulator {
         } else {
             input_tokens
         };
+
+        // Recover any in-progress tool_use that was not finalized by a
+        // ContentBlockStop (e.g. the stream was truncated). Without this
+        // the tool is silently lost and the response looks like EndTurn
+        // with no tool calls.
+        if let Some(pending) = self.current_tool_use.take() {
+            tracing::warn!(
+                tool_name = %pending.name,
+                tool_id = %pending.id,
+                json_len = pending.input_json.len(),
+                "Stream ended with an in-progress tool_use block — \
+                 recovering partial tool call"
+            );
+            self.tool_uses.push(pending);
+            if self.stop_reason.is_none() {
+                self.stop_reason = Some(StopReason::MaxTokens);
+            }
+        }
 
         let mut content_blocks = Vec::new();
 
