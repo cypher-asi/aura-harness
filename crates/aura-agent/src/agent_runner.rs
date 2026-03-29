@@ -46,6 +46,10 @@ pub struct TaskExecutionResult {
     /// required for this task. Automatons use this to distinguish legitimate
     /// no-op completions from false-positive successes.
     pub no_changes_needed: bool,
+    /// When true, the agent progressed past the exploration phase and
+    /// submitted a plan. Automatons use this to distinguish "never tried"
+    /// from "tried but was interrupted" when file_ops is empty.
+    pub reached_implementing: bool,
 }
 
 /// Suggested follow-up task from agent execution.
@@ -354,7 +358,8 @@ pub fn configure_loop_config(
     };
     let max_tokens = match complexity {
         TaskComplexity::Simple => config.task_execution_max_tokens.min(8_192),
-        _ => config.task_execution_max_tokens,
+        TaskComplexity::Complex => config.task_execution_max_tokens.max(32_768),
+        TaskComplexity::Standard => config.task_execution_max_tokens,
     };
     let max_iterations = match complexity {
         TaskComplexity::Simple => config.max_agentic_iterations.min(15),
@@ -400,6 +405,7 @@ fn finalize_loop_result(result: AgentLoopResult) -> TaskExecutionResult {
         output_tokens: result.total_output_tokens,
         files_already_applied: true,
         no_changes_needed: false,
+        reached_implementing: false,
     }
 }
 
@@ -449,7 +455,7 @@ mod tests {
         let config = AgentRunnerConfig::default();
         let loop_cfg =
             configure_loop_config(TaskComplexity::Complex, &config, 18, 3, "system".into());
-        assert_eq!(loop_cfg.max_tokens, config.task_execution_max_tokens);
+        assert_eq!(loop_cfg.max_tokens, config.task_execution_max_tokens.max(32_768));
         assert_eq!(loop_cfg.max_iterations, config.max_agentic_iterations);
     }
 

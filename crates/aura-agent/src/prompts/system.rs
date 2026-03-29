@@ -151,7 +151,9 @@ Test command: {test_cmd}
 Rules:
 - Always verify your changes compile before calling task_done
 - Use edit_file for targeted changes to existing files, write_file for new files or full rewrites
-- For new files longer than ~80-100 lines, do NOT write the entire file in one write_file call. Write a short skeleton first (e.g. module doc, imports, one small function or test), then use edit_file repeatedly to add the rest in logical chunks (one test or section at a time). This avoids output truncation.
+- CRITICAL: Create or modify ONE file per response turn. Do NOT batch multiple large write_file or edit_file calls in a single response — this risks output truncation that wastes the entire turn.
+- For new files longer than ~80 lines, write a short skeleton first (module doc, imports, one function), then use edit_file in follow-up turns to add remaining sections incrementally.
+- If a previous attempt failed with "truncated" or "no file operations completed", switch to smaller incremental edits immediately.
 - Before editing ANY existing file, you MUST read it first (via read_file or
   search_code). Never modify a file you haven't seen in this session. This
   prevents writing code that conflicts with the current file contents.

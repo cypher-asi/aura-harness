@@ -544,6 +544,8 @@ impl TaskToolExecutor {
         }
         exec.follow_up_tasks = self.follow_ups.lock().await.clone();
         exec.no_changes_needed = *self.no_changes_needed.lock().await;
+        let phase = self.task_phase.lock().await;
+        exec.reached_implementing = matches!(*phase, crate::planning::TaskPhase::Implementing { .. });
     }
 
     fn emit_text(&self, text: String) {

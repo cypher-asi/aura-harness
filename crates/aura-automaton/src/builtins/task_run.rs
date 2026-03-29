@@ -264,9 +264,14 @@ impl Automaton for TaskRunAutomaton {
             Ok(mut exec) => {
                 executor.merge_into_result(&mut exec).await;
                 if exec.file_ops.is_empty() && !exec.no_changes_needed {
-                    Err(anyhow::anyhow!(
+                    let msg = if exec.reached_implementing {
+                        "task reached implementation phase but no file operations completed \
+                         — likely truncated by max_tokens or interrupted. \
+                         On retry, use smaller incremental edits (one file per turn)."
+                    } else {
                         "task completed without any file operations — completion not verified"
-                    ))
+                    };
+                    Err(anyhow::anyhow!("{}", msg))
                 } else {
                     Ok(exec)
                 }

@@ -32,6 +32,7 @@ const STATE_LOOP_FINISHED: &str = "loop_finished";
 const STATE_TASK_QUEUE: &str = "task_queue";
 const STATE_DONE_IDS: &str = "done_ids";
 const STATE_FAILED_IDS: &str = "failed_ids";
+const STATE_FAILURE_REASONS: &str = "failure_reasons";
 const STATE_INITIALIZED: &str = "initialized";
 
 const MAX_RETRIES_PER_TASK: u32 = 2;
@@ -352,6 +353,11 @@ impl Automaton for DevLoopAutomaton {
                 failed_ids.push(task.id.clone());
                 ctx.state.set(STATE_FAILED_IDS, &failed_ids);
 
+                let mut failure_reasons: HashMap<String, String> =
+                    ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
+                failure_reasons.insert(task.id.clone(), e.to_string());
+                ctx.state.set(STATE_FAILURE_REASONS, &failure_reasons);
+
                 let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0) + 1;
                 ctx.state.set(STATE_FAILED_COUNT, &failed);
 
@@ -442,10 +448,13 @@ impl DevLoopAutomaton {
             title: &spec.title,
             markdown_contents: &spec.content,
         };
+        let failure_reasons: HashMap<String, String> =
+            ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
+        let prior_failure = failure_reasons.get(&task.id).cloned().unwrap_or_default();
         let task_info = TaskInfo {
             title: &task.title,
             description: &task.description,
-            execution_notes: "",
+            execution_notes: &prior_failure,
             files_changed: &[],
         };
         let session_info = SessionInfo {
@@ -517,10 +526,14 @@ impl DevLoopAutomaton {
             Ok(mut exec) => {
                 executor.merge_into_result(&mut exec).await;
                 if exec.file_ops.is_empty() && !exec.no_changes_needed {
-                    Err(AutomatonError::AgentExecution(
+                    let msg = if exec.reached_implementing {
+                        "task reached implementation phase but no file operations completed \
+                         — likely truncated by max_tokens or interrupted. \
+                         On retry, use smaller incremental edits (one file per turn)."
+                    } else {
                         "task completed without any file operations — completion not verified"
-                            .into(),
-                    ))
+                    };
+                    Err(AutomatonError::AgentExecution(msg.into()))
                 } else {
                     Ok(exec)
                 }
