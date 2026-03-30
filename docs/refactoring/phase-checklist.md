@@ -2,8 +2,9 @@
 
 > Generated: 2026-03-30
 >
-> This document defines the CI/test gates every refactoring phase must pass
-> and records pre-refactoring public API snapshots so regressions are visible.
+> This document preserves the refactor gate checklist and pre-refactoring API
+> snapshots used during migration. The snapshots in section 3 are historical.
+> For current crate shape, see section 2.1 below.
 
 ---
 
@@ -48,6 +49,33 @@ cargo test -p aura-automaton
 cargo test -p aura-node
 cargo test -p aura-kernel
 ```
+
+---
+
+## 2.1 Current Workspace Shape (Post-Refactor)
+
+The workspace currently contains 12 crates:
+
+```text
+aura-core
+aura-store
+aura-tools
+aura-reasoner
+aura-kernel
+aura-terminal
+aura-cli
+aura-agent
+aura-auth
+aura-automaton
+aura-node
+aura-protocol
+```
+
+Refactor outcomes reflected in codebase:
+
+- `aura-executor` was dissolved into `aura-core` + `aura-kernel`.
+- `aura-runtime`, `aura-agent-fileops`, and `aura-agent-verify` were merged into `aura-agent`.
+- `aura-session` was dissolved into binary-local session helper modules.
 
 ---
 
@@ -216,9 +244,9 @@ pub enum RuntimeError {
 
 ---
 
-## 4. Phase-by-Phase Checklist
+## 4. Historical Phase-by-Phase Checklist
 
-Mark each gate as you go. A phase is **not done** until every box is checked.
+Archived execution checklist from migration period.
 
 ### Phase 0 — Baseline verified green
 

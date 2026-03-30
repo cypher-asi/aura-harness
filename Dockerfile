@@ -11,21 +11,16 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src              src/
 COPY crates/aura-core         crates/aura-core/
 COPY crates/aura-store        crates/aura-store/
-COPY crates/aura-executor     crates/aura-executor/
 COPY crates/aura-tools        crates/aura-tools/
 COPY crates/aura-reasoner     crates/aura-reasoner/
 COPY crates/aura-kernel       crates/aura-kernel/
-COPY crates/aura-runtime      crates/aura-runtime/
 COPY crates/aura-node         crates/aura-node/
 COPY crates/aura-protocol    crates/aura-protocol/
 COPY crates/aura-terminal     crates/aura-terminal/
 COPY crates/aura-cli          crates/aura-cli/
 COPY crates/aura-agent        crates/aura-agent/
-COPY crates/aura-agent-fileops crates/aura-agent-fileops/
-COPY crates/aura-agent-verify crates/aura-agent-verify/
 COPY crates/aura-auth         crates/aura-auth/
 COPY crates/aura-automaton    crates/aura-automaton/
-COPY crates/aura-session      crates/aura-session/
 
 RUN cargo build --release --bin aura \
     && strip target/release/aura

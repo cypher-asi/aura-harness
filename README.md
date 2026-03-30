@@ -91,21 +91,16 @@ ANTHROPIC_API_KEY=your-key npm start   # listens on :3000
 |---|---|
 | `aura-core` | Shared domain types, strongly-typed IDs, hashing, serialization, and model identifiers |
 | `aura-store` | RocksDB persistence: record log, agent metadata, and inbox with atomic batch commits |
-| `aura-executor` | `Executor` trait and `ExecutorRouter` bridging deterministic kernel logic from side effects |
 | `aura-tools` | Tool registry, sandboxed filesystem and command execution, domain tool wiring |
 | `aura-reasoner` | Provider-agnostic `ModelProvider` trait: Anthropic HTTP, proxy routing, mock, retries |
 | `aura-kernel` | Deterministic single-step kernel: context, reasoning, policy, execution, record commit |
-| `aura-runtime` | Multi-step `TurnProcessor` agentic loop and `ProcessManager` for long-running commands |
+| `aura-agent` | Multi-step orchestration (`AgentLoop`, `TurnProcessor`, `ProcessManager`), task runner, and agent-level policies |
 | `aura-terminal` | Ratatui-based terminal UI library: themes, components, input handling, layout |
 | `aura-cli` | Interactive REPL with slash commands, wired to session and agent handling |
-| `aura-agent` | `AgentLoop` orchestration: blocking detection, compaction, budgets, sanitization, task runners |
-| `aura-agent-fileops` | Structured file operations, path validation, workspace mapping, edit parsing |
-| `aura-agent-verify` | Build/test verification with optional LLM-driven fix loops, snapshots, and rollback |
 | `aura-auth` | zOS login client and JWT credential store (`~/.aura/credentials.json`) for proxy mode |
 | `aura-automaton` | Automaton lifecycle, scheduling, runtime, state, and built-in automatons (chat, dev loop, etc.) |
 | `aura-node` | HTTP router, scheduler, and per-agent worker loops with single-writer guarantee |
 | `aura-protocol` | Serde types for the `/stream` WebSocket API (session init, messages, events, approvals) |
-| `aura-session` | Shared bootstrap for CLI/TUI: identity setup, auth loading, provider selection |
 | `aura-gateway-ts` | Optional Express gateway for local `/propose` LLM routing (TypeScript) |
 
 ## Project Structure
@@ -124,21 +119,16 @@ aura-harness/
   crates/
     aura-core/              # shared types, IDs, hashing
     aura-store/             # RocksDB storage backend
-    aura-executor/          # executor trait and router
     aura-tools/             # tool registry, sandboxed FS/cmd
     aura-reasoner/          # LLM provider abstraction
     aura-kernel/            # deterministic kernel
-    aura-runtime/           # turn processor, process manager
     aura-terminal/          # ratatui TUI library
     aura-cli/               # interactive REPL (separate binary)
-    aura-agent/             # agent loop orchestration
-    aura-agent-fileops/     # structured file operations
-    aura-agent-verify/      # build/test verification + fix loops
+    aura-agent/             # agent loop + runtime + file_ops + verify
     aura-auth/              # zOS login, credential store
     aura-automaton/         # automaton lifecycle and built-ins
     aura-node/              # HTTP server, scheduler, workers
     aura-protocol/          # WebSocket stream API types
-    aura-session/           # shared CLI/TUI bootstrap
   aura-gateway-ts/          # optional TypeScript gateway
     src/index.ts
     src/reasoner.ts
@@ -247,7 +237,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all --all-features
 
 # Check non-RocksDB crates (no LLVM required)
-cargo check -p aura-core -p aura-executor -p aura-reasoner
+cargo check -p aura-core -p aura-kernel -p aura-reasoner
 ```
 
 ## License
