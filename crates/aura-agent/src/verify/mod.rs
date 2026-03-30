@@ -16,7 +16,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 
-use aura_agent_fileops::FileOp;
+use crate::file_ops::FileOp;
 
 pub mod build;
 pub mod common;

@@ -50,8 +50,6 @@ members = [
     "crates/aura-terminal",
     "crates/aura-cli",
     "crates/aura-agent",
-    "crates/aura-agent-fileops",
-    "crates/aura-agent-verify",
     "crates/aura-auth",
     "crates/aura-automaton",
     "crates/aura-node",

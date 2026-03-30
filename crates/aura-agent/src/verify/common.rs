@@ -5,7 +5,7 @@ use std::path::Path;
 
 use tracing::warn;
 
-use aura_agent_fileops::{self as file_ops, FileOp};
+use crate::file_ops::{self, FileOp};
 
 use super::error_types::BuildFixAttemptRecord;
 use super::signatures::normalize_error_signature;

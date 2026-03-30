@@ -35,7 +35,7 @@ pub(crate) mod build;
 pub(crate) mod compaction;
 mod constants;
 pub mod events;
-pub(crate) use aura_agent_fileops as file_ops;
+pub(crate) mod file_ops;
 pub mod git;
 mod helpers;
 mod kernel_executor;
@@ -48,7 +48,7 @@ mod sanitize;
 pub(crate) mod self_review;
 pub(crate) mod shell_parse;
 pub mod types;
-pub(crate) use aura_agent_verify as verify;
+pub(crate) mod verify;
 
 pub mod agent_runner;
 pub(crate) mod message_conversion;

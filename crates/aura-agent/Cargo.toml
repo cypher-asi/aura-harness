@@ -19,8 +19,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures-util = { workspace = true }
 async-trait = "0.1"
-aura-agent-fileops = { path = "../aura-agent-fileops" }
-aura-agent-verify = { path = "../aura-agent-verify" }
 regex = "1"
 thiserror = { workspace = true }
 url = "2"

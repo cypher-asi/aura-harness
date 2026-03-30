@@ -160,8 +160,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aura-agent-fileops",
- "aura-agent-verify",
  "aura-core",
  "aura-kernel",
  "aura-reasoner",
@@ -177,34 +175,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "aura-agent-fileops"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "aura-agent-verify"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-agent-fileops",
- "aura-reasoner",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]

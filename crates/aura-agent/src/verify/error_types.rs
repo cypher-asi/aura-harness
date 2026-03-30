@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use aura_agent_fileops::ErrorReferences;
+use crate::file_ops::ErrorReferences;
 
 static TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"found for (?:struct|enum|trait|union) `(\w+)").expect("static regex")

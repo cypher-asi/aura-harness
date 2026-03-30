@@ -6,7 +6,7 @@ use std::path::Path;
 
 use tracing::{info, warn};
 
-use aura_agent_fileops::{self as file_ops, FileOp};
+use crate::file_ops::{self, FileOp};
 
 use super::error_types::parse_error_references;
 use super::signatures::parse_individual_error_signatures;

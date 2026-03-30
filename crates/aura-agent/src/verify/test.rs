@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use tracing::{info, warn};
 
-use aura_agent_fileops::FileOp;
+use crate::file_ops::FileOp;
 
 use super::common::apply_fix_and_record;
 use super::error_types::BuildFixAttemptRecord;
