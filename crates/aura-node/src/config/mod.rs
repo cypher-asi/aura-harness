@@ -19,10 +19,6 @@ pub struct NodeConfig {
     pub sync_writes: bool,
     /// Record window size for kernel context
     pub record_window_size: usize,
-    /// Reasoner gateway URL
-    pub reasoner_url: String,
-    /// Reasoner timeout in milliseconds
-    pub reasoner_timeout_ms: u64,
     /// Enable filesystem tools
     pub enable_fs_tools: bool,
     /// Enable command tools
@@ -45,8 +41,6 @@ impl Default for NodeConfig {
             bind_addr: "127.0.0.1:8080".to_string(),
             sync_writes: false,
             record_window_size: 50,
-            reasoner_url: "http://localhost:3000".to_string(),
-            reasoner_timeout_ms: 30_000,
             enable_fs_tools: true,
             enable_cmd_tools: false,
             allowed_commands: vec![],
@@ -75,14 +69,6 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("RECORD_WINDOW_SIZE") {
             if let Ok(n) = val.parse() {
                 config.record_window_size = n;
-            }
-        }
-        if let Ok(val) = std::env::var("REASONER_URL") {
-            config.reasoner_url = val;
-        }
-        if let Ok(val) = std::env::var("REASONER_TIMEOUT_MS") {
-            if let Ok(n) = val.parse() {
-                config.reasoner_timeout_ms = n;
             }
         }
         if let Ok(val) = std::env::var("ENABLE_FS_TOOLS") {

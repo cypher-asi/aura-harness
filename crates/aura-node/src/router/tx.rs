@@ -73,6 +73,57 @@ pub(super) async fn submit_tx_handler(
     ))
 }
 
+// === Tx Status ===
+
+#[derive(Debug, Serialize)]
+pub(super) struct TxStatusResponse {
+    tx_id: String,
+    status: String,
+}
+
+/// Check the processing status of a previously submitted transaction.
+#[instrument(skip(state))]
+pub(super) async fn tx_status_handler(
+    State(state): State<RouterState>,
+    Path((agent_id_hex, tx_id_hex)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let agent_id = AgentId::from_hex(&agent_id_hex)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
+    let tx_hash = Hash::from_hex(&tx_id_hex)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid tx_id: {e}")))?;
+
+    let head_seq = state.store.get_head_seq(agent_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {e}"),
+        )
+    })?;
+
+    let from_seq = head_seq.saturating_sub(100).max(1);
+    let entries = state
+        .store
+        .scan_record(agent_id, from_seq, 100)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Storage error: {e}"),
+            )
+        })?;
+
+    let status = if entries.iter().any(|e| e.tx.hash == tx_hash) {
+        "processed"
+    } else if state.store.has_pending_tx(agent_id).unwrap_or(false) {
+        "pending"
+    } else {
+        "unknown"
+    };
+
+    Ok(Json(TxStatusResponse {
+        tx_id: tx_id_hex,
+        status: status.to_string(),
+    }))
+}
+
 // === Get Head ===
 
 #[derive(Debug, Serialize)]

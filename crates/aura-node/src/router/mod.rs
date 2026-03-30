@@ -5,7 +5,7 @@ use crate::config::NodeConfig;
 use crate::scheduler::Scheduler;
 use crate::session::{handle_ws_connection, WsContext};
 use crate::terminal;
-use aura_core::{AgentId, Transaction, TransactionType};
+use aura_core::{AgentId, Hash, Transaction, TransactionType};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
@@ -80,6 +80,7 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/api/read-file", get(read_file_handler))
         .route("/workspace/resolve", get(resolve_workspace_handler))
         .route("/tx", post(submit_tx_handler))
+        .route("/tx/status/:agent_id/:tx_id", get(tx_status_handler))
         .route("/agents/:agent_id/head", get(get_head_handler))
         .route("/agents/:agent_id/record", get(scan_record_handler))
         .route("/ws/terminal", get(terminal_ws_handler))

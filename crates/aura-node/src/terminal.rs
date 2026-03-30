@@ -165,6 +165,7 @@ async fn bridge_pty_ws(
 ) {
     let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(256);
     let (exit_tx, mut exit_rx) = mpsc::channel::<i32>(1);
+    let (error_tx, mut error_rx) = mpsc::channel::<String>(16);
 
     tokio::task::spawn_blocking(move || {
         read_pty_loop(reader, output_tx, exit_tx);
@@ -187,6 +188,12 @@ async fn bridge_pty_ws(
                     )).await;
                     break;
                 }
+                Some(err_msg) = error_rx.recv() => {
+                    let msg = serde_json::json!({"type":"error","message": err_msg});
+                    if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     };
@@ -198,8 +205,12 @@ async fn bridge_pty_ws(
                 Message::Close(_) => break,
                 _ => continue,
             };
-            let Ok(cm) = serde_json::from_str::<ClientMsg>(&text) else {
-                continue;
+            let cm = match serde_json::from_str::<ClientMsg>(&text) {
+                Ok(cm) => cm,
+                Err(e) => {
+                    let _ = error_tx.try_send(format!("invalid JSON: {e}"));
+                    continue;
+                }
             };
             handle_inbound_frame(&cm, &mut writer, &master);
         }

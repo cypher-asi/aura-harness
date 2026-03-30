@@ -11,8 +11,6 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_LISTEN_ADDR");
     std::env::remove_var("SYNC_WRITES");
     std::env::remove_var("RECORD_WINDOW_SIZE");
-    std::env::remove_var("REASONER_URL");
-    std::env::remove_var("REASONER_TIMEOUT_MS");
     std::env::remove_var("ENABLE_FS_TOOLS");
     std::env::remove_var("ENABLE_CMD_TOOLS");
     std::env::remove_var("ALLOWED_COMMANDS");
@@ -30,8 +28,6 @@ fn test_default_config() {
     assert_eq!(config.bind_addr, "127.0.0.1:8080");
     assert!(!config.sync_writes);
     assert_eq!(config.record_window_size, 50);
-    assert_eq!(config.reasoner_url, "http://localhost:3000");
-    assert_eq!(config.reasoner_timeout_ms, 30_000);
     assert!(config.enable_fs_tools);
     assert!(!config.enable_cmd_tools);
     assert!(config.allowed_commands.is_empty());
@@ -159,34 +155,6 @@ fn test_record_window_size_parsing() {
 }
 
 #[test]
-fn test_reasoner_url_env() {
-    let _lock = ENV_LOCK.lock().unwrap();
-    clear_node_env_vars();
-
-    std::env::set_var("REASONER_URL", "http://custom:5000");
-    let config = NodeConfig::from_env();
-    assert_eq!(config.reasoner_url, "http://custom:5000");
-
-    clear_node_env_vars();
-}
-
-#[test]
-fn test_reasoner_timeout_env() {
-    let _lock = ENV_LOCK.lock().unwrap();
-    clear_node_env_vars();
-
-    std::env::set_var("REASONER_TIMEOUT_MS", "60000");
-    let config = NodeConfig::from_env();
-    assert_eq!(config.reasoner_timeout_ms, 60_000);
-
-    std::env::set_var("REASONER_TIMEOUT_MS", "not_a_number");
-    let config = NodeConfig::from_env();
-    assert_eq!(config.reasoner_timeout_ms, 30_000);
-
-    clear_node_env_vars();
-}
-
-#[test]
 fn test_bind_addr_env() {
     let _lock = ENV_LOCK.lock().unwrap();
     clear_node_env_vars();
@@ -255,8 +223,6 @@ fn test_full_env_override() {
     std::env::set_var("BIND_ADDR", "0.0.0.0:4000");
     std::env::set_var("SYNC_WRITES", "true");
     std::env::set_var("RECORD_WINDOW_SIZE", "200");
-    std::env::set_var("REASONER_URL", "http://reasoner:8080");
-    std::env::set_var("REASONER_TIMEOUT_MS", "45000");
     std::env::set_var("ENABLE_FS_TOOLS", "false");
     std::env::set_var("ENABLE_CMD_TOOLS", "true");
     std::env::set_var("ALLOWED_COMMANDS", "git,cargo,npm");
@@ -270,8 +236,6 @@ fn test_full_env_override() {
     assert_eq!(config.bind_addr, "0.0.0.0:4000");
     assert!(config.sync_writes);
     assert_eq!(config.record_window_size, 200);
-    assert_eq!(config.reasoner_url, "http://reasoner:8080");
-    assert_eq!(config.reasoner_timeout_ms, 45_000);
     assert!(!config.enable_fs_tools);
     assert!(config.enable_cmd_tools);
     assert_eq!(config.allowed_commands, vec!["git", "cargo", "npm"]);
