@@ -25,7 +25,6 @@ mod anthropic;
 mod error;
 mod mock;
 mod request;
-mod retry;
 pub mod types;
 
 pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {

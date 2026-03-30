@@ -27,11 +27,6 @@ pub(crate) fn str_field(input: &Value, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Extract and parse a required string field into a target type.
-pub(crate) fn parse_id(input: &Value, key: &str) -> Result<String, String> {
-    str_field(input, key).ok_or_else(|| format!("Missing required field: {key}"))
-}
-
 /// Extract a required string field, returning an error message on absence.
 pub(crate) fn require_str(input: &Value, key: &str) -> Result<String, String> {
     str_field(input, key).ok_or_else(|| format!("Missing required field: {key}"))

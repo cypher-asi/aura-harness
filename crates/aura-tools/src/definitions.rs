@@ -9,39 +9,6 @@
 //! crate) and keeping only individual tool schemas here.
 
 use aura_core::ToolDefinition;
-use std::sync::{Arc, LazyLock};
-
-static AGENT_TOOLS: LazyLock<Arc<[ToolDefinition]>> =
-    LazyLock::new(|| chat_tool_definitions_inner().into());
-
-static ENGINE_TOOLS: LazyLock<Arc<[ToolDefinition]>> =
-    LazyLock::new(|| engine_tool_definitions_inner().into());
-
-static MULTI_PROJECT_TOOLS: LazyLock<Arc<[ToolDefinition]>> =
-    LazyLock::new(|| multi_project_tool_definitions_inner().into());
-
-/// Return type for lazily cached tool definitions. Callers can use this
-/// as `&[ToolDefinition]` (via Deref) or convert to `Vec` cheaply.
-pub(crate) type ToolDefs = Arc<[ToolDefinition]>;
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/// Returns the full set of tools the chat agent can invoke (lazily cached).
-pub(crate) fn agent_tool_definitions() -> ToolDefs {
-    Arc::clone(&AGENT_TOOLS)
-}
-
-/// Returns engine tool definitions (lazily cached).
-pub(crate) fn engine_tool_definitions() -> ToolDefs {
-    Arc::clone(&ENGINE_TOOLS)
-}
-
-/// Returns tool definitions for multi-project agent chat (lazily cached).
-pub(crate) fn multi_project_tool_definitions() -> ToolDefs {
-    Arc::clone(&MULTI_PROJECT_TOOLS)
-}
 
 // ============================================================================
 // Helpers
@@ -219,12 +186,6 @@ fn search_tools() -> Vec<ToolDefinition> {
 // Chat agent tools
 // ============================================================================
 
-fn chat_tool_definitions_inner() -> Vec<ToolDefinition> {
-    let mut tools = core_tool_definitions();
-    tools.extend(chat_management_tools());
-    tools
-}
-
 pub(crate) fn chat_management_tools() -> Vec<ToolDefinition> {
     let mut tools = spec_tool_definitions();
     tools.extend(task_tool_definitions());
@@ -355,12 +316,6 @@ fn dev_loop_tool_definitions() -> Vec<ToolDefinition> {
 // Engine tools
 // ============================================================================
 
-fn engine_tool_definitions_inner() -> Vec<ToolDefinition> {
-    let mut tools = core_tool_definitions();
-    tools.extend(engine_specific_tools());
-    tools
-}
-
 pub(crate) fn engine_specific_tools() -> Vec<ToolDefinition> {
     vec![
         tool(
@@ -435,91 +390,12 @@ pub(crate) fn engine_specific_tools() -> Vec<ToolDefinition> {
 }
 
 // ============================================================================
-// Multi-project tools
-// ============================================================================
-
-fn multi_project_tool_definitions_inner() -> Vec<ToolDefinition> {
-    chat_tool_definitions_inner()
-        .into_iter()
-        .map(|mut td| {
-            if let Some(props) = td
-                .input_schema
-                .get_mut("properties")
-                .and_then(|p| p.as_object_mut())
-            {
-                props.insert(
-                    "project_id".to_string(),
-                    serde_json::json!({
-                        "type": "string",
-                        "description": "The project ID to operate on (required for multi-project context)"
-                    }),
-                );
-            }
-            if let Some(req) = td.input_schema.get_mut("required") {
-                if let Some(arr) = req.as_array_mut() {
-                    arr.insert(0, serde_json::json!("project_id"));
-                }
-            }
-            td
-        })
-        .collect()
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn agent_tool_definitions_nonempty() {
-        let tools = agent_tool_definitions();
-        assert!(!tools.is_empty(), "agent tools should not be empty");
-    }
-
-    #[test]
-    fn engine_tool_definitions_nonempty() {
-        let tools = engine_tool_definitions();
-        assert!(!tools.is_empty(), "engine tools should not be empty");
-    }
-
-    #[test]
-    fn engine_tool_definitions_contains_task_done() {
-        let tools = engine_tool_definitions();
-        assert!(
-            tools.iter().any(|t| t.name == "task_done"),
-            "engine tools must include task_done"
-        );
-    }
-
-    #[test]
-    fn engine_tool_definitions_contains_get_task_context() {
-        let tools = engine_tool_definitions();
-        assert!(
-            tools.iter().any(|t| t.name == "get_task_context"),
-            "engine tools must include get_task_context"
-        );
-    }
-
-    #[test]
-    fn multi_project_definitions_add_project_id() {
-        let tools = multi_project_tool_definitions();
-        for tool in tools.iter() {
-            let has_project_id = tool
-                .input_schema
-                .get("properties")
-                .and_then(|p| p.get("project_id"))
-                .is_some();
-            assert!(
-                has_project_id,
-                "multi-project tool '{}' must have project_id param",
-                tool.name
-            );
-        }
-    }
 
     #[test]
     fn strip_property_descriptions_removes_descriptions() {
@@ -549,42 +425,5 @@ mod tests {
         let props = stripped.get("properties").unwrap();
         assert_eq!(props.get("path").unwrap().get("type").unwrap(), "string");
         assert_eq!(props.get("count").unwrap().get("type").unwrap(), "integer");
-    }
-
-    #[test]
-    fn all_tools_have_input_schema() {
-        for tools_fn in [
-            agent_tool_definitions,
-            engine_tool_definitions,
-            multi_project_tool_definitions,
-        ] {
-            let tools = tools_fn();
-            for tool in tools.iter() {
-                assert!(
-                    !tool.input_schema.is_null(),
-                    "tool '{}' must have an input_schema",
-                    tool.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn no_duplicate_tool_names() {
-        for tools_fn in [
-            agent_tool_definitions,
-            engine_tool_definitions,
-            multi_project_tool_definitions,
-        ] {
-            let tools = tools_fn();
-            let mut seen = HashSet::new();
-            for tool in tools.iter() {
-                assert!(
-                    seen.insert(&tool.name),
-                    "duplicate tool name: {}",
-                    tool.name
-                );
-            }
-        }
     }
 }
