@@ -1,0 +1,120 @@
+//! HTTP and WebSocket router for the node API.
+
+use crate::automaton_bridge::AutomatonBridge;
+use crate::config::NodeConfig;
+use crate::scheduler::Scheduler;
+use crate::session::{handle_ws_connection, WsContext};
+use crate::terminal;
+use aura_core::{AgentId, Transaction, TransactionType};
+use aura_reasoner::ModelProvider;
+use aura_store::Store;
+use aura_tools::automaton_tools::AutomatonController;
+use aura_tools::domain_tools::DomainApi;
+use aura_tools::{ToolCatalog, ToolConfig};
+use axum::{
+    extract::{ws::WebSocketUpgrade, Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tower_http::trace::TraceLayer;
+use tracing::{error, info, instrument};
+
+mod automaton;
+mod files;
+mod tx;
+mod ws;
+
+use automaton::*;
+use files::*;
+use tx::*;
+use ws::*;
+
+#[cfg(test)]
+mod tests;
+
+/// Shared state for the router.
+pub struct RouterState {
+    pub store: Arc<dyn Store>,
+    pub scheduler: Arc<Scheduler>,
+    pub config: NodeConfig,
+    /// Model provider for WebSocket sessions (type-erased).
+    pub provider: Arc<dyn ModelProvider + Send + Sync>,
+    /// Tool configuration for WebSocket sessions.
+    pub tool_config: ToolConfig,
+    /// Canonical tool catalog (shared across sessions).
+    pub catalog: Arc<ToolCatalog>,
+    /// Domain API for specs/tasks/project/orbit/network (None if no internal token).
+    pub domain_api: Option<Arc<dyn DomainApi>>,
+    /// Automaton controller for dev-loop lifecycle (None when domain API unavailable).
+    pub automaton_controller: Option<Arc<dyn AutomatonController>>,
+    /// Concrete bridge for event subscription (same object as automaton_controller).
+    pub automaton_bridge: Option<Arc<AutomatonBridge>>,
+}
+
+impl Clone for RouterState {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            scheduler: self.scheduler.clone(),
+            config: self.config.clone(),
+            provider: self.provider.clone(),
+            tool_config: self.tool_config.clone(),
+            catalog: self.catalog.clone(),
+            domain_api: self.domain_api.clone(),
+            automaton_controller: self.automaton_controller.clone(),
+            automaton_bridge: self.automaton_bridge.clone(),
+        }
+    }
+}
+
+/// Create the router.
+pub fn create_router(state: RouterState) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/api/files", get(list_files_handler))
+        .route("/api/read-file", get(read_file_handler))
+        .route("/workspace/resolve", get(resolve_workspace_handler))
+        .route("/tx", post(submit_tx_handler))
+        .route("/agents/:agent_id/head", get(get_head_handler))
+        .route("/agents/:agent_id/record", get(scan_record_handler))
+        .route("/ws/terminal", get(terminal_ws_handler))
+        .route("/stream", get(ws_upgrade_handler))
+        .route("/stream/automaton/:automaton_id", get(automaton_ws_handler))
+        .route("/automaton/start", post(automaton_start_handler))
+        .route("/automaton/list", get(automaton_list_handler))
+        .route(
+            "/automaton/:automaton_id/status",
+            get(automaton_status_handler),
+        )
+        .route(
+            "/automaton/:automaton_id/pause",
+            post(automaton_pause_handler),
+        )
+        .route(
+            "/automaton/:automaton_id/stop",
+            post(automaton_stop_handler),
+        )
+        .with_state(state)
+        .layer(TraceLayer::new_for_http())
+}
+
+// === Terminal WebSocket ===
+
+async fn terminal_ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(terminal::handle_terminal_ws)
+}
+
+// === Health ===
+
+/// Return a simple health-check response with version info.
+async fn health_handler() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION")
+    }))
+}

@@ -1,0 +1,193 @@
+use super::*;
+
+impl DevLoopAutomaton {
+    pub(super) async fn execute_task(
+        &self,
+        ctx: &TickContext,
+        cfg: &DevLoopConfig,
+        task: &TaskDescriptor,
+    ) -> Result<TaskExecutionResult, AutomatonError> {
+        let project = self
+            .domain
+            .get_project(&cfg.project_id, None)
+            .await
+            .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
+
+        let spec = self
+            .domain
+            .get_spec(&task.spec_id, None)
+            .await
+            .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
+
+        if let Some(shell_cmd) = extract_shell_command(task) {
+            let workspace = ctx
+                .workspace_root
+                .as_deref()
+                .unwrap_or(std::path::Path::new(&project.path));
+            return self
+                .runner
+                .execute_shell_task(
+                    &ShellTaskParams {
+                        command: &shell_cmd,
+                        project_root: workspace,
+                    },
+                    None,
+                )
+                .await
+                .map_err(|e| AutomatonError::AgentExecution(e.to_string()));
+        }
+
+        let effective_path = ctx
+            .workspace_root
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| project.path.clone());
+
+        let project_info = ProjectInfo {
+            name: &project.name,
+            description: project.description.as_deref().unwrap_or(""),
+            folder_path: &effective_path,
+            build_command: project.build_command.as_deref(),
+            test_command: project.test_command.as_deref(),
+        };
+        let spec_info = SpecInfo {
+            title: &spec.title,
+            markdown_contents: &spec.content,
+        };
+        let failure_reasons: HashMap<String, String> =
+            ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
+        let prior_failure = failure_reasons.get(&task.id).cloned().unwrap_or_default();
+        let task_info = TaskInfo {
+            title: &task.title,
+            description: &task.description,
+            execution_notes: &prior_failure,
+            files_changed: &[],
+        };
+        let session_info = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
+        let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
+
+        let params = AgenticTaskParams {
+            project: &project_info,
+            spec: &spec_info,
+            task: &task_info,
+            session: &session_info,
+            agent: None,
+            work_log: &work_log,
+            completed_deps: &[],
+            workspace_map: "",
+            codebase_snapshot: "",
+            type_defs_context: "",
+            dep_api_context: "",
+            member_count: 1,
+            tools,
+        };
+
+        let cancel = ctx.cancellation_token().clone();
+
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let automaton_tx = ctx.event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(evt) = event_rx.recv().await {
+                forward_agent_event(&automaton_tx, evt);
+            }
+        });
+
+        let inner_executor: Arc<dyn aura_agent::types::AgentToolExecutor> = self
+            .tool_executor
+            .clone()
+            .unwrap_or_else(|| Arc::new(NoOpToolExecutor));
+
+        let tracking = TaskTrackingConfig {
+            inner_executor,
+            project_folder: effective_path.clone(),
+            build_command: project.build_command.clone(),
+        };
+
+        let result = self
+            .runner
+            .execute_task_tracked(
+                self.provider.as_ref(),
+                tracking,
+                &params,
+                Some(event_tx),
+                Some(cancel),
+            )
+            .await;
+
+        match result {
+            Ok(exec) => {
+                if exec.file_ops.is_empty() && !exec.no_changes_needed {
+                    let msg = if exec.reached_implementing {
+                        "task reached implementation phase but no file operations completed \
+                         — likely truncated by max_tokens or interrupted. \
+                         On retry, use smaller incremental edits (one file per turn)."
+                    } else {
+                        "task completed without any file operations — completion not verified"
+                    };
+                    Err(AutomatonError::AgentExecution(msg.into()))
+                } else {
+                    Ok(exec)
+                }
+            }
+            Err(e) => Err(AutomatonError::AgentExecution(e.to_string())),
+        }
+    }
+
+    pub(super) async fn try_retry_failed(
+        &self,
+        ctx: &mut TickContext,
+        _project_id: &str,
+    ) -> Result<bool, AutomatonError> {
+        let failed_ids: Vec<String> = ctx.state.get(STATE_FAILED_IDS).unwrap_or_default();
+        if failed_ids.is_empty() {
+            return Ok(false);
+        }
+
+        let mut retry_counts: HashMap<String, u32> =
+            ctx.state.get(STATE_RETRY_COUNTS).unwrap_or_default();
+
+        let retryable: Vec<String> = failed_ids
+            .iter()
+            .filter(|id| *retry_counts.get(*id).unwrap_or(&0) < MAX_RETRIES_PER_TASK)
+            .cloned()
+            .collect();
+
+        if retryable.is_empty() {
+            return Ok(false);
+        }
+
+        let mut queue: Vec<String> = ctx.state.get(STATE_TASK_QUEUE).unwrap_or_default();
+        let new_failed: Vec<String> = failed_ids
+            .iter()
+            .filter(|id| !retryable.contains(id))
+            .cloned()
+            .collect();
+
+        for id in &retryable {
+            let count = retry_counts.entry(id.clone()).or_insert(0);
+            *count += 1;
+            info!(task_id = %id, attempt = *count, "Retrying failed task");
+
+            if let Err(e) = self.domain.transition_task(id, "ready", None).await {
+                warn!(task_id = %id, error = %e, "Failed to sync retry status to backend");
+            }
+
+            queue.push(id.clone());
+
+            ctx.emit(AutomatonEvent::TaskRetrying {
+                task_id: id.clone(),
+                attempt: *count,
+                reason: "automatic retry after failure".into(),
+            });
+        }
+
+        ctx.state.set(STATE_TASK_QUEUE, &queue);
+        ctx.state.set(STATE_FAILED_IDS, &new_failed);
+        ctx.state.set(STATE_RETRY_COUNTS, &retry_counts);
+        Ok(true)
+    }
+}
