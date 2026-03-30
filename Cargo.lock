@@ -119,7 +119,6 @@ dependencies = [
  "aura-agent",
  "aura-auth",
  "aura-core",
- "aura-executor",
  "aura-kernel",
  "aura-node",
  "aura-reasoner",
@@ -164,7 +163,6 @@ dependencies = [
  "aura-agent-fileops",
  "aura-agent-verify",
  "aura-core",
- "aura-executor",
  "aura-kernel",
  "aura-reasoner",
  "aura-runtime",
@@ -232,7 +230,6 @@ dependencies = [
  "async-trait",
  "aura-agent",
  "aura-core",
- "aura-executor",
  "aura-reasoner",
  "aura-tools",
  "chrono",
@@ -255,7 +252,6 @@ dependencies = [
  "aura-agent",
  "aura-auth",
  "aura-core",
- "aura-executor",
  "aura-kernel",
  "aura-reasoner",
  "aura-session",
@@ -276,6 +272,7 @@ dependencies = [
 name = "aura-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "blake3",
  "bytes",
@@ -285,22 +282,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
- "uuid",
-]
-
-[[package]]
-name = "aura-executor"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-core",
- "bytes",
- "futures",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -309,7 +292,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aura-core",
- "aura-executor",
  "aura-reasoner",
  "aura-store",
  "bytes",
@@ -330,7 +312,6 @@ dependencies = [
  "aura-agent",
  "aura-automaton",
  "aura-core",
- "aura-executor",
  "aura-kernel",
  "aura-protocol",
  "aura-reasoner",
@@ -394,7 +375,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-core",
- "aura-executor",
  "aura-kernel",
  "aura-reasoner",
  "aura-store",
@@ -418,7 +398,7 @@ dependencies = [
  "aura-agent",
  "aura-auth",
  "aura-core",
- "aura-executor",
+ "aura-kernel",
  "aura-reasoner",
  "aura-store",
  "aura-tools",
@@ -466,7 +446,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-core",
- "aura-executor",
  "aura-reasoner",
  "bytes",
  "glob",

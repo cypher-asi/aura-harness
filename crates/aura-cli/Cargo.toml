@@ -15,7 +15,6 @@ aura-core = { path = "../aura-core" }
 aura-agent = { path = "../aura-agent" }
 aura-auth = { path = "../aura-auth" }
 aura-store = { path = "../aura-store" }
-aura-executor = { path = "../aura-executor" }
 aura-reasoner = { path = "../aura-reasoner" }
 aura-tools = { path = "../aura-tools" }
 aura-kernel = { path = "../aura-kernel" }

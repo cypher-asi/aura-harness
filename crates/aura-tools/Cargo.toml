@@ -8,7 +8,6 @@ license.workspace = true
 
 [dependencies]
 aura-core = { path = "../aura-core" }
-aura-executor = { path = "../aura-executor" }
 aura-reasoner = { path = "../aura-reasoner" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

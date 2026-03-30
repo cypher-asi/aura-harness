@@ -3,7 +3,8 @@
 //! Tests the full tool execution pipeline from action to effect.
 
 use aura_core::{Action, ActionId, AgentId, ToolCall};
-use aura_executor::{ExecuteContext, ExecutorRouter};
+use aura_core::ExecuteContext;
+use aura_kernel::ExecutorRouter;
 use aura_tools::{Sandbox, ToolExecutor};
 use std::path::PathBuf;
 use std::sync::Arc;

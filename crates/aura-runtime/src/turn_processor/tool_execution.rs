@@ -5,7 +5,7 @@ use aura_kernel::PermissionLevel;
 use aura_core::{
     tool_result_cache_key, Action, AgentId, ToolCall, CACHEABLE_TOOLS,
 };
-use aura_executor::{ExecuteContext, decode_tool_effect};
+use aura_core::{ExecuteContext, decode_tool_effect};
 use aura_reasoner::{ContentBlock, Message, ModelProvider, ToolResultContent};
 use aura_store::Store;
 use aura_tools::ToolRegistry;

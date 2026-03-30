@@ -7,7 +7,7 @@ use crate::protocol::{
     ToolResultMsg, ToolUseStart, UserMessage,
 };
 use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
-use aura_executor::ExecutorRouter;
+use aura_kernel::ExecutorRouter;
 use aura_reasoner::Message;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::ToolResolver;

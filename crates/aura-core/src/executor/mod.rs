@@ -1,24 +1,19 @@
-//! # aura-executor
+//! Executor trait, context, error, and decode primitives.
 //!
-//! Executor trait and router for dispatching actions to executors.
-//!
-//! The executor framework provides the boundary between deterministic
-//! kernel logic and external side effects.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
-
-mod context;
-mod router;
-
-pub use context::ExecuteContext;
-pub use router::ExecutorRouter;
+//! Moved from `aura-executor` during the Phase 4 crate consolidation.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core::{Action, Effect, EffectStatus, ToolResult};
 use tracing::warn;
+
+use crate::{Action, ActionId, AgentId, Effect, EffectStatus, ToolResult};
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutorError {
@@ -29,6 +24,10 @@ pub enum ExecutorError {
     #[error(transparent)]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
+
+// ---------------------------------------------------------------------------
+// Trait
+// ---------------------------------------------------------------------------
 
 /// Executor trait for handling actions.
 ///
@@ -50,6 +49,74 @@ pub trait Executor: Send + Sync {
     /// Get the executor name for logging/debugging.
     fn name(&self) -> &'static str;
 }
+
+// ---------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------
+
+/// Context provided to executors when executing an action.
+#[derive(Debug, Clone)]
+pub struct ExecuteContext {
+    /// The agent executing the action
+    pub agent_id: AgentId,
+    /// The action being executed
+    pub action_id: ActionId,
+    /// Workspace root for this agent (sandbox root for tools)
+    pub workspace_root: PathBuf,
+    /// Configuration limits
+    pub limits: ExecuteLimits,
+}
+
+/// Execution limits enforced by the executor.
+#[derive(Debug, Clone)]
+pub struct ExecuteLimits {
+    /// Maximum bytes to read from files
+    pub read_bytes: usize,
+    /// Maximum bytes to write to files
+    pub write_bytes: usize,
+    /// Maximum command execution time
+    pub command_timeout: Duration,
+    /// Maximum stdout bytes from commands
+    pub stdout_bytes: usize,
+    /// Maximum stderr bytes from commands
+    pub stderr_bytes: usize,
+}
+
+impl Default for ExecuteLimits {
+    fn default() -> Self {
+        Self {
+            read_bytes: 5 * 1024 * 1024, // 5MB
+            write_bytes: 1024 * 1024,    // 1MB
+            command_timeout: Duration::from_secs(10),
+            stdout_bytes: 256 * 1024, // 256KB
+            stderr_bytes: 256 * 1024, // 256KB
+        }
+    }
+}
+
+impl ExecuteContext {
+    /// Create a new execution context.
+    #[must_use]
+    pub fn new(agent_id: AgentId, action_id: ActionId, workspace_root: PathBuf) -> Self {
+        Self {
+            agent_id,
+            action_id,
+            workspace_root,
+            limits: ExecuteLimits::default(),
+        }
+    }
+
+    /// Set custom limits.
+    #[must_use]
+    pub const fn with_limits(mut self, limits: ExecuteLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decode helper
+// ---------------------------------------------------------------------------
 
 /// Result of decoding a tool execution effect into displayable text.
 #[derive(Debug, Clone)]
@@ -119,28 +186,5 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
             is_error: true,
             metadata: HashMap::new(),
         }
-    }
-}
-
-/// A no-op executor that accepts all actions and returns empty committed effects.
-#[cfg(test)]
-pub(crate) struct NoOpExecutor;
-
-#[cfg(test)]
-#[async_trait]
-impl Executor for NoOpExecutor {
-    async fn execute(&self, _ctx: &ExecuteContext, action: &Action) -> Result<Effect, ExecutorError> {
-        Ok(Effect::committed_agreement(
-            action.action_id,
-            bytes::Bytes::new(),
-        ))
-    }
-
-    fn can_handle(&self, _action: &Action) -> bool {
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "noop"
     }
 }

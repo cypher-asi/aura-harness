@@ -3,7 +3,7 @@
 //! Tests conversation history loading and context accumulation across turns.
 
 use aura_core::{AgentId, Decision, ProposalSet, RecordEntry, Transaction, TransactionKind};
-use aura_executor::ExecutorRouter;
+use aura_kernel::ExecutorRouter;
 use aura_runtime::{TurnConfig, TurnProcessor};
 use aura_reasoner::{MockProvider, MockResponse};
 use aura_store::{RocksStore, Store};

@@ -10,7 +10,6 @@ license.workspace = true
 aura-kernel = { path = "../aura-kernel" }
 aura-core = { path = "../aura-core" }
 aura-store = { path = "../aura-store" }
-aura-executor = { path = "../aura-executor" }
 aura-reasoner = { path = "../aura-reasoner" }
 aura-tools = { path = "../aura-tools" }
 anyhow = { workspace = true }

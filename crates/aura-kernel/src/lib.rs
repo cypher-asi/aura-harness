@@ -24,10 +24,12 @@
 mod context;
 mod kernel;
 mod policy;
+pub mod router;
 
 pub use context::{Context, ContextBuilder};
 pub use kernel::{Kernel, KernelConfig, ProcessResult};
 pub use policy::{default_tool_permission, PermissionLevel, Policy, PolicyConfig, PolicyResult};
+pub use router::ExecutorRouter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {

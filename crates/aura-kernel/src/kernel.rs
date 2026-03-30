@@ -29,7 +29,8 @@ use crate::policy::{Policy, PolicyConfig};
 use aura_core::{
     Action, ActionId, Decision, Effect, EffectStatus, ProposalSet, RecordEntry, Transaction,
 };
-use aura_executor::{ExecuteContext, ExecutorRouter};
+use aura_core::ExecuteContext;
+use crate::ExecutorRouter;
 use aura_reasoner::{ProposeRequest, Reasoner};
 use aura_store::Store;
 use std::path::PathBuf;

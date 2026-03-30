@@ -13,12 +13,16 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
 pub mod error;
+pub mod executor;
 pub mod hash;
 pub mod ids;
 pub(crate) mod serde_helpers;
 pub mod types;
 
 pub use error::{AuraError, Result};
+pub use executor::{
+    DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError, decode_tool_effect,
+};
 pub use ids::{ActionId, AgentId, Hash, ProcessId, TxId};
 pub use types::{
     Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,

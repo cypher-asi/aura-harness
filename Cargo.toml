@@ -13,7 +13,6 @@ aura-core = { path = "crates/aura-core" }
 aura-kernel = { path = "crates/aura-kernel" }
 aura-runtime = { path = "crates/aura-runtime" }
 aura-store = { path = "crates/aura-store" }
-aura-executor = { path = "crates/aura-executor" }
 aura-reasoner = { path = "crates/aura-reasoner" }
 aura-tools = { path = "crates/aura-tools" }
 aura-agent = { path = "crates/aura-agent" }
@@ -44,7 +43,6 @@ resolver = "2"
 members = [
     "crates/aura-core",
     "crates/aura-store",
-    "crates/aura-executor",
     "crates/aura-tools",
     "crates/aura-reasoner",
     "crates/aura-kernel",

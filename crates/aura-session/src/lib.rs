@@ -5,7 +5,7 @@
 use aura_agent::prompts::default_system_prompt;
 use aura_agent::{AgentLoopConfig, KernelToolExecutor};
 use aura_core::Identity;
-use aura_executor::ExecutorRouter;
+use aura_kernel::ExecutorRouter;
 use aura_reasoner::{AnthropicProvider, MockProvider, ModelProvider, ToolDefinition};
 use aura_store::RocksStore;
 use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};

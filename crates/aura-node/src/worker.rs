@@ -156,7 +156,7 @@ mod tests {
 
         let config = aura_agent::AgentLoopConfig::default();
         let agent_loop = AgentLoop::new(config);
-        let router = aura_executor::ExecutorRouter::new();
+        let router = aura_kernel::ExecutorRouter::new();
         let executor = aura_agent::KernelToolExecutor::new(router, agent_id, ws_dir.join("test"));
 
         let count = process_agent(agent_id, store, provider, &agent_loop, &executor, &[])
@@ -188,7 +188,7 @@ mod tests {
 
         let config = aura_agent::AgentLoopConfig::default();
         let agent_loop = AgentLoop::new(config);
-        let router = aura_executor::ExecutorRouter::new();
+        let router = aura_kernel::ExecutorRouter::new();
         let executor = aura_agent::KernelToolExecutor::new(router, agent_id, ws_dir.join("agent"));
 
         let count = process_agent(

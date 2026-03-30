@@ -6,7 +6,7 @@ use crate::tool::{builtin_tools, Tool, ToolContext};
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
-use aura_executor::{ExecuteContext, Executor};
+use aura_core::{ExecuteContext, Executor};
 use bytes::Bytes;
 use std::collections::HashMap;
 use tracing::{debug, error, instrument};
@@ -87,16 +87,16 @@ impl ToolExecutor {
 #[async_trait]
 impl Executor for ToolExecutor {
     #[instrument(skip(self, ctx, action), fields(action_id = %action.action_id))]
-    async fn execute(&self, ctx: &ExecuteContext, action: &Action) -> Result<Effect, aura_executor::ExecutorError> {
+    async fn execute(&self, ctx: &ExecuteContext, action: &Action) -> Result<Effect, aura_core::ExecutorError> {
         let tool_call: ToolCall = serde_json::from_slice(&action.payload)
-            .map_err(|e| aura_executor::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}")))?;
+            .map_err(|e| aura_core::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}")))?;
 
         debug!(tool = %tool_call.tool, "Executing tool");
 
         match self.execute_tool(ctx, &tool_call).await {
             Ok(result) => {
                 let payload = serde_json::to_vec(&result)
-                    .map_err(|e| aura_executor::ExecutorError::ExecutionFailed(format!("Failed to serialize tool result: {e}")))?;
+                    .map_err(|e| aura_core::ExecutorError::ExecutionFailed(format!("Failed to serialize tool result: {e}")))?;
                 Ok(Effect::new(
                     action.action_id,
                     EffectKind::Agreement,
@@ -108,7 +108,7 @@ impl Executor for ToolExecutor {
                 error!(error = %e, "Tool execution failed");
                 let result = ToolResult::failure(&tool_call.tool, e.to_string());
                 let payload = serde_json::to_vec(&result)
-                    .map_err(|e| aura_executor::ExecutorError::ExecutionFailed(format!("Failed to serialize error result: {e}")))?;
+                    .map_err(|e| aura_core::ExecutorError::ExecutionFailed(format!("Failed to serialize error result: {e}")))?;
                 Ok(Effect::new(
                     action.action_id,
                     EffectKind::Agreement,

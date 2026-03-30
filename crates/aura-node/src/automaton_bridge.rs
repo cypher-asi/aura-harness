@@ -17,7 +17,7 @@ use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::KernelToolExecutor;
 use aura_automaton::{AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton};
 use aura_core::AgentId;
-use aura_executor::ExecutorRouter;
+use aura_kernel::ExecutorRouter;
 use aura_reasoner::ModelProvider;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolCatalog;

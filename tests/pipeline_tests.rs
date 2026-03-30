@@ -5,7 +5,7 @@
 
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
 use aura_core::{AgentId, Transaction, TransactionType};
-use aura_executor::ExecutorRouter;
+use aura_kernel::ExecutorRouter;
 use aura_reasoner::{MockProvider, MockResponse, ToolDefinition};
 use aura_store::{RocksStore, Store};
 use bytes::Bytes;

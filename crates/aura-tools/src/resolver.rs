@@ -13,7 +13,7 @@ use crate::tool::{builtin_tools, Tool, ToolContext};
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
-use aura_executor::{ExecuteContext, Executor};
+use aura_core::{ExecuteContext, Executor};
 use aura_core::ToolDefinition;
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -145,9 +145,9 @@ impl Executor for ToolResolver {
         &self,
         ctx: &ExecuteContext,
         action: &Action,
-    ) -> Result<Effect, aura_executor::ExecutorError> {
+    ) -> Result<Effect, aura_core::ExecutorError> {
         let tool_call: ToolCall = serde_json::from_slice(&action.payload).map_err(|e| {
-            aura_executor::ExecutorError::ExecutionFailed(format!(
+            aura_core::ExecutorError::ExecutionFailed(format!(
                 "Failed to parse tool call: {e}"
             ))
         })?;
@@ -157,7 +157,7 @@ impl Executor for ToolResolver {
         match self.execute_tool(ctx, &tool_call).await {
             Ok(result) => {
                 let payload = serde_json::to_vec(&result).map_err(|e| {
-                    aura_executor::ExecutorError::ExecutionFailed(format!(
+                    aura_core::ExecutorError::ExecutionFailed(format!(
                         "Failed to serialize tool result: {e}"
                     ))
                 })?;
@@ -172,7 +172,7 @@ impl Executor for ToolResolver {
                 error!(error = %e, "Tool execution failed");
                 let result = ToolResult::failure(&tool_call.tool, e.to_string());
                 let payload = serde_json::to_vec(&result).map_err(|e| {
-                    aura_executor::ExecutorError::ExecutionFailed(format!(
+                    aura_core::ExecutorError::ExecutionFailed(format!(
                         "Failed to serialize error result: {e}"
                     ))
                 })?;

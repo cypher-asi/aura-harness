@@ -3,7 +3,7 @@
 //! Tests complete turns from user prompt through model response to tool execution.
 
 use aura_core::{AgentId, Transaction};
-use aura_executor::ExecutorRouter;
+use aura_kernel::ExecutorRouter;
 use aura_runtime::{TurnConfig, TurnProcessor};
 use aura_reasoner::{MockProvider, MockResponse};
 use aura_store::RocksStore;

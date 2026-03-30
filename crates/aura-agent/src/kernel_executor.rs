@@ -6,7 +6,8 @@
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
 use aura_core::{Action, AgentId, ToolCall};
-use aura_executor::{ExecuteContext, ExecutorRouter, decode_tool_effect};
+use aura_core::{ExecuteContext, decode_tool_effect};
+use aura_kernel::ExecutorRouter;
 use std::path::PathBuf;
 use tracing::{debug, error, info};
 
