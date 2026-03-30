@@ -50,9 +50,13 @@ impl AnthropicProvider {
 
         let response = req_builder.send().await.map_err(|e| {
             error!(error = %e, "Anthropic API request failed");
-            ApiError::Other(ReasonerError::Request(format!(
-                "Anthropic API request failed: {e}"
-            )))
+            if e.is_timeout() {
+                ApiError::Other(ReasonerError::Timeout)
+            } else {
+                ApiError::Other(ReasonerError::Request(format!(
+                    "Anthropic API request failed: {e}"
+                )))
+            }
         })?;
 
         if !response.status().is_success() {

@@ -10,7 +10,7 @@ use aura_store::Store;
 use aura_tools::ToolRegistry;
 use std::collections::HashMap;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 impl<P, S, R> TurnProcessor<P, S, R>
 where
@@ -32,9 +32,9 @@ where
         tool_cache: &mut ToolCache,
     ) -> anyhow::Result<Vec<ExecutedToolCall>> {
         let workspace = self.agent_workspace(&agent_id);
-        if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
-            error!(error = %e, "Failed to create workspace");
-        }
+        tokio::fs::create_dir_all(&workspace).await.map_err(|e| {
+            anyhow::anyhow!("failed to create workspace {}: {e}", workspace.display())
+        })?;
 
         let (denied, cached, to_execute) = self.classify_tool_calls(message, tool_cache);
 

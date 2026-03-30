@@ -71,6 +71,9 @@ fn classify_reasoner_error(e: &aura_reasoner::ReasonerError) -> LlmCallError {
 }
 
 fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
+    if let Some(re) = e.downcast_ref::<aura_reasoner::ReasonerError>() {
+        return classify_reasoner_error(re);
+    }
     let msg = e.to_string();
     if msg.contains("402") {
         LlmCallError::InsufficientCredits(msg)

@@ -4,7 +4,6 @@ use crate::{StopReason, StreamContentType, StreamEvent};
 use futures_util::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tracing::trace;
 
 const MAX_SSE_BUFFER_SIZE: usize = 10 * 1024 * 1024;
 
@@ -47,8 +46,13 @@ where
 
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    if let Ok(s) = std::str::from_utf8(&bytes) {
-                        self.buffer.push_str(s);
+                    match std::str::from_utf8(&bytes) {
+                        Ok(s) => self.buffer.push_str(s),
+                        Err(e) => {
+                            return Poll::Ready(Some(Ok(StreamEvent::Error {
+                                message: format!("invalid UTF-8 in SSE stream: {e}"),
+                            })));
+                        }
                     }
                     if self.buffer.len() > MAX_SSE_BUFFER_SIZE {
                         self.finished = true;
@@ -123,8 +127,10 @@ fn parse_sse_event(event_str: &str) -> Option<StreamEvent> {
     let sse_event: SseEvent = match serde_json::from_str(&data) {
         Ok(e) => e,
         Err(e) => {
-            trace!(data = %data, error = %e, "Failed to parse SSE event");
-            return None;
+            tracing::warn!(error = %e, "malformed SSE JSON payload");
+            return Some(StreamEvent::Error {
+                message: format!("malformed SSE JSON: {e}"),
+            });
         }
     };
 
@@ -211,9 +217,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_event_with_invalid_json_returns_none() {
+    fn test_parse_event_with_invalid_json_returns_error() {
         let event = parse_sse_event("event: message_start\ndata: {not valid json!!}");
-        assert!(event.is_none());
+        assert!(
+            matches!(event, Some(StreamEvent::Error { ref message }) if message.contains("malformed SSE JSON")),
+            "expected StreamEvent::Error, got {event:?}"
+        );
     }
 
     #[test]
@@ -320,16 +329,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sse_stream_skips_malformed_then_continues() {
-        // Events must arrive in separate chunks so the stream re-polls and
-        // picks up the valid event after the malformed one drains the buffer.
+    async fn test_sse_stream_emits_error_for_malformed_then_continues() {
         let inner = bytes_stream(vec![
             "event: unknown\ndata: {bad json}\n\n",
             "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
         ]);
         let mut stream = SseStream::new(inner);
-        let event = stream.next().await;
-        assert!(matches!(event, Some(Ok(StreamEvent::MessageStop))));
+        let first = stream.next().await;
+        assert!(
+            matches!(&first, Some(Ok(StreamEvent::Error { message })) if message.contains("malformed SSE JSON")),
+            "expected StreamEvent::Error, got {first:?}"
+        );
+        // Error from malformed JSON marks finished because StreamEvent::Error sets finished=true
     }
 
     #[tokio::test]

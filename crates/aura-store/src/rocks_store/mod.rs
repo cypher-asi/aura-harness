@@ -172,8 +172,10 @@ impl Store for RocksStore {
             debug!(inbox_seq = head, "Transaction dequeued");
             Ok(Some((head, tx)))
         } else {
-            debug!("Inbox entry missing at head");
-            Ok(None)
+            Err(StoreError::InboxCorruption {
+                agent_id,
+                expected_seq: head,
+            })
         }
     }
 
@@ -263,16 +265,13 @@ impl Store for RocksStore {
                 break;
             }
 
-            if let Ok(entry) = serde_json::from_slice::<RecordEntry>(&value) {
-                entries.push(entry);
-            } else {
-                debug!(
-                    seq = record_key.seq,
-                    error_kind = "deserialization",
-                    "skipping malformed record"
-                );
-                continue;
-            }
+            let entry = serde_json::from_slice::<RecordEntry>(&value).map_err(|e| {
+                StoreError::Deserialization(format!(
+                    "record seq={}: {e}",
+                    record_key.seq
+                ))
+            })?;
+            entries.push(entry);
 
             if entries.len() >= limit {
                 break;

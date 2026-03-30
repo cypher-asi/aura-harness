@@ -181,7 +181,9 @@ where
         next_seq: u64,
     ) -> Result<TurnResult, crate::runtime::RuntimeError> {
         info!("Starting turn processing (store-based history)");
-        let messages = self.build_initial_messages(agent_id, &tx, next_seq);
+        let messages = self
+            .build_initial_messages(agent_id, &tx, next_seq)
+            .map_err(|e| crate::runtime::RuntimeError::Internal(e.to_string()))?;
         self.run_turn_loop(messages, agent_id)
             .await
             .map_err(|e| crate::runtime::RuntimeError::Internal(e.to_string()))

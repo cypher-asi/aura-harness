@@ -129,6 +129,8 @@ pub struct StreamAccumulator {
     pub cache_creation_input_tokens: Option<u64>,
     /// Cache read input tokens (prompt caching)
     pub cache_read_input_tokens: Option<u64>,
+    /// Error captured from a `StreamEvent::Error`.
+    pub stream_error: Option<String>,
 }
 
 /// Tool use being accumulated from streaming events.
@@ -214,7 +216,10 @@ impl StreamAccumulator {
                 self.stop_reason = *stop_reason;
                 self.output_tokens = *output_tokens;
             }
-            StreamEvent::MessageStop | StreamEvent::Ping | StreamEvent::Error { .. } => {}
+            StreamEvent::MessageStop | StreamEvent::Ping => {}
+            StreamEvent::Error { message } => {
+                self.stream_error = Some(message.clone());
+            }
         }
     }
 
@@ -249,6 +254,14 @@ impl StreamAccumulator {
             self.tool_uses.push(pending);
             if self.stop_reason.is_none() {
                 self.stop_reason = Some(StopReason::MaxTokens);
+            }
+        }
+
+        if let Some(ref err_msg) = self.stream_error {
+            if self.text_content.is_empty() && self.tool_uses.is_empty() && self.current_tool_use.is_none() {
+                return Err(ReasonerError::Internal(format!(
+                    "stream terminated with error: {err_msg}"
+                )));
             }
         }
 

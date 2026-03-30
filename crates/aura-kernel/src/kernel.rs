@@ -182,7 +182,7 @@ where
             debug!("Replay mode: skipping execution");
             vec![]
         } else {
-            self.execute_actions(&tx.agent_id, &actions).await
+            self.execute_actions(&tx.agent_id, &actions).await?
         };
 
         // Check for failures
@@ -279,13 +279,16 @@ where
         &self,
         agent_id: &aura_core::AgentId,
         actions: &[Action],
-    ) -> Vec<Effect> {
+    ) -> Result<Vec<Effect>, crate::KernelError> {
         let mut effects = Vec::new();
         let workspace = self.agent_workspace(agent_id);
 
-        if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
-            error!(error = %e, "Failed to create workspace");
-        }
+        tokio::fs::create_dir_all(&workspace).await.map_err(|e| {
+            crate::KernelError::Internal(format!(
+                "failed to create workspace {}: {e}",
+                workspace.display()
+            ))
+        })?;
 
         for action in actions {
             let ctx = ExecuteContext::new(*agent_id, action.action_id, workspace.clone());
@@ -294,7 +297,7 @@ where
             effects.push(effect);
         }
 
-        effects
+        Ok(effects)
     }
 }
 

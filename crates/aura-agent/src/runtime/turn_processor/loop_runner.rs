@@ -25,11 +25,11 @@ where
         agent_id: AgentId,
         tx: &Transaction,
         current_seq: u64,
-    ) -> Vec<Message> {
+    ) -> anyhow::Result<Vec<Message>> {
         let mut messages = Vec::new();
 
         if current_seq > 1 && self.config.context_window > 0 {
-            self.load_history(agent_id, current_seq, &mut messages);
+            self.load_history(agent_id, current_seq, &mut messages)?;
         }
 
         let prompt = String::from_utf8_lossy(&tx.payload);
@@ -41,10 +41,10 @@ where
         messages.push(Message::user(prompt.to_string()));
 
         log_message_context(&messages);
-        messages
+        Ok(messages)
     }
 
-    fn load_history(&self, agent_id: AgentId, current_seq: u64, messages: &mut Vec<Message>) {
+    fn load_history(&self, agent_id: AgentId, current_seq: u64, messages: &mut Vec<Message>) -> anyhow::Result<()> {
         let start_seq = current_seq
             .saturating_sub(self.config.context_window as u64)
             .max(1);
@@ -57,44 +57,45 @@ where
             "Loading conversation history"
         );
 
-        if let Ok(entries) = self.store.scan_record(agent_id, start_seq, limit) {
-            let session_start_idx = entries
-                .iter()
-                .rposition(|e| e.tx.tx_type == aura_core::TransactionType::SessionStart);
+        let entries = self.store.scan_record(agent_id, start_seq, limit)?;
 
-            let relevant_entries = session_start_idx.map_or_else(
-                || &entries[..],
-                |idx| {
-                    debug!(
-                        session_start_seq = entries[idx].seq,
-                        "Found session boundary"
-                    );
-                    &entries[idx + 1..]
-                },
-            );
+        let session_start_idx = entries
+            .iter()
+            .rposition(|e| e.tx.tx_type == aura_core::TransactionType::SessionStart);
 
-            for entry in relevant_entries {
-                match entry.tx.tx_type {
-                    aura_core::TransactionType::UserPrompt => {
-                        let content = String::from_utf8_lossy(&entry.tx.payload);
-                        if !content.is_empty() {
-                            messages.push(Message::user(content.to_string()));
-                        }
+        let relevant_entries = session_start_idx.map_or_else(
+            || &entries[..],
+            |idx| {
+                debug!(
+                    session_start_seq = entries[idx].seq,
+                    "Found session boundary"
+                );
+                &entries[idx + 1..]
+            },
+        );
+
+        for entry in relevant_entries {
+            match entry.tx.tx_type {
+                aura_core::TransactionType::UserPrompt => {
+                    let content = String::from_utf8_lossy(&entry.tx.payload);
+                    if !content.is_empty() {
+                        messages.push(Message::user(content.to_string()));
                     }
-                    aura_core::TransactionType::AgentMsg => {
-                        let content = String::from_utf8_lossy(&entry.tx.payload);
-                        if !content.is_empty() {
-                            messages.push(Message::assistant(content.to_string()));
-                        }
-                    }
-                    _ => {}
                 }
+                aura_core::TransactionType::AgentMsg => {
+                    let content = String::from_utf8_lossy(&entry.tx.payload);
+                    if !content.is_empty() {
+                        messages.push(Message::assistant(content.to_string()));
+                    }
+                }
+                _ => {}
             }
-            debug!(
-                loaded_messages = messages.len(),
-                "Loaded conversation history"
-            );
         }
+        debug!(
+            loaded_messages = messages.len(),
+            "Loaded conversation history"
+        );
+        Ok(())
     }
 
     /// Estimate the total character count of messages.

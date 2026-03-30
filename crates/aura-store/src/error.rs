@@ -51,6 +51,13 @@ pub enum StoreError {
     /// A storage key could not be decoded (wrong length, prefix, or field).
     #[error("invalid key format: {0}")]
     InvalidKey(String),
+
+    /// An inbox key that should exist (head < tail) is missing — indicates data corruption.
+    #[error("inbox corruption: agent={agent_id}, expected seq={expected_seq}")]
+    InboxCorruption {
+        agent_id: AgentId,
+        expected_seq: u64,
+    },
 }
 
 impl From<serde_json::Error> for StoreError {
@@ -135,5 +142,18 @@ mod tests {
         let tx_id = TxId::from_content(b"test");
         let err = StoreError::TransactionNotFound(tx_id);
         assert!(err.to_string().contains("transaction not found"));
+    }
+
+    #[test]
+    fn test_inbox_corruption() {
+        let agent_id = AgentId::generate();
+        let err = StoreError::InboxCorruption {
+            agent_id,
+            expected_seq: 7,
+        };
+        let display = err.to_string();
+        assert!(display.contains("inbox corruption"));
+        assert!(display.contains("expected seq=7"));
+        assert!(display.contains(&agent_id.to_string()));
     }
 }
