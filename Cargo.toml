@@ -129,6 +129,7 @@ base64 = "0.22"
 dirs = "5.0"
 
 [dev-dependencies]
+aura-node = { path = "crates/aura-node", features = ["test-support"] }
 proptest = { workspace = true }
 tempfile = { workspace = true }
 bytes = { workspace = true }

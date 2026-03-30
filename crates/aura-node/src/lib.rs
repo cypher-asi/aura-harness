@@ -22,20 +22,33 @@
     clippy::unnecessary_map_or
 )]
 
-pub mod automaton_bridge;
+pub(crate) mod automaton_bridge;
 mod config;
-pub mod domain;
-pub mod jwt_domain;
+pub(crate) mod domain;
+pub(crate) mod jwt_domain;
 mod node;
-pub mod protocol;
-pub mod router;
-pub mod scheduler;
-pub mod session;
-pub mod terminal;
+pub(crate) mod protocol;
+pub(crate) mod router;
+pub(crate) mod scheduler;
+pub(crate) mod session;
+pub(crate) mod terminal;
 mod worker;
 
 pub use config::NodeConfig;
 pub use node::Node;
+
+pub use aura_protocol::{
+    ApprovalResponse, AssistantMessageEnd, AssistantMessageStart, ConversationMessage, ErrorMsg,
+    FileOp, FilesChanged, InboundMessage, InstalledTool, OutboundMessage, SessionInit,
+    SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolAuth as ProtocolToolAuth,
+    ToolInfo, ToolResultMsg, ToolUseStart, UserMessage,
+};
+
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    pub use crate::router::{create_router, RouterState};
+    pub use crate::scheduler::Scheduler;
+}
 
 /// Top-level error type for the aura-node crate.
 #[derive(Debug, thiserror::Error)]
