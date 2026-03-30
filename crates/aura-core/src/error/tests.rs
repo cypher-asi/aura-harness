@@ -202,15 +202,15 @@ fn test_error_helper_functions() {
 
 #[test]
 fn test_result_type_alias() {
-    fn returns_result() -> Result<i32> {
-        Ok(42)
+    fn returns_result() -> i32 {
+        42
     }
 
     fn returns_error() -> Result<i32> {
         Err(AuraError::internal("test"))
     }
 
-    assert_eq!(returns_result().unwrap(), 42);
+    assert_eq!(returns_result(), 42);
     assert!(returns_error().is_err());
 }
 
@@ -229,7 +229,7 @@ fn test_deserialization_error_with_source() {
 
 #[test]
 fn test_serialization_with_source() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "write failed");
+    let io_err = std::io::Error::other("write failed");
     let err = AuraError::serialization_with_source("encode failed", io_err);
     match err {
         AuraError::Serialization { message, source } => {

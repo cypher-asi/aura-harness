@@ -12,10 +12,34 @@ use crate::{
 };
 use async_trait::async_trait;
 use serde::Serialize;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 impl AnthropicProvider {
+    async fn check_base_url_reachable(&self) -> bool {
+        let ping_url = format!("{}/", self.config.base_url.trim_end_matches('/'));
+        let result = self
+            .client
+            .get(ping_url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) => {
+                let status = resp.status();
+                status.is_success()
+                    || status.is_client_error()
+                    || status.is_server_error()
+                    || status.is_redirection()
+            }
+            Err(e) => {
+                warn!(error = %e, "Anthropic health check failed");
+                false
+            }
+        }
+    }
+
     /// Send an HTTP request to the Anthropic API and classify the response.
     pub(super) async fn send_checked<B: Serialize + Sync>(
         &self,
@@ -291,7 +315,11 @@ impl ModelProvider for AnthropicProvider {
     }
 
     async fn health_check(&self) -> bool {
-        true
+        use super::config::RoutingMode;
+        match self.config.routing_mode {
+            RoutingMode::Direct if self.config.api_key.trim().is_empty() => false,
+            _ => self.check_base_url_reachable().await,
+        }
     }
 
     #[tracing::instrument(skip(self, request), fields(model = %request.model))]

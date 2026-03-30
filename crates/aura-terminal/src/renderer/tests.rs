@@ -125,7 +125,7 @@ fn test_parse_markdown_line_list_item() {
     let spans = parse_markdown_line("- list item", base_style, &theme);
     assert!(!spans.is_empty());
     let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(text.contains("•") || text.contains("-"));
+    assert!(text.contains('•') || text.contains('-'));
 }
 
 #[test]

@@ -360,7 +360,8 @@ mod tests {
             .iter()
             .map(|n| Theme::by_name(n).name)
             .collect();
-        let unique: std::collections::HashSet<&str> = names.iter().map(|s| s.as_str()).collect();
+        let unique: std::collections::HashSet<&str> =
+            names.iter().map(std::string::String::as_str).collect();
         assert_eq!(names.len(), unique.len());
     }
 

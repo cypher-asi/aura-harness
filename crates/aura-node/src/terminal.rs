@@ -93,9 +93,38 @@ async fn open_pty(
 )> {
     let cols = spawn.cols.unwrap_or(80);
     let rows = spawn.rows.unwrap_or(24);
+    let setup = tokio::task::spawn_blocking(move || setup_pty(cols, rows)).await;
+    let (shell, master, reader, writer) = match setup {
+        Ok(Ok(values)) => values,
+        Ok(Err(msg)) => {
+            let _ = send_json(socket, &serde_json::json!({"type":"exit","code":-1})).await;
+            warn!("{msg}");
+            return None;
+        }
+        Err(e) => {
+            let _ = send_json(socket, &serde_json::json!({"type":"exit","code":-1})).await;
+            warn!("PTY setup task failed: {e}");
+            return None;
+        }
+    };
+
+    Some((shell, master, reader, writer))
+}
+
+fn setup_pty(
+    cols: u16,
+    rows: u16,
+) -> Result<
+    (
+        String,
+        Arc<Mutex<Box<dyn MasterPty + Send>>>,
+        Box<dyn Read + Send>,
+        Box<dyn std::io::Write + Send>,
+    ),
+    String,
+> {
     let shell = default_shell();
     let cwd = default_cwd();
-
     let pty_system = native_pty_system();
     let size = PtySize {
         rows,
@@ -103,45 +132,29 @@ async fn open_pty(
         pixel_width: 0,
         pixel_height: 0,
     };
-    let pair = match pty_system.openpty(size) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = send_json(socket, &serde_json::json!({"type":"exit","code":-1})).await;
-            warn!("Failed to open PTY: {e}");
-            return None;
-        }
-    };
+    let pair = pty_system
+        .openpty(size)
+        .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
     let mut cmd = CommandBuilder::new(&shell);
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
+    let _child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("Failed to spawn shell: {e}"))?;
 
-    let _child = match pair.slave.spawn_command(cmd) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = send_json(socket, &serde_json::json!({"type":"exit","code":-1})).await;
-            warn!("Failed to spawn shell: {e}");
-            return None;
-        }
-    };
-
-    let reader = match pair.master.try_clone_reader() {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Failed to clone PTY reader: {e}");
-            return None;
-        }
-    };
-    let writer = match pair.master.take_writer() {
-        Ok(w) => w,
-        Err(e) => {
-            warn!("Failed to take PTY writer: {e}");
-            return None;
-        }
-    };
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("Failed to clone PTY reader: {e}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
 
-    Some((shell, master, reader, writer))
+    Ok((shell, master, reader, writer))
 }
 
 async fn bridge_pty_ws(

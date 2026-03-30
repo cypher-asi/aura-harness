@@ -191,14 +191,9 @@ mod tests {
     use futures_util::StreamExt;
 
     fn bytes_stream(
-        chunks: Vec<&str>,
+        chunks: Vec<&'static str>,
     ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin {
-        futures_util::stream::iter(
-            chunks
-                .into_iter()
-                .map(|c| Ok(bytes::Bytes::from(c.to_string())))
-                .collect::<Vec<_>>(),
-        )
+        futures_util::stream::iter(chunks.into_iter().map(|c| Ok(bytes::Bytes::from(c.to_string()))))
     }
 
     // --- parse_sse_event unit tests ---

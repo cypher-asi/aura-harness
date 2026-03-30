@@ -38,7 +38,7 @@ fn test_interleaved_agent_operations() {
 
         for agent in &agents {
             let (inbox_seq, tx) = store.dequeue_tx(*agent).unwrap().unwrap();
-            let seq = round as u64 + 1;
+            let seq = u64::try_from(round).expect("round fits in u64") + 1;
             let entry = RecordEntry::builder(seq, tx).build();
             store
                 .append_entry_atomic(*agent, seq, &entry, inbox_seq)
@@ -249,9 +249,8 @@ fn test_crash_recovery_record_entries_persist() {
             let tx = create_test_tx(agent_id);
             store.enqueue_tx(&tx).unwrap();
             let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
-            let entry = RecordEntry::builder(i, tx)
-                .context_hash([i as u8; 32])
-                .build();
+            let byte = u8::try_from(i).expect("test index fits in u8");
+            let entry = RecordEntry::builder(i, tx).context_hash([byte; 32]).build();
             store
                 .append_entry_atomic(agent_id, i, &entry, inbox_seq)
                 .unwrap();
@@ -265,8 +264,9 @@ fn test_crash_recovery_record_entries_persist() {
         let entries = store.scan_record(agent_id, 1, 10).unwrap();
         assert_eq!(entries.len(), 5);
         for (i, entry) in entries.iter().enumerate() {
-            assert_eq!(entry.seq, (i + 1) as u64);
-            assert_eq!(entry.context_hash, [(i + 1) as u8; 32]);
+            assert_eq!(entry.seq, u64::try_from(i + 1).expect("index fits in u64"));
+            let expected = u8::try_from(i + 1).expect("index fits in u8");
+            assert_eq!(entry.context_hash, [expected; 32]);
         }
     }
 }

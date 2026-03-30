@@ -11,10 +11,10 @@ proptest! {
         let uuid_b = uuid::Uuid::from_bytes(b);
         let id_a = AgentId::from_uuid(uuid_a);
         let id_b = AgentId::from_uuid(uuid_b);
-        if a != b {
-            prop_assert_ne!(id_a, id_b);
-        } else {
+        if a == b {
             prop_assert_eq!(id_a, id_b);
+        } else {
+            prop_assert_ne!(id_a, id_b);
         }
     }
 
@@ -25,10 +25,10 @@ proptest! {
     ) {
         let id_a = TxId::from_content(&a);
         let id_b = TxId::from_content(&b);
-        if a != b {
-            prop_assert_ne!(id_a, id_b);
-        } else {
+        if a == b {
             prop_assert_eq!(id_a, id_b);
+        } else {
+            prop_assert_ne!(id_a, id_b);
         }
     }
 
