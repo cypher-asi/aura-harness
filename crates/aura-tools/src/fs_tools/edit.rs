@@ -79,7 +79,12 @@ pub fn fs_edit(
         return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
     }
 
-    let raw_content = fs::read_to_string(&resolved)?;
+    let raw_content = fs::read_to_string(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("read_to_string({}): {e}", resolved.display()),
+        ))
+    })?;
 
     // Detect CRLF and normalise to LF for matching
     let had_crlf = raw_content.contains("\r\n");
@@ -145,7 +150,12 @@ pub fn fs_edit(
         new_content
     };
 
-    fs::write(&resolved, &final_content)?;
+    fs::write(&resolved, &final_content).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("write({}): {e}", resolved.display()),
+        ))
+    })?;
 
     Ok(ToolResult::success(
         "edit_file",

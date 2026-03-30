@@ -1,4 +1,5 @@
 use super::*;
+use tracing::warn;
 
 const IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -120,9 +121,14 @@ pub(super) async fn list_files_handler(
     }
 
     let rel = std::path::PathBuf::from(".");
-    let entries = tokio::task::spawn_blocking(move || walk_directory(&base, &rel, 0, depth))
-        .await
-        .unwrap_or_default();
+    let entries =
+        match tokio::task::spawn_blocking(move || walk_directory(&base, &rel, 0, depth)).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "list_files spawn_blocking failed");
+                Vec::new()
+            }
+        };
 
     Json(serde_json::json!({ "ok": true, "entries": entries }))
 }
@@ -155,7 +161,7 @@ pub(super) async fn read_file_handler(
         })),
         Err(e) => Json(serde_json::json!({
             "ok": false,
-            "error": format!("failed to read file: {e}"),
+            "error": format!("failed to read {}: {e}", resolved.display()),
         })),
     }
 }

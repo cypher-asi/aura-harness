@@ -17,7 +17,12 @@ pub fn fs_delete(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError>
         return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
     }
 
-    fs::remove_file(&resolved)?;
+    fs::remove_file(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("remove_file({}): {e}", resolved.display()),
+        ))
+    })?;
     Ok(ToolResult::success(
         "delete_file",
         format!("Deleted {path}"),

@@ -65,11 +65,21 @@ pub fn fs_write(
     // Always create parent directories
     if let Some(parent) = resolved.parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).map_err(|e| {
+                ToolError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("create_dir_all({}): {e}", parent.display()),
+                ))
+            })?;
         }
     }
 
-    fs::write(&resolved, content)?;
+    fs::write(&resolved, content).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("write({}): {e}", resolved.display()),
+        ))
+    })?;
 
     // Post-write verification
     let on_disk_size = usize::try_from(fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0))

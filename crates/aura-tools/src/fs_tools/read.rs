@@ -27,7 +27,12 @@ pub fn fs_read(
         return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
     }
 
-    let metadata = fs::metadata(&resolved)?;
+    let metadata = fs::metadata(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("metadata({}): {e}", resolved.display()),
+        ))
+    })?;
     let size = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
 
     if size > max_bytes {
@@ -37,7 +42,12 @@ pub fn fs_read(
         });
     }
 
-    let contents = fs::read(&resolved)?;
+    let contents = fs::read(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("read({}): {e}", resolved.display()),
+        ))
+    })?;
 
     if start_line.is_some() || end_line.is_some() {
         let text = String::from_utf8_lossy(&contents);

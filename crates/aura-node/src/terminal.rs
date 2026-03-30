@@ -197,6 +197,12 @@ async fn bridge_pty_ws(
     }
 }
 
+/// Process a single inbound WebSocket frame (input or resize).
+///
+/// Uses `std::sync::Mutex` intentionally: the lock is held only for a
+/// brief, non-async `resize()` call with no `.await` while locked.
+/// Switching to `tokio::sync::Mutex` would require making this function
+/// async for no practical benefit.
 fn handle_inbound_frame(
     cm: &ClientMsg,
     writer: &mut Box<dyn std::io::Write + Send>,

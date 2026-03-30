@@ -30,11 +30,11 @@ pub fn is_git_repo(project_root: &str) -> bool {
     Path::new(project_root).join(".git").exists()
 }
 
-async fn git_output(cmd: &mut Command) -> Result<std::process::Output, String> {
+async fn git_output(cmd: &mut Command, label: &str) -> Result<std::process::Output, String> {
     tokio::time::timeout(GIT_TIMEOUT, cmd.output())
         .await
-        .map_err(|_| "git command timed out".to_string())?
-        .map_err(|e| format!("git command failed: {e}"))
+        .map_err(|_| format!("git {label}: timed out after {}s", GIT_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("git {label}: {e}"))
 }
 
 pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
@@ -42,6 +42,7 @@ pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
         Command::new("git")
             .args(["remote", "get-url", name])
             .current_dir(project_root),
+        "remote get-url",
     )
     .await;
 
@@ -53,6 +54,7 @@ pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
                     Command::new("git")
                         .args(["remote", "set-url", name, url])
                         .current_dir(project_root),
+                    "remote set-url",
                 )
                 .await
                 {
@@ -69,6 +71,7 @@ pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
                 Command::new("git")
                     .args(["remote", "add", name, url])
                     .current_dir(project_root),
+                "remote add",
             )
             .await
             {
@@ -88,6 +91,7 @@ pub async fn git_commit(project_root: &str, message: &str) -> Result<Option<Stri
         Command::new("git")
             .args(["add", "-A"])
             .current_dir(project_root),
+        "add -A",
     )
     .await?;
 
@@ -102,6 +106,7 @@ pub async fn git_commit(project_root: &str, message: &str) -> Result<Option<Stri
         Command::new("git")
             .args(["diff", "--cached", "--quiet"])
             .current_dir(project_root),
+        "diff --cached",
     )
     .await?;
 
@@ -114,6 +119,7 @@ pub async fn git_commit(project_root: &str, message: &str) -> Result<Option<Stri
         Command::new("git")
             .args(["commit", "-m", message])
             .current_dir(project_root),
+        "commit",
     )
     .await?;
 
@@ -128,6 +134,7 @@ pub async fn git_commit(project_root: &str, message: &str) -> Result<Option<Stri
         Command::new("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(project_root),
+        "rev-parse HEAD",
     )
     .await?;
 
@@ -147,6 +154,7 @@ pub async fn list_unpushed_commits(
         Command::new("git")
             .args(["log", &range, "--pretty=format:%H %s"])
             .current_dir(project_root),
+        "log (unpushed)",
     )
     .await;
 
@@ -182,6 +190,7 @@ pub async fn git_push(
         Command::new("git")
             .args(["push", "orbit", &format!("HEAD:{branch}")])
             .current_dir(project_root),
+        &format!("push orbit HEAD:{branch}"),
     )
     .await?;
 

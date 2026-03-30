@@ -29,10 +29,26 @@ pub fn fs_ls(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError> {
     let mut dirs: Vec<(String, u64)> = Vec::new();
     let mut files: Vec<(String, u64, &str)> = Vec::new();
 
-    for entry in fs::read_dir(&resolved)? {
-        let entry = entry?;
+    let read_dir = fs::read_dir(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("read_dir({}): {e}", resolved.display()),
+        ))
+    })?;
+    for entry in read_dir {
+        let entry = entry.map_err(|e| {
+            ToolError::Io(std::io::Error::new(
+                e.kind(),
+                format!("read_dir entry in {}: {e}", resolved.display()),
+            ))
+        })?;
         let name = entry.file_name().to_string_lossy().to_string();
-        let metadata = entry.metadata()?;
+        let metadata = entry.metadata().map_err(|e| {
+            ToolError::Io(std::io::Error::new(
+                e.kind(),
+                format!("metadata({}): {e}", entry.path().display()),
+            ))
+        })?;
 
         if metadata.is_dir() {
             if LS_NOISE_DIRS.contains(&name.as_str()) {

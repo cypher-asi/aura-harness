@@ -83,7 +83,10 @@ impl ToolExecutor {
             return Err(ToolError::ToolDisabled(tool_name.clone()));
         }
 
-        let sandbox = Sandbox::new(&ctx.workspace_root)?;
+        let workspace_root = ctx.workspace_root.clone();
+        let sandbox = tokio::task::spawn_blocking(move || Sandbox::new(&workspace_root))
+            .await
+            .map_err(|e| ToolError::CommandFailed(format!("sandbox init task panicked: {e}")))??;
         let tool_ctx = ToolContext {
             sandbox,
             config: self.config.clone(),

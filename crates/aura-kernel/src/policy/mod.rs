@@ -135,10 +135,15 @@ impl PolicyConfig {
 // ============================================================================
 
 /// Policy engine for authorizing proposals and tool usage.
+///
+/// Uses `std::sync::Mutex` for `session_approvals` intentionally: all
+/// accesses are brief `insert`/`contains`/`remove`/`clear` with no
+/// `.await` held across the lock, so a sync mutex avoids the overhead
+/// of `tokio::sync::Mutex` and the `Send` bound it would impose on
+/// callers.
 #[derive(Debug)]
 pub struct Policy {
     config: PolicyConfig,
-    /// Session approvals for `AskOnce` tools
     session_approvals: Mutex<HashSet<String>>,
 }
 

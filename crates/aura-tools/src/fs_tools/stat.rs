@@ -16,7 +16,12 @@ pub fn fs_stat(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError> {
     let resolved = sandbox.resolve_existing(path)?;
     debug!(?resolved, "Getting file stats");
 
-    let metadata = fs::metadata(&resolved)?;
+    let metadata = fs::metadata(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("metadata({}): {e}", resolved.display()),
+        ))
+    })?;
 
     let mut result_metadata = HashMap::new();
     result_metadata.insert("size".to_string(), metadata.len().to_string());

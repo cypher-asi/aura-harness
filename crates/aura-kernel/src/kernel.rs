@@ -147,7 +147,12 @@ where
         let window = self
             .store
             .scan_record(tx.agent_id, from_seq, self.config.record_window_size)
-            .map_err(|e| crate::KernelError::Store(e.to_string()))?;
+            .map_err(|e| {
+                crate::KernelError::Store(format!(
+                    "scan_record(agent={}, from_seq={from_seq}): {e}",
+                    tx.agent_id
+                ))
+            })?;
         debug!(window_size = window.len(), "Loaded record window");
 
         // 2. Build context

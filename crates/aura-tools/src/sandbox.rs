@@ -61,10 +61,20 @@ impl Sandbox {
 
         // Create root if it doesn't exist
         if !root.exists() {
-            std::fs::create_dir_all(root)?;
+            std::fs::create_dir_all(root).map_err(|e| {
+                ToolError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("create_dir_all({}): {e}", root.display()),
+                ))
+            })?;
         }
 
-        let root = root.canonicalize()?;
+        let root = root.canonicalize().map_err(|e| {
+            ToolError::Io(std::io::Error::new(
+                e.kind(),
+                format!("canonicalize({}): {e}", root.display()),
+            ))
+        })?;
         debug!(?root, "Sandbox initialized");
 
         Ok(Self { root })
@@ -125,7 +135,12 @@ impl Sandbox {
         }
 
         // Re-canonicalize to resolve symlinks
-        let canonical = resolved.canonicalize()?;
+        let canonical = resolved.canonicalize().map_err(|e| {
+            ToolError::Io(std::io::Error::new(
+                e.kind(),
+                format!("canonicalize({}): {e}", resolved.display()),
+            ))
+        })?;
 
         // Check again after following symlinks
         if !canonical.starts_with(&self.root) {
