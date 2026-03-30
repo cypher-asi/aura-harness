@@ -2,7 +2,7 @@
 //!
 //! Tests conversation history loading and context accumulation across turns.
 
-use aura_core::{AgentId, Decision, ProposalSet, RecordEntry, Transaction, TransactionKind};
+use aura_core::{AgentId, Decision, ProposalSet, RecordEntry, Transaction, TransactionType};
 use aura_kernel::ExecutorRouter;
 use aura_agent::{TurnConfig, TurnProcessor};
 use aura_reasoner::{MockProvider, MockResponse};
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Helper to create and store a record entry.
-fn store_entry(store: &RocksStore, agent_id: AgentId, seq: u64, kind: TransactionKind, content: &str) {
+fn store_entry(store: &RocksStore, agent_id: AgentId, seq: u64, kind: TransactionType, content: &str) {
     let tx = Transaction::new(
         aura_core::TxId::from_content(content.as_bytes()),
         agent_id,
@@ -44,10 +44,10 @@ async fn test_conversation_history_loaded() {
     let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
 
     // Pre-populate history
-    store_entry(&store, agent_id, 1, TransactionKind::UserPrompt, "Hello");
-    store_entry(&store, agent_id, 2, TransactionKind::AgentMsg, "Hi there!");
-    store_entry(&store, agent_id, 3, TransactionKind::UserPrompt, "How are you?");
-    store_entry(&store, agent_id, 4, TransactionKind::AgentMsg, "I'm doing well!");
+    store_entry(&store, agent_id, 1, TransactionType::UserPrompt, "Hello");
+    store_entry(&store, agent_id, 2, TransactionType::AgentMsg, "Hi there!");
+    store_entry(&store, agent_id, 3, TransactionType::UserPrompt, "How are you?");
+    store_entry(&store, agent_id, 4, TransactionType::AgentMsg, "I'm doing well!");
 
     // Create processor
     let provider = Arc::new(MockProvider::simple_response("Thanks for asking!"));
@@ -81,15 +81,15 @@ async fn test_session_boundary_resets_context() {
     let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
 
     // Pre-session history
-    store_entry(&store, agent_id, 1, TransactionKind::UserPrompt, "Old message 1");
-    store_entry(&store, agent_id, 2, TransactionKind::AgentMsg, "Old response 1");
+    store_entry(&store, agent_id, 1, TransactionType::UserPrompt, "Old message 1");
+    store_entry(&store, agent_id, 2, TransactionType::AgentMsg, "Old response 1");
 
     // Session start (context boundary)
-    store_entry(&store, agent_id, 3, TransactionKind::SessionStart, "");
+    store_entry(&store, agent_id, 3, TransactionType::SessionStart, "");
 
     // Post-session history
-    store_entry(&store, agent_id, 4, TransactionKind::UserPrompt, "New message");
-    store_entry(&store, agent_id, 5, TransactionKind::AgentMsg, "New response");
+    store_entry(&store, agent_id, 4, TransactionType::UserPrompt, "New message");
+    store_entry(&store, agent_id, 5, TransactionType::AgentMsg, "New response");
 
     // Create processor
     let provider = Arc::new(MockProvider::simple_response("Context test!"));
@@ -154,9 +154,9 @@ async fn test_context_window_limit() {
     // Create many messages
     for i in 1..=20 {
         let kind = if i % 2 == 1 {
-            TransactionKind::UserPrompt
+            TransactionType::UserPrompt
         } else {
-            TransactionKind::AgentMsg
+            TransactionType::AgentMsg
         };
         store_entry(&store, agent_id, i, kind, &format!("Message {i}"));
     }

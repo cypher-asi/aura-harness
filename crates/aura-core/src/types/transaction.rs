@@ -31,10 +31,6 @@ pub enum TransactionType {
     ProcessComplete,
 }
 
-/// Legacy alias for backwards compatibility.
-#[deprecated(since = "0.2.0", note = "Use TransactionType instead")]
-pub type TransactionKind = TransactionType;
-
 /// An immutable transaction input to the system.
 ///
 /// Transactions are the only way state can change in Aura.

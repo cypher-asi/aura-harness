@@ -62,6 +62,3 @@ pub fn tool_result_cache_key(tool_name: &str, input: &serde_json::Value) -> Stri
     format!("{tool_name}\0{canonical}")
 }
 
-// Legacy alias for backwards compatibility
-#[allow(deprecated)]
-pub use types::TransactionKind;

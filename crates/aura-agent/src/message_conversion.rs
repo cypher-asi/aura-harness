@@ -260,11 +260,6 @@ impl ProjectResolver for MultiProjectResolver {
 // Forwarding executor
 // ---------------------------------------------------------------------------
 
-/// Callback invoked after each tool call result for event forwarding.
-pub trait ToolResultCallback: Send + Sync {
-    fn on_result(&self, tc: &ToolCallInfo, result: &ToolCallResult);
-}
-
 /// Tool executor that wraps an [`AgentToolExecutor`] with project routing
 /// and optional result forwarding.
 pub struct RoutingToolExecutor<R: ProjectResolver> {

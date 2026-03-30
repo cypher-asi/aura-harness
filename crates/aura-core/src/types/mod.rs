@@ -27,9 +27,6 @@ pub use tool::{
 pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
 pub use transaction::{Transaction, TransactionType};
 
-#[allow(deprecated)]
-pub use transaction::TransactionKind;
-
 #[cfg(test)]
 mod tests {
     use super::*;

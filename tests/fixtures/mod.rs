@@ -4,7 +4,7 @@
 
 use aura_core::{
     Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectKind, EffectStatus,
-    ProposalSet, RecordEntry, ToolCall, ToolResult, Transaction, TransactionKind, TxId,
+    ProposalSet, RecordEntry, ToolCall, ToolResult, Transaction, TransactionType, TxId,
 };
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ pub fn user_prompt_tx(agent_id: AgentId, message: &str) -> Transaction {
 }
 
 /// Create a transaction with specific kind.
-pub fn transaction_with_kind(agent_id: AgentId, kind: TransactionKind, payload: &str) -> Transaction {
+pub fn transaction_with_kind(agent_id: AgentId, kind: TransactionType, payload: &str) -> Transaction {
     let payload_bytes = Bytes::from(payload.to_string());
     let tx_id = TxId::from_content(&payload_bytes);
     let ts_ms = 1_700_000_000_000; // Fixed timestamp for determinism
@@ -52,7 +52,7 @@ pub fn conversation_transactions(agent_id: AgentId, exchanges: &[(&str, &str)]) 
         .iter()
         .flat_map(|(user_msg, _agent_msg)| {
             vec![
-                transaction_with_kind(agent_id, TransactionKind::UserPrompt, user_msg),
+                transaction_with_kind(agent_id, TransactionType::UserPrompt, user_msg),
                 // AgentMsg transactions would be created by the system
             ]
         })
