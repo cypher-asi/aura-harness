@@ -202,4 +202,15 @@ mod tests {
         assert!(lines[2].contains("aaa_file.txt"));
         assert!(lines[3].contains("zzz_file.txt"));
     }
+
+    #[test]
+    fn test_fs_ls_workspace_root_alias() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        fs::write(dir.path().join("root.txt"), "hello").unwrap();
+
+        let result = fs_ls(&sandbox, "/").unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(output.contains("root.txt"));
+    }
 }

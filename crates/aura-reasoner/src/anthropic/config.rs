@@ -71,7 +71,7 @@ impl AnthropicConfig {
         let timeout_ms = std::env::var("AURA_MODEL_TIMEOUT_MS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(60_000);
+            .unwrap_or(300_000);
 
         let fallback_model = std::env::var("AURA_ANTHROPIC_FALLBACK_MODEL")
             .ok()
@@ -94,7 +94,7 @@ impl AnthropicConfig {
         Self {
             api_key: api_key.into(),
             default_model: model.into(),
-            timeout_ms: 60_000,
+            timeout_ms: 300_000,
             max_retries: 2,
             base_url: "https://api.anthropic.com".to_string(),
             routing_mode: RoutingMode::Direct,

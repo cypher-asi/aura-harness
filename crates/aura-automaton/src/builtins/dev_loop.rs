@@ -643,6 +643,12 @@ pub(crate) fn forward_agent_event(
         AgentLoopEvent::TextDelta(d) => AutomatonEvent::TextDelta { delta: d },
         AgentLoopEvent::ThinkingDelta(d) => AutomatonEvent::ThinkingDelta { delta: d },
         AgentLoopEvent::ToolStart { id, name } => AutomatonEvent::ToolCallStarted { id, name },
+        AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
+            let Ok(input) = serde_json::from_str::<serde_json::Value>(&input) else {
+                return;
+            };
+            AutomatonEvent::ToolCallSnapshot { id, name, input }
+        }
         AgentLoopEvent::ToolResult {
             tool_use_id,
             tool_name,
@@ -759,6 +765,50 @@ pub(super) async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_agent_event;
+    use crate::events::AutomatonEvent;
+
+    #[test]
+    fn forwards_valid_tool_input_snapshot() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        forward_agent_event(
+            &tx,
+            aura_agent::events::AgentLoopEvent::ToolInputSnapshot {
+                id: "tool-1".to_string(),
+                name: "run_command".to_string(),
+                input: r#"{"command":"npm run build"}"#.to_string(),
+            },
+        );
+
+        let event = rx.try_recv().expect("expected forwarded event");
+        match event {
+            AutomatonEvent::ToolCallSnapshot { id, name, input } => {
+                assert_eq!(id, "tool-1");
+                assert_eq!(name, "run_command");
+                assert_eq!(input["command"], "npm run build");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drops_invalid_tool_input_snapshot_json() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        forward_agent_event(
+            &tx,
+            aura_agent::events::AgentLoopEvent::ToolInputSnapshot {
+                id: "tool-1".to_string(),
+                name: "run_command".to_string(),
+                input: "{".to_string(),
+            },
+        );
+
+        assert!(rx.try_recv().is_err(), "invalid JSON snapshot should be ignored");
     }
 }
 

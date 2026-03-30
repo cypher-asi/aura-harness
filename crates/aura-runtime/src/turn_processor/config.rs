@@ -41,7 +41,7 @@ impl Default for TurnConfig {
         Self {
             max_steps: 25,
             max_tool_calls_per_step: 8,
-            model_timeout_ms: 60_000,
+            model_timeout_ms: 180_000,
             tool_timeout_ms: 30_000,
             context_window: 50,
             model: aura_core::DEFAULT_MODEL.to_string(),
@@ -79,7 +79,7 @@ mod tests {
         let config = TurnConfig::default();
         assert_eq!(config.max_steps, 25);
         assert_eq!(config.max_tool_calls_per_step, 8);
-        assert_eq!(config.model_timeout_ms, 60_000);
+        assert_eq!(config.model_timeout_ms, 180_000);
         assert_eq!(config.tool_timeout_ms, 30_000);
         assert_eq!(config.context_window, 50);
         assert_eq!(config.model, aura_core::DEFAULT_MODEL);

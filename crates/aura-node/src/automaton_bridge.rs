@@ -85,12 +85,14 @@ impl AutomatonBridge {
         &self,
         domain: Arc<dyn DomainApi>,
         auth_token: Option<&str>,
+        project_id: Option<&str>,
         workspace: &std::path::Path,
     ) -> Arc<KernelToolExecutor> {
         let mut resolver = ToolResolver::new(self.catalog.clone(), self.tool_config.clone());
-        let domain_exec = Arc::new(DomainToolExecutor::with_session_jwt(
+        let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
             auth_token.map(String::from),
+            project_id.map(String::from),
         ));
         resolver = resolver.with_domain_executor(domain_exec);
 
@@ -217,9 +219,14 @@ impl AutomatonController for AutomatonBridge {
         let domain = self.domain_with_jwt(auth_token.as_deref());
         let effective_workspace = workspace_root.clone();
         let tool_executor = if let Some(ref ws) = effective_workspace {
-            self.build_tool_executor(domain.clone(), auth_token.as_deref(), ws)
+            self.build_tool_executor(domain.clone(), auth_token.as_deref(), Some(project_id), ws)
         } else {
-            self.build_tool_executor(domain.clone(), auth_token.as_deref(), std::path::Path::new("."))
+            self.build_tool_executor(
+                domain.clone(),
+                auth_token.as_deref(),
+                Some(project_id),
+                std::path::Path::new("."),
+            )
         };
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
@@ -300,9 +307,14 @@ impl AutomatonController for AutomatonBridge {
         let domain = self.domain_with_jwt(auth_token.as_deref());
         let effective_workspace = workspace_root.clone();
         let tool_executor = if let Some(ref ws) = effective_workspace {
-            self.build_tool_executor(domain.clone(), auth_token.as_deref(), ws)
+            self.build_tool_executor(domain.clone(), auth_token.as_deref(), Some(project_id), ws)
         } else {
-            self.build_tool_executor(domain.clone(), auth_token.as_deref(), std::path::Path::new("."))
+            self.build_tool_executor(
+                domain.clone(),
+                auth_token.as_deref(),
+                Some(project_id),
+                std::path::Path::new("."),
+            )
         };
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());

@@ -143,6 +143,7 @@ dependencies = [
  "proptest",
  "reqwest",
  "rpassword",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

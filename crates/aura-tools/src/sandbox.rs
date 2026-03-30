@@ -87,6 +87,11 @@ impl Sandbox {
     pub fn resolve(&self, path: impl AsRef<Path>) -> Result<PathBuf, ToolError> {
         let path = path.as_ref();
 
+        if is_workspace_root_alias(path) {
+            debug!(original = ?path, resolved = ?self.root, "Path resolved to workspace root alias");
+            return Ok(self.root.clone());
+        }
+
         // Join with root if relative
         let joined = if path.is_absolute() {
             path.to_path_buf()
@@ -170,6 +175,17 @@ fn normalize_path(path: &Path) -> PathBuf {
     components.iter().collect()
 }
 
+fn is_workspace_root_alias(path: &Path) -> bool {
+    use std::path::Component;
+
+    let mut components = path.components();
+    match (components.next(), components.next(), components.next()) {
+        (Some(Component::RootDir), None, None) => true,
+        (Some(Component::Prefix(_)), Some(Component::RootDir), None) => true,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +242,14 @@ mod tests {
 
         let result = sandbox.resolve("/etc/passwd");
         assert!(matches!(result, Err(ToolError::SandboxViolation { .. })));
+    }
+
+    #[test]
+    fn test_resolve_workspace_root_alias() {
+        let (sandbox, _dir) = create_sandbox();
+
+        let resolved = sandbox.resolve("/").unwrap();
+        assert_eq!(resolved, sandbox.root());
     }
 
     #[test]
