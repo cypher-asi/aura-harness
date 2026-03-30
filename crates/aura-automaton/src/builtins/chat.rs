@@ -87,13 +87,34 @@ impl Automaton for ChatAutomaton {
     async fn tick(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
         let cfg = ChatConfig::from_json(&ctx.config)?;
 
+        let stored = self.load_messages(ctx, &cfg).await?;
+        let (project_info, api_messages, tools) =
+            self.build_chat_context(ctx, &cfg, &stored).await?;
+
+        let result = self
+            .run_chat_loop(ctx, &project_info, &cfg, api_messages, tools)
+            .await?;
+        self.save_assistant_reply(ctx, &cfg, &result).await;
+
+        ctx.emit(AutomatonEvent::TokenUsage {
+            input_tokens: result.total_input_tokens,
+            output_tokens: result.total_output_tokens,
+        });
+
+        Ok(TickOutcome::Done)
+    }
+}
+
+impl ChatAutomaton {
+    async fn load_messages(
+        &self,
+        ctx: &mut TickContext,
+        cfg: &ChatConfig,
+    ) -> Result<Vec<MessageDescriptor>, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
             message: "Loading conversation...".into(),
         });
 
-        // ------------------------------------------------------------------
-        // 1. Fetch messages
-        // ------------------------------------------------------------------
         let stored = self
             .domain
             .list_messages(&cfg.project_id, &cfg.instance_id)
@@ -105,12 +126,25 @@ impl Automaton for ChatAutomaton {
                 automaton_id: ctx.automaton_id.to_string(),
                 message: "No messages to process".into(),
             });
-            return Ok(TickOutcome::Done);
+            return Err(AutomatonError::DomainApi("No messages to process".into()));
         }
 
-        // ------------------------------------------------------------------
-        // 2. Build context
-        // ------------------------------------------------------------------
+        Ok(stored)
+    }
+
+    async fn build_chat_context(
+        &self,
+        ctx: &mut TickContext,
+        cfg: &ChatConfig,
+        stored: &[MessageDescriptor],
+    ) -> Result<
+        (
+            aura_tools::domain_tools::ProjectDescriptor,
+            Vec<Message>,
+            Vec<aura_reasoner::ToolDefinition>,
+        ),
+        AutomatonError,
+    > {
         ctx.emit(AutomatonEvent::Progress {
             message: "Building context...".into(),
         });
@@ -121,6 +155,24 @@ impl Automaton for ChatAutomaton {
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
+        let api_messages = convert_descriptors_to_messages(stored);
+        let tools = self.catalog.tools_for_profile(ToolProfile::Agent);
+
+        Ok((project, api_messages, tools))
+    }
+
+    async fn run_chat_loop(
+        &self,
+        ctx: &mut TickContext,
+        project: &aura_tools::domain_tools::ProjectDescriptor,
+        cfg: &ChatConfig,
+        api_messages: Vec<Message>,
+        tools: Vec<aura_reasoner::ToolDefinition>,
+    ) -> Result<aura_agent::AgentLoopResult, AutomatonError> {
+        ctx.emit(AutomatonEvent::Progress {
+            message: "Waiting for response...".into(),
+        });
+
         let project_info = ProjectInfo {
             name: &project.name,
             description: project.description.as_deref().unwrap_or(""),
@@ -128,16 +180,6 @@ impl Automaton for ChatAutomaton {
             build_command: project.build_command.as_deref(),
             test_command: project.test_command.as_deref(),
         };
-
-        let api_messages = convert_descriptors_to_messages(&stored);
-        let tools = self.catalog.tools_for_profile(ToolProfile::Agent);
-
-        // ------------------------------------------------------------------
-        // 3. Run agent loop
-        // ------------------------------------------------------------------
-        ctx.emit(AutomatonEvent::Progress {
-            message: "Waiting for response...".into(),
-        });
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let automaton_tx = ctx.event_tx.clone();
@@ -148,7 +190,6 @@ impl Automaton for ChatAutomaton {
         });
 
         let cancel = ctx.cancellation_token().clone();
-
         let executor = NoOpChatExecutor;
 
         let result = self
@@ -173,43 +214,44 @@ impl Automaton for ChatAutomaton {
             "chat loop finished"
         );
 
-        // ------------------------------------------------------------------
-        // 4. Save assistant message
-        // ------------------------------------------------------------------
-        if !result.total_text.is_empty() {
-            let session = self
-                .domain
-                .get_active_session(&cfg.instance_id)
-                .await
-                .ok()
-                .flatten();
-            let session_id = session.map(|s| s.id).unwrap_or_default();
+        Ok(result)
+    }
 
-            if let Err(e) = self
-                .domain
-                .save_message(SaveMessageParams {
-                    project_id: cfg.project_id.clone(),
-                    instance_id: cfg.instance_id.clone(),
-                    session_id,
-                    role: "assistant".into(),
-                    content: result.total_text.clone(),
-                })
-                .await
-            {
-                error!(error = %e, "failed to save assistant message");
-            }
-
-            ctx.emit(AutomatonEvent::MessageSaved {
-                message_id: String::new(),
-            });
+    async fn save_assistant_reply(
+        &self,
+        ctx: &mut TickContext,
+        cfg: &ChatConfig,
+        result: &aura_agent::AgentLoopResult,
+    ) {
+        if result.total_text.is_empty() {
+            return;
         }
 
-        ctx.emit(AutomatonEvent::TokenUsage {
-            input_tokens: result.total_input_tokens,
-            output_tokens: result.total_output_tokens,
-        });
+        let session = self
+            .domain
+            .get_active_session(&cfg.instance_id)
+            .await
+            .ok()
+            .flatten();
+        let session_id = session.map(|s| s.id).unwrap_or_default();
 
-        Ok(TickOutcome::Done)
+        if let Err(e) = self
+            .domain
+            .save_message(SaveMessageParams {
+                project_id: cfg.project_id.clone(),
+                instance_id: cfg.instance_id.clone(),
+                session_id,
+                role: "assistant".into(),
+                content: result.total_text.clone(),
+            })
+            .await
+        {
+            error!(error = %e, "failed to save assistant message");
+        }
+
+        ctx.emit(AutomatonEvent::MessageSaved {
+            message_id: String::new(),
+        });
     }
 }
 

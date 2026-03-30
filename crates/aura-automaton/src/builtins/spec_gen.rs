@@ -72,6 +72,24 @@ impl Automaton for SpecGenAutomaton {
     async fn tick(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
         let cfg = SpecGenConfig::from_json(&ctx.config)?;
 
+        let requirements = self.load_requirements(ctx, &cfg).await?;
+        let specs = self.generate_specs(ctx, &cfg, &requirements).await?;
+        self.save_specs(ctx, &cfg, &specs).await?;
+
+        ctx.emit(AutomatonEvent::Progress {
+            message: format!("{} specs generated and saved", specs.len()),
+        });
+
+        Ok(TickOutcome::Done)
+    }
+}
+
+impl SpecGenAutomaton {
+    async fn load_requirements(
+        &self,
+        ctx: &mut TickContext,
+        cfg: &SpecGenConfig,
+    ) -> Result<String, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
             message: "Loading project...".into(),
         });
@@ -82,9 +100,6 @@ impl Automaton for SpecGenAutomaton {
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
-        // ------------------------------------------------------------------
-        // 1. Load requirements
-        // ------------------------------------------------------------------
         ctx.emit(AutomatonEvent::Progress {
             message: "Reading requirements document...".into(),
         });
@@ -95,35 +110,13 @@ impl Automaton for SpecGenAutomaton {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let requirements = if !requirements_path.is_empty() {
-            let workspace_root = ctx
-                .workspace_root
-                .as_deref()
-                .ok_or_else(|| AutomatonError::InvalidConfig("no workspace_root set".into()))?;
-            let resolved = workspace_root.join(requirements_path);
-            let canonical = resolved.canonicalize().map_err(|e| {
-                AutomatonError::InvalidConfig(format!(
-                    "failed to resolve requirements path {requirements_path}: {e}"
-                ))
-            })?;
-            let canonical_base = workspace_root.canonicalize().map_err(|e| {
-                AutomatonError::InvalidConfig(format!("failed to canonicalize workspace root: {e}"))
-            })?;
-            if !canonical.starts_with(&canonical_base) {
-                return Err(AutomatonError::InvalidConfig(format!(
-                    "requirements_path escapes workspace root: {requirements_path}"
-                )));
-            }
-            tokio::fs::read_to_string(&canonical).await.map_err(|e| {
-                AutomatonError::InvalidConfig(format!(
-                    "failed to read requirements file {requirements_path}: {e}"
-                ))
-            })?
-        } else {
+        if requirements_path.is_empty() {
             return Err(AutomatonError::InvalidConfig(
                 "no requirements_path configured".into(),
             ));
-        };
+        }
+
+        let requirements = read_requirements(ctx, requirements_path)?;
 
         info!(
             project_id = %cfg.project_id,
@@ -131,9 +124,15 @@ impl Automaton for SpecGenAutomaton {
             "requirements loaded"
         );
 
-        // ------------------------------------------------------------------
-        // 2. Generate specs via LLM
-        // ------------------------------------------------------------------
+        Ok(requirements)
+    }
+
+    async fn generate_specs(
+        &self,
+        ctx: &mut TickContext,
+        cfg: &SpecGenConfig,
+        requirements: &str,
+    ) -> Result<Vec<ParsedSpec>, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
             message: "Generating specifications...".into(),
         });
@@ -146,7 +145,7 @@ impl Automaton for SpecGenAutomaton {
             .to_string();
 
         let request = aura_reasoner::ModelRequest::builder(&model, SPEC_GENERATION_SYSTEM_PROMPT)
-            .messages(vec![aura_reasoner::Message::user(&requirements)])
+            .messages(vec![aura_reasoner::Message::user(requirements)])
             .max_tokens(MAX_TOKENS)
             .build();
 
@@ -161,9 +160,6 @@ impl Automaton for SpecGenAutomaton {
             output_tokens: response.usage.output_tokens,
         });
 
-        // ------------------------------------------------------------------
-        // 3. Parse response
-        // ------------------------------------------------------------------
         ctx.emit(AutomatonEvent::Progress {
             message: "Parsing AI response...".into(),
         });
@@ -176,14 +172,19 @@ impl Automaton for SpecGenAutomaton {
             "parsed specs from LLM response"
         );
 
-        // ------------------------------------------------------------------
-        // 4. Save specs
-        // ------------------------------------------------------------------
+        Ok(specs)
+    }
+
+    async fn save_specs(
+        &self,
+        ctx: &mut TickContext,
+        cfg: &SpecGenConfig,
+        specs: &[ParsedSpec],
+    ) -> Result<(), AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
             message: format!("Saving {} specs...", specs.len()),
         });
 
-        // Clear existing specs
         let existing = self
             .domain
             .list_specs(&cfg.project_id, None)
@@ -214,12 +215,34 @@ impl Automaton for SpecGenAutomaton {
             });
         }
 
-        ctx.emit(AutomatonEvent::Progress {
-            message: format!("{} specs generated and saved", specs.len()),
-        });
-
-        Ok(TickOutcome::Done)
+        Ok(())
     }
+}
+
+fn read_requirements(ctx: &TickContext, requirements_path: &str) -> Result<String, AutomatonError> {
+    let workspace_root = ctx
+        .workspace_root
+        .as_deref()
+        .ok_or_else(|| AutomatonError::InvalidConfig("no workspace_root set".into()))?;
+    let resolved = workspace_root.join(requirements_path);
+    let canonical = resolved.canonicalize().map_err(|e| {
+        AutomatonError::InvalidConfig(format!(
+            "failed to resolve requirements path {requirements_path}: {e}"
+        ))
+    })?;
+    let canonical_base = workspace_root.canonicalize().map_err(|e| {
+        AutomatonError::InvalidConfig(format!("failed to canonicalize workspace root: {e}"))
+    })?;
+    if !canonical.starts_with(&canonical_base) {
+        return Err(AutomatonError::InvalidConfig(format!(
+            "requirements_path escapes workspace root: {requirements_path}"
+        )));
+    }
+    std::fs::read_to_string(&canonical).map_err(|e| {
+        AutomatonError::InvalidConfig(format!(
+            "failed to read requirements file {requirements_path}: {e}"
+        ))
+    })
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

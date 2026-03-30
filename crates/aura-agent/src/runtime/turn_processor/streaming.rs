@@ -127,7 +127,6 @@ where
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn complete_with_streaming_inner(
         &self,
         request: ModelRequest,
@@ -149,91 +148,19 @@ where
         };
 
         let mut accumulator = StreamAccumulator::new();
-        let input_tokens = 0u64;
         let mut in_thinking_block = false;
 
         loop {
-            let event_result = if let Some(token) = &self.cancellation_token {
-                tokio::select! {
-                    biased;
-                    () = token.cancelled() => {
-                        info!("Stream cancelled by cancellation token");
-                        break;
-                    }
-                    next = stream.next() => next,
-                }
-            } else {
-                stream.next().await
-            };
-
+            let event_result = self.next_stream_event(&mut stream).await;
             let Some(event_result) = event_result else {
                 break;
             };
 
             match event_result {
                 Ok(event) => {
-                    match &event {
-                        StreamEvent::ContentBlockStart {
-                            content_type: aura_reasoner::StreamContentType::Thinking,
-                            ..
-                        } => {
-                            in_thinking_block = true;
-                        }
-                        StreamEvent::ContentBlockStart {
-                            content_type: aura_reasoner::StreamContentType::ToolUse { id, name },
-                            ..
-                        } => {
-                            if in_thinking_block {
-                                self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
-                                in_thinking_block = false;
-                            }
-                            self.emit_stream_event(StreamCallbackEvent::ToolStart {
-                                id: id.clone(),
-                                name: name.clone(),
-                            });
-                        }
-                        StreamEvent::ContentBlockStart {
-                            content_type: aura_reasoner::StreamContentType::Text,
-                            ..
-                        }
-                        | StreamEvent::ContentBlockStop { .. } => {
-                            if in_thinking_block {
-                                self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
-                                in_thinking_block = false;
-                            }
-                        }
-                        StreamEvent::ThinkingDelta { thinking } => {
-                            self.emit_stream_event(StreamCallbackEvent::ThinkingDelta(
-                                thinking.clone(),
-                            ));
-                        }
-                        StreamEvent::TextDelta { text } => {
-                            self.emit_stream_event(StreamCallbackEvent::TextDelta(text.clone()));
-                        }
-                        StreamEvent::Error { message } => {
-                            error!(error = %message, "Stream error from provider");
-                            let (code, recoverable) = classify_llm_error(message);
-                            self.emit_stream_event(StreamCallbackEvent::Error {
-                                code: code.to_string(),
-                                message: message.clone(),
-                                recoverable,
-                            });
-                            anyhow::bail!("Stream error: {message}");
-                        }
-                        _ => {}
-                    }
-
+                    self.dispatch_stream_event(&event, &mut in_thinking_block)?;
                     accumulator.process(&event);
-
-                    if matches!(event, StreamEvent::InputJsonDelta { .. }) {
-                        if let Some(tool) = &accumulator.current_tool_use {
-                            self.emit_stream_event(StreamCallbackEvent::ToolInputSnapshot {
-                                id: tool.id.clone(),
-                                name: tool.name.clone(),
-                                input: tool.input_json.clone(),
-                            });
-                        }
-                    }
+                    self.emit_tool_input_snapshot(&event, &accumulator);
 
                     if matches!(event, StreamEvent::MessageStop) {
                         break;
@@ -254,11 +181,98 @@ where
         }
 
         self.emit_stream_event(StreamCallbackEvent::StepComplete);
-
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         accumulator
-            .into_response(input_tokens, latency_ms)
+            .into_response(0u64, latency_ms)
             .map_err(Into::into)
+    }
+
+    async fn next_stream_event(
+        &self,
+        stream: &mut std::pin::Pin<
+            Box<dyn futures_util::Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static>,
+        >,
+    ) -> Option<anyhow::Result<StreamEvent>> {
+        if let Some(token) = &self.cancellation_token {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => {
+                    info!("Stream cancelled by cancellation token");
+                    None
+                }
+                next = stream.next() => next,
+            }
+        } else {
+            stream.next().await
+        }
+    }
+
+    fn dispatch_stream_event(
+        &self,
+        event: &StreamEvent,
+        in_thinking_block: &mut bool,
+    ) -> anyhow::Result<()> {
+        match event {
+            StreamEvent::ContentBlockStart {
+                content_type: aura_reasoner::StreamContentType::Thinking,
+                ..
+            } => {
+                *in_thinking_block = true;
+            }
+            StreamEvent::ContentBlockStart {
+                content_type: aura_reasoner::StreamContentType::ToolUse { id, name },
+                ..
+            } => {
+                if *in_thinking_block {
+                    self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
+                    *in_thinking_block = false;
+                }
+                self.emit_stream_event(StreamCallbackEvent::ToolStart {
+                    id: id.clone(),
+                    name: name.clone(),
+                });
+            }
+            StreamEvent::ContentBlockStart {
+                content_type: aura_reasoner::StreamContentType::Text,
+                ..
+            }
+            | StreamEvent::ContentBlockStop { .. } => {
+                if *in_thinking_block {
+                    self.emit_stream_event(StreamCallbackEvent::ThinkingComplete);
+                    *in_thinking_block = false;
+                }
+            }
+            StreamEvent::ThinkingDelta { thinking } => {
+                self.emit_stream_event(StreamCallbackEvent::ThinkingDelta(thinking.clone()));
+            }
+            StreamEvent::TextDelta { text } => {
+                self.emit_stream_event(StreamCallbackEvent::TextDelta(text.clone()));
+            }
+            StreamEvent::Error { message } => {
+                error!(error = %message, "Stream error from provider");
+                let (code, recoverable) = classify_llm_error(message);
+                self.emit_stream_event(StreamCallbackEvent::Error {
+                    code: code.to_string(),
+                    message: message.clone(),
+                    recoverable,
+                });
+                anyhow::bail!("Stream error: {message}");
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn emit_tool_input_snapshot(&self, event: &StreamEvent, accumulator: &StreamAccumulator) {
+        if matches!(event, StreamEvent::InputJsonDelta { .. }) {
+            if let Some(tool) = &accumulator.current_tool_use {
+                self.emit_stream_event(StreamCallbackEvent::ToolInputSnapshot {
+                    id: tool.id.clone(),
+                    name: tool.name.clone(),
+                    input: tool.input_json.clone(),
+                });
+            }
+        }
     }
 }

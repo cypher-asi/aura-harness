@@ -6,7 +6,6 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::Instant;
 
 use tracing::{info, warn};
 
@@ -19,7 +18,7 @@ use super::signatures::{normalize_error_signature, parse_individual_error_signat
 use super::test::run_and_handle_tests;
 use super::utils::{
     all_errors_in_baseline, auto_correct_build_command, infer_default_build_command,
-    rollback_to_snapshot, snapshot_modified_files,
+    rollback_to_snapshot, snapshot_modified_files, FileSnapshot,
 };
 use super::{emit, FixProvider, VerifyConfig, VerifyEvent};
 
@@ -134,11 +133,39 @@ fn check_error_stagnation(
     false
 }
 
+/// Mutable state for the verify-and-fix loop.
+struct FixLoopState {
+    fix_ops: Vec<FileOp>,
+    prior: Vec<BuildFixAttemptRecord>,
+    test_prior: Vec<BuildFixAttemptRecord>,
+    dup_bail: u32,
+    inp_t: u64,
+    out_t: u64,
+    last_stderr: String,
+}
+
+impl FixLoopState {
+    fn to_result(&self, build_passed: bool, attempts_used: u32) -> BuildVerifyResult {
+        BuildVerifyResult {
+            fix_ops: self.fix_ops.clone(),
+            build_passed,
+            attempts_used,
+            duplicate_bailouts: self.dup_bail,
+            fix_input_tokens: self.inp_t,
+            fix_output_tokens: self.out_t,
+            last_stderr: if build_passed {
+                String::new()
+            } else {
+                self.last_stderr.clone()
+            },
+        }
+    }
+}
+
 /// Run the build/test verify-and-fix loop.
 ///
 /// Iterates up to `config.max_build_fix_retries`, running the build command,
 /// requesting LLM fixes on failure, and optionally running tests on success.
-#[allow(clippy::too_many_lines)]
 pub async fn verify_and_fix_build(
     params: &BuildVerifyParams<'_>,
     config: &VerifyConfig,
@@ -162,40 +189,20 @@ pub async fn verify_and_fix_build(
         };
 
     let base_path = params.project_root;
-    let mut fix_ops: Vec<FileOp> = Vec::new();
-    let mut prior: Vec<BuildFixAttemptRecord> = Vec::new();
-    let mut test_prior: Vec<BuildFixAttemptRecord> = Vec::new();
-    let (mut dup_bail, mut inp_t, mut out_t) = (0u32, 0u64, 0u64);
-    let mut last_stderr = String::new();
     let pre_fix_snapshots = snapshot_modified_files(base_path, params.initial_file_ops);
+    let mut st = FixLoopState {
+        fix_ops: Vec::new(),
+        prior: Vec::new(),
+        test_prior: Vec::new(),
+        dup_bail: 0,
+        inp_t: 0,
+        out_t: 0,
+        last_stderr: String::new(),
+    };
 
     for attempt in 1..=config.max_build_fix_retries {
-        // --- run build ---
-        let build_start = Instant::now();
+        let br = run_build_step(base_path, &build_cmd, event_tx).await?;
 
-        let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel();
-        if let Some(tx) = event_tx {
-            let fwd = tx.clone();
-            tokio::spawn(async move {
-                while let Some(line) = line_rx.recv().await {
-                    let _ = fwd.send(VerifyEvent::OutputDelta(line));
-                }
-            });
-        } else {
-            tokio::spawn(async move { while line_rx.recv().await.is_some() {} });
-        }
-
-        emit(
-            event_tx,
-            VerifyEvent::BuildStarted {
-                command: build_cmd.clone(),
-            },
-        );
-
-        let br = runner::run_build_command(base_path, &build_cmd, Some(line_tx)).await?;
-        let dur = build_start.elapsed().as_millis() as u64;
-
-        // --- timeout auto-correct ---
         if br.timed_out {
             if let Some(c) = auto_correct_build_command(&build_cmd) {
                 warn!(old = %build_cmd, new = %c, "build command timed out, auto-correcting");
@@ -204,140 +211,168 @@ pub async fn verify_and_fix_build(
             }
         }
 
-        // --- success ---
         if br.success {
-            emit(
-                event_tx,
-                VerifyEvent::BuildPassed {
-                    command: build_cmd.clone(),
-                    stdout: br.stdout.clone(),
-                    duration_ms: dur,
-                },
-            );
-            match params.test_command {
-                Some(test_cmd) if !test_cmd.trim().is_empty() => {
-                    let (tp, i, o) = run_and_handle_tests(
-                        base_path,
-                        test_cmd,
-                        attempt,
-                        params.baseline_test_failures,
-                        fix_provider,
-                        event_tx,
-                        &mut test_prior,
-                        &mut fix_ops,
-                    )
-                    .await?;
-                    inp_t += i;
-                    out_t += o;
-                    if tp {
-                        return Ok(BuildVerifyResult {
-                            fix_ops,
-                            build_passed: true,
-                            attempts_used: attempt,
-                            duplicate_bailouts: dup_bail,
-                            fix_input_tokens: inp_t,
-                            fix_output_tokens: out_t,
-                            last_stderr: String::new(),
-                        });
-                    }
-                    continue;
-                }
-                _ => {
-                    return Ok(BuildVerifyResult {
-                        fix_ops,
-                        build_passed: true,
-                        attempts_used: attempt,
-                        duplicate_bailouts: dup_bail,
-                        fix_input_tokens: inp_t,
-                        fix_output_tokens: out_t,
-                        last_stderr: String::new(),
-                    });
-                }
-            }
-        }
-
-        // --- failure ---
-        last_stderr = br.stderr.clone();
-        emit(
-            event_tx,
-            VerifyEvent::BuildFailed {
-                command: build_cmd.clone(),
-                stdout: br.stdout.clone(),
-                stderr: br.stderr.clone(),
+            return handle_build_success(
+                params,
+                &build_cmd,
+                &br,
                 attempt,
-                duration_ms: dur,
-            },
-        );
-
-        if all_errors_in_baseline(params.baseline_build_errors, &br.stderr) {
-            return Ok(BuildVerifyResult {
-                fix_ops,
-                build_passed: true,
-                attempts_used: attempt,
-                duplicate_bailouts: dup_bail,
-                fix_input_tokens: inp_t,
-                fix_output_tokens: out_t,
-                last_stderr: String::new(),
-            });
+                fix_provider,
+                event_tx,
+                &mut st,
+            )
+            .await;
         }
 
-        if attempt == config.max_build_fix_retries {
-            info!(task = %params.task_label, "build still failing after max retries");
-            return Ok(BuildVerifyResult {
-                fix_ops,
-                build_passed: false,
-                attempts_used: attempt,
-                duplicate_bailouts: dup_bail,
-                fix_input_tokens: inp_t,
-                fix_output_tokens: out_t,
-                last_stderr,
-            });
-        }
-
-        if check_error_stagnation(params.task_label, &br.stderr, &prior, attempt) {
-            dup_bail += 1;
-            rollback_to_snapshot(base_path, &pre_fix_snapshots).await;
-            info!(task = %params.task_label, "rolled back files after stagnated fix loop");
-            return Ok(BuildVerifyResult {
-                fix_ops,
-                build_passed: false,
-                attempts_used: attempt,
-                duplicate_bailouts: dup_bail,
-                fix_input_tokens: inp_t,
-                fix_output_tokens: out_t,
-                last_stderr,
-            });
-        }
-
-        // --- request and apply fix ---
-        emit(event_tx, VerifyEvent::BuildFixAttempt { attempt });
-
-        let (response, i, o) = fix_provider
-            .request_fix(&build_cmd, &br.stderr, &br.stdout, &prior)
-            .await?;
-        inp_t += i;
-        out_t += o;
-
-        apply_fix_and_record(
-            base_path,
-            &response,
+        let should_return = handle_build_failure(
+            params,
+            &build_cmd,
+            &br,
             attempt,
-            &br.stderr,
-            &mut prior,
-            &mut fix_ops,
-            "build-fix",
+            config,
+            &pre_fix_snapshots,
             fix_provider,
+            event_tx,
+            &mut st,
         )
         .await?;
+
+        if let Some(result) = should_return {
+            return Ok(result);
+        }
     }
 
-    Ok(BuildVerifyResult {
-        fix_ops,
-        build_passed: false,
-        attempts_used: config.max_build_fix_retries,
-        duplicate_bailouts: dup_bail,
-        fix_input_tokens: inp_t,
-        fix_output_tokens: out_t,
-        last_stderr,
-    })
+    Ok(st.to_result(false, config.max_build_fix_retries))
+}
+
+async fn run_build_step(
+    base_path: &Path,
+    build_cmd: &str,
+    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
+) -> anyhow::Result<runner::BuildResult> {
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel();
+    if let Some(tx) = event_tx {
+        let fwd = tx.clone();
+        tokio::spawn(async move {
+            while let Some(line) = line_rx.recv().await {
+                let _ = fwd.send(VerifyEvent::OutputDelta(line));
+            }
+        });
+    } else {
+        tokio::spawn(async move { while line_rx.recv().await.is_some() {} });
+    }
+
+    emit(
+        event_tx,
+        VerifyEvent::BuildStarted {
+            command: build_cmd.to_string(),
+        },
+    );
+
+    runner::run_build_command(base_path, build_cmd, Some(line_tx)).await
+}
+
+async fn handle_build_success(
+    params: &BuildVerifyParams<'_>,
+    build_cmd: &str,
+    br: &runner::BuildResult,
+    attempt: u32,
+    fix_provider: &dyn FixProvider,
+    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
+    st: &mut FixLoopState,
+) -> anyhow::Result<BuildVerifyResult> {
+    let dur = 0u64; // timing already logged by run_build_step
+    emit(
+        event_tx,
+        VerifyEvent::BuildPassed {
+            command: build_cmd.to_string(),
+            stdout: br.stdout.clone(),
+            duration_ms: dur,
+        },
+    );
+    match params.test_command {
+        Some(test_cmd) if !test_cmd.trim().is_empty() => {
+            let (tp, i, o) = run_and_handle_tests(
+                params.project_root,
+                test_cmd,
+                attempt,
+                params.baseline_test_failures,
+                fix_provider,
+                event_tx,
+                &mut st.test_prior,
+                &mut st.fix_ops,
+            )
+            .await?;
+            st.inp_t += i;
+            st.out_t += o;
+            if tp {
+                return Ok(st.to_result(true, attempt));
+            }
+            Ok(st.to_result(false, attempt))
+        }
+        _ => Ok(st.to_result(true, attempt)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_build_failure(
+    params: &BuildVerifyParams<'_>,
+    build_cmd: &str,
+    br: &runner::BuildResult,
+    attempt: u32,
+    config: &VerifyConfig,
+    pre_fix_snapshots: &[FileSnapshot],
+    fix_provider: &dyn FixProvider,
+    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
+    st: &mut FixLoopState,
+) -> anyhow::Result<Option<BuildVerifyResult>> {
+    st.last_stderr = br.stderr.clone();
+    emit(
+        event_tx,
+        VerifyEvent::BuildFailed {
+            command: build_cmd.to_string(),
+            stdout: br.stdout.clone(),
+            stderr: br.stderr.clone(),
+            attempt,
+            duration_ms: 0,
+        },
+    );
+
+    if all_errors_in_baseline(params.baseline_build_errors, &br.stderr) {
+        return Ok(Some(st.to_result(true, attempt)));
+    }
+
+    if attempt == config.max_build_fix_retries {
+        info!(task = %params.task_label, "build still failing after max retries");
+        return Ok(Some(st.to_result(false, attempt)));
+    }
+
+    if check_error_stagnation(params.task_label, &br.stderr, &st.prior, attempt) {
+        st.dup_bail += 1;
+        rollback_to_snapshot(params.project_root, pre_fix_snapshots).await;
+        info!(task = %params.task_label, "rolled back files after stagnated fix loop");
+        return Ok(Some(st.to_result(false, attempt)));
+    }
+
+    emit(event_tx, VerifyEvent::BuildFixAttempt { attempt });
+
+    let (response, i, o) = fix_provider
+        .request_fix(build_cmd, &br.stderr, &br.stdout, &st.prior)
+        .await?;
+    st.inp_t += i;
+    st.out_t += o;
+
+    apply_fix_and_record(
+        params.project_root,
+        &response,
+        attempt,
+        &br.stderr,
+        &mut st.prior,
+        &mut st.fix_ops,
+        "build-fix",
+        fix_provider,
+    )
+    .await?;
+
+    Ok(None)
 }

@@ -82,74 +82,7 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.colors.primary));
 
-    let help_text = vec![
-        Line::from(Span::styled(
-            "/help      Show this help",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/new       New session (reset context)",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/clear     Clear messages",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/swarm     Toggle Swarm panel",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/record    Toggle Record panel",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/login     Login to zOS",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/logout    Clear credentials",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/whoami     Show auth status",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "/quit      Exit",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Enter      Send message",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "Tab        Switch panels",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "↑/↓        Navigate / History",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "PgUp/PgDn  Scroll chat history",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "Shift+Mouse Select text to copy",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(Span::styled(
-            "Ctrl+C     Cancel/Exit",
-            Style::default().fg(theme.colors.foreground),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press any key to close",
-            Style::default().fg(theme.colors.muted),
-        )),
-    ];
+    let help_text = build_help_lines(theme);
 
     let paragraph = Paragraph::new(help_text)
         .block(block)
@@ -157,8 +90,44 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     frame.render_widget(paragraph, modal_area);
 }
 
+fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
+    let fg = theme.colors.foreground;
+    let items = [
+        "/help      Show this help",
+        "/new       New session (reset context)",
+        "/clear     Clear messages",
+        "/swarm     Toggle Swarm panel",
+        "/record    Toggle Record panel",
+        "/login     Login to zOS",
+        "/logout    Clear credentials",
+        "/whoami     Show auth status",
+        "/quit      Exit",
+        "",
+        "Enter      Send message",
+        "Tab        Switch panels",
+        "↑/↓        Navigate / History",
+        "PgUp/PgDn  Scroll chat history",
+        "Shift+Mouse Select text to copy",
+        "Ctrl+C     Cancel/Exit",
+        "",
+        "Press any key to close",
+    ];
+
+    items
+        .into_iter()
+        .map(|s| {
+            if s.is_empty() {
+                Line::from("")
+            } else if s == "Press any key to close" {
+                Line::from(Span::styled(s, Style::default().fg(theme.colors.muted)))
+            } else {
+                Line::from(Span::styled(s, Style::default().fg(fg)))
+            }
+        })
+        .collect()
+}
+
 /// Render the record detail overlay.
-#[allow(clippy::too_many_lines)]
 fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
     use crate::events::RecordStatus;
 
@@ -169,7 +138,6 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
     let area = frame.area();
     let modal_width = 70.min(area.width.saturating_sub(4));
     let has_error = !record.error_details.is_empty();
-    let has_info = !record.info.is_empty();
     let base_height = 24u16;
     #[allow(clippy::cast_possible_truncation)]
     let error_lines = if has_error {
@@ -181,6 +149,7 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
+
     let (status_icon, status_color) = match record.status {
         RecordStatus::Ok => (" ✓ ", theme.colors.success),
         RecordStatus::Error => (" ✗ ", theme.colors.error),
@@ -193,7 +162,33 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(status_color));
 
-    let mut content = vec![
+    let mut content = build_record_header(record, theme);
+    build_transaction_section(&mut content, record, theme);
+    build_processing_section(&mut content, record, theme);
+
+    if has_error {
+        build_error_section(&mut content, record, modal_width, theme);
+    }
+
+    build_message_section(&mut content, record, theme);
+
+    content.push(Line::from(""));
+    content.push(Line::from(Span::styled(
+        "Press Esc or Enter to close",
+        Style::default().fg(theme.colors.muted),
+    )));
+
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, modal_area);
+}
+
+fn build_record_header<'a>(
+    record: &'a crate::events::RecordSummary,
+    theme: &Theme,
+) -> Vec<Line<'a>> {
+    vec![
         Line::from(vec![
             Span::styled("Sequence:    ", Style::default().fg(theme.colors.muted)),
             Span::styled(
@@ -208,8 +203,14 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
                 Style::default().fg(theme.colors.secondary),
             ),
         ]),
-    ];
+    ]
+}
 
+fn build_transaction_section<'a>(
+    content: &mut Vec<Line<'a>>,
+    record: &'a crate::events::RecordSummary,
+    theme: &Theme,
+) {
     content.push(Line::from(""));
     content.push(Line::from(Span::styled(
         "── Transaction ──",
@@ -245,13 +246,19 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
         ),
     ]));
 
-    if has_info {
+    if !record.info.is_empty() {
         content.push(Line::from(vec![
             Span::styled("info:        ", Style::default().fg(theme.colors.muted)),
             Span::styled(&record.info, Style::default().fg(theme.colors.primary)),
         ]));
     }
+}
 
+fn build_processing_section<'a>(
+    content: &mut Vec<Line<'a>>,
+    record: &'a crate::events::RecordSummary,
+    theme: &Theme,
+) {
     content.push(Line::from(""));
     content.push(Line::from(Span::styled(
         "── Processing ──",
@@ -275,29 +282,39 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
             Style::default().fg(theme.colors.foreground),
         ),
     ]));
+}
 
-    if has_error {
-        content.push(Line::from(""));
-        content.push(Line::from(Span::styled(
-            "Error Details:",
-            Style::default().fg(theme.colors.error),
-        )));
-        for line in record.error_details.lines() {
-            if line.is_empty() {
-                content.push(Line::from(""));
-            } else {
-                let max_width = (modal_width as usize).saturating_sub(4);
-                let wrapped = wrap_words(line, max_width);
-                for wrapped_line in wrapped {
-                    content.push(Line::from(Span::styled(
-                        format!("  {wrapped_line}"),
-                        Style::default().fg(theme.colors.error),
-                    )));
-                }
+fn build_error_section<'a>(
+    content: &mut Vec<Line<'a>>,
+    record: &'a crate::events::RecordSummary,
+    modal_width: u16,
+    theme: &Theme,
+) {
+    content.push(Line::from(""));
+    content.push(Line::from(Span::styled(
+        "Error Details:",
+        Style::default().fg(theme.colors.error),
+    )));
+    for line in record.error_details.lines() {
+        if line.is_empty() {
+            content.push(Line::from(""));
+        } else {
+            let max_width = (modal_width as usize).saturating_sub(4);
+            for wrapped_line in wrap_words(line, max_width) {
+                content.push(Line::from(Span::styled(
+                    format!("  {wrapped_line}"),
+                    Style::default().fg(theme.colors.error),
+                )));
             }
         }
     }
+}
 
+fn build_message_section<'a>(
+    content: &mut Vec<Line<'a>>,
+    record: &'a crate::events::RecordSummary,
+    theme: &Theme,
+) {
     content.push(Line::from(""));
     content.push(Line::from(Span::styled(
         "Message:",
@@ -313,17 +330,6 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
             content.push(Line::from(spans));
         }
     }
-
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "Press Esc or Enter to close",
-        Style::default().fg(theme.colors.muted),
-    )));
-
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, modal_area);
 }
 
 /// Render a notification.

@@ -13,41 +13,67 @@ impl DevLoopAutomaton {
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
+        if let Some(shell_cmd) = extract_shell_command(task) {
+            return self.execute_shell(ctx, &project, &shell_cmd).await;
+        }
+
+        let effective_path = effective_project_path(ctx, &project);
         let spec = self
             .domain
             .get_spec(&task.spec_id, None)
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
-        if let Some(shell_cmd) = extract_shell_command(task) {
-            let workspace = ctx
-                .workspace_root
-                .as_deref()
-                .unwrap_or(std::path::Path::new(&project.path));
-            return self
-                .runner
-                .execute_shell_task(
-                    &ShellTaskParams {
-                        command: &shell_cmd,
-                        project_root: workspace,
-                    },
-                    None,
-                )
-                .await
-                .map_err(|e| AutomatonError::AgentExecution(e.to_string()));
-        }
+        let result = self
+            .run_agentic_task(ctx, &project, &spec, task, &effective_path)
+            .await;
 
-        let effective_path = ctx
+        match result {
+            Ok(exec) => validate_execution(exec),
+            Err(e) => Err(AutomatonError::AgentExecution(e.to_string())),
+        }
+    }
+
+    async fn execute_shell(
+        &self,
+        ctx: &TickContext,
+        project: &aura_tools::domain_tools::ProjectDescriptor,
+        shell_cmd: &str,
+    ) -> Result<TaskExecutionResult, AutomatonError> {
+        let workspace = ctx
             .workspace_root
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| project.path.clone());
+            .as_deref()
+            .unwrap_or(std::path::Path::new(&project.path));
+        self.runner
+            .execute_shell_task(
+                &ShellTaskParams {
+                    command: shell_cmd,
+                    project_root: workspace,
+                },
+                None,
+            )
+            .await
+            .map_err(|e| AutomatonError::AgentExecution(e.to_string()))
+    }
+
+    async fn run_agentic_task(
+        &self,
+        ctx: &TickContext,
+        project: &aura_tools::domain_tools::ProjectDescriptor,
+        spec: &aura_tools::domain_tools::SpecDescriptor,
+        task: &TaskDescriptor,
+        effective_path: &str,
+    ) -> Result<TaskExecutionResult, anyhow::Error> {
+        let failure_reasons: HashMap<String, String> =
+            ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
+        let prior_failure = failure_reasons.get(&task.id).cloned().unwrap_or_default();
+        let work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
+        let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
 
         let project_info = ProjectInfo {
             name: &project.name,
             description: project.description.as_deref().unwrap_or(""),
-            folder_path: &effective_path,
+            folder_path: effective_path,
             build_command: project.build_command.as_deref(),
             test_command: project.test_command.as_deref(),
         };
@@ -55,9 +81,6 @@ impl DevLoopAutomaton {
             title: &spec.title,
             markdown_contents: &spec.content,
         };
-        let failure_reasons: HashMap<String, String> =
-            ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
-        let prior_failure = failure_reasons.get(&task.id).cloned().unwrap_or_default();
         let task_info = TaskInfo {
             title: &task.title,
             description: &task.description,
@@ -67,8 +90,6 @@ impl DevLoopAutomaton {
         let session_info = SessionInfo {
             summary_of_previous_context: "",
         };
-        let work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
-        let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
 
         let params = AgenticTaskParams {
             project: &project_info,
@@ -87,7 +108,6 @@ impl DevLoopAutomaton {
         };
 
         let cancel = ctx.cancellation_token().clone();
-
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let automaton_tx = ctx.event_tx.clone();
         tokio::spawn(async move {
@@ -103,12 +123,11 @@ impl DevLoopAutomaton {
 
         let tracking = TaskTrackingConfig {
             inner_executor,
-            project_folder: effective_path.clone(),
+            project_folder: effective_path.to_string(),
             build_command: project.build_command.clone(),
         };
 
-        let result = self
-            .runner
+        self.runner
             .execute_task_tracked(
                 self.provider.as_ref(),
                 tracking,
@@ -116,25 +135,8 @@ impl DevLoopAutomaton {
                 Some(event_tx),
                 Some(cancel),
             )
-            .await;
-
-        match result {
-            Ok(exec) => {
-                if exec.file_ops.is_empty() && !exec.no_changes_needed {
-                    let msg = if exec.reached_implementing {
-                        "task reached implementation phase but no file operations completed \
-                         — likely truncated by max_tokens or interrupted. \
-                         On retry, use smaller incremental edits (one file per turn)."
-                    } else {
-                        "task completed without any file operations — completion not verified"
-                    };
-                    Err(AutomatonError::AgentExecution(msg.into()))
-                } else {
-                    Ok(exec)
-                }
-            }
-            Err(e) => Err(AutomatonError::AgentExecution(e.to_string())),
-        }
+            .await
+            .map_err(Into::into)
     }
 
     pub(super) async fn try_retry_failed(
@@ -160,34 +162,77 @@ impl DevLoopAutomaton {
             return Ok(false);
         }
 
-        let mut queue: Vec<String> = ctx.state.get(STATE_TASK_QUEUE).unwrap_or_default();
-        let new_failed: Vec<String> = failed_ids
-            .iter()
-            .filter(|id| !retryable.contains(id))
-            .cloned()
-            .collect();
+        enqueue_retries(
+            ctx,
+            self.domain.as_ref(),
+            &retryable,
+            &mut retry_counts,
+            &failed_ids,
+        )
+        .await;
 
-        for id in &retryable {
-            let count = retry_counts.entry(id.clone()).or_insert(0);
-            *count += 1;
-            info!(task_id = %id, attempt = *count, "Retrying failed task");
+        Ok(true)
+    }
+}
 
-            if let Err(e) = self.domain.transition_task(id, "ready", None).await {
-                warn!(task_id = %id, error = %e, "Failed to sync retry status to backend");
-            }
+async fn enqueue_retries(
+    ctx: &mut TickContext,
+    domain: &dyn DomainApi,
+    retryable: &[String],
+    retry_counts: &mut HashMap<String, u32>,
+    failed_ids: &[String],
+) {
+    let mut queue: Vec<String> = ctx.state.get(STATE_TASK_QUEUE).unwrap_or_default();
+    let new_failed: Vec<String> = failed_ids
+        .iter()
+        .filter(|id| !retryable.contains(id))
+        .cloned()
+        .collect();
 
-            queue.push(id.clone());
+    for id in retryable {
+        let count = retry_counts.entry(id.clone()).or_insert(0);
+        *count += 1;
+        info!(task_id = %id, attempt = *count, "Retrying failed task");
 
-            ctx.emit(AutomatonEvent::TaskRetrying {
-                task_id: id.clone(),
-                attempt: *count,
-                reason: "automatic retry after failure".into(),
-            });
+        if let Err(e) = domain.transition_task(id, "ready", None).await {
+            warn!(task_id = %id, error = %e, "Failed to sync retry status to backend");
         }
 
-        ctx.state.set(STATE_TASK_QUEUE, &queue);
-        ctx.state.set(STATE_FAILED_IDS, &new_failed);
-        ctx.state.set(STATE_RETRY_COUNTS, &retry_counts);
-        Ok(true)
+        queue.push(id.clone());
+        ctx.emit(AutomatonEvent::TaskRetrying {
+            task_id: id.clone(),
+            attempt: *count,
+            reason: "automatic retry after failure".into(),
+        });
+    }
+
+    ctx.state.set(STATE_TASK_QUEUE, &queue);
+    ctx.state.set(STATE_FAILED_IDS, &new_failed);
+    ctx.state.set(STATE_RETRY_COUNTS, retry_counts);
+}
+
+fn effective_project_path(
+    ctx: &TickContext,
+    project: &aura_tools::domain_tools::ProjectDescriptor,
+) -> String {
+    ctx.workspace_root
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| project.path.clone())
+}
+
+fn validate_execution(exec: TaskExecutionResult) -> Result<TaskExecutionResult, AutomatonError> {
+    if exec.file_ops.is_empty() && !exec.no_changes_needed {
+        let msg = if exec.reached_implementing {
+            "task reached implementation phase but no file operations completed \
+             — likely truncated by max_tokens or interrupted. \
+             On retry, use smaller incremental edits (one file per turn)."
+        } else {
+            "task completed without any file operations — completion not verified"
+        };
+        Err(AutomatonError::AgentExecution(msg.into()))
+    } else {
+        Ok(exec)
     }
 }

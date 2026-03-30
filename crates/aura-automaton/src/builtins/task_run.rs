@@ -108,10 +108,39 @@ impl Automaton for TaskRunAutomaton {
         }
 
         let cfg = TaskRunConfig::from_json(&ctx.config)?;
+        let (task, project, spec) = self.fetch_task_context(&cfg).await?;
 
-        // ------------------------------------------------------------------
-        // 1. Fetch task, project, spec
-        // ------------------------------------------------------------------
+        ctx.emit(AutomatonEvent::TaskStarted {
+            task_id: task.id.clone(),
+            task_title: task.title.clone(),
+        });
+
+        self.transition_to_in_progress(&task).await;
+
+        if let Some(shell_cmd) = super::dev_loop::extract_shell_command(&task) {
+            let result = self.run_shell_task(ctx, &project, &shell_cmd).await;
+            return self
+                .finalize_task(ctx, &task.id, &task.title, result.map_err(Into::into))
+                .await;
+        }
+
+        let result = self.run_agentic_task(ctx, &project, &spec, &task).await;
+        self.finalize_task(ctx, &task.id, &task.title, result).await
+    }
+}
+
+impl TaskRunAutomaton {
+    async fn fetch_task_context(
+        &self,
+        cfg: &TaskRunConfig,
+    ) -> Result<
+        (
+            aura_tools::domain_tools::TaskDescriptor,
+            aura_tools::domain_tools::ProjectDescriptor,
+            aura_tools::domain_tools::SpecDescriptor,
+        ),
+        AutomatonError,
+    > {
         let tasks = self
             .domain
             .list_tasks(&cfg.project_id, None, None)
@@ -121,7 +150,8 @@ impl Automaton for TaskRunAutomaton {
         let task = tasks
             .iter()
             .find(|t| t.id == cfg.task_id)
-            .ok_or_else(|| AutomatonError::DomainApi(format!("task {} not found", cfg.task_id)))?;
+            .ok_or_else(|| AutomatonError::DomainApi(format!("task {} not found", cfg.task_id)))?
+            .clone();
 
         let project = self
             .domain
@@ -135,14 +165,10 @@ impl Automaton for TaskRunAutomaton {
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
-        ctx.emit(AutomatonEvent::TaskStarted {
-            task_id: task.id.clone(),
-            task_title: task.title.clone(),
-        });
+        Ok((task, project, spec))
+    }
 
-        // ------------------------------------------------------------------
-        // 2. Transition task to in-progress (pending → ready → in_progress)
-        // ------------------------------------------------------------------
+    async fn transition_to_in_progress(&self, task: &aura_tools::domain_tools::TaskDescriptor) {
         if task.status == "pending" {
             let _ = self.domain.transition_task(&task.id, "ready", None).await;
         }
@@ -153,32 +179,37 @@ impl Automaton for TaskRunAutomaton {
         {
             warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
         }
+    }
 
-        // ------------------------------------------------------------------
-        // 3. Execute
-        // ------------------------------------------------------------------
-        if let Some(shell_cmd) = super::dev_loop::extract_shell_command(task) {
-            let workspace = ctx
-                .workspace_root
-                .as_deref()
-                .unwrap_or(std::path::Path::new(&project.path));
+    async fn run_shell_task(
+        &self,
+        ctx: &TickContext,
+        project: &aura_tools::domain_tools::ProjectDescriptor,
+        shell_cmd: &str,
+    ) -> Result<aura_agent::agent_runner::TaskExecutionResult, anyhow::Error> {
+        let workspace = ctx
+            .workspace_root
+            .as_deref()
+            .unwrap_or(std::path::Path::new(&project.path));
+        self.runner
+            .execute_shell_task(
+                &ShellTaskParams {
+                    command: shell_cmd,
+                    project_root: workspace,
+                },
+                None,
+            )
+            .await
+            .map_err(Into::into)
+    }
 
-            let result = self
-                .runner
-                .execute_shell_task(
-                    &ShellTaskParams {
-                        command: &shell_cmd,
-                        project_root: workspace,
-                    },
-                    None,
-                )
-                .await;
-
-            return self
-                .finalize_task(ctx, &task.id, &task.title, result.map_err(Into::into))
-                .await;
-        }
-
+    async fn run_agentic_task(
+        &self,
+        ctx: &TickContext,
+        project: &aura_tools::domain_tools::ProjectDescriptor,
+        spec: &aura_tools::domain_tools::SpecDescriptor,
+        task: &aura_tools::domain_tools::TaskDescriptor,
+    ) -> Result<aura_agent::agent_runner::TaskExecutionResult, anyhow::Error> {
         let effective_path = ctx
             .workspace_root
             .as_ref()
@@ -233,7 +264,6 @@ impl Automaton for TaskRunAutomaton {
         });
 
         let cancel = ctx.cancellation_token().clone();
-
         let inner_executor: Arc<dyn aura_agent::types::AgentToolExecutor> = self
             .tool_executor
             .clone()
@@ -256,7 +286,7 @@ impl Automaton for TaskRunAutomaton {
             )
             .await;
 
-        let result = match result {
+        match result {
             Ok(exec) => {
                 if exec.file_ops.is_empty() && !exec.no_changes_needed {
                     let msg = if exec.reached_implementing {
@@ -272,13 +302,9 @@ impl Automaton for TaskRunAutomaton {
                 }
             }
             Err(e) => Err(e.into()),
-        };
-
-        self.finalize_task(ctx, &task.id, &task.title, result).await
+        }
     }
-}
 
-impl TaskRunAutomaton {
     async fn finalize_task(
         &self,
         ctx: &mut TickContext,

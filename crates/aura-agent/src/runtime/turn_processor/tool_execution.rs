@@ -25,7 +25,6 @@ where
     /// re-execution. Permitted tools are then executed in parallel via
     /// `futures::future::join_all`. Successful cacheable results are stored
     /// back into the cache for future steps within the same turn.
-    #[allow(clippy::too_many_lines)]
     pub(super) async fn execute_tool_calls(
         &self,
         message: &Message,
@@ -33,45 +32,52 @@ where
         tool_cache: &mut ToolCache,
     ) -> anyhow::Result<Vec<ExecutedToolCall>> {
         let workspace = self.agent_workspace(&agent_id);
-
         if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
             error!(error = %e, "Failed to create workspace");
         }
 
-        // Phase 1: policy checks + cache lookups
+        let (denied, cached, to_execute) = self.classify_tool_calls(message, tool_cache);
+
+        let executed = self
+            .execute_permitted_tools(to_execute, agent_id, &workspace)
+            .await;
+
+        populate_tool_cache(tool_cache, &executed);
+
+        let mut results = denied;
+        results.extend(cached);
+        results.extend(executed);
+        Ok(results)
+    }
+
+    fn classify_tool_calls(
+        &self,
+        message: &Message,
+        tool_cache: &ToolCache,
+    ) -> (
+        Vec<ExecutedToolCall>,
+        Vec<ExecutedToolCall>,
+        Vec<(String, String, serde_json::Value)>,
+    ) {
         let mut denied = Vec::new();
         let mut cached = Vec::new();
-        let mut to_execute: Vec<(String, String, serde_json::Value)> = Vec::new();
+        let mut to_execute = Vec::new();
 
         for block in &message.content {
             if let ContentBlock::ToolUse { id, name, input } = block {
                 debug!(tool = %name, id = %id, "Checking tool permission");
 
-                let permission = self.policy.check_tool_permission(name);
-                match permission {
-                    PermissionLevel::Deny => {
-                        warn!(tool = %name, "Tool denied by policy");
-                        denied.push(ExecutedToolCall {
-                            tool_use_id: id.clone(),
-                            tool_name: name.clone(),
-                            tool_args: input.clone(),
-                            result: ToolResultContent::text(format!(
-                                "Tool '{name}' is not allowed"
-                            )),
-                            is_error: true,
-                            metadata: HashMap::default(),
-                        });
-                        continue;
-                    }
-                    PermissionLevel::AlwaysAsk => {
-                        debug!(tool = %name, "Tool requires approval (AlwaysAsk)");
-                    }
-                    PermissionLevel::AskOnce => {
-                        debug!(tool = %name, "Tool allowed (AskOnce)");
-                    }
-                    PermissionLevel::AlwaysAllow => {
-                        debug!(tool = %name, "Tool allowed (AlwaysAllow)");
-                    }
+                if self.policy.check_tool_permission(name) == PermissionLevel::Deny {
+                    warn!(tool = %name, "Tool denied by policy");
+                    denied.push(ExecutedToolCall {
+                        tool_use_id: id.clone(),
+                        tool_name: name.clone(),
+                        tool_args: input.clone(),
+                        result: ToolResultContent::text(format!("Tool '{name}' is not allowed")),
+                        is_error: true,
+                        metadata: HashMap::default(),
+                    });
+                    continue;
                 }
 
                 if CACHEABLE_TOOLS.contains(&name.as_str()) {
@@ -89,75 +95,96 @@ where
             }
         }
 
-        // Phase 2: execute permitted tools in parallel
+        (denied, cached, to_execute)
+    }
+
+    async fn execute_permitted_tools(
+        &self,
+        to_execute: Vec<(String, String, serde_json::Value)>,
+        agent_id: AgentId,
+        workspace: &std::path::Path,
+    ) -> Vec<ExecutedToolCall> {
         let tool_timeout = Duration::from_millis(self.config.tool_timeout_ms);
         let futures: Vec<_> = to_execute
             .into_iter()
             .map(|(id, name, input)| {
-                let workspace = workspace.clone();
+                let workspace = workspace.to_path_buf();
                 async move {
-                    let tool_call = ToolCall::new(name.clone(), input.clone());
-                    let action = match Action::delegate_tool(&tool_call) {
-                        Ok(a) => a,
-                        Err(e) => {
-                            return ExecutedToolCall {
-                                tool_use_id: id,
-                                tool_name: name,
-                                tool_args: input,
-                                result: ToolResultContent::text(format!(
-                                    "Failed to create action: {e}"
-                                )),
-                                is_error: true,
-                                metadata: HashMap::default(),
-                            };
-                        }
-                    };
-                    let ctx = ExecuteContext::new(agent_id, action.action_id, workspace);
-
-                    let effect =
-                        match timeout(tool_timeout, self.executor.execute(&ctx, &action)).await {
-                            Ok(effect) => effect,
-                            Err(_) => {
-                                return ExecutedToolCall {
-                                    tool_use_id: id,
-                                    tool_name: name,
-                                    tool_args: input,
-                                    result: ToolResultContent::text(format!(
-                                        "Tool execution timed out after {}ms",
-                                        tool_timeout.as_millis()
-                                    )),
-                                    is_error: true,
-                                    metadata: HashMap::default(),
-                                };
-                            }
-                        };
-
-                    let decoded = decode_tool_effect(&effect);
-                    ExecutedToolCall {
-                        tool_use_id: id,
-                        tool_name: name,
-                        tool_args: input,
-                        result: ToolResultContent::text(decoded.content),
-                        is_error: decoded.is_error,
-                        metadata: decoded.metadata,
-                    }
+                    execute_single_tool(
+                        id,
+                        name,
+                        input,
+                        agent_id,
+                        workspace,
+                        tool_timeout,
+                        &self.executor,
+                    )
+                    .await
                 }
             })
             .collect();
+        futures_util::future::join_all(futures).await
+    }
+}
 
-        let executed = futures_util::future::join_all(futures).await;
-
-        // Phase 3: populate cache with successful cacheable results
-        for result in &executed {
-            if !result.is_error && CACHEABLE_TOOLS.contains(&result.tool_name.as_str()) {
-                let cache_key = tool_result_cache_key(&result.tool_name, &result.tool_args);
-                tool_cache.insert(cache_key, result.clone());
-            }
+async fn execute_single_tool(
+    id: String,
+    name: String,
+    input: serde_json::Value,
+    agent_id: AgentId,
+    workspace: std::path::PathBuf,
+    tool_timeout: Duration,
+    executor: &aura_kernel::ExecutorRouter,
+) -> ExecutedToolCall {
+    let tool_call = ToolCall::new(name.clone(), input.clone());
+    let action = match Action::delegate_tool(&tool_call) {
+        Ok(a) => a,
+        Err(e) => {
+            return ExecutedToolCall {
+                tool_use_id: id,
+                tool_name: name,
+                tool_args: input,
+                result: ToolResultContent::text(format!("Failed to create action: {e}")),
+                is_error: true,
+                metadata: HashMap::default(),
+            };
         }
+    };
+    let ctx = ExecuteContext::new(agent_id, action.action_id, workspace);
 
-        let mut results = denied;
-        results.extend(cached);
-        results.extend(executed);
-        Ok(results)
+    let effect = match timeout(tool_timeout, executor.execute(&ctx, &action)).await {
+        Ok(effect) => effect,
+        Err(_) => {
+            return ExecutedToolCall {
+                tool_use_id: id,
+                tool_name: name,
+                tool_args: input,
+                result: ToolResultContent::text(format!(
+                    "Tool execution timed out after {}ms",
+                    tool_timeout.as_millis()
+                )),
+                is_error: true,
+                metadata: HashMap::default(),
+            };
+        }
+    };
+
+    let decoded = decode_tool_effect(&effect);
+    ExecutedToolCall {
+        tool_use_id: id,
+        tool_name: name,
+        tool_args: input,
+        result: ToolResultContent::text(decoded.content),
+        is_error: decoded.is_error,
+        metadata: decoded.metadata,
+    }
+}
+
+fn populate_tool_cache(tool_cache: &mut ToolCache, executed: &[ExecutedToolCall]) {
+    for result in executed {
+        if !result.is_error && CACHEABLE_TOOLS.contains(&result.tool_name.as_str()) {
+            let cache_key = tool_result_cache_key(&result.tool_name, &result.tool_args);
+            tool_cache.insert(cache_key, result.clone());
+        }
     }
 }

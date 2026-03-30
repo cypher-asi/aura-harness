@@ -17,14 +17,32 @@ use tracing::{debug, error, info, warn};
 
 impl AnthropicProvider {
     /// Send an HTTP request to the Anthropic API and classify the response.
-    ///
-    /// Returns the raw `reqwest::Response` on success, or an [`ApiError`]
-    /// that the retry loop can pattern-match on.
     pub(super) async fn send_checked<B: Serialize + Sync>(
         &self,
         request_ctx: &ModelRequest,
         json_body: &B,
     ) -> Result<reqwest::Response, ApiError> {
+        let req_builder = self.build_request(request_ctx, json_body)?;
+
+        let response = req_builder.send().await.map_err(|e| {
+            error!(error = %e, "Anthropic API request failed");
+            ApiError::Other(ReasonerError::Request(format!(
+                "Anthropic API request failed: {e}"
+            )))
+        })?;
+
+        if !response.status().is_success() {
+            return Err(classify_api_error(response).await);
+        }
+
+        Ok(response)
+    }
+
+    fn build_request<B: Serialize + Sync>(
+        &self,
+        request_ctx: &ModelRequest,
+        json_body: &B,
+    ) -> Result<reqwest::RequestBuilder, ApiError> {
         use super::config::RoutingMode;
 
         let mut req_builder = self
@@ -64,41 +82,142 @@ impl AnthropicProvider {
             }
         }
 
-        let response = req_builder.send().await.map_err(|e| {
-            error!(error = %e, "Anthropic API request failed");
-            ApiError::Other(ReasonerError::Request(format!(
-                "Anthropic API request failed: {e}"
-            )))
-        })?;
+        Ok(req_builder)
+    }
+}
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let status_code = status.as_u16();
-            let body = response.text().await.unwrap_or_default();
-            let body_preview = crate::truncate_body(&body, 200);
-            error!(status = %status, body = %body_preview, "Anthropic API error");
+async fn classify_api_error(response: reqwest::Response) -> ApiError {
+    let status = response.status();
+    let status_code = status.as_u16();
+    let body = response.text().await.unwrap_or_default();
+    let body_preview = crate::truncate_body(&body, 200);
+    error!(status = %status, body = %body_preview, "Anthropic API error");
 
-            if super::is_cloudflare_html(&body) {
-                return Err(ApiError::CloudflareBlock(format!(
-                    "LLM proxy returned Cloudflare block ({status}) — service may be cold-starting"
-                )));
-            }
+    if super::is_cloudflare_html(&body) {
+        return ApiError::CloudflareBlock(format!(
+            "LLM proxy returned Cloudflare block ({status}) — service may be cold-starting"
+        ));
+    }
 
-            return match status_code {
-                402 => Err(ApiError::InsufficientCredits(format!(
-                    "Anthropic API error: {status} - {body}"
-                ))),
-                429 | 529 => Err(ApiError::Overloaded(format!(
-                    "Anthropic API error: {status} - {body}"
-                ))),
-                _ => Err(ApiError::Other(ReasonerError::Api {
-                    status: status_code,
-                    message: format!("{status} - {body}"),
-                })),
-            };
+    match status_code {
+        402 => ApiError::InsufficientCredits(format!("Anthropic API error: {status} - {body}")),
+        429 | 529 => ApiError::Overloaded(format!("Anthropic API error: {status} - {body}")),
+        _ => ApiError::Other(ReasonerError::Api {
+            status: status_code,
+            message: format!("{status} - {body}"),
+        }),
+    }
+}
+
+fn build_api_request(
+    request: &ModelRequest,
+    model: &str,
+    system: &serde_json::Value,
+) -> ApiRequest {
+    let thinking = resolve_thinking(request, model);
+    ApiRequest {
+        model: model.to_string(),
+        system: system.clone(),
+        messages: convert_messages_to_api(&request.messages),
+        tools: if request.tools.is_empty() {
+            None
+        } else {
+            Some(convert_tools_to_api(&request.tools))
+        },
+        tool_choice: convert_tool_choice(&request.tool_choice),
+        max_tokens: request.max_tokens,
+        temperature: if thinking.is_some() {
+            Some(1.0)
+        } else {
+            request.temperature
+        },
+        thinking,
+    }
+}
+
+fn parse_complete_response(
+    api_response: ApiResponse,
+    model_idx: usize,
+    request_model: &str,
+    model: &str,
+    latency_ms: u64,
+) -> ModelResponse {
+    let message = convert_response_to_aura(&api_response.content);
+    let stop_reason = match api_response.stop_reason.as_deref() {
+        Some("tool_use") => StopReason::ToolUse,
+        Some("max_tokens") => StopReason::MaxTokens,
+        Some("stop_sequence") => StopReason::StopSequence,
+        _ => StopReason::EndTurn,
+    };
+
+    if model_idx > 0 {
+        info!(primary = %request_model, fallback = %model, "Completed with fallback model");
+    }
+
+    debug!(
+        stop_reason = ?stop_reason,
+        latency_ms,
+        input_tokens = api_response.usage.input_tokens,
+        output_tokens = api_response.usage.output_tokens,
+        model_used = %model,
+        "Received response from Anthropic"
+    );
+
+    let model_used = api_response.model.clone();
+
+    ModelResponse {
+        stop_reason,
+        message,
+        usage: Usage {
+            input_tokens: api_response.usage.input_tokens,
+            output_tokens: api_response.usage.output_tokens,
+            cache_creation_input_tokens: api_response.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: api_response.usage.cache_read_input_tokens,
+        },
+        trace: ProviderTrace {
+            request_id: Some(api_response.id),
+            latency_ms,
+            model: api_response.model,
+        },
+        model_used,
+    }
+}
+
+/// Handle retry errors — returns `Ok(true)` to break the inner retry loop (fallback),
+/// `Ok(false)` to continue retrying, `Err` to propagate immediately.
+/// Handle retry errors — returns `Ok(Some(true))` to break inner retry loop (fallback),
+/// `Ok(Some(false))` to continue retrying, `Ok(None)` to propagate the error directly.
+/// In the `None` case, the caller must convert the original `ApiError` into `ReasonerError`.
+fn classify_retry_action(
+    err: &ApiError,
+    attempt: u32,
+    max_retries: u32,
+    model_idx: usize,
+    model_count: usize,
+    model: &str,
+    last_err: &mut Option<ReasonerError>,
+) -> Option<bool> {
+    match err {
+        ApiError::InsufficientCredits(_) => None,
+        ApiError::CloudflareBlock(msg) if attempt < max_retries => {
+            warn!(model = %model, attempt, "Cloudflare block, will retry");
+            *last_err = Some(ReasonerError::Api {
+                status: 403,
+                message: msg.clone(),
+            });
+            Some(false)
         }
-
-        Ok(response)
+        ApiError::Overloaded(msg) if attempt < max_retries => {
+            warn!(model = %model, attempt, "API overloaded, will retry");
+            *last_err = Some(ReasonerError::RateLimited(msg.clone()));
+            Some(false)
+        }
+        ApiError::Overloaded(msg) if model_idx < model_count - 1 => {
+            warn!(model = %model, "Retries exhausted, falling back to next model");
+            *last_err = Some(ReasonerError::RateLimited(msg.clone()));
+            Some(true)
+        }
+        _ => None,
     }
 }
 
@@ -113,29 +232,10 @@ impl ModelProvider for AnthropicProvider {
         let start = Instant::now();
         let models = self.model_chain(&request.model);
         let system = build_system_block(&request.system);
-
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
-            let thinking = resolve_thinking(&request, model);
-            let api_request = ApiRequest {
-                model: model.clone(),
-                system: system.clone(),
-                messages: convert_messages_to_api(&request.messages),
-                tools: if request.tools.is_empty() {
-                    None
-                } else {
-                    Some(convert_tools_to_api(&request.tools))
-                },
-                tool_choice: convert_tool_choice(&request.tool_choice),
-                max_tokens: request.max_tokens,
-                temperature: if thinking.is_some() {
-                    Some(1.0)
-                } else {
-                    request.temperature
-                },
-                thinking,
-            };
+            let api_request = build_api_request(&request, model, &system);
 
             debug!(
                 model = %model,
@@ -155,80 +255,33 @@ impl ModelProvider for AnthropicProvider {
                     Ok(response) => {
                         let latency_ms =
                             u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-
                         let api_response: ApiResponse = response.json().await.map_err(|e| {
                             error!(error = %e, "Failed to parse Anthropic response");
                             ReasonerError::Parse(format!("Failed to parse Anthropic response: {e}"))
                         })?;
-
-                        let message = convert_response_to_aura(&api_response.content);
-                        let stop_reason = match api_response.stop_reason.as_deref() {
-                            Some("tool_use") => StopReason::ToolUse,
-                            Some("max_tokens") => StopReason::MaxTokens,
-                            Some("stop_sequence") => StopReason::StopSequence,
-                            _ => StopReason::EndTurn,
-                        };
-
-                        if model_idx > 0 {
-                            info!(
-                                primary = %request.model,
-                                fallback = %model,
-                                "Completed with fallback model"
-                            );
-                        }
-
-                        debug!(
-                            stop_reason = ?stop_reason,
+                        return Ok(parse_complete_response(
+                            api_response,
+                            model_idx,
+                            &request.model,
+                            model,
                             latency_ms,
-                            input_tokens = api_response.usage.input_tokens,
-                            output_tokens = api_response.usage.output_tokens,
-                            model_used = %model,
-                            "Received response from Anthropic"
-                        );
-
-                        let model_used = api_response.model.clone();
-
-                        return Ok(ModelResponse {
-                            stop_reason,
-                            message,
-                            usage: Usage {
-                                input_tokens: api_response.usage.input_tokens,
-                                output_tokens: api_response.usage.output_tokens,
-                                cache_creation_input_tokens: api_response
-                                    .usage
-                                    .cache_creation_input_tokens,
-                                cache_read_input_tokens: api_response.usage.cache_read_input_tokens,
-                            },
-                            trace: ProviderTrace {
-                                request_id: Some(api_response.id),
-                                latency_ms,
-                                model: api_response.model,
-                            },
-                            model_used,
-                        });
+                        ));
                     }
-                    Err(ApiError::InsufficientCredits(msg)) => {
-                        return Err(ReasonerError::InsufficientCredits(msg));
+                    Err(e) => {
+                        match classify_retry_action(
+                            &e,
+                            attempt,
+                            self.config.max_retries,
+                            model_idx,
+                            models.len(),
+                            model,
+                            &mut last_err,
+                        ) {
+                            Some(true) => break,
+                            Some(false) => {}
+                            None => return Err(e.into()),
+                        }
                     }
-                    Err(ApiError::CloudflareBlock(ref msg))
-                        if attempt < self.config.max_retries =>
-                    {
-                        warn!(model = %model, attempt, "Cloudflare block, will retry");
-                        last_err = Some(ReasonerError::Api {
-                            status: 403,
-                            message: msg.clone(),
-                        });
-                    }
-                    Err(ApiError::Overloaded(ref msg)) if attempt < self.config.max_retries => {
-                        warn!(model = %model, attempt, "API overloaded, will retry");
-                        last_err = Some(ReasonerError::RateLimited(msg.clone()));
-                    }
-                    Err(ApiError::Overloaded(ref msg)) if model_idx < models.len() - 1 => {
-                        warn!(model = %model, "Retries exhausted, falling back to next model");
-                        last_err = Some(ReasonerError::RateLimited(msg.clone()));
-                        break;
-                    }
-                    Err(e) => return Err(e.into()),
                 }
             }
         }
@@ -249,7 +302,6 @@ impl ModelProvider for AnthropicProvider {
     ) -> Result<StreamEventStream, ReasonerError> {
         let models = self.model_chain(&request.model);
         let system = build_system_block(&request.system);
-
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
@@ -301,28 +353,21 @@ impl ModelProvider for AnthropicProvider {
                         let sse_stream = SseStream::new(byte_stream);
                         return Ok(Box::pin(sse_stream));
                     }
-                    Err(ApiError::InsufficientCredits(msg)) => {
-                        return Err(ReasonerError::InsufficientCredits(msg));
+                    Err(e) => {
+                        match classify_retry_action(
+                            &e,
+                            attempt,
+                            self.config.max_retries,
+                            model_idx,
+                            models.len(),
+                            model,
+                            &mut last_err,
+                        ) {
+                            Some(true) => break,
+                            Some(false) => {}
+                            None => return Err(e.into()),
+                        }
                     }
-                    Err(ApiError::CloudflareBlock(ref msg))
-                        if attempt < self.config.max_retries =>
-                    {
-                        warn!(model = %model, attempt, "Streaming Cloudflare block, will retry");
-                        last_err = Some(ReasonerError::Api {
-                            status: 403,
-                            message: msg.clone(),
-                        });
-                    }
-                    Err(ApiError::Overloaded(ref msg)) if attempt < self.config.max_retries => {
-                        warn!(model = %model, attempt, "Streaming API overloaded, will retry");
-                        last_err = Some(ReasonerError::RateLimited(msg.clone()));
-                    }
-                    Err(ApiError::Overloaded(ref msg)) if model_idx < models.len() - 1 => {
-                        warn!(model = %model, "Streaming retries exhausted, falling back");
-                        last_err = Some(ReasonerError::RateLimited(msg.clone()));
-                        break;
-                    }
-                    Err(e) => return Err(e.into()),
                 }
             }
         }

@@ -23,10 +23,6 @@ fn is_cacheable(tool_name: &str) -> bool {
     CACHEABLE_TOOLS.contains(&tool_name)
 }
 
-// ---------------------------------------------------------------------------
-// Top-level ToolUse stop-reason handler
-// ---------------------------------------------------------------------------
-
 /// Handle `StopReason::ToolUse` — cache, execute, emit, stall-check.
 ///
 /// Returns `true` if the loop should break.
@@ -118,7 +114,19 @@ pub(super) async fn handle_tool_use(
     }
 
     if is_stalled {
-        handle_stall(event_tx, state);
+        let msg = "CRITICAL: Agent appears stalled — repeatedly failing \
+                   to write to the same files. Stopping to prevent \
+                   infinite loop. Try a different approach or ask for help.";
+        helpers::append_warning(&mut state.messages, msg);
+        streaming::emit(
+            event_tx,
+            AgentLoopEvent::Error {
+                code: "stall_detected".to_string(),
+                message: msg.to_string(),
+                recoverable: false,
+            },
+        );
+        state.result.stalled = true;
         return true;
     }
 
@@ -145,10 +153,6 @@ pub(super) async fn handle_tool_use(
 
     false
 }
-
-// ---------------------------------------------------------------------------
-// Tool call extraction and caching
-// ---------------------------------------------------------------------------
 
 fn extract_tool_calls(response: &ModelResponse) -> Vec<ToolCallInfo> {
     response
@@ -272,22 +276,6 @@ pub(super) fn push_tool_result_message_with_context(
     if !blocks.is_empty() {
         messages.push(Message::new(aura_reasoner::Role::User, blocks));
     }
-}
-
-fn handle_stall(event_tx: Option<&UnboundedSender<AgentLoopEvent>>, state: &mut LoopState) {
-    let msg = "CRITICAL: Agent appears stalled — repeatedly failing \
-               to write to the same files. Stopping to prevent \
-               infinite loop. Try a different approach or ask for help.";
-    helpers::append_warning(&mut state.messages, msg);
-    streaming::emit(
-        event_tx,
-        AgentLoopEvent::Error {
-            code: "stall_detected".to_string(),
-            message: msg.to_string(),
-            recoverable: false,
-        },
-    );
-    state.result.stalled = true;
 }
 
 // ---------------------------------------------------------------------------

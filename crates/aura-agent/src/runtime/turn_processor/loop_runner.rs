@@ -20,10 +20,6 @@ where
     R: ToolRegistry,
 {
     /// Build initial messages including conversation history from the store.
-    ///
-    /// Loads up to `context_window` previous entries and converts them to messages,
-    /// then appends the current user prompt. Stops at any `SessionStart` transaction
-    /// to respect context boundaries.
     pub(super) fn build_initial_messages(
         &self,
         agent_id: AgentId,
@@ -33,56 +29,7 @@ where
         let mut messages = Vec::new();
 
         if current_seq > 1 && self.config.context_window > 0 {
-            let start_seq = current_seq
-                .saturating_sub(self.config.context_window as u64)
-                .max(1);
-            let limit = self.config.context_window;
-
-            debug!(
-                agent_id = %agent_id,
-                start_seq = start_seq,
-                limit = limit,
-                "Loading conversation history"
-            );
-
-            if let Ok(entries) = self.store.scan_record(agent_id, start_seq, limit) {
-                let session_start_idx = entries
-                    .iter()
-                    .rposition(|e| e.tx.tx_type == aura_core::TransactionType::SessionStart);
-
-                let relevant_entries = session_start_idx.map_or_else(
-                    || &entries[..],
-                    |idx| {
-                        debug!(
-                            session_start_seq = entries[idx].seq,
-                            "Found session boundary"
-                        );
-                        &entries[idx + 1..]
-                    },
-                );
-
-                for entry in relevant_entries {
-                    match entry.tx.tx_type {
-                        aura_core::TransactionType::UserPrompt => {
-                            let content = String::from_utf8_lossy(&entry.tx.payload);
-                            if !content.is_empty() {
-                                messages.push(Message::user(content.to_string()));
-                            }
-                        }
-                        aura_core::TransactionType::AgentMsg => {
-                            let content = String::from_utf8_lossy(&entry.tx.payload);
-                            if !content.is_empty() {
-                                messages.push(Message::assistant(content.to_string()));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                debug!(
-                    loaded_messages = messages.len(),
-                    "Loaded conversation history"
-                );
-            }
+            self.load_history(agent_id, current_seq, &mut messages);
         }
 
         let prompt = String::from_utf8_lossy(&tx.payload);
@@ -93,30 +40,69 @@ where
         );
         messages.push(Message::user(prompt.to_string()));
 
-        for (i, msg) in messages.iter().enumerate() {
-            let content_preview: String = msg.text_content().chars().take(50).collect();
-            debug!(
-                idx = i,
-                role = ?msg.role,
-                content_preview = %content_preview,
-                "Message in context"
-            );
-        }
-
+        log_message_context(&messages);
         messages
     }
 
-    /// Estimate the total character count of messages (used as a proxy for tokens).
+    fn load_history(&self, agent_id: AgentId, current_seq: u64, messages: &mut Vec<Message>) {
+        let start_seq = current_seq
+            .saturating_sub(self.config.context_window as u64)
+            .max(1);
+        let limit = self.config.context_window;
+
+        debug!(
+            agent_id = %agent_id,
+            start_seq = start_seq,
+            limit = limit,
+            "Loading conversation history"
+        );
+
+        if let Ok(entries) = self.store.scan_record(agent_id, start_seq, limit) {
+            let session_start_idx = entries
+                .iter()
+                .rposition(|e| e.tx.tx_type == aura_core::TransactionType::SessionStart);
+
+            let relevant_entries = session_start_idx.map_or_else(
+                || &entries[..],
+                |idx| {
+                    debug!(
+                        session_start_seq = entries[idx].seq,
+                        "Found session boundary"
+                    );
+                    &entries[idx + 1..]
+                },
+            );
+
+            for entry in relevant_entries {
+                match entry.tx.tx_type {
+                    aura_core::TransactionType::UserPrompt => {
+                        let content = String::from_utf8_lossy(&entry.tx.payload);
+                        if !content.is_empty() {
+                            messages.push(Message::user(content.to_string()));
+                        }
+                    }
+                    aura_core::TransactionType::AgentMsg => {
+                        let content = String::from_utf8_lossy(&entry.tx.payload);
+                        if !content.is_empty() {
+                            messages.push(Message::assistant(content.to_string()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            debug!(
+                loaded_messages = messages.len(),
+                "Loaded conversation history"
+            );
+        }
+    }
+
+    /// Estimate the total character count of messages.
     fn estimate_message_chars(messages: &[Message]) -> usize {
         messages.iter().map(|m| m.text_content().len()).sum()
     }
 
     /// Truncate the message list to fit within the context-window budget.
-    ///
-    /// Strategy: keep the first message (original user prompt) and the
-    /// most-recent N messages. Middle messages — especially large
-    /// tool-result messages — are dropped and replaced with a single
-    /// "[truncated]" placeholder so the model knows context was trimmed.
     fn truncate_messages_if_needed(messages: &mut Vec<Message>, config: &super::TurnConfig) {
         #[allow(
             clippy::cast_possible_truncation,
@@ -166,7 +152,6 @@ where
 
     /// Core agentic turn loop shared by both `process_turn` and
     /// `process_turn_with_messages`.
-    #[allow(clippy::too_many_lines)]
     pub(super) async fn run_turn_loop(
         &self,
         mut messages: Vec<Message>,
@@ -190,7 +175,6 @@ where
             }
 
             debug!(step = step, messages = messages.len(), "Processing step");
-
             Self::truncate_messages_if_needed(&mut messages, &self.config);
 
             let step_result = self
@@ -199,7 +183,6 @@ where
 
             total_input_tokens += step_result.response.usage.input_tokens;
             total_output_tokens += step_result.response.usage.output_tokens;
-
             messages.push(step_result.response.message.clone());
             final_message = Some(step_result.response.message.clone());
 
@@ -207,65 +190,14 @@ where
                 had_failures = true;
             }
 
-            match step_result.stop_reason {
-                StopReason::EndTurn => {
-                    info!(step = step, "Turn completed (end_turn)");
-                    entries.push(TurnEntry {
-                        turn_step: step,
-                        model_response: step_result.response,
-                        tool_results: vec![],
-                        executed_tools: vec![],
-                        stop_reason: StopReason::EndTurn,
-                    });
-                    break;
-                }
-                StopReason::ToolUse => {
-                    let tool_results: Vec<(String, ToolResultContent, bool)> = step_result
-                        .executed_tools
-                        .iter()
-                        .map(|t| (t.tool_use_id.clone(), t.result.clone(), t.is_error))
-                        .collect();
-
-                    entries.push(TurnEntry {
-                        turn_step: step,
-                        model_response: step_result.response,
-                        tool_results: tool_results.clone(),
-                        executed_tools: step_result.executed_tools,
-                        stop_reason: StopReason::ToolUse,
-                    });
-
-                    if !tool_results.is_empty() {
-                        messages.push(Message::tool_results(tool_results));
-                    }
-                }
-                StopReason::MaxTokens => {
-                    warn!(step = step, "Turn stopped due to max_tokens");
-                    entries.push(TurnEntry {
-                        turn_step: step,
-                        model_response: step_result.response,
-                        tool_results: vec![],
-                        executed_tools: vec![],
-                        stop_reason: StopReason::MaxTokens,
-                    });
-                    break;
-                }
-                StopReason::StopSequence => {
-                    debug!(step = step, "Turn stopped at stop sequence");
-                    entries.push(TurnEntry {
-                        turn_step: step,
-                        model_response: step_result.response,
-                        tool_results: vec![],
-                        executed_tools: vec![],
-                        stop_reason: StopReason::StopSequence,
-                    });
-                    break;
-                }
+            let should_break = process_stop_reason(&step_result, step, &mut entries, &mut messages);
+            if should_break {
+                break;
             }
         }
 
         #[allow(clippy::cast_possible_truncation)]
         let steps = entries.len() as u32;
-
         info!(
             steps = steps,
             input_tokens = total_input_tokens,
@@ -284,5 +216,82 @@ where
             model: model_name,
             provider: provider_name,
         })
+    }
+}
+
+fn log_message_context(messages: &[Message]) {
+    for (i, msg) in messages.iter().enumerate() {
+        let content_preview: String = msg.text_content().chars().take(50).collect();
+        debug!(
+            idx = i,
+            role = ?msg.role,
+            content_preview = %content_preview,
+            "Message in context"
+        );
+    }
+}
+
+/// Returns `true` if the loop should break after handling this stop reason.
+fn process_stop_reason(
+    step_result: &super::StepResult,
+    step: u32,
+    entries: &mut Vec<TurnEntry>,
+    messages: &mut Vec<Message>,
+) -> bool {
+    let step_u32 = step;
+    match step_result.stop_reason {
+        StopReason::EndTurn => {
+            info!(step = step, "Turn completed (end_turn)");
+            entries.push(TurnEntry {
+                turn_step: step_u32,
+                model_response: step_result.response.clone(),
+                tool_results: vec![],
+                executed_tools: vec![],
+                stop_reason: StopReason::EndTurn,
+            });
+            true
+        }
+        StopReason::ToolUse => {
+            let tool_results: Vec<(String, ToolResultContent, bool)> = step_result
+                .executed_tools
+                .iter()
+                .map(|t| (t.tool_use_id.clone(), t.result.clone(), t.is_error))
+                .collect();
+
+            entries.push(TurnEntry {
+                turn_step: step_u32,
+                model_response: step_result.response.clone(),
+                tool_results: tool_results.clone(),
+                executed_tools: step_result.executed_tools.clone(),
+                stop_reason: StopReason::ToolUse,
+            });
+
+            if !tool_results.is_empty() {
+                messages.push(Message::tool_results(tool_results));
+            }
+            false
+        }
+        StopReason::MaxTokens => {
+            warn!(step = step, "Turn stopped due to max_tokens");
+            entries.push(TurnEntry {
+                turn_step: step_u32,
+                model_response: step_result.response.clone(),
+                tool_results: vec![],
+                executed_tools: vec![],
+                stop_reason: StopReason::MaxTokens,
+            });
+            true
+        }
+        StopReason::StopSequence => {
+            debug!(step = step, "Turn stopped at stop sequence");
+            entries.push(TurnEntry {
+                turn_step: step_u32,
+                model_response: step_result.response.clone(),
+                tool_results: vec![],
+                executed_tools: vec![],
+                stop_reason: StopReason::StopSequence,
+            });
+            true
+        }
     }
 }

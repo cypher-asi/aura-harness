@@ -80,7 +80,22 @@ pub async fn run_build_command(
         "running build verification"
     );
 
-    let mut child = if needs_shell(build_command) {
+    let mut child = spawn_build_child(project_dir, build_command)?;
+
+    let (stdout_handle, stderr_handle) = spawn_output_collectors(&mut child, output_tx);
+
+    let result =
+        await_build_result(&mut child, build_command, stdout_handle, stderr_handle).await?;
+
+    log_build_result(&result, build_command);
+    Ok(result)
+}
+
+fn spawn_build_child(
+    project_dir: &Path,
+    build_command: &str,
+) -> anyhow::Result<tokio::process::Child> {
+    let child = if needs_shell(build_command) {
         #[cfg(target_os = "windows")]
         {
             Command::new("cmd")
@@ -109,91 +124,109 @@ pub async fn run_build_command(
             .spawn()
     }
     .map_err(|e| anyhow::anyhow!("failed to execute build command `{build_command}`: {e}"))?;
+    Ok(child)
+}
 
+fn spawn_output_collectors(
+    child: &mut tokio::process::Child,
+    output_tx: Option<UnboundedSender<String>>,
+) -> (
+    tokio::task::JoinHandle<String>,
+    tokio::task::JoinHandle<String>,
+) {
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
     let stdout_tx = output_tx.clone();
-    let stdout_handle = tokio::spawn(async move {
-        let mut collected = String::new();
-        if let Some(pipe) = stdout_pipe {
-            let mut reader = tokio::io::BufReader::new(pipe).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if let Some(ref tx) = stdout_tx {
-                    let _ = tx.send(format!("{line}\n"));
-                }
-                collected.push_str(&line);
-                collected.push('\n');
-            }
-        }
-        collected
-    });
-    let stderr_tx = output_tx;
-    let stderr_handle = tokio::spawn(async move {
-        let mut collected = String::new();
-        if let Some(pipe) = stderr_pipe {
-            let mut reader = tokio::io::BufReader::new(pipe).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if let Some(ref tx) = stderr_tx {
-                    let _ = tx.send(format!("{line}\n"));
-                }
-                collected.push_str(&line);
-                collected.push('\n');
-            }
-        }
-        collected
-    });
+    let stdout_handle = tokio::spawn(async move { collect_lines(stdout_pipe, stdout_tx).await });
+    let stderr_handle = tokio::spawn(async move { collect_lines(stderr_pipe, output_tx).await });
 
-    let result = match tokio::time::timeout(BUILD_TIMEOUT, child.wait()).await {
+    (stdout_handle, stderr_handle)
+}
+
+async fn collect_lines<R: tokio::io::AsyncRead + Unpin>(
+    pipe: Option<R>,
+    tx: Option<UnboundedSender<String>>,
+) -> String {
+    let mut collected = String::new();
+    if let Some(pipe) = pipe {
+        let mut reader = tokio::io::BufReader::new(pipe).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            if let Some(ref tx) = tx {
+                let _ = tx.send(format!("{line}\n"));
+            }
+            collected.push_str(&line);
+            collected.push('\n');
+        }
+    }
+    collected
+}
+
+async fn await_build_result(
+    child: &mut tokio::process::Child,
+    build_command: &str,
+    stdout_handle: tokio::task::JoinHandle<String>,
+    stderr_handle: tokio::task::JoinHandle<String>,
+) -> anyhow::Result<BuildResult> {
+    match tokio::time::timeout(BUILD_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => {
             let stdout_raw = stdout_handle.await.unwrap_or_default();
             let stderr_raw = stderr_handle.await.unwrap_or_default();
-            BuildResult {
+            Ok(BuildResult {
                 success: status.success(),
                 stdout: truncate_output(&stdout_raw, MAX_OUTPUT_BYTES),
                 stderr: truncate_output(&stderr_raw, MAX_OUTPUT_BYTES),
                 exit_code: status.code(),
                 timed_out: false,
-            }
+            })
         }
         Ok(Err(e)) => {
             anyhow::bail!("IO error waiting for build command `{build_command}`: {e}");
         }
-        Err(_) => {
-            warn!(
-                command = %build_command,
-                timeout_secs = BUILD_TIMEOUT.as_secs(),
-                "build command timed out, killing process"
-            );
-            if let Err(e) = child.kill().await {
-                warn!(command = %build_command, error = %e, "failed to kill timed-out build process");
-            }
-            let partial_stderr = stderr_handle.await.unwrap_or_default();
-            let timeout_msg = format!(
-                "Build command timed out after {}s. The command may start a long-running \
-                 process (e.g. a server). Use `cargo build` or `cargo check` instead of \
-                 `cargo run` for build verification.",
-                BUILD_TIMEOUT.as_secs()
-            );
-            let stderr = if partial_stderr.is_empty() {
-                timeout_msg
-            } else {
-                format!(
-                    "{}\n\n{}",
-                    truncate_output(&partial_stderr, MAX_OUTPUT_BYTES),
-                    timeout_msg
-                )
-            };
-            BuildResult {
-                success: false,
-                stdout: stdout_handle.await.unwrap_or_default(),
-                stderr,
-                exit_code: None,
-                timed_out: true,
-            }
-        }
-    };
+        Err(_) => handle_build_timeout(child, build_command, stdout_handle, stderr_handle).await,
+    }
+}
 
+async fn handle_build_timeout(
+    child: &mut tokio::process::Child,
+    build_command: &str,
+    stdout_handle: tokio::task::JoinHandle<String>,
+    stderr_handle: tokio::task::JoinHandle<String>,
+) -> anyhow::Result<BuildResult> {
+    warn!(
+        command = %build_command,
+        timeout_secs = BUILD_TIMEOUT.as_secs(),
+        "build command timed out, killing process"
+    );
+    if let Err(e) = child.kill().await {
+        warn!(command = %build_command, error = %e, "failed to kill timed-out build process");
+    }
+    let partial_stderr = stderr_handle.await.unwrap_or_default();
+    let timeout_msg = format!(
+        "Build command timed out after {}s. The command may start a long-running \
+         process (e.g. a server). Use `cargo build` or `cargo check` instead of \
+         `cargo run` for build verification.",
+        BUILD_TIMEOUT.as_secs()
+    );
+    let stderr = if partial_stderr.is_empty() {
+        timeout_msg
+    } else {
+        format!(
+            "{}\n\n{}",
+            truncate_output(&partial_stderr, MAX_OUTPUT_BYTES),
+            timeout_msg
+        )
+    };
+    Ok(BuildResult {
+        success: false,
+        stdout: stdout_handle.await.unwrap_or_default(),
+        stderr,
+        exit_code: None,
+        timed_out: true,
+    })
+}
+
+fn log_build_result(result: &BuildResult, build_command: &str) {
     if result.success {
         info!(command = %build_command, "build verification passed");
     } else {
@@ -204,8 +237,6 @@ pub async fn run_build_command(
             "build verification failed"
         );
     }
-
-    Ok(result)
 }
 
 /// Parse test runner output into individual test results and a summary line.

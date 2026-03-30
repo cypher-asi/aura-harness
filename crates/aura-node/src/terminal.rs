@@ -58,23 +58,43 @@ struct ClientMsg {
 }
 
 /// Handle a terminal WebSocket connection.
-///
-/// The first message must be `{"type":"spawn",...}`. After that the
-/// connection speaks the standard `input`/`output`/`resize`/`exit`
-/// JSON protocol.
 pub async fn handle_terminal_ws(mut socket: WebSocket) {
-    // ── 1. Wait for the spawn message ────────────────────────────────
     let spawn = match wait_for_spawn(&mut socket).await {
         Some(s) => s,
         None => return,
     };
 
+    let (shell, master, reader, writer) = match open_pty(&mut socket, &spawn).await {
+        Some(t) => t,
+        None => return,
+    };
+
+    let _ = send_json(
+        &mut socket,
+        &serde_json::json!({"type": "spawned", "shell": shell}),
+    )
+    .await;
+    info!(shell = %shell, "Terminal PTY spawned");
+
+    bridge_pty_ws(socket, reader, writer, master).await;
+
+    info!("Terminal WebSocket disconnected");
+}
+
+async fn open_pty(
+    socket: &mut WebSocket,
+    spawn: &SpawnMsg,
+) -> Option<(
+    String,
+    Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    Box<dyn Read + Send>,
+    Box<dyn std::io::Write + Send>,
+)> {
     let cols = spawn.cols.unwrap_or(80);
     let rows = spawn.rows.unwrap_or(24);
     let shell = default_shell();
     let cwd = default_cwd();
 
-    // ── 2. Open PTY ──────────────────────────────────────────────────
     let pty_system = native_pty_system();
     let size = PtySize {
         rows,
@@ -85,9 +105,9 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
     let pair = match pty_system.openpty(size) {
         Ok(p) => p,
         Err(e) => {
-            let _ = send_json(&mut socket, &serde_json::json!({"type":"exit","code":-1})).await;
+            let _ = send_json(socket, &serde_json::json!({"type":"exit","code":-1})).await;
             warn!("Failed to open PTY: {e}");
-            return;
+            return None;
         }
     };
 
@@ -98,9 +118,9 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
     let _child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
         Err(e) => {
-            let _ = send_json(&mut socket, &serde_json::json!({"type":"exit","code":-1})).await;
+            let _ = send_json(socket, &serde_json::json!({"type":"exit","code":-1})).await;
             warn!("Failed to spawn shell: {e}");
-            return;
+            return None;
         }
     };
 
@@ -108,31 +128,27 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
         Ok(r) => r,
         Err(e) => {
             warn!("Failed to clone PTY reader: {e}");
-            return;
+            return None;
         }
     };
-    let mut writer = match pair.master.take_writer() {
+    let writer = match pair.master.take_writer() {
         Ok(w) => w,
         Err(e) => {
             warn!("Failed to take PTY writer: {e}");
-            return;
+            return None;
         }
     };
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
 
-    // ── 3. Send spawned confirmation ─────────────────────────────────
-    let _ = send_json(
-        &mut socket,
-        &serde_json::json!({
-            "type": "spawned",
-            "shell": shell,
-        }),
-    )
-    .await;
+    Some((shell, master, reader, writer))
+}
 
-    info!(shell = %shell, "Terminal PTY spawned");
-
-    // ── 4. Bridge PTY ↔ WebSocket ────────────────────────────────────
+async fn bridge_pty_ws(
+    socket: WebSocket,
+    reader: Box<dyn Read + Send>,
+    mut writer: Box<dyn std::io::Write + Send>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+) {
     let (output_tx, mut output_rx) = mpsc::channel::<Vec<u8>>(256);
     let (exit_tx, mut exit_rx) = mpsc::channel::<i32>(1);
 
@@ -142,7 +158,6 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
 
     let (mut ws_write, mut ws_read) = socket.split();
 
-    // Outbound: PTY → client
     let outbound = async {
         loop {
             tokio::select! {
@@ -162,7 +177,6 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
         }
     };
 
-    // Inbound: client → PTY
     let inbound = async {
         while let Some(Ok(msg)) = ws_read.next().await {
             let text = match msg {
@@ -173,31 +187,7 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
             let Ok(cm) = serde_json::from_str::<ClientMsg>(&text) else {
                 continue;
             };
-            match cm.msg_type.as_str() {
-                "input" => {
-                    if let Some(data) = cm.data {
-                        if let Ok(bytes) = B64.decode(&data) {
-                            if writer.write_all(&bytes).is_err() {
-                                break;
-                            }
-                            let _ = writer.flush();
-                        }
-                    }
-                }
-                "resize" => {
-                    if let (Some(c), Some(r)) = (cm.cols, cm.rows) {
-                        if let Ok(m) = master.lock() {
-                            let _ = m.resize(PtySize {
-                                rows: r,
-                                cols: c,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
+            handle_inbound_frame(&cm, &mut writer, &master);
         }
     };
 
@@ -205,8 +195,39 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
         _ = outbound => {}
         _ = inbound => {}
     }
+}
 
-    info!("Terminal WebSocket disconnected");
+fn handle_inbound_frame(
+    cm: &ClientMsg,
+    writer: &mut Box<dyn std::io::Write + Send>,
+    master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
+) {
+    match cm.msg_type.as_str() {
+        "input" => {
+            if let Some(ref data) = cm.data {
+                if let Ok(bytes) = B64.decode(data) {
+                    use std::io::Write;
+                    if writer.write_all(&bytes).is_err() {
+                        return;
+                    }
+                    let _ = writer.flush();
+                }
+            }
+        }
+        "resize" => {
+            if let (Some(c), Some(r)) = (cm.cols, cm.rows) {
+                if let Ok(m) = master.lock() {
+                    let _ = m.resize(PtySize {
+                        rows: r,
+                        cols: c,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────

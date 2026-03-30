@@ -296,119 +296,143 @@ fn highlight_line(
     while i < chars.len() {
         let c = chars[i];
 
-        // Check for string literals
         if c == '"' || c == '\'' || c == '`' {
-            let quote = c;
-            let mut string_content = String::from(c);
-            i += 1;
-            while i < chars.len() {
-                let ch = chars[i];
-                string_content.push(ch);
-                i += 1;
-                if ch == quote
-                    && (string_content.len() < 2
-                        || string_content.chars().nth(string_content.len() - 2) != Some('\\'))
-                {
-                    break;
-                }
-            }
+            i = highlight_string(&chars, i, config, &mut spans);
+        } else if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            highlight_line_comment(&chars, i, config, &mut spans);
+            break;
+        } else if c == '#' {
+            highlight_line_comment(&chars, i, config, &mut spans);
+            break;
+        } else if c.is_ascii_digit() {
+            i = highlight_number(&chars, i, config, &mut spans);
+        } else if c.is_alphabetic() || c == '_' {
+            i = highlight_identifier(&chars, i, keywords, config, theme, &mut spans);
+        } else if "+-*/%=<>!&|^~?:".contains(c) {
+            i = highlight_operator(&chars, i, config, &mut spans);
+        } else {
             spans.push(Span::styled(
-                string_content,
-                Style::default().fg(config.string),
+                c.to_string(),
+                Style::default().fg(theme.colors.foreground),
             ));
-            continue;
-        }
-
-        // Check for comments (// or #)
-        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            let comment: String = chars[i..].iter().collect();
-            spans.push(Span::styled(comment, Style::default().fg(config.comment)));
-            break;
-        }
-        if c == '#' {
-            let comment: String = chars[i..].iter().collect();
-            spans.push(Span::styled(comment, Style::default().fg(config.comment)));
-            break;
-        }
-
-        // Check for numbers
-        if c.is_ascii_digit() {
-            let mut num = String::from(c);
             i += 1;
-            while i < chars.len()
-                && (chars[i].is_ascii_digit()
-                    || chars[i] == '.'
-                    || chars[i] == 'x'
-                    || chars[i] == 'b'
-                    || chars[i].is_ascii_hexdigit())
-            {
-                num.push(chars[i]);
-                i += 1;
-            }
-            spans.push(Span::styled(num, Style::default().fg(config.number)));
-            continue;
         }
-
-        // Check for identifiers and keywords
-        if c.is_alphabetic() || c == '_' {
-            let mut word = String::from(c);
-            i += 1;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                word.push(chars[i]);
-                i += 1;
-            }
-
-            // Check if it's a keyword
-            if keywords.contains(&word.as_str()) {
-                spans.push(Span::styled(
-                    word,
-                    Style::default()
-                        .fg(config.keyword)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-            // Check if followed by ( - likely a function
-            else if i < chars.len() && chars[i] == '(' {
-                spans.push(Span::styled(word, Style::default().fg(config.function)));
-            }
-            // Check if it looks like a type (starts with uppercase)
-            else if word.chars().next().is_some_and(char::is_uppercase) {
-                spans.push(Span::styled(word, Style::default().fg(config.r#type)));
-            } else {
-                spans.push(Span::styled(
-                    word,
-                    Style::default().fg(theme.colors.foreground),
-                ));
-            }
-            continue;
-        }
-
-        // Check for operators
-        if "+-*/%=<>!&|^~?:".contains(c) {
-            let mut op = String::from(c);
-            i += 1;
-            // Check for multi-char operators
-            while i < chars.len() && "+-*/%=<>!&|^~?:".contains(chars[i]) {
-                op.push(chars[i]);
-                i += 1;
-            }
-            spans.push(Span::styled(op, Style::default().fg(config.operator)));
-            continue;
-        }
-
-        // Default: just add the character
-        spans.push(Span::styled(
-            c.to_string(),
-            Style::default().fg(theme.colors.foreground),
-        ));
-        i += 1;
     }
 
     if spans.is_empty() {
         spans.push(Span::styled(String::new(), Style::default()));
     }
-
     spans
+}
+
+fn highlight_string(
+    chars: &[char],
+    start: usize,
+    config: &LanguageConfig,
+    spans: &mut Vec<Span<'static>>,
+) -> usize {
+    let quote = chars[start];
+    let mut string_content = String::from(quote);
+    let mut i = start + 1;
+    while i < chars.len() {
+        let ch = chars[i];
+        string_content.push(ch);
+        i += 1;
+        if ch == quote
+            && (string_content.len() < 2
+                || string_content.chars().nth(string_content.len() - 2) != Some('\\'))
+        {
+            break;
+        }
+    }
+    spans.push(Span::styled(
+        string_content,
+        Style::default().fg(config.string),
+    ));
+    i
+}
+
+fn highlight_line_comment(
+    chars: &[char],
+    start: usize,
+    config: &LanguageConfig,
+    spans: &mut Vec<Span<'static>>,
+) {
+    let comment: String = chars[start..].iter().collect();
+    spans.push(Span::styled(comment, Style::default().fg(config.comment)));
+}
+
+fn highlight_number(
+    chars: &[char],
+    start: usize,
+    config: &LanguageConfig,
+    spans: &mut Vec<Span<'static>>,
+) -> usize {
+    let mut num = String::from(chars[start]);
+    let mut i = start + 1;
+    while i < chars.len()
+        && (chars[i].is_ascii_digit()
+            || chars[i] == '.'
+            || chars[i] == 'x'
+            || chars[i] == 'b'
+            || chars[i].is_ascii_hexdigit())
+    {
+        num.push(chars[i]);
+        i += 1;
+    }
+    spans.push(Span::styled(num, Style::default().fg(config.number)));
+    i
+}
+
+fn highlight_identifier(
+    chars: &[char],
+    start: usize,
+    keywords: &[&str],
+    config: &LanguageConfig,
+    theme: &Theme,
+    spans: &mut Vec<Span<'static>>,
+) -> usize {
+    let mut word = String::from(chars[start]);
+    let mut i = start + 1;
+    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+        word.push(chars[i]);
+        i += 1;
+    }
+
+    if keywords.contains(&word.as_str()) {
+        spans.push(Span::styled(
+            word,
+            Style::default()
+                .fg(config.keyword)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if i < chars.len() && chars[i] == '(' {
+        spans.push(Span::styled(word, Style::default().fg(config.function)));
+    } else if word.chars().next().is_some_and(char::is_uppercase) {
+        spans.push(Span::styled(word, Style::default().fg(config.r#type)));
+    } else {
+        spans.push(Span::styled(
+            word,
+            Style::default().fg(theme.colors.foreground),
+        ));
+    }
+    i
+}
+
+fn highlight_operator(
+    chars: &[char],
+    start: usize,
+    config: &LanguageConfig,
+    spans: &mut Vec<Span<'static>>,
+) -> usize {
+    let mut op = String::from(chars[start]);
+    let mut i = start + 1;
+    while i < chars.len() && "+-*/%=<>!&|^~?:".contains(chars[i]) {
+        op.push(chars[i]);
+        i += 1;
+    }
+    spans.push(Span::styled(op, Style::default().fg(config.operator)));
+    i
 }
 
 #[cfg(test)]
