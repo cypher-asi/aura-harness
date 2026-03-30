@@ -46,7 +46,7 @@ use aura_tools::ToolRegistry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 // ============================================================================
 // Turn Processor
@@ -294,10 +294,11 @@ where
             .as_deref()
             .unwrap_or(&self.config.model);
 
+        let max_tokens = step_config.thinking_budget.unwrap_or(self.config.max_tokens);
         let request = ModelRequest::builder(model, &self.config.system_prompt)
             .messages(messages.to_vec())
             .tools(tools)
-            .max_tokens(self.config.max_tokens)
+            .max_tokens(max_tokens)
             .temperature(self.config.temperature.unwrap_or(0.2))
             .build();
 
@@ -315,10 +316,21 @@ where
 
         match response.stop_reason {
             StopReason::ToolUse => {
-                let executed_tools = self
+                let mut executed_tools = self
                     .execute_tool_calls(&response.message, agent_id, tool_cache)
                     .await
                     .map_err(|e| crate::runtime::RuntimeError::ToolExecution(e.to_string()))?;
+                if let Some(max) = step_config.max_tool_calls {
+                    let max = max as usize;
+                    if executed_tools.len() > max {
+                        warn!(
+                            count = executed_tools.len(),
+                            max,
+                            "Truncating tool results to max_tool_calls limit"
+                        );
+                        executed_tools.truncate(max);
+                    }
+                }
                 let had_failures = executed_tools.iter().any(|t| t.is_error);
                 self.emit_tool_completions(&executed_tools);
                 Ok(StepResult {

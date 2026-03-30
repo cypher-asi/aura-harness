@@ -62,11 +62,11 @@ impl Default for TurnConfig {
 /// basis — for example, tapering the thinking budget after early iterations.
 #[derive(Debug, Clone, Default)]
 pub struct StepConfig {
-    /// Override the thinking budget for this step. NOTE: not yet enforced by the turn processor.
+    /// Override the thinking budget (max tokens) for this step.
     pub thinking_budget: Option<u32>,
     /// Override the model for this step.
     pub model_override: Option<String>,
-    /// Override the maximum tool calls for this step. NOTE: not yet enforced by the turn processor.
+    /// Override the maximum tool calls for this step.
     pub max_tool_calls: Option<u32>,
 }
 

@@ -296,3 +296,46 @@ fn test_policy_add_allowed_tools() {
         PermissionLevel::AlwaysAllow
     );
 }
+
+#[test]
+fn test_check_denies_ask_once_tool_without_approval() {
+    let policy = Policy::with_defaults();
+    let tool_call = ToolCall::new("write_file", serde_json::json!({"path": "f.txt"}));
+    let payload = serde_json::to_vec(&tool_call).unwrap();
+    let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
+
+    let result = policy.check(&proposal);
+    assert!(!result.allowed);
+    assert!(result.reason.unwrap().contains("requires approval"));
+}
+
+#[test]
+fn test_check_allows_ask_once_tool_after_approval() {
+    let policy = Policy::with_defaults();
+    policy.approve_for_session("write_file");
+
+    let tool_call = ToolCall::new("write_file", serde_json::json!({"path": "f.txt"}));
+    let payload = serde_json::to_vec(&tool_call).unwrap();
+    let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
+
+    let result = policy.check(&proposal);
+    assert!(result.allowed);
+}
+
+#[test]
+fn test_check_denies_always_ask_tool() {
+    let config =
+        PolicyConfig::default().with_tool_permission("read_file", PermissionLevel::AlwaysAsk);
+    let policy = Policy::new(config);
+
+    let tool_call = ToolCall::new("read_file", serde_json::json!({"path": "f.txt"}));
+    let payload = serde_json::to_vec(&tool_call).unwrap();
+    let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
+
+    let result = policy.check(&proposal);
+    assert!(!result.allowed);
+    assert!(result
+        .reason
+        .unwrap()
+        .contains("requires approval for each use"));
+}

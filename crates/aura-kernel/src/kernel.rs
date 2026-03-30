@@ -166,7 +166,17 @@ where
             debug!("Replay mode: skipping reasoner");
             ProposalSet::new()
         } else {
-            self.get_proposals(&tx, &context).await
+            let mut p = self.get_proposals(&tx, &context).await?;
+            let max = self.policy.max_proposals();
+            if p.proposals.len() > max {
+                warn!(
+                    count = p.proposals.len(),
+                    max,
+                    "Truncating proposals to max_proposals limit"
+                );
+                p.proposals.truncate(max);
+            }
+            p
         };
 
         // 4. Apply policy and build actions
@@ -213,7 +223,7 @@ where
         &self,
         tx: &Transaction,
         context: &crate::context::Context,
-    ) -> ProposalSet {
+    ) -> Result<ProposalSet, crate::KernelError> {
         let request = ProposeRequest::new(tx.agent_id, tx.clone())
             .with_record_window(context.record_summaries.clone());
 
@@ -222,32 +232,21 @@ where
         match timeout(timeout_duration, self.reasoner.propose(request)).await {
             Ok(Ok(proposals)) => {
                 debug!(count = proposals.proposals.len(), "Received proposals");
-                proposals
+                Ok(proposals)
             }
             Ok(Err(e)) => {
                 error!(error = %e, "Reasoner failed");
-                let mut proposals = ProposalSet::new();
-                let mut trace = aura_core::Trace::default();
-                trace.metadata.insert("error".to_string(), e.to_string());
-                proposals.trace = Some(trace);
-                proposals
+                Err(crate::KernelError::Reasoner(e.to_string()))
             }
             Err(_) => {
                 error!(
                     timeout_ms = self.config.proposal_timeout_ms,
                     "Reasoner timed out"
                 );
-                let mut proposals = ProposalSet::new();
-                let mut trace = aura_core::Trace::default();
-                trace.metadata.insert(
-                    "error".to_string(),
-                    format!(
-                        "Reasoner timed out after {}ms",
-                        self.config.proposal_timeout_ms
-                    ),
-                );
-                proposals.trace = Some(trace);
-                proposals
+                Err(crate::KernelError::Timeout(format!(
+                    "Reasoner timed out after {}ms",
+                    self.config.proposal_timeout_ms
+                )))
             }
         }
     }
@@ -375,6 +374,28 @@ mod tests {
         assert_eq!(result.entry.seq, 1);
         assert!(result.entry.actions.is_empty());
         assert!(!result.had_failures);
+    }
+
+    #[tokio::test]
+    async fn test_process_reasoner_failure_returns_error() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+
+        let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let reasoner = Arc::new(FailingProposer::new());
+        let executor = ExecutorRouter::new();
+
+        let config = KernelConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            ..KernelConfig::default()
+        };
+
+        let kernel = Kernel::new(store, reasoner.clone(), executor, config);
+        let tx = Transaction::user_prompt(aura_core::AgentId::generate(), "test");
+        let result = kernel.process(tx, 1).await;
+
+        assert!(result.is_err());
+        assert_eq!(reasoner.call_count(), 1);
     }
 
     #[tokio::test]

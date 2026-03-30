@@ -269,11 +269,25 @@ impl Policy {
                         };
                     }
                     PermissionLevel::AlwaysAsk => {
-                        debug!(tool = %tool_call.tool, "Tool will require approval");
+                        warn!(tool = %tool_call.tool, "Tool requires per-use approval");
+                        return PolicyResult {
+                            allowed: false,
+                            reason: Some(format!(
+                                "Tool '{}' requires approval for each use",
+                                tool_call.tool
+                            )),
+                        };
                     }
                     PermissionLevel::AskOnce => {
                         if !self.is_session_approved(&tool_call.tool) {
-                            debug!(tool = %tool_call.tool, "Tool requires session approval");
+                            warn!(tool = %tool_call.tool, "Tool requires session approval");
+                            return PolicyResult {
+                                allowed: false,
+                                reason: Some(format!(
+                                    "Tool '{}' requires approval",
+                                    tool_call.tool
+                                )),
+                            };
                         }
                     }
                     PermissionLevel::AlwaysAllow => {
