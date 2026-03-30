@@ -5,9 +5,10 @@
 //! [`AgentLoop`].
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
@@ -15,6 +16,7 @@ use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
 use crate::file_ops::FileOp;
+use crate::planning::TaskPhase;
 use crate::policy::{
     classify_task_complexity, compute_exploration_allowance, compute_thinking_budget,
     resolve_simple_model, TaskComplexity,
@@ -24,6 +26,7 @@ use crate::prompts::{
     AgentInfo, ProjectInfo, SessionInfo, SpecInfo, TaskInfo,
 };
 use crate::task_context;
+use crate::task_executor::TaskToolExecutor;
 use crate::types::{AgentLoopResult, AgentToolExecutor};
 use crate::verify::{
     auto_correct_build_command, normalize_error_signature, run_build_command, BuildFixAttemptRecord,
@@ -117,6 +120,19 @@ pub struct AgenticTaskParams<'a> {
 pub struct ShellTaskParams<'a> {
     pub command: &'a str,
     pub project_root: &'a Path,
+}
+
+/// Configuration for task-aware tracking in [`AgentRunner::execute_task_tracked`].
+///
+/// Bundles the inner tool executor and project metadata that `TaskToolExecutor`
+/// needs so that callers do not have to construct the executor themselves.
+pub struct TaskTrackingConfig {
+    /// Inner executor that handles filesystem and search tools.
+    pub inner_executor: Arc<dyn AgentToolExecutor>,
+    /// Path to the project root for build and stub checks.
+    pub project_folder: String,
+    /// Build command (from project config or auto-detected).
+    pub build_command: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +231,44 @@ impl AgentRunner {
         }
 
         Ok(finalize_loop_result(result))
+    }
+
+    /// Execute an agentic task with built-in plan gating, file tracking,
+    /// self-review, and stub detection.
+    ///
+    /// This is the preferred entry point for automatons: it internally
+    /// constructs a [`TaskToolExecutor`] and merges its tracked state
+    /// (file ops, notes, follow-ups, phase) into the returned result.
+    pub async fn execute_task_tracked(
+        &self,
+        provider: &dyn ModelProvider,
+        tracking: TaskTrackingConfig,
+        params: &AgenticTaskParams<'_>,
+        event_tx: Option<mpsc::UnboundedSender<AgentLoopEvent>>,
+        cancel: Option<CancellationToken>,
+    ) -> Result<TaskExecutionResult, crate::AgentError> {
+        let task_executor = TaskToolExecutor {
+            inner: tracking.inner_executor,
+            project_folder: tracking.project_folder,
+            build_command: tracking.build_command,
+            task_context: String::new(),
+            tracked_file_ops: Default::default(),
+            notes: Default::default(),
+            follow_ups: Default::default(),
+            stub_fix_attempts: Default::default(),
+            task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
+            self_review: Default::default(),
+            event_tx: event_tx.clone(),
+            no_changes_needed: Default::default(),
+            recent_tool_outcomes: Default::default(),
+        };
+
+        let mut result = self
+            .execute_task(provider, &task_executor, params, event_tx, cancel)
+            .await?;
+
+        task_executor.merge_into_result(&mut result).await;
+        Ok(result)
     }
 
     /// Execute a chat interaction using the agent loop.

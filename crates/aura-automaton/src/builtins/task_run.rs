@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use aura_agent::agent_runner::{
-    AgentRunner, AgentRunnerConfig, AgenticTaskParams, ShellTaskParams,
+    AgentRunner, AgentRunnerConfig, AgenticTaskParams, ShellTaskParams, TaskTrackingConfig,
 };
 use aura_agent::prompts::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
 use aura_reasoner::ModelProvider;
@@ -231,29 +231,18 @@ impl Automaton for TaskRunAutomaton {
             .tool_executor
             .clone()
             .unwrap_or_else(|| Arc::new(NoOpExecutor));
-        let executor = aura_agent::task_executor::TaskToolExecutor {
-            inner: inner_executor,
+
+        let tracking = TaskTrackingConfig {
+            inner_executor,
             project_folder: effective_path.clone(),
             build_command: project.build_command.clone(),
-            task_context: String::new(),
-            tracked_file_ops: Default::default(),
-            notes: Default::default(),
-            follow_ups: Default::default(),
-            stub_fix_attempts: Default::default(),
-            task_phase: Arc::new(tokio::sync::Mutex::new(
-                aura_agent::planning::TaskPhase::Exploring,
-            )),
-            self_review: Default::default(),
-            event_tx: Some(event_tx.clone()),
-            no_changes_needed: Default::default(),
-            recent_tool_outcomes: Default::default(),
         };
 
         let result = self
             .runner
-            .execute_task(
+            .execute_task_tracked(
                 self.provider.as_ref(),
-                &executor,
+                tracking,
                 &params,
                 Some(event_tx),
                 Some(cancel),
@@ -261,8 +250,7 @@ impl Automaton for TaskRunAutomaton {
             .await;
 
         let result = match result {
-            Ok(mut exec) => {
-                executor.merge_into_result(&mut exec).await;
+            Ok(exec) => {
                 if exec.file_ops.is_empty() && !exec.no_changes_needed {
                     let msg = if exec.reached_implementing {
                         "task reached implementation phase but no file operations completed \
