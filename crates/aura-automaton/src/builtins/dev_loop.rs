@@ -681,7 +681,26 @@ pub(super) async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
     };
 
     if !aura_agent::git::is_git_repo(&workspace) {
-        return;
+        info!(task_id, %workspace, "Workspace is not a git repo; initializing");
+        let init = tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&workspace)
+            .output()
+            .await;
+        match init {
+            Ok(o) if o.status.success() => {
+                info!(task_id, "git init succeeded");
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                warn!(task_id, %stderr, "git init failed");
+                return;
+            }
+            Err(e) => {
+                warn!(task_id, error = %e, "failed to run git init");
+                return;
+            }
+        }
     }
 
     let commit_msg = format!("task({}): completed", task_id);
