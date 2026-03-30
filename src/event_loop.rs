@@ -1,9 +1,8 @@
 //! Event processing loop for the terminal UI mode.
 
 use crate::record_loader::extract_tool_info;
-use aura_agent::{AgentLoop, AgentLoopEvent, KernelToolExecutor};
+use aura_agent::{AgentLoop, AgentLoopEvent, KernelToolExecutor, ProcessManager};
 use aura_core::{AgentId, EffectStatus, RecordEntry, Transaction, TransactionType};
-use aura_runtime::ProcessManager;
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_store::{RocksStore, Store};
 use aura_terminal::{

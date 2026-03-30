@@ -122,7 +122,6 @@ dependencies = [
  "aura-kernel",
  "aura-node",
  "aura-reasoner",
- "aura-runtime",
  "aura-session",
  "aura-store",
  "aura-terminal",
@@ -163,8 +162,11 @@ dependencies = [
  "aura-core",
  "aura-kernel",
  "aura-reasoner",
- "aura-runtime",
+ "aura-store",
+ "aura-tools",
  "base64 0.22.1",
+ "bytes",
+ "dashmap",
  "futures-util",
  "regex",
  "serde",
@@ -203,7 +205,7 @@ dependencies = [
  "aura-reasoner",
  "aura-tools",
  "chrono",
- "dashmap 5.5.3",
+ "dashmap",
  "serde",
  "serde_json",
  "tempfile",
@@ -291,7 +293,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
- "dashmap 5.5.3",
+ "dashmap",
  "dirs",
  "dotenvy",
  "futures-util",
@@ -335,28 +337,6 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
- "tracing",
-]
-
-[[package]]
-name = "aura-runtime"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-core",
- "aura-kernel",
- "aura-reasoner",
- "aura-store",
- "aura-tools",
- "bytes",
- "dashmap 6.1.0",
- "futures-util",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -807,12 +787,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-utils"
-version = "0.8.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
-
-[[package]]
 name = "crossterm"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -888,20 +862,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
-name = "dashmap"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
  "hashbrown 0.14.5",
  "lock_api",
  "once_cell",

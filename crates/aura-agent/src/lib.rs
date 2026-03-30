@@ -52,13 +52,18 @@ pub(crate) mod verify;
 
 pub mod agent_runner;
 pub(crate) mod message_conversion;
+pub mod runtime;
 pub(crate) mod task_context;
 pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
-pub use aura_runtime::ModelCallDelegate;
 pub use events::AgentLoopEvent;
 pub use kernel_executor::KernelToolExecutor;
+pub use runtime::{
+    ExecutedToolCall, ModelCallDelegate, ProcessManager, ProcessManagerConfig, ProcessOutput,
+    RunningProcess, RuntimeError, StepConfig, StepResult, StreamCallback, StreamCallbackEvent,
+    ToolCache, TurnConfig, TurnEntry, TurnProcessor, TurnResult,
+};
 pub use types::{
     AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo,
     ToolCallResult,

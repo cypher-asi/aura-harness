@@ -11,7 +11,6 @@ path = "src/main.rs"
 aura-terminal = { path = "crates/aura-terminal" }
 aura-core = { path = "crates/aura-core" }
 aura-kernel = { path = "crates/aura-kernel" }
-aura-runtime = { path = "crates/aura-runtime" }
 aura-store = { path = "crates/aura-store" }
 aura-reasoner = { path = "crates/aura-reasoner" }
 aura-tools = { path = "crates/aura-tools" }
@@ -46,7 +45,6 @@ members = [
     "crates/aura-tools",
     "crates/aura-reasoner",
     "crates/aura-kernel",
-    "crates/aura-runtime",
     "crates/aura-terminal",
     "crates/aura-cli",
     "crates/aura-agent",

@@ -6,7 +6,7 @@ use aura_core::{
     ActionId, ActionResultPayload, AgentId, Hash, ProcessId, ProcessPending, Transaction,
     TransactionType,
 };
-use aura_runtime::ProcessManager;
+use aura_agent::ProcessManager;
 use aura_tools::{cmd_run_with_threshold, Sandbox, ThresholdResult};
 use std::sync::Arc;
 use std::time::Duration;

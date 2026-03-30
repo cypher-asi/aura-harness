@@ -179,11 +179,11 @@ where
         agent_id: AgentId,
         tx: Transaction,
         next_seq: u64,
-    ) -> Result<TurnResult, crate::RuntimeError> {
+    ) -> Result<TurnResult, crate::runtime::RuntimeError> {
         info!("Starting turn processing (store-based history)");
         let messages = self.build_initial_messages(agent_id, &tx, next_seq);
         self.run_turn_loop(messages, agent_id).await
-            .map_err(|e| crate::RuntimeError::Internal(e.to_string()))
+            .map_err(|e| crate::runtime::RuntimeError::Internal(e.to_string()))
     }
 
     /// Process a turn with pre-built message history.
@@ -203,10 +203,10 @@ where
         &self,
         agent_id: AgentId,
         messages: Vec<Message>,
-    ) -> Result<TurnResult, crate::RuntimeError> {
+    ) -> Result<TurnResult, crate::runtime::RuntimeError> {
         info!("Starting turn processing (caller-provided history)");
         self.run_turn_loop(messages, agent_id).await
-            .map_err(|e| crate::RuntimeError::Internal(e.to_string()))
+            .map_err(|e| crate::runtime::RuntimeError::Internal(e.to_string()))
     }
 
     /// Make a model call through the turn processor's infrastructure.
@@ -223,9 +223,9 @@ where
     /// # Errors
     ///
     /// Returns error if the model completion fails.
-    pub async fn resolve_model_call(&self, request: ModelRequest) -> Result<ModelResponse, crate::RuntimeError> {
+    pub async fn resolve_model_call(&self, request: ModelRequest) -> Result<ModelResponse, crate::runtime::RuntimeError> {
         self.resolve_model_response(request).await
-            .map_err(|e| crate::RuntimeError::Model(e.to_string()))
+            .map_err(|e| crate::runtime::RuntimeError::Model(e.to_string()))
     }
 
     /// Resolve a model response: replay stub, streaming completion, or
@@ -279,7 +279,7 @@ where
         agent_id: AgentId,
         tool_cache: &mut ToolCache,
         step_config: &StepConfig,
-    ) -> Result<StepResult, crate::RuntimeError> {
+    ) -> Result<StepResult, crate::runtime::RuntimeError> {
         let tools = self.build_tools();
         let model = step_config
             .model_override
@@ -294,7 +294,7 @@ where
             .build();
 
         let response = self.resolve_model_response(request).await
-            .map_err(|e| crate::RuntimeError::Model(e.to_string()))?;
+            .map_err(|e| crate::runtime::RuntimeError::Model(e.to_string()))?;
 
         debug!(
             stop_reason = ?response.stop_reason,
@@ -308,7 +308,7 @@ where
                 let executed_tools = self
                     .execute_tool_calls(&response.message, agent_id, tool_cache)
                     .await
-                    .map_err(|e| crate::RuntimeError::ToolExecution(e.to_string()))?;
+                    .map_err(|e| crate::runtime::RuntimeError::ToolExecution(e.to_string()))?;
                 let had_failures = executed_tools.iter().any(|t| t.is_error);
                 self.emit_tool_completions(&executed_tools);
                 Ok(StepResult {

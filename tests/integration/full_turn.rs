@@ -4,7 +4,7 @@
 
 use aura_core::{AgentId, Transaction};
 use aura_kernel::ExecutorRouter;
-use aura_runtime::{TurnConfig, TurnProcessor};
+use aura_agent::{TurnConfig, TurnProcessor};
 use aura_reasoner::{MockProvider, MockResponse};
 use aura_store::RocksStore;
 use aura_tools::{DefaultToolRegistry, ToolExecutor};

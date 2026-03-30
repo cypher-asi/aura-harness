@@ -9,8 +9,9 @@ license.workspace = true
 [dependencies]
 aura-core = { path = "../aura-core" }
 aura-kernel = { path = "../aura-kernel" }
-aura-runtime = { path = "../aura-runtime" }
 aura-reasoner = { path = "../aura-reasoner" }
+aura-store = { path = "../aura-store" }
+aura-tools = { path = "../aura-tools" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -23,6 +24,8 @@ regex = "1"
 thiserror = { workspace = true }
 url = "2"
 base64 = { workspace = true }
+bytes = { workspace = true }
+dashmap = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

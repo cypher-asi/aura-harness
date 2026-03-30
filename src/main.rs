@@ -11,10 +11,9 @@ mod record_loader;
 
 use cli::{Cli, Commands, RunArgs, UiMode};
 
-use aura_agent::AgentLoop;
+use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
 use aura_core::{Identity, Transaction};
 use aura_reasoner::ModelProvider;
-use aura_runtime::{ProcessManager, ProcessManagerConfig};
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use clap::Parser;
 use colored::Colorize;
