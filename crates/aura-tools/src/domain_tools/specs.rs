@@ -51,6 +51,7 @@ pub async fn create_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -
     // Auto-derive orderIndex from existing spec count so specs are
     // numbered in creation order without the caller needing to track it.
     let order = match api.list_specs(project_id, jwt.as_deref()).await {
+        #[allow(clippy::cast_possible_truncation)]
         Ok(specs) => specs.len() as u32,
         Err(_) => 0,
     };

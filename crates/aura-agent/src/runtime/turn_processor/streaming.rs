@@ -105,25 +105,24 @@ where
     ) -> anyhow::Result<ModelResponse> {
         let timeout_duration = Duration::from_millis(self.config.model_timeout_ms);
 
-        match timeout(
+        if let Ok(result) = timeout(
             timeout_duration,
             self.complete_with_streaming_inner(request),
         )
         .await
         {
-            Ok(result) => result,
-            Err(_) => {
-                let msg = format!(
-                    "Model call timed out after {}ms",
-                    self.config.model_timeout_ms
-                );
-                self.emit_stream_event(StreamCallbackEvent::Error {
-                    code: "timeout".to_string(),
-                    message: msg.clone(),
-                    recoverable: true,
-                });
-                Err(anyhow::anyhow!(msg))
-            }
+            result
+        } else {
+            let msg = format!(
+                "Model call timed out after {}ms",
+                self.config.model_timeout_ms
+            );
+            self.emit_stream_event(StreamCallbackEvent::Error {
+                code: "timeout".to_string(),
+                message: msg.clone(),
+                recoverable: true,
+            });
+            Err(anyhow::anyhow!(msg))
         }
     }
 

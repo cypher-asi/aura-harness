@@ -285,10 +285,10 @@ pub fn parse_test_output(
     let result = IndividualTestResult {
         name: "(aggregate)".to_string(),
         status: status.to_string(),
-        message: if !success {
-            Some(truncate_output(&combined, 2000))
-        } else {
+        message: if success {
             None
+        } else {
+            Some(truncate_output(&combined, 2000))
         },
     };
     (vec![result], summary)

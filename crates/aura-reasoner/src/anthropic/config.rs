@@ -37,7 +37,7 @@ impl AnthropicConfig {
     /// Returns error if API key is not set.
     ///
     /// NOTE: This method embeds Aura-specific environment variable names
-    /// (AURA_ROUTER_URL, AURA_LLM_ROUTING). Consider accepting these as
+    /// (`AURA_ROUTER_URL`, `AURA_LLM_ROUTING`). Consider accepting these as
     /// parameters or moving deployment config to the caller.
     pub fn from_env() -> anyhow::Result<Self> {
         let routing_mode = match std::env::var("AURA_LLM_ROUTING").as_deref() {

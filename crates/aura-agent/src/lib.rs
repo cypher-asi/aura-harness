@@ -26,6 +26,22 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(dead_code)]
+// Line/column numbers and small counters never exceed i32::MAX or lose f64 precision
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::cast_precision_loss)]
+// Internal crate — error docs for pub(crate) functions add noise
+#![allow(clippy::missing_errors_doc)]
+// Prompt-building code uses push_str(&format!()) extensively for clarity
+#![allow(clippy::format_push_string)]
+// Many match-to-let-else refactors would reduce readability in complex control flow
+#![allow(clippy::manual_let_else)]
+// Mutex guard drop timing is correct; tightening adds complexity for marginal benefit
+#![allow(clippy::significant_drop_tightening)]
+// Result wrappers kept for forward-compatibility (functions may gain error paths)
+#![allow(clippy::unnecessary_wraps)]
+// if-let-else is often more readable than map_or/map_or_else closures
+#![allow(clippy::option_if_let_else)]
 
 mod agent_loop;
 pub(crate) mod blocking;
@@ -88,24 +104,22 @@ impl From<aura_reasoner::ReasonerError> for AgentError {
     fn from(e: aura_reasoner::ReasonerError) -> Self {
         match e {
             aura_reasoner::ReasonerError::Timeout => {
-                AgentError::Timeout("model request timed out".to_string())
+                Self::Timeout("model request timed out".to_string())
             }
             aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
-                AgentError::Model(format!("insufficient credits: {msg}"))
+                Self::Model(format!("insufficient credits: {msg}"))
             }
             aura_reasoner::ReasonerError::RateLimited(msg) => {
-                AgentError::Model(format!("rate limited: {msg}"))
+                Self::Model(format!("rate limited: {msg}"))
             }
             aura_reasoner::ReasonerError::Api { status, message } => {
-                AgentError::Model(format!("api error ({status}): {message}"))
+                Self::Model(format!("api error ({status}): {message}"))
             }
             aura_reasoner::ReasonerError::Request(msg) => {
-                AgentError::Model(format!("request error: {msg}"))
+                Self::Model(format!("request error: {msg}"))
             }
-            aura_reasoner::ReasonerError::Parse(msg) => {
-                AgentError::Model(format!("parse error: {msg}"))
-            }
-            aura_reasoner::ReasonerError::Internal(msg) => AgentError::Model(msg),
+            aura_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
+            aura_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
         }
     }
 }

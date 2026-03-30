@@ -1,6 +1,13 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(dead_code)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::option_if_let_else)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::needless_pass_by_ref_mut)] // Future-proofing for mutable references
+#![allow(clippy::match_wildcard_for_single_variants)] // Wildcard is intentional for forward compatibility
 
 mod context;
 mod error;

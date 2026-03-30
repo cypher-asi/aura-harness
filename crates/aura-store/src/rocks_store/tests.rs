@@ -1,7 +1,6 @@
 use super::*;
 use aura_core::{Decision, Hash, ProposalSet, TransactionType};
 use bytes::Bytes;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 fn create_test_store() -> (RocksStore, TempDir) {

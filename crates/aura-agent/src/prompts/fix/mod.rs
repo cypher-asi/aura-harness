@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::path::Path;
 
 use super::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
@@ -18,6 +19,7 @@ pub struct BuildFixPromptParams<'a> {
     pub prior_attempts: &'a [BuildFixAttemptRecord],
 }
 
+#[must_use]
 pub fn build_fix_prompt_with_history(params: &BuildFixPromptParams<'_>) -> String {
     let mut prompt = String::new();
 
@@ -63,43 +65,46 @@ fn format_fix_header(
 ) -> String {
     let mut header = String::new();
 
-    header.push_str(&format!(
+    let _ = write!(
+        header,
         "# Project: {}\n{}\n\n",
         project.name, project.description
-    ));
-    header.push_str(&format!(
+    );
+    let _ = write!(
+        header,
         "# Spec: {}\n{}\n\n",
         spec.title, spec.markdown_contents
-    ));
-    header.push_str(&format!("# Task: {}\n{}\n\n", task.title, task.description));
+    );
+    let _ = write!(header, "# Task: {}\n{}\n\n", task.title, task.description);
 
     if !session.summary_of_previous_context.is_empty() {
-        header.push_str(&format!(
+        let _ = write!(
+            header,
             "# Previous Context Summary\n{}\n\n",
             session.summary_of_previous_context
-        ));
+        );
     }
 
     if !prior_notes.is_empty() {
-        header.push_str(&format!(
-            "# Notes from Initial Implementation\n{}\n\n",
-            prior_notes
-        ));
+        let _ = write!(
+            header,
+            "# Notes from Initial Implementation\n{prior_notes}\n\n",
+        );
     }
 
     if !prior_attempts.is_empty() {
         header.push_str("# Previous Fix Attempts (all failed)\nThe following fixes were already attempted and did NOT solve the problem. You MUST try a fundamentally different approach.\n\n");
         for (i, attempt) in prior_attempts.iter().enumerate() {
-            header.push_str(&format!("## Attempt {}\n", i + 1));
+            let _ = writeln!(header, "## Attempt {}", i + 1);
             if !attempt.changes_summary.is_empty() {
-                header.push_str(&format!("Changes made:\n{}\n", attempt.changes_summary));
+                let _ = write!(header, "Changes made:\n{}\n", attempt.changes_summary);
             } else if !attempt.files_changed.is_empty() {
                 header.push_str("Files changed:\n");
                 for f in &attempt.files_changed {
-                    header.push_str(&format!("- {f}\n"));
+                    let _ = writeln!(header, "- {f}");
                 }
             }
-            header.push_str(&format!("Error:\n```\n{}\n```\n\n", attempt.stderr));
+            let _ = write!(header, "Error:\n```\n{}\n```\n\n", attempt.stderr);
         }
     }
 
@@ -129,26 +134,26 @@ fn format_fix_body(
 ) -> String {
     let mut body = String::new();
 
-    body.push_str(&format!(
+    let _ = write!(
+        body,
         "# Build/Test Verification FAILED\n\
-         The command `{}` failed after the previous file operations were applied.\n\
+         The command `{build_command}` failed after the previous file operations were applied.\n\
          You MUST fix ALL errors below.\n\n",
-        build_command
-    ));
+    );
 
     if !guidance.is_empty() {
-        body.push_str(&format!(
-            "## Error Analysis & Required Fix Strategy\n{}\n",
-            guidance
-        ));
+        let _ = write!(
+            body,
+            "## Error Analysis & Required Fix Strategy\n{guidance}\n",
+        );
     }
 
     let truncated_stderr = truncate_prompt_output(stderr, 8000);
-    body.push_str(&format!("## stderr\n```\n{}\n```\n\n", truncated_stderr));
+    let _ = write!(body, "## stderr\n```\n{truncated_stderr}\n```\n\n");
 
     if !stdout.is_empty() {
         let truncated_stdout = truncate_prompt_output(stdout, 4000);
-        body.push_str(&format!("## stdout\n```\n{}\n```\n\n", truncated_stdout));
+        let _ = write!(body, "## stdout\n```\n{truncated_stdout}\n```\n\n");
     }
 
     if error_refs.methods_not_found.len() > 3 {
@@ -175,10 +180,10 @@ fn format_fix_body(
     }
 
     if !codebase_snapshot.is_empty() {
-        body.push_str(&format!(
-            "# Current Codebase Files (after previous changes)\n{}\n",
-            codebase_snapshot
-        ));
+        let _ = write!(
+            body,
+            "# Current Codebase Files (after previous changes)\n{codebase_snapshot}\n",
+        );
     }
 
     body
@@ -199,6 +204,7 @@ fn truncate_prompt_output(s: &str, max_chars: usize) -> String {
 
 /// Build a prompt that tells the agent to replace stub/placeholder code with
 /// real implementations.
+#[must_use]
 pub fn build_stub_fix_prompt(stub_reports: &[StubReport]) -> String {
     let mut prompt = String::from(
         "STOP: Your implementation compiles but contains stub/placeholder code that must be \
@@ -206,10 +212,11 @@ pub fn build_stub_fix_prompt(stub_reports: &[StubReport]) -> String {
     );
 
     for report in stub_reports {
-        prompt.push_str(&format!(
+        let _ = write!(
+            prompt,
             "- {}:{} -- {}\n  ```\n  {}\n  ```\n\n",
             report.path, report.line, report.pattern, report.context,
-        ));
+        );
     }
 
     prompt.push_str(

@@ -93,9 +93,8 @@ impl BuildBaseline {
             return output.to_string();
         }
         format!(
-            "[BASELINE] {} error(s) are NEW (introduced by your changes), \
-             {} error(s) are PRE-EXISTING (ignore them). Focus only on the new errors.\n\n{}",
-            new_count, preexisting_count, output,
+            "[BASELINE] {new_count} error(s) are NEW (introduced by your changes), \
+             {preexisting_count} error(s) are PRE-EXISTING (ignore them). Focus only on the new errors.\n\n{output}",
         )
     }
 

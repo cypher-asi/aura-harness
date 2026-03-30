@@ -19,7 +19,15 @@
     clippy::option_if_let_else,
     clippy::missing_panics_doc,
     clippy::needless_pass_by_value,
-    clippy::unnecessary_map_or
+    clippy::unnecessary_map_or,
+    clippy::wildcard_imports,
+    clippy::manual_let_else,
+    clippy::ignored_unit_patterns,
+    clippy::significant_drop_tightening,
+    clippy::missing_errors_doc,
+    clippy::missing_const_for_fn,
+    clippy::unused_self,
+    clippy::struct_field_names
 )]
 
 pub(crate) mod automaton_bridge;

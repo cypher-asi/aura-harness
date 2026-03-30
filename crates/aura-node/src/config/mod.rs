@@ -164,7 +164,7 @@ impl NodeConfig {
         if let Some(ref base) = self.project_base {
             path.starts_with(base)
         } else {
-            path.starts_with(&self.workspaces_path())
+            path.starts_with(self.workspaces_path())
         }
     }
 

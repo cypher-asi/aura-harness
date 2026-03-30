@@ -1,8 +1,8 @@
 use super::type_resolution::is_impl_for_type;
 
-pub(crate) fn extract_struct_fields(content: &str, type_name: &str) -> Option<String> {
-    let struct_prefix_pub = format!("pub struct {}", type_name);
-    let struct_prefix = format!("struct {}", type_name);
+pub fn extract_struct_fields(content: &str, type_name: &str) -> Option<String> {
+    let struct_prefix_pub = format!("pub struct {type_name}");
+    let struct_prefix = format!("struct {type_name}");
     let lines: Vec<&str> = content.lines().collect();
 
     for (i, line) in lines.iter().enumerate() {
@@ -15,7 +15,7 @@ pub(crate) fn extract_struct_fields(content: &str, type_name: &str) -> Option<St
             None => continue,
         };
         match after.chars().next() {
-            Some('{') | Some(' ') | Some('<') | None => {}
+            Some('{' | ' ' | '<') | None => {}
             _ => continue,
         }
         if !trimmed.contains('{') {
@@ -30,7 +30,7 @@ pub(crate) fn extract_struct_fields(content: &str, type_name: &str) -> Option<St
     None
 }
 
-pub(crate) fn extract_pub_signatures(content: &str, type_name: &str) -> Vec<String> {
+pub fn extract_pub_signatures(content: &str, type_name: &str) -> Vec<String> {
     let mut signatures = Vec::new();
     let mut in_impl = false;
     let mut impl_depth: i32 = 0;
@@ -94,12 +94,12 @@ pub(crate) fn extract_pub_signatures(content: &str, type_name: &str) -> Vec<Stri
 
 /// Extract the definition block (struct, trait, or enum) for a given type name.
 /// Tries each keyword in order and returns the first match found.
-pub(crate) fn extract_definition_block(content: &str, type_name: &str) -> Option<String> {
+pub fn extract_definition_block(content: &str, type_name: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
 
     for keyword in &["struct", "trait", "enum"] {
-        let prefix_pub = format!("pub {} {}", keyword, type_name);
-        let prefix_plain = format!("{} {}", keyword, type_name);
+        let prefix_pub = format!("pub {keyword} {type_name}");
+        let prefix_plain = format!("{keyword} {type_name}");
 
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -111,7 +111,7 @@ pub(crate) fn extract_definition_block(content: &str, type_name: &str) -> Option
                 None => continue,
             };
             match after.chars().next() {
-                Some('{') | Some(' ') | Some('<') | Some(':') | None => {}
+                Some('{' | ' ' | '<' | ':') | None => {}
                 _ => continue,
             }
             if !trimmed.contains('{') {

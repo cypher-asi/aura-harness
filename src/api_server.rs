@@ -27,7 +27,7 @@ const IGNORED_DIRS: &[&str] = &[
 ];
 
 /// Start the embedded API server.
-pub(crate) async fn start_api_server(cmd_tx: mpsc::Sender<UiCommand>) -> Option<String> {
+pub async fn start_api_server(cmd_tx: mpsc::Sender<UiCommand>) -> Option<String> {
     let app = Router::new()
         .route("/health", get(api_health_handler))
         .route("/api/files", get(api_list_files_handler))
@@ -108,7 +108,7 @@ struct DirEntry {
     path: String,
     is_dir: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    children: Option<Vec<DirEntry>>,
+    children: Option<Vec<Self>>,
 }
 
 fn dir_first_then_name(a: &std::fs::DirEntry, b: &std::fs::DirEntry) -> std::cmp::Ordering {
@@ -149,7 +149,7 @@ fn walk_directory(path: &std::path::Path, depth: usize, max_depth: usize) -> Vec
     let Ok(read_dir) = std::fs::read_dir(path) else {
         return Vec::new();
     };
-    let mut items: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
+    let mut items: Vec<_> = read_dir.filter_map(std::result::Result::ok).collect();
     items.sort_by(dir_first_then_name);
     items
         .into_iter()

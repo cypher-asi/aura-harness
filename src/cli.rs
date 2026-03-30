@@ -8,13 +8,13 @@ use std::path::PathBuf;
     name = "aura",
     about = "AURA CLI - Autonomous Universal Reasoning Architecture"
 )]
-pub(crate) struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
-pub(crate) enum Commands {
+pub enum Commands {
     /// Run the agent (default when no subcommand is given).
     Run(RunArgs),
     /// Authenticate with zOS to obtain a JWT for proxy mode.
@@ -29,7 +29,7 @@ pub(crate) enum Commands {
 
 /// Arguments for the `run` subcommand (also the default behaviour).
 #[derive(Parser)]
-pub(crate) struct RunArgs {
+pub struct RunArgs {
     /// UI mode (terminal or none)
     #[arg(long, default_value = "terminal")]
     pub ui: UiMode,
@@ -64,7 +64,7 @@ impl Default for RunArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum UiMode {
+pub enum UiMode {
     /// Full terminal UI (default)
     Terminal,
     /// No UI, run as swarm server

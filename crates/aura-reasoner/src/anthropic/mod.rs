@@ -35,9 +35,9 @@ enum ApiError {
 impl From<ApiError> for ReasonerError {
     fn from(e: ApiError) -> Self {
         match e {
-            ApiError::Overloaded(msg) => ReasonerError::RateLimited(msg),
-            ApiError::InsufficientCredits(msg) => ReasonerError::InsufficientCredits(msg),
-            ApiError::CloudflareBlock(msg) => ReasonerError::Api {
+            ApiError::Overloaded(msg) => Self::RateLimited(msg),
+            ApiError::InsufficientCredits(msg) => Self::InsufficientCredits(msg),
+            ApiError::CloudflareBlock(msg) => Self::Api {
                 status: 403,
                 message: msg,
             },

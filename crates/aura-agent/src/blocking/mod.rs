@@ -11,5 +11,5 @@
 //! 6. Write cooldowns
 //! 7. Shell read workarounds
 
-pub(crate) mod detection;
-pub(crate) mod stall;
+pub mod detection;
+pub mod stall;

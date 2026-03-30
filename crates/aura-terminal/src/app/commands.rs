@@ -111,8 +111,8 @@ impl App {
             }
             UiCommand::AppendThinking(thinking) => self.thinking_content.push_str(&thinking),
             UiCommand::FinishThinking => self.is_thinking = false,
-            UiCommand::ShowMessage(data) => self.cmd_show_message(data),
-            UiCommand::ShowTool(data) => self.cmd_show_tool(data),
+            UiCommand::ShowMessage(data) => self.cmd_show_message(&data),
+            UiCommand::ShowTool(data) => self.cmd_show_tool(&data),
             UiCommand::CompleteTool {
                 id,
                 result,
@@ -133,13 +133,13 @@ impl App {
                 self.state = AppState::AwaitingApproval;
             }
             UiCommand::ShowError(msg) => {
-                self.cmd_notification(&msg, "⛔ Error: ", NotificationType::Error)
+                self.cmd_notification(&msg, "⛔ Error: ", NotificationType::Error);
             }
             UiCommand::ShowSuccess(msg) => {
-                self.cmd_notification(&msg, "✓ ", NotificationType::Success)
+                self.cmd_notification(&msg, "✓ ", NotificationType::Success);
             }
             UiCommand::ShowWarning(msg) => {
-                self.cmd_notification(&msg, "⚠ Warning: ", NotificationType::Warning)
+                self.cmd_notification(&msg, "⚠ Warning: ", NotificationType::Warning);
             }
             UiCommand::Complete => self.cmd_complete(),
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
@@ -189,7 +189,7 @@ impl App {
         self.streaming_content.clear();
     }
 
-    fn cmd_show_message(&mut self, data: crate::events::MessageData) {
+    fn cmd_show_message(&mut self, data: &crate::events::MessageData) {
         let mut msg = Message::new(data.role, &data.content);
         if data.is_streaming {
             msg.set_streaming(true);
@@ -197,7 +197,7 @@ impl App {
         self.add_message(msg);
     }
 
-    fn cmd_show_tool(&mut self, data: crate::events::ToolData) {
+    fn cmd_show_tool(&mut self, data: &crate::events::ToolData) {
         let tool = ToolCard::new(&data.id, &data.name).with_args(&data.args);
         self.add_tool(tool);
         let tool_summary = super::format::format_tool_summary(&data.name, &data.args);

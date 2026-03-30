@@ -58,6 +58,7 @@ impl TaskRunAutomaton {
     }
 }
 
+#[allow(clippy::struct_field_names)]
 struct TaskRunConfig {
     project_id: String,
     task_id: String,
@@ -91,7 +92,7 @@ impl TaskRunConfig {
 
 #[async_trait::async_trait]
 impl Automaton for TaskRunAutomaton {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "task-run"
     }
 
@@ -119,9 +120,7 @@ impl Automaton for TaskRunAutomaton {
 
         if let Some(shell_cmd) = super::dev_loop::extract_shell_command(&task) {
             let result = self.run_shell_task(ctx, &project, &shell_cmd).await;
-            return self
-                .finalize_task(ctx, &task.id, &task.title, result.map_err(Into::into))
-                .await;
+            return self.finalize_task(ctx, &task.id, &task.title, result).await;
         }
 
         let result = self.run_agentic_task(ctx, &project, &spec, &task).await;
@@ -190,7 +189,7 @@ impl TaskRunAutomaton {
         let workspace = ctx
             .workspace_root
             .as_deref()
-            .unwrap_or(std::path::Path::new(&project.path));
+            .unwrap_or_else(|| std::path::Path::new(&project.path));
         self.runner
             .execute_shell_task(
                 &ShellTaskParams {
@@ -296,7 +295,7 @@ impl TaskRunAutomaton {
                     } else {
                         "task completed without any file operations — completion not verified"
                     };
-                    Err(anyhow::anyhow!("{}", msg))
+                    Err(anyhow::anyhow!("{msg}"))
                 } else {
                     Ok(exec)
                 }

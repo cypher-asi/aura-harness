@@ -200,7 +200,8 @@ impl DomainApi for HttpDomainApi {
         let jwt = Self::require_jwt(jwt)?;
         let mut url = format!("{}/api/projects/{project_id}/tasks", self.storage_url);
         if let Some(sid) = spec_id {
-            url.push_str(&format!("?specId={sid}"));
+            use std::fmt::Write;
+            let _ = write!(url, "?specId={sid}");
         }
         self.api_get(&url, jwt).await
     }

@@ -58,6 +58,7 @@ impl AutomatonRuntime {
         }
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn install(
         &self,
         automaton: Box<dyn Automaton>,
@@ -75,7 +76,7 @@ impl AutomatonRuntime {
             id: id.clone(),
             kind: automaton.kind().to_string(),
             status: AutomatonStatus::Installing,
-            schedule: schedule.clone(),
+            schedule,
             config: config.clone(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
@@ -182,7 +183,7 @@ impl AutomatonRuntime {
             }
 
             match automaton.tick(&mut ctx).await {
-                Ok(TickOutcome::Continue) => continue,
+                Ok(TickOutcome::Continue) => {}
                 Ok(TickOutcome::Done) => break AutomatonStatus::Completed,
                 Ok(TickOutcome::Yield { reason }) => {
                     info!(automaton_id = %id, %reason, "automaton yielded");
@@ -234,6 +235,7 @@ impl AutomatonRuntime {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn trigger(&self, id: &str, payload: serde_json::Value) -> Result<(), AutomatonError> {
         if let Some(entry) = self.instances.get(id) {
             let _ = entry.value().event_tx.send(AutomatonEvent::LogLine {

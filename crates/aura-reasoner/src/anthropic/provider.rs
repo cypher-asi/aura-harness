@@ -198,7 +198,6 @@ fn classify_retry_action(
     last_err: &mut Option<ReasonerError>,
 ) -> Option<bool> {
     match err {
-        ApiError::InsufficientCredits(_) => None,
         ApiError::CloudflareBlock(msg) if attempt < max_retries => {
             warn!(model = %model, attempt, "Cloudflare block, will retry");
             *last_err = Some(ReasonerError::Api {

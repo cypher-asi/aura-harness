@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    build_stub_fix_prompt, classify_build_errors, error_category_guidance, file_ops,
+    format_tool_arg_hint, looks_like_compiler_errors, AgentLoopEvent, FileOp, FollowUpSuggestion,
+    Path, TaskPhase, TaskPlan, TaskToolExecutor, ToolCallInfo, ToolCallResult,
+    MAX_STUB_FIX_ATTEMPTS,
+};
 
 impl TaskToolExecutor {
     pub(super) async fn track_file_op(&self, tool_name: &str, input: &serde_json::Value) {
@@ -155,7 +160,7 @@ impl TaskToolExecutor {
         if tc
             .input
             .get("no_changes_needed")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
         {
             *self.no_changes_needed.lock().await = true;
@@ -259,10 +264,9 @@ impl TaskToolExecutor {
                     tool_use_id: tc.id.clone(),
                     content: format!(
                         "Plan accepted. Proceeding to implementation.\n\n\
-                         YOUR PLAN (reference during implementation):\n{}\n\n\
+                         YOUR PLAN (reference during implementation):\n{context_string}\n\n\
                          Now implement according to this plan. Start with the most \
                          foundational changes first.",
-                        context_string,
                     ),
                     is_error: false,
                     stop_loop: false,
@@ -302,6 +306,7 @@ impl TaskToolExecutor {
     /// Merge tracked executor state (file ops, notes, follow-ups) into a
     /// [`TaskExecutionResult`] so that downstream consumers see real evidence
     /// instead of hardcoded defaults.
+    #[allow(clippy::assigning_clones)] // clone_from doesn't work through MutexGuard
     pub async fn merge_into_result(&self, exec: &mut crate::agent_runner::TaskExecutionResult) {
         exec.file_ops = self.tracked_file_ops.lock().await.clone();
         let task_notes = self.notes.lock().await.clone();

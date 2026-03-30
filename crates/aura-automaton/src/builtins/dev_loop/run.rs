@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    extract_shell_command, forward_agent_event, info, warn, AgenticTaskParams, Arc, AutomatonError,
+    AutomatonEvent, DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap, NoOpToolExecutor,
+    ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor, TaskExecutionResult,
+    TaskInfo, TaskTrackingConfig, TickContext, ToolProfile, MAX_RETRIES_PER_TASK, STATE_FAILED_IDS,
+    STATE_FAILURE_REASONS, STATE_RETRY_COUNTS, STATE_TASK_QUEUE, STATE_WORK_LOG,
+};
 
 impl DevLoopAutomaton {
     pub(super) async fn execute_task(
@@ -43,7 +49,7 @@ impl DevLoopAutomaton {
         let workspace = ctx
             .workspace_root
             .as_deref()
-            .unwrap_or(std::path::Path::new(&project.path));
+            .unwrap_or_else(|| std::path::Path::new(&project.path));
         self.runner
             .execute_shell_task(
                 &ShellTaskParams {

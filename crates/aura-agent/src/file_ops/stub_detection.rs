@@ -24,11 +24,11 @@ pub enum StubPattern {
 impl std::fmt::Display for StubPattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StubPattern::TodoMacro => write!(f, "todo!() macro"),
-            StubPattern::UnimplementedMacro => write!(f, "unimplemented!() macro"),
-            StubPattern::EmptyFnBody => write!(f, "empty function body"),
-            StubPattern::DefaultOnlyReturn => write!(f, "default-only return value"),
-            StubPattern::IgnoredParams => write!(f, "all parameters unused (prefixed with _)"),
+            Self::TodoMacro => write!(f, "todo!() macro"),
+            Self::UnimplementedMacro => write!(f, "unimplemented!() macro"),
+            Self::EmptyFnBody => write!(f, "empty function body"),
+            Self::DefaultOnlyReturn => write!(f, "default-only return value"),
+            Self::IgnoredParams => write!(f, "all parameters unused (prefixed with _)"),
         }
     }
 }
@@ -57,7 +57,7 @@ pub fn detect_stub_patterns(base_path: &Path, file_ops: &[FileOp]) -> Vec<StubRe
             FileOp::Delete { .. } => continue,
         };
 
-        if !path.ends_with(".rs") || !seen_paths.insert(path.clone()) {
+        if !path.to_ascii_lowercase().ends_with(".rs") || !seen_paths.insert(path.clone()) {
             continue;
         }
 
@@ -137,15 +137,14 @@ fn detect_hollow_functions(path: &str, lines: &[&str], reports: &mut Vec<StubRep
             continue;
         }
 
-        let caps = match fn_re.captures(trimmed) {
-            Some(c) => c,
-            None => {
-                i += 1;
-                continue;
-            }
+        let caps = if let Some(c) = fn_re.captures(trimmed) {
+            c
+        } else {
+            i += 1;
+            continue;
         };
 
-        let params_str = caps.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+        let params_str = caps.get(2).map_or("", |m| m.as_str().trim());
         let fn_line = i + 1;
 
         let has_return = return_re.captures(trimmed).is_some();
@@ -171,7 +170,7 @@ fn detect_hollow_functions(path: &str, lines: &[&str], reports: &mut Vec<StubRep
                         context: trimmed.to_string(),
                     });
                 }
-            } else if is_trivial_return(body_trimmed, &return_type) {
+            } else if is_trivial_return(body_trimmed, return_type.as_ref()) {
                 reports.push(StubReport {
                     path: path.to_string(),
                     line: fn_line,
@@ -204,7 +203,7 @@ fn detect_hollow_functions(path: &str, lines: &[&str], reports: &mut Vec<StubRep
 }
 
 /// Extract the text of a function body starting from the line the `fn` keyword
-/// is on. Returns `(body_text, last_line_index)`. The body_text includes the
+/// is on. Returns `(body_text, last_line_index)`. The `body_text` includes the
 /// outer braces.
 fn extract_fn_body(lines: &[&str], fn_line_idx: usize) -> (String, usize) {
     let mut depth: i32 = 0;
@@ -246,7 +245,7 @@ const TRIVIAL_BODIES: &[&str] = &[
     "None",
 ];
 
-fn is_trivial_return(body: &str, return_type: &Option<String>) -> bool {
+fn is_trivial_return(body: &str, return_type: Option<&String>) -> bool {
     let inner = body
         .trim()
         .trim_start_matches('{')
@@ -263,7 +262,7 @@ fn is_trivial_return(body: &str, return_type: &Option<String>) -> bool {
 
     for trivial in TRIVIAL_BODIES {
         if stmt == *trivial {
-            let rt = return_type.as_deref().unwrap_or("");
+            let rt = return_type.map_or("", String::as_str);
             if stmt == "Ok(())" && (rt.contains("Result<()") || rt.contains("Result<(), ")) {
                 return false;
             }

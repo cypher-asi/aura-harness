@@ -166,14 +166,13 @@ pub fn extract_shell_command(title: &str, description: &str) -> Option<String> {
         let lower = title.to_lowercase();
         let cmd_start = SHELL_PREFIXES
             .iter()
-            .filter_map(|p| {
+            .find_map(|p| {
                 if lower.starts_with(p) {
                     Some(p.len())
                 } else {
                     None
                 }
             })
-            .next()
             .unwrap_or(0);
         title[cmd_start..].trim().to_string()
     } else if SHELL_INDICATORS

@@ -1,8 +1,14 @@
-use super::*;
+use super::{
+    info, topological_sort, warn, Automaton, AutomatonError, AutomatonEvent, DevLoopAutomaton,
+    DevLoopConfig, DomainApi, HashMap, HashSet, Schedule, TaskDescriptor, TaskExecutionResult,
+    TickContext, TickOutcome, STATE_COMPLETED_COUNT, STATE_DONE_IDS, STATE_FAILED_COUNT,
+    STATE_FAILED_IDS, STATE_FAILURE_REASONS, STATE_INITIALIZED, STATE_LOOP_FINISHED,
+    STATE_TASK_QUEUE, STATE_WORK_LOG,
+};
 
 #[async_trait::async_trait]
 impl Automaton for DevLoopAutomaton {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "dev-loop"
     }
 
@@ -70,7 +76,7 @@ impl DevLoopAutomaton {
 
         if tasks.is_empty() {
             info!("No tasks found for project, finishing");
-            return self.finish(ctx).await;
+            return self.finish(ctx);
         }
 
         let already_done: Vec<String> = tasks
@@ -114,14 +120,14 @@ impl DevLoopAutomaton {
     ) -> Result<TickOutcome, AutomatonError> {
         let mut queue: Vec<String> = ctx.state.get(STATE_TASK_QUEUE).unwrap_or_default();
         let done_ids: Vec<String> = ctx.state.get(STATE_DONE_IDS).unwrap_or_default();
-        let done_set: HashSet<&str> = done_ids.iter().map(|s| s.as_str()).collect();
+        let done_set: HashSet<&str> = done_ids.iter().map(std::string::String::as_str).collect();
 
         if queue.is_empty() {
             if self.try_retry_failed(ctx, &cfg.project_id).await? {
                 return Ok(TickOutcome::Continue);
             }
             info!("Task queue empty, finishing loop");
-            return self.finish(ctx).await;
+            return self.finish(ctx);
         }
 
         let task_id = queue.remove(0);
@@ -264,39 +270,36 @@ async fn transition_to_in_progress(domain: &dyn DomainApi, task: &TaskDescriptor
 
 /// Commit staged changes and push to the Orbit remote if the automaton config
 /// includes `git_repo_url`. Called after each successful task completion.
-pub(crate) async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
+pub async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
     let workspace = match ctx.workspace_root.as_ref() {
         Some(ws) => ws.to_string_lossy().to_string(),
         None => return,
     };
 
-    if !aura_agent::git::is_git_repo(&workspace) {
-        if !init_git_repo(&workspace, task_id).await {
-            return;
-        }
+    if !aura_agent::git::is_git_repo(&workspace) && !init_git_repo(&workspace, task_id).await {
+        return;
     }
 
-    let sha =
-        match aura_agent::git::git_commit(&workspace, &format!("task({}): completed", task_id))
-            .await
-        {
-            Ok(Some(sha)) => sha,
-            Ok(None) => {
-                ctx.emit(AutomatonEvent::GitCommitFailed {
-                    task_id: task_id.to_string(),
-                    reason: "No changes to commit".to_string(),
-                });
-                return;
-            }
-            Err(e) => {
-                warn!(task_id, error = %e, "auto-commit after task completion failed");
-                ctx.emit(AutomatonEvent::GitCommitFailed {
-                    task_id: task_id.to_string(),
-                    reason: format!("Commit failed: {e}"),
-                });
-                return;
-            }
-        };
+    let sha = match aura_agent::git::git_commit(&workspace, &format!("task({task_id}): completed"))
+        .await
+    {
+        Ok(Some(sha)) => sha,
+        Ok(None) => {
+            ctx.emit(AutomatonEvent::GitCommitFailed {
+                task_id: task_id.to_string(),
+                reason: "No changes to commit".to_string(),
+            });
+            return;
+        }
+        Err(e) => {
+            warn!(task_id, error = %e, "auto-commit after task completion failed");
+            ctx.emit(AutomatonEvent::GitCommitFailed {
+                task_id: task_id.to_string(),
+                reason: format!("Commit failed: {e}"),
+            });
+            return;
+        }
+    };
 
     ctx.emit(AutomatonEvent::GitCommitted {
         task_id: task_id.to_string(),

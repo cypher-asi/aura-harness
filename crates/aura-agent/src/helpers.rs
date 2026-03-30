@@ -5,9 +5,9 @@ use aura_reasoner::{ContentBlock, Message, Role};
 /// Append a warning as a text block to the last user message, or push a new
 /// user message if the last message isn't a user message.
 ///
-/// This is safe to call after tool_result messages because it appends to
+/// This is safe to call after `tool_result` messages because it appends to
 /// the existing user message rather than inserting a new one that would
-/// break the tool_use/tool_result adjacency required by Anthropic.
+/// break the `tool_use/tool_result` adjacency required by Anthropic.
 pub fn append_warning(messages: &mut Vec<Message>, warning: &str) {
     if let Some(last) = messages.last_mut() {
         if last.role == Role::User {
@@ -49,8 +49,8 @@ pub fn is_exploration_tool(name: &str) -> bool {
 
 /// Summarize write tool inputs to save context tokens.
 ///
-/// For write_file: replaces content with path + byte size.
-/// For edit_file: replaces old_text/new_text with path + edit description.
+/// For `write_file`: replaces content with path + byte size.
+/// For `edit_file`: replaces `old_text/new_text` with path + edit description.
 /// For other tools: returns `None` (input unchanged).
 #[must_use]
 pub fn summarize_write_input(
@@ -66,8 +66,7 @@ pub fn summarize_write_input(
             let content_len = input
                 .get("content")
                 .and_then(|v| v.as_str())
-                .map(|s| s.len())
-                .unwrap_or(0);
+                .map_or(0, str::len);
             Some(serde_json::json!({
                 "path": path,
                 "_summarized": format!("Content: {} bytes written", content_len)
@@ -80,16 +79,14 @@ pub fn summarize_write_input(
                 .unwrap_or("unknown");
             let old_len = input
                 .get("old_text")
-                .or(input.get("old_string"))
+                .or_else(|| input.get("old_string"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.len())
-                .unwrap_or(0);
+                .map_or(0, str::len);
             let new_len = input
                 .get("new_text")
-                .or(input.get("new_string"))
+                .or_else(|| input.get("new_string"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.len())
-                .unwrap_or(0);
+                .map_or(0, str::len);
             Some(serde_json::json!({
                 "path": path,
                 "_summarized": format!("Edit: replaced {} chars with {} chars", old_len, new_len)

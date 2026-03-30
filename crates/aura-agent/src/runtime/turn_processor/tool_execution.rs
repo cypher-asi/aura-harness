@@ -50,6 +50,7 @@ where
         Ok(results)
     }
 
+    #[allow(clippy::type_complexity)]
     fn classify_tool_calls(
         &self,
         message: &Message,

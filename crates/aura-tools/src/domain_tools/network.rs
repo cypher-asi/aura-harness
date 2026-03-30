@@ -7,7 +7,7 @@ use super::api::DomainApi;
 use super::helpers::{domain_err, domain_ok, str_field};
 
 fn parse_api_result(body: &str) -> Value {
-    serde_json::from_str::<Value>(body).unwrap_or(Value::String(body.to_owned()))
+    serde_json::from_str::<Value>(body).unwrap_or_else(|_| Value::String(body.to_owned()))
 }
 
 pub async fn post_to_feed(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {

@@ -35,7 +35,7 @@ struct FileDirEntry {
     path: String,
     is_dir: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    children: Option<Vec<FileDirEntry>>,
+    children: Option<Vec<Self>>,
 }
 
 fn walk_directory(

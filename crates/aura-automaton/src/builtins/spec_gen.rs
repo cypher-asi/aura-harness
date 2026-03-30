@@ -61,7 +61,7 @@ const MAX_TOKENS: u32 = 32_768;
 
 #[async_trait::async_trait]
 impl Automaton for SpecGenAutomaton {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "spec-gen"
     }
 

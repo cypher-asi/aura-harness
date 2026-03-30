@@ -684,7 +684,7 @@ async fn test_ws_streaming_message_fields() {
 
     let has_text_delta = messages
         .iter()
-        .any(|m| m["type"] == "text_delta" && m["text"].as_str().map_or(false, |t| !t.is_empty()));
+        .any(|m| m["type"] == "text_delta" && m["text"].as_str().is_some_and(|t| !t.is_empty()));
     assert!(has_text_delta, "expected at least one non-empty text_delta");
 
     let end_msg = messages

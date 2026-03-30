@@ -8,7 +8,7 @@ pub(crate) fn deser_string_or_default<'de, D>(d: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    Option::<String>::deserialize(d).map(|opt| opt.unwrap_or_default())
+    Option::<String>::deserialize(d).map(Option::unwrap_or_default)
 }
 
 /// Deserialize a u32 that may be null or missing into `0`.
@@ -24,7 +24,7 @@ pub(crate) fn str_field(input: &Value, key: &str) -> Option<String> {
     input
         .get(key)
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
 }
 
 /// Extract a required string field, returning an error message on absence.

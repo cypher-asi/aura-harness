@@ -22,7 +22,7 @@ use ts_rs::TS;
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub enum InboundMessage {
     /// Initialize the session (must be the first message).
-    SessionInit(SessionInit),
+    SessionInit(Box<SessionInit>),
     /// Send a user message for processing.
     UserMessage(UserMessage),
     /// Cancel the current turn.
@@ -143,7 +143,7 @@ pub struct SessionReady {
     pub tools: Vec<ToolInfo>,
 }
 
-/// Minimal tool info for the session_ready response.
+/// Minimal tool info for the `session_ready` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct ToolInfo {
@@ -235,6 +235,7 @@ pub struct FilesChanged {
 }
 
 impl FilesChanged {
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.created.is_empty() && self.modified.is_empty() && self.deleted.is_empty()
     }
@@ -257,17 +258,20 @@ pub struct ErrorMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+#[derive(Default)]
 pub enum ToolAuth {
+    #[default]
     None,
-    Bearer { token: String },
-    ApiKey { header: String, key: String },
-    Headers { headers: HashMap<String, String> },
-}
-
-impl Default for ToolAuth {
-    fn default() -> Self {
-        Self::None
-    }
+    Bearer {
+        token: String,
+    },
+    ApiKey {
+        header: String,
+        key: String,
+    },
+    Headers {
+        headers: HashMap<String, String>,
+    },
 }
 
 /// Definition for an installed tool, sent over the wire in `session_init`.

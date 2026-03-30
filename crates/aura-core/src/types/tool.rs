@@ -84,23 +84,26 @@ pub struct ToolExecution {
 /// Authentication configuration for installed tools.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ToolAuth {
+    #[default]
     None,
-    Bearer { token: String },
-    ApiKey { header: String, key: String },
-    Headers { headers: HashMap<String, String> },
+    Bearer {
+        token: String,
+    },
+    ApiKey {
+        header: String,
+        key: String,
+    },
+    Headers {
+        headers: HashMap<String, String>,
+    },
 }
 
-impl Default for ToolAuth {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-/// Definition for an installed tool (replaces ExternalToolDefinition).
+/// Definition for an installed tool (replaces `ExternalToolDefinition`).
 ///
 /// Installed tools are dispatched via HTTP POST to an endpoint.
-/// They can come from tools.toml, the HTTP install API, or session_init.
+/// They can come from `tools.toml`, the HTTP install API, or `session_init`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledToolDefinition {
     pub name: String,

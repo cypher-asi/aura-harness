@@ -12,11 +12,11 @@ fn build_type_section(type_name: &str, sources: &[(String, String)]) -> String {
 
     for (rel_path, content) in sources {
         if let Some(def) = super::extract_definition_block(content, type_name) {
-            if !has_content {
-                section.push_str(&format!("### {} ({})\n", type_name, rel_path));
-                has_content = true;
+            if has_content {
+                section.push_str(&format!("  (also in {rel_path})\n"));
             } else {
-                section.push_str(&format!("  (also in {})\n", rel_path));
+                section.push_str(&format!("### {type_name} ({rel_path})\n"));
+                has_content = true;
             }
             section.push_str(&def);
             section.push('\n');
@@ -25,7 +25,7 @@ fn build_type_section(type_name: &str, sources: &[(String, String)]) -> String {
         let sigs = super::extract_pub_signatures(content, type_name);
         if !sigs.is_empty() {
             if !has_content {
-                section.push_str(&format!("### {} ({})\n", type_name, rel_path));
+                section.push_str(&format!("### {type_name} ({rel_path})\n"));
                 has_content = true;
             }
             for sig in &sigs {
@@ -47,7 +47,7 @@ pub fn resolve_type_definitions_for_task(
     spec_content: &str,
     budget: usize,
 ) -> String {
-    let combined = format!("{} {} {}", task_title, task_description, spec_content);
+    let combined = format!("{task_title} {task_description} {spec_content}");
     let type_names = extract_type_names_from_text(&combined);
     if type_names.is_empty() {
         return String::new();
@@ -75,7 +75,7 @@ pub fn resolve_type_definitions_for_task(
     if output.is_empty() {
         String::new()
     } else {
-        format!("## Key Type Definitions\n\n{}", output)
+        format!("## Key Type Definitions\n\n{output}")
     }
 }
 
@@ -108,7 +108,7 @@ pub async fn resolve_type_definitions_for_task_async(
 }
 
 /// Check whether a line is an `impl` block header for the given type name.
-pub(crate) fn is_impl_for_type(line: &str, type_name: &str) -> bool {
+pub fn is_impl_for_type(line: &str, type_name: &str) -> bool {
     if !line.starts_with("impl") {
         return false;
     }

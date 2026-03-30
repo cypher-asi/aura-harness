@@ -1,4 +1,4 @@
-pub(crate) fn extract_signatures(content: &str) -> String {
+pub fn extract_signatures(content: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let mut output = String::new();
     let mut i = 0;

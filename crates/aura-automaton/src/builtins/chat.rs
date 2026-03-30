@@ -76,7 +76,7 @@ impl ChatConfig {
 
 #[async_trait::async_trait]
 impl Automaton for ChatAutomaton {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "chat"
     }
 

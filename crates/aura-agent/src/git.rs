@@ -12,7 +12,7 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 fn redact_url(url: &str) -> String {
     match url::Url::parse(url) {
         Ok(parsed) if !parsed.password().unwrap_or_default().is_empty() => {
-            let mut redacted = parsed.clone();
+            let mut redacted = parsed;
             redacted.set_password(Some("***")).ok();
             redacted.to_string()
         }
@@ -26,6 +26,7 @@ pub struct CommitInfo {
     pub message: String,
 }
 
+#[must_use]
 pub fn is_git_repo(project_root: &str) -> bool {
     Path::new(project_root).join(".git").exists()
 }
@@ -50,6 +51,7 @@ pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
         Ok(o) if o.status.success() => {
             let current = String::from_utf8_lossy(&o.stdout).trim().to_string();
             if current != url {
+                let safe = redact_url(url);
                 if let Err(e) = git_output(
                     Command::new("git")
                         .args(["remote", "set-url", name, url])
@@ -58,15 +60,14 @@ pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
                 )
                 .await
                 {
-                    let safe = redact_url(url);
                     tracing::warn!(remote = name, url = %safe, error = %e, "failed to set-url git remote");
                 } else {
-                    let safe = redact_url(url);
                     debug!(remote = name, url = %safe, "updated git remote URL");
                 }
             }
         }
         _ => {
+            let safe = redact_url(url);
             if let Err(e) = git_output(
                 Command::new("git")
                     .args(["remote", "add", name, url])
@@ -75,10 +76,8 @@ pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
             )
             .await
             {
-                let safe = redact_url(url);
                 tracing::warn!(remote = name, url = %safe, error = %e, "failed to add git remote");
             } else {
-                let safe = redact_url(url);
                 debug!(remote = name, url = %safe, "added git remote");
             }
         }

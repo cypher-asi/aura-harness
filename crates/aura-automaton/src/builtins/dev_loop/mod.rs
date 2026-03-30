@@ -29,7 +29,7 @@ mod finish;
 mod run;
 mod tick;
 
-pub(crate) use tick::commit_and_push;
+pub use tick::commit_and_push;
 
 #[cfg(test)]
 mod tests;
@@ -138,7 +138,8 @@ fn topological_sort(tasks: &[TaskDescriptor]) -> Vec<String> {
 
     // Stable sort: prefer tasks by their order field
     let order_map: HashMap<&str, u32> = tasks.iter().map(|t| (t.id.as_str(), t.order)).collect();
-    let mut queue_vec: Vec<&str> = queue.drain(..).collect();
+    let mut queue_vec: Vec<&str> = queue.iter().copied().collect();
+    queue.clear();
     queue_vec.sort_by_key(|id| order_map.get(id).copied().unwrap_or(u32::MAX));
     queue = queue_vec.into_iter().collect();
 
@@ -165,10 +166,10 @@ fn topological_sort(tasks: &[TaskDescriptor]) -> Vec<String> {
     result
 }
 
-pub(crate) fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
+pub fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
     let title_lower = task.title.to_lowercase();
     if title_lower.starts_with("run:") || title_lower.starts_with("shell:") {
-        let cmd = task.title.splitn(2, ':').nth(1)?.trim().to_string();
+        let cmd = task.title.split_once(':')?.1.trim().to_string();
         if !cmd.is_empty() {
             return Some(cmd);
         }
@@ -176,7 +177,7 @@ pub(crate) fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
     None
 }
 
-pub(crate) fn forward_agent_event(
+pub fn forward_agent_event(
     tx: &tokio::sync::mpsc::UnboundedSender<AutomatonEvent>,
     evt: aura_agent::events::AgentLoopEvent,
 ) {

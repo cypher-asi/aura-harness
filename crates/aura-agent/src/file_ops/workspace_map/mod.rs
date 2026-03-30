@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::FileOpsError;
 
-pub(crate) mod signatures;
+pub mod signatures;
 
 struct WorkspaceMetadata {
     members: Vec<String>,
@@ -53,13 +53,8 @@ fn format_workspace_map(
         let name = meta
             .crate_names
             .get(member)
-            .map(|s| s.as_str())
-            .unwrap_or(member);
-        let doc = meta
-            .crate_docs
-            .get(member)
-            .map(|s| s.as_str())
-            .unwrap_or("");
+            .map_or(member.as_str(), String::as_str);
+        let doc = meta.crate_docs.get(member).map_or("", String::as_str);
         let doc_suffix = if doc.is_empty() {
             String::new()
         } else {
@@ -70,7 +65,7 @@ fn format_workspace_map(
             let resolved: Vec<&str> = deps
                 .iter()
                 .filter(|d| name_to_path.contains_key(d.as_str()))
-                .map(|d| d.as_str())
+                .map(std::string::String::as_str)
                 .collect();
             if resolved.is_empty() {
                 output.push_str("    deps: []\n");
@@ -99,7 +94,7 @@ pub fn generate_workspace_map(project_root: &str) -> Result<String, FileOpsError
     Ok(format_workspace_map(&meta, &name_to_path))
 }
 
-pub(crate) fn parse_workspace_members(cargo_content: &str) -> Vec<String> {
+pub fn parse_workspace_members(cargo_content: &str) -> Vec<String> {
     let mut members = Vec::new();
     let mut in_members = false;
 
@@ -138,7 +133,7 @@ fn extract_quoted_strings(line: &str, out: &mut Vec<String>) {
     }
 }
 
-pub(crate) fn parse_package_name(cargo_content: &str) -> Option<String> {
+pub fn parse_package_name(cargo_content: &str) -> Option<String> {
     let mut in_package = false;
     for line in cargo_content.lines() {
         let trimmed = line.trim();
@@ -165,7 +160,7 @@ pub(crate) fn parse_package_name(cargo_content: &str) -> Option<String> {
 /// Extract workspace-internal dependency names from a crate's Cargo.toml.
 /// We detect path dependencies (those with `path = "..."`) and return
 /// the package name (from `package = "..."` override or the dep key itself).
-pub(crate) fn parse_internal_deps(cargo_content: &str) -> Vec<String> {
+pub fn parse_internal_deps(cargo_content: &str) -> Vec<String> {
     let mut deps = Vec::new();
     let mut in_deps = false;
     let mut in_inline_table = false;

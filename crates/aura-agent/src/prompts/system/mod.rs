@@ -42,6 +42,7 @@ pub const CONTEXT_SUMMARY_SYSTEM_PROMPT: &str = "You summarize conversations con
 // Fix system prompt
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn build_fix_system_prompt() -> String {
     String::from(
         r#"
@@ -117,6 +118,7 @@ Response schema:
 // Agentic execution system prompt
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn agentic_execution_system_prompt(
     project: &ProjectInfo<'_>,
     agent: Option<&AgentInfo<'_>>,
@@ -258,7 +260,7 @@ fn build_agent_preamble(agent: Option<&AgentInfo<'_>>) -> String {
     preamble
 }
 
-fn platform_info_string() -> &'static str {
+const fn platform_info_string() -> &'static str {
     if cfg!(windows) {
         "Platform: Windows. Shell commands run via `cmd /C`. Use PowerShell or \
          Windows-compatible syntax. Avoid Unix-only tools (grep, sed, awk, head, \
@@ -278,7 +280,7 @@ fn workspace_context_section(ws_info: &str) -> String {
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("multiple");
     format!(
-        r#"
+        r"
 ## Workspace Context
 This is a Rust workspace with {crate_count} crate members. Before implementing:
 1. Check the Workspace Structure section in the task context to understand crate dependencies
@@ -286,7 +288,7 @@ This is a Rust workspace with {crate_count} crate members. Before implementing:
 3. NEVER guess type signatures, method names, or struct fields -- verify by reading source
 4. If you declare `pub mod foo;`, create foo.rs in the same set of file operations
 5. Use the codebase snapshot to understand existing patterns before writing new code
-"#
+"
     )
 }
 
@@ -294,6 +296,7 @@ This is a Rust workspace with {crate_count} crate members. Before implementing:
 // Chat system prompt builder
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn build_chat_system_prompt(project: &ProjectInfo<'_>, custom_system_prompt: &str) -> String {
     let mut prompt = if custom_system_prompt.is_empty() {
         CHAT_SYSTEM_PROMPT_BASE.to_string()

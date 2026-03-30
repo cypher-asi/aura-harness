@@ -37,9 +37,10 @@ fn default_shell() -> String {
 }
 
 fn default_cwd() -> String {
-    dirs::home_dir()
-        .map(|p: std::path::PathBuf| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".".into())
+    dirs::home_dir().map_or_else(
+        || ".".into(),
+        |p: std::path::PathBuf| p.to_string_lossy().into_owned(),
+    )
 }
 
 #[derive(Deserialize)]

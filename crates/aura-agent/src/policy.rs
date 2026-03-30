@@ -10,7 +10,7 @@ pub enum TaskComplexity {
 }
 
 pub fn classify_task_complexity(title: &str, description: &str) -> TaskComplexity {
-    let combined = format!("{} {}", title, description).to_lowercase();
+    let combined = format!("{title} {description}").to_lowercase();
     let mut score: i32 = 0;
 
     let simple_signals: &[(&str, i32)] = &[
@@ -81,7 +81,7 @@ pub fn compute_exploration_allowance(
     member_count: usize,
 ) -> usize {
     let complexity = classify_task_complexity(task_title, task_description);
-    let combined = format!("{} {}", task_title, task_description).to_lowercase();
+    let combined = format!("{task_title} {task_description}").to_lowercase();
 
     let is_refactoring = combined.contains("refactor")
         || combined.contains("rename across")

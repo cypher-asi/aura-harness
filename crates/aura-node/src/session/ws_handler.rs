@@ -122,7 +122,7 @@ async fn run_active_turn_select(
         }
         join_result = &mut turn.join_handle => {
             let message_id = turn.message_id.clone();
-            let _ = turn.stream_forward_handle.abort();
+            turn.stream_forward_handle.abort();
             finalize_turn(session, join_result, &message_id, outbound_tx);
             TurnAction::TurnFinished
         }
@@ -187,7 +187,7 @@ fn dispatch_idle_message(
 ) -> IdleAction {
     match serde_json::from_str::<InboundMessage>(raw) {
         Ok(InboundMessage::SessionInit(init)) => {
-            handle_session_init(session, init, outbound_tx, ctx);
+            handle_session_init(session, *init, outbound_tx, ctx);
             IdleAction::Continue
         }
         Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx) {
@@ -493,7 +493,7 @@ fn apply_turn_result(
     message_id: &str,
     outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
 ) {
-    session.messages = loop_result.messages.clone();
+    session.messages.clone_from(&loop_result.messages);
 
     let input_tokens = loop_result.total_input_tokens;
     let output_tokens = loop_result.total_output_tokens;

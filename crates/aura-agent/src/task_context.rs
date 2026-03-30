@@ -50,7 +50,9 @@ pub async fn fetch_codebase_context(
         }
     };
 
-    let dep_api_context = if !workspace_map.is_empty() {
+    let dep_api_context = if workspace_map.is_empty() {
+        String::new()
+    } else {
         file_ops::resolve_task_dep_api_context_cached(
             project_folder,
             task_title,
@@ -63,8 +65,6 @@ pub async fn fetch_codebase_context(
             tracing::warn!("resolve_task_dep_api_context_cached failed: {e}");
             String::new()
         })
-    } else {
-        String::new()
     };
 
     let type_defs_context = file_ops::type_resolution::resolve_type_definitions_for_task_async(
@@ -106,22 +106,20 @@ pub fn build_full_task_context(
         task_context.push_str(&conventions);
     }
     if !workspace_map.is_empty() {
-        task_context.push_str(&format!("\n# Workspace Structure\n{}\n", workspace_map));
+        task_context.push_str(&format!("\n# Workspace Structure\n{workspace_map}\n"));
     }
     if !type_defs.is_empty() {
         task_context.push_str(&format!(
-            "\n# Type Definitions Referenced in Task\n{}\n",
-            type_defs,
+            "\n# Type Definitions Referenced in Task\n{type_defs}\n",
         ));
     }
     if !codebase_snapshot.is_empty() {
         task_context.push_str(&format!(
-            "\n# Current Codebase Files\n{}\n",
-            codebase_snapshot,
+            "\n# Current Codebase Files\n{codebase_snapshot}\n",
         ));
     }
     if !dep_api.is_empty() {
-        task_context.push_str(&format!("\n# Dependency API Surface\n{}\n", dep_api));
+        task_context.push_str(&format!("\n# Dependency API Surface\n{dep_api}\n"));
     }
     cap_task_context(&mut task_context, MAX_TASK_CONTEXT_CHARS);
     task_context
@@ -189,19 +187,19 @@ fn extract_codebase_conventions(codebase_snapshot: &str) -> String {
 /// Trim `task_context` to at most `budget` characters by progressively
 /// removing lower-priority sections (codebase snapshot first, then dep API,
 /// then workspace map), preserving the core task description and spec.
+const CAP_SECTIONS: &[&str] = &[
+    "\n# Current Codebase Files\n",
+    "\n# Dependency API Surface\n",
+    "\n# Workspace Structure\n",
+    "\n# Type Definitions Referenced in Task\n",
+];
+
 pub fn cap_task_context(task_context: &mut String, budget: usize) {
     if task_context.len() <= budget {
         return;
     }
 
-    const SECTIONS: &[&str] = &[
-        "\n# Current Codebase Files\n",
-        "\n# Dependency API Surface\n",
-        "\n# Workspace Structure\n",
-        "\n# Type Definitions Referenced in Task\n",
-    ];
-
-    for section_header in SECTIONS {
+    for section_header in CAP_SECTIONS {
         if task_context.len() <= budget {
             return;
         }
@@ -280,11 +278,10 @@ pub async fn check_already_completed(
             for file_path in &dep_files {
                 let full_path = base.join(file_path);
                 if let Ok(content) = tokio::fs::read_to_string(&full_path).await {
-                    let needle = format!("{}{}", code_prefix, name);
+                    let needle = format!("{code_prefix}{name}");
                     if content.to_lowercase().contains(&needle.to_lowercase()) {
                         return Some(format!(
-                            "`{}{}` already exists in {} (created by a predecessor task)",
-                            code_prefix, name, file_path,
+                            "`{code_prefix}{name}` already exists in {file_path} (created by a predecessor task)",
                         ));
                     }
                 }
@@ -308,9 +305,7 @@ pub fn resolve_completed_deps<'a>(
     }
     all_tasks
         .iter()
-        .filter(|t| {
-            dependency_ids.iter().any(|dep_id| t.title == *dep_id) && !t.execution_notes.is_empty()
-        })
+        .filter(|t| dependency_ids.contains(&t.title) && !t.execution_notes.is_empty())
         .collect()
 }
 

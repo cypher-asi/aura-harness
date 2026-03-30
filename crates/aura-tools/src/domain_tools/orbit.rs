@@ -7,7 +7,7 @@ use super::api::DomainApi;
 use super::helpers::{domain_err, domain_ok, str_field};
 
 fn parse_orbit_result(body: &str) -> Value {
-    serde_json::from_str::<Value>(body).unwrap_or(Value::String(body.to_owned()))
+    serde_json::from_str::<Value>(body).unwrap_or_else(|_| Value::String(body.to_owned()))
 }
 
 pub async fn orbit_list_repos(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
@@ -78,7 +78,8 @@ pub async fn orbit_list_commits(api: &dyn DomainApi, _project_id: &str, input: &
     let jwt = str_field(input, "jwt").unwrap_or_default();
     let mut path = format!("/repos/{org_id}/{repo}/commits?limit={limit}");
     if !git_ref.is_empty() {
-        path.push_str(&format!("&ref={git_ref}"));
+        use std::fmt::Write;
+        let _ = write!(path, "&ref={git_ref}");
     }
     match api.orbit_api_call("GET", &path, None, Some(&jwt)).await {
         Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
@@ -128,7 +129,8 @@ pub async fn orbit_list_prs(api: &dyn DomainApi, _project_id: &str, input: &Valu
     let jwt = str_field(input, "jwt").unwrap_or_default();
     let mut path = format!("/repos/{org_id}/{repo}/pulls");
     if !status.is_empty() {
-        path.push_str(&format!("?status={status}"));
+        use std::fmt::Write;
+        let _ = write!(path, "?status={status}");
     }
     match api.orbit_api_call("GET", &path, None, Some(&jwt)).await {
         Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),

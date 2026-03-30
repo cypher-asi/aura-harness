@@ -263,18 +263,15 @@ impl Store for RocksStore {
                 break;
             }
 
-            match serde_json::from_slice::<RecordEntry>(&value) {
-                Ok(entry) => {
-                    entries.push(entry);
-                }
-                Err(_) => {
-                    debug!(
-                        seq = record_key.seq,
-                        error_kind = "deserialization",
-                        "skipping malformed record"
-                    );
-                    continue;
-                }
+            if let Ok(entry) = serde_json::from_slice::<RecordEntry>(&value) {
+                entries.push(entry);
+            } else {
+                debug!(
+                    seq = record_key.seq,
+                    error_kind = "deserialization",
+                    "skipping malformed record"
+                );
+                continue;
             }
 
             if entries.len() >= limit {

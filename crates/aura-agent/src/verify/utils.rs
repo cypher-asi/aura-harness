@@ -111,7 +111,10 @@ pub fn build_error_context_snapshot(
     let error_refs = parse_error_references(build_stderr);
     let fresh_error_files = file_ops::resolve_error_source_files(project_root, &error_refs, budget);
 
-    if !fresh_error_files.is_empty() {
+    if fresh_error_files.is_empty() {
+        file_ops::read_relevant_files(&project_root.display().to_string(), budget)
+            .unwrap_or_default()
+    } else {
         let remaining_budget = budget.saturating_sub(fresh_error_files.len());
         if remaining_budget > 2_000 {
             let supplemental = file_ops::read_relevant_files(
@@ -127,9 +130,6 @@ pub fn build_error_context_snapshot(
         } else {
             fresh_error_files
         }
-    } else {
-        file_ops::read_relevant_files(&project_root.display().to_string(), budget)
-            .unwrap_or_default()
     }
 }
 

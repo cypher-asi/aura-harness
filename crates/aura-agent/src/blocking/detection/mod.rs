@@ -170,13 +170,11 @@ pub fn detect_all_blocked(
 /// through to the executor where it fails and disrupts stall detection.
 /// This detector catches that case upfront for all tool families.
 fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult> {
-    if WRITE_TOOLS.contains(&tool.name.as_str()) {
-        if extract_path(tool).is_none() {
-            return Some(BlockCheckResult::blocked(format!(
-                "`{}` requires a `path` argument. Provide the file path to operate on.",
-                tool.name
-            )));
-        }
+    if WRITE_TOOLS.contains(&tool.name.as_str()) && extract_path(tool).is_none() {
+        return Some(BlockCheckResult::blocked(format!(
+            "`{}` requires a `path` argument. Provide the file path to operate on.",
+            tool.name
+        )));
     }
     if COMMAND_TOOLS.contains(&tool.name.as_str()) {
         let has_command = tool
@@ -191,13 +189,13 @@ fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult>
             )));
         }
     }
-    if EXPLORATION_TOOLS.contains(&tool.name.as_str()) && tool.name == "read_file" {
-        if extract_path(tool).is_none() {
-            return Some(BlockCheckResult::blocked(
-                "`read_file` requires a `path` argument. Provide the file path to read."
-                    .to_string(),
-            ));
-        }
+    if EXPLORATION_TOOLS.contains(&tool.name.as_str())
+        && tool.name == "read_file"
+        && extract_path(tool).is_none()
+    {
+        return Some(BlockCheckResult::blocked(
+            "`read_file` requires a `path` argument. Provide the file path to read.".to_string(),
+        ));
     }
     None
 }

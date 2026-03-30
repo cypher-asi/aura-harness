@@ -194,11 +194,11 @@ fn is_workspace_root_alias(path: &Path) -> bool {
     use std::path::Component;
 
     let mut components = path.components();
-    match (components.next(), components.next(), components.next()) {
-        (Some(Component::RootDir), None, None) => true,
-        (Some(Component::Prefix(_)), Some(Component::RootDir), None) => true,
-        _ => false,
-    }
+    matches!(
+        (components.next(), components.next(), components.next()),
+        (Some(Component::RootDir), None, None)
+            | (Some(Component::Prefix(_)), Some(Component::RootDir), None)
+    )
 }
 
 #[cfg(test)]

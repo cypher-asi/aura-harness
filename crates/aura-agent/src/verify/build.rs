@@ -326,7 +326,7 @@ async fn handle_build_failure(
     event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
     st: &mut FixLoopState,
 ) -> anyhow::Result<Option<BuildVerifyResult>> {
-    st.last_stderr = br.stderr.clone();
+    st.last_stderr.clone_from(&br.stderr);
     emit(
         event_tx,
         VerifyEvent::BuildFailed {

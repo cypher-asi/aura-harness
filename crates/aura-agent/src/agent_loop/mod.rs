@@ -272,7 +272,7 @@ impl AgentLoop {
 }
 
 /// Mutable state carried across iterations of the agent loop.
-pub(crate) struct LoopState {
+pub struct LoopState {
     pub(crate) result: AgentLoopResult,
     pub(crate) tool_cache: HashMap<String, String>,
     pub(crate) blocking_ctx: BlockingContext,

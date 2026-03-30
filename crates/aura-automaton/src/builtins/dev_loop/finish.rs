@@ -1,10 +1,11 @@
-use super::*;
+use super::{
+    info, AutomatonError, AutomatonEvent, DevLoopAutomaton, TickContext, TickOutcome,
+    STATE_COMPLETED_COUNT, STATE_FAILED_COUNT, STATE_LOOP_FINISHED,
+};
 
 impl DevLoopAutomaton {
-    pub(super) async fn finish(
-        &self,
-        ctx: &mut TickContext,
-    ) -> Result<TickOutcome, AutomatonError> {
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(super) fn finish(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
         let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0);
         let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0);
 

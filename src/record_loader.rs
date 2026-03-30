@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 /// Load existing records from the store and send to UI.
-pub(crate) fn load_existing_records(
+pub fn load_existing_records(
     store: &Arc<RocksStore>,
     agent_id: AgentId,
     commands: &mpsc::Sender<UiCommand>,
@@ -132,7 +132,7 @@ pub(crate) fn load_existing_records(
 }
 
 /// Send initial agent info to the UI.
-pub(crate) fn send_initial_agent(
+pub fn send_initial_agent(
     identity: &Identity,
     store: &Arc<RocksStore>,
     commands: &mpsc::Sender<UiCommand>,
@@ -156,7 +156,7 @@ pub(crate) fn send_initial_agent(
 }
 
 /// Extract tool name or other info from a transaction payload.
-pub(crate) fn extract_tool_info(tx: &Transaction) -> String {
+pub fn extract_tool_info(tx: &Transaction) -> String {
     match tx.tx_type {
         TransactionType::ToolProposal => {
             if let Ok(proposal) = serde_json::from_slice::<aura_core::ToolProposal>(&tx.payload) {

@@ -3,14 +3,14 @@
 use ratatui::layout::Rect;
 
 /// Calculate the display width of a string (accounting for Unicode characters).
-pub(crate) fn display_width(s: &str) -> usize {
+pub fn display_width(s: &str) -> usize {
     use unicode_width::UnicodeWidthStr;
     UnicodeWidthStr::width(s)
 }
 
 /// Wrap text at word boundaries to fit within `max_width` (display width).
 /// Returns a vector of lines, each fitting within the width.
-pub(crate) fn wrap_words(text: &str, max_width: usize) -> Vec<String> {
+pub fn wrap_words(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![text.to_string()];
     }
@@ -88,7 +88,7 @@ pub(crate) fn wrap_words(text: &str, max_width: usize) -> Vec<String> {
 }
 
 /// Helper to create a centered rect.
-pub(crate) fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     Rect {

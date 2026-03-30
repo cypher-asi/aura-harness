@@ -85,7 +85,7 @@ async fn handle_automaton_ws(
         while let Some(msg) = ws_rx.next().await {
             match msg {
                 Ok(WsMessage::Close(_)) | Err(_) => break,
-                _ => continue,
+                _ => {}
             }
         }
         tracing::debug!(automaton_id = %drain_aid, "Automaton WS read side closed");

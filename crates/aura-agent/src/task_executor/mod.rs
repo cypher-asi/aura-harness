@@ -181,7 +181,7 @@ impl AgentToolExecutor for TaskToolExecutor {
             .map(String::from)
             .or_else(|| infer_default_build_command(project_root))?;
 
-        self.emit_text(format!("\n[auto-build: {}]\n", cmd));
+        self.emit_text(format!("\n[auto-build: {cmd}]\n"));
 
         match crate::verify::run_build_command(project_root, &cmd, None).await {
             Ok(result) => {
@@ -195,10 +195,10 @@ impl AgentToolExecutor for TaskToolExecutor {
                     }
                     output.push_str(&result.stderr);
                 }
-                let output = if !result.success {
-                    self.enrich_compiler_output(&output)
-                } else {
+                let output = if result.success {
                     output
+                } else {
+                    self.enrich_compiler_output(&output)
                 };
                 Some(AutoBuildResult {
                     success: result.success,
@@ -251,8 +251,11 @@ pub fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
     match tc.name.as_str() {
         "read_file" => {
             let path = tc.input.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let start = tc.input.get("start_line").and_then(|v| v.as_u64());
-            let end = tc.input.get("end_line").and_then(|v| v.as_u64());
+            let start = tc
+                .input
+                .get("start_line")
+                .and_then(serde_json::Value::as_u64);
+            let end = tc.input.get("end_line").and_then(serde_json::Value::as_u64);
             match (start, end) {
                 (Some(s), Some(e)) => format!("{path}:{s}-{e}"),
                 (Some(s), None) => format!("{path}:{s}-end"),
@@ -278,7 +281,10 @@ pub fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
                 .get("pattern")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let ctx = tc.input.get("context_lines").and_then(|v| v.as_u64());
+            let ctx = tc
+                .input
+                .get("context_lines")
+                .and_then(serde_json::Value::as_u64);
             if let Some(c) = ctx {
                 format!("{pattern}, context={c}")
             } else {

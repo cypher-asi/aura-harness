@@ -133,9 +133,8 @@ pub fn convert_messages_to_rich(messages: &[ChatMessage]) -> Vec<Message> {
         .filter(|m| m.role == ChatRole::User || m.role == ChatRole::Assistant)
         .flat_map(|m| {
             let role = match m.role {
-                ChatRole::User => Role::User,
+                ChatRole::User | ChatRole::System => Role::User,
                 ChatRole::Assistant => Role::Assistant,
-                ChatRole::System => Role::User,
             };
             if let Some(blocks) = &m.content_blocks {
                 convert_content_blocks(blocks, role)
@@ -188,10 +187,10 @@ pub fn build_attachment_blocks(
             let header = att
                 .name
                 .as_deref()
-                .map(|n| format!("[File: {}]\n\n", n))
+                .map(|n| format!("[File: {n}]\n\n"))
                 .unwrap_or_default();
             blocks.push(ChatContentBlock::Text {
-                text: format!("{}{}", header, text),
+                text: format!("{header}{text}"),
             });
         }
     }

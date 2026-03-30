@@ -181,32 +181,7 @@ pub fn try_signature_compact(content: &str) -> Option<String> {
                 || trimmed.starts_with("pub const fn ")
                 || trimmed.starts_with("const fn ");
 
-            if !in_body {
-                if is_sig_line && line_buf.contains('{') {
-                    result.push_str(&line_buf);
-                    result.push('\n');
-
-                    let open_count = line_buf.chars().filter(|&c| c == '{').count() as i32;
-                    let close_count = line_buf.chars().filter(|&c| c == '}').count() as i32;
-                    brace_depth += open_count - close_count;
-
-                    if brace_depth > 0 {
-                        in_body = true;
-                        body_start_depth = brace_depth - 1;
-                        wrote_placeholder = false;
-                    }
-                } else {
-                    for c in line_buf.chars() {
-                        match c {
-                            '{' => brace_depth += 1,
-                            '}' => brace_depth -= 1,
-                            _ => {}
-                        }
-                    }
-                    result.push_str(&line_buf);
-                    result.push('\n');
-                }
-            } else {
+            if in_body {
                 for c in line_buf.chars() {
                     match c {
                         '{' => brace_depth += 1,
@@ -226,6 +201,29 @@ pub fn try_signature_compact(content: &str) -> Option<String> {
                     result.push_str("    // ... body omitted ...\n");
                     wrote_placeholder = true;
                 }
+            } else if is_sig_line && line_buf.contains('{') {
+                result.push_str(&line_buf);
+                result.push('\n');
+
+                let open_count = line_buf.chars().filter(|&c| c == '{').count() as i32;
+                let close_count = line_buf.chars().filter(|&c| c == '}').count() as i32;
+                brace_depth += open_count - close_count;
+
+                if brace_depth > 0 {
+                    in_body = true;
+                    body_start_depth = brace_depth - 1;
+                    wrote_placeholder = false;
+                }
+            } else {
+                for c in line_buf.chars() {
+                    match c {
+                        '{' => brace_depth += 1,
+                        '}' => brace_depth -= 1,
+                        _ => {}
+                    }
+                }
+                result.push_str(&line_buf);
+                result.push('\n');
             }
 
             line_buf.clear();

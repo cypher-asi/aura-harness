@@ -8,11 +8,7 @@ use ratatui::{
 
 /// Parse markdown text and return styled spans (with owned strings).
 /// Supports: **bold**, *italic*, `code`, headers (#), lists (- *), blockquotes (>)
-pub(crate) fn parse_markdown_line(
-    text: &str,
-    base_style: Style,
-    theme: &Theme,
-) -> Vec<Span<'static>> {
+pub fn parse_markdown_line(text: &str, base_style: Style, theme: &Theme) -> Vec<Span<'static>> {
     let trimmed = text.trim_start();
 
     // Headers: # ## ###
@@ -178,13 +174,13 @@ pub(super) fn find_next_marker(text: &str) -> Option<(usize, MarkerType, usize)>
 
 /// Content segment - either regular text or a code block.
 #[derive(Debug)]
-pub(crate) enum ContentSegment {
+pub enum ContentSegment {
     Text(String),
     CodeBlock { language: String, code: String },
 }
 
 /// Parse message content into segments of text and code blocks.
-pub(crate) fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
+pub fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
     let mut segments = Vec::new();
     let mut current_text = String::new();
     let mut in_code_block = false;

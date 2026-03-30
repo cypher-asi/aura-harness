@@ -176,6 +176,7 @@ pub trait DomainApi: Send + Sync {
         spec_id: Option<&str>,
         jwt: Option<&str>,
     ) -> anyhow::Result<Vec<TaskDescriptor>>;
+    #[allow(clippy::too_many_arguments)]
     async fn create_task(
         &self,
         project_id: &str,

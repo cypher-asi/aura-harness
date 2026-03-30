@@ -5,9 +5,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 mod apply;
-pub(crate) mod error_context;
+pub mod error_context;
 pub mod file_walkers;
-pub(crate) mod source_parser;
+pub mod source_parser;
 pub mod stub_detection;
 pub mod task_keywords;
 pub mod task_relevance;
@@ -17,7 +17,7 @@ pub mod workspace_map;
 
 pub use apply::apply_file_ops;
 pub use error_context::{resolve_error_context, resolve_error_source_files, ERROR_SOURCE_BUDGET};
-pub(crate) use source_parser::{extract_definition_block, extract_pub_signatures};
+pub use source_parser::{extract_definition_block, extract_pub_signatures};
 pub use stub_detection::*;
 pub use task_relevance::*;
 pub use workspace_map::*;
@@ -85,7 +85,7 @@ fn lexical_normalize(path: &Path) -> std::path::PathBuf {
     out
 }
 
-pub(crate) const SKIP_DIRS: &[&str] = &[
+pub const SKIP_DIRS: &[&str] = &[
     ".git",
     "target",
     "node_modules",
@@ -104,7 +104,7 @@ pub struct ErrorReferences {
     pub wrong_arg_counts: Vec<String>,
 }
 
-pub(crate) const INCLUDE_EXTENSIONS: &[&str] = &[
+pub const INCLUDE_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "json", "toml", "md", "css", "html", "yaml", "yml", "py", "sh",
     "sql", "graphql",
 ];
@@ -138,8 +138,8 @@ fn walk_and_collect(
 /// Fuzzy whitespace-insensitive search and replace. Matches lines by trimmed
 /// content rather than exact whitespace. Returns `None` if zero or multiple
 /// matches are found.
-pub(crate) fn fuzzy_search_replace(content: &str, search: &str, replace: &str) -> Option<String> {
-    let search_lines: Vec<&str> = search.lines().map(|l| l.trim()).collect();
+pub fn fuzzy_search_replace(content: &str, search: &str, replace: &str) -> Option<String> {
+    let search_lines: Vec<&str> = search.lines().map(str::trim).collect();
     if search_lines.is_empty() || search_lines.iter().all(|l| l.is_empty()) {
         return None;
     }
@@ -174,7 +174,6 @@ pub(crate) fn fuzzy_search_replace(content: &str, search: &str, replace: &str) -
                 result.push('\n');
             }
         } else if i >= match_start && i < match_end {
-            continue;
         } else {
             result.push_str(line);
             result.push('\n');

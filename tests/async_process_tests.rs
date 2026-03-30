@@ -301,7 +301,7 @@ async fn test_multiple_async_processes() {
 
         #[cfg(windows)]
         let child = std::process::Command::new("cmd.exe")
-            .args(["/C", &format!("echo process_{}", i)])
+            .args(["/C", &format!("echo process_{i}")])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -321,7 +321,7 @@ async fn test_multiple_async_processes() {
             action_id,
             process_id,
             child,
-            format!("echo process_{}", i),
+            format!("echo process_{i}"),
         );
     }
 

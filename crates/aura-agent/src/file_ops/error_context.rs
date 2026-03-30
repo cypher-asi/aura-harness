@@ -33,11 +33,11 @@ pub fn resolve_error_context(base_path: &Path, refs: &ErrorReferences) -> String
         let mut header_written = false;
 
         for (rel_path, content) in &sources {
-            if !header_written {
-                section.push_str(&format!("### {} ({})\n", type_name, rel_path));
-                header_written = true;
+            if header_written {
+                section.push_str(&format!("  (also in {rel_path})\n"));
             } else {
-                section.push_str(&format!("  (also in {})\n", rel_path));
+                section.push_str(&format!("### {type_name} ({rel_path})\n"));
+                header_written = true;
             }
 
             if let Some(fields) = extract_struct_fields(content, type_name) {
@@ -98,7 +98,7 @@ pub fn resolve_error_source_files(
             Ok(c) => c,
             Err(_) => continue,
         };
-        let section = format!("--- {} ---\n{}\n\n", file, content);
+        let section = format!("--- {file} ---\n{content}\n\n");
         if section.len() > remaining {
             break;
         }
@@ -112,7 +112,7 @@ pub fn resolve_error_source_files(
     output
 }
 
-pub(crate) fn find_type_sources(
+pub fn find_type_sources(
     base_path: &Path,
     type_name: &str,
     source_hints: &[(String, u32)],
@@ -121,7 +121,7 @@ pub(crate) fn find_type_sources(
     let mut seen: HashSet<String> = HashSet::new();
     let patterns: Vec<String> = ["struct", "impl", "trait", "enum"]
         .iter()
-        .map(|kw| format!("{} {}", kw, type_name))
+        .map(|kw| format!("{kw} {type_name}"))
         .collect();
 
     for (hint_file, _) in source_hints {
@@ -162,11 +162,11 @@ fn walk_for_type_sources(
 
     let patterns: Vec<String> = ["struct", "impl", "trait", "enum"]
         .iter()
-        .map(|kw| format!("{} {}", kw, type_name))
+        .map(|kw| format!("{kw} {type_name}"))
         .collect();
 
-    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
+    let mut entries: Vec<_> = entries.filter_map(std::result::Result::ok).collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in entries {
         if results.len() >= MAX_TYPE_FILES {

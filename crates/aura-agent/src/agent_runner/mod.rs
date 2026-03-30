@@ -51,7 +51,7 @@ pub struct TaskExecutionResult {
     pub no_changes_needed: bool,
     /// When true, the agent progressed past the exploration phase and
     /// submitted a plan. Automatons use this to distinguish "never tried"
-    /// from "tried but was interrupted" when file_ops is empty.
+    /// from "tried but was interrupted" when `file_ops` is empty.
     pub reached_implementing: bool,
 }
 
@@ -147,7 +147,7 @@ pub struct AgentRunner {
 
 impl AgentRunner {
     #[must_use]
-    pub fn new(config: AgentRunnerConfig) -> Self {
+    pub const fn new(config: AgentRunnerConfig) -> Self {
         Self { config }
     }
 
@@ -252,15 +252,15 @@ impl AgentRunner {
             project_folder: tracking.project_folder,
             build_command: tracking.build_command,
             task_context: String::new(),
-            tracked_file_ops: Default::default(),
-            notes: Default::default(),
-            follow_ups: Default::default(),
-            stub_fix_attempts: Default::default(),
+            tracked_file_ops: Arc::default(),
+            notes: Arc::default(),
+            follow_ups: Arc::default(),
+            stub_fix_attempts: Arc::default(),
             task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
-            self_review: Default::default(),
+            self_review: Arc::default(),
             event_tx: event_tx.clone(),
-            no_changes_needed: Default::default(),
-            recent_tool_outcomes: Default::default(),
+            no_changes_needed: Arc::default(),
+            recent_tool_outcomes: Arc::default(),
         };
 
         let mut result = self
@@ -272,6 +272,7 @@ impl AgentRunner {
     }
 
     /// Execute a chat interaction using the agent loop.
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_chat(
         &self,
         provider: &dyn ModelProvider,
@@ -333,8 +334,7 @@ impl AgentRunner {
         for attempt in 1..=max_attempts {
             if let Some(tx) = event_tx {
                 let _ = tx.send(AgentLoopEvent::TextDelta(format!(
-                    "Running: {} (attempt {attempt}/{max_attempts})\n",
-                    command,
+                    "Running: {command} (attempt {attempt}/{max_attempts})\n",
                 )));
             }
 
@@ -357,10 +357,10 @@ impl AgentRunner {
                 });
             }
 
-            let detail = if !result.stderr.is_empty() {
-                &result.stderr
-            } else {
+            let detail = if result.stderr.is_empty() {
                 &result.stdout
+            } else {
+                &result.stderr
             };
 
             if let Some(tx) = event_tx {
@@ -380,7 +380,7 @@ impl AgentRunner {
 
             if attempt < max_attempts {
                 prior.push(BuildFixAttemptRecord {
-                    stderr: detail.to_string(),
+                    stderr: detail.clone(),
                     error_signature: normalize_error_signature(detail),
                     files_changed: Vec::new(),
                     changes_summary: String::new(),
@@ -399,6 +399,7 @@ impl AgentRunner {
 // ---------------------------------------------------------------------------
 
 /// Build an [`AgentLoopConfig`] from task complexity and runner config.
+#[must_use]
 pub fn configure_loop_config(
     complexity: TaskComplexity,
     config: &AgentRunnerConfig,

@@ -26,6 +26,7 @@ fn is_cacheable(tool_name: &str) -> bool {
 /// Handle `StopReason::ToolUse` — cache, execute, emit, stall-check.
 ///
 /// Returns `true` if the loop should break.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn handle_tool_use(
     agent: &AgentLoop,
     response: &ModelResponse,
@@ -250,7 +251,7 @@ fn emit_tool_results(
     }
 }
 
-/// Build a single user message with tool_result blocks first, followed by any
+/// Build a single user message with `tool_result` blocks first, followed by any
 /// optional context text blocks.
 ///
 /// Anthropic requires that every assistant `tool_use` is immediately paired by
@@ -287,8 +288,8 @@ impl AgentLoop {
     ///
     /// Returns `(results, side_messages, is_stalled, blocked_ids)` where
     /// `side_messages` are warning/build texts that should be embedded into
-    /// the tool_result user message rather than pushed as separate messages
-    /// (which would violate Anthropic's tool_use/tool_result adjacency
+    /// the `tool_result` user message rather than pushed as separate messages
+    /// (which would violate Anthropic's `tool_use/tool_result` adjacency
     /// requirement), and `blocked_ids` tracks which tool calls were blocked
     /// by detection policy (for accurate source labelling in logs).
     pub(crate) async fn process_tool_results(

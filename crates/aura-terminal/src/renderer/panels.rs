@@ -190,7 +190,7 @@ fn build_chat_lines<'a>(app: &App, content_width: usize, theme: &Theme) -> Vec<L
     lines
 }
 
-fn message_style<'a>(
+const fn message_style<'a>(
     role: MessageRole,
     theme: &Theme,
 ) -> (&'a str, ratatui::style::Color, ratatui::style::Color) {
@@ -202,8 +202,8 @@ fn message_style<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_text_segment<'a>(
-    lines: &mut Vec<Line<'a>>,
+fn render_text_segment(
+    lines: &mut Vec<Line<'_>>,
     text: &str,
     is_first: &mut bool,
     timestamp: &str,
@@ -277,8 +277,8 @@ fn line_with_prefix<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_code_segment<'a>(
-    lines: &mut Vec<Line<'a>>,
+fn render_code_segment(
+    lines: &mut Vec<Line<'_>>,
     language: &str,
     code: &str,
     is_first: &mut bool,

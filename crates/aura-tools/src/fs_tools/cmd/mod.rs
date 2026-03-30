@@ -191,37 +191,26 @@ fn wait_with_threshold(
 
     let start = Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = child.stdout.take().map_or_else(Vec::new, |mut s| {
-                    let mut buf = Vec::new();
-                    let _ = s.read_to_end(&mut buf);
-                    buf
-                });
-                let stderr = child.stderr.take().map_or_else(Vec::new, |mut s| {
-                    let mut buf = Vec::new();
-                    let _ = s.read_to_end(&mut buf);
-                    buf
-                });
-                return ThresholdResult::Completed(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
-            Ok(None) => {
-                if start.elapsed() > threshold {
-                    return ThresholdResult::Pending(child);
-                }
-                thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(_) => {
-                if start.elapsed() > threshold {
-                    return ThresholdResult::Pending(child);
-                }
-                thread::sleep(std::time::Duration::from_millis(10));
-            }
+        if let Ok(Some(status)) = child.try_wait() {
+            let stdout = child.stdout.take().map_or_else(Vec::new, |mut s| {
+                let mut buf = Vec::new();
+                let _ = s.read_to_end(&mut buf);
+                buf
+            });
+            let stderr = child.stderr.take().map_or_else(Vec::new, |mut s| {
+                let mut buf = Vec::new();
+                let _ = s.read_to_end(&mut buf);
+                buf
+            });
+            return ThresholdResult::Completed(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            });
+        } else if start.elapsed() > threshold {
+            return ThresholdResult::Pending(child);
         }
+        thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 

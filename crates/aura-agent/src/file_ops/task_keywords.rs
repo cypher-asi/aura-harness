@@ -10,8 +10,8 @@ static CRATE_NAME_RE: LazyLock<Regex> =
 static MODULE_NAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b([a-z][a-z0-9_]{2,})\b").expect("static regex"));
 
-pub(crate) fn extract_task_keywords(task_title: &str, task_description: &str) -> Vec<String> {
-    let combined = format!("{} {}", task_title, task_description);
+pub fn extract_task_keywords(task_title: &str, task_description: &str) -> Vec<String> {
+    let combined = format!("{task_title} {task_description}");
     let mut keywords: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -39,7 +39,7 @@ pub(crate) fn extract_task_keywords(task_title: &str, task_description: &str) ->
     keywords
 }
 
-pub(crate) const COMMON_WORDS: &[&str] = &[
+pub const COMMON_WORDS: &[&str] = &[
     "The",
     "This",
     "That",
@@ -163,13 +163,13 @@ const COMMON_MODULE_STOP_WORDS: &[&str] = &[
 ];
 
 /// Identify which workspace crate(s) the task most likely targets.
-pub(crate) fn identify_target_crates(
+pub fn identify_target_crates(
     task_title: &str,
     task_description: &str,
     members: &[String],
     crate_names: &HashMap<String, String>,
 ) -> Vec<String> {
-    let combined = format!("{} {}", task_title, task_description).to_lowercase();
+    let combined = format!("{task_title} {task_description}").to_lowercase();
 
     let mut scored: Vec<(String, u32)> = members
         .iter()
@@ -204,9 +204,9 @@ pub(crate) fn identify_target_crates(
     scored.into_iter().map(|(m, _)| m).collect()
 }
 
-/// Extract PascalCase type names from text, filtering out standard library types
+/// Extract `PascalCase` type names from text, filtering out standard library types
 /// and common English words.
-pub(crate) fn extract_type_names_from_text(text: &str) -> Vec<String> {
+pub fn extract_type_names_from_text(text: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 

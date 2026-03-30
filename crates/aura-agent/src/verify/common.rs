@@ -11,7 +11,7 @@ use super::error_types::BuildFixAttemptRecord;
 use super::signatures::normalize_error_signature;
 use super::FixProvider;
 
-/// Describe each file op as a human-readable "op_name path" string.
+/// Describe each file op as a human-readable "`op_name` path" string.
 pub fn describe_file_ops(ops: &[FileOp]) -> Vec<String> {
     ops.iter()
         .map(|op| {
@@ -53,9 +53,9 @@ pub fn summarize_file_ops(ops: &[FileOp]) -> String {
                     .collect();
                 format!("{}:\n{}", path, changes.join("\n"))
             }
-            FileOp::Modify { path, .. } => format!("{}: full rewrite", path),
-            FileOp::Create { path, .. } => format!("{}: created", path),
-            FileOp::Delete { path } => format!("{}: deleted", path),
+            FileOp::Modify { path, .. } => format!("{path}: full rewrite"),
+            FileOp::Create { path, .. } => format!("{path}: created"),
+            FileOp::Delete { path } => format!("{path}: deleted"),
         })
         .collect::<Vec<_>>()
         .join("\n")

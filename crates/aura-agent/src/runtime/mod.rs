@@ -33,24 +33,22 @@ impl From<aura_reasoner::ReasonerError> for RuntimeError {
     fn from(e: aura_reasoner::ReasonerError) -> Self {
         match e {
             aura_reasoner::ReasonerError::Timeout => {
-                RuntimeError::Timeout("model request timed out".to_string())
+                Self::Timeout("model request timed out".to_string())
             }
             aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
-                RuntimeError::Model(format!("insufficient credits: {msg}"))
+                Self::Model(format!("insufficient credits: {msg}"))
             }
             aura_reasoner::ReasonerError::RateLimited(msg) => {
-                RuntimeError::Model(format!("rate limited: {msg}"))
+                Self::Model(format!("rate limited: {msg}"))
             }
             aura_reasoner::ReasonerError::Api { status, message } => {
-                RuntimeError::Model(format!("api error ({status}): {message}"))
+                Self::Model(format!("api error ({status}): {message}"))
             }
             aura_reasoner::ReasonerError::Request(msg) => {
-                RuntimeError::Model(format!("request error: {msg}"))
+                Self::Model(format!("request error: {msg}"))
             }
-            aura_reasoner::ReasonerError::Parse(msg) => {
-                RuntimeError::Model(format!("parse error: {msg}"))
-            }
-            aura_reasoner::ReasonerError::Internal(msg) => RuntimeError::Model(msg),
+            aura_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
+            aura_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
         }
     }
 }

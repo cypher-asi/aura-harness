@@ -6,7 +6,7 @@
 //! 3. Fix orphan tool results (`tool_result` without matching `tool_use`)
 //! 4. Fix unpaired tool uses (`tool_use` without matching `tool_result`)
 //! 5. Ensure conversation starts with a user message
-//! 6. Assert positional tool_use/tool_result constraint (debug guard)
+//! 6. Assert positional `tool_use/tool_result` constraint (debug guard)
 
 use aura_reasoner::{ContentBlock, Message, Role, ToolResultContent};
 use std::collections::HashSet;

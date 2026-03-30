@@ -1,7 +1,7 @@
 //! Task planning types for explore/implement phase gating.
 //!
-//! Before the agent submits a plan, write operations (write_file, edit_file,
-//! delete_file) are rejected. The `submit_plan` tool transitions the phase
+//! Before the agent submits a plan, write operations (`write_file`, `edit_file`,
+//! `delete_file`) are rejected. The `submit_plan` tool transitions the phase
 //! from `Exploring` to `Implementing`.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub struct TaskPlan {
 }
 
 impl TaskPlan {
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             approach: String::new(),
             files_to_modify: Vec::new(),

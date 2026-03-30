@@ -43,9 +43,7 @@ impl StallDetector {
         // Writes were attempted but all failed (possibly with unextractable
         // paths). Treat empty targets as matching the previous set so the
         // streak keeps growing.
-        if current_targets.is_empty() {
-            self.streak += 1;
-        } else if *current_targets == self.prev_targets {
+        if current_targets.is_empty() || *current_targets == self.prev_targets {
             self.streak += 1;
         } else {
             self.streak = 1;

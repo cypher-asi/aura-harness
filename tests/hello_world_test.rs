@@ -38,7 +38,7 @@ fn hello_subcommand_exits_with_code_zero() {
         .expect("failed to execute binary");
 
     let code = output.status.code().expect("process terminated by signal");
-    assert_eq!(code, 0, "expected exit code 0, got {}", code);
+    assert_eq!(code, 0, "expected exit code 0, got {code}");
 }
 
 #[test]
@@ -53,7 +53,6 @@ fn hello_subcommand_stderr_is_empty() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.is_empty(),
-        "expected no stderr output, got: {}",
-        stderr
+        "expected no stderr output, got: {stderr}"
     );
 }

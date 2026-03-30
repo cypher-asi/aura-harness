@@ -62,6 +62,7 @@ pub async fn create_task(api: &dyn DomainApi, project_id: &str, input: &Value) -
         .list_tasks(project_id, Some(&spec_id), jwt.as_deref())
         .await
     {
+        #[allow(clippy::cast_possible_truncation)]
         Ok(tasks) => tasks.len() as u32,
         Err(_) => 0,
     };

@@ -298,10 +298,7 @@ fn highlight_line(
 
         if c == '"' || c == '\'' || c == '`' {
             i = highlight_string(&chars, i, config, &mut spans);
-        } else if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            highlight_line_comment(&chars, i, config, &mut spans);
-            break;
-        } else if c == '#' {
+        } else if (c == '/' && i + 1 < chars.len() && chars[i + 1] == '/') || c == '#' {
             highlight_line_comment(&chars, i, config, &mut spans);
             break;
         } else if c.is_ascii_digit() {

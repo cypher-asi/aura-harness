@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 const TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// Bundled dependencies for the event loop, reducing parameter count.
-pub(crate) struct EventLoopContext<'a> {
+pub struct EventLoopContext<'a> {
     pub events: &'a mut mpsc::Receiver<UiEvent>,
     pub process_completions: mpsc::Receiver<Transaction>,
     pub commands: mpsc::Sender<UiCommand>,
@@ -48,7 +48,7 @@ struct LoopState<'a> {
 /// Run the event processing loop.
 ///
 /// Handles user messages from the UI and process completion events.
-pub(crate) async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
+pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     let EventLoopContext {
         events,
         mut process_completions,

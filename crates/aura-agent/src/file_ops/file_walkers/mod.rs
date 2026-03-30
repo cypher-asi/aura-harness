@@ -5,7 +5,7 @@ use super::FileOpsError;
 use super::{INCLUDE_EXTENSIONS, SKIP_DIRS};
 
 /// Collect all .rs files in a directory recursively, reading full content.
-pub(crate) fn collect_rs_files_recursive(
+pub fn collect_rs_files_recursive(
     base: &Path,
     dir: &Path,
     output: &mut String,
@@ -17,8 +17,8 @@ pub(crate) fn collect_rs_files_recursive(
         Ok(e) => e,
         Err(_) => return Ok(()),
     };
-    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
+    let mut entries: Vec<_> = entries.filter_map(std::result::Result::ok).collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in entries {
         if *current_size >= max_bytes {
@@ -42,7 +42,7 @@ pub(crate) fn collect_rs_files_recursive(
                 continue;
             }
             if let Ok(content) = std::fs::read_to_string(&path) {
-                let section = format!("--- {} ---\n{}\n\n", rel, content);
+                let section = format!("--- {rel} ---\n{content}\n\n");
                 if *current_size + section.len() <= max_bytes {
                     output.push_str(&section);
                     *current_size += section.len();
@@ -54,7 +54,7 @@ pub(crate) fn collect_rs_files_recursive(
 }
 
 /// Walk the filesystem looking for files whose filename matches any keyword.
-pub(crate) fn collect_keyword_matching_files(
+pub fn collect_keyword_matching_files(
     base: &Path,
     dir: &Path,
     keywords: &[String],
@@ -65,7 +65,7 @@ pub(crate) fn collect_keyword_matching_files(
         Ok(e) => e,
         Err(_) => return,
     };
-    for entry in entries.filter_map(|e| e.ok()) {
+    for entry in entries.filter_map(std::result::Result::ok) {
         let path = entry.path();
         let fname = entry.file_name().to_string_lossy().to_string();
 
@@ -106,7 +106,7 @@ pub(crate) fn collect_keyword_matching_files(
 }
 
 /// Like `walk_and_collect` but skips already-included files.
-pub(crate) fn walk_and_collect_filtered(
+pub fn walk_and_collect_filtered(
     base: &Path,
     dir: &Path,
     output: &mut String,
@@ -115,8 +115,8 @@ pub(crate) fn walk_and_collect_filtered(
     included: &mut std::collections::HashSet<String>,
 ) -> Result<(), FileOpsError> {
     let entries = std::fs::read_dir(dir).map_err(|e| FileOpsError::Io(e.to_string()))?;
-    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    entries.sort_by_key(|e| e.file_name());
+    let mut entries: Vec<_> = entries.filter_map(std::result::Result::ok).collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in entries {
         if *current_size >= max_bytes {
@@ -150,7 +150,7 @@ pub(crate) fn walk_and_collect_filtered(
 
             let content =
                 std::fs::read_to_string(&path).map_err(|e| FileOpsError::Io(e.to_string()))?;
-            let section = format!("--- {} ---\n{}\n\n", rel, content);
+            let section = format!("--- {rel} ---\n{content}\n\n");
             if *current_size + section.len() > max_bytes {
                 break;
             }
@@ -180,7 +180,7 @@ impl<'a> TieredCollector<'a> {
         }
     }
 
-    fn budget_exhausted(&self) -> bool {
+    const fn budget_exhausted(&self) -> bool {
         self.current_size >= self.max_bytes
     }
 
@@ -281,7 +281,7 @@ impl<'a> TieredCollector<'a> {
 }
 
 fn format_file_or_signatures(rel: &str, content: &str) -> String {
-    if content.len() > 8_000 && rel.ends_with(".rs") {
+    if content.len() > 8_000 && rel.to_ascii_lowercase().ends_with(".rs") {
         let sigs = extract_signatures_from_content(content);
         if sigs.len() < content.len() / 2 && !sigs.is_empty() {
             return format!("--- {rel} [signatures] ---\n{sigs}\n\n");
@@ -292,7 +292,7 @@ fn format_file_or_signatures(rel: &str, content: &str) -> String {
 
 /// Shared 4-tier file collection logic used by both the sync and cached variants
 /// of `retrieve_task_relevant_files`.
-pub(crate) fn collect_tiered_files(
+pub fn collect_tiered_files(
     root: &Path,
     target_crates: &[String],
     dep_crate_paths: &[String],
@@ -359,7 +359,7 @@ fn enqueue_transitive_deps(
 }
 
 /// Shared BFS dependency resolution used by both sync and cached API context functions.
-pub(crate) fn resolve_dependency_signatures_bfs(
+pub fn resolve_dependency_signatures_bfs(
     root: &Path,
     target_path: &str,
     crate_names: &std::collections::HashMap<String, String>,

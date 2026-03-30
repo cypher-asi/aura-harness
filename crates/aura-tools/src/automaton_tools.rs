@@ -43,6 +43,7 @@ pub trait AutomatonController: Send + Sync {
 
     /// Execute a single task through the dev-loop engine (non-blocking).
     /// Returns the automaton ID immediately.
+    #[allow(clippy::too_many_arguments)]
     async fn run_task(
         &self,
         project_id: &str,
