@@ -562,43 +562,40 @@ mod tests {
         assert_eq!(provider.name(), "anthropic");
     }
 
+    const TEST_DEFAULT_MODEL: &str = "claude-opus-4-6";
+    const TEST_FALLBACK_MODEL: &str = "claude-sonnet-4-6";
+
     #[test]
     fn test_config_with_fallback() {
-        let mut config = AnthropicConfig::new("key", aura_core::DEFAULT_MODEL);
-        config.fallback_model = Some(aura_core::FALLBACK_MODEL.to_string());
-        assert_eq!(
-            config.fallback_model,
-            Some(aura_core::FALLBACK_MODEL.to_string())
-        );
+        let mut config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+        config.fallback_model = Some(TEST_FALLBACK_MODEL.to_string());
+        assert_eq!(config.fallback_model, Some(TEST_FALLBACK_MODEL.to_string()));
     }
 
     #[test]
     fn test_model_chain_without_fallback() {
-        let config = AnthropicConfig::new("key", aura_core::DEFAULT_MODEL);
+        let config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
         let provider = AnthropicProvider::new(config).unwrap();
-        let chain = provider.model_chain(aura_core::DEFAULT_MODEL);
-        assert_eq!(chain, vec![aura_core::DEFAULT_MODEL]);
+        let chain = provider.model_chain(TEST_DEFAULT_MODEL);
+        assert_eq!(chain, vec![TEST_DEFAULT_MODEL]);
     }
 
     #[test]
     fn test_model_chain_with_fallback() {
-        let mut config = AnthropicConfig::new("key", aura_core::DEFAULT_MODEL);
-        config.fallback_model = Some(aura_core::FALLBACK_MODEL.to_string());
+        let mut config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+        config.fallback_model = Some(TEST_FALLBACK_MODEL.to_string());
         let provider = AnthropicProvider::new(config).unwrap();
-        let chain = provider.model_chain(aura_core::DEFAULT_MODEL);
-        assert_eq!(
-            chain,
-            vec![aura_core::DEFAULT_MODEL, aura_core::FALLBACK_MODEL]
-        );
+        let chain = provider.model_chain(TEST_DEFAULT_MODEL);
+        assert_eq!(chain, vec![TEST_DEFAULT_MODEL, TEST_FALLBACK_MODEL]);
     }
 
     #[test]
     fn test_model_chain_deduplicates() {
-        let mut config = AnthropicConfig::new("key", aura_core::DEFAULT_MODEL);
-        config.fallback_model = Some(aura_core::DEFAULT_MODEL.to_string());
+        let mut config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+        config.fallback_model = Some(TEST_DEFAULT_MODEL.to_string());
         let provider = AnthropicProvider::new(config).unwrap();
-        let chain = provider.model_chain(aura_core::DEFAULT_MODEL);
-        assert_eq!(chain, vec![aura_core::DEFAULT_MODEL]);
+        let chain = provider.model_chain(TEST_DEFAULT_MODEL);
+        assert_eq!(chain, vec![TEST_DEFAULT_MODEL]);
     }
 
     #[test]
@@ -631,33 +628,33 @@ mod tests {
 
     #[test]
     fn test_resolve_thinking_explicit_config() {
-        let request = ModelRequest::builder(aura_core::DEFAULT_MODEL, "system")
+        let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
             .max_tokens(8192)
             .thinking(ThinkingConfig {
                 budget_tokens: 4000,
             })
             .build();
-        let thinking = resolve_thinking(&request, aura_core::DEFAULT_MODEL);
+        let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
         assert!(thinking.is_some());
         assert_eq!(thinking.unwrap().budget_tokens, 4000);
     }
 
     #[test]
     fn test_resolve_thinking_auto_for_capable_model() {
-        let request = ModelRequest::builder(aura_core::DEFAULT_MODEL, "system")
+        let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
             .max_tokens(8192)
             .build();
-        let thinking = resolve_thinking(&request, aura_core::DEFAULT_MODEL);
+        let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
         assert!(thinking.is_some());
         assert_eq!(thinking.unwrap().budget_tokens, 4096);
     }
 
     #[test]
     fn test_resolve_thinking_none_for_small_budget() {
-        let request = ModelRequest::builder(aura_core::DEFAULT_MODEL, "system")
+        let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
             .max_tokens(1024)
             .build();
-        let thinking = resolve_thinking(&request, aura_core::DEFAULT_MODEL);
+        let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
         assert!(thinking.is_none());
     }
 

@@ -22,7 +22,6 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
 mod anthropic;
-mod client;
 mod error;
 mod mock;
 mod request;
@@ -43,7 +42,7 @@ pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
 
 pub use anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
 pub use error::ReasonerError;
-pub use mock::{MockProvider, MockReasoner, MockResponse};
+pub use mock::{MockProvider, MockResponse};
 pub use request::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use types::{
     AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, Message, ModelRequest,
@@ -55,7 +54,6 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use aura_core::ProposalSet;
 
 // ============================================================================
 // ModelProvider Trait (New in Spec-02)
@@ -165,52 +163,4 @@ pub trait ModelProvider: Send + Sync {
     ///
     /// This can be used for health checks and load balancing.
     async fn health_check(&self) -> bool;
-}
-
-// ============================================================================
-// Legacy Reasoner Trait (Spec-01 Compatibility)
-// ============================================================================
-
-/// Reasoner trait for generating proposals.
-///
-/// **Note**: This is the legacy interface from Spec-01. New code should use
-/// `ModelProvider` instead. This trait is kept for backwards compatibility.
-///
-/// The reasoner is the probabilistic component that suggests actions
-/// based on context. The kernel records proposals and makes final decisions.
-#[async_trait]
-pub trait Reasoner: Send + Sync {
-    /// Generate proposals based on context.
-    ///
-    /// # Errors
-    /// Returns error if the reasoner fails or times out.
-    async fn propose(&self, request: ProposeRequest) -> Result<ProposalSet, ReasonerError>;
-
-    /// Check if the reasoner is available.
-    async fn health_check(&self) -> bool;
-}
-
-// ============================================================================
-// Configuration
-// ============================================================================
-
-/// Reasoner configuration (legacy).
-#[derive(Debug, Clone)]
-pub(crate) struct ReasonerConfig {
-    /// Gateway URL
-    pub gateway_url: String,
-    /// Request timeout in milliseconds
-    pub timeout_ms: u64,
-    /// Maximum retries
-    pub max_retries: u32,
-}
-
-impl Default for ReasonerConfig {
-    fn default() -> Self {
-        Self {
-            gateway_url: "http://localhost:3000".to_string(),
-            timeout_ms: 30_000,
-            max_retries: 2,
-        }
-    }
 }

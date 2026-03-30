@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_auth::CredentialStore;
-use aura_core::Executor;
+use aura_kernel::Executor;
 use aura_node::test_support::{create_router, RouterState, Scheduler};
 use aura_node::NodeConfig;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};

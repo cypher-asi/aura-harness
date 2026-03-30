@@ -17,6 +17,7 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 hex = "0.4"
 bytes = { workspace = true }
+async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

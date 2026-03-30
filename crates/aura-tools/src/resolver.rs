@@ -1,49 +1,45 @@
 //! Tool resolver — unified dispatch layer for tool execution.
 //!
-//! The resolver owns the internal `Tool` implementations (built-in handlers).
-//! Domain tools are delegated when a [`DomainToolExecutor`] is attached.
-//! Additional tools can be registered at runtime with [`ToolResolver::register`].
+//! The resolver adds catalog-based visibility and domain tool dispatch on top
+//! of [`ToolExecutor`](crate::ToolExecutor), which owns the internal built-in
+//! tool implementations and permission checks.
 
 use crate::catalog::ToolCatalog;
 use crate::catalog::ToolProfile;
 use crate::domain_tools::DomainToolExecutor;
 use crate::error::ToolError;
-use crate::sandbox::Sandbox;
-use crate::tool::{builtin_tools, Tool, ToolContext};
+use crate::tool::Tool;
 use crate::ToolConfig;
+use crate::ToolExecutor;
 use async_trait::async_trait;
 use aura_core::ToolDefinition;
 use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
-use aura_core::{ExecuteContext, Executor};
+use aura_kernel::{ExecuteContext, Executor, ExecutorError};
 use bytes::Bytes;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, instrument};
 
 /// Unified tool resolver providing both visibility and execution dispatch.
 ///
+/// Composes [`ToolExecutor`](crate::ToolExecutor) for built-in tool execution
+/// and adds domain tool routing (specs, tasks, project) on top.
+///
 /// Implements [`Executor`] so it can be plugged into the kernel layer
 /// (scheduler, `ExecutorRouter`) as a drop-in replacement for `ToolExecutor`.
 pub struct ToolResolver {
     catalog: Arc<ToolCatalog>,
-    tools: HashMap<String, Box<dyn Tool>>,
+    inner: ToolExecutor,
     domain_executor: Option<Arc<DomainToolExecutor>>,
-    config: ToolConfig,
 }
 
 impl ToolResolver {
     /// Create a resolver pre-loaded with all built-in tool handlers.
     #[must_use]
     pub fn new(catalog: Arc<ToolCatalog>, config: ToolConfig) -> Self {
-        let mut tools: HashMap<String, Box<dyn Tool>> = HashMap::new();
-        for tool in builtin_tools() {
-            tools.insert(tool.name().to_string(), tool);
-        }
         Self {
             catalog,
-            tools,
+            inner: ToolExecutor::new(config),
             domain_executor: None,
-            config,
         }
     }
 
@@ -57,18 +53,17 @@ impl ToolResolver {
     /// Visible tools for a profile (delegates to the catalog + config).
     #[must_use]
     pub fn visible_tools(&self, profile: ToolProfile) -> Vec<ToolDefinition> {
-        self.catalog.visible_tools(profile, &self.config)
+        self.catalog.visible_tools(profile, &self.inner.config())
     }
 
     /// Register an additional internal tool at runtime.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.tools.insert(tool.name().to_string(), tool);
+        self.inner.register(tool);
     }
 
-    /// Execute a tool call (after FS/command permission gates):
+    /// Execute a tool call:
     /// 1. Domain executor when attached (pure HTTP — no sandbox needed).
-    /// 2. Internal handler map (built-ins and [`register`](Self::register) tools).
-    /// 3. [`ToolError::UnknownTool`] if nothing matches.
+    /// 2. Delegate to the inner [`ToolExecutor`] for built-in tools.
     #[instrument(skip(self, ctx), fields(tool = %tool_call.tool))]
     async fn execute_tool(
         &self,
@@ -77,29 +72,10 @@ impl ToolResolver {
     ) -> Result<ToolResult, ToolError> {
         let tool_name = &tool_call.tool;
 
-        const FS_TOOLS: &[&str] = &[
-            "read_file",
-            "write_file",
-            "edit_file",
-            "delete_file",
-            "list_files",
-            "find_files",
-            "stat_file",
-            "search_code",
-        ];
-        const CMD_TOOLS: &[&str] = &["run_command"];
-
-        if FS_TOOLS.contains(&tool_name.as_str()) && !self.config.enable_fs {
-            return Err(ToolError::ToolDisabled(tool_name.clone()));
-        }
-        if CMD_TOOLS.contains(&tool_name.as_str()) && !self.config.enable_commands {
-            return Err(ToolError::ToolDisabled(tool_name.clone()));
-        }
-
-        // 1. Domain tools (specs, tasks, project) — pure HTTP calls that
-        //    never touch the filesystem, so they must be dispatched before
-        //    Sandbox::new to avoid failing when the workspace dir is
-        //    inaccessible (e.g. remote agent on a different OS).
+        // Domain tools (specs, tasks, project) — pure HTTP calls that
+        // never touch the filesystem, so they must be dispatched before
+        // Sandbox::new to avoid failing when the workspace dir is
+        // inaccessible (e.g. remote agent on a different OS).
         if let Some(ref domain) = self.domain_executor {
             if domain.handles(tool_name) {
                 let project_id = tool_call.args["project_id"].as_str().unwrap_or_default();
@@ -115,18 +91,9 @@ impl ToolResolver {
             }
         }
 
-        // 2. Internal/FS/command tools — require a valid sandbox.
-        let sandbox = Sandbox::new(&ctx.workspace_root)?;
-        let tool_ctx = ToolContext {
-            sandbox,
-            config: self.config.clone(),
-        };
-
-        if let Some(tool) = self.tools.get(tool_name.as_str()) {
-            return tool.execute(&tool_ctx, tool_call.args.clone()).await;
-        }
-
-        Err(ToolError::UnknownTool(tool_name.clone()))
+        // Built-in tools — delegates permission checks, sandbox, and dispatch
+        // to ToolExecutor so the logic is not duplicated.
+        self.inner.execute_tool(ctx, tool_call).await
     }
 }
 
@@ -141,9 +108,9 @@ impl Executor for ToolResolver {
         &self,
         ctx: &ExecuteContext,
         action: &Action,
-    ) -> Result<Effect, aura_core::ExecutorError> {
+    ) -> Result<Effect, ExecutorError> {
         let tool_call: ToolCall = serde_json::from_slice(&action.payload).map_err(|e| {
-            aura_core::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
+            ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
         })?;
 
         debug!(tool = %tool_call.tool, "Executing tool via resolver");
@@ -151,9 +118,7 @@ impl Executor for ToolResolver {
         match self.execute_tool(ctx, &tool_call).await {
             Ok(result) => {
                 let payload = serde_json::to_vec(&result).map_err(|e| {
-                    aura_core::ExecutorError::ExecutionFailed(format!(
-                        "Failed to serialize tool result: {e}"
-                    ))
+                    ExecutorError::ExecutionFailed(format!("Failed to serialize tool result: {e}"))
                 })?;
                 Ok(Effect::new(
                     action.action_id,
@@ -166,9 +131,7 @@ impl Executor for ToolResolver {
                 error!(error = %e, "Tool execution failed");
                 let result = ToolResult::failure(&tool_call.tool, e.to_string());
                 let payload = serde_json::to_vec(&result).map_err(|e| {
-                    aura_core::ExecutorError::ExecutionFailed(format!(
-                        "Failed to serialize error result: {e}"
-                    ))
+                    ExecutorError::ExecutionFailed(format!("Failed to serialize error result: {e}"))
                 })?;
                 Ok(Effect::new(
                     action.action_id,
@@ -200,6 +163,7 @@ impl Executor for ToolResolver {
 mod tests {
     use super::*;
     use aura_core::{ActionId, AgentId};
+    use aura_kernel::ExecuteContext;
     use tempfile::TempDir;
 
     fn make_catalog_and_resolver() -> (Arc<ToolCatalog>, ToolResolver) {
@@ -221,8 +185,9 @@ mod tests {
     #[test]
     fn resolver_has_builtin_tools() {
         let (_cat, resolver) = make_catalog_and_resolver();
-        assert!(resolver.tools.contains_key("read_file"));
-        assert!(resolver.tools.contains_key("run_command"));
+        let tools = resolver.visible_tools(ToolProfile::Core);
+        let names: std::collections::HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains("read_file"));
     }
 
     #[test]
@@ -558,7 +523,7 @@ mod tests {
         let (_cat, resolver) = make_catalog_and_resolver();
         let core = _cat.tools_for_profile(ToolProfile::Core);
         for t in &core {
-            let has_handler = resolver.tools.contains_key(t.name.as_str());
+            let has_handler = resolver.inner.has_tool(&t.name);
             assert!(
                 has_handler,
                 "core tool '{}' has no built-in handler",

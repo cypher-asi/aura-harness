@@ -1,9 +1,10 @@
 //! Tool call execution logic with policy checks and caching.
 
 use super::{ExecutedToolCall, ToolCache, TurnProcessor};
-use aura_core::{decode_tool_effect, ExecuteContext};
-use aura_core::{tool_result_cache_key, Action, AgentId, ToolCall, CACHEABLE_TOOLS};
+use crate::constants::{tool_result_cache_key, CACHEABLE_TOOLS};
+use aura_core::{Action, AgentId, ToolCall};
 use aura_kernel::PermissionLevel;
+use aura_kernel::{decode_tool_effect, ExecuteContext};
 use aura_reasoner::{ContentBlock, Message, ModelProvider, ToolResultContent};
 use aura_store::Store;
 use aura_tools::ToolRegistry;

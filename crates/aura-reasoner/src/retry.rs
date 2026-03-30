@@ -1,7 +1,12 @@
-//! Retry and model fallback logic.
+//! Generic retry and model fallback logic for [`ModelProvider`] implementations.
 //!
 //! Provides exponential backoff for rate-limit errors (429/529)
 //! and automatic fallback to alternative models when retries are exhausted.
+//!
+//! **Note**: [`AnthropicProvider`](crate::AnthropicProvider) embeds its own
+//! retry + fallback logic in `complete()` and `complete_streaming()`, so it
+//! does **not** use this module. `complete_with_retry` is kept as a reusable
+//! building block for future providers that don't implement retry internally.
 
 use crate::error::ReasonerError;
 use crate::{ModelProvider, ModelRequest, ModelResponse};

@@ -101,7 +101,7 @@ impl Default for AgentLoopConfig {
             thinking_min_budget: THINKING_MIN_BUDGET,
             extra_tools: Vec::new(),
             system_prompt: String::new(),
-            model: aura_core::DEFAULT_MODEL.to_string(),
+            model: crate::constants::DEFAULT_MODEL.to_string(),
             auth_token: None,
             tool_hints: None,
             aura_project_id: None,

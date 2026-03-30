@@ -44,7 +44,7 @@ impl Default for TurnConfig {
             model_timeout_ms: 180_000,
             tool_timeout_ms: 30_000,
             context_window: 50,
-            model: aura_core::DEFAULT_MODEL.to_string(),
+            model: crate::constants::DEFAULT_MODEL.to_string(),
             system_prompt: String::new(),
             workspace_base: PathBuf::from("./workspaces"),
             replay_mode: false,
@@ -82,7 +82,7 @@ mod tests {
         assert_eq!(config.model_timeout_ms, 180_000);
         assert_eq!(config.tool_timeout_ms, 30_000);
         assert_eq!(config.context_window, 50);
-        assert_eq!(config.model, aura_core::DEFAULT_MODEL);
+        assert_eq!(config.model, crate::constants::DEFAULT_MODEL);
         assert!(!config.replay_mode);
         assert_eq!(config.temperature, Some(0.2));
         assert_eq!(config.max_tokens, 16_384);

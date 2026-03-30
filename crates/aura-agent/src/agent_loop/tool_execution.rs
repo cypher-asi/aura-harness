@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use aura_core::{tool_result_cache_key, CACHEABLE_TOOLS};
+use crate::constants::{tool_result_cache_key, CACHEABLE_TOOLS};
 use aura_reasoner::{ContentBlock, Message, ModelResponse, ToolResultContent};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};

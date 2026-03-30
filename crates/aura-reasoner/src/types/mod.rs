@@ -64,13 +64,13 @@ mod tests {
 
     #[test]
     fn test_model_request_builder() {
-        let request = ModelRequest::builder(aura_core::DEFAULT_MODEL, "You are helpful")
+        let request = ModelRequest::builder("claude-opus-4-6", "You are helpful")
             .message(Message::user("Hi"))
             .max_tokens(1000)
             .temperature(0.7)
             .build();
 
-        assert_eq!(request.model, aura_core::DEFAULT_MODEL);
+        assert_eq!(request.model, "claude-opus-4-6");
         assert_eq!(request.system, "You are helpful");
         assert_eq!(request.messages.len(), 1);
         assert_eq!(request.max_tokens, 1000);
@@ -449,7 +449,7 @@ mod tests {
 
         acc.process(&StreamEvent::MessageStart {
             message_id: "msg123".to_string(),
-            model: aura_core::DEFAULT_MODEL.to_string(),
+            model: "claude-opus-4-6".to_string(),
             input_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(response.message.text_content(), "Hello!");
         assert_eq!(response.usage.input_tokens, 100);
         assert_eq!(response.usage.output_tokens, 5);
-        assert_eq!(response.trace.model, aura_core::DEFAULT_MODEL);
+        assert_eq!(response.trace.model, "claude-opus-4-6");
         assert_eq!(response.trace.latency_ms, 500);
     }
 

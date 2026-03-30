@@ -15,8 +15,6 @@ bytes = { workspace = true }
 uuid = { workspace = true }
 hex = "0.4"
 base64 = { workspace = true }
-async-trait = "0.1"
-tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1,17 +1,13 @@
 //! Mock implementations for testing.
 //!
-//! Provides both:
-//! - `MockProvider` - implements `ModelProvider` (Spec-02)
-//! - `MockReasoner` - implements `Reasoner` (Spec-01, legacy)
+//! Provides `MockProvider` which implements `ModelProvider` for testing
+//! the turn processor and other components without calling a real model API.
 
 use crate::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, Role,
     StopReason, Usage,
 };
-use crate::{ProposeRequest, Reasoner};
 use async_trait::async_trait;
-use aura_core::{ActionKind, Proposal, ProposalSet, ToolCall, Trace};
-use bytes::Bytes;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tracing::debug;
@@ -248,136 +244,9 @@ impl ModelProvider for MockProvider {
     }
 }
 
-// ============================================================================
-// MockReasoner (Spec-01 Legacy)
-// ============================================================================
-
-/// Mock reasoner that returns configurable proposals.
-///
-/// **Note**: This is the legacy interface from Spec-01. For new code,
-/// use `MockProvider` instead.
-pub struct MockReasoner {
-    /// Proposals to return
-    proposals: Vec<Proposal>,
-    /// Simulate latency
-    latency_ms: u64,
-    /// Call counter
-    call_count: AtomicU64,
-    /// Whether to fail
-    should_fail: bool,
-}
-
-impl MockReasoner {
-    /// Create a new mock reasoner.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            proposals: Vec::new(),
-            latency_ms: 0,
-            call_count: AtomicU64::new(0),
-            should_fail: false,
-        }
-    }
-
-    /// Set proposals to return.
-    #[must_use]
-    pub fn with_proposals(mut self, proposals: Vec<Proposal>) -> Self {
-        self.proposals = proposals;
-        self
-    }
-
-    /// Add a single proposal.
-    #[must_use]
-    pub fn with_proposal(mut self, proposal: Proposal) -> Self {
-        self.proposals.push(proposal);
-        self
-    }
-
-    /// Set simulated latency.
-    #[must_use]
-    pub const fn with_latency(mut self, latency_ms: u64) -> Self {
-        self.latency_ms = latency_ms;
-        self
-    }
-
-    /// Configure to fail.
-    #[must_use]
-    pub const fn with_failure(mut self) -> Self {
-        self.should_fail = true;
-        self
-    }
-
-    /// Get call count.
-    #[must_use]
-    pub fn call_count(&self) -> u64 {
-        self.call_count.load(Ordering::SeqCst)
-    }
-
-    /// Create a mock reasoner that suggests reading a file.
-    #[must_use]
-    pub fn file_reader() -> Self {
-        let tool_call = ToolCall::fs_read(".", None);
-        let payload = serde_json::to_vec(&tool_call).unwrap_or_default();
-
-        Self::new().with_proposal(
-            Proposal::new(ActionKind::Delegate, Bytes::from(payload))
-                .with_rationale("Reading file to understand context"),
-        )
-    }
-
-    /// Create a mock reasoner that returns empty proposals.
-    #[must_use]
-    pub const fn empty() -> Self {
-        Self::new()
-    }
-}
-
-impl Default for MockReasoner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Reasoner for MockReasoner {
-    async fn propose(&self, request: ProposeRequest) -> Result<ProposalSet, crate::ReasonerError> {
-        self.call_count.fetch_add(1, Ordering::SeqCst);
-
-        debug!(
-            agent_id = %request.agent_id,
-            call_count = self.call_count(),
-            "MockReasoner.propose called"
-        );
-
-        if self.should_fail {
-            return Err(crate::ReasonerError::Internal(
-                "Mock reasoner configured to fail".into(),
-            ));
-        }
-
-        // Simulate latency
-        if self.latency_ms > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(self.latency_ms)).await;
-        }
-
-        let trace = Trace {
-            model: Some("mock".to_string()),
-            latency_ms: Some(self.latency_ms),
-            ..Default::default()
-        };
-
-        Ok(ProposalSet::with_proposals(self.proposals.clone()).with_trace(trace))
-    }
-
-    async fn health_check(&self) -> bool {
-        !self.should_fail
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{AgentId, Transaction};
 
     #[tokio::test]
     async fn test_mock_provider_simple() {
@@ -439,34 +308,6 @@ mod tests {
             .build();
 
         let result = provider.complete(request).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_mock_reasoner() {
-        let reasoner = MockReasoner::new()
-            .with_proposal(Proposal::new(ActionKind::Reason, Bytes::new()).with_rationale("Test"));
-
-        let request = ProposeRequest::new(
-            AgentId::generate(),
-            Transaction::user_prompt(AgentId::generate(), "test"),
-        );
-
-        let result = reasoner.propose(request).await.unwrap();
-        assert_eq!(result.proposals.len(), 1);
-        assert_eq!(reasoner.call_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_mock_reasoner_failure() {
-        let reasoner = MockReasoner::new().with_failure();
-
-        let request = ProposeRequest::new(
-            AgentId::generate(),
-            Transaction::user_prompt(AgentId::generate(), "test"),
-        );
-
-        let result = reasoner.propose(request).await;
         assert!(result.is_err());
     }
 }

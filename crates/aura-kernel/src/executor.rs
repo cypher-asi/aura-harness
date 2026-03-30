@@ -1,6 +1,8 @@
 //! Executor trait, context, error, and decode primitives.
 //!
-//! Moved from `aura-executor` during the Phase 4 crate consolidation.
+//! Moved from `aura-core` during the Phase 2 architecture refactor.
+//! These types live in `aura-kernel` because they introduce side effects
+//! (tracing, async) that don't belong in the pure-types crate.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tracing::warn;
 
-use crate::{Action, ActionId, AgentId, Effect, EffectStatus, ToolResult};
+use aura_core::{Action, ActionId, AgentId, Effect, EffectStatus, ToolResult};
 
 // ---------------------------------------------------------------------------
 // Error

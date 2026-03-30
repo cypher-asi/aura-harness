@@ -92,8 +92,8 @@ impl Default for AgentRunnerConfig {
             stream_timeout_secs: 120,
             max_context_tokens: 200_000,
             max_task_credits: None,
-            default_model: aura_core::DEFAULT_MODEL.to_string(),
-            simple_model: aura_core::FALLBACK_MODEL.to_string(),
+            default_model: crate::constants::DEFAULT_MODEL.to_string(),
+            simple_model: crate::constants::FALLBACK_MODEL.to_string(),
             auth_token: None,
         }
     }

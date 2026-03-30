@@ -1,4 +1,38 @@
-//! Numeric constants matching aura-app's operational parameters.
+//! Product constants and numeric parameters for the agent layer.
+
+// ---------------------------------------------------------------------------
+// Default model identifiers
+// ---------------------------------------------------------------------------
+
+/// Default frontier model for agent loops and sessions.
+pub const DEFAULT_MODEL: &str = "claude-opus-4-6";
+
+/// Fallback model used when the primary model is unavailable.
+pub const FALLBACK_MODEL: &str = "claude-sonnet-4-6";
+
+// ---------------------------------------------------------------------------
+// Tool result caching
+// ---------------------------------------------------------------------------
+
+/// Tools whose successful results can be cached within a single run or turn (read-only).
+pub const CACHEABLE_TOOLS: &[&str] = &[
+    "read_file",
+    "list_files",
+    "stat_file",
+    "find_files",
+    "search_code",
+];
+
+/// Deterministic cache key from tool name and JSON arguments (canonical serialization).
+#[must_use]
+pub fn tool_result_cache_key(tool_name: &str, input: &serde_json::Value) -> String {
+    let canonical = serde_json::to_string(input).unwrap_or_else(|_| format!("{input:?}"));
+    format!("{tool_name}\0{canonical}")
+}
+
+// ---------------------------------------------------------------------------
+// Agent loop parameters
+// ---------------------------------------------------------------------------
 
 /// Maximum tool-use iterations before the loop terminates.
 pub const MAX_ITERATIONS: usize = 25;

@@ -142,7 +142,7 @@ impl Automaton for SpecGenAutomaton {
             .config
             .get("model")
             .and_then(|v| v.as_str())
-            .unwrap_or(aura_core::DEFAULT_MODEL)
+            .unwrap_or(aura_agent::DEFAULT_MODEL)
             .to_string();
 
         let request = aura_reasoner::ModelRequest::builder(&model, SPEC_GENERATION_SYSTEM_PROMPT)

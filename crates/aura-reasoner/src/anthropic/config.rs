@@ -65,8 +65,8 @@ impl AnthropicConfig {
             }
         };
 
-        let default_model = std::env::var("AURA_ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| aura_core::DEFAULT_MODEL.to_string());
+        let default_model =
+            std::env::var("AURA_ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-opus-4-6".to_string());
 
         let timeout_ms = std::env::var("AURA_MODEL_TIMEOUT_MS")
             .ok()

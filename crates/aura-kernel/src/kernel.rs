@@ -25,13 +25,13 @@
 //!   downstream consumers can verify chain integrity.
 
 use crate::context::ContextBuilder;
+use crate::executor::ExecuteContext;
 use crate::policy::{Policy, PolicyConfig};
 use crate::ExecutorRouter;
-use aura_core::ExecuteContext;
 use aura_core::{
     Action, ActionId, Decision, Effect, EffectStatus, ProposalSet, RecordEntry, Transaction,
 };
-use aura_reasoner::{ProposeRequest, Reasoner};
+use aura_reasoner::ProposeRequest;
 use aura_store::Store;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,11 +74,25 @@ pub struct ProcessResult {
     pub had_failures: bool,
 }
 
+/// Trait for generating proposals from context.
+///
+/// This replaces the legacy `Reasoner` trait from aura-reasoner. The kernel
+/// only needs `propose()`, so callers can implement this with a real model
+/// provider, a mock, or even a closure.
+#[async_trait::async_trait]
+pub trait Proposer: Send + Sync {
+    /// Generate proposals based on context.
+    async fn propose(
+        &self,
+        request: ProposeRequest,
+    ) -> Result<aura_core::ProposalSet, aura_reasoner::ReasonerError>;
+}
+
 /// The deterministic kernel.
 pub struct Kernel<S, R>
 where
     S: Store,
-    R: Reasoner,
+    R: Proposer,
 {
     store: Arc<S>,
     reasoner: Arc<R>,
@@ -90,7 +104,7 @@ where
 impl<S, R> Kernel<S, R>
 where
     S: Store,
-    R: Reasoner,
+    R: Proposer,
 {
     /// Create a new kernel.
     #[must_use]
@@ -282,16 +296,56 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_reasoner::MockReasoner;
     use aura_store::RocksStore;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use tempfile::TempDir;
 
-    fn create_test_kernel() -> (Kernel<RocksStore, MockReasoner>, TempDir, TempDir) {
+    struct EmptyProposer;
+
+    #[async_trait::async_trait]
+    impl Proposer for EmptyProposer {
+        async fn propose(
+            &self,
+            _request: ProposeRequest,
+        ) -> Result<ProposalSet, aura_reasoner::ReasonerError> {
+            Ok(ProposalSet::new())
+        }
+    }
+
+    struct FailingProposer {
+        call_count: AtomicU64,
+    }
+
+    impl FailingProposer {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicU64::new(0),
+            }
+        }
+        fn call_count(&self) -> u64 {
+            self.call_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Proposer for FailingProposer {
+        async fn propose(
+            &self,
+            _request: ProposeRequest,
+        ) -> Result<ProposalSet, aura_reasoner::ReasonerError> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Err(aura_reasoner::ReasonerError::Internal(
+                "configured to fail".into(),
+            ))
+        }
+    }
+
+    fn create_test_kernel() -> (Kernel<RocksStore, EmptyProposer>, TempDir, TempDir) {
         let db_dir = TempDir::new().unwrap();
         let ws_dir = TempDir::new().unwrap();
 
         let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
-        let reasoner = Arc::new(MockReasoner::empty());
+        let reasoner = Arc::new(EmptyProposer);
         let executor = ExecutorRouter::new();
 
         let config = KernelConfig {
@@ -321,12 +375,12 @@ mod tests {
         let ws_dir = TempDir::new().unwrap();
 
         let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
-        let reasoner = Arc::new(MockReasoner::new().with_failure()); // Would fail if called
+        let reasoner = Arc::new(FailingProposer::new());
         let executor = ExecutorRouter::new();
 
         let config = KernelConfig {
             workspace_base: ws_dir.path().to_path_buf(),
-            replay_mode: true, // Enable replay mode
+            replay_mode: true,
             ..KernelConfig::default()
         };
 
@@ -335,8 +389,7 @@ mod tests {
         let tx = Transaction::user_prompt(aura_core::AgentId::generate(), "test");
         let result = kernel.process(tx, 1).await.unwrap();
 
-        // Should succeed even though reasoner would fail - replay mode skips it
         assert_eq!(result.entry.seq, 1);
-        assert_eq!(reasoner.call_count(), 0); // Reasoner was not called
+        assert_eq!(reasoner.call_count(), 0);
     }
 }

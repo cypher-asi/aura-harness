@@ -32,7 +32,7 @@ pub(crate) mod blocking;
 mod budget;
 pub(crate) mod build;
 pub(crate) mod compaction;
-mod constants;
+pub mod constants;
 pub mod events;
 pub(crate) mod file_ops;
 pub mod git;
@@ -52,10 +52,12 @@ pub(crate) mod verify;
 pub mod agent_runner;
 pub(crate) mod message_conversion;
 pub mod runtime;
+pub mod session_bootstrap;
 pub(crate) mod task_context;
 pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
+pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS, DEFAULT_MODEL, FALLBACK_MODEL};
 pub use events::AgentLoopEvent;
 pub use kernel_executor::KernelToolExecutor;
 pub use runtime::{

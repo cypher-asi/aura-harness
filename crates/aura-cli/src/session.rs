@@ -310,12 +310,12 @@ mod tests {
         clear_all_env_vars();
 
         std::env::set_var("AURA_MAX_STEPS_PER_TURN", "20");
-        std::env::set_var("AURA_ANTHROPIC_MODEL", aura_core::DEFAULT_MODEL);
+        std::env::set_var("AURA_ANTHROPIC_MODEL", aura_agent::DEFAULT_MODEL);
 
         let config = SessionConfig::from_env();
 
         assert_eq!(config.loop_config.max_iterations, 20);
-        assert_eq!(config.loop_config.model, aura_core::DEFAULT_MODEL);
+        assert_eq!(config.loop_config.model, aura_agent::DEFAULT_MODEL);
 
         clear_all_env_vars();
     }

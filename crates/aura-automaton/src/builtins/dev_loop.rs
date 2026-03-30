@@ -59,7 +59,7 @@ impl DevLoopConfig {
         let model = config
             .get("model")
             .and_then(|v| v.as_str())
-            .unwrap_or(aura_core::DEFAULT_MODEL)
+            .unwrap_or(aura_agent::DEFAULT_MODEL)
             .to_string();
         Ok(Self {
             project_id,

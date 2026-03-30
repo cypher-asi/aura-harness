@@ -6,7 +6,7 @@ use crate::tool::{builtin_tools, Tool, ToolContext};
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
-use aura_core::{ExecuteContext, Executor};
+use aura_kernel::{ExecuteContext, Executor, ExecutorError};
 use bytes::Bytes;
 use std::collections::HashMap;
 use tracing::{debug, error, instrument};
@@ -37,14 +37,26 @@ impl ToolExecutor {
         Self::new(ToolConfig::default())
     }
 
+    /// Borrow the current tool configuration.
+    #[must_use]
+    pub fn config(&self) -> &ToolConfig {
+        &self.config
+    }
+
+    /// Check whether a tool handler is registered by name.
+    #[must_use]
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
     /// Register an additional tool at runtime.
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
-    /// Execute a tool call.
+    /// Execute a tool call with permission checks and sandbox enforcement.
     #[instrument(skip(self, ctx), fields(tool = %tool_call.tool))]
-    async fn execute_tool(
+    pub async fn execute_tool(
         &self,
         ctx: &ExecuteContext,
         tool_call: &ToolCall,
@@ -91,9 +103,9 @@ impl Executor for ToolExecutor {
         &self,
         ctx: &ExecuteContext,
         action: &Action,
-    ) -> Result<Effect, aura_core::ExecutorError> {
+    ) -> Result<Effect, ExecutorError> {
         let tool_call: ToolCall = serde_json::from_slice(&action.payload).map_err(|e| {
-            aura_core::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
+            ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
         })?;
 
         debug!(tool = %tool_call.tool, "Executing tool");
@@ -101,9 +113,7 @@ impl Executor for ToolExecutor {
         match self.execute_tool(ctx, &tool_call).await {
             Ok(result) => {
                 let payload = serde_json::to_vec(&result).map_err(|e| {
-                    aura_core::ExecutorError::ExecutionFailed(format!(
-                        "Failed to serialize tool result: {e}"
-                    ))
+                    ExecutorError::ExecutionFailed(format!("Failed to serialize tool result: {e}"))
                 })?;
                 Ok(Effect::new(
                     action.action_id,
@@ -116,9 +126,7 @@ impl Executor for ToolExecutor {
                 error!(error = %e, "Tool execution failed");
                 let result = ToolResult::failure(&tool_call.tool, e.to_string());
                 let payload = serde_json::to_vec(&result).map_err(|e| {
-                    aura_core::ExecutorError::ExecutionFailed(format!(
-                        "Failed to serialize error result: {e}"
-                    ))
+                    ExecutorError::ExecutionFailed(format!("Failed to serialize error result: {e}"))
                 })?;
                 Ok(Effect::new(
                     action.action_id,
@@ -146,6 +154,7 @@ impl Executor for ToolExecutor {
 mod tests {
     use super::*;
     use aura_core::{ActionId, AgentId};
+    use aura_kernel::ExecuteContext;
     use tempfile::TempDir;
 
     fn create_test_context() -> (ExecuteContext, TempDir) {

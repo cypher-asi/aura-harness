@@ -6,7 +6,7 @@ use crate::domain::HttpDomainApi;
 use crate::router::{create_router, RouterState};
 use crate::scheduler::Scheduler;
 use aura_automaton::AutomatonRuntime;
-use aura_core::Executor;
+use aura_kernel::Executor;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
 use aura_tools::automaton_tools::AutomatonController;
