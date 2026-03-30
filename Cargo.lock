@@ -122,7 +122,6 @@ dependencies = [
  "aura-kernel",
  "aura-node",
  "aura-reasoner",
- "aura-session",
  "aura-store",
  "aura-terminal",
  "aura-tools",
@@ -226,7 +225,6 @@ dependencies = [
  "aura-core",
  "aura-kernel",
  "aura-reasoner",
- "aura-session",
  "aura-store",
  "aura-tools",
  "colored",
@@ -338,22 +336,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "aura-session"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "aura-agent",
- "aura-auth",
- "aura-core",
- "aura-kernel",
- "aura-reasoner",
- "aura-store",
- "aura-tools",
- "tracing",
- "uuid",
 ]
 
 [[package]]

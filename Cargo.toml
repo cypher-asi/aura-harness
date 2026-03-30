@@ -17,7 +17,6 @@ aura-tools = { path = "crates/aura-tools" }
 aura-agent = { path = "crates/aura-agent" }
 aura-auth = { path = "crates/aura-auth" }
 aura-node = { path = "crates/aura-node" }
-aura-session = { path = "crates/aura-session" }
 anyhow = "1.0"
 tokio = { version = "1.35", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -52,7 +51,6 @@ members = [
     "crates/aura-automaton",
     "crates/aura-node",
     "crates/aura-protocol",
-    "crates/aura-session",
 ]
 
 [workspace.package]

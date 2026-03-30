@@ -13,6 +13,7 @@
 #[allow(dead_code)]
 mod approval;
 mod session;
+mod session_helpers;
 
 use anyhow::Result;
 use colored::Colorize;

@@ -8,6 +8,7 @@ mod api_server;
 mod cli;
 mod event_loop;
 mod record_loader;
+mod session_helpers;
 
 use cli::{Cli, Commands, RunArgs, UiMode};
 
@@ -195,7 +196,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     let identity = Identity::new(&zns_id, "Terminal Agent");
 
     let store_path = data_dir.join("store");
-    let store = aura_session::open_store(&store_path)?;
+    let store = session_helpers::open_store(&store_path)?;
 
     record_loader::load_existing_records(&store, identity.agent_id, &cmd_tx);
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
@@ -203,9 +204,9 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     let agent_workspace = workspace_root.join(identity.agent_id.to_hex());
     let (kernel_executor, tools) =
-        aura_session::build_tool_executor(identity.agent_id, agent_workspace);
+        session_helpers::build_tool_executor(identity.agent_id, agent_workspace);
 
-    let config = aura_session::default_agent_config();
+    let config = session_helpers::default_agent_config();
     let agent_loop = AgentLoop::new(config);
 
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
@@ -214,7 +215,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
         ProcessManagerConfig::default(),
     ));
 
-    let selection = aura_session::select_provider(&args.provider);
+    let selection = session_helpers::select_provider(&args.provider);
     if selection.name != "anthropic" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }

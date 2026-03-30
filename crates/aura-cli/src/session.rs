@@ -61,7 +61,7 @@ impl SessionConfig {
             loop_config.model = v;
         }
 
-        loop_config.auth_token = aura_session::load_auth_token();
+        loop_config.auth_token = crate::session_helpers::load_auth_token();
 
         Self {
             data_dir,
@@ -106,14 +106,14 @@ impl Session {
         info!(agent_id = %identity.agent_id, name = %identity.name, "Created identity");
 
         let store_path = config.data_dir.join("store");
-        let store = aura_session::open_store(&store_path)?;
+        let store = crate::session_helpers::open_store(&store_path)?;
         debug!(?store_path, "Opened store");
 
         let workspace = config.workspace_root.join(identity.agent_id.to_hex());
         let (kernel_executor, tools) =
-            aura_session::build_tool_executor(identity.agent_id, workspace);
+            crate::session_helpers::build_tool_executor(identity.agent_id, workspace);
 
-        let selection = aura_session::select_provider(&config.provider);
+        let selection = crate::session_helpers::select_provider(&config.provider);
         let provider: Box<dyn ModelProvider> = selection.provider;
         let provider_name = selection.name;
 
