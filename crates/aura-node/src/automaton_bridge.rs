@@ -15,7 +15,9 @@ use tracing::info;
 
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::KernelToolExecutor;
-use aura_automaton::{AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton};
+use aura_automaton::{
+    AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton,
+};
 use aura_core::AgentId;
 use aura_kernel::ExecutorRouter;
 use aura_reasoner::ModelProvider;
@@ -131,7 +133,11 @@ impl AutomatonBridge {
         broadcast_tx
     }
 
-    fn build_runner_config(&self, model: Option<&str>, auth_token: Option<&str>) -> AgentRunnerConfig {
+    fn build_runner_config(
+        &self,
+        model: Option<&str>,
+        auth_token: Option<&str>,
+    ) -> AgentRunnerConfig {
         let mut config = AgentRunnerConfig::default();
         if let Some(m) = model {
             config.default_model = m.to_string();

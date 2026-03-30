@@ -105,7 +105,12 @@ where
     ) -> anyhow::Result<ModelResponse> {
         let timeout_duration = Duration::from_millis(self.config.model_timeout_ms);
 
-        match timeout(timeout_duration, self.complete_with_streaming_inner(request)).await {
+        match timeout(
+            timeout_duration,
+            self.complete_with_streaming_inner(request),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_) => {
                 let msg = format!(
@@ -252,6 +257,8 @@ where
 
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        accumulator.into_response(input_tokens, latency_ms)
+        accumulator
+            .into_response(input_tokens, latency_ms)
+            .map_err(Into::into)
     }
 }

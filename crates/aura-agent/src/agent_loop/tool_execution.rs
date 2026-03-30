@@ -420,7 +420,11 @@ fn partition_blocked(
             let msg = check
                 .recovery_message
                 .unwrap_or_else(|| "Blocked".to_string());
-            let path_hint = tool.input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let path_hint = tool
+                .input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             warn!(
                 tool_use_id = %tool.id,
                 tool_name = %tool.name,

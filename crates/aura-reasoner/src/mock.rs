@@ -209,7 +209,9 @@ impl ModelProvider for MockProvider {
         );
 
         if self.should_fail {
-            return Err(crate::ReasonerError::Internal("Mock provider configured to fail".into()));
+            return Err(crate::ReasonerError::Internal(
+                "Mock provider configured to fail".into(),
+            ));
         }
 
         // Simulate latency
@@ -348,7 +350,9 @@ impl Reasoner for MockReasoner {
         );
 
         if self.should_fail {
-            return Err(crate::ReasonerError::Internal("Mock reasoner configured to fail".into()));
+            return Err(crate::ReasonerError::Internal(
+                "Mock reasoner configured to fail".into(),
+            ));
         }
 
         // Simulate latency

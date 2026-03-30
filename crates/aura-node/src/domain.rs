@@ -12,6 +12,14 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 use tracing::{debug, warn};
 
+const MAX_CLOUDFLARE_RETRIES: u32 = 2;
+const CLOUDFLARE_RETRY_BASE_MS: u64 = 1500;
+
+fn is_cloudflare_block(status: reqwest::StatusCode, body: &str) -> bool {
+    (status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::SERVICE_UNAVAILABLE)
+        && body.contains("<!DOCTYPE html")
+}
+
 pub struct HttpDomainApi {
     http: Client,
     storage_url: String,
@@ -37,22 +45,59 @@ impl HttpDomainApi {
         jwt.ok_or_else(|| anyhow!("JWT required for this operation but not provided — ensure the front-end sends a token in session_init"))
     }
 
-    async fn api_get<T: DeserializeOwned>(&self, url: &str, jwt: &str) -> anyhow::Result<T> {
-        debug!(url, "HttpDomainApi api GET");
-        let resp = self
-            .http
-            .get(url)
-            .bearer_auth(jwt)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = body.chars().take(300).collect();
+    async fn send_with_retry(
+        &self,
+        method: &str,
+        url: &str,
+        jwt: &str,
+        body: Option<&serde_json::Value>,
+    ) -> anyhow::Result<String> {
+        for attempt in 0..=MAX_CLOUDFLARE_RETRIES {
+            let req = match method {
+                "POST" => self.http.post(url).bearer_auth(jwt),
+                "PUT" => self.http.put(url).bearer_auth(jwt),
+                "DELETE" => self.http.delete(url).bearer_auth(jwt),
+                _ => self.http.get(url).bearer_auth(jwt),
+            };
+            let req = if let Some(b) = body { req.json(b) } else { req };
+
+            let resp = req
+                .send()
+                .await
+                .with_context(|| format!("{method} {url}"))?;
+            let status = resp.status();
+            let text = resp.text().await?;
+
+            if status.is_success() {
+                return Ok(text);
+            }
+
+            if is_cloudflare_block(status, &text) && attempt < MAX_CLOUDFLARE_RETRIES {
+                let backoff = CLOUDFLARE_RETRY_BASE_MS * u64::from(2u32.pow(attempt));
+                warn!(
+                    url,
+                    attempt,
+                    backoff_ms = backoff,
+                    "Cloudflare block detected, retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                continue;
+            }
+
+            let truncated: String = if is_cloudflare_block(status, &text) {
+                format!("Cloudflare is blocking requests to {url} — the service may be cold-starting or temporarily unavailable")
+            } else {
+                text.chars().take(300).collect()
+            };
             return Err(anyhow!("HTTP {status}: {truncated}"));
         }
-        serde_json::from_str(&body).with_context(|| format!("parse response from {url}"))
+        unreachable!()
+    }
+
+    async fn api_get<T: DeserializeOwned>(&self, url: &str, jwt: &str) -> anyhow::Result<T> {
+        debug!(url, "HttpDomainApi api GET");
+        let text = self.send_with_retry("GET", url, jwt, None).await?;
+        serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
     }
 
     async fn api_post<T: DeserializeOwned>(
@@ -62,20 +107,7 @@ impl HttpDomainApi {
         jwt: &str,
     ) -> anyhow::Result<T> {
         debug!(url, "HttpDomainApi api POST");
-        let resp = self
-            .http
-            .post(url)
-            .bearer_auth(jwt)
-            .json(body)
-            .send()
-            .await
-            .with_context(|| format!("POST {url}"))?;
-        let status = resp.status();
-        let text = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = text.chars().take(300).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
+        let text = self.send_with_retry("POST", url, jwt, Some(body)).await?;
         serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
     }
 
@@ -86,38 +118,13 @@ impl HttpDomainApi {
         jwt: &str,
     ) -> anyhow::Result<T> {
         debug!(url, "HttpDomainApi api PUT");
-        let resp = self
-            .http
-            .put(url)
-            .bearer_auth(jwt)
-            .json(body)
-            .send()
-            .await
-            .with_context(|| format!("PUT {url}"))?;
-        let status = resp.status();
-        let text = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = text.chars().take(300).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
+        let text = self.send_with_retry("PUT", url, jwt, Some(body)).await?;
         serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
     }
 
     async fn api_delete(&self, url: &str, jwt: &str) -> anyhow::Result<()> {
         debug!(url, "HttpDomainApi api DELETE");
-        let resp = self
-            .http
-            .delete(url)
-            .bearer_auth(jwt)
-            .send()
-            .await
-            .with_context(|| format!("DELETE {url}"))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            let truncated: String = body.chars().take(300).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
+        self.send_with_retry("DELETE", url, jwt, None).await?;
         Ok(())
     }
 }
@@ -126,7 +133,11 @@ impl HttpDomainApi {
 impl DomainApi for HttpDomainApi {
     // -- Specs (aura-storage, JWT /api/) --------------------------------------
 
-    async fn list_specs(&self, project_id: &str, jwt: Option<&str>) -> anyhow::Result<Vec<SpecDescriptor>> {
+    async fn list_specs(
+        &self,
+        project_id: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<Vec<SpecDescriptor>> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/projects/{project_id}/specs", self.storage_url);
         self.api_get(&url, jwt).await
@@ -283,7 +294,11 @@ impl DomainApi for HttpDomainApi {
 
     // -- Project (aura-network, JWT /api/) ------------------------------------
 
-    async fn get_project(&self, project_id: &str, jwt: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
+    async fn get_project(
+        &self,
+        project_id: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/projects/{project_id}", self.network_url);
         self.api_get(&url, jwt).await
@@ -356,7 +371,11 @@ impl DomainApi for HttpDomainApi {
         self.api_get(&url, jwt).await
     }
 
-    async fn get_project_stats(&self, project_id: &str, jwt: Option<&str>) -> anyhow::Result<serde_json::Value> {
+    async fn get_project_stats(
+        &self,
+        project_id: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<serde_json::Value> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/stats?scope=project&projectId={project_id}",
@@ -418,7 +437,10 @@ impl DomainApi for HttpDomainApi {
         if let Some(body) = body {
             req = req.json(body);
         }
-        let resp = req.send().await.with_context(|| format!("{method} {url}"))?;
+        let resp = req
+            .send()
+            .await
+            .with_context(|| format!("{method} {url}"))?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -454,7 +476,10 @@ impl DomainApi for HttpDomainApi {
         if let Some(body) = body {
             req = req.json(body);
         }
-        let resp = req.send().await.with_context(|| format!("{method} {url}"))?;
+        let resp = req
+            .send()
+            .await
+            .with_context(|| format!("{method} {url}"))?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {

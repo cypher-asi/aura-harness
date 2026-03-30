@@ -102,7 +102,8 @@ impl Automaton for TaskRunAutomaton {
     async fn tick(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
         if self.tool_executor.is_none() {
             return Err(AutomatonError::InvalidConfig(
-                "no tool executor configured — the agent cannot perform file or command operations".into(),
+                "no tool executor configured — the agent cannot perform file or command operations"
+                    .into(),
             ));
         }
 
@@ -145,7 +146,11 @@ impl Automaton for TaskRunAutomaton {
         if task.status == "pending" {
             let _ = self.domain.transition_task(&task.id, "ready", None).await;
         }
-        if let Err(e) = self.domain.transition_task(&task.id, "in_progress", None).await {
+        if let Err(e) = self
+            .domain
+            .transition_task(&task.id, "in_progress", None)
+            .await
+        {
             warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
         }
 
@@ -169,7 +174,9 @@ impl Automaton for TaskRunAutomaton {
                 )
                 .await;
 
-            return self.finalize_task(ctx, &task.id, &task.title, result.map_err(Into::into)).await;
+            return self
+                .finalize_task(ctx, &task.id, &task.title, result.map_err(Into::into))
+                .await;
         }
 
         let effective_path = ctx

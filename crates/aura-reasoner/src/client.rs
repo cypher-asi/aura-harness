@@ -8,7 +8,7 @@ use std::time::Duration;
 use tracing::{debug, error, instrument, warn};
 
 /// HTTP-based reasoner client.
-pub struct HttpReasoner {
+pub(crate) struct HttpReasoner {
     client: Client,
     config: ReasonerConfig,
 }
@@ -52,8 +52,9 @@ impl Reasoner for HttpReasoner {
             match self.client.post(&url).json(&request).send().await {
                 Ok(response) => {
                     if response.status().is_success() {
-                        let proposals: ProposalSet = response.json().await
-                            .map_err(|e| crate::ReasonerError::Parse(format!("Failed to parse proposals: {e}")))?;
+                        let proposals: ProposalSet = response.json().await.map_err(|e| {
+                            crate::ReasonerError::Parse(format!("Failed to parse proposals: {e}"))
+                        })?;
                         debug!(count = proposals.proposals.len(), "Received proposals");
                         return Ok(proposals);
                     }
@@ -74,7 +75,8 @@ impl Reasoner for HttpReasoner {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| crate::ReasonerError::Internal("Reasoner request failed".into())))
+        Err(last_error
+            .unwrap_or_else(|| crate::ReasonerError::Internal("Reasoner request failed".into())))
     }
 
     async fn health_check(&self) -> bool {

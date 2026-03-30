@@ -61,7 +61,10 @@ mod tests {
 
     #[test]
     fn test_api_error_display() {
-        let err = ReasonerError::Api { status: 500, message: "internal error".to_string() };
+        let err = ReasonerError::Api {
+            status: 500,
+            message: "internal error".to_string(),
+        };
         let msg = format!("{err}");
         assert_eq!(msg, "API error (status 500): internal error");
     }

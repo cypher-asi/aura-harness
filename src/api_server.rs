@@ -95,8 +95,12 @@ struct ListFilesQuery {
     depth: usize,
 }
 
-fn default_files_path() -> String { ".".into() }
-fn default_files_depth() -> usize { 3 }
+fn default_files_path() -> String {
+    ".".into()
+}
+fn default_files_depth() -> usize {
+    3
+}
 
 #[derive(serde::Serialize)]
 struct DirEntry {
@@ -110,7 +114,9 @@ struct DirEntry {
 fn dir_first_then_name(a: &std::fs::DirEntry, b: &std::fs::DirEntry) -> std::cmp::Ordering {
     let a_dir = a.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
     let b_dir = b.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-    b_dir.cmp(&a_dir).then_with(|| a.file_name().cmp(&b.file_name()))
+    b_dir
+        .cmp(&a_dir)
+        .then_with(|| a.file_name().cmp(&b.file_name()))
 }
 
 fn build_dir_entry(item: std::fs::DirEntry, depth: usize, max_depth: usize) -> Option<DirEntry> {

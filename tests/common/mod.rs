@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use aura_auth::CredentialStore;
 use aura_core::Executor;
-use aura_node::NodeConfig;
 use aura_node::test_support::{create_router, RouterState, Scheduler};
+use aura_node::NodeConfig;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
 use aura_tools::catalog::ToolProfile;
@@ -166,9 +166,7 @@ impl TestServer {
         let base_url = format!("http://{local_addr}");
 
         let handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service())
-                .await
-                .ok();
+            axum::serve(listener, app.into_make_service()).await.ok();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -533,11 +531,7 @@ pub fn http_client() -> reqwest::Client {
 /// Convenience: connect a WS client with session_init + auth token.
 pub async fn connect_llm_session(server: &TestServer, ws_path: &Path, token: &str) -> WsClient {
     let mut ws = WsClient::connect(&server.ws_url()).await;
-    let tok = if token.is_empty() {
-        None
-    } else {
-        Some(token)
-    };
+    let tok = if token.is_empty() { None } else { Some(token) };
     ws.send_session_init(ws_path, tok).await;
     ws.expect_session_ready().await;
     ws

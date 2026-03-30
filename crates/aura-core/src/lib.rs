@@ -21,7 +21,7 @@ pub mod types;
 
 pub use error::{AuraError, Result};
 pub use executor::{
-    DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError, decode_tool_effect,
+    decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
 };
 pub use ids::{ActionId, AgentId, Hash, ProcessId, TxId};
 pub use types::{
@@ -61,4 +61,3 @@ pub fn tool_result_cache_key(tool_name: &str, input: &serde_json::Value) -> Stri
     let canonical = serde_json::to_string(input).unwrap_or_else(|_| format!("{input:?}"));
     format!("{tool_name}\0{canonical}")
 }
-

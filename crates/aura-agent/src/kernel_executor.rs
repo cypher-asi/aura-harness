@@ -1,12 +1,12 @@
 //! Default `AgentToolExecutor` implementation wrapping the kernel's `ExecutorRouter`.
 //!
 //! Bridges between the `AgentToolExecutor` trait (agent-loop layer) and the
-//! existing executor infrastructure in `aura-executor`.
+//! executor infrastructure now owned by `aura-core` / `aura-kernel`.
 
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
+use aura_core::{decode_tool_effect, ExecuteContext};
 use aura_core::{Action, AgentId, ToolCall};
-use aura_core::{ExecuteContext, decode_tool_effect};
 use aura_kernel::ExecutorRouter;
 use std::path::PathBuf;
 use tracing::{debug, error, info};

@@ -15,12 +15,11 @@ pub mod type_resolution;
 pub mod validation;
 pub mod workspace_map;
 
-pub use apply::{apply_file_ops, compute_file_changes};
+pub use apply::apply_file_ops;
 pub use error_context::{resolve_error_context, resolve_error_source_files, ERROR_SOURCE_BUDGET};
 pub(crate) use source_parser::{extract_definition_block, extract_pub_signatures};
 pub use stub_detection::*;
 pub use task_relevance::*;
-pub use validation::*;
 pub use workspace_map::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -57,16 +56,6 @@ pub enum FileOp {
         path: String,
         replacements: Vec<Replacement>,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileChangeSummary {
-    pub op: String,
-    pub path: String,
-    #[serde(default)]
-    pub lines_added: u32,
-    #[serde(default)]
-    pub lines_removed: u32,
 }
 
 pub fn validate_path(base: &Path, target: &Path) -> Result<(), FileOpsError> {

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use tracing::{error, info};
 
-use super::{fuzzy_search_replace, validate_path, FileChangeSummary, FileOp, FileOpsError};
+use super::{fuzzy_search_replace, validate_path, FileOp, FileOpsError};
 
 pub async fn apply_file_ops(base_path: &Path, ops: &[FileOp]) -> Result<(), FileOpsError> {
     info!(base = %base_path.display(), count = ops.len(), "applying file operations");
@@ -122,60 +122,4 @@ async fn apply_search_replace(
         "applied search-replace"
     );
     Ok(())
-}
-
-/// Compute line-level change stats for each file op before applying them.
-/// Must be called before `apply_file_ops` so old file contents are still on disk.
-///
-/// This function performs blocking filesystem reads (`std::fs::read_to_string`).
-/// It must NOT be called directly from an async runtime thread; use
-/// `tokio::task::spawn_blocking` at the call site.
-pub fn compute_file_changes(base_path: &Path, ops: &[FileOp]) -> Vec<FileChangeSummary> {
-    ops.iter()
-        .map(|op| match op {
-            FileOp::Create { path, content } => FileChangeSummary {
-                op: "create".to_string(),
-                path: path.clone(),
-                lines_added: content.lines().count() as u32,
-                lines_removed: 0,
-            },
-            FileOp::Modify { path, content } => {
-                let old_lines = std::fs::read_to_string(base_path.join(path))
-                    .map(|s| s.lines().count() as u32)
-                    .unwrap_or(0);
-                FileChangeSummary {
-                    op: "modify".to_string(),
-                    path: path.clone(),
-                    lines_added: content.lines().count() as u32,
-                    lines_removed: old_lines,
-                }
-            }
-            FileOp::Delete { path } => {
-                let old_lines = std::fs::read_to_string(base_path.join(path))
-                    .map(|s| s.lines().count() as u32)
-                    .unwrap_or(0);
-                FileChangeSummary {
-                    op: "delete".to_string(),
-                    path: path.clone(),
-                    lines_added: 0,
-                    lines_removed: old_lines,
-                }
-            }
-            FileOp::SearchReplace { path, replacements } => {
-                let old_content = std::fs::read_to_string(base_path.join(path)).unwrap_or_default();
-                let old_lines = old_content.lines().count() as u32;
-                let mut new_content = old_content;
-                for rep in replacements {
-                    new_content = new_content.replacen(&rep.search, &rep.replace, 1);
-                }
-                let new_lines = new_content.lines().count() as u32;
-                FileChangeSummary {
-                    op: "search_replace".to_string(),
-                    path: path.clone(),
-                    lines_added: new_lines,
-                    lines_removed: old_lines,
-                }
-            }
-        })
-        .collect()
 }

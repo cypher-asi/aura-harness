@@ -25,7 +25,10 @@ pub async fn update_project(api: &dyn DomainApi, project_id: &str, input: &Value
         test_command: str_field(input, "test_command"),
     };
     let jwt = str_field(input, "jwt");
-    match api.update_project(project_id, updates, jwt.as_deref()).await {
+    match api
+        .update_project(project_id, updates, jwt.as_deref())
+        .await
+    {
         Ok(p) => domain_ok(json!({ "project": p })),
         Err(e) => domain_err(e),
     }

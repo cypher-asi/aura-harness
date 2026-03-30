@@ -15,13 +15,27 @@ use serde::{Deserialize, Serialize};
 pub struct SpecDescriptor {
     #[serde(alias = "spec_id")]
     pub id: String,
-    #[serde(alias = "projectId", default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(
+        alias = "projectId",
+        default,
+        deserialize_with = "super::helpers::deser_string_or_default"
+    )]
     pub project_id: String,
     #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
     pub title: String,
-    #[serde(alias = "markdownContents", alias = "markdown_contents", default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(
+        alias = "markdownContents",
+        alias = "markdown_contents",
+        default,
+        deserialize_with = "super::helpers::deser_string_or_default"
+    )]
     pub content: String,
-    #[serde(alias = "orderIndex", alias = "order_index", default, deserialize_with = "super::helpers::deser_u32_or_default")]
+    #[serde(
+        alias = "orderIndex",
+        alias = "order_index",
+        default,
+        deserialize_with = "super::helpers::deser_u32_or_default"
+    )]
     pub order: u32,
     #[serde(alias = "parentId", default)]
     pub parent_id: Option<String>,
@@ -30,9 +44,17 @@ pub struct SpecDescriptor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDescriptor {
     pub id: String,
-    #[serde(alias = "specId", default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(
+        alias = "specId",
+        default,
+        deserialize_with = "super::helpers::deser_string_or_default"
+    )]
     pub spec_id: String,
-    #[serde(alias = "projectId", default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(
+        alias = "projectId",
+        default,
+        deserialize_with = "super::helpers::deser_string_or_default"
+    )]
     pub project_id: String,
     #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
     pub title: String,
@@ -42,7 +64,12 @@ pub struct TaskDescriptor {
     pub status: String,
     #[serde(alias = "dependencyIds", alias = "dependency_ids", default)]
     pub dependencies: Vec<String>,
-    #[serde(alias = "orderIndex", alias = "order_index", default, deserialize_with = "super::helpers::deser_u32_or_default")]
+    #[serde(
+        alias = "orderIndex",
+        alias = "order_index",
+        default,
+        deserialize_with = "super::helpers::deser_u32_or_default"
+    )]
     pub order: u32,
 }
 
@@ -119,7 +146,11 @@ pub struct CreateSessionParams {
 #[async_trait]
 pub trait DomainApi: Send + Sync {
     // Specs — JWT auth via /api/ routes
-    async fn list_specs(&self, project_id: &str, jwt: Option<&str>) -> anyhow::Result<Vec<SpecDescriptor>>;
+    async fn list_specs(
+        &self,
+        project_id: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<Vec<SpecDescriptor>>;
     async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<SpecDescriptor>;
     async fn create_spec(
         &self,
@@ -162,7 +193,12 @@ pub trait DomainApi: Send + Sync {
         jwt: Option<&str>,
     ) -> anyhow::Result<TaskDescriptor>;
     async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<()>;
-    async fn transition_task(&self, task_id: &str, status: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor>;
+    async fn transition_task(
+        &self,
+        task_id: &str,
+        status: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<TaskDescriptor>;
     async fn claim_next_task(
         &self,
         project_id: &str,
@@ -174,7 +210,11 @@ pub trait DomainApi: Send + Sync {
     async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor>;
 
     // Project (aura-network) — JWT auth via /api/ routes
-    async fn get_project(&self, project_id: &str, jwt: Option<&str>) -> anyhow::Result<ProjectDescriptor>;
+    async fn get_project(
+        &self,
+        project_id: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<ProjectDescriptor>;
     async fn update_project(
         &self,
         project_id: &str,
@@ -199,7 +239,11 @@ pub trait DomainApi: Send + Sync {
         limit: Option<u64>,
         jwt: Option<&str>,
     ) -> anyhow::Result<serde_json::Value>;
-    async fn get_project_stats(&self, project_id: &str, jwt: Option<&str>) -> anyhow::Result<serde_json::Value>;
+    async fn get_project_stats(
+        &self,
+        project_id: &str,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<serde_json::Value>;
 
     // Messages
     async fn list_messages(
@@ -220,9 +264,23 @@ pub trait DomainApi: Send + Sync {
     ) -> anyhow::Result<Option<SessionDescriptor>>;
 
     // Orbit (raw JSON pass-through)
-    async fn orbit_api_call(&self, method: &str, path: &str, body: Option<&serde_json::Value>, jwt: Option<&str>) -> anyhow::Result<String>;
-    fn orbit_url(&self) -> &str { "" }
+    async fn orbit_api_call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<String>;
+    fn orbit_url(&self) -> &str {
+        ""
+    }
 
     // Network (raw JSON pass-through)
-    async fn network_api_call(&self, method: &str, path: &str, body: Option<&serde_json::Value>, jwt: Option<&str>) -> anyhow::Result<String>;
+    async fn network_api_call(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<String>;
 }

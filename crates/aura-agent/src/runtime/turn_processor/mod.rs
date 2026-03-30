@@ -34,9 +34,9 @@ pub use delegate::ModelCallDelegate;
 pub use streaming::{StreamCallback, StreamCallbackEvent};
 pub use types::{ExecutedToolCall, StepResult, ToolCache, TurnEntry, TurnResult};
 
-use aura_kernel::{Policy, PolicyConfig};
 use aura_core::{AgentId, Transaction};
 use aura_kernel::ExecutorRouter;
+use aura_kernel::{Policy, PolicyConfig};
 use aura_reasoner::{
     Message, ModelProvider, ModelRequest, ModelResponse, StopReason, ToolDefinition,
     ToolResultContent,
@@ -182,7 +182,8 @@ where
     ) -> Result<TurnResult, crate::runtime::RuntimeError> {
         info!("Starting turn processing (store-based history)");
         let messages = self.build_initial_messages(agent_id, &tx, next_seq);
-        self.run_turn_loop(messages, agent_id).await
+        self.run_turn_loop(messages, agent_id)
+            .await
             .map_err(|e| crate::runtime::RuntimeError::Internal(e.to_string()))
     }
 
@@ -205,7 +206,8 @@ where
         messages: Vec<Message>,
     ) -> Result<TurnResult, crate::runtime::RuntimeError> {
         info!("Starting turn processing (caller-provided history)");
-        self.run_turn_loop(messages, agent_id).await
+        self.run_turn_loop(messages, agent_id)
+            .await
             .map_err(|e| crate::runtime::RuntimeError::Internal(e.to_string()))
     }
 
@@ -223,8 +225,12 @@ where
     /// # Errors
     ///
     /// Returns error if the model completion fails.
-    pub async fn resolve_model_call(&self, request: ModelRequest) -> Result<ModelResponse, crate::runtime::RuntimeError> {
-        self.resolve_model_response(request).await
+    pub async fn resolve_model_call(
+        &self,
+        request: ModelRequest,
+    ) -> Result<ModelResponse, crate::runtime::RuntimeError> {
+        self.resolve_model_response(request)
+            .await
             .map_err(|e| crate::runtime::RuntimeError::Model(e.to_string()))
     }
 
@@ -293,7 +299,9 @@ where
             .temperature(self.config.temperature.unwrap_or(0.2))
             .build();
 
-        let response = self.resolve_model_response(request).await
+        let response = self
+            .resolve_model_response(request)
+            .await
             .map_err(|e| crate::runtime::RuntimeError::Model(e.to_string()))?;
 
         debug!(

@@ -26,11 +26,11 @@
 
 use crate::context::ContextBuilder;
 use crate::policy::{Policy, PolicyConfig};
+use crate::ExecutorRouter;
+use aura_core::ExecuteContext;
 use aura_core::{
     Action, ActionId, Decision, Effect, EffectStatus, ProposalSet, RecordEntry, Transaction,
 };
-use aura_core::ExecuteContext;
-use crate::ExecutorRouter;
 use aura_reasoner::{ProposeRequest, Reasoner};
 use aura_store::Store;
 use std::path::PathBuf;
@@ -121,21 +121,26 @@ where
     ///
     /// Returns error if storage operations or proposal processing fails.
     #[instrument(skip(self, tx), fields(agent_id = %tx.agent_id, hash = %tx.hash))]
-    pub async fn process(&self, tx: Transaction, next_seq: u64) -> Result<ProcessResult, crate::KernelError> {
+    pub async fn process(
+        &self,
+        tx: Transaction,
+        next_seq: u64,
+    ) -> Result<ProcessResult, crate::KernelError> {
         info!(seq = next_seq, "Processing transaction");
 
         // 1. Load record window
         let from_seq = next_seq.saturating_sub(self.config.record_window_size as u64);
-        let window =
-            self.store
-                .scan_record(tx.agent_id, from_seq, self.config.record_window_size)
-                .map_err(|e| crate::KernelError::Store(e.to_string()))?;
+        let window = self
+            .store
+            .scan_record(tx.agent_id, from_seq, self.config.record_window_size)
+            .map_err(|e| crate::KernelError::Store(e.to_string()))?;
         debug!(window_size = window.len(), "Loaded record window");
 
         // 2. Build context
         let context = ContextBuilder::new(&tx)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?
-            .with_record_window(window).build();
+            .with_record_window(window)
+            .build();
 
         // 3. Get proposals (skip in replay mode)
         let proposals = if self.config.replay_mode {

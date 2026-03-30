@@ -9,10 +9,6 @@ use super::workspace_map::{
     parse_internal_deps, parse_package_name, parse_workspace_members, WorkspaceCache,
 };
 
-pub use super::type_resolution::{
-    resolve_type_definitions_for_task, resolve_type_definitions_for_task_async,
-};
-
 /// Builds workspace context from disk (non-cached path).
 struct WorkspaceContext {
     members: Vec<String>,

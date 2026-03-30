@@ -42,11 +42,9 @@ pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
 }
 
 pub use anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
-pub use client::HttpReasoner;
 pub use error::ReasonerError;
 pub use mock::{MockProvider, MockReasoner, MockResponse};
 pub use request::{ProposeLimits, ProposeRequest, RecordSummary};
-pub use retry::{complete_with_retry, RetryConfig};
 pub use types::{
     AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, Message, ModelRequest,
     ModelResponse, ProviderTrace, Role, StopReason, StreamAccumulator, StreamContentType,
@@ -129,7 +127,10 @@ pub trait ModelProvider: Send + Sync {
     /// # Errors
     ///
     /// Returns error if the provider request fails.
-    async fn complete_streaming(&self, request: ModelRequest) -> Result<StreamEventStream, ReasonerError> {
+    async fn complete_streaming(
+        &self,
+        request: ModelRequest,
+    ) -> Result<StreamEventStream, ReasonerError> {
         // Default: fall back to non-streaming
         let response = self.complete(request).await?;
 
@@ -195,7 +196,7 @@ pub trait Reasoner: Send + Sync {
 
 /// Reasoner configuration (legacy).
 #[derive(Debug, Clone)]
-pub struct ReasonerConfig {
+pub(crate) struct ReasonerConfig {
     /// Gateway URL
     pub gateway_url: String,
     /// Request timeout in milliseconds

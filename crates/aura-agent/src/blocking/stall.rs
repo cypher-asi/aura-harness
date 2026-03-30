@@ -147,9 +147,9 @@ mod tests {
         let targets: HashSet<String> = ["a.rs".to_string()].into();
         let empty = HashSet::new();
         assert!(!det.update(&targets, false, true)); // 1
-        assert!(!det.update(&empty, false, true));   // pathless write: streak grows to 2
+        assert!(!det.update(&empty, false, true)); // pathless write: streak grows to 2
         assert_eq!(det.streak(), 2);
-        assert!(det.update(&empty, false, true));    // 3 = threshold
+        assert!(det.update(&empty, false, true)); // 3 = threshold
     }
 
     #[test]
@@ -159,7 +159,7 @@ mod tests {
         let empty = HashSet::new();
         assert!(!det.update(&targets, false, true)); // 1
         assert!(!det.update(&targets, false, true)); // 2
-        assert!(!det.update(&empty, false, false));  // no writes at all: reset
+        assert!(!det.update(&empty, false, false)); // no writes at all: reset
         assert_eq!(det.streak(), 0);
     }
 }

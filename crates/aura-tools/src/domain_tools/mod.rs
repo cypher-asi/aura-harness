@@ -23,14 +23,36 @@ use tracing::warn;
 use helpers::domain_err;
 
 const DOMAIN_TOOL_NAMES: &[&str] = &[
-    "list_specs", "get_spec", "create_spec", "update_spec", "delete_spec",
-    "list_tasks", "get_task", "create_task", "update_task", "delete_task", "transition_task",
-    "get_project", "update_project",
-    "create_log", "list_logs", "get_project_stats",
-    "orbit_push", "orbit_create_repo", "orbit_list_repos", "orbit_list_branches",
-    "orbit_create_branch", "orbit_list_commits", "orbit_get_diff",
-    "orbit_create_pr", "orbit_list_prs", "orbit_merge_pr",
-    "post_to_feed", "list_projects", "check_budget", "record_usage",
+    "list_specs",
+    "get_spec",
+    "create_spec",
+    "update_spec",
+    "delete_spec",
+    "list_tasks",
+    "get_task",
+    "create_task",
+    "update_task",
+    "delete_task",
+    "transition_task",
+    "get_project",
+    "update_project",
+    "create_log",
+    "list_logs",
+    "get_project_stats",
+    "orbit_push",
+    "orbit_create_repo",
+    "orbit_list_repos",
+    "orbit_list_branches",
+    "orbit_create_branch",
+    "orbit_list_commits",
+    "orbit_get_diff",
+    "orbit_create_pr",
+    "orbit_list_prs",
+    "orbit_merge_pr",
+    "post_to_feed",
+    "list_projects",
+    "check_budget",
+    "record_usage",
 ];
 
 /// Dispatches domain tool calls to the appropriate handler via `DomainApi`.
@@ -121,11 +143,15 @@ impl DomainToolExecutor {
             "create_task" => tasks::create_task(self.api.as_ref(), project_id, &input).await,
             "update_task" => tasks::update_task(self.api.as_ref(), project_id, &input).await,
             "delete_task" => tasks::delete_task(self.api.as_ref(), project_id, &input).await,
-            "transition_task" => tasks::transition_task(self.api.as_ref(), project_id, &input).await,
+            "transition_task" => {
+                tasks::transition_task(self.api.as_ref(), project_id, &input).await
+            }
 
             // Project
             "get_project" => project::get_project(self.api.as_ref(), project_id, &input).await,
-            "update_project" => project::update_project(self.api.as_ref(), project_id, &input).await,
+            "update_project" => {
+                project::update_project(self.api.as_ref(), project_id, &input).await
+            }
 
             // Storage (logs, stats)
             "create_log" => storage::create_log(self.api.as_ref(), project_id, &input).await,
@@ -136,19 +162,33 @@ impl DomainToolExecutor {
 
             // Orbit (git operations)
             "orbit_push" => orbit::orbit_push(self.api.as_ref(), project_id, &input).await,
-            "orbit_create_repo" => orbit::orbit_create_repo(self.api.as_ref(), project_id, &input).await,
-            "orbit_list_repos" => orbit::orbit_list_repos(self.api.as_ref(), project_id, &input).await,
-            "orbit_list_branches" => orbit::orbit_list_branches(self.api.as_ref(), project_id, &input).await,
-            "orbit_create_branch" => orbit::orbit_create_branch(self.api.as_ref(), project_id, &input).await,
-            "orbit_list_commits" => orbit::orbit_list_commits(self.api.as_ref(), project_id, &input).await,
+            "orbit_create_repo" => {
+                orbit::orbit_create_repo(self.api.as_ref(), project_id, &input).await
+            }
+            "orbit_list_repos" => {
+                orbit::orbit_list_repos(self.api.as_ref(), project_id, &input).await
+            }
+            "orbit_list_branches" => {
+                orbit::orbit_list_branches(self.api.as_ref(), project_id, &input).await
+            }
+            "orbit_create_branch" => {
+                orbit::orbit_create_branch(self.api.as_ref(), project_id, &input).await
+            }
+            "orbit_list_commits" => {
+                orbit::orbit_list_commits(self.api.as_ref(), project_id, &input).await
+            }
             "orbit_get_diff" => orbit::orbit_get_diff(self.api.as_ref(), project_id, &input).await,
-            "orbit_create_pr" => orbit::orbit_create_pr(self.api.as_ref(), project_id, &input).await,
+            "orbit_create_pr" => {
+                orbit::orbit_create_pr(self.api.as_ref(), project_id, &input).await
+            }
             "orbit_list_prs" => orbit::orbit_list_prs(self.api.as_ref(), project_id, &input).await,
             "orbit_merge_pr" => orbit::orbit_merge_pr(self.api.as_ref(), project_id, &input).await,
 
             // Network (social, billing)
             "post_to_feed" => network::post_to_feed(self.api.as_ref(), project_id, &input).await,
-            "list_projects" => network::network_list_projects(self.api.as_ref(), project_id, &input).await,
+            "list_projects" => {
+                network::network_list_projects(self.api.as_ref(), project_id, &input).await
+            }
             "check_budget" => network::check_budget(self.api.as_ref(), project_id, &input).await,
             "record_usage" => network::record_usage(self.api.as_ref(), project_id, &input).await,
 

@@ -338,7 +338,8 @@ impl AgentRunner {
                 )));
             }
 
-            let result = run_build_command(params.project_root, &command, None).await
+            let result = run_build_command(params.project_root, &command, None)
+                .await
                 .map_err(|e| crate::AgentError::BuildFailed(e.to_string()))?;
 
             if result.success {
@@ -387,7 +388,9 @@ impl AgentRunner {
             }
         }
 
-        Err(crate::AgentError::BuildFailed(format!("command `{command}` failed after {max_attempts} attempts")))
+        Err(crate::AgentError::BuildFailed(format!(
+            "command `{command}` failed after {max_attempts} attempts"
+        )))
     }
 }
 
@@ -509,7 +512,10 @@ mod tests {
         let config = AgentRunnerConfig::default();
         let loop_cfg =
             configure_loop_config(TaskComplexity::Complex, &config, 18, 3, "system".into());
-        assert_eq!(loop_cfg.max_tokens, config.task_execution_max_tokens.max(32_768));
+        assert_eq!(
+            loop_cfg.max_tokens,
+            config.task_execution_max_tokens.max(32_768)
+        );
         assert_eq!(loop_cfg.max_iterations, config.max_agentic_iterations);
     }
 

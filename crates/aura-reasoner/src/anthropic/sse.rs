@@ -1,4 +1,5 @@
 use super::api_types::{SseContentBlock, SseDelta, SseEvent};
+use crate::error::ReasonerError;
 use crate::{StopReason, StreamContentType, StreamEvent};
 use futures_util::Stream;
 use std::pin::Pin;
@@ -51,14 +52,18 @@ where
                     }
                     if self.buffer.len() > MAX_SSE_BUFFER_SIZE {
                         self.finished = true;
-                        return Poll::Ready(Some(Err(anyhow::anyhow!(
+                        return Poll::Ready(Some(Err(ReasonerError::Internal(format!(
                             "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes"
-                        ))));
+                        ))
+                        .into())));
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
                     self.finished = true;
-                    return Poll::Ready(Some(Err(anyhow::anyhow!("Stream error: {e}"))));
+                    return Poll::Ready(Some(Err(ReasonerError::Request(format!(
+                        "Stream error: {e}"
+                    ))
+                    .into())));
                 }
                 Poll::Ready(None) => {
                     self.finished = true;

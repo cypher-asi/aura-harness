@@ -76,7 +76,12 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
 
     // ── 2. Open PTY ──────────────────────────────────────────────────
     let pty_system = native_pty_system();
-    let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+    let size = PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
     let pair = match pty_system.openpty(size) {
         Ok(p) => p,
         Err(e) => {
@@ -116,10 +121,13 @@ pub async fn handle_terminal_ws(mut socket: WebSocket) {
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
 
     // ── 3. Send spawned confirmation ─────────────────────────────────
-    let _ = send_json(&mut socket, &serde_json::json!({
-        "type": "spawned",
-        "shell": shell,
-    }))
+    let _ = send_json(
+        &mut socket,
+        &serde_json::json!({
+            "type": "spawned",
+            "shell": shell,
+        }),
+    )
     .await;
 
     info!(shell = %shell, "Terminal PTY spawned");
@@ -223,9 +231,7 @@ async fn wait_for_spawn(socket: &mut WebSocket) -> Option<SpawnMsg> {
 }
 
 async fn send_json(socket: &mut WebSocket, value: &serde_json::Value) -> Result<(), axum::Error> {
-    socket
-        .send(Message::Text(value.to_string()))
-        .await
+    socket.send(Message::Text(value.to_string())).await
 }
 
 fn read_pty_loop(

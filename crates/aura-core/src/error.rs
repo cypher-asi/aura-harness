@@ -6,7 +6,7 @@
 //! - **Boundary crates** (`aura-store`, `aura-auth`, `aura-tools`, `aura-reasoner`) define
 //!   typed error enums (`StoreError`, `AuthError`, `ToolError`, `ReasonerError`) for their
 //!   specific failure modes.
-//! - **Orchestration layers** (`aura-kernel`, `aura-runtime`, `aura-agent`, CLI binaries)
+//! - **Orchestration layers** (`aura-kernel`, `aura-agent::runtime`, `aura-agent`, CLI binaries)
 //!   use `anyhow::Result` for flexibility and error context chaining.
 //! - **`AuraError`** serves as the shared domain error type in `aura-core`, available for
 //!   cross-layer error propagation where typed errors are preferred over `anyhow`.
@@ -28,7 +28,7 @@ pub enum AuraError {
     // === Storage Errors ===
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these
     /// variants. These are retained for potential use by higher layers that map
-    /// store errors into AuraError.
+    /// store errors into `AuraError`.
     #[error("storage error: {message}")]
     Storage {
         message: String,
@@ -38,31 +38,31 @@ pub enum AuraError {
 
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these
     /// variants. These are retained for potential use by higher layers that map
-    /// store errors into AuraError.
+    /// store errors into `AuraError`.
     #[error("agent not found: {agent_id}")]
     AgentNotFound { agent_id: AgentId },
 
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these
     /// variants. These are retained for potential use by higher layers that map
-    /// store errors into AuraError.
+    /// store errors into `AuraError`.
     #[error("record entry not found: agent={agent_id}, seq={seq}")]
     RecordEntryNotFound { agent_id: AgentId, seq: u64 },
 
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these
     /// variants. These are retained for potential use by higher layers that map
-    /// store errors into AuraError.
+    /// store errors into `AuraError`.
     #[error("transaction not found: {tx_id}")]
     TransactionNotFound { tx_id: TxId },
 
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these
     /// variants. These are retained for potential use by higher layers that map
-    /// store errors into AuraError.
+    /// store errors into `AuraError`.
     #[error("inbox empty for agent: {agent_id}")]
     InboxEmpty { agent_id: AgentId },
 
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these
     /// variants. These are retained for potential use by higher layers that map
-    /// store errors into AuraError.
+    /// store errors into `AuraError`.
     #[error("sequence mismatch: expected {expected}, got {actual}")]
     SequenceMismatch { expected: u64, actual: u64 },
 

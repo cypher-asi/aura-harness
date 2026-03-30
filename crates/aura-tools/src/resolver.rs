@@ -12,9 +12,9 @@ use crate::sandbox::Sandbox;
 use crate::tool::{builtin_tools, Tool, ToolContext};
 use crate::ToolConfig;
 use async_trait::async_trait;
+use aura_core::ToolDefinition;
 use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
 use aura_core::{ExecuteContext, Executor};
-use aura_core::ToolDefinition;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,12 +102,8 @@ impl ToolResolver {
         //    inaccessible (e.g. remote agent on a different OS).
         if let Some(ref domain) = self.domain_executor {
             if domain.handles(tool_name) {
-                let project_id = tool_call.args["project_id"]
-                    .as_str()
-                    .unwrap_or_default();
-                let result_json = domain
-                    .execute(tool_name, project_id, &tool_call.args)
-                    .await;
+                let project_id = tool_call.args["project_id"].as_str().unwrap_or_default();
+                let result_json = domain.execute(tool_name, project_id, &tool_call.args).await;
                 let is_error = serde_json::from_str::<serde_json::Value>(&result_json)
                     .ok()
                     .and_then(|v| v.get("ok")?.as_bool())
@@ -147,9 +143,7 @@ impl Executor for ToolResolver {
         action: &Action,
     ) -> Result<Effect, aura_core::ExecutorError> {
         let tool_call: ToolCall = serde_json::from_slice(&action.payload).map_err(|e| {
-            aura_core::ExecutorError::ExecutionFailed(format!(
-                "Failed to parse tool call: {e}"
-            ))
+            aura_core::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
         })?;
 
         debug!(tool = %tool_call.tool, "Executing tool via resolver");
@@ -235,8 +229,7 @@ mod tests {
     fn visible_tools_returns_core() {
         let (_cat, resolver) = make_catalog_and_resolver();
         let tools = resolver.visible_tools(ToolProfile::Core);
-        let names: std::collections::HashSet<_> =
-            tools.iter().map(|t| t.name.as_str()).collect();
+        let names: std::collections::HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains("read_file"));
     }
 
@@ -294,33 +287,185 @@ mod tests {
 
         #[async_trait]
         impl DomainApi for StubDomainApi {
-            async fn list_specs(&self, _: &str, _: Option<&str>) -> anyhow::Result<Vec<SpecDescriptor>> { Ok(vec![]) }
-            async fn get_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<SpecDescriptor> { anyhow::bail!("stub") }
-            async fn create_spec(&self, _: &str, title: &str, _: &str, _: u32, _: Option<&str>) -> anyhow::Result<SpecDescriptor> {
-                Ok(SpecDescriptor { id: "s1".into(), project_id: "p1".into(), title: title.into(), content: String::new(), order: 0, parent_id: None })
+            async fn list_specs(
+                &self,
+                _: &str,
+                _: Option<&str>,
+            ) -> anyhow::Result<Vec<SpecDescriptor>> {
+                Ok(vec![])
             }
-            async fn update_spec(&self, _: &str, _: Option<&str>, _: Option<&str>, _: Option<&str>) -> anyhow::Result<SpecDescriptor> { anyhow::bail!("stub") }
-            async fn delete_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> { Ok(()) }
-            async fn list_tasks(&self, _: &str, _: Option<&str>, _: Option<&str>) -> anyhow::Result<Vec<TaskDescriptor>> { Ok(vec![]) }
-            async fn create_task(&self, _: &str, _: &str, _: &str, _: &str, _: &[String], _: u32, _: Option<&str>) -> anyhow::Result<TaskDescriptor> { anyhow::bail!("stub") }
-            async fn update_task(&self, _: &str, _: TaskUpdate, _: Option<&str>) -> anyhow::Result<TaskDescriptor> { anyhow::bail!("stub") }
-            async fn delete_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> { Ok(()) }
-            async fn transition_task(&self, _: &str, _: &str, _: Option<&str>) -> anyhow::Result<TaskDescriptor> { anyhow::bail!("stub") }
-            async fn claim_next_task(&self, _: &str, _: &str, _: Option<&str>) -> anyhow::Result<Option<TaskDescriptor>> { Ok(None) }
-            async fn get_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<TaskDescriptor> { anyhow::bail!("stub") }
-            async fn get_project(&self, project_id: &str, _: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
-                Ok(ProjectDescriptor { id: project_id.into(), name: "test".into(), path: String::new(), description: None, tech_stack: None, build_command: None, test_command: None })
+            async fn get_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+                anyhow::bail!("stub")
             }
-            async fn update_project(&self, _: &str, _: ProjectUpdate, _: Option<&str>) -> anyhow::Result<ProjectDescriptor> { anyhow::bail!("stub") }
-            async fn create_log(&self, _: &str, _: &str, _: &str, _: Option<&str>, _: Option<&serde_json::Value>, _: Option<&str>) -> anyhow::Result<serde_json::Value> { Ok(serde_json::json!({})) }
-            async fn list_logs(&self, _: &str, _: Option<&str>, _: Option<u64>, _: Option<&str>) -> anyhow::Result<serde_json::Value> { Ok(serde_json::json!([])) }
-            async fn get_project_stats(&self, _: &str, _: Option<&str>) -> anyhow::Result<serde_json::Value> { Ok(serde_json::json!({})) }
-            async fn list_messages(&self, _: &str, _: &str) -> anyhow::Result<Vec<MessageDescriptor>> { Ok(vec![]) }
-            async fn save_message(&self, _: SaveMessageParams) -> anyhow::Result<()> { Ok(()) }
-            async fn create_session(&self, _: CreateSessionParams) -> anyhow::Result<SessionDescriptor> { anyhow::bail!("stub") }
-            async fn get_active_session(&self, _: &str) -> anyhow::Result<Option<SessionDescriptor>> { Ok(None) }
-            async fn orbit_api_call(&self, _: &str, _: &str, _: Option<&serde_json::Value>, _: Option<&str>) -> anyhow::Result<String> { Ok("{}".into()) }
-            async fn network_api_call(&self, _: &str, _: &str, _: Option<&serde_json::Value>, _: Option<&str>) -> anyhow::Result<String> { Ok("{}".into()) }
+            async fn create_spec(
+                &self,
+                _: &str,
+                title: &str,
+                _: &str,
+                _: u32,
+                _: Option<&str>,
+            ) -> anyhow::Result<SpecDescriptor> {
+                Ok(SpecDescriptor {
+                    id: "s1".into(),
+                    project_id: "p1".into(),
+                    title: title.into(),
+                    content: String::new(),
+                    order: 0,
+                    parent_id: None,
+                })
+            }
+            async fn update_spec(
+                &self,
+                _: &str,
+                _: Option<&str>,
+                _: Option<&str>,
+                _: Option<&str>,
+            ) -> anyhow::Result<SpecDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn delete_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn list_tasks(
+                &self,
+                _: &str,
+                _: Option<&str>,
+                _: Option<&str>,
+            ) -> anyhow::Result<Vec<TaskDescriptor>> {
+                Ok(vec![])
+            }
+            async fn create_task(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: &[String],
+                _: u32,
+                _: Option<&str>,
+            ) -> anyhow::Result<TaskDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn update_task(
+                &self,
+                _: &str,
+                _: TaskUpdate,
+                _: Option<&str>,
+            ) -> anyhow::Result<TaskDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn delete_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn transition_task(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+            ) -> anyhow::Result<TaskDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn claim_next_task(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+            ) -> anyhow::Result<Option<TaskDescriptor>> {
+                Ok(None)
+            }
+            async fn get_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn get_project(
+                &self,
+                project_id: &str,
+                _: Option<&str>,
+            ) -> anyhow::Result<ProjectDescriptor> {
+                Ok(ProjectDescriptor {
+                    id: project_id.into(),
+                    name: "test".into(),
+                    path: String::new(),
+                    description: None,
+                    tech_stack: None,
+                    build_command: None,
+                    test_command: None,
+                })
+            }
+            async fn update_project(
+                &self,
+                _: &str,
+                _: ProjectUpdate,
+                _: Option<&str>,
+            ) -> anyhow::Result<ProjectDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn create_log(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: Option<&str>,
+                _: Option<&serde_json::Value>,
+                _: Option<&str>,
+            ) -> anyhow::Result<serde_json::Value> {
+                Ok(serde_json::json!({}))
+            }
+            async fn list_logs(
+                &self,
+                _: &str,
+                _: Option<&str>,
+                _: Option<u64>,
+                _: Option<&str>,
+            ) -> anyhow::Result<serde_json::Value> {
+                Ok(serde_json::json!([]))
+            }
+            async fn get_project_stats(
+                &self,
+                _: &str,
+                _: Option<&str>,
+            ) -> anyhow::Result<serde_json::Value> {
+                Ok(serde_json::json!({}))
+            }
+            async fn list_messages(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> anyhow::Result<Vec<MessageDescriptor>> {
+                Ok(vec![])
+            }
+            async fn save_message(&self, _: SaveMessageParams) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn create_session(
+                &self,
+                _: CreateSessionParams,
+            ) -> anyhow::Result<SessionDescriptor> {
+                anyhow::bail!("stub")
+            }
+            async fn get_active_session(
+                &self,
+                _: &str,
+            ) -> anyhow::Result<Option<SessionDescriptor>> {
+                Ok(None)
+            }
+            async fn orbit_api_call(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&serde_json::Value>,
+                _: Option<&str>,
+            ) -> anyhow::Result<String> {
+                Ok("{}".into())
+            }
+            async fn network_api_call(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<&serde_json::Value>,
+                _: Option<&str>,
+            ) -> anyhow::Result<String> {
+                Ok("{}".into())
+            }
         }
 
         use crate::domain_tools as aura_tools_domain;
@@ -331,8 +476,8 @@ mod tests {
         use crate::domain_tools::DomainToolExecutor;
 
         let cat = Arc::new(ToolCatalog::new());
-        let resolver = ToolResolver::new(cat, ToolConfig::default())
-            .with_domain_executor(Arc::new(
+        let resolver =
+            ToolResolver::new(cat, ToolConfig::default()).with_domain_executor(Arc::new(
                 DomainToolExecutor::new(Arc::new(stub_domain::StubDomainApi)),
             ));
 
@@ -343,16 +488,25 @@ mod tests {
             std::path::PathBuf::from("/nonexistent/impossible/workspace"),
         );
 
-        let tc = ToolCall::new("create_spec", serde_json::json!({
-            "project_id": "p1",
-            "title": "Hello World",
-            "content": "# Hello"
-        }));
+        let tc = ToolCall::new(
+            "create_spec",
+            serde_json::json!({
+                "project_id": "p1",
+                "title": "Hello World",
+                "content": "# Hello"
+            }),
+        );
         let result = resolver.execute_tool(&ctx, &tc).await;
-        assert!(result.is_ok(), "domain tool should succeed even with inaccessible workspace");
+        assert!(
+            result.is_ok(),
+            "domain tool should succeed even with inaccessible workspace"
+        );
         let tr = result.unwrap();
         let stdout = std::str::from_utf8(&tr.stdout).unwrap();
-        assert!(stdout.contains("\"ok\":true"), "create_spec should return ok:true, got: {stdout}");
+        assert!(
+            stdout.contains("\"ok\":true"),
+            "create_spec should return ok:true, got: {stdout}"
+        );
     }
 
     #[tokio::test]
@@ -360,8 +514,8 @@ mod tests {
         use crate::domain_tools::DomainToolExecutor;
 
         let cat = Arc::new(ToolCatalog::new());
-        let resolver = ToolResolver::new(cat, ToolConfig::default())
-            .with_domain_executor(Arc::new(
+        let resolver =
+            ToolResolver::new(cat, ToolConfig::default()).with_domain_executor(Arc::new(
                 DomainToolExecutor::new(Arc::new(stub_domain::StubDomainApi)),
             ));
 
@@ -373,10 +527,16 @@ mod tests {
 
         let tc = ToolCall::new("get_project", serde_json::json!({"project_id": "p1"}));
         let result = resolver.execute_tool(&ctx, &tc).await;
-        assert!(result.is_ok(), "get_project should succeed even with inaccessible workspace");
+        assert!(
+            result.is_ok(),
+            "get_project should succeed even with inaccessible workspace"
+        );
         let tr = result.unwrap();
         let stdout = std::str::from_utf8(&tr.stdout).unwrap();
-        assert!(stdout.contains("\"ok\":true"), "get_project should return ok:true, got: {stdout}");
+        assert!(
+            stdout.contains("\"ok\":true"),
+            "get_project should return ok:true, got: {stdout}"
+        );
     }
 
     #[tokio::test]

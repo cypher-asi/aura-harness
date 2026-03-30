@@ -1,8 +1,8 @@
 //! HTTP and WebSocket router for the node API.
 
+use crate::automaton_bridge::AutomatonBridge;
 use crate::config::NodeConfig;
 use crate::scheduler::Scheduler;
-use crate::automaton_bridge::AutomatonBridge;
 use crate::session::{handle_ws_connection, WsContext};
 use crate::terminal;
 use aura_core::{AgentId, Transaction, TransactionType};
@@ -71,10 +71,7 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/agents/:agent_id/record", get(scan_record_handler))
         .route("/ws/terminal", get(terminal_ws_handler))
         .route("/stream", get(ws_upgrade_handler))
-        .route(
-            "/stream/automaton/:automaton_id",
-            get(automaton_ws_handler),
-        )
+        .route("/stream/automaton/:automaton_id", get(automaton_ws_handler))
         .route("/automaton/start", post(automaton_start_handler))
         .route("/automaton/list", get(automaton_list_handler))
         .route(
@@ -111,7 +108,18 @@ async fn health_handler() -> impl IntoResponse {
 
 // === Files ===
 
-const IGNORED_DIRS: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".next", "dist", "build", ".svn", ".hg", "vendor"];
+const IGNORED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".next",
+    "dist",
+    "build",
+    ".svn",
+    ".hg",
+    "vendor",
+];
 
 #[derive(Debug, Deserialize)]
 struct ListFilesQuery {
@@ -121,8 +129,12 @@ struct ListFilesQuery {
     depth: usize,
 }
 
-fn default_files_path() -> String { ".".into() }
-fn default_files_depth() -> usize { 3 }
+fn default_files_path() -> String {
+    ".".into()
+}
+fn default_files_depth() -> usize {
+    3
+}
 
 #[derive(Debug, Serialize)]
 struct FileDirEntry {
@@ -133,7 +145,12 @@ struct FileDirEntry {
     children: Option<Vec<FileDirEntry>>,
 }
 
-fn walk_directory(base: &std::path::Path, rel: &std::path::Path, depth: usize, max_depth: usize) -> Vec<FileDirEntry> {
+fn walk_directory(
+    base: &std::path::Path,
+    rel: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+) -> Vec<FileDirEntry> {
     if depth >= max_depth {
         return Vec::new();
     }
@@ -260,7 +277,9 @@ async fn resolve_workspace_handler(
     State(state): State<RouterState>,
     Query(query): Query<ResolveWorkspaceQuery>,
 ) -> impl IntoResponse {
-    let path = state.config.resolve_workspace_for_project(&query.project_name);
+    let path = state
+        .config
+        .resolve_workspace_for_project(&query.project_name);
     Json(serde_json::json!({
         "path": path.to_string_lossy(),
     }))
@@ -446,25 +465,20 @@ async fn automaton_start_handler(
     State(state): State<RouterState>,
     Json(req): Json<AutomatonStartRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let bridge = state
-        .automaton_bridge
-        .as_ref()
-        .ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "automaton controller unavailable"})),
-            )
-        })?;
+    let bridge = state.automaton_bridge.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "automaton controller unavailable"})),
+        )
+    })?;
 
-    let auth_token = req
-        .auth_token
-        .or_else(|| {
-            headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.strip_prefix("Bearer "))
-                .map(String::from)
-        });
+    let auth_token = req.auth_token.or_else(|| {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .map(String::from)
+    });
 
     let workspace_root = req.workspace_root.map(|s| {
         let path = std::path::PathBuf::from(s);
@@ -495,12 +509,7 @@ async fn automaton_start_handler(
             )
             .await
     }
-    .map_err(|e| {
-        (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": e})),
-        )
-    })?;
+    .map_err(|e| (StatusCode::CONFLICT, Json(serde_json::json!({"error": e}))))?;
 
     Ok((
         StatusCode::CREATED,
@@ -561,14 +570,13 @@ async fn automaton_pause_handler(
         )
     })?;
 
-    bridge.pause_by_id(&automaton_id).map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": e})),
-        )
-    })?;
+    bridge
+        .pause_by_id(&automaton_id)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))))?;
 
-    Ok(Json(serde_json::json!({"ok": true, "automaton_id": automaton_id, "status": "paused"})))
+    Ok(Json(
+        serde_json::json!({"ok": true, "automaton_id": automaton_id, "status": "paused"}),
+    ))
 }
 
 /// Stop a running automaton.
@@ -583,14 +591,13 @@ async fn automaton_stop_handler(
         )
     })?;
 
-    bridge.stop_by_id(&automaton_id).map_err(|e| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": e})),
-        )
-    })?;
+    bridge
+        .stop_by_id(&automaton_id)
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))))?;
 
-    Ok(Json(serde_json::json!({"ok": true, "automaton_id": automaton_id, "status": "stopped"})))
+    Ok(Json(
+        serde_json::json!({"ok": true, "automaton_id": automaton_id, "status": "stopped"}),
+    ))
 }
 
 // === WebSocket ===
@@ -637,9 +644,7 @@ async fn automaton_ws_handler(
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(String::from);
 
-    ws.on_upgrade(move |socket| {
-        handle_automaton_ws(socket, automaton_id, state.automaton_bridge)
-    })
+    ws.on_upgrade(move |socket| handle_automaton_ws(socket, automaton_id, state.automaton_bridge))
 }
 
 async fn handle_automaton_ws(
@@ -655,7 +660,9 @@ async fn handle_automaton_ws(
     let bridge = match bridge {
         Some(b) => b,
         None => {
-            let msg = serde_json::json!({"type": "error", "message": "automaton controller unavailable"}).to_string();
+            let msg =
+                serde_json::json!({"type": "error", "message": "automaton controller unavailable"})
+                    .to_string();
             let _: Result<(), _> = ws_tx.send(WsMessage::Text(msg)).await;
             return;
         }

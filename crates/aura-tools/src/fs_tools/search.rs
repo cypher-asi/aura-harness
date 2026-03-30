@@ -2,8 +2,8 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::ToolResult;
 use aura_core::ToolDefinition;
+use aura_core::ToolResult;
 use std::fs;
 use tracing::{debug, instrument};
 
@@ -145,7 +145,10 @@ pub fn search_code(
             continue;
         }
 
-        if entry_path.metadata().map_or(true, |m| m.len() > MAX_SEARCH_FILE_SIZE) {
+        if entry_path
+            .metadata()
+            .map_or(true, |m| m.len() > MAX_SEARCH_FILE_SIZE)
+        {
             continue;
         }
 

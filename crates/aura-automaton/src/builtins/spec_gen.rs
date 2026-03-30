@@ -107,22 +107,18 @@ impl Automaton for SpecGenAutomaton {
                 ))
             })?;
             let canonical_base = workspace_root.canonicalize().map_err(|e| {
-                AutomatonError::InvalidConfig(format!(
-                    "failed to canonicalize workspace root: {e}"
-                ))
+                AutomatonError::InvalidConfig(format!("failed to canonicalize workspace root: {e}"))
             })?;
             if !canonical.starts_with(&canonical_base) {
                 return Err(AutomatonError::InvalidConfig(format!(
                     "requirements_path escapes workspace root: {requirements_path}"
                 )));
             }
-            tokio::fs::read_to_string(&canonical)
-                .await
-                .map_err(|e| {
-                    AutomatonError::InvalidConfig(format!(
-                        "failed to read requirements file {requirements_path}: {e}"
-                    ))
-                })?
+            tokio::fs::read_to_string(&canonical).await.map_err(|e| {
+                AutomatonError::InvalidConfig(format!(
+                    "failed to read requirements file {requirements_path}: {e}"
+                ))
+            })?
         } else {
             return Err(AutomatonError::InvalidConfig(
                 "no requirements_path configured".into(),
@@ -202,7 +198,13 @@ impl Automaton for SpecGenAutomaton {
         for (idx, spec) in specs.iter().enumerate() {
             let saved = self
                 .domain
-                .create_spec(&cfg.project_id, &spec.title, &spec.content, idx as u32, None)
+                .create_spec(
+                    &cfg.project_id,
+                    &spec.title,
+                    &spec.content,
+                    idx as u32,
+                    None,
+                )
                 .await
                 .map_err(|e| AutomatonError::DomainApi(format!("save spec: {e}")))?;
 

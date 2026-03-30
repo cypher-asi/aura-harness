@@ -29,7 +29,10 @@ pub async fn orbit_create_repo(api: &dyn DomainApi, _project_id: &str, input: &V
         "visibility": input["visibility"].as_str().unwrap_or("private"),
     });
     let jwt = str_field(input, "jwt");
-    match api.orbit_api_call("POST", "/api/repos", Some(&body), jwt.as_deref()).await {
+    match api
+        .orbit_api_call("POST", "/api/repos", Some(&body), jwt.as_deref())
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
         Err(e) => domain_err(e),
     }
@@ -57,7 +60,10 @@ pub async fn orbit_create_branch(api: &dyn DomainApi, _project_id: &str, input: 
         "source": input["source"].as_str().unwrap_or("main"),
     });
     let path = format!("/repos/{org_id}/{repo}/branches");
-    match api.orbit_api_call("POST", &path, Some(&body), Some(&jwt)).await {
+    match api
+        .orbit_api_call("POST", &path, Some(&body), Some(&jwt))
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
         Err(e) => domain_err(e),
     }
@@ -105,7 +111,10 @@ pub async fn orbit_create_pr(api: &dyn DomainApi, _project_id: &str, input: &Val
         "description": input["description"].as_str().unwrap_or_default(),
     });
     let path = format!("/repos/{org_id}/{repo}/pulls");
-    match api.orbit_api_call("POST", &path, Some(&body), Some(&jwt)).await {
+    match api
+        .orbit_api_call("POST", &path, Some(&body), Some(&jwt))
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
         Err(e) => domain_err(e),
     }
@@ -137,7 +146,10 @@ pub async fn orbit_merge_pr(api: &dyn DomainApi, _project_id: &str, input: &Valu
         "strategy": input["strategy"].as_str().unwrap_or("merge"),
     });
     let path = format!("/repos/{org_id}/{repo}/pulls/{pr_id}/merge");
-    match api.orbit_api_call("POST", &path, Some(&body), Some(&jwt)).await {
+    match api
+        .orbit_api_call("POST", &path, Some(&body), Some(&jwt))
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
         Err(e) => domain_err(e),
     }
@@ -159,7 +171,8 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
         return domain_err("No workspace context");
     }
 
-    let orbit_host = api.orbit_url()
+    let orbit_host = api
+        .orbit_url()
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     let remote_url = format!("https://x-token:{jwt}@{orbit_host}/{org_id}/{repo}.git");

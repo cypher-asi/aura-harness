@@ -175,6 +175,7 @@ mod key_tests {
         }
     }
 
+    #[allow(deprecated)]
     #[test]
     fn agent_meta_key_roundtrip_all_fields() {
         let agent_id = AgentId::generate();

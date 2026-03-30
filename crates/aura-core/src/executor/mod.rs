@@ -41,7 +41,8 @@ pub trait Executor: Send + Sync {
     /// # Errors
     /// Returns error if execution fails. The caller should convert this
     /// to a Failed effect and record it.
-    async fn execute(&self, ctx: &ExecuteContext, action: &Action) -> Result<Effect, ExecutorError>;
+    async fn execute(&self, ctx: &ExecuteContext, action: &Action)
+        -> Result<Effect, ExecutorError>;
 
     /// Check if this executor can handle the given action.
     fn can_handle(&self, action: &Action) -> bool;
@@ -169,8 +170,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
             }
         }
     } else {
-        let content = if let Ok(tool_result) =
-            serde_json::from_slice::<ToolResult>(&effect.payload)
+        let content = if let Ok(tool_result) = serde_json::from_slice::<ToolResult>(&effect.payload)
         {
             String::from_utf8_lossy(&tool_result.stderr).to_string()
         } else {

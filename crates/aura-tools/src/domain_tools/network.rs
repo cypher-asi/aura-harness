@@ -22,13 +22,20 @@ pub async fn post_to_feed(api: &dyn DomainApi, _project_id: &str, input: &Value)
         "metadata": input["metadata"],
     });
     let jwt = str_field(input, "jwt");
-    match api.network_api_call("POST", "/api/posts", Some(&body), jwt.as_deref()).await {
+    match api
+        .network_api_call("POST", "/api/posts", Some(&body), jwt.as_deref())
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_api_result(&r) })),
         Err(e) => domain_err(e),
     }
 }
 
-pub async fn network_list_projects(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
+pub async fn network_list_projects(
+    api: &dyn DomainApi,
+    _project_id: &str,
+    input: &Value,
+) -> String {
     debug!("domain_tools: network_list_projects");
     let org_id = input["org_id"].as_str().unwrap_or_default();
     let jwt = str_field(input, "jwt").unwrap_or_default();
@@ -55,7 +62,10 @@ pub async fn check_budget(api: &dyn DomainApi, _project_id: &str, input: &Value)
     let org_id = input["org_id"].as_str().unwrap_or_default();
     let jwt = str_field(input, "jwt");
     let path = format!("/api/orgs/{org_id}/budget");
-    match api.network_api_call("GET", &path, None, jwt.as_deref()).await {
+    match api
+        .network_api_call("GET", &path, None, jwt.as_deref())
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_api_result(&r) })),
         Err(e) => domain_err(e),
     }
@@ -72,7 +82,10 @@ pub async fn record_usage(api: &dyn DomainApi, _project_id: &str, input: &Value)
         "model": input["model"].as_str(),
     });
     let jwt = str_field(input, "jwt");
-    match api.network_api_call("POST", "/api/usage", Some(&body), jwt.as_deref()).await {
+    match api
+        .network_api_call("POST", "/api/usage", Some(&body), jwt.as_deref())
+        .await
+    {
         Ok(r) => domain_ok(json!({ "result": parse_api_result(&r) })),
         Err(e) => domain_err(e),
     }

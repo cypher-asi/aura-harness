@@ -62,7 +62,10 @@ impl ModelProvider for StreamingMockProvider {
         self.inner.complete(request).await
     }
 
-    async fn complete_streaming(&self, request: ModelRequest) -> Result<StreamEventStream, ReasonerError> {
+    async fn complete_streaming(
+        &self,
+        request: ModelRequest,
+    ) -> Result<StreamEventStream, ReasonerError> {
         let response = self.inner.complete(request).await?;
 
         let mut events: Vec<anyhow::Result<StreamEvent>> = Vec::new();

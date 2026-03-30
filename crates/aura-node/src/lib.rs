@@ -40,8 +40,8 @@ pub use node::Node;
 pub use aura_protocol::{
     ApprovalResponse, AssistantMessageEnd, AssistantMessageStart, ConversationMessage, ErrorMsg,
     FileOp, FilesChanged, InboundMessage, InstalledTool, OutboundMessage, SessionInit,
-    SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolAuth as ProtocolToolAuth,
-    ToolInfo, ToolResultMsg, ToolUseStart, UserMessage,
+    SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolAuth as ProtocolToolAuth, ToolInfo,
+    ToolResultMsg, ToolUseStart, UserMessage,
 };
 
 #[cfg(feature = "test-support")]

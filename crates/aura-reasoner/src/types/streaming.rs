@@ -1,6 +1,7 @@
 use super::content::{ContentBlock, Role};
 use super::message::Message;
 use super::response::{ModelResponse, ProviderTrace, StopReason, Usage};
+use crate::error::ReasonerError;
 
 /// A streaming event from the model provider.
 ///
@@ -221,12 +222,12 @@ impl StreamAccumulator {
     ///
     /// # Errors
     ///
-    /// Returns error if tool use JSON is invalid.
+    /// Returns `ReasonerError` if the accumulated state is invalid.
     pub fn into_response(
         mut self,
         input_tokens: u64,
         latency_ms: u64,
-    ) -> anyhow::Result<ModelResponse> {
+    ) -> Result<ModelResponse, ReasonerError> {
         let effective_input_tokens = if self.input_tokens > 0 {
             self.input_tokens
         } else {

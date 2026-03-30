@@ -1,6 +1,6 @@
-//! # aura-runtime
+//! # Runtime
 //!
-//! Turn processor and process manager for Aura.
+//! Turn processor and process manager used by `aura-agent`.
 //!
 //! This module provides:
 //! - Multi-step turn processor for agentic loops (Spec-02)
@@ -31,6 +31,26 @@ pub enum RuntimeError {
 
 impl From<aura_reasoner::ReasonerError> for RuntimeError {
     fn from(e: aura_reasoner::ReasonerError) -> Self {
-        RuntimeError::Model(e.to_string())
+        match e {
+            aura_reasoner::ReasonerError::Timeout => {
+                RuntimeError::Timeout("model request timed out".to_string())
+            }
+            aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
+                RuntimeError::Model(format!("insufficient credits: {msg}"))
+            }
+            aura_reasoner::ReasonerError::RateLimited(msg) => {
+                RuntimeError::Model(format!("rate limited: {msg}"))
+            }
+            aura_reasoner::ReasonerError::Api { status, message } => {
+                RuntimeError::Model(format!("api error ({status}): {message}"))
+            }
+            aura_reasoner::ReasonerError::Request(msg) => {
+                RuntimeError::Model(format!("request error: {msg}"))
+            }
+            aura_reasoner::ReasonerError::Parse(msg) => {
+                RuntimeError::Model(format!("parse error: {msg}"))
+            }
+            aura_reasoner::ReasonerError::Internal(msg) => RuntimeError::Model(msg),
+        }
     }
 }

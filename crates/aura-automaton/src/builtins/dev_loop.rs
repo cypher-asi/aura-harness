@@ -211,14 +211,11 @@ impl Automaton for DevLoopAutomaton {
                 .map(|t| t.id.clone())
                 .collect();
 
-            let executable: Vec<&TaskDescriptor> = tasks
-                .iter()
-                .filter(|t| t.status != "done")
-                .collect();
+            let executable: Vec<&TaskDescriptor> =
+                tasks.iter().filter(|t| t.status != "done").collect();
 
-            let sorted = topological_sort(
-                &executable.iter().map(|t| (*t).clone()).collect::<Vec<_>>(),
-            );
+            let sorted =
+                topological_sort(&executable.iter().map(|t| (*t).clone()).collect::<Vec<_>>());
 
             info!(
                 total = tasks.len(),
@@ -273,7 +270,10 @@ impl Automaton for DevLoopAutomaton {
 
         // Check dependencies are satisfied
         if !task.dependencies.is_empty()
-            && !task.dependencies.iter().all(|dep| done_set.contains(dep.as_str()))
+            && !task
+                .dependencies
+                .iter()
+                .all(|dep| done_set.contains(dep.as_str()))
         {
             // Dependencies not met — push to back of queue
             info!(task_id = %task.id, title = %task.title, "Dependencies not yet met, deferring");
@@ -293,7 +293,11 @@ impl Automaton for DevLoopAutomaton {
                 warn!(task_id = %task.id, error = %e, "Failed to transition task to ready");
             }
         }
-        if let Err(e) = self.domain.transition_task(&task.id, "in_progress", None).await {
+        if let Err(e) = self
+            .domain
+            .transition_task(&task.id, "in_progress", None)
+            .await
+        {
             warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
         }
 
@@ -313,16 +317,14 @@ impl Automaton for DevLoopAutomaton {
                     warn!(task_id = %task.id, error = %e, "Failed to sync task done status to backend");
                 }
 
-                let mut done_ids: Vec<String> =
-                    ctx.state.get(STATE_DONE_IDS).unwrap_or_default();
+                let mut done_ids: Vec<String> = ctx.state.get(STATE_DONE_IDS).unwrap_or_default();
                 done_ids.push(task.id.clone());
                 ctx.state.set(STATE_DONE_IDS, &done_ids);
 
                 let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0) + 1;
                 ctx.state.set(STATE_COMPLETED_COUNT, &completed);
 
-                let mut work_log: Vec<String> =
-                    ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
+                let mut work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
                 work_log.push(format!(
                     "Task (completed): {}\nNotes: {}",
                     task.title, exec.notes
@@ -362,8 +364,7 @@ impl Automaton for DevLoopAutomaton {
                 let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0) + 1;
                 ctx.state.set(STATE_FAILED_COUNT, &failed);
 
-                let mut work_log: Vec<String> =
-                    ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
+                let mut work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
                 work_log.push(format!("Task (failed): {}\nReason: {e}", task.title));
                 ctx.state.set(STATE_WORK_LOG, &work_log);
 
@@ -566,11 +567,7 @@ impl DevLoopAutomaton {
             *count += 1;
             info!(task_id = %id, attempt = *count, "Retrying failed task");
 
-            if let Err(e) = self
-                .domain
-                .transition_task(id, "ready", None)
-                .await
-            {
+            if let Err(e) = self.domain.transition_task(id, "ready", None).await {
                 warn!(task_id = %id, error = %e, "Failed to sync retry status to backend");
             }
 
@@ -797,7 +794,10 @@ mod tests {
             },
         );
 
-        assert!(rx.try_recv().is_err(), "invalid JSON snapshot should be ignored");
+        assert!(
+            rx.try_recv().is_err(),
+            "invalid JSON snapshot should be ignored"
+        );
     }
 }
 

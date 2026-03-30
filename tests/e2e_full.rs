@@ -33,9 +33,9 @@ use std::time::Duration;
 
 use aura_core::AgentId;
 use common::{
-    SessionInitOpts, TestServer, WsClient, assert_stop_reason, collect_text,
-    connect_llm_session, find_agent_dir, find_file, http_client,
-    place_file_in_agent_dir, start_mock_server, tool_names_used,
+    assert_stop_reason, collect_text, connect_llm_session, find_agent_dir, find_file, http_client,
+    place_file_in_agent_dir, start_mock_server, tool_names_used, SessionInitOpts, TestServer,
+    WsClient,
 };
 use serde_json::{json, Value};
 
@@ -72,7 +72,10 @@ async fn rest_tx_then_record_visible() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let resp = client
-        .get(format!("{}/agents/{hex}/record?from_seq=1&limit=10", server.base_url()))
+        .get(format!(
+            "{}/agents/{hex}/record?from_seq=1&limit=10",
+            server.base_url()
+        ))
         .send()
         .await
         .unwrap();
@@ -116,7 +119,10 @@ async fn rest_tx_increments_head() {
         .unwrap();
     let data: Value = resp.json().await.unwrap();
     let head = data["head_seq"].as_u64().unwrap();
-    assert!(head >= 1, "head_seq should be >= 1 after TX submissions, got {head}");
+    assert!(
+        head >= 1,
+        "head_seq should be >= 1 after TX submissions, got {head}"
+    );
 }
 
 #[tokio::test]
@@ -175,7 +181,11 @@ async fn rest_record_limit_capped_at_1000() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "large limit should still succeed (capped to 1000)");
+    assert_eq!(
+        resp.status(),
+        200,
+        "large limit should still succeed (capped to 1000)"
+    );
 }
 
 #[tokio::test]
@@ -184,7 +194,13 @@ async fn rest_tx_all_kinds_stored() {
     let client = http_client();
     let agent_id = AgentId::generate();
     let hex = agent_id.to_hex();
-    let kinds = ["user_prompt", "agent_msg", "trigger", "action_result", "system"];
+    let kinds = [
+        "user_prompt",
+        "agent_msg",
+        "trigger",
+        "action_result",
+        "system",
+    ];
 
     for kind in &kinds {
         let payload_b64 = base64::Engine::encode(
@@ -253,7 +269,11 @@ async fn rest_multiple_agents_isolated() {
 
     // Cross-agent head should not mix
     let head_a = client
-        .get(format!("{}/agents/{}/head", server.base_url(), agent_a.to_hex()))
+        .get(format!(
+            "{}/agents/{}/head",
+            server.base_url(),
+            agent_a.to_hex()
+        ))
         .send()
         .await
         .unwrap()
@@ -261,7 +281,11 @@ async fn rest_multiple_agents_isolated() {
         .await
         .unwrap();
     let head_b = client
-        .get(format!("{}/agents/{}/head", server.base_url(), agent_b.to_hex()))
+        .get(format!(
+            "{}/agents/{}/head",
+            server.base_url(),
+            agent_b.to_hex()
+        ))
         .send()
         .await
         .unwrap()
@@ -349,7 +373,8 @@ async fn rest_invalid_kind_returns_400() {
     let server = TestServer::start().await;
     let client = http_client();
     let agent_id = AgentId::generate();
-    let body = json!({ "agent_id": agent_id.to_hex(), "kind": "bogus_kind", "payload": "aGVsbG8=" });
+    let body =
+        json!({ "agent_id": agent_id.to_hex(), "kind": "bogus_kind", "payload": "aGVsbG8=" });
     let resp = client
         .post(format!("{}/tx", server.base_url()))
         .json(&body)
@@ -364,7 +389,8 @@ async fn rest_invalid_base64_returns_400() {
     let server = TestServer::start().await;
     let client = http_client();
     let agent_id = AgentId::generate();
-    let body = json!({ "agent_id": agent_id.to_hex(), "kind": "user_prompt", "payload": "!!!not-b64!!!" });
+    let body =
+        json!({ "agent_id": agent_id.to_hex(), "kind": "user_prompt", "payload": "!!!not-b64!!!" });
     let resp = client
         .post(format!("{}/tx", server.base_url()))
         .json(&body)
@@ -448,7 +474,10 @@ async fn ws_sec_workspace_outside_base_rejected() {
     .await;
 
     let msg = ws.recv_json().await.expect("expected error");
-    assert_eq!(msg["type"], "error", "expected error for outside workspace, got: {msg}");
+    assert_eq!(
+        msg["type"], "error",
+        "expected error for outside workspace, got: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -468,10 +497,7 @@ async fn ws_sec_project_path_relative_rejected() {
     let msg = ws.recv_json().await.expect("expected error");
     assert_eq!(msg["type"], "error");
     assert!(
-        msg["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("absolute"),
+        msg["message"].as_str().unwrap_or("").contains("absolute"),
         "expected 'absolute' in error message, got: {msg}"
     );
 }
@@ -602,7 +628,10 @@ async fn ws_cfg_conversation_messages_accepted() {
     .await;
 
     let ready = ws.expect_session_ready().await;
-    assert!(ready["session_id"].is_string(), "should get valid session_ready");
+    assert!(
+        ready["session_id"].is_string(),
+        "should get valid session_ready"
+    );
 }
 
 #[tokio::test]
@@ -678,7 +707,10 @@ async fn ws_cfg_minimal_session_init() {
 
     let ready = ws.expect_session_ready().await;
     let tools = ready["tools"].as_array().unwrap();
-    assert!(!tools.is_empty(), "should get default tools with minimal init");
+    assert!(
+        !tools.is_empty(),
+        "should get default tools with minimal init"
+    );
 }
 
 #[tokio::test]
@@ -830,7 +862,10 @@ async fn ws_proto_cancel_no_active_turn() {
 
     // We should get either a turn response or at least no crash
     let msg = ws.recv_json_timeout(Duration::from_secs(10)).await;
-    assert!(msg.is_some(), "session should remain alive after idle cancel");
+    assert!(
+        msg.is_some(),
+        "session should remain alive after idle cancel"
+    );
 }
 
 #[tokio::test]
@@ -946,7 +981,10 @@ async fn ws_proto_rapid_init_then_message() {
 
     // Should get a valid response (mock provider)
     let msg = ws.recv_json_timeout(Duration::from_secs(30)).await;
-    assert!(msg.is_some(), "should receive response after rapid init+message");
+    assert!(
+        msg.is_some(),
+        "should receive response after rapid init+message"
+    );
 }
 
 // ============================================================================
@@ -1013,7 +1051,10 @@ async fn jwt_via_bearer_header() {
 
     ws.send_user_message("Say hello in one word.").await;
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
-    assert!(!messages.is_empty(), "should receive messages with bearer auth");
+    assert!(
+        !messages.is_empty(),
+        "should receive messages with bearer auth"
+    );
 
     let has_text = messages.iter().any(|m| m["type"] == "text_delta");
     assert!(has_text, "should get text_delta with bearer auth");
@@ -1037,7 +1078,10 @@ async fn jwt_via_session_init_token() {
     ws.send_user_message("What is 1+1? Reply with just the number.")
         .await;
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
-    assert!(!messages.is_empty(), "should receive messages with token field auth");
+    assert!(
+        !messages.is_empty(),
+        "should receive messages with token field auth"
+    );
 
     let has_text = messages.iter().any(|m| m["type"] == "text_delta");
     assert!(has_text, "should get text_delta with token field auth");
@@ -1060,10 +1104,7 @@ async fn jwt_proxy_mode_llm_turn() {
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
 
     let text = collect_text(&messages);
-    assert!(
-        text.contains('4'),
-        "expected '4' in response, got: {text}"
-    );
+    assert!(text.contains('4'), "expected '4' in response, got: {text}");
     assert_stop_reason(&messages, "end_turn");
 }
 
@@ -1178,11 +1219,7 @@ async fn tool_edit_file_replace_all() {
 
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
 
-    place_file_in_agent_dir(
-        &ws_path,
-        "repeated.txt",
-        "foo bar foo baz foo qux",
-    );
+    place_file_in_agent_dir(&ws_path, "repeated.txt", "foo bar foo baz foo qux");
 
     ws.send_user_message(
         "Use the edit_file tool on 'repeated.txt' with old_text='foo', new_text='REPLACED', and set replace_all to true. Do it now.",
@@ -1375,10 +1412,8 @@ async fn tool_read_nonexistent_errors() {
     std::fs::create_dir_all(&ws_path).unwrap();
 
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
-    ws.send_user_message(
-        "Use the read_file tool to read 'does_not_exist_xyz.txt'. Do it now.",
-    )
-    .await;
+    ws.send_user_message("Use the read_file tool to read 'does_not_exist_xyz.txt'. Do it now.")
+        .await;
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
@@ -1428,10 +1463,8 @@ async fn tool_delete_nonexistent() {
     std::fs::create_dir_all(&ws_path).unwrap();
 
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
-    ws.send_user_message(
-        "Use the delete_file tool to delete 'ghost_file_xyz.txt'. Do it now.",
-    )
-    .await;
+    ws.send_user_message("Use the delete_file tool to delete 'ghost_file_xyz.txt'. Do it now.")
+        .await;
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
@@ -1479,7 +1512,10 @@ async fn tool_read_file_line_range() {
 
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
 
-    let content = (1..=20).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+    let content = (1..=20)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     place_file_in_agent_dir(&ws_path, "numbered.txt", &content);
 
     ws.send_user_message(
@@ -1501,7 +1537,10 @@ async fn tool_read_file_line_range() {
         .iter()
         .filter(|m| m["type"] == "tool_result" && m["name"] == "read_file")
         .collect();
-    assert!(!results.is_empty(), "expected at least one read_file tool_result");
+    assert!(
+        !results.is_empty(),
+        "expected at least one read_file tool_result"
+    );
 }
 
 #[tokio::test]
@@ -1591,10 +1630,8 @@ async fn tool_write_file_overwrite() {
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
     place_file_in_agent_dir(&ws_path, "overwrite.txt", "ORIGINAL");
 
-    ws.send_user_message(
-        "Use the write_file tool to write 'OVERWRITTEN' to 'overwrite.txt'.",
-    )
-    .await;
+    ws.send_user_message("Use the write_file tool to write 'OVERWRITTEN' to 'overwrite.txt'.")
+        .await;
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
@@ -1676,9 +1713,7 @@ async fn stream_message_sequence_order() {
     );
 
     // Should have at least one text_delta between start and end
-    let has_text = messages
-        .iter()
-        .any(|m| m["type"] == "text_delta");
+    let has_text = messages.iter().any(|m| m["type"] == "text_delta");
     assert!(has_text, "should have text_delta between start and end");
 }
 
@@ -1707,7 +1742,10 @@ async fn stream_message_id_matches() {
     let start_id = start["message_id"].as_str().unwrap();
     let end_id = end["message_id"].as_str().unwrap();
     assert!(!start_id.is_empty(), "message_id should be non-empty");
-    assert_eq!(start_id, end_id, "message_id should match between start and end");
+    assert_eq!(
+        start_id, end_id,
+        "message_id should match between start and end"
+    );
 }
 
 #[tokio::test]
@@ -1728,8 +1766,14 @@ async fn stream_usage_fields() {
         .expect("missing assistant_message_end");
 
     let usage = &end["usage"];
-    assert!(usage["input_tokens"].as_u64().unwrap_or(0) > 0, "input_tokens > 0");
-    assert!(usage["output_tokens"].as_u64().unwrap_or(0) > 0, "output_tokens > 0");
+    assert!(
+        usage["input_tokens"].as_u64().unwrap_or(0) > 0,
+        "input_tokens > 0"
+    );
+    assert!(
+        usage["output_tokens"].as_u64().unwrap_or(0) > 0,
+        "output_tokens > 0"
+    );
     assert!(
         usage["model"].is_string() && !usage["model"].as_str().unwrap().is_empty(),
         "model should be non-empty string"
@@ -1761,8 +1805,12 @@ async fn stream_cumulative_tokens_increase() {
         .iter()
         .find(|m| m["type"] == "assistant_message_end")
         .expect("turn 1 missing end");
-    let cum_in_1 = end1["usage"]["cumulative_input_tokens"].as_u64().unwrap_or(0);
-    let cum_out_1 = end1["usage"]["cumulative_output_tokens"].as_u64().unwrap_or(0);
+    let cum_in_1 = end1["usage"]["cumulative_input_tokens"]
+        .as_u64()
+        .unwrap_or(0);
+    let cum_out_1 = end1["usage"]["cumulative_output_tokens"]
+        .as_u64()
+        .unwrap_or(0);
 
     // Turn 2
     ws.send_user_message("Say goodbye.").await;
@@ -1771,8 +1819,12 @@ async fn stream_cumulative_tokens_increase() {
         .iter()
         .find(|m| m["type"] == "assistant_message_end")
         .expect("turn 2 missing end");
-    let cum_in_2 = end2["usage"]["cumulative_input_tokens"].as_u64().unwrap_or(0);
-    let cum_out_2 = end2["usage"]["cumulative_output_tokens"].as_u64().unwrap_or(0);
+    let cum_in_2 = end2["usage"]["cumulative_input_tokens"]
+        .as_u64()
+        .unwrap_or(0);
+    let cum_out_2 = end2["usage"]["cumulative_output_tokens"]
+        .as_u64()
+        .unwrap_or(0);
 
     assert!(
         cum_in_2 >= cum_in_1,
@@ -1802,9 +1854,18 @@ async fn stream_files_changed_structure() {
         .expect("missing end");
 
     let fc = &end["files_changed"];
-    assert!(fc["created"].is_array(), "files_changed.created should be array");
-    assert!(fc["modified"].is_array(), "files_changed.modified should be array");
-    assert!(fc["deleted"].is_array(), "files_changed.deleted should be array");
+    assert!(
+        fc["created"].is_array(),
+        "files_changed.created should be array"
+    );
+    assert!(
+        fc["modified"].is_array(),
+        "files_changed.modified should be array"
+    );
+    assert!(
+        fc["deleted"].is_array(),
+        "files_changed.deleted should be array"
+    );
 }
 
 #[tokio::test]
@@ -2039,7 +2100,8 @@ async fn stress_concurrent_rest_and_ws() {
         &base64::engine::general_purpose::STANDARD,
         "concurrent test",
     );
-    let body = json!({ "agent_id": agent_id.to_hex(), "kind": "user_prompt", "payload": payload_b64 });
+    let body =
+        json!({ "agent_id": agent_id.to_hex(), "kind": "user_prompt", "payload": payload_b64 });
     let resp = client
         .post(format!("{}/tx", server.base_url()))
         .json(&body)
@@ -2091,10 +2153,8 @@ async fn tool_multi_turn_context_preserved() {
     );
 
     // Turn 2: read the same file
-    ws.send_user_message(
-        "Use the read_file tool to read 'memo.txt' and tell me what it says.",
-    )
-    .await;
+    ws.send_user_message("Use the read_file tool to read 'memo.txt' and tell me what it says.")
+        .await;
     let turn2 = ws.collect_turn(Duration::from_secs(120)).await;
     let end = turn2
         .iter()
@@ -2150,10 +2210,8 @@ async fn tool_message_during_turn_rejected() {
 
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
 
-    ws.send_user_message(
-        "Write a 500-word essay about software testing.",
-    )
-    .await;
+    ws.send_user_message("Write a 500-word essay about software testing.")
+        .await;
 
     tokio::time::sleep(Duration::from_millis(300)).await;
     ws.send_user_message("This should be rejected").await;
@@ -2163,8 +2221,5 @@ async fn tool_message_during_turn_rejected() {
     let has_turn_in_progress = messages
         .iter()
         .any(|m| m["type"] == "error" && m["code"] == "turn_in_progress");
-    assert!(
-        has_turn_in_progress,
-        "expected turn_in_progress error"
-    );
+    assert!(has_turn_in_progress, "expected turn_in_progress error");
 }

@@ -26,18 +26,10 @@ pub mod signatures;
 pub mod test;
 pub mod utils;
 
-pub use build::{
-    capture_build_baseline, verify_and_fix_build, BuildVerifyParams, BuildVerifyResult,
-};
-pub use common::{describe_file_ops, summarize_file_ops};
 pub use error_types::{parse_error_references, BuildFixAttemptRecord};
-pub use runner::{parse_test_output, run_build_command, BuildResult, IndividualTestResult};
-pub use signatures::{normalize_error_signature, parse_individual_error_signatures};
-pub use test::{capture_test_baseline, run_and_handle_tests};
-pub use utils::{
-    auto_correct_build_command, build_error_context_snapshot, infer_default_build_command,
-    rollback_to_snapshot, snapshot_modified_files, FileSnapshot,
-};
+pub use runner::run_build_command;
+pub use signatures::normalize_error_signature;
+pub use utils::{auto_correct_build_command, infer_default_build_command};
 
 // ---------------------------------------------------------------------------
 // Configuration

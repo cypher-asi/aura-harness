@@ -592,7 +592,10 @@ mod tests {
 
         let result = policy.check(&proposal);
         assert!(!result.allowed);
-        assert!(result.reason.unwrap().contains("Malformed delegate payload"));
+        assert!(result
+            .reason
+            .unwrap()
+            .contains("Malformed delegate payload"));
     }
 
     #[test]

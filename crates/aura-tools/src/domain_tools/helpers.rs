@@ -20,7 +20,7 @@ where
 }
 
 /// Extract a string field from a JSON value.
-pub fn str_field(input: &Value, key: &str) -> Option<String> {
+pub(crate) fn str_field(input: &Value, key: &str) -> Option<String> {
     input
         .get(key)
         .and_then(|v| v.as_str())
@@ -28,18 +28,18 @@ pub fn str_field(input: &Value, key: &str) -> Option<String> {
 }
 
 /// Extract and parse a required string field into a target type.
-pub fn parse_id(input: &Value, key: &str) -> Result<String, String> {
+pub(crate) fn parse_id(input: &Value, key: &str) -> Result<String, String> {
     str_field(input, key).ok_or_else(|| format!("Missing required field: {key}"))
 }
 
 /// Extract a required string field, returning an error message on absence.
-pub fn require_str(input: &Value, key: &str) -> Result<String, String> {
+pub(crate) fn require_str(input: &Value, key: &str) -> Result<String, String> {
     str_field(input, key).ok_or_else(|| format!("Missing required field: {key}"))
 }
 
 /// Wrap a successful domain tool result into the standard JSON envelope.
 /// Merges `payload` fields into `{"ok": true, ...}`.
-pub fn domain_ok(payload: serde_json::Value) -> String {
+pub(crate) fn domain_ok(payload: serde_json::Value) -> String {
     let mut envelope = serde_json::json!({ "ok": true });
     if let Value::Object(map) = payload {
         if let Value::Object(ref mut env_map) = envelope {
@@ -50,12 +50,12 @@ pub fn domain_ok(payload: serde_json::Value) -> String {
 }
 
 /// Wrap an error into the standard JSON envelope.
-pub fn domain_err(error: impl std::fmt::Display) -> String {
+pub(crate) fn domain_err(error: impl std::fmt::Display) -> String {
     serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
 }
 
 /// Extract an optional list of strings from a JSON array field.
-pub fn str_array(input: &Value, key: &str) -> Vec<String> {
+pub(crate) fn str_array(input: &Value, key: &str) -> Vec<String> {
     input
         .get(key)
         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())

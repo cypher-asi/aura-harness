@@ -254,8 +254,14 @@ mod tests {
         let tools = cat.tools_for_profile(ToolProfile::Agent);
         let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains("read_file"), "agent should include core");
-        assert!(names.contains("list_specs"), "agent should include management");
-        assert!(!names.contains("task_done"), "agent should not include engine");
+        assert!(
+            names.contains("list_specs"),
+            "agent should include management"
+        );
+        assert!(
+            !names.contains("task_done"),
+            "agent should not include engine"
+        );
     }
 
     #[test]
@@ -264,7 +270,10 @@ mod tests {
         let tools = cat.tools_for_profile(ToolProfile::Engine);
         let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains("read_file"), "engine should include core");
-        assert!(names.contains("task_done"), "engine should include engine tools");
+        assert!(
+            names.contains("task_done"),
+            "engine should include engine tools"
+        );
         assert!(
             !names.contains("list_specs"),
             "engine should not include management"

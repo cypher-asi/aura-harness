@@ -2,7 +2,7 @@
 
 use aura_core::{Action, Effect, EffectKind, EffectStatus, ExecuteContext, Executor};
 use std::sync::Arc;
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 
 /// Router that dispatches actions to the appropriate executor.
 pub struct ExecutorRouter {
@@ -32,24 +32,39 @@ impl ExecutorRouter {
     /// Execute an action by finding and invoking the appropriate executor.
     #[instrument(skip(self, ctx, action), fields(action_id = %action.action_id, kind = ?action.kind))]
     pub async fn execute(&self, ctx: &ExecuteContext, action: &Action) -> Effect {
+        let mut matched_count = 0usize;
+        let mut selected: Option<&Arc<dyn Executor>> = None;
         for executor in &self.executors {
             if executor.can_handle(action) {
-                debug!(executor = executor.name(), "Dispatching action to executor");
+                matched_count += 1;
+                if selected.is_none() {
+                    selected = Some(executor);
+                }
+            }
+        }
 
-                match executor.execute(ctx, action).await {
-                    Ok(effect) => {
-                        debug!(?effect.status, "Action executed successfully");
-                        return effect;
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Executor failed");
-                        return Effect::new(
-                            action.action_id,
-                            EffectKind::Agreement,
-                            EffectStatus::Failed,
-                            format!("Executor error: {e}"),
-                        );
-                    }
+        if matched_count > 1 {
+            warn!(
+                matched_count,
+                "Multiple executors can handle action; dispatching first registered match"
+            );
+        }
+
+        if let Some(executor) = selected {
+            debug!(executor = executor.name(), "Dispatching action to executor");
+            match executor.execute(ctx, action).await {
+                Ok(effect) => {
+                    debug!(?effect.status, "Action executed successfully");
+                    return effect;
+                }
+                Err(e) => {
+                    error!(error = %e, "Executor failed");
+                    return Effect::new(
+                        action.action_id,
+                        EffectKind::Agreement,
+                        EffectStatus::Failed,
+                        format!("Executor error: {e}"),
+                    );
                 }
             }
         }

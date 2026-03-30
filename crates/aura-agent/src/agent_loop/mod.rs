@@ -327,7 +327,12 @@ impl LoopState {
         }
     }
 
-    fn build_request(&self, config: &AgentLoopConfig, tools: &[ToolDefinition], iteration: usize) -> ModelRequest {
+    fn build_request(
+        &self,
+        config: &AgentLoopConfig,
+        tools: &[ToolDefinition],
+        iteration: usize,
+    ) -> ModelRequest {
         let (effective_tools, tool_choice) = match (&config.tool_hints, iteration) {
             (Some(hints), 0) if !hints.is_empty() => {
                 let filtered: Vec<_> = tools

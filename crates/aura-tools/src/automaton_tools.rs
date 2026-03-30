@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use aura_core::ToolResult;
 use aura_core::ToolDefinition;
+use aura_core::ToolResult;
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
@@ -320,10 +320,7 @@ pub fn devloop_control_tools(
             controller.clone(),
             project_id.clone(),
         )),
-        Box::new(StopDevLoopTool::new(
-            controller.clone(),
-            project_id.clone(),
-        )),
+        Box::new(StopDevLoopTool::new(controller.clone(), project_id.clone())),
         Box::new(RunTaskTool::new(
             controller,
             project_id,

@@ -14,7 +14,17 @@ pub async fn create_log(api: &dyn DomainApi, project_id: &str, input: &Value) ->
     let agent_id = str_field(input, "project_agent_id");
     let jwt = str_field(input, "jwt");
 
-    match api.create_log(project_id, message, level, agent_id.as_deref(), metadata, jwt.as_deref()).await {
+    match api
+        .create_log(
+            project_id,
+            message,
+            level,
+            agent_id.as_deref(),
+            metadata,
+            jwt.as_deref(),
+        )
+        .await
+    {
         Ok(result) => domain_ok(serde_json::json!({ "result": result })),
         Err(e) => domain_err(e),
     }
@@ -27,7 +37,10 @@ pub async fn list_logs(api: &dyn DomainApi, project_id: &str, input: &Value) -> 
     let limit = input["limit"].as_u64();
     let jwt = str_field(input, "jwt");
 
-    match api.list_logs(project_id, level.as_deref(), limit, jwt.as_deref()).await {
+    match api
+        .list_logs(project_id, level.as_deref(), limit, jwt.as_deref())
+        .await
+    {
         Ok(result) => domain_ok(serde_json::json!({ "result": result })),
         Err(e) => domain_err(e),
     }

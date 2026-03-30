@@ -37,8 +37,8 @@
 
 use crate::worker::process_agent;
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
-use aura_core::{AgentId, AgentStatus};
 use aura_core::Executor;
+use aura_core::{AgentId, AgentStatus};
 use aura_kernel::ExecutorRouter;
 use aura_reasoner::{ModelProvider, ToolDefinition};
 use aura_store::Store;

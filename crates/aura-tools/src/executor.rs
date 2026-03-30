@@ -87,16 +87,24 @@ impl ToolExecutor {
 #[async_trait]
 impl Executor for ToolExecutor {
     #[instrument(skip(self, ctx, action), fields(action_id = %action.action_id))]
-    async fn execute(&self, ctx: &ExecuteContext, action: &Action) -> Result<Effect, aura_core::ExecutorError> {
-        let tool_call: ToolCall = serde_json::from_slice(&action.payload)
-            .map_err(|e| aura_core::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}")))?;
+    async fn execute(
+        &self,
+        ctx: &ExecuteContext,
+        action: &Action,
+    ) -> Result<Effect, aura_core::ExecutorError> {
+        let tool_call: ToolCall = serde_json::from_slice(&action.payload).map_err(|e| {
+            aura_core::ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
+        })?;
 
         debug!(tool = %tool_call.tool, "Executing tool");
 
         match self.execute_tool(ctx, &tool_call).await {
             Ok(result) => {
-                let payload = serde_json::to_vec(&result)
-                    .map_err(|e| aura_core::ExecutorError::ExecutionFailed(format!("Failed to serialize tool result: {e}")))?;
+                let payload = serde_json::to_vec(&result).map_err(|e| {
+                    aura_core::ExecutorError::ExecutionFailed(format!(
+                        "Failed to serialize tool result: {e}"
+                    ))
+                })?;
                 Ok(Effect::new(
                     action.action_id,
                     EffectKind::Agreement,
@@ -107,8 +115,11 @@ impl Executor for ToolExecutor {
             Err(e) => {
                 error!(error = %e, "Tool execution failed");
                 let result = ToolResult::failure(&tool_call.tool, e.to_string());
-                let payload = serde_json::to_vec(&result)
-                    .map_err(|e| aura_core::ExecutorError::ExecutionFailed(format!("Failed to serialize error result: {e}")))?;
+                let payload = serde_json::to_vec(&result).map_err(|e| {
+                    aura_core::ExecutorError::ExecutionFailed(format!(
+                        "Failed to serialize error result: {e}"
+                    ))
+                })?;
                 Ok(Effect::new(
                     action.action_id,
                     EffectKind::Agreement,

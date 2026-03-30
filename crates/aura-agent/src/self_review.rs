@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 /// Normalise a tool-reported path so that backslashes and leading `./`
 /// don't cause mismatches.
-pub fn normalize_tool_path(path: &str) -> String {
+fn normalize_tool_path(path: &str) -> String {
     path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 

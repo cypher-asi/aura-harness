@@ -405,7 +405,10 @@ mod tests {
         ctx.written_paths.insert("test.rs".to_string());
         let tool = make_tool("edit_file", serde_json::json!({"path": "test.rs"}));
         let result = detect_blocked_writes(&tool, &ctx);
-        assert!(result.is_none(), "edit_file should bypass the duplicate-write detector");
+        assert!(
+            result.is_none(),
+            "edit_file should bypass the duplicate-write detector"
+        );
     }
 
     #[test]
@@ -414,7 +417,10 @@ mod tests {
         ctx.written_paths.insert("test.rs".to_string());
         let tool = make_tool("delete_file", serde_json::json!({"path": "test.rs"}));
         let result = detect_blocked_writes(&tool, &ctx);
-        assert!(result.is_none(), "delete_file should bypass the duplicate-write detector");
+        assert!(
+            result.is_none(),
+            "delete_file should bypass the duplicate-write detector"
+        );
     }
 
     #[test]
@@ -491,7 +497,10 @@ mod tests {
         let tool = make_tool("write_file", serde_json::json!({}));
         let result = detect_missing_required_args(&tool).unwrap();
         assert!(result.blocked);
-        assert!(result.recovery_message.unwrap().contains("requires a `path`"));
+        assert!(result
+            .recovery_message
+            .unwrap()
+            .contains("requires a `path`"));
     }
 
     #[test]
@@ -520,7 +529,10 @@ mod tests {
         let tool = make_tool("run_command", serde_json::json!({}));
         let result = detect_missing_required_args(&tool).unwrap();
         assert!(result.blocked);
-        assert!(result.recovery_message.unwrap().contains("requires a `command`"));
+        assert!(result
+            .recovery_message
+            .unwrap()
+            .contains("requires a `command`"));
     }
 
     #[test]

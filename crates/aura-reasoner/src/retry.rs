@@ -9,7 +9,7 @@ use std::time::Duration;
 use tracing::{debug, warn};
 
 /// Configuration for retry and fallback behavior.
-pub struct RetryConfig {
+pub(crate) struct RetryConfig {
     /// Fallback chain of model names (e.g., `["claude-opus-4-6", "claude-sonnet-4-20250514"]`).
     pub fallback_chain: Vec<String>,
     /// Maximum retries per model before falling back.
@@ -40,7 +40,7 @@ impl Default for RetryConfig {
 /// # Errors
 ///
 /// Returns error when all models/retries are exhausted, or on non-retryable errors.
-pub async fn complete_with_retry(
+pub(crate) async fn complete_with_retry(
     provider: &dyn ModelProvider,
     mut request: ModelRequest,
     config: &RetryConfig,
@@ -93,7 +93,9 @@ pub async fn complete_with_retry(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| ReasonerError::Internal("All models in fallback chain exhausted".into())))
+    Err(last_error.unwrap_or_else(|| {
+        ReasonerError::Internal("All models in fallback chain exhausted".into())
+    }))
 }
 
 #[cfg(test)]

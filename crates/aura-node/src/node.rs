@@ -93,16 +93,16 @@ impl Node {
         info!("Scheduler ready");
 
         let automaton_runtime = Arc::new(AutomatonRuntime::new());
-        let automaton_bridge: Option<Arc<AutomatonBridge>> =
-            Some(Arc::new(AutomatonBridge::new(
-                automaton_runtime.clone(),
-                domain_api.clone(),
-                provider.clone(),
-                catalog.clone(),
-                tool_config.clone(),
-            )));
-        let automaton_controller: Option<Arc<dyn AutomatonController>> =
-            automaton_bridge.clone().map(|b| b as Arc<dyn AutomatonController>);
+        let automaton_bridge: Option<Arc<AutomatonBridge>> = Some(Arc::new(AutomatonBridge::new(
+            automaton_runtime.clone(),
+            domain_api.clone(),
+            provider.clone(),
+            catalog.clone(),
+            tool_config.clone(),
+        )));
+        let automaton_controller: Option<Arc<dyn AutomatonController>> = automaton_bridge
+            .clone()
+            .map(|b| b as Arc<dyn AutomatonController>);
         if automaton_controller.is_some() {
             info!("Automaton runtime ready");
         }

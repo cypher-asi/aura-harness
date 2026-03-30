@@ -1,11 +1,9 @@
 //! Tool call execution logic with policy checks and caching.
 
 use super::{ExecutedToolCall, ToolCache, TurnProcessor};
+use aura_core::{decode_tool_effect, ExecuteContext};
+use aura_core::{tool_result_cache_key, Action, AgentId, ToolCall, CACHEABLE_TOOLS};
 use aura_kernel::PermissionLevel;
-use aura_core::{
-    tool_result_cache_key, Action, AgentId, ToolCall, CACHEABLE_TOOLS,
-};
-use aura_core::{ExecuteContext, decode_tool_effect};
 use aura_reasoner::{ContentBlock, Message, ModelProvider, ToolResultContent};
 use aura_store::Store;
 use aura_tools::ToolRegistry;
@@ -115,27 +113,23 @@ where
                     };
                     let ctx = ExecuteContext::new(agent_id, action.action_id, workspace);
 
-                    let effect = match timeout(
-                        tool_timeout,
-                        self.executor.execute(&ctx, &action),
-                    )
-                    .await
-                    {
-                        Ok(effect) => effect,
-                        Err(_) => {
-                            return ExecutedToolCall {
-                                tool_use_id: id,
-                                tool_name: name,
-                                tool_args: input,
-                                result: ToolResultContent::text(format!(
-                                    "Tool execution timed out after {}ms",
-                                    tool_timeout.as_millis()
-                                )),
-                                is_error: true,
-                                metadata: HashMap::default(),
-                            };
-                        }
-                    };
+                    let effect =
+                        match timeout(tool_timeout, self.executor.execute(&ctx, &action)).await {
+                            Ok(effect) => effect,
+                            Err(_) => {
+                                return ExecutedToolCall {
+                                    tool_use_id: id,
+                                    tool_name: name,
+                                    tool_args: input,
+                                    result: ToolResultContent::text(format!(
+                                        "Tool execution timed out after {}ms",
+                                        tool_timeout.as_millis()
+                                    )),
+                                    is_error: true,
+                                    metadata: HashMap::default(),
+                                };
+                            }
+                        };
 
                     let decoded = decode_tool_effect(&effect);
                     ExecutedToolCall {

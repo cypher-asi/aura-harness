@@ -55,7 +55,10 @@ pub async fn create_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -
         Err(_) => 0,
     };
 
-    match api.create_spec(project_id, &title, &content, order, jwt.as_deref()).await {
+    match api
+        .create_spec(project_id, &title, &content, order, jwt.as_deref())
+        .await
+    {
         Ok(s) => domain_ok(json!({ "spec": s })),
         Err(e) => domain_err(e),
     }
@@ -72,7 +75,12 @@ pub async fn update_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) 
     let jwt = str_field(input, "jwt");
 
     match api
-        .update_spec(&spec_id, title.as_deref(), content.as_deref(), jwt.as_deref())
+        .update_spec(
+            &spec_id,
+            title.as_deref(),
+            content.as_deref(),
+            jwt.as_deref(),
+        )
         .await
     {
         Ok(s) => domain_ok(json!({ "spec": s })),

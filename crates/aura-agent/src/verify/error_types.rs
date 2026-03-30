@@ -16,8 +16,7 @@ static METHOD_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("static regex")
 });
 static FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"missing field `(\w+)` in initializer of `(?:\w+::)*(\w+)`")
-        .expect("static regex")
+    Regex::new(r"missing field `(\w+)` in initializer of `(?:\w+::)*(\w+)`").expect("static regex")
 });
 static NO_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"struct `(?:\w+::)*(\w+)` has no field named `(\w+)`").expect("static regex")

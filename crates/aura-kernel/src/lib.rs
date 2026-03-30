@@ -16,7 +16,7 @@
 //! 4. Executes actions via the executor router
 //! 5. Records all inputs/outputs for replay
 //!
-//! The turn processor and process manager have been extracted to `aura-runtime`.
+//! The turn processor and process manager now live under `aura-agent::runtime`.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]

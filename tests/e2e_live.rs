@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use aura_core::AgentId;
 use common::{
-    TestServer, WsClient, assert_stop_reason, collect_text, connect_llm_session, find_agent_dir,
-    find_file, has_tool_error, http_client, place_file_in_agent_dir, tool_names_used,
+    assert_stop_reason, collect_text, connect_llm_session, find_agent_dir, find_file,
+    has_tool_error, http_client, place_file_in_agent_dir, tool_names_used, TestServer, WsClient,
 };
 use serde_json::{json, Value};
 
@@ -50,10 +50,8 @@ async fn test_health() {
 async fn test_submit_tx() {
     let server = TestServer::start().await;
     let agent_id = AgentId::generate();
-    let payload_b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        "Hello from e2e",
-    );
+    let payload_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "Hello from e2e");
     let body = json!({
         "agent_id": agent_id.to_hex(),
         "kind": "user_prompt",
@@ -202,7 +200,10 @@ async fn test_ws_simple_prompt() {
     assert!(output_tokens > 0, "expected non-zero output_tokens");
 
     let text = collect_text(&messages);
-    assert!(text.contains('4'), "expected response to contain '4', got: {text}");
+    assert!(
+        text.contains('4'),
+        "expected response to contain '4', got: {text}"
+    );
 }
 
 // ============================================================================
@@ -228,10 +229,16 @@ async fn test_tool_write_and_read_file() {
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
-    assert!(tools.contains(&"write_file".to_string()), "expected write_file tool use");
+    assert!(
+        tools.contains(&"write_file".to_string()),
+        "expected write_file tool use"
+    );
 
     let file_path = find_file(&ws_path, "hello.txt");
-    assert!(file_path.is_some(), "file was not created on disk anywhere under workspace");
+    assert!(
+        file_path.is_some(),
+        "file was not created on disk anywhere under workspace"
+    );
     let content = std::fs::read_to_string(file_path.unwrap()).unwrap();
     assert!(
         content.contains("Hello E2E Test"),
@@ -251,7 +258,11 @@ async fn test_tool_edit_file() {
     let mut ws = connect_llm_session(&server, &ws_path, &token).await;
 
     // Place file in the agent directory (where tools operate)
-    place_file_in_agent_dir(&ws_path, "target.txt", "The quick brown fox jumps over the lazy dog.");
+    place_file_in_agent_dir(
+        &ws_path,
+        "target.txt",
+        "The quick brown fox jumps over the lazy dog.",
+    );
 
     ws.send_user_message(
         "Use the edit_file tool on the file 'target.txt'. \
@@ -262,7 +273,10 @@ async fn test_tool_edit_file() {
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
-    assert!(tools.contains(&"edit_file".to_string()), "expected edit_file tool use, got: {tools:?}");
+    assert!(
+        tools.contains(&"edit_file".to_string()),
+        "expected edit_file tool use, got: {tools:?}"
+    );
 
     // Verify the edit was applied (LLM may provide slightly different params)
     if let Some(file_path) = find_file(&ws_path, "target.txt") {
@@ -355,7 +369,10 @@ async fn test_tool_stat_file() {
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
-    assert!(tools.contains(&"stat_file".to_string()), "expected stat_file tool use");
+    assert!(
+        tools.contains(&"stat_file".to_string()),
+        "expected stat_file tool use"
+    );
     assert_stop_reason(&messages, "end_turn");
 }
 
@@ -521,10 +538,8 @@ async fn test_ws_multi_turn() {
     );
 
     // Turn 2: read the file from turn 1 (tests context carryover)
-    ws.send_user_message(
-        "Use the read_file tool to read 'memo.txt' and tell me its contents.",
-    )
-    .await;
+    ws.send_user_message("Use the read_file tool to read 'memo.txt' and tell me its contents.")
+        .await;
     let turn2 = ws.collect_turn(Duration::from_secs(120)).await;
 
     // The LLM may read the file or recall from context.
@@ -632,7 +647,10 @@ async fn test_ws_message_during_turn() {
     assert!(
         has_turn_in_progress,
         "expected turn_in_progress error, messages: {:?}",
-        messages.iter().map(|m| m["type"].as_str()).collect::<Vec<_>>()
+        messages
+            .iter()
+            .map(|m| m["type"].as_str())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -659,7 +677,10 @@ async fn test_ws_streaming_message_fields() {
         .find(|m| m["type"] == "assistant_message_start");
     assert!(start.is_some(), "missing assistant_message_start");
     let start_msg_id = start.unwrap()["message_id"].as_str().unwrap_or("");
-    assert!(!start_msg_id.is_empty(), "assistant_message_start should have non-empty message_id");
+    assert!(
+        !start_msg_id.is_empty(),
+        "assistant_message_start should have non-empty message_id"
+    );
 
     let has_text_delta = messages
         .iter()
@@ -683,14 +704,32 @@ async fn test_ws_streaming_message_fields() {
     );
 
     let usage = &end_msg["usage"];
-    assert!(usage["input_tokens"].as_u64().unwrap_or(0) > 0, "input_tokens should be > 0");
-    assert!(usage["output_tokens"].as_u64().unwrap_or(0) > 0, "output_tokens should be > 0");
-    assert!(usage["model"].is_string() && !usage["model"].as_str().unwrap().is_empty(), "model should be non-empty");
+    assert!(
+        usage["input_tokens"].as_u64().unwrap_or(0) > 0,
+        "input_tokens should be > 0"
+    );
+    assert!(
+        usage["output_tokens"].as_u64().unwrap_or(0) > 0,
+        "output_tokens should be > 0"
+    );
+    assert!(
+        usage["model"].is_string() && !usage["model"].as_str().unwrap().is_empty(),
+        "model should be non-empty"
+    );
 
     let fc = &end_msg["files_changed"];
-    assert!(fc["created"].is_array(), "files_changed.created should be an array");
-    assert!(fc["modified"].is_array(), "files_changed.modified should be an array");
-    assert!(fc["deleted"].is_array(), "files_changed.deleted should be an array");
+    assert!(
+        fc["created"].is_array(),
+        "files_changed.created should be an array"
+    );
+    assert!(
+        fc["modified"].is_array(),
+        "files_changed.modified should be an array"
+    );
+    assert!(
+        fc["deleted"].is_array(),
+        "files_changed.deleted should be an array"
+    );
 }
 
 #[tokio::test]
@@ -709,7 +748,10 @@ async fn test_ws_files_changed_after_write() {
 
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
     let tools = tool_names_used(&messages);
-    assert!(tools.contains(&"write_file".to_string()), "expected write_file");
+    assert!(
+        tools.contains(&"write_file".to_string()),
+        "expected write_file"
+    );
 
     // files_changed is populated by the server; it may or may not track tool-based writes
     // depending on implementation. We verify the field structure exists regardless.
@@ -718,7 +760,10 @@ async fn test_ws_files_changed_after_write() {
         .find(|m| m["type"] == "assistant_message_end");
     assert!(end_msg.is_some(), "missing assistant_message_end");
     let fc = &end_msg.unwrap()["files_changed"];
-    assert!(fc["created"].is_array(), "files_changed.created should be an array");
+    assert!(
+        fc["created"].is_array(),
+        "files_changed.created should be an array"
+    );
 }
 
 // ============================================================================
@@ -734,7 +779,11 @@ async fn test_ws_session_init_with_system_prompt() {
     std::fs::create_dir_all(&ws_path).unwrap();
 
     let mut ws = WsClient::connect(&server.ws_url()).await;
-    let tok = if token.is_empty() { None } else { Some(token.as_str()) };
+    let tok = if token.is_empty() {
+        None
+    } else {
+        Some(token.as_str())
+    };
     ws.send_session_init_full(
         &ws_path,
         tok,
@@ -752,7 +801,10 @@ async fn test_ws_session_init_with_system_prompt() {
 
     let text = collect_text(&messages).to_lowercase();
     assert!(
-        text.contains("arrr") || text.contains("ahoy") || text.contains("matey") || text.contains("pirate"),
+        text.contains("arrr")
+            || text.contains("ahoy")
+            || text.contains("matey")
+            || text.contains("pirate"),
         "system_prompt override should influence response, got: {text}"
     );
 }
@@ -767,7 +819,11 @@ async fn test_ws_session_init_with_model() {
 
     let model = aura_core::DEFAULT_MODEL;
     let mut ws = WsClient::connect(&server.ws_url()).await;
-    let tok = if token.is_empty() { None } else { Some(token.as_str()) };
+    let tok = if token.is_empty() {
+        None
+    } else {
+        Some(token.as_str())
+    };
     ws.send_session_init_full(&ws_path, tok, None, Some(model), None, None)
         .await;
     ws.expect_session_ready().await;
@@ -780,10 +836,7 @@ async fn test_ws_session_init_with_model() {
         .find(|m| m["type"] == "assistant_message_end")
         .expect("missing assistant_message_end");
     let used_model = end_msg["usage"]["model"].as_str().unwrap_or("");
-    assert!(
-        !used_model.is_empty(),
-        "usage.model should be non-empty"
-    );
+    assert!(!used_model.is_empty(), "usage.model should be non-empty");
 }
 
 #[tokio::test]
@@ -795,7 +848,11 @@ async fn test_ws_session_init_with_max_turns() {
     std::fs::create_dir_all(&ws_path).unwrap();
 
     let mut ws = WsClient::connect(&server.ws_url()).await;
-    let tok = if token.is_empty() { None } else { Some(token.as_str()) };
+    let tok = if token.is_empty() {
+        None
+    } else {
+        Some(token.as_str())
+    };
     ws.send_session_init_full(&ws_path, tok, None, None, None, Some(1))
         .await;
     ws.expect_session_ready().await;
@@ -813,14 +870,20 @@ async fn test_ws_session_init_with_max_turns() {
     let end_msg = messages
         .iter()
         .find(|m| m["type"] == "assistant_message_end");
-    assert!(end_msg.is_some(), "should get assistant_message_end even with max_turns=1");
+    assert!(
+        end_msg.is_some(),
+        "should get assistant_message_end even with max_turns=1"
+    );
 }
 
 #[tokio::test]
 async fn test_ws_auth_bearer_header() {
     let _ = dotenvy::dotenv();
     let token = require_llm!();
-    assert!(!token.is_empty(), "bearer header test requires a non-empty token");
+    assert!(
+        !token.is_empty(),
+        "bearer header test requires a non-empty token"
+    );
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("bearer-header");
     std::fs::create_dir_all(&ws_path).unwrap();
@@ -832,7 +895,10 @@ async fn test_ws_auth_bearer_header() {
 
     ws.send_user_message("Say hello in one word.").await;
     let messages = ws.collect_turn(Duration::from_secs(120)).await;
-    assert!(!messages.is_empty(), "should receive messages with bearer header auth");
+    assert!(
+        !messages.is_empty(),
+        "should receive messages with bearer header auth"
+    );
 
     let has_text = messages.iter().any(|m| m["type"] == "text_delta");
     assert!(has_text, "should get text_delta with bearer header auth");
@@ -924,7 +990,9 @@ async fn test_tool_run_command_failure() {
     if !cmd_results.is_empty() {
         let result_text = cmd_results[0]["result"].as_str().unwrap_or("");
         assert!(
-            result_text.contains("not find") || result_text.contains("No such") || result_text.contains("cannot"),
+            result_text.contains("not find")
+                || result_text.contains("No such")
+                || result_text.contains("cannot"),
             "failing command should mention error, got: {result_text}"
         );
     }
@@ -1131,7 +1199,9 @@ async fn test_tool_search_code_regex() {
     if !tool_results.is_empty() {
         let result = tool_results[0]["result"].as_str().unwrap_or("");
         assert!(
-            result.contains("add_numbers") || result.contains("subtract_numbers") || result.contains("multiply_numbers"),
+            result.contains("add_numbers")
+                || result.contains("subtract_numbers")
+                || result.contains("multiply_numbers"),
             "regex search should find _numbers functions, got: {result}"
         );
     }

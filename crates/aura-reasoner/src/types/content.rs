@@ -112,4 +112,3 @@ impl ContentBlock {
         matches!(self, Self::ToolUse { .. })
     }
 }
-

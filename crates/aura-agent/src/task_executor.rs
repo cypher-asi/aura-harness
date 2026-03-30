@@ -417,7 +417,9 @@ impl TaskToolExecutor {
                     "ERROR: {}/{} recent tool calls returned errors ({:.0}% failure rate). \
                      The task is likely incomplete. Review the errors, fix the underlying \
                      issue, then try completing again.",
-                    outcomes.errors, outcomes.total, error_ratio * 100.0,
+                    outcomes.errors,
+                    outcomes.total,
+                    error_ratio * 100.0,
                 ));
             }
         }
@@ -533,10 +535,7 @@ impl TaskToolExecutor {
     /// Merge tracked executor state (file ops, notes, follow-ups) into a
     /// [`TaskExecutionResult`] so that downstream consumers see real evidence
     /// instead of hardcoded defaults.
-    pub async fn merge_into_result(
-        &self,
-        exec: &mut crate::agent_runner::TaskExecutionResult,
-    ) {
+    pub async fn merge_into_result(&self, exec: &mut crate::agent_runner::TaskExecutionResult) {
         exec.file_ops = self.tracked_file_ops.lock().await.clone();
         let task_notes = self.notes.lock().await.clone();
         if !task_notes.is_empty() {
@@ -545,7 +544,8 @@ impl TaskToolExecutor {
         exec.follow_up_tasks = self.follow_ups.lock().await.clone();
         exec.no_changes_needed = *self.no_changes_needed.lock().await;
         let phase = self.task_phase.lock().await;
-        exec.reached_implementing = matches!(*phase, crate::planning::TaskPhase::Implementing { .. });
+        exec.reached_implementing =
+            matches!(*phase, crate::planning::TaskPhase::Implementing { .. });
     }
 
     fn emit_text(&self, text: String) {
@@ -718,7 +718,9 @@ mod tests {
     #[tokio::test]
     async fn task_done_allows_no_ops_with_exemption() {
         let executor = make_executor();
-        let calls = [task_done_no_changes("analysis task, no code changes required")];
+        let calls = [task_done_no_changes(
+            "analysis task, no code changes required",
+        )];
         let results = executor.execute(&calls).await;
 
         assert_eq!(results.len(), 1);

@@ -82,7 +82,7 @@ fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
 impl AgentLoop {
     /// Call the model and translate errors.
     ///
-    /// When a [`ModelCallDelegate`](aura_kernel::ModelCallDelegate) is set,
+    /// When a [`ModelCallDelegate`](crate::runtime::ModelCallDelegate) is set,
     /// the call is routed through the delegate (gaining its streaming,
     /// cancellation, and replay). Otherwise falls back to the direct
     /// provider path (streaming when `event_tx` is present, non-streaming

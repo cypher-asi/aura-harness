@@ -148,6 +148,6 @@ impl AgentLoop {
         }
 
         let latency_ms = start.elapsed().as_millis() as u64;
-        accumulator.into_response(0, latency_ms)
+        accumulator.into_response(0, latency_ms).map_err(Into::into)
     }
 }

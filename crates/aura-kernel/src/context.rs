@@ -281,7 +281,10 @@ mod tests {
             create_test_entry(4, agent_id, TransactionType::UserPrompt, "after session"),
         ];
 
-        let ctx = ContextBuilder::new(&tx).unwrap().with_record_window(entries).build();
+        let ctx = ContextBuilder::new(&tx)
+            .unwrap()
+            .with_record_window(entries)
+            .build();
 
         assert_eq!(ctx.record_summaries.len(), 4);
         assert_eq!(ctx.record_summaries[0].tx_kind, "UserPrompt");
@@ -294,7 +297,10 @@ mod tests {
     fn test_context_empty_window() {
         let tx = Transaction::user_prompt(AgentId::generate(), "test");
 
-        let ctx = ContextBuilder::new(&tx).unwrap().with_record_window(vec![]).build();
+        let ctx = ContextBuilder::new(&tx)
+            .unwrap()
+            .with_record_window(vec![])
+            .build();
 
         assert!(ctx.record_summaries.is_empty());
         // Context hash should still be valid
@@ -345,7 +351,10 @@ mod tests {
             create_test_entry(9, agent_id, TransactionType::ProcessComplete, "complete"),
         ];
 
-        let ctx = ContextBuilder::new(&tx).unwrap().with_record_window(entries).build();
+        let ctx = ContextBuilder::new(&tx)
+            .unwrap()
+            .with_record_window(entries)
+            .build();
 
         assert_eq!(ctx.record_summaries.len(), 9);
 
@@ -380,7 +389,10 @@ mod tests {
             })
             .collect();
 
-        let ctx = ContextBuilder::new(&tx).unwrap().with_record_window(entries).build();
+        let ctx = ContextBuilder::new(&tx)
+            .unwrap()
+            .with_record_window(entries)
+            .build();
 
         assert_eq!(ctx.record_summaries.len(), 100);
         assert_eq!(ctx.record_summaries[0].seq, 1);
@@ -442,7 +454,10 @@ mod tests {
             .unwrap()
             .with_record_window(entries.clone())
             .build();
-        let ctx2 = ContextBuilder::new(&tx).unwrap().with_record_window(entries).build();
+        let ctx2 = ContextBuilder::new(&tx)
+            .unwrap()
+            .with_record_window(entries)
+            .build();
 
         assert_eq!(ctx1.context_hash, ctx2.context_hash);
         assert_eq!(ctx1.record_summaries.len(), ctx2.record_summaries.len());

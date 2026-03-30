@@ -39,6 +39,8 @@ enum ApiError {
     Overloaded(String),
     /// 402 — stop immediately, no retry or fallback.
     InsufficientCredits(String),
+    /// 403 / 503 with Cloudflare HTML — retryable (service cold-starting).
+    CloudflareBlock(String),
     /// Any other failure.
     Other(ReasonerError),
 }
@@ -48,9 +50,17 @@ impl From<ApiError> for ReasonerError {
         match e {
             ApiError::Overloaded(msg) => ReasonerError::RateLimited(msg),
             ApiError::InsufficientCredits(msg) => ReasonerError::InsufficientCredits(msg),
+            ApiError::CloudflareBlock(msg) => ReasonerError::Api {
+                status: 403,
+                message: msg,
+            },
             ApiError::Other(e) => e,
         }
     }
+}
+
+fn is_cloudflare_html(body: &str) -> bool {
+    body.contains("<!DOCTYPE html") && (body.contains("cloudflare") || body.contains("oldie"))
 }
 
 // ============================================================================
@@ -126,7 +136,9 @@ impl AnthropicProvider {
             }
             RoutingMode::Proxy => {
                 let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
-                    ApiError::Other(ReasonerError::Internal("Proxy mode requires a JWT auth token".into()))
+                    ApiError::Other(ReasonerError::Internal(
+                        "Proxy mode requires a JWT auth token".into(),
+                    ))
                 })?;
                 req_builder = req_builder
                     .header("authorization", format!("Bearer {token}"))
@@ -148,7 +160,9 @@ impl AnthropicProvider {
 
         let response = req_builder.send().await.map_err(|e| {
             error!(error = %e, "Anthropic API request failed");
-            ApiError::Other(ReasonerError::Request(format!("Anthropic API request failed: {e}")))
+            ApiError::Other(ReasonerError::Request(format!(
+                "Anthropic API request failed: {e}"
+            )))
         })?;
 
         if !response.status().is_success() {
@@ -157,6 +171,12 @@ impl AnthropicProvider {
             let body = response.text().await.unwrap_or_default();
             let body_preview = crate::truncate_body(&body, 200);
             error!(status = %status, body = %body_preview, "Anthropic API error");
+
+            if is_cloudflare_html(&body) {
+                return Err(ApiError::CloudflareBlock(format!(
+                    "LLM proxy returned Cloudflare block ({status}) — service may be cold-starting"
+                )));
+            }
 
             return match status_code {
                 402 => Err(ApiError::InsufficientCredits(format!(
@@ -284,6 +304,15 @@ impl ModelProvider for AnthropicProvider {
                     Err(ApiError::InsufficientCredits(msg)) => {
                         return Err(ReasonerError::InsufficientCredits(msg));
                     }
+                    Err(ApiError::CloudflareBlock(ref msg))
+                        if attempt < self.config.max_retries =>
+                    {
+                        warn!(model = %model, attempt, "Cloudflare block, will retry");
+                        last_err = Some(ReasonerError::Api {
+                            status: 403,
+                            message: msg.clone(),
+                        });
+                    }
                     Err(ApiError::Overloaded(ref msg)) if attempt < self.config.max_retries => {
                         warn!(model = %model, attempt, "API overloaded, will retry");
                         last_err = Some(ReasonerError::RateLimited(msg.clone()));
@@ -298,16 +327,23 @@ impl ModelProvider for AnthropicProvider {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| ReasonerError::Internal("All models in fallback chain exhausted".into())))
+        Err(last_err.unwrap_or_else(|| {
+            ReasonerError::Internal("All models in fallback chain exhausted".into())
+        }))
     }
 
-    /// Stub: always returns true. TODO: implement real health check.
+    /// Health is determined lazily on first request; the Anthropic API does
+    /// not expose a dedicated health-check endpoint, so we optimistically
+    /// return `true` and let request-time errors drive retry/fallback.
     async fn health_check(&self) -> bool {
         true
     }
 
     #[instrument(skip(self, request), fields(model = %request.model))]
-    async fn complete_streaming(&self, request: ModelRequest) -> Result<StreamEventStream, ReasonerError> {
+    async fn complete_streaming(
+        &self,
+        request: ModelRequest,
+    ) -> Result<StreamEventStream, ReasonerError> {
         let models = self.model_chain(&request.model);
         let system = build_system_block(&request.system);
 
@@ -365,6 +401,15 @@ impl ModelProvider for AnthropicProvider {
                     Err(ApiError::InsufficientCredits(msg)) => {
                         return Err(ReasonerError::InsufficientCredits(msg));
                     }
+                    Err(ApiError::CloudflareBlock(ref msg))
+                        if attempt < self.config.max_retries =>
+                    {
+                        warn!(model = %model, attempt, "Streaming Cloudflare block, will retry");
+                        last_err = Some(ReasonerError::Api {
+                            status: 403,
+                            message: msg.clone(),
+                        });
+                    }
                     Err(ApiError::Overloaded(ref msg)) if attempt < self.config.max_retries => {
                         warn!(model = %model, attempt, "Streaming API overloaded, will retry");
                         last_err = Some(ReasonerError::RateLimited(msg.clone()));
@@ -379,7 +424,9 @@ impl ModelProvider for AnthropicProvider {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| ReasonerError::Internal("All models in fallback chain exhausted".into())))
+        Err(last_err.unwrap_or_else(|| {
+            ReasonerError::Internal("All models in fallback chain exhausted".into())
+        }))
     }
 }
 
@@ -539,7 +586,10 @@ mod tests {
         config.fallback_model = Some(aura_core::FALLBACK_MODEL.to_string());
         let provider = AnthropicProvider::new(config).unwrap();
         let chain = provider.model_chain(aura_core::DEFAULT_MODEL);
-        assert_eq!(chain, vec![aura_core::DEFAULT_MODEL, aura_core::FALLBACK_MODEL]);
+        assert_eq!(
+            chain,
+            vec![aura_core::DEFAULT_MODEL, aura_core::FALLBACK_MODEL]
+        );
     }
 
     #[test]
@@ -560,8 +610,23 @@ mod tests {
             ApiError::InsufficientCredits("402 insufficient".into()).into();
         assert!(credits.to_string().contains("402"));
 
-        let other: ReasonerError = ApiError::Other(ReasonerError::Request("network error".into())).into();
+        let cloudflare: ReasonerError = ApiError::CloudflareBlock("Cloudflare block".into()).into();
+        assert!(cloudflare.to_string().contains("Cloudflare"));
+
+        let other: ReasonerError =
+            ApiError::Other(ReasonerError::Request("network error".into())).into();
         assert!(other.to_string().contains("network error"));
+    }
+
+    #[test]
+    fn test_cloudflare_detection() {
+        use super::is_cloudflare_html;
+        assert!(is_cloudflare_html(
+            r#"<!DOCTYPE html><!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US">"#
+        ));
+        assert!(!is_cloudflare_html(
+            r#"{"error":{"type":"authentication_error","message":"invalid api key"}}"#
+        ));
     }
 
     #[test]
