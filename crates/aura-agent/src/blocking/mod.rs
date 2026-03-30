@@ -13,5 +13,3 @@
 
 pub(crate) mod detection;
 pub(crate) mod stall;
-
-pub use detection::BlockingContext;

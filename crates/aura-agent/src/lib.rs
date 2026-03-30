@@ -29,31 +29,31 @@
 #![allow(dead_code)]
 
 mod agent_loop;
-pub mod blocking;
+pub(crate) mod blocking;
 mod budget;
-pub mod build;
-pub mod compaction;
+pub(crate) mod build;
+pub(crate) mod compaction;
 mod constants;
 pub mod events;
-pub use aura_agent_fileops as file_ops;
+pub(crate) use aura_agent_fileops as file_ops;
 pub mod git;
 mod helpers;
 mod kernel_executor;
-pub mod parser;
-pub mod planning;
-pub mod policy;
+pub(crate) mod parser;
+pub(crate) mod planning;
+pub(crate) mod policy;
 pub mod prompts;
 mod read_guard;
 mod sanitize;
-pub mod self_review;
-pub mod shell_parse;
+pub(crate) mod self_review;
+pub(crate) mod shell_parse;
 pub mod types;
-pub use aura_agent_verify as verify;
+pub(crate) use aura_agent_verify as verify;
 
 pub mod agent_runner;
-pub mod message_conversion;
-pub mod task_context;
-pub mod task_executor;
+pub(crate) mod message_conversion;
+pub(crate) mod task_context;
+pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use aura_runtime::ModelCallDelegate;
