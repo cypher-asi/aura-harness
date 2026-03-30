@@ -155,6 +155,8 @@ impl TestServer {
             tool_config,
             catalog,
             domain_api: None,
+            automaton_controller: None,
+            automaton_bridge: None,
         };
         let app = create_router(state);
 

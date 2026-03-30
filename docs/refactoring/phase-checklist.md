@@ -1,0 +1,293 @@
+# Refactoring Phase Checklist
+
+> Generated: 2026-03-30
+>
+> This document defines the CI/test gates every refactoring phase must pass
+> and records pre-refactoring public API snapshots so regressions are visible.
+
+---
+
+## 1. Global Acceptance Criteria
+
+Every phase **must** pass all of the following before it is considered complete:
+
+| # | Gate | Command / Check |
+|---|------|-----------------|
+| G1 | Workspace compiles | `cargo check --workspace --all-targets` |
+| G2 | All tests green | `cargo test --workspace --all-features` |
+| G3 | No clippy warnings | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| G4 | No new cyclic deps | Verify with `cargo metadata` — no new inter-crate cycles introduced |
+| G5 | Spec-01 invariants | **I1 – I4** preserved (see below) |
+
+### Spec-01 Invariants (must hold at all times)
+
+| ID | Invariant |
+|----|-----------|
+| **I1** | **Per-Agent order** — For a given `agent_id`, Record entries are strictly ordered by `seq`. |
+| **I2** | **Atomic commit** — A processed Transaction commits all-or-nothing: RecordEntry + head_seq + inbox dequeue. |
+| **I3** | **No hidden state** — Derived state is either replayable from Record or stored as a derived artifact that is also recorded. |
+| **I4** | **Deterministic kernel input** — The Kernel advances only by consuming Transactions and committing RecordEntries. |
+
+---
+
+## 2. Focused Compile Checks
+
+In addition to the full-workspace gates, run targeted checks on the most
+sensitive crates after each phase:
+
+```bash
+cargo check -p aura-agent   --all-targets
+cargo check -p aura-automaton --all-targets
+cargo check -p aura-node     --all-targets
+cargo check -p aura-kernel   --all-targets
+```
+
+```bash
+cargo test -p aura-agent
+cargo test -p aura-automaton
+cargo test -p aura-node
+cargo test -p aura-kernel
+```
+
+---
+
+## 3. Pre-Refactoring Public API Snapshots
+
+Captured from each crate's `src/lib.rs` before any refactoring begins.
+Any phase that removes or renames a public item must update this section
+and justify the change in its PR description.
+
+### 3.1 `aura-agent`
+
+**Public modules:**
+
+```text
+pub mod blocking
+pub mod build
+pub mod compaction
+pub mod events
+pub mod git
+pub mod parser
+pub mod planning
+pub mod policy
+pub mod prompts
+pub mod self_review
+pub mod shell_parse
+pub mod types
+pub mod agent_runner
+pub mod message_conversion
+pub mod task_context
+pub mod task_executor
+```
+
+**Re-exports:**
+
+```text
+pub use aura_agent_fileops as file_ops;
+pub use aura_agent_verify as verify;
+pub use agent_loop::{AgentLoop, AgentLoopConfig};
+pub use aura_runtime::ModelCallDelegate;
+pub use events::AgentLoopEvent;
+pub use kernel_executor::KernelToolExecutor;
+pub use types::{AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult};
+```
+
+**Public types / traits / functions:**
+
+```text
+pub enum AgentError {
+    Model(String),
+    ToolExecution(String),
+    Timeout(String),
+    BuildFailed(String),
+    Internal(String),
+}
+```
+
+### 3.2 `aura-node`
+
+**Public modules:**
+
+```text
+pub mod automaton_bridge
+pub mod domain
+pub mod jwt_domain
+pub mod protocol
+pub mod router
+pub mod scheduler
+pub mod session
+pub mod terminal
+```
+
+**Re-exports:**
+
+```text
+pub use config::NodeConfig;
+pub use node::Node;
+```
+
+**Public types / traits / functions:**
+
+```text
+pub enum NodeError {
+    Server(#[from] std::io::Error),
+    Store(#[from] anyhow::Error),
+    InvalidAddress(#[from] std::net::AddrParseError),
+}
+```
+
+### 3.3 `aura-tools`
+
+**Public modules:**
+
+```text
+pub mod automaton_tools
+pub mod catalog
+pub mod definitions
+pub mod domain_tools
+pub mod resolver
+```
+
+**Crate-internal modules (pub(crate)):**
+
+```text
+pub(crate) mod fs_tools
+pub(crate) mod registry
+pub(crate) mod tool
+```
+
+**Re-exports:**
+
+```text
+pub use catalog::ToolCatalog;
+pub use error::ToolError;
+pub use executor::ToolExecutor;
+pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
+pub use registry::{DefaultToolRegistry, ToolRegistry};
+pub use resolver::ToolResolver;
+pub use sandbox::Sandbox;
+pub use tool::{Tool, ToolContext};
+```
+
+**Public types / traits / functions:**
+
+```text
+pub struct ToolConfig {
+    pub enable_fs: bool,
+    pub enable_commands: bool,
+    pub command_allowlist: Vec<String>,
+    pub max_read_bytes: usize,
+    pub sync_threshold_ms: u64,
+    pub max_async_timeout_ms: u64,
+}
+
+impl Default for ToolConfig { .. }
+```
+
+### 3.4 `aura-runtime`
+
+**Public modules:**
+
+```text
+pub mod process_manager
+```
+
+**Re-exports:**
+
+```text
+pub use process_manager::{ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess};
+pub use turn_processor::{
+    ExecutedToolCall, ModelCallDelegate, StepConfig, StepResult, StreamCallback,
+    StreamCallbackEvent, ToolCache, TurnConfig, TurnEntry, TurnProcessor, TurnResult,
+};
+```
+
+**Public types / traits / functions:**
+
+```text
+pub enum RuntimeError {
+    Model(String),
+    ToolExecution(String),
+    Timeout(String),
+    Store(String),
+    Internal(String),
+}
+```
+
+---
+
+## 4. Phase-by-Phase Checklist
+
+Mark each gate as you go. A phase is **not done** until every box is checked.
+
+### Phase 0 — Baseline verified green
+
+- [ ] `cargo check --workspace --all-targets` passes
+- [ ] `cargo test --workspace --all-features` passes
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [ ] Focused checks on `aura-agent`, `aura-automaton`, `aura-node`, `aura-kernel` pass
+- [ ] API snapshots above match current state
+
+### Phase 1 — AgentRunner boundary fix
+
+- [ ] `AgentRunner` moved or re-bounded as designed
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+- [ ] No public API removals without snapshot update
+
+### Phase 2 — Tighten `aura-agent` API
+
+- [ ] Non-essential `pub mod` items made `pub(crate)` or removed
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+- [ ] Snapshot updated to reflect narrowed API
+
+### Phase 3 — Extract `aura-agent-fileops` wiring
+
+- [ ] File-ops integration verified end-to-end
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 4 — Wire `AgentLoop` into runtime
+
+- [ ] `AgentLoop` is callable from `aura-runtime` turn processor
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 5 — Consolidate error types
+
+- [ ] `AgentError` / `RuntimeError` unified or bridged cleanly
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 6 — Process manager integration
+
+- [ ] Async processes tracked end-to-end through agent loop
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 7 — Session lifecycle cleanup
+
+- [ ] `aura-node` session module simplified
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 8 — Automaton bridge stabilization
+
+- [ ] `automaton_bridge` API finalized
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 9 — Tool resolver unification
+
+- [ ] Single `ToolResolver` path for built-in + domain tools
+- [ ] G1–G5 pass
+- [ ] Focused crate checks pass
+
+### Phase 10 — Final cleanup & documentation
+
+- [ ] Dead code removed
+- [ ] `#![allow(dead_code)]` annotations removed where possible
+- [ ] G1–G5 pass
+- [ ] All snapshots updated to reflect final public API
+- [ ] PROGRESS.md updated
