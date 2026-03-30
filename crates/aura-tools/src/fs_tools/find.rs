@@ -52,7 +52,11 @@ pub fn fs_find(
                 return;
             }
         };
-        for entry in entries.flatten() {
+        for entry in entries.filter_map(|entry| {
+            entry
+                .map_err(|e| warn!(path = %dir.display(), error = %e, "skipping unreadable directory entry"))
+                .ok()
+        }) {
             if results.len() >= max {
                 return;
             }

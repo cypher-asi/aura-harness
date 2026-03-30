@@ -114,7 +114,8 @@ pub fn walk_and_collect_filtered(
     max_bytes: usize,
     included: &mut std::collections::HashSet<String>,
 ) -> Result<(), FileOpsError> {
-    let entries = std::fs::read_dir(dir).map_err(|e| FileOpsError::Io(e.to_string()))?;
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| FileOpsError::Io(format!("{}: {e}", dir.display())))?;
     let mut entries: Vec<_> = entries.filter_map(std::result::Result::ok).collect();
     entries.sort_by_key(std::fs::DirEntry::file_name);
 
@@ -148,8 +149,8 @@ pub fn walk_and_collect_filtered(
                 continue;
             }
 
-            let content =
-                std::fs::read_to_string(&path).map_err(|e| FileOpsError::Io(e.to_string()))?;
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| FileOpsError::Io(format!("{}: {e}", path.display())))?;
             let section = format!("--- {rel} ---\n{content}\n\n");
             if *current_size + section.len() > max_bytes {
                 break;

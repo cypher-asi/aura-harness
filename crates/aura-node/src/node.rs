@@ -16,6 +16,7 @@ use aura_tools::{ToolCatalog, ToolConfig, ToolResolver};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use anyhow::Context;
 use tracing::{info, warn};
 
 /// The Aura Node runtime.
@@ -44,13 +45,17 @@ impl Node {
         info!("Starting Aura Node");
         info!(data_dir = ?self.config.data_dir, "Data directory");
 
-        tokio::fs::create_dir_all(self.config.db_path()).await?;
-        tokio::fs::create_dir_all(self.config.workspaces_path()).await?;
+        tokio::fs::create_dir_all(self.config.db_path())
+            .await
+            .context("creating database directory")?;
+        tokio::fs::create_dir_all(self.config.workspaces_path())
+            .await
+            .context("creating workspaces directory")?;
 
-        let store = Arc::new(RocksStore::open(
-            self.config.db_path(),
-            self.config.sync_writes,
-        )?);
+        let store = Arc::new(
+            RocksStore::open(self.config.db_path(), self.config.sync_writes)
+                .context("opening RocksDB store")?,
+        );
         info!("Store opened");
 
         let tool_config = ToolConfig {
@@ -120,11 +125,19 @@ impl Node {
         };
         let app = create_router(state);
 
-        let addr: SocketAddr = self.config.bind_addr.parse()?;
-        let listener = TcpListener::bind(addr).await?;
+        let addr: SocketAddr = self
+            .config
+            .bind_addr
+            .parse()
+            .context("parsing bind address")?;
+        let listener = TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("binding TCP listener on {addr}"))?;
         info!(%addr, "HTTP server listening");
 
-        axum::serve(listener, app).await?;
+        axum::serve(listener, app)
+            .await
+            .context("running HTTP server")?;
 
         Ok(())
     }

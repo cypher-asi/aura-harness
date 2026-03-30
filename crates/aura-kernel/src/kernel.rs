@@ -157,7 +157,12 @@ where
 
         // 2. Build context
         let context = ContextBuilder::new(&tx)
-            .map_err(|e| crate::KernelError::Serialization(e.to_string()))?
+            .map_err(|e| {
+                crate::KernelError::Serialization(format!(
+                    "serializing transaction {}: {e}",
+                    tx.hash
+                ))
+            })?
             .with_record_window(window)
             .build();
 

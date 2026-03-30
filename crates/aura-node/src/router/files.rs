@@ -49,6 +49,7 @@ fn walk_directory(
     }
     let abs = base.join(rel);
     let Ok(read_dir) = std::fs::read_dir(&abs) else {
+        warn!(path = %abs.display(), "failed to read directory during walk");
         return Vec::new();
     };
     let mut dirs: Vec<(String, std::path::PathBuf)> = Vec::new();

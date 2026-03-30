@@ -64,7 +64,10 @@ pub fn summarize_file_ops(ops: &[FileOp]) -> String {
 /// Build a codebase snapshot for fix prompts using the `read_relevant_files`
 /// budget-based approach.
 pub fn build_codebase_snapshot(project_folder: &str, budget: usize) -> String {
-    file_ops::read_relevant_files(project_folder, budget).unwrap_or_default()
+    file_ops::read_relevant_files(project_folder, budget).unwrap_or_else(|e| {
+        warn!(folder = %project_folder, error = %e, "failed to read codebase snapshot");
+        String::new()
+    })
 }
 
 /// Parse an LLM fix response, apply file operations to disk, and record the

@@ -18,11 +18,11 @@ pub async fn apply_file_ops(base_path: &Path, ops: &[FileOp]) -> Result<(), File
                 if let Some(parent) = full_path.parent() {
                     tokio::fs::create_dir_all(parent)
                         .await
-                        .map_err(|e| FileOpsError::Io(e.to_string()))?;
+                        .map_err(|e| FileOpsError::Io(format!("{}: {e}", parent.display())))?;
                 }
                 tokio::fs::write(&full_path, content).await.map_err(|e| {
                     error!(path = %path, error = %e, "failed to write file");
-                    FileOpsError::Io(e.to_string())
+                    FileOpsError::Io(format!("{}: {e}", full_path.display()))
                 })?;
                 info!(path = %path, bytes = content.len(), "wrote file");
             }
@@ -35,7 +35,7 @@ pub async fn apply_file_ops(base_path: &Path, ops: &[FileOp]) -> Result<(), File
                 if full_path.exists() {
                     tokio::fs::remove_file(&full_path).await.map_err(|e| {
                         error!(path = %path, error = %e, "failed to delete file");
-                        FileOpsError::Io(e.to_string())
+                        FileOpsError::Io(format!("{}: {e}", full_path.display()))
                     })?;
                     info!(path = %path, "deleted file");
                 }
@@ -113,7 +113,7 @@ async fn apply_search_replace(
         .await
         .map_err(|e| {
             error!(path = %path, error = %e, "failed to write after search-replace");
-            FileOpsError::Io(e.to_string())
+            FileOpsError::Io(format!("{}: {e}", full_path.display()))
         })?;
     info!(
         path = %path,

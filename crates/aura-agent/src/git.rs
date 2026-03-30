@@ -168,7 +168,15 @@ pub async fn list_unpushed_commits(
                 })
             })
             .collect(),
-        _ => Vec::new(),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            debug!(%remote, %branch, %stderr, "no unpushed commits or ref not found");
+            Vec::new()
+        }
+        Err(e) => {
+            tracing::warn!(%remote, %branch, error = %e, "failed to list unpushed commits");
+            Vec::new()
+        }
     }
 }
 

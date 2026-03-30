@@ -306,8 +306,8 @@ impl WorkspaceCache {
 /// Returns 1 (single crate) if no workspace is detected.
 pub fn count_workspace_members(project_root: &str) -> Result<usize, FileOpsError> {
     let root_cargo = Path::new(project_root).join("Cargo.toml");
-    let content =
-        std::fs::read_to_string(&root_cargo).map_err(|e| FileOpsError::Io(e.to_string()))?;
+    let content = std::fs::read_to_string(&root_cargo)
+        .map_err(|e| FileOpsError::Io(format!("{}: {e}", root_cargo.display())))?;
     let members = parse_workspace_members(&content);
     if members.is_empty() {
         Ok(1)
