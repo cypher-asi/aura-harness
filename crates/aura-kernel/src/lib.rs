@@ -46,4 +46,4 @@ pub enum KernelError {
 }
 
 // Re-export ToolResultContent for convenience
-pub use aura_reasoner::ToolResultContent;
+pub use aura_core::ToolResultContent;

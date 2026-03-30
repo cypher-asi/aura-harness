@@ -8,7 +8,7 @@
 use crate::definitions;
 use crate::tool::builtin_tools;
 use crate::ToolConfig;
-use aura_reasoner::ToolDefinition;
+use aura_core::ToolDefinition;
 use std::collections::HashSet;
 use tracing::debug;
 

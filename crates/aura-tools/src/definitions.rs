@@ -8,7 +8,7 @@
 //! tool set composition to the caller (aura-cli, aura-node, or a shared session
 //! crate) and keeping only individual tool schemas here.
 
-use aura_reasoner::ToolDefinition;
+use aura_core::ToolDefinition;
 use std::sync::{Arc, LazyLock};
 
 static AGENT_TOOLS: LazyLock<Arc<[ToolDefinition]>> =

@@ -21,10 +21,11 @@ pub mod types;
 pub use error::{AuraError, Result};
 pub use ids::{ActionId, AgentId, Hash, ProcessId, TxId};
 pub use types::{
-    Action, ActionKind, ActionResultPayload, AgentStatus, Decision, Effect, EffectKind,
-    EffectStatus, Identity, InstalledToolDefinition, ProcessPending, Proposal, ProposalSet,
-    RecordEntry, RejectedProposal, ToolAuth, ToolCall, ToolCallContext, ToolDecision,
-    ToolExecution, ToolProposal, ToolResult, Trace, Transaction, TransactionType,
+    Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,
+    EffectKind, EffectStatus, Identity, InstalledToolDefinition, ProcessPending, Proposal,
+    ProposalSet, RecordEntry, RejectedProposal, ToolAuth, ToolCall, ToolCallContext, ToolDecision,
+    ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent, Trace, Transaction,
+    TransactionType,
 };
 
 // ---------------------------------------------------------------------------

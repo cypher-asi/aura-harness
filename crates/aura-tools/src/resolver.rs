@@ -14,7 +14,7 @@ use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
 use aura_executor::{ExecuteContext, Executor};
-use aura_reasoner::ToolDefinition;
+use aura_core::ToolDefinition;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub use aura_core::ToolResultContent;
+
 // ============================================================================
 // Role and Content Types
 // ============================================================================
@@ -111,48 +113,3 @@ impl ContentBlock {
     }
 }
 
-// ============================================================================
-// Tool Result Content
-// ============================================================================
-
-/// Content of a tool result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ToolResultContent {
-    /// Plain text result
-    Text(String),
-    /// Structured JSON result
-    Json(serde_json::Value),
-}
-
-impl ToolResultContent {
-    /// Create text content.
-    #[must_use]
-    pub fn text(s: impl Into<String>) -> Self {
-        Self::Text(s.into())
-    }
-
-    /// Create JSON content.
-    #[must_use]
-    pub const fn json(value: serde_json::Value) -> Self {
-        Self::Json(value)
-    }
-}
-
-impl From<String> for ToolResultContent {
-    fn from(s: String) -> Self {
-        Self::Text(s)
-    }
-}
-
-impl From<&str> for ToolResultContent {
-    fn from(s: &str) -> Self {
-        Self::Text(s.to_string())
-    }
-}
-
-impl From<serde_json::Value> for ToolResultContent {
-    fn from(v: serde_json::Value) -> Self {
-        Self::Json(v)
-    }
-}

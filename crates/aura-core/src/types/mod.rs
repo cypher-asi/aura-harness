@@ -7,6 +7,7 @@ mod effect;
 mod identity;
 mod process;
 mod proposal;
+mod reasoner_types;
 mod record;
 mod status;
 mod tool;
@@ -23,6 +24,7 @@ pub use tool::{
     InstalledToolDefinition, ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolExecution,
     ToolProposal, ToolResult,
 };
+pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
 pub use transaction::{Transaction, TransactionType};
 
 #[allow(deprecated)]

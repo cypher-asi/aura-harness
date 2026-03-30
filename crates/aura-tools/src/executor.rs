@@ -240,8 +240,8 @@ mod tests {
             fn name(&self) -> &str {
                 "custom_tool"
             }
-            fn definition(&self) -> aura_reasoner::ToolDefinition {
-                aura_reasoner::ToolDefinition::new(
+            fn definition(&self) -> aura_core::ToolDefinition {
+                aura_core::ToolDefinition::new(
                     "custom_tool",
                     "A test tool",
                     serde_json::json!({"type": "object"}),

@@ -9,7 +9,7 @@ use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::ToolResult;
-use aura_reasoner::ToolDefinition;
+use aura_core::ToolDefinition;
 
 /// Context provided to tools during execution.
 pub struct ToolContext {

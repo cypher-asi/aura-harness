@@ -3,7 +3,7 @@
 //! Provides tool definitions and schemas for the model to use.
 
 use crate::tool::{builtin_tools, read_only_builtin_tools};
-use aura_reasoner::ToolDefinition;
+use aura_core::ToolDefinition;
 use std::collections::HashMap;
 use tracing::{debug, instrument};
 

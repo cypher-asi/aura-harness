@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aura_core::ToolResult;
-use aura_reasoner::ToolDefinition;
+use aura_core::ToolDefinition;
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
