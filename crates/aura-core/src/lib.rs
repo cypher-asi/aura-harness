@@ -16,6 +16,7 @@ pub mod error;
 pub mod hash;
 pub mod ids;
 pub(crate) mod serde_helpers;
+pub mod time;
 pub mod types;
 
 pub use error::{AuraError, Result};

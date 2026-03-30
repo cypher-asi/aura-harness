@@ -1,10 +1,11 @@
 use super::{
     extract_shell_command, forward_agent_event, info, warn, AgenticTaskParams, Arc, AutomatonError,
-    AutomatonEvent, DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap, NoOpToolExecutor,
-    ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor, TaskExecutionResult,
-    TaskInfo, TaskTrackingConfig, TickContext, ToolProfile, MAX_RETRIES_PER_TASK, STATE_FAILED_IDS,
-    STATE_FAILURE_REASONS, STATE_RETRY_COUNTS, STATE_TASK_QUEUE, STATE_WORK_LOG,
+    AutomatonEvent, DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap, ProjectInfo, SessionInfo,
+    ShellTaskParams, SpecInfo, TaskDescriptor, TaskExecutionResult, TaskInfo, TaskTrackingConfig,
+    TickContext, ToolProfile, MAX_RETRIES_PER_TASK, STATE_FAILED_IDS, STATE_FAILURE_REASONS,
+    STATE_RETRY_COUNTS, STATE_TASK_QUEUE, STATE_WORK_LOG,
 };
+use crate::builtins::noop_executor::NoOpExecutor;
 
 impl DevLoopAutomaton {
     pub(super) async fn execute_task(
@@ -125,7 +126,7 @@ impl DevLoopAutomaton {
         let inner_executor: Arc<dyn aura_agent::types::AgentToolExecutor> = self
             .tool_executor
             .clone()
-            .unwrap_or_else(|| Arc::new(NoOpToolExecutor));
+            .unwrap_or_else(|| Arc::new(NoOpExecutor));
 
         let tracking = TaskTrackingConfig {
             inner_executor,

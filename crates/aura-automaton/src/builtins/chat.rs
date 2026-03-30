@@ -14,6 +14,7 @@ use aura_reasoner::{Message, ModelProvider};
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::{DomainApi, MessageDescriptor, SaveMessageParams};
 
+use super::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
@@ -190,7 +191,7 @@ impl ChatAutomaton {
         });
 
         let cancel = ctx.cancellation_token().clone();
-        let executor = NoOpChatExecutor;
+        let executor = NoOpExecutor;
 
         let result = self
             .runner
@@ -270,22 +271,3 @@ fn convert_descriptors_to_messages(descriptors: &[MessageDescriptor]) -> Vec<Mes
         .collect()
 }
 
-struct NoOpChatExecutor;
-
-#[async_trait::async_trait]
-impl aura_agent::types::AgentToolExecutor for NoOpChatExecutor {
-    async fn execute(
-        &self,
-        tool_calls: &[aura_agent::types::ToolCallInfo],
-    ) -> Vec<aura_agent::types::ToolCallResult> {
-        tool_calls
-            .iter()
-            .map(|tc| {
-                aura_agent::types::ToolCallResult::error(
-                    &tc.id,
-                    "tool execution not configured for this chat session",
-                )
-            })
-            .collect()
-    }
-}

@@ -221,19 +221,3 @@ pub fn forward_agent_event(
     let _ = tx.send(automaton_event);
 }
 
-struct NoOpToolExecutor;
-
-#[async_trait::async_trait]
-impl aura_agent::types::AgentToolExecutor for NoOpToolExecutor {
-    async fn execute(
-        &self,
-        tool_calls: &[aura_agent::types::ToolCallInfo],
-    ) -> Vec<aura_agent::types::ToolCallResult> {
-        tool_calls
-            .iter()
-            .map(|tc| {
-                aura_agent::types::ToolCallResult::error(&tc.id, "no tool executor configured")
-            })
-            .collect()
-    }
-}

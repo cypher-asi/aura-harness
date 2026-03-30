@@ -15,13 +15,13 @@ use aura_reasoner::ModelProvider;
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::DomainApi;
 
+use super::dev_loop::commit_and_push;
+use super::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
 use crate::runtime::{Automaton, TickOutcome};
 use crate::schedule::Schedule;
-
-use super::dev_loop::commit_and_push;
 
 pub struct TaskRunAutomaton {
     domain: Arc<dyn DomainApi>,
@@ -349,19 +349,3 @@ impl TaskRunAutomaton {
     }
 }
 
-struct NoOpExecutor;
-
-#[async_trait::async_trait]
-impl aura_agent::types::AgentToolExecutor for NoOpExecutor {
-    async fn execute(
-        &self,
-        tool_calls: &[aura_agent::types::ToolCallInfo],
-    ) -> Vec<aura_agent::types::ToolCallResult> {
-        tool_calls
-            .iter()
-            .map(|tc| {
-                aura_agent::types::ToolCallResult::error(&tc.id, "no tool executor configured")
-            })
-            .collect()
-    }
-}

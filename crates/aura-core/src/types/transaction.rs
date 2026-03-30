@@ -60,12 +60,8 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Get current timestamp in milliseconds.
     fn now_ms() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0)
+        crate::time::now_ms()
     }
 
     /// Create a new transaction with explicit hash (for replay/import).

@@ -22,10 +22,7 @@ impl ProcessPending {
     /// Create a new pending process payload.
     #[must_use]
     pub fn new(process_id: ProcessId, command: impl Into<String>) -> Self {
-        let started_at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+        let started_at_ms = crate::time::now_ms();
 
         Self {
             process_id,
