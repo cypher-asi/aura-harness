@@ -4,14 +4,14 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use super::api::{DomainApi, ProjectUpdate};
-use super::helpers::str_field;
+use super::helpers::{domain_err, domain_ok, str_field};
 
 pub async fn get_project(api: &dyn DomainApi, project_id: &str, input: &Value) -> String {
     debug!(project_id, "domain_tools: get_project");
     let jwt = str_field(input, "jwt");
     match api.get_project(project_id, jwt.as_deref()).await {
-        Ok(p) => json!({ "ok": true, "project": p }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(p) => domain_ok(json!({ "project": p })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -26,7 +26,7 @@ pub async fn update_project(api: &dyn DomainApi, project_id: &str, input: &Value
     };
     let jwt = str_field(input, "jwt");
     match api.update_project(project_id, updates, jwt.as_deref()).await {
-        Ok(p) => json!({ "ok": true, "project": p }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(p) => domain_ok(json!({ "project": p })),
+        Err(e) => domain_err(e),
     }
 }

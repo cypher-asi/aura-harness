@@ -1,10 +1,10 @@
 //! Storage domain tool handlers (logs, project stats).
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tracing::debug;
 
 use super::api::DomainApi;
-use super::helpers::str_field;
+use super::helpers::{domain_err, domain_ok, str_field};
 
 pub async fn create_log(api: &dyn DomainApi, project_id: &str, input: &Value) -> String {
     debug!(project_id, "domain_tools: create_log");
@@ -15,8 +15,8 @@ pub async fn create_log(api: &dyn DomainApi, project_id: &str, input: &Value) ->
     let jwt = str_field(input, "jwt");
 
     match api.create_log(project_id, message, level, agent_id.as_deref(), metadata, jwt.as_deref()).await {
-        Ok(result) => json!({ "ok": true, "result": result }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(result) => domain_ok(serde_json::json!({ "result": result })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -28,8 +28,8 @@ pub async fn list_logs(api: &dyn DomainApi, project_id: &str, input: &Value) -> 
     let jwt = str_field(input, "jwt");
 
     match api.list_logs(project_id, level.as_deref(), limit, jwt.as_deref()).await {
-        Ok(result) => json!({ "ok": true, "result": result }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(result) => domain_ok(serde_json::json!({ "result": result })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -39,7 +39,7 @@ pub async fn get_project_stats(api: &dyn DomainApi, project_id: &str, input: &Va
     let jwt = str_field(input, "jwt");
 
     match api.get_project_stats(project_id, jwt.as_deref()).await {
-        Ok(result) => json!({ "ok": true, "result": result }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(result) => domain_ok(serde_json::json!({ "result": result })),
+        Err(e) => domain_err(e),
     }
 }

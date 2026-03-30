@@ -4,14 +4,18 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use super::api::DomainApi;
-use super::helpers::str_field;
+use super::helpers::{domain_err, domain_ok, str_field};
+
+fn parse_orbit_result(body: &str) -> Value {
+    serde_json::from_str::<Value>(body).unwrap_or(Value::String(body.to_owned()))
+}
 
 pub async fn orbit_list_repos(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
     debug!("domain_tools: orbit_list_repos");
     let jwt = str_field(input, "jwt").unwrap_or_default();
     match api.orbit_api_call("GET", "/repos", None, Some(&jwt)).await {
-        Ok(body) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&body).unwrap_or(Value::String(body.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(body) => domain_ok(json!({ "result": parse_orbit_result(&body) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -26,8 +30,8 @@ pub async fn orbit_create_repo(api: &dyn DomainApi, _project_id: &str, input: &V
     });
     let jwt = str_field(input, "jwt");
     match api.orbit_api_call("POST", "/api/repos", Some(&body), jwt.as_deref()).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -38,8 +42,8 @@ pub async fn orbit_list_branches(api: &dyn DomainApi, _project_id: &str, input: 
     let jwt = str_field(input, "jwt").unwrap_or_default();
     let path = format!("/repos/{org_id}/{repo}/branches");
     match api.orbit_api_call("GET", &path, None, Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -54,8 +58,8 @@ pub async fn orbit_create_branch(api: &dyn DomainApi, _project_id: &str, input: 
     });
     let path = format!("/repos/{org_id}/{repo}/branches");
     match api.orbit_api_call("POST", &path, Some(&body), Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -71,8 +75,8 @@ pub async fn orbit_list_commits(api: &dyn DomainApi, _project_id: &str, input: &
         path.push_str(&format!("&ref={git_ref}"));
     }
     match api.orbit_api_call("GET", &path, None, Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -84,8 +88,8 @@ pub async fn orbit_get_diff(api: &dyn DomainApi, _project_id: &str, input: &Valu
     let jwt = str_field(input, "jwt").unwrap_or_default();
     let path = format!("/repos/{org_id}/{repo}/commits/{sha}/diff");
     match api.orbit_api_call("GET", &path, None, Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -102,8 +106,8 @@ pub async fn orbit_create_pr(api: &dyn DomainApi, _project_id: &str, input: &Val
     });
     let path = format!("/repos/{org_id}/{repo}/pulls");
     match api.orbit_api_call("POST", &path, Some(&body), Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -118,8 +122,8 @@ pub async fn orbit_list_prs(api: &dyn DomainApi, _project_id: &str, input: &Valu
         path.push_str(&format!("?status={status}"));
     }
     match api.orbit_api_call("GET", &path, None, Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -134,8 +138,8 @@ pub async fn orbit_merge_pr(api: &dyn DomainApi, _project_id: &str, input: &Valu
     });
     let path = format!("/repos/{org_id}/{repo}/pulls/{pr_id}/merge");
     match api.orbit_api_call("POST", &path, Some(&body), Some(&jwt)).await {
-        Ok(r) => json!({ "ok": true, "result": serde_json::from_str::<Value>(&r).unwrap_or(Value::String(r.clone())) }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(r) => domain_ok(json!({ "result": parse_orbit_result(&r) })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -149,10 +153,10 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
     let workspace = str_field(input, "workspace").unwrap_or_default();
 
     if org_id.is_empty() || repo.is_empty() || branch.is_empty() {
-        return json!({ "ok": false, "error": "org_id, repo, and branch are required" }).to_string();
+        return domain_err("org_id, repo, and branch are required");
     }
     if workspace.is_empty() {
-        return json!({ "ok": false, "error": "No workspace context" }).to_string();
+        return domain_err("No workspace context");
     }
 
     let orbit_host = api.orbit_url()
@@ -174,11 +178,11 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             if output.status.success() {
-                json!({ "ok": true, "result": format!("{stdout}{stderr}").trim().to_string() }).to_string()
+                domain_ok(json!({ "result": format!("{stdout}{stderr}").trim().to_string() }))
             } else {
-                json!({ "ok": false, "error": format!("git push failed: {stderr}").trim().to_string() }).to_string()
+                domain_err(format!("git push failed: {stderr}").trim().to_string())
             }
         }
-        Err(e) => json!({ "ok": false, "error": format!("Failed to run git push: {e}") }).to_string(),
+        Err(e) => domain_err(format!("Failed to run git push: {e}")),
     }
 }

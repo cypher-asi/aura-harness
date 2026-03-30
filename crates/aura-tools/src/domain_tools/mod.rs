@@ -16,9 +16,11 @@ pub mod tasks;
 
 pub use api::*;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
+
+use helpers::domain_err;
 
 const DOMAIN_TOOL_NAMES: &[&str] = &[
     "list_specs", "get_spec", "create_spec", "update_spec", "delete_spec",
@@ -152,11 +154,7 @@ impl DomainToolExecutor {
 
             other => {
                 warn!(tool = other, "unknown domain tool");
-                json!({
-                    "ok": false,
-                    "error": format!("unknown domain tool: {other}")
-                })
-                .to_string()
+                domain_err(format!("unknown domain tool: {other}"))
             }
         }
     }

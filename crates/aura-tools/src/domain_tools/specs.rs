@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use super::api::DomainApi;
-use super::helpers::{require_str, str_field};
+use super::helpers::{domain_err, domain_ok, require_str, str_field};
 
 pub async fn list_specs(api: &dyn DomainApi, project_id: &str, input: &Value) -> String {
     debug!(project_id, "domain_tools: list_specs");
@@ -21,9 +21,9 @@ pub async fn list_specs(api: &dyn DomainApi, project_id: &str, input: &Value) ->
                     })
                 })
                 .collect();
-            json!({ "ok": true, "specs": summaries }).to_string()
+            domain_ok(json!({ "specs": summaries }))
         }
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -31,12 +31,12 @@ pub async fn get_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -> S
     debug!(project_id, "domain_tools: get_spec");
     let spec_id = match require_str(input, "spec_id") {
         Ok(id) => id,
-        Err(e) => return json!({ "ok": false, "error": e }).to_string(),
+        Err(e) => return domain_err(&e),
     };
     let jwt = str_field(input, "jwt");
     match api.get_spec(&spec_id, jwt.as_deref()).await {
-        Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(s) => domain_ok(json!({ "spec": s })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -56,8 +56,8 @@ pub async fn create_spec(api: &dyn DomainApi, project_id: &str, input: &Value) -
     };
 
     match api.create_spec(project_id, &title, &content, order, jwt.as_deref()).await {
-        Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(s) => domain_ok(json!({ "spec": s })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -65,7 +65,7 @@ pub async fn update_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) 
     debug!("domain_tools: update_spec");
     let spec_id = match require_str(input, "spec_id") {
         Ok(id) => id,
-        Err(e) => return json!({ "ok": false, "error": e }).to_string(),
+        Err(e) => return domain_err(&e),
     };
     let title = str_field(input, "title");
     let content = str_field(input, "markdown_contents").or_else(|| str_field(input, "content"));
@@ -75,8 +75,8 @@ pub async fn update_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) 
         .update_spec(&spec_id, title.as_deref(), content.as_deref(), jwt.as_deref())
         .await
     {
-        Ok(s) => json!({ "ok": true, "spec": s }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(s) => domain_ok(json!({ "spec": s })),
+        Err(e) => domain_err(e),
     }
 }
 
@@ -84,11 +84,11 @@ pub async fn delete_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) 
     debug!("domain_tools: delete_spec");
     let spec_id = match require_str(input, "spec_id") {
         Ok(id) => id,
-        Err(e) => return json!({ "ok": false, "error": e }).to_string(),
+        Err(e) => return domain_err(&e),
     };
     let jwt = str_field(input, "jwt");
     match api.delete_spec(&spec_id, jwt.as_deref()).await {
-        Ok(()) => json!({ "ok": true, "deleted": spec_id }).to_string(),
-        Err(e) => json!({ "ok": false, "error": e.to_string() }).to_string(),
+        Ok(()) => domain_ok(json!({ "deleted": spec_id })),
+        Err(e) => domain_err(e),
     }
 }
