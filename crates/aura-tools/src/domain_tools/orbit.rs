@@ -188,8 +188,13 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
     cmd.current_dir(&workspace);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
 
-    match cmd.output().await {
-        Ok(output) => {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        cmd.output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             if output.status.success() {
@@ -198,6 +203,7 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
                 domain_err(format!("git push failed: {stderr}").trim().to_string())
             }
         }
-        Err(e) => domain_err(format!("Failed to run git push: {e}")),
+        Ok(Err(e)) => domain_err(format!("Failed to run git push: {e}")),
+        Err(_) => domain_err("git push timed out after 120s"),
     }
 }

@@ -178,7 +178,7 @@ pub fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
 }
 
 pub fn forward_agent_event(
-    tx: &tokio::sync::mpsc::UnboundedSender<AutomatonEvent>,
+    tx: &tokio::sync::mpsc::Sender<AutomatonEvent>,
     evt: aura_agent::events::AgentLoopEvent,
 ) {
     use aura_agent::events::AgentLoopEvent;
@@ -218,6 +218,8 @@ pub fn forward_agent_event(
         },
         _ => return,
     };
-    let _ = tx.send(automaton_event);
+    if let Err(e) = tx.try_send(automaton_event) {
+        tracing::warn!("automaton event channel full or closed: {e}");
+    }
 }
 

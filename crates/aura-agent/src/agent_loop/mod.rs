@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use crate::runtime::ModelCallDelegate;
 use aura_reasoner::{Message, ModelProvider, ModelRequest, StopReason, ToolDefinition};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -198,7 +198,7 @@ impl AgentLoop {
         executor: &dyn AgentToolExecutor,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-        event_tx: Option<UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<Sender<AgentLoopEvent>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
         let mut state = LoopState::new(&self.config, messages);
@@ -258,7 +258,7 @@ impl AgentLoop {
         &self,
         response: &aura_reasoner::ModelResponse,
         executor: &dyn AgentToolExecutor,
-        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
         state: &mut LoopState,
     ) -> bool {
         match response.stop_reason {
@@ -371,7 +371,7 @@ impl LoopState {
 /// Run post-iteration checks (checkpoint, compaction, budget). Returns `true` to break.
 fn post_iteration_checks(
     config: &AgentLoopConfig,
-    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
     iteration: usize,
 ) -> bool {

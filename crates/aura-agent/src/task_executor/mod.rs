@@ -58,7 +58,7 @@ pub struct TaskToolExecutor {
     /// Self-review guard tracking writes vs reads.
     pub self_review: Arc<Mutex<SelfReviewGuard>>,
     /// Optional event channel for status messages.
-    pub event_tx: Option<mpsc::UnboundedSender<AgentLoopEvent>>,
+    pub event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
     /// Set to true when the agent explicitly declares no file changes are
     /// required for this task (via `no_changes_needed` in `task_done` input).
     pub no_changes_needed: Arc<Mutex<bool>>,
@@ -198,7 +198,15 @@ impl AgentToolExecutor for TaskToolExecutor {
                 let output = if result.success {
                     output
                 } else {
-                    self.enrich_compiler_output(&output)
+                    let pf = self.project_folder.clone();
+                    tokio::task::spawn_blocking(move || {
+                        handlers::enrich_compiler_output_sync(&pf, &output)
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("spawn_blocking panicked in enrich_compiler_output: {e}");
+                        String::new()
+                    })
                 };
                 Some(AutoBuildResult {
                     success: result.success,

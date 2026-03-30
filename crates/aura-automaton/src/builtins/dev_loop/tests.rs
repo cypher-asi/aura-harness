@@ -3,7 +3,7 @@ use crate::events::AutomatonEvent;
 
 #[test]
 fn forwards_valid_tool_input_snapshot() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     forward_agent_event(
         &tx,
         aura_agent::events::AgentLoopEvent::ToolInputSnapshot {
@@ -26,7 +26,7 @@ fn forwards_valid_tool_input_snapshot() {
 
 #[test]
 fn drops_invalid_tool_input_snapshot_json() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     forward_agent_event(
         &tx,
         aura_agent::events::AgentLoopEvent::ToolInputSnapshot {

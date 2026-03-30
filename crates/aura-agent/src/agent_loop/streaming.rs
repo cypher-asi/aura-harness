@@ -6,7 +6,7 @@ use aura_reasoner::{
     ModelProvider, ModelRequest, ModelResponse, StreamAccumulator, StreamContentType, StreamEvent,
 };
 use futures_util::StreamExt;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -15,15 +15,17 @@ use crate::events::AgentLoopEvent;
 use super::AgentLoop;
 
 /// Send an event through the channel if present.
-pub(super) fn emit(tx: Option<&UnboundedSender<AgentLoopEvent>>, event: AgentLoopEvent) {
+pub(super) fn emit(tx: Option<&Sender<AgentLoopEvent>>, event: AgentLoopEvent) {
     if let Some(tx) = tx {
-        let _ = tx.send(event);
+        if let Err(e) = tx.try_send(event) {
+            tracing::warn!("agent event channel full or closed: {e}");
+        }
     }
 }
 
 /// Emit an [`AgentLoopEvent::IterationComplete`] event.
 pub(super) fn emit_iteration_complete(
-    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
     iteration: usize,
     response: &ModelResponse,
 ) {
@@ -39,7 +41,7 @@ pub(super) fn emit_iteration_complete(
 
 /// Map a [`StreamEvent`] to the corresponding [`AgentLoopEvent`] and emit it.
 fn emit_stream_event(
-    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
     stream_event: &StreamEvent,
     accumulator: &StreamAccumulator,
 ) {
@@ -104,7 +106,7 @@ impl AgentLoop {
         &self,
         provider: &dyn ModelProvider,
         request: ModelRequest,
-        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
     ) -> anyhow::Result<ModelResponse> {
         let start = Instant::now();

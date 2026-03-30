@@ -47,7 +47,7 @@ fn classify_ws_frame(msg_result: Option<Result<WsMessage, axum::Error>>) -> WsAc
 /// Handle a WebSocket connection through its full lifecycle.
 pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<OutboundMessage>();
+    let (outbound_tx, mut outbound_rx) = mpsc::channel::<OutboundMessage>(1024);
 
     let send_task = tokio::spawn(async move {
         while let Some(msg) = outbound_rx.recv().await {
@@ -102,7 +102,7 @@ async fn run_active_turn_select(
     ws_rx: &mut futures_util::stream::SplitStream<WebSocket>,
     turn: &mut ActiveTurn,
     session: &mut Session,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) -> TurnAction {
     tokio::select! {
         biased;
@@ -133,7 +133,7 @@ fn handle_msg_during_turn(
     raw: &str,
     turn: &ActiveTurn,
     session: &Session,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     match serde_json::from_str::<InboundMessage>(raw) {
         Ok(InboundMessage::Cancel) => {
@@ -141,14 +141,14 @@ fn handle_msg_during_turn(
             turn.cancel_token.cancel();
         }
         Ok(_) => {
-            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                 code: "turn_in_progress".into(),
                 message: "A turn is currently in progress; send cancel first".into(),
                 recoverable: true,
             }));
         }
         Err(e) => {
-            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                 code: "parse_error".into(),
                 message: format!("Invalid message: {e}"),
                 recoverable: true,
@@ -166,7 +166,7 @@ enum IdleAction {
 async fn run_idle_select(
     ws_rx: &mut futures_util::stream::SplitStream<WebSocket>,
     session: &mut Session,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) -> IdleAction {
     match classify_ws_frame(ws_rx.next().await) {
@@ -182,7 +182,7 @@ async fn run_idle_select(
 fn dispatch_idle_message(
     raw: &str,
     session: &mut Session,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) -> IdleAction {
     match serde_json::from_str::<InboundMessage>(raw) {
@@ -208,7 +208,7 @@ fn dispatch_idle_message(
             IdleAction::Continue
         }
         Err(e) => {
-            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                 code: "parse_error".into(),
                 message: format!("Invalid message: {e}"),
                 recoverable: true,
@@ -222,11 +222,11 @@ fn dispatch_idle_message(
 fn handle_session_init(
     session: &mut Session,
     init: SessionInit,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) {
     if session.initialized {
-        let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "already_initialized".into(),
             message: "Session has already been initialized".into(),
             recoverable: true,
@@ -235,7 +235,7 @@ fn handle_session_init(
     }
 
     if let Err(e) = session.apply_init(init) {
-        let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "invalid_workspace".into(),
             message: e,
             recoverable: true,
@@ -263,7 +263,7 @@ fn handle_session_init(
         "Session initialized"
     );
 
-    let _ = outbound_tx.send(OutboundMessage::SessionReady(SessionReady {
+    let _ = outbound_tx.try_send(OutboundMessage::SessionReady(SessionReady {
         session_id: session.session_id.clone(),
         tools,
     }));
@@ -289,11 +289,11 @@ fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) {
 fn start_turn(
     session: &mut Session,
     msg: UserMessage,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) -> Option<ActiveTurn> {
     if !session.initialized {
-        let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "not_initialized".into(),
             message: "Send session_init before user_message".into(),
             recoverable: true,
@@ -302,7 +302,7 @@ fn start_turn(
     }
 
     let message_id = Uuid::new_v4().to_string();
-    let _ = outbound_tx.send(OutboundMessage::AssistantMessageStart(
+    let _ = outbound_tx.try_send(OutboundMessage::AssistantMessageStart(
         AssistantMessageStart {
             message_id: message_id.clone(),
         },
@@ -324,7 +324,7 @@ fn start_turn(
     let cancel_for_loop = cancel_token.clone();
     let cancel_for_check = cancel_token.clone();
 
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<AgentLoopEvent>();
+    let (event_tx, event_rx) = mpsc::channel::<AgentLoopEvent>(1024);
 
     let join_handle = tokio::spawn(async move {
         let mut result: anyhow::Result<AgentLoopResult> = agent_loop
@@ -399,8 +399,8 @@ fn build_kernel_executor(
 }
 
 async fn forward_events_to_ws(
-    mut event_rx: mpsc::UnboundedReceiver<AgentLoopEvent>,
-    outbound: mpsc::UnboundedSender<OutboundMessage>,
+    mut event_rx: mpsc::Receiver<AgentLoopEvent>,
+    outbound: mpsc::Sender<OutboundMessage>,
 ) {
     while let Some(event) = event_rx.recv().await {
         let msg = match event {
@@ -438,7 +438,7 @@ async fn forward_events_to_ws(
             | AgentLoopEvent::StepComplete
             | AgentLoopEvent::Warning(_) => continue,
         };
-        if outbound.send(msg).is_err() {
+        if outbound.try_send(msg).is_err() {
             break;
         }
     }
@@ -449,7 +449,7 @@ fn finalize_turn(
     session: &mut Session,
     join_result: Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
     message_id: &str,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     let result = match join_result {
         Ok(inner) => inner,
@@ -466,7 +466,7 @@ fn finalize_turn(
         }
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Turn processing failed");
-            let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                 code: "turn_error".into(),
                 message: format!("Turn processing failed: {e}"),
                 recoverable: true,
@@ -475,13 +475,13 @@ fn finalize_turn(
     }
 }
 
-fn send_turn_error(outbound_tx: &mpsc::UnboundedSender<OutboundMessage>, message_id: &str) {
-    let _ = outbound_tx.send(OutboundMessage::Error(ErrorMsg {
+fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id: &str) {
+    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
         code: "internal_error".into(),
         message: "Turn processing task panicked".into(),
         recoverable: false,
     }));
-    let _ = outbound_tx.send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
+    let _ = outbound_tx.try_send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
         message_id: message_id.to_string(),
         stop_reason: "error".into(),
         usage: SessionUsage::default(),
@@ -493,7 +493,7 @@ fn apply_turn_result(
     session: &mut Session,
     loop_result: &AgentLoopResult,
     message_id: &str,
-    outbound_tx: &mpsc::UnboundedSender<OutboundMessage>,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     session.messages.clone_from(&loop_result.messages);
 
@@ -520,7 +520,7 @@ fn apply_turn_result(
         0.0
     };
 
-    let _ = outbound_tx.send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
+    let _ = outbound_tx.try_send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
         message_id: message_id.to_string(),
         stop_reason: stop_reason.into(),
         usage: SessionUsage {

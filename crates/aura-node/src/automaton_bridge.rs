@@ -112,7 +112,7 @@ impl AutomatonBridge {
     fn spawn_event_forwarder(
         &self,
         automaton_id: String,
-        mut event_rx: tokio::sync::mpsc::UnboundedReceiver<AutomatonEvent>,
+        mut event_rx: tokio::sync::mpsc::Receiver<AutomatonEvent>,
     ) -> broadcast::Sender<AutomatonEvent> {
         let (broadcast_tx, _) = broadcast::channel(EVENT_BROADCAST_CAPACITY);
         let channels = self.event_channels.clone();

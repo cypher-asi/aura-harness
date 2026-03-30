@@ -265,7 +265,7 @@ async fn run_agent_turn(
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     bool,
 ) {
-    let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::unbounded_channel::<AgentLoopEvent>();
+    let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
 
     let fwd_commands = state.commands.clone();
     let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, fwd_commands));

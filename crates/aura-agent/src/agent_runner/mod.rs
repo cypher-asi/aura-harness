@@ -158,7 +158,7 @@ impl AgentRunner {
         provider: &dyn ModelProvider,
         executor: &dyn AgentToolExecutor,
         params: &AgenticTaskParams<'_>,
-        event_tx: Option<mpsc::UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
         let complexity = classify_task_complexity(params.task.title, params.task.description);
@@ -244,7 +244,7 @@ impl AgentRunner {
         provider: &dyn ModelProvider,
         tracking: TaskTrackingConfig,
         params: &AgenticTaskParams<'_>,
-        event_tx: Option<mpsc::UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
         let task_executor = TaskToolExecutor {
@@ -281,7 +281,7 @@ impl AgentRunner {
         custom_system_prompt: &str,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-        event_tx: Option<mpsc::UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
         let system_prompt = {
@@ -324,7 +324,7 @@ impl AgentRunner {
     pub async fn execute_shell_task(
         &self,
         params: &ShellTaskParams<'_>,
-        event_tx: Option<&mpsc::UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&mpsc::Sender<AgentLoopEvent>>,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
         let command = auto_correct_build_command(params.command)
             .unwrap_or_else(|| params.command.to_string());
@@ -333,7 +333,7 @@ impl AgentRunner {
 
         for attempt in 1..=max_attempts {
             if let Some(tx) = event_tx {
-                let _ = tx.send(AgentLoopEvent::TextDelta(format!(
+                let _ = tx.try_send(AgentLoopEvent::TextDelta(format!(
                     "Running: {command} (attempt {attempt}/{max_attempts})\n",
                 )));
             }
@@ -348,7 +348,7 @@ impl AgentRunner {
                     command, result.stdout,
                 );
                 if let Some(tx) = event_tx {
-                    let _ = tx.send(AgentLoopEvent::TextDelta(notes.clone()));
+                    let _ = tx.try_send(AgentLoopEvent::TextDelta(notes.clone()));
                 }
                 return Ok(TaskExecutionResult {
                     notes,
@@ -364,7 +364,7 @@ impl AgentRunner {
             };
 
             if let Some(tx) = event_tx {
-                let _ = tx.send(AgentLoopEvent::TextDelta(format!(
+                let _ = tx.try_send(AgentLoopEvent::TextDelta(format!(
                     "Command failed (attempt {attempt}):\n{detail}\n",
                 )));
             }

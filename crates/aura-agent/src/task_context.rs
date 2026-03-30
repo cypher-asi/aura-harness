@@ -43,8 +43,16 @@ pub async fn fetch_codebase_context(
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("cached file retrieval failed, falling back to basic read: {e}");
-            file_ops::read_relevant_files(project_folder, 50_000).unwrap_or_else(|e2| {
-                tracing::warn!("fallback read_relevant_files also failed: {e2}");
+            let folder = project_folder.to_string();
+            tokio::task::spawn_blocking(move || {
+                file_ops::read_relevant_files(&folder, 50_000).unwrap_or_else(|e2| {
+                    tracing::warn!("fallback read_relevant_files also failed: {e2}");
+                    String::new()
+                })
+            })
+            .await
+            .unwrap_or_else(|e2| {
+                tracing::warn!("spawn_blocking panicked: {e2}");
                 String::new()
             })
         }

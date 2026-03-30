@@ -12,7 +12,7 @@ pub(super) struct ForwarderState {
 
 /// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s.
 pub(super) async fn forward_agent_events(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<AgentLoopEvent>,
+    mut rx: tokio::sync::mpsc::Receiver<AgentLoopEvent>,
     commands: mpsc::Sender<UiCommand>,
 ) -> ForwarderState {
     let mut state = ForwarderState {

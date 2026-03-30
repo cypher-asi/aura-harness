@@ -5,6 +5,33 @@ use super::{
     MAX_STUB_FIX_ATTEMPTS,
 };
 
+pub(super) fn enrich_compiler_output_sync(project_folder: &str, raw_output: &str) -> String {
+    if !looks_like_compiler_errors(raw_output) {
+        return raw_output.to_string();
+    }
+
+    let base_path = Path::new(project_folder);
+
+    let categories = classify_build_errors(raw_output);
+    let guidance = error_category_guidance(&categories);
+    let refs = crate::verify::parse_error_references(raw_output);
+    let api_ref = file_ops::resolve_error_context(base_path, &refs);
+
+    let mut enriched = raw_output.to_string();
+
+    if !guidance.is_empty() {
+        enriched.push_str("\n\n## Error Diagnosis & Guidance\n\n");
+        enriched.push_str(&guidance);
+    }
+
+    if !api_ref.is_empty() {
+        enriched.push('\n');
+        enriched.push_str(&api_ref);
+    }
+
+    enriched
+}
+
 impl TaskToolExecutor {
     pub(super) async fn track_file_op(&self, tool_name: &str, input: &serde_json::Value) {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -32,30 +59,7 @@ impl TaskToolExecutor {
     }
 
     pub(super) fn enrich_compiler_output(&self, raw_output: &str) -> String {
-        if !looks_like_compiler_errors(raw_output) {
-            return raw_output.to_string();
-        }
-
-        let base_path = Path::new(&self.project_folder);
-
-        let categories = classify_build_errors(raw_output);
-        let guidance = error_category_guidance(&categories);
-        let refs = crate::verify::parse_error_references(raw_output);
-        let api_ref = file_ops::resolve_error_context(base_path, &refs);
-
-        let mut enriched = raw_output.to_string();
-
-        if !guidance.is_empty() {
-            enriched.push_str("\n\n## Error Diagnosis & Guidance\n\n");
-            enriched.push_str(&guidance);
-        }
-
-        if !api_ref.is_empty() {
-            enriched.push('\n');
-            enriched.push_str(&api_ref);
-        }
-
-        enriched
+        enrich_compiler_output_sync(&self.project_folder, raw_output)
     }
 
     pub(super) async fn handle_task_done(
@@ -322,7 +326,9 @@ impl TaskToolExecutor {
 
     pub(super) fn emit_text(&self, text: String) {
         if let Some(tx) = &self.event_tx {
-            let _ = tx.send(AgentLoopEvent::TextDelta(text));
+            if let Err(e) = tx.try_send(AgentLoopEvent::TextDelta(text)) {
+                tracing::warn!("event channel full or closed: {e}");
+            }
         }
     }
 }

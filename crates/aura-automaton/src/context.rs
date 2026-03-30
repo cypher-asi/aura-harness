@@ -7,7 +7,7 @@ use crate::types::AutomatonId;
 pub struct TickContext {
     pub automaton_id: AutomatonId,
     pub state: AutomatonState,
-    pub event_tx: mpsc::UnboundedSender<AutomatonEvent>,
+    pub event_tx: mpsc::Sender<AutomatonEvent>,
     pub config: serde_json::Value,
     pub workspace_root: Option<std::path::PathBuf>,
     shutdown: tokio_util::sync::CancellationToken,
@@ -17,7 +17,7 @@ impl TickContext {
     pub fn new(
         automaton_id: AutomatonId,
         state: AutomatonState,
-        event_tx: mpsc::UnboundedSender<AutomatonEvent>,
+        event_tx: mpsc::Sender<AutomatonEvent>,
         config: serde_json::Value,
         workspace_root: Option<std::path::PathBuf>,
         shutdown: tokio_util::sync::CancellationToken,
@@ -33,7 +33,9 @@ impl TickContext {
     }
 
     pub fn emit(&self, event: AutomatonEvent) {
-        let _ = self.event_tx.send(event);
+        if let Err(e) = self.event_tx.try_send(event) {
+            tracing::warn!("automaton event channel full or closed: {e}");
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {

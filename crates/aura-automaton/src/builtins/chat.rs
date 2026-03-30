@@ -182,7 +182,7 @@ impl ChatAutomaton {
             test_command: project.test_command.as_deref(),
         };
 
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
         let automaton_tx = ctx.event_tx.clone();
         tokio::spawn(async move {
             while let Some(evt) = event_rx.recv().await {

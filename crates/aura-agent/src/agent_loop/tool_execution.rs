@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::constants::{tool_result_cache_key, CACHEABLE_TOOLS};
 use aura_reasoner::{ContentBlock, Message, ModelResponse, ToolResultContent};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
 
 use crate::blocking::detection::{detect_all_blocked, BlockingContext};
@@ -31,7 +31,7 @@ pub(super) async fn handle_tool_use(
     agent: &AgentLoop,
     response: &ModelResponse,
     executor: &dyn AgentToolExecutor,
-    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
 ) -> bool {
     let tool_calls = extract_tool_calls(response);
@@ -230,7 +230,7 @@ fn update_cache(
 // ---------------------------------------------------------------------------
 
 fn emit_tool_results(
-    event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
     all_results: &[ToolCallResult],
     tool_calls: &[ToolCallInfo],
 ) {

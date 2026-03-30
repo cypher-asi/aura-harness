@@ -44,7 +44,7 @@ struct RunningAutomaton {
     cancel: CancellationToken,
     #[allow(dead_code)]
     status_tx: watch::Sender<AutomatonStatus>,
-    event_tx: mpsc::UnboundedSender<AutomatonEvent>,
+    event_tx: mpsc::Sender<AutomatonEvent>,
 }
 
 pub struct AutomatonRuntime {
@@ -64,13 +64,13 @@ impl AutomatonRuntime {
         automaton: Box<dyn Automaton>,
         config: serde_json::Value,
         workspace_root: Option<std::path::PathBuf>,
-    ) -> Result<(AutomatonHandle, mpsc::UnboundedReceiver<AutomatonEvent>), AutomatonError> {
+    ) -> Result<(AutomatonHandle, mpsc::Receiver<AutomatonEvent>), AutomatonError> {
         let id = AutomatonId::new();
         let schedule = automaton.default_schedule();
         let cancel = CancellationToken::new();
         let (status_tx, status_rx) = watch::channel(AutomatonStatus::Installing);
         let (pause_tx, pause_rx) = watch::channel(false);
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(1024);
 
         let info = AutomatonInfo {
             id: id.clone(),
@@ -122,7 +122,7 @@ impl AutomatonRuntime {
         cancel: CancellationToken,
         status_tx: watch::Sender<AutomatonStatus>,
         mut pause_rx: watch::Receiver<bool>,
-        event_tx: mpsc::UnboundedSender<AutomatonEvent>,
+        event_tx: mpsc::Sender<AutomatonEvent>,
         instances: Arc<DashMap<String, RunningAutomaton>>,
     ) {
         let state = AutomatonState::new();
@@ -138,17 +138,17 @@ impl AutomatonRuntime {
         if let Err(e) = automaton.on_install(&ctx).await {
             error!(automaton_id = %id, error = %e, "on_install failed");
             let _ = status_tx.send(AutomatonStatus::Failed);
-            let _ = event_tx.send(AutomatonEvent::Error {
+            let _ = event_tx.try_send(AutomatonEvent::Error {
                 automaton_id: id.to_string(),
                 message: e.to_string(),
             });
-            let _ = event_tx.send(AutomatonEvent::Done);
+            let _ = event_tx.try_send(AutomatonEvent::Done);
             instances.remove(id.as_str());
             return;
         }
 
         let _ = status_tx.send(AutomatonStatus::Running);
-        let _ = event_tx.send(AutomatonEvent::Started {
+        let _ = event_tx.try_send(AutomatonEvent::Started {
             automaton_id: id.to_string(),
         });
 
@@ -159,7 +159,7 @@ impl AutomatonRuntime {
 
             if *pause_rx.borrow() {
                 let _ = status_tx.send(AutomatonStatus::Paused);
-                let _ = event_tx.send(AutomatonEvent::Paused {
+                let _ = event_tx.try_send(AutomatonEvent::Paused {
                     automaton_id: id.to_string(),
                 });
                 loop {
@@ -171,7 +171,7 @@ impl AutomatonRuntime {
                     }
                     if !*pause_rx.borrow() {
                         let _ = status_tx.send(AutomatonStatus::Running);
-                        let _ = event_tx.send(AutomatonEvent::Resumed {
+                        let _ = event_tx.try_send(AutomatonEvent::Resumed {
                             automaton_id: id.to_string(),
                         });
                         break;
@@ -191,7 +191,7 @@ impl AutomatonRuntime {
                 }
                 Err(e) => {
                     error!(automaton_id = %id, error = %e, "tick failed");
-                    let _ = event_tx.send(AutomatonEvent::Error {
+                    let _ = event_tx.try_send(AutomatonEvent::Error {
                         automaton_id: id.to_string(),
                         message: e.to_string(),
                     });
@@ -205,11 +205,11 @@ impl AutomatonRuntime {
         }
 
         let _ = status_tx.send(final_status);
-        let _ = event_tx.send(AutomatonEvent::Stopped {
+        let _ = event_tx.try_send(AutomatonEvent::Stopped {
             automaton_id: id.to_string(),
             reason: format!("{final_status:?}"),
         });
-        let _ = event_tx.send(AutomatonEvent::Done);
+        let _ = event_tx.try_send(AutomatonEvent::Done);
         instances.remove(id.as_str());
     }
 
@@ -238,7 +238,7 @@ impl AutomatonRuntime {
     #[allow(clippy::needless_pass_by_value)]
     pub fn trigger(&self, id: &str, payload: serde_json::Value) -> Result<(), AutomatonError> {
         if let Some(entry) = self.instances.get(id) {
-            let _ = entry.value().event_tx.send(AutomatonEvent::LogLine {
+            let _ = entry.value().event_tx.try_send(AutomatonEvent::LogLine {
                 message: format!("trigger: {payload}"),
             });
             Ok(())

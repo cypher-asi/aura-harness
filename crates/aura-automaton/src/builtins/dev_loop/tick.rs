@@ -311,23 +311,30 @@ pub async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
 
 async fn init_git_repo(workspace: &str, task_id: &str) -> bool {
     info!(task_id, %workspace, "Workspace is not a git repo; initializing");
-    let init = tokio::process::Command::new("git")
-        .args(["init"])
-        .current_dir(workspace)
-        .output()
-        .await;
+    let init = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(workspace)
+            .output(),
+    )
+    .await;
     match init {
-        Ok(o) if o.status.success() => {
+        Ok(Ok(o)) if o.status.success() => {
             info!(task_id, "git init succeeded");
             true
         }
-        Ok(o) => {
+        Ok(Ok(o)) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             warn!(task_id, %stderr, "git init failed");
             false
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!(task_id, error = %e, "failed to run git init");
+            false
+        }
+        Err(_) => {
+            warn!(task_id, "git init timed out after 30s");
             false
         }
     }

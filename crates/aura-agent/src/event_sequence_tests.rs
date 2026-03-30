@@ -130,7 +130,7 @@ impl ModelProvider for StreamingMockProvider {
 }
 
 /// Drain all events from the channel after the sender has been dropped.
-async fn collect_events(mut rx: mpsc::UnboundedReceiver<AgentLoopEvent>) -> Vec<AgentLoopEvent> {
+async fn collect_events(mut rx: mpsc::Receiver<AgentLoopEvent>) -> Vec<AgentLoopEvent> {
     let mut events = Vec::new();
     while let Some(event) = rx.recv().await {
         events.push(event);
@@ -152,7 +152,7 @@ async fn text_response_emits_text_delta_then_iteration_complete() {
     };
     let agent = AgentLoop::new(config);
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(1024);
     let messages = vec![Message::user("hi")];
     let tools = vec![];
 
@@ -216,7 +216,7 @@ async fn tool_use_emits_tool_start_input_snapshot_then_result() {
     };
     let agent = AgentLoop::new(config);
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(1024);
     let messages = vec![Message::user("Read test.txt")];
     let tools = vec![ToolDefinition::new(
         "read_file",
@@ -306,7 +306,7 @@ async fn budget_warning_emits_warning_event() {
     };
     let agent = AgentLoop::new(config);
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(1024);
     let messages = vec![Message::user("go")];
     let tools = vec![ToolDefinition::new(
         "read_file",
@@ -364,7 +364,7 @@ async fn exploration_limit_emits_warning_event() {
     };
     let agent = AgentLoop::new(config);
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(1024);
     let messages = vec![Message::user("explore")];
     let tools = vec![ToolDefinition::new(
         "read_file",
@@ -407,7 +407,7 @@ async fn llm_error_emits_error_event() {
     };
     let agent = AgentLoop::new(config);
 
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(1024);
     let messages = vec![Message::user("hi")];
     let tools = vec![];
 

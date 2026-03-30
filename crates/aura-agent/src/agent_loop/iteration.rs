@@ -3,7 +3,7 @@
 use aura_reasoner::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ToolResultContent,
 };
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -31,7 +31,7 @@ impl LlmCallError {
     pub(super) fn apply(
         self,
         result: &mut AgentLoopResult,
-        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
     ) {
         match self {
             Self::InsufficientCredits(msg) => {
@@ -94,7 +94,7 @@ impl AgentLoop {
         &self,
         provider: &dyn ModelProvider,
         request: ModelRequest,
-        event_tx: Option<&UnboundedSender<AgentLoopEvent>>,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
     ) -> Result<ModelResponse, LlmCallError> {
         let stream_timeout = self.config.stream_timeout;

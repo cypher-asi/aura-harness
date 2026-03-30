@@ -30,7 +30,11 @@ pub struct HttpDomainApi {
 impl HttpDomainApi {
     pub fn new(storage_url: &str, network_url: &str, orbit_url: &str) -> Self {
         Self {
-            http: Client::new(),
+            http: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("HTTP client build"),
             storage_url: storage_url.trim_end_matches('/').to_string(),
             network_url: network_url.trim_end_matches('/').to_string(),
             orbit_url: orbit_url.trim_end_matches('/').to_string(),
