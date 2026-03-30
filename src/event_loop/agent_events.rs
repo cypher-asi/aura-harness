@@ -72,14 +72,16 @@ pub(super) async fn forward_agent_events(
                     })
                     .await;
             }
-            AgentLoopEvent::IterationComplete { .. } => {}
+            AgentLoopEvent::IterationComplete { .. }
+            | AgentLoopEvent::ThinkingComplete
+            | AgentLoopEvent::StepComplete
+            | AgentLoopEvent::ToolComplete { .. } => {}
             AgentLoopEvent::Warning(msg) => {
                 let _ = commands.send(UiCommand::ShowWarning(msg)).await;
             }
             AgentLoopEvent::Error { message, .. } => {
                 let _ = commands.send(UiCommand::ShowWarning(message)).await;
             }
-            AgentLoopEvent::ToolComplete { .. } => {}
         }
     }
 

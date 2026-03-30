@@ -263,7 +263,7 @@ where
             };
             self.emit_stream_event(StreamCallbackEvent::ToolComplete {
                 name: tool.tool_name.clone(),
-                args: tool.tool_args.clone(),
+                args: Some(tool.tool_args.clone()),
                 result: result_text,
                 is_error: tool.is_error,
             });

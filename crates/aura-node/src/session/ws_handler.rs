@@ -434,6 +434,8 @@ async fn forward_events_to_ws(
             AgentLoopEvent::ToolInputSnapshot { .. }
             | AgentLoopEvent::ToolComplete { .. }
             | AgentLoopEvent::IterationComplete { .. }
+            | AgentLoopEvent::ThinkingComplete
+            | AgentLoopEvent::StepComplete
             | AgentLoopEvent::Warning(_) => continue,
         };
         if outbound.send(msg).is_err() {

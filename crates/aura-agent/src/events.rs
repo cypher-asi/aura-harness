@@ -1,17 +1,23 @@
-//! Streaming events emitted by `AgentLoop` during execution.
+//! Unified streaming events emitted during agent execution.
 //!
-//! Consumers subscribe by passing an `mpsc::UnboundedSender<AgentLoopEvent>`
-//! to `AgentLoop::run()`. Events are emitted in real-time as the loop
-//! progresses through model calls, tool executions, and loop-level decisions.
+//! `TurnEvent` is the single event type for both `AgentLoop` and
+//! `TurnProcessor`. Consumers subscribe by passing an
+//! `mpsc::UnboundedSender<TurnEvent>` to the orchestrator.
 
-/// Events emitted by the agent loop during execution.
+/// Unified events emitted during agent/turn execution.
+///
+/// Covers all events previously split between `AgentLoopEvent` and
+/// `StreamCallbackEvent`.
 #[derive(Debug, Clone)]
-pub enum AgentLoopEvent {
+pub enum TurnEvent {
     /// Incremental text content from the model.
     TextDelta(String),
 
     /// Incremental thinking/reasoning content from the model.
     ThinkingDelta(String),
+
+    /// Thinking block completed (end of extended-thinking content).
+    ThinkingComplete,
 
     /// A tool use block started streaming.
     ToolStart {
@@ -31,10 +37,12 @@ pub enum AgentLoopEvent {
         input: String,
     },
 
-    /// A tool execution completed.
+    /// A tool execution completed (with full result).
     ToolComplete {
         /// Tool name.
         name: String,
+        /// Tool arguments (JSON), if available.
+        args: Option<serde_json::Value>,
         /// Result content (text).
         result: String,
         /// Whether the tool execution failed.
@@ -63,12 +71,15 @@ pub enum AgentLoopEvent {
         output_tokens: u64,
     },
 
+    /// Streaming is complete for the current step.
+    StepComplete,
+
     /// A warning was injected into the context.
     Warning(String),
 
     /// An error occurred during execution.
     Error {
-        /// Machine-readable error code (e.g. `rate_limit`, `timeout`, `llm_error`).
+        /// Machine-readable error code.
         code: String,
         /// Human-readable description.
         message: String,
@@ -76,3 +87,6 @@ pub enum AgentLoopEvent {
         recoverable: bool,
     },
 }
+
+/// Backward-compatible alias for `TurnEvent`.
+pub type AgentLoopEvent = TurnEvent;
