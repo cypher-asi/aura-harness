@@ -45,6 +45,14 @@ pub struct ModelRequest {
     pub thinking: Option<ThinkingConfig>,
     /// Optional JWT auth token for proxy routing.
     pub auth_token: Option<String>,
+    /// Project ID for X-Aura-Project-Id billing header.
+    pub aura_project_id: Option<String>,
+    /// Project-agent UUID for X-Aura-Agent-Id billing header.
+    pub aura_agent_id: Option<String>,
+    /// Storage session UUID for X-Aura-Session-Id billing header.
+    pub aura_session_id: Option<String>,
+    /// Org UUID for X-Aura-Org-Id billing header.
+    pub aura_org_id: Option<String>,
 }
 
 impl ModelRequest {
@@ -66,6 +74,10 @@ pub struct ModelRequestBuilder {
     temperature: Option<f32>,
     thinking: Option<ThinkingConfig>,
     auth_token: Option<String>,
+    aura_project_id: Option<String>,
+    aura_agent_id: Option<String>,
+    aura_session_id: Option<String>,
+    aura_org_id: Option<String>,
 }
 
 impl ModelRequestBuilder {
@@ -82,6 +94,10 @@ impl ModelRequestBuilder {
             temperature: None,
             thinking: None,
             auth_token: None,
+            aura_project_id: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
         }
     }
 
@@ -141,6 +157,30 @@ impl ModelRequestBuilder {
         self
     }
 
+    #[must_use]
+    pub fn aura_project_id(mut self, id: Option<String>) -> Self {
+        self.aura_project_id = id;
+        self
+    }
+
+    #[must_use]
+    pub fn aura_agent_id(mut self, id: Option<String>) -> Self {
+        self.aura_agent_id = id;
+        self
+    }
+
+    #[must_use]
+    pub fn aura_session_id(mut self, id: Option<String>) -> Self {
+        self.aura_session_id = id;
+        self
+    }
+
+    #[must_use]
+    pub fn aura_org_id(mut self, id: Option<String>) -> Self {
+        self.aura_org_id = id;
+        self
+    }
+
     /// Build the request.
     #[must_use]
     pub fn build(self) -> ModelRequest {
@@ -154,6 +194,10 @@ impl ModelRequestBuilder {
             temperature: self.temperature,
             thinking: self.thinking,
             auth_token: self.auth_token,
+            aura_project_id: self.aura_project_id,
+            aura_agent_id: self.aura_agent_id,
+            aura_session_id: self.aura_session_id,
+            aura_org_id: self.aura_org_id,
         }
     }
 }

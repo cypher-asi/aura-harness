@@ -75,6 +75,7 @@ impl AnthropicProvider {
     /// Returns error if client creation fails.
     pub fn new(config: AnthropicConfig) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
             .timeout(std::time::Duration::from_millis(config.timeout_ms))
             .build()?;
         Ok(Self { client, config })
@@ -107,7 +108,7 @@ impl AnthropicProvider {
     /// that the retry loop can pattern-match on.
     async fn send_checked<B: Serialize + Sync>(
         &self,
-        auth_token: Option<&str>,
+        request_ctx: &ModelRequest,
         json_body: &B,
     ) -> Result<reqwest::Response, ApiError> {
         let mut req_builder = self
@@ -124,12 +125,24 @@ impl AnthropicProvider {
                     .header("anthropic-beta", "prompt-caching-2024-07-31");
             }
             RoutingMode::Proxy => {
-                let token = auth_token.ok_or_else(|| {
+                let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
                     ApiError::Other(ReasonerError::Internal("Proxy mode requires a JWT auth token".into()))
                 })?;
                 req_builder = req_builder
                     .header("authorization", format!("Bearer {token}"))
                     .header("anthropic-beta", "prompt-caching-2024-07-31");
+                if let Some(ref v) = request_ctx.aura_project_id {
+                    req_builder = req_builder.header("X-Aura-Project-Id", v);
+                }
+                if let Some(ref v) = request_ctx.aura_agent_id {
+                    req_builder = req_builder.header("X-Aura-Agent-Id", v);
+                }
+                if let Some(ref v) = request_ctx.aura_session_id {
+                    req_builder = req_builder.header("X-Aura-Session-Id", v);
+                }
+                if let Some(ref v) = request_ctx.aura_org_id {
+                    req_builder = req_builder.header("X-Aura-Org-Id", v);
+                }
             }
         }
 
@@ -174,7 +187,6 @@ impl ModelProvider for AnthropicProvider {
         let start = Instant::now();
         let models = self.model_chain(&request.model);
         let system = build_system_block(&request.system);
-        let auth_token = request.auth_token.as_deref();
 
         let mut last_err: Option<ReasonerError> = None;
 
@@ -213,7 +225,7 @@ impl ModelProvider for AnthropicProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
 
-                match self.send_checked(auth_token, &api_request).await {
+                match self.send_checked(&request, &api_request).await {
                     Ok(response) => {
                         let latency_ms =
                             u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -298,7 +310,6 @@ impl ModelProvider for AnthropicProvider {
     async fn complete_streaming(&self, request: ModelRequest) -> Result<StreamEventStream, ReasonerError> {
         let models = self.model_chain(&request.model);
         let system = build_system_block(&request.system);
-        let auth_token = request.auth_token.as_deref();
 
         let mut last_err: Option<ReasonerError> = None;
 
@@ -338,7 +349,7 @@ impl ModelProvider for AnthropicProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
 
-                match self.send_checked(auth_token, &api_request).await {
+                match self.send_checked(&request, &api_request).await {
                     Ok(response) => {
                         if model_idx > 0 {
                             info!(

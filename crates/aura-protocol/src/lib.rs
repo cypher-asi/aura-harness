@@ -77,6 +77,15 @@ pub struct SessionInit {
     /// Prior conversation messages to restore into session history.
     #[serde(default)]
     pub conversation_messages: Option<Vec<ConversationMessage>>,
+    /// Project-agent UUID for X-Aura-Agent-Id billing header.
+    #[serde(default)]
+    pub aura_agent_id: Option<String>,
+    /// Storage session UUID for X-Aura-Session-Id billing header.
+    #[serde(default)]
+    pub aura_session_id: Option<String>,
+    /// Organization UUID for X-Aura-Org-Id billing header.
+    #[serde(default)]
+    pub aura_org_id: Option<String>,
 }
 
 /// Payload for `user_message`.

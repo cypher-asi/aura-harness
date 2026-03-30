@@ -74,6 +74,14 @@ pub struct AgentLoopConfig {
     /// On the first iteration, tools are filtered to this set and
     /// `tool_choice` is set to force tool usage.
     pub tool_hints: Option<Vec<String>>,
+    /// Project ID for X-Aura-Project-Id billing header.
+    pub aura_project_id: Option<String>,
+    /// Project-agent UUID for X-Aura-Agent-Id billing header.
+    pub aura_agent_id: Option<String>,
+    /// Storage session UUID for X-Aura-Session-Id billing header.
+    pub aura_session_id: Option<String>,
+    /// Org UUID for X-Aura-Org-Id billing header.
+    pub aura_org_id: Option<String>,
 }
 
 impl Default for AgentLoopConfig {
@@ -96,6 +104,10 @@ impl Default for AgentLoopConfig {
             model: aura_core::DEFAULT_MODEL.to_string(),
             auth_token: None,
             tool_hints: None,
+            aura_project_id: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
         }
     }
 }
@@ -341,6 +353,10 @@ impl LoopState {
             .tool_choice(tool_choice)
             .max_tokens(self.thinking_budget)
             .auth_token(config.auth_token.clone())
+            .aura_project_id(config.aura_project_id.clone())
+            .aura_agent_id(config.aura_agent_id.clone())
+            .aura_session_id(config.aura_session_id.clone())
+            .aura_org_id(config.aura_org_id.clone())
             .build()
     }
 }

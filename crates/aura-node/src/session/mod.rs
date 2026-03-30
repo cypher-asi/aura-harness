@@ -63,6 +63,12 @@ pub struct Session {
     pub auth_token: Option<String>,
     /// Project ID for domain tool calls.
     pub project_id: Option<String>,
+    /// Project-agent UUID for X-Aura-Agent-Id billing header.
+    pub aura_agent_id: Option<String>,
+    /// Storage session UUID for X-Aura-Session-Id billing header.
+    pub aura_session_id: Option<String>,
+    /// Org UUID for X-Aura-Org-Id billing header.
+    pub aura_org_id: Option<String>,
 }
 
 impl Session {
@@ -88,6 +94,9 @@ impl Session {
             context_window_tokens: 200_000,
             auth_token: None,
             project_id: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
         }
     }
 
@@ -151,6 +160,15 @@ impl Session {
         if let Some(pid) = init.project_id {
             self.project_id = Some(pid);
         }
+        if let Some(id) = init.aura_agent_id {
+            self.aura_agent_id = Some(id);
+        }
+        if let Some(id) = init.aura_session_id {
+            self.aura_session_id = Some(id);
+        }
+        if let Some(id) = init.aura_org_id {
+            self.aura_org_id = Some(id);
+        }
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
                 match msg.role.as_str() {
@@ -190,6 +208,10 @@ impl Session {
             max_tokens: self.max_tokens,
             max_context_tokens: Some(self.context_window_tokens),
             auth_token: self.auth_token.clone(),
+            aura_project_id: self.project_id.clone(),
+            aura_agent_id: self.aura_agent_id.clone(),
+            aura_session_id: self.aura_session_id.clone(),
+            aura_org_id: self.aura_org_id.clone(),
             ..AgentLoopConfig::default()
         }
     }
