@@ -15,6 +15,7 @@ pub(super) async fn ws_upgrade_handler(
     let ctx = WsContext {
         workspace_base: state.config.workspaces_path(),
         provider: state.provider.clone(),
+        store: state.store.clone(),
         tool_config: state.tool_config.clone(),
         auth_token,
         catalog: state.catalog.clone(),

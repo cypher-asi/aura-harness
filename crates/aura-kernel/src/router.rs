@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tracing::{debug, error, instrument, warn};
 
 /// Router that dispatches actions to the appropriate executor.
+#[derive(Clone)]
 pub struct ExecutorRouter {
     executors: Vec<Arc<dyn Executor>>,
 }

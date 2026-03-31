@@ -3,11 +3,13 @@
 //! Manages the agent session using `AgentLoop` for multi-step orchestration.
 
 use aura_agent::{
-    prompts::default_system_prompt, AgentLoop, AgentLoopConfig, AgentLoopResult, KernelToolExecutor,
+    prompts::default_system_prompt, AgentLoop, AgentLoopConfig, AgentLoopResult,
+    KernelModelGateway, KernelToolGateway,
 };
 use aura_core::{AgentId, Identity};
+use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
-use aura_store::RocksStore;
+use aura_store::{RocksStore, Store};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -80,13 +82,13 @@ impl SessionConfig {
 /// An interactive CLI session.
 pub struct Session {
     identity: Identity,
-    #[allow(dead_code)]
     store: Arc<RocksStore>,
     provider_name: String,
     current_seq: u64,
     agent_loop: AgentLoop,
-    provider: Box<dyn ModelProvider>,
-    executor: KernelToolExecutor,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
+    executor_router: ExecutorRouter,
+    workspace: PathBuf,
     tools: Vec<ToolDefinition>,
     messages: Vec<Message>,
 }
@@ -110,11 +112,11 @@ impl Session {
         debug!(?store_path, "Opened store");
 
         let workspace = config.workspace_root.join(identity.agent_id.to_hex());
-        let (kernel_executor, tools) =
-            crate::session_helpers::build_tool_executor(identity.agent_id, workspace);
+        let (executor_router, tools) =
+            crate::session_helpers::build_executor_router();
 
         let selection = crate::session_helpers::select_provider(&config.provider);
-        let provider: Box<dyn ModelProvider> = selection.provider;
+        let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::from(selection.provider);
         let provider_name = selection.name;
 
         let agent_loop = AgentLoop::new(config.loop_config);
@@ -128,7 +130,8 @@ impl Session {
             current_seq: 1,
             agent_loop,
             provider,
-            executor: kernel_executor,
+            executor_router,
+            workspace,
             tools,
             messages: Vec::new(),
         })
@@ -161,11 +164,15 @@ impl Session {
         self.messages.push(Message::user(text));
         self.current_seq += 1;
 
+        let kernel = self.build_kernel()?;
+        let model_gateway = KernelModelGateway::new(kernel.clone());
+        let tool_gateway = KernelToolGateway::new(kernel);
+
         let result = self
             .agent_loop
             .run(
-                self.provider.as_ref(),
-                &self.executor,
+                &model_gateway,
+                &tool_gateway,
                 self.messages.clone(),
                 self.tools.clone(),
             )
@@ -174,6 +181,24 @@ impl Session {
         self.messages.clone_from(&result.messages);
 
         Ok(result)
+    }
+
+    fn build_kernel(&self) -> anyhow::Result<Arc<Kernel>> {
+        let config = KernelConfig {
+            workspace_base: self.workspace.clone(),
+            ..KernelConfig::default()
+        };
+
+        let store: Arc<dyn Store> = self.store.clone();
+        let kernel = Kernel::new(
+            store,
+            self.provider.clone(),
+            self.executor_router.clone(),
+            config,
+            self.identity.agent_id,
+        )?;
+
+        Ok(Arc::new(kernel))
     }
 
     /// Update the auth token for subsequent model requests.

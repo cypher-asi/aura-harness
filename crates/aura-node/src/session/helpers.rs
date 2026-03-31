@@ -9,6 +9,7 @@ use crate::protocol::{
     SessionUsage, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
 };
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
+use aura_kernel::{Kernel, KernelConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -63,6 +64,7 @@ pub(super) fn handle_session_init(
     }));
 }
 
+#[allow(dead_code)] // Retained until Phase 9 removes it
 pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> KernelToolExecutor {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
@@ -96,6 +98,55 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
         None => session.workspace.join(session.agent_id.to_hex()),
     };
     KernelToolExecutor::new(router, session.agent_id, workspace)
+}
+
+pub(super) fn build_kernel(session: &Session, ctx: &WsContext) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
+    let domain_exec = ctx.domain_api.as_ref().map(|api| {
+        use aura_tools::domain_tools::DomainToolExecutor;
+        Arc::new(DomainToolExecutor::with_session_context(
+            api.clone(),
+            session.auth_token.clone(),
+            session.project_id.clone(),
+        ))
+    });
+
+    let mut resolver =
+        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec);
+
+    if let Some(ref controller) = ctx.automaton_controller {
+        let project_id = session.project_id.clone().unwrap_or_default();
+        let workspace_root = session.project_path.clone();
+        for tool in aura_tools::automaton_tools::devloop_control_tools(
+            controller.clone(),
+            project_id,
+            workspace_root,
+            session.auth_token.clone(),
+        ) {
+            resolver.register(tool);
+        }
+    }
+
+    let router = executor_factory::build_executor_router(resolver);
+
+    let workspace = match session.project_path {
+        Some(ref pp) => pp.clone(),
+        None => session.workspace.join(session.agent_id.to_hex()),
+    };
+
+    let config = KernelConfig {
+        workspace_base: workspace,
+        ..KernelConfig::default()
+    };
+
+    let kernel = Kernel::new(
+        ctx.store.clone(),
+        ctx.provider.clone(),
+        router,
+        config,
+        session.agent_id,
+    )?;
+
+    Ok(Arc::new(kernel))
 }
 
 pub(super) async fn forward_events_to_ws(

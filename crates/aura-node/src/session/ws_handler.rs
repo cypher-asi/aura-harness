@@ -5,7 +5,7 @@ use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
-use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult};
+use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway};
 use aura_reasoner::Message;
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
@@ -256,7 +256,21 @@ fn start_turn(
 
     session.messages.push(Message::user(&msg.content));
 
-    let kernel_executor = helpers::build_kernel_executor(session, ctx);
+    let kernel = match helpers::build_kernel(session, ctx) {
+        Ok(k) => k,
+        Err(e) => {
+            error!(session_id = %session.session_id, error = %e, "Failed to build kernel");
+            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                code: "kernel_error".into(),
+                message: format!("Failed to build kernel: {e}"),
+                recoverable: true,
+            }));
+            return None;
+        }
+    };
+
+    let model_gateway = KernelModelGateway::new(kernel.clone());
+    let tool_gateway = KernelToolGateway::new(kernel);
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
@@ -264,7 +278,6 @@ fn start_turn(
 
     let tools = session.tool_definitions.clone();
     let messages = session.messages.clone();
-    let provider = ctx.provider.clone();
 
     let cancel_token = CancellationToken::new();
     let cancel_for_loop = cancel_token.clone();
@@ -275,8 +288,8 @@ fn start_turn(
     let join_handle = tokio::spawn(async move {
         let mut result: anyhow::Result<AgentLoopResult> = agent_loop
             .run_with_events(
-                provider.as_ref(),
-                &kernel_executor,
+                &model_gateway,
+                &tool_gateway,
                 messages,
                 tools,
                 Some(event_tx),

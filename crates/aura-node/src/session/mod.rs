@@ -12,6 +12,7 @@ use crate::protocol::{self, SessionInit};
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{AgentId, InstalledToolDefinition};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
+use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
@@ -259,6 +260,8 @@ pub struct WsContext {
     pub workspace_base: PathBuf,
     /// Shared model provider (type-erased).
     pub provider: Arc<dyn ModelProvider + Send + Sync>,
+    /// Persistent store for kernel recording.
+    pub store: Arc<dyn Store>,
     /// Tool configuration (fs/cmd permissions).
     pub tool_config: ToolConfig,
     /// JWT auth token from the WebSocket upgrade request.
