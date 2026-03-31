@@ -135,6 +135,7 @@ tokio-tungstenite = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 base64 = { workspace = true }
+dashmap = { workspace = true }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

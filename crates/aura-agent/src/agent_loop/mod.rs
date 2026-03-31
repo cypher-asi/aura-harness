@@ -13,6 +13,8 @@ mod tool_execution_tests;
 mod tool_processing;
 
 #[cfg(test)]
+mod contract_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_advanced;

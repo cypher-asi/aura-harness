@@ -27,9 +27,15 @@ max_turns: number | null,
  */
 installed_tools: Array<InstalledTool> | null, 
 /**
- * Workspace directory path.
+ * Workspace directory path (must be under the server's workspace base).
  */
 workspace: string | null, 
+/**
+ * Absolute path to the real project directory on the host filesystem.
+ * When set, tool execution happens directly in this directory instead of
+ * the sandboxed `aura_data/workspaces/` tree.
+ */
+project_path: string | null, 
 /**
  * JWT auth token for proxy routing.
  */
@@ -41,4 +47,16 @@ project_id: string | null,
 /**
  * Prior conversation messages to restore into session history.
  */
-conversation_messages: Array<ConversationMessage> | null, };
+conversation_messages: Array<ConversationMessage> | null, 
+/**
+ * Project-agent UUID for X-Aura-Agent-Id billing header.
+ */
+aura_agent_id: string | null, 
+/**
+ * Storage session UUID for X-Aura-Session-Id billing header.
+ */
+aura_session_id: string | null, 
+/**
+ * Organization UUID for X-Aura-Org-Id billing header.
+ */
+aura_org_id: string | null, };

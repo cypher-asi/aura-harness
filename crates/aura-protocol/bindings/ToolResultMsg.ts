@@ -3,4 +3,4 @@
 /**
  * Payload for `tool_result`.
  */
-export type ToolResultMsg = { name: string, result: string, is_error: boolean, tool_use_id?: string, };
+export type ToolResultMsg = { name: string, result: string, is_error: boolean, tool_use_id: string | null, };
