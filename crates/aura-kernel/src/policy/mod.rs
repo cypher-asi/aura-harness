@@ -31,13 +31,15 @@ pub enum PermissionLevel {
 }
 
 /// Default permission level for a tool based on its name.
+///
+/// All core tools default to `AlwaysAllow`. The `AskOnce`/`AlwaysAsk`
+/// levels require an approval UI that is not yet implemented; until then,
+/// specific tools can be restricted via `PolicyConfig::tool_permissions`.
 #[must_use]
 pub fn default_tool_permission(tool: &str) -> PermissionLevel {
     match tool {
-        "list_files" | "read_file" | "stat_file" | "search_code" | "run_command" => {
-            PermissionLevel::AlwaysAllow
-        }
-        "write_file" | "edit_file" => PermissionLevel::AskOnce,
+        "list_files" | "read_file" | "stat_file" | "search_code" | "run_command"
+        | "write_file" | "edit_file" | "delete_file" => PermissionLevel::AlwaysAllow,
         _ => PermissionLevel::Deny,
     }
 }

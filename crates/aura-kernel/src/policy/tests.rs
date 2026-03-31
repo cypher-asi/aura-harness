@@ -9,7 +9,7 @@ fn test_default_permissions() {
     );
     assert_eq!(
         default_tool_permission("write_file"),
-        PermissionLevel::AskOnce
+        PermissionLevel::AlwaysAllow
     );
     assert_eq!(
         default_tool_permission("run_command"),
@@ -65,17 +65,19 @@ fn test_restrictive_policy_blocks_unknown_tool() {
 
 #[test]
 fn test_session_approvals() {
-    let policy = Policy::with_defaults();
+    let config =
+        PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);
+    let policy = Policy::new(config);
 
-    assert!(policy.requires_approval("write_file"));
+    assert!(policy.requires_approval("guarded_tool"));
 
-    policy.approve_for_session("write_file");
+    policy.approve_for_session("guarded_tool");
 
-    assert!(!policy.requires_approval("write_file"));
-    assert!(policy.is_session_approved("write_file"));
+    assert!(!policy.requires_approval("guarded_tool"));
+    assert!(policy.is_session_approved("guarded_tool"));
 
     policy.clear_session_approvals();
-    assert!(policy.requires_approval("write_file"));
+    assert!(policy.requires_approval("guarded_tool"));
 }
 
 #[test]
@@ -109,14 +111,16 @@ fn test_restrictive_config() {
 
 #[test]
 fn test_revoke_session_approval() {
-    let policy = Policy::with_defaults();
+    let config =
+        PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);
+    let policy = Policy::new(config);
 
-    policy.approve_for_session("write_file");
-    assert!(policy.is_session_approved("write_file"));
+    policy.approve_for_session("guarded_tool");
+    assert!(policy.is_session_approved("guarded_tool"));
 
-    policy.revoke_session_approval("write_file");
-    assert!(!policy.is_session_approved("write_file"));
-    assert!(policy.requires_approval("write_file"));
+    policy.revoke_session_approval("guarded_tool");
+    assert!(!policy.is_session_approved("guarded_tool"));
+    assert!(policy.requires_approval("guarded_tool"));
 }
 
 #[test]
@@ -185,17 +189,21 @@ fn test_check_tool_denied_in_restrictive() {
 
 #[test]
 fn test_check_tool_ask_once_not_approved() {
-    let policy = Policy::with_defaults();
-    let result = policy.check_tool("write_file", &serde_json::json!({}));
+    let config =
+        PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);
+    let policy = Policy::new(config);
+    let result = policy.check_tool("guarded_tool", &serde_json::json!({}));
     assert!(!result.allowed);
     assert!(result.reason.unwrap().contains("requires approval"));
 }
 
 #[test]
 fn test_check_tool_ask_once_after_approval() {
-    let policy = Policy::with_defaults();
-    policy.approve_for_session("write_file");
-    let result = policy.check_tool("write_file", &serde_json::json!({}));
+    let config =
+        PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);
+    let policy = Policy::new(config);
+    policy.approve_for_session("guarded_tool");
+    let result = policy.check_tool("guarded_tool", &serde_json::json!({}));
     assert!(result.allowed);
 }
 
@@ -323,8 +331,10 @@ fn test_policy_add_allowed_tools() {
 
 #[test]
 fn test_check_denies_ask_once_tool_without_approval() {
-    let policy = Policy::with_defaults();
-    let tool_call = ToolCall::new("write_file", serde_json::json!({"path": "f.txt"}));
+    let config =
+        PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);
+    let policy = Policy::new(config);
+    let tool_call = ToolCall::new("guarded_tool", serde_json::json!({"path": "f.txt"}));
     let payload = serde_json::to_vec(&tool_call).unwrap();
     let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
 
@@ -335,10 +345,12 @@ fn test_check_denies_ask_once_tool_without_approval() {
 
 #[test]
 fn test_check_allows_ask_once_tool_after_approval() {
-    let policy = Policy::with_defaults();
-    policy.approve_for_session("write_file");
+    let config =
+        PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);
+    let policy = Policy::new(config);
+    policy.approve_for_session("guarded_tool");
 
-    let tool_call = ToolCall::new("write_file", serde_json::json!({"path": "f.txt"}));
+    let tool_call = ToolCall::new("guarded_tool", serde_json::json!({"path": "f.txt"}));
     let payload = serde_json::to_vec(&tool_call).unwrap();
     let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
 
