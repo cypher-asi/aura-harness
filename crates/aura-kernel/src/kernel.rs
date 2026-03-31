@@ -107,17 +107,29 @@ pub struct ReasonResult {
 pub struct ReasonStreamHandle {
     kernel_store: Arc<dyn Store>,
     agent_id: AgentId,
-    seq: u64,
+    seq_counter: Arc<Mutex<u64>>,
     #[allow(dead_code)]
     config: KernelConfig,
 }
 
 impl ReasonStreamHandle {
+    fn next_seq(&self) -> u64 {
+        let mut seq = self
+            .seq_counter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = *seq;
+        *seq += 1;
+        current
+    }
+
     /// Record a successfully completed streaming response.
     ///
     /// # Errors
     /// Returns error if serialization or store append fails.
     pub fn record_completed(&self, response: &ModelResponse) -> Result<RecordEntry, crate::KernelError> {
+        let seq = self.next_seq();
+
         let reasoning_payload = serde_json::json!({
             "model": response.trace.model,
             "stop_reason": format!("{:?}", response.stop_reason),
@@ -134,12 +146,12 @@ impl ReasonStreamHandle {
             None,
         );
 
-        let entry = RecordEntry::builder(self.seq, tx)
+        let entry = RecordEntry::builder(seq, tx)
             .context_hash([0u8; 32])
             .build();
 
         self.kernel_store
-            .append_entry_direct(self.agent_id, self.seq, &entry)
+            .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
 
         Ok(entry)
@@ -150,6 +162,8 @@ impl ReasonStreamHandle {
     /// # Errors
     /// Returns error if serialization or store append fails.
     pub fn record_failed(&self, error: &str) -> Result<RecordEntry, crate::KernelError> {
+        let seq = self.next_seq();
+
         let reasoning_payload = serde_json::json!({
             "error": error,
             "status": "failed",
@@ -164,12 +178,12 @@ impl ReasonStreamHandle {
             None,
         );
 
-        let entry = RecordEntry::builder(self.seq, tx)
+        let entry = RecordEntry::builder(seq, tx)
             .context_hash([0u8; 32])
             .build();
 
         self.kernel_store
-            .append_entry_direct(self.agent_id, self.seq, &entry)
+            .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
 
         Ok(entry)
@@ -192,7 +206,7 @@ pub struct Kernel {
     config: KernelConfig,
     /// Agent this kernel instance is bound to.
     pub agent_id: AgentId,
-    seq: Mutex<u64>,
+    seq: Arc<Mutex<u64>>,
 }
 
 impl Kernel {
@@ -221,7 +235,7 @@ impl Kernel {
             policy,
             config,
             agent_id,
-            seq: Mutex::new(head_seq + 1),
+            seq: Arc::new(Mutex::new(head_seq + 1)),
         })
     }
 
@@ -663,8 +677,6 @@ impl Kernel {
         &self,
         request: ModelRequest,
     ) -> Result<(ReasonStreamHandle, StreamEventStream), crate::KernelError> {
-        let seq = self.next_seq();
-
         let stream = self
             .provider
             .complete_streaming(request)
@@ -674,7 +686,7 @@ impl Kernel {
         let handle = ReasonStreamHandle {
             kernel_store: self.store.clone(),
             agent_id: self.agent_id,
-            seq,
+            seq_counter: self.seq.clone(),
             config: self.config.clone(),
         };
 
