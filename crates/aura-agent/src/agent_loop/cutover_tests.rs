@@ -1,9 +1,9 @@
-//! Cutover tests: AgentLoop equivalents of every TurnProcessor test.
+//! Cutover tests: AgentLoop equivalents of every former TurnProcessor test.
 //!
 //! These tests verify that AgentLoop covers the same behavioral surface as
-//! TurnProcessor, ensuring no coverage is lost during the migration.
+//! the removed TurnProcessor, ensuring no coverage was lost during migration.
 
-use aura_reasoner::{ContentBlock, Message, MockProvider, MockResponse, ModelProvider, ToolDefinition};
+use aura_reasoner::{ContentBlock, Message, MockProvider, MockResponse, ToolDefinition};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -45,7 +45,7 @@ fn read_file_tool() -> ToolDefinition {
 }
 
 // =========================================================================
-// Unit-test equivalents (from turn_processor/tests.rs)
+// Unit-test equivalents (formerly in turn_processor/tests.rs)
 // =========================================================================
 
 /// Equivalent of `test_simple_turn`.
@@ -104,7 +104,7 @@ async fn agentloop_tool_use_then_text() {
 /// AgentLoop's budget check reserves the last iteration slot for a final
 /// text response (`iteration >= max_iterations - 1`), so we set
 /// `max_iterations` one higher than the desired cap to get the same
-/// effective iteration count as TurnProcessor's `max_steps`.
+/// effective iteration count as the former TurnProcessor's `max_steps`.
 #[tokio::test]
 async fn agentloop_max_iterations_stops() {
     let provider = MockProvider::new().with_default_response(MockResponse::tool_use(
@@ -405,43 +405,21 @@ async fn agentloop_token_accounting() {
 
 /// Equivalent of `test_stream_callback_emits_events`.
 ///
-/// Uses a `ModelCallDelegate` so that events are emitted through the
-/// non-streaming delegate path (the direct streaming path requires
-/// `complete_streaming` which `MockProvider` doesn't implement).
+/// Uses the streaming path with `event_tx` to verify events are emitted.
+/// `MockProvider` inherits the default `complete_streaming` which wraps
+/// `complete()` in stream events, so this works without a real streaming
+/// provider.
 #[tokio::test]
 async fn agentloop_events_emitted() {
-    use std::sync::Arc;
+    let provider = MockProvider::simple_response("Hello from stream!");
+    let agent = AgentLoop::new(default_config());
 
-    struct NonStreamingDelegate {
-        provider: MockProvider,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::runtime::ModelCallDelegate for NonStreamingDelegate {
-        async fn call_model(
-            &self,
-            request: aura_reasoner::ModelRequest,
-        ) -> anyhow::Result<aura_reasoner::ModelResponse> {
-            self.provider
-                .complete(request)
-                .await
-                .map_err(anyhow::Error::from)
-        }
-    }
-
-    let inner_provider = MockProvider::simple_response("Hello from stream!");
-    let delegate = NonStreamingDelegate {
-        provider: inner_provider,
-    };
-    let agent = AgentLoop::new(default_config()).with_model_delegate(Arc::new(delegate));
-
-    let dummy_provider = MockProvider::new();
     let executor = MockExecutor { results: vec![] };
     let (tx, mut rx) = mpsc::channel::<TurnEvent>(100);
 
     let result = agent
         .run_with_events(
-            &dummy_provider,
+            &provider,
             &executor,
             vec![Message::user("Hello")],
             vec![],

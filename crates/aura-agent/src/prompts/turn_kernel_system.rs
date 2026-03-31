@@ -1,7 +1,6 @@
-//! Default system prompt for the kernel turn processor (`TurnConfig::system_prompt`).
+//! Default system prompt for the agent loop (`AgentLoopConfig::system_prompt`).
 //!
-//! Callers set this on `TurnConfig` or equivalent agent loop configuration; the kernel
-//! default is an empty string.
+//! Callers set this on `AgentLoopConfig`; the default is an empty string.
 
 /// Default system prompt for the autonomous coding agent using kernel filesystem/shell tools.
 #[must_use]

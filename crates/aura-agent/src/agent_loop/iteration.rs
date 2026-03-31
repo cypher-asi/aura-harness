@@ -85,11 +85,7 @@ fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
 impl AgentLoop {
     /// Call the model and translate errors.
     ///
-    /// When a [`ModelCallDelegate`](crate::runtime::ModelCallDelegate) is set,
-    /// the call is routed through the delegate (gaining its streaming,
-    /// cancellation, and replay). Otherwise falls back to the direct
-    /// provider path (streaming when `event_tx` is present, non-streaming
-    /// otherwise).
+    /// Uses streaming when `event_tx` is present, non-streaming otherwise.
     pub(super) async fn call_model(
         &self,
         provider: &dyn ModelProvider,
@@ -100,13 +96,6 @@ impl AgentLoop {
         let stream_timeout = self.config.stream_timeout;
 
         timeout(stream_timeout, async {
-            if let Some(delegate) = &self.model_delegate {
-                return delegate
-                    .call_model(request)
-                    .await
-                    .map_err(|e| classify_anyhow_error(&e));
-            }
-
             if event_tx.is_some() {
                 self.complete_with_streaming(provider, request, event_tx, cancellation_token)
                     .await

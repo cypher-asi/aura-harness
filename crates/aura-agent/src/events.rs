@@ -1,13 +1,11 @@
 //! Unified streaming events emitted during agent execution.
 //!
-//! `TurnEvent` is the single event type for both `AgentLoop` and
-//! `TurnProcessor`. Consumers subscribe by passing an
-//! `mpsc::UnboundedSender<TurnEvent>` to the orchestrator.
+//! `TurnEvent` is the event type for `AgentLoop`. Consumers subscribe
+//! by passing an `mpsc::Sender<TurnEvent>` to the orchestrator.
 
 /// Unified events emitted during agent/turn execution.
 ///
-/// Covers all events previously split between `AgentLoopEvent` and
-/// `StreamCallbackEvent`.
+/// Covers all events emitted during agent execution.
 #[derive(Debug, Clone)]
 pub enum TurnEvent {
     /// Incremental text content from the model.

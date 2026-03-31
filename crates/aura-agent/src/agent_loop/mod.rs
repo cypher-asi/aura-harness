@@ -24,10 +24,8 @@ mod tests;
 mod tests_advanced;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
-use crate::runtime::ModelCallDelegate;
 use aura_reasoner::{Message, ModelProvider, ModelRequest, StopReason, ToolDefinition};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
@@ -124,39 +122,13 @@ impl Default for AgentLoopConfig {
 /// The main multi-step agent loop orchestrator.
 pub struct AgentLoop {
     config: AgentLoopConfig,
-    /// Optional delegate for model calls. When set, the loop delegates
-    /// model completions to this processor instead of calling the
-    /// `ModelProvider` directly, gaining the delegate's streaming,
-    /// cancellation, and replay infrastructure.
-    model_delegate: Option<Arc<dyn ModelCallDelegate>>,
 }
 
 impl AgentLoop {
     /// Create a new agent loop with the given configuration.
     #[must_use]
     pub fn new(config: AgentLoopConfig) -> Self {
-        Self {
-            config,
-            model_delegate: None,
-        }
-    }
-
-    /// Set a [`ModelCallDelegate`] to handle model calls.
-    ///
-    /// When a delegate is set, [`AgentLoop`] routes all model completions
-    /// through `delegate.call_model()` instead of calling the provider
-    /// directly. The delegate handles streaming, cancellation, and replay
-    /// internally.
-    ///
-    /// **Streaming note:** Per-token streaming events (text deltas, thinking
-    /// deltas) are emitted by the delegate's own callback. Configure
-    /// streaming on the delegate before passing it here. Higher-level
-    /// events (`IterationComplete`, `ToolResult`, `Error`) are still
-    /// emitted through `event_tx`.
-    #[must_use]
-    pub fn with_model_delegate(mut self, delegate: Arc<dyn ModelCallDelegate>) -> Self {
-        self.model_delegate = Some(delegate);
-        self
+        Self { config }
     }
 
     /// Update the auth token for subsequent model requests.

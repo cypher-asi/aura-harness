@@ -1,38 +1,17 @@
 //! Contract tests for AgentLoop behavior that must hold across all refactor phases.
 
-use std::sync::Arc;
-
 use aura_reasoner::{
-    ContentBlock, Message, MockProvider, MockResponse, ModelProvider, StopReason, ToolDefinition,
-    Usage,
+    ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition, Usage,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{AgentLoop, AgentLoopConfig};
 use crate::events::TurnEvent;
-use crate::runtime::ModelCallDelegate;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 
 struct MockExecutor {
     results: Vec<ToolCallResult>,
-}
-
-struct NonStreamingDelegate {
-    provider: MockProvider,
-}
-
-#[async_trait::async_trait]
-impl ModelCallDelegate for NonStreamingDelegate {
-    async fn call_model(
-        &self,
-        request: aura_reasoner::ModelRequest,
-    ) -> anyhow::Result<aura_reasoner::ModelResponse> {
-        self.provider
-            .complete(request)
-            .await
-            .map_err(anyhow::Error::from)
-    }
 }
 
 #[async_trait::async_trait]
@@ -217,18 +196,14 @@ async fn contract_streaming_events_ordered() {
         ))
         .with_response(MockResponse::text("Done."));
 
-    let delegate = NonStreamingDelegate { provider };
-    let agent = AgentLoop::new(default_config())
-        .with_model_delegate(Arc::new(delegate));
-
-    let dummy_provider = MockProvider::new();
+    let agent = AgentLoop::new(default_config());
     let messages = vec![Message::user("Read test.txt")];
     let tools = vec![read_file_tool()];
 
     let (tx, mut rx) = mpsc::channel::<TurnEvent>(100);
 
     let result = agent
-        .run_with_events(&dummy_provider, &executor, messages, tools, Some(tx), None)
+        .run_with_events(&provider, &executor, messages, tools, Some(tx), None)
         .await
         .unwrap();
 

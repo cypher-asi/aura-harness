@@ -128,32 +128,65 @@ pub trait ModelProvider: Send + Sync {
         &self,
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
-        // Default: fall back to non-streaming
         let response = self.complete(request).await?;
 
-        // Convert response to stream events
-        let events = vec![
-            Ok(StreamEvent::MessageStart {
-                message_id: response.trace.request_id.clone().unwrap_or_default(),
-                model: response.trace.model.clone(),
-                input_tokens: Some(response.usage.input_tokens),
-                cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
-                cache_read_input_tokens: response.usage.cache_read_input_tokens,
-            }),
-            Ok(StreamEvent::ContentBlockStart {
-                index: 0,
-                content_type: StreamContentType::Text,
-            }),
-            Ok(StreamEvent::TextDelta {
-                text: response.message.text_content(),
-            }),
-            Ok(StreamEvent::ContentBlockStop { index: 0 }),
-            Ok(StreamEvent::MessageDelta {
-                stop_reason: Some(response.stop_reason),
-                output_tokens: response.usage.output_tokens,
-            }),
-            Ok(StreamEvent::MessageStop),
-        ];
+        let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![Ok(StreamEvent::MessageStart {
+            message_id: response.trace.request_id.clone().unwrap_or_default(),
+            model: response.trace.model.clone(),
+            input_tokens: Some(response.usage.input_tokens),
+            cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: response.usage.cache_read_input_tokens,
+        })];
+
+        for (index, block) in response.message.content.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let idx = index as u32;
+            match block {
+                ContentBlock::Text { text } => {
+                    events.push(Ok(StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_type: StreamContentType::Text,
+                    }));
+                    events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
+                    events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
+                }
+                ContentBlock::Thinking { thinking, signature } => {
+                    events.push(Ok(StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_type: StreamContentType::Thinking,
+                    }));
+                    events.push(Ok(StreamEvent::ThinkingDelta {
+                        thinking: thinking.clone(),
+                    }));
+                    if let Some(sig) = signature {
+                        events.push(Ok(StreamEvent::SignatureDelta {
+                            signature: sig.clone(),
+                        }));
+                    }
+                    events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    events.push(Ok(StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_type: StreamContentType::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                        },
+                    }));
+                    events.push(Ok(StreamEvent::InputJsonDelta {
+                        partial_json: input.to_string(),
+                    }));
+                    events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
+                }
+                _ => {}
+            }
+        }
+
+        events.push(Ok(StreamEvent::MessageDelta {
+            stop_reason: Some(response.stop_reason),
+            output_tokens: response.usage.output_tokens,
+        }));
+        events.push(Ok(StreamEvent::MessageStop));
 
         Ok(Box::pin(futures_util::stream::iter(events)))
     }

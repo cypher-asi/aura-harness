@@ -1,21 +1,15 @@
 //! # Runtime
 //!
-//! Turn processor and process manager used by `aura-agent`.
+//! Process manager used by `aura-agent`.
 //!
 //! This module provides:
-//! - Multi-step turn processor for agentic loops (Spec-02)
 //! - Process manager for async command execution
 
 pub mod process_manager;
-mod turn_processor;
 
 pub use process_manager::{ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess};
-pub use turn_processor::{
-    ExecutedToolCall, ModelCallDelegate, StepConfig, StepResult, StreamCallback,
-    StreamCallbackEvent, ToolCache, TurnConfig, TurnEntry, TurnProcessor, TurnResult,
-};
 
-/// Errors from the turn processor and process manager runtime layer.
+/// Errors from the process manager runtime layer.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("model error: {0}")]
