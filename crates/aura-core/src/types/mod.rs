@@ -78,6 +78,7 @@ mod tests {
             Just(TransactionType::ToolProposal),
             Just(TransactionType::ToolExecution),
             Just(TransactionType::ProcessComplete),
+            Just(TransactionType::Reasoning),
         ]
     }
 
@@ -307,6 +308,14 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_transaction_type_roundtrip() {
+        let json = serde_json::to_string(&TransactionType::Reasoning).unwrap();
+        assert_eq!(json, "\"reasoning\"");
+        let parsed: TransactionType = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, TransactionType::Reasoning);
+    }
+
+    #[test]
     fn transaction_type_serialization() {
         let types = vec![
             TransactionType::UserPrompt,
@@ -318,6 +327,7 @@ mod tests {
             TransactionType::ToolProposal,
             TransactionType::ToolExecution,
             TransactionType::ProcessComplete,
+            TransactionType::Reasoning,
         ];
 
         for tx_type in types {

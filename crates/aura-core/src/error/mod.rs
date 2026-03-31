@@ -16,6 +16,7 @@
 //!
 //! Uses `thiserror` for library errors with context preservation.
 
+#[allow(deprecated)]
 use crate::ids::{ActionId, AgentId, TxId};
 use thiserror::Error;
 
@@ -52,6 +53,7 @@ pub enum AuraError {
     /// variants. These are retained for potential use by higher layers that map
     /// store errors into `AuraError`.
     #[error("transaction not found: {tx_id}")]
+    #[allow(deprecated)]
     TransactionNotFound { tx_id: TxId },
 
     /// NOTE: Storage-layer code uses `StoreError` (in aura-store) rather than these

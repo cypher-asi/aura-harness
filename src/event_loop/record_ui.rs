@@ -13,17 +13,8 @@ pub(super) async fn send_record_to_ui(
     tx: &Transaction,
     entry: &RecordEntry,
 ) {
-    let (tx_kind, sender) = match tx.tx_type {
-        TransactionType::UserPrompt => ("Prompt".to_string(), "USER".to_string()),
-        TransactionType::ActionResult => ("Action".to_string(), "SYSTEM".to_string()),
-        TransactionType::System => ("System".to_string(), "SYSTEM".to_string()),
-        TransactionType::AgentMsg => ("Response".to_string(), "AURA".to_string()),
-        TransactionType::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
-        TransactionType::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
-        TransactionType::ToolProposal => ("Propose".to_string(), "LLM".to_string()),
-        TransactionType::ToolExecution => ("Execute".to_string(), "KERNEL".to_string()),
-        TransactionType::ProcessComplete => ("Complete".to_string(), "SYSTEM".to_string()),
-    };
+    let (kind, sndr) = crate::record_loader::tx_type_label(tx.tx_type);
+    let (tx_kind, sender) = (kind.to_string(), sndr.to_string());
 
     let message = String::from_utf8_lossy(&tx.payload).to_string();
     let message = if message.len() > 200 {

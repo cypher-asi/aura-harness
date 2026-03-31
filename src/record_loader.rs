@@ -44,17 +44,8 @@ pub fn load_existing_records(
     };
 
     for entry in records {
-        let (tx_kind, sender) = match entry.tx.tx_type {
-            TransactionType::UserPrompt => ("Prompt".to_string(), "USER".to_string()),
-            TransactionType::ActionResult => ("Action".to_string(), "SYSTEM".to_string()),
-            TransactionType::System => ("System".to_string(), "SYSTEM".to_string()),
-            TransactionType::AgentMsg => ("Response".to_string(), "AURA".to_string()),
-            TransactionType::Trigger => ("Trigger".to_string(), "SYSTEM".to_string()),
-            TransactionType::SessionStart => ("Session".to_string(), "SYSTEM".to_string()),
-            TransactionType::ToolProposal => ("Propose".to_string(), "LLM".to_string()),
-            TransactionType::ToolExecution => ("Execute".to_string(), "KERNEL".to_string()),
-            TransactionType::ProcessComplete => ("Complete".to_string(), "SYSTEM".to_string()),
-        };
+        let (tx_kind, sender) = tx_type_label(entry.tx.tx_type);
+        let (tx_kind, sender) = (tx_kind.to_string(), sender.to_string());
 
         let message = String::from_utf8_lossy(&entry.tx.payload).to_string();
         let message = if message.len() > 200 {
@@ -153,6 +144,22 @@ pub fn send_initial_agent(
     let _ = commands.try_send(UiCommand::SetActiveAgent(hex::encode(
         identity.agent_id.as_bytes(),
     )));
+}
+
+/// Map a transaction type to its display label and sender name.
+pub fn tx_type_label(tx_type: TransactionType) -> (&'static str, &'static str) {
+    match tx_type {
+        TransactionType::UserPrompt => ("Prompt", "USER"),
+        TransactionType::ActionResult => ("Action", "SYSTEM"),
+        TransactionType::System => ("System", "SYSTEM"),
+        TransactionType::AgentMsg => ("Response", "AURA"),
+        TransactionType::Trigger => ("Trigger", "SYSTEM"),
+        TransactionType::SessionStart => ("Session", "SYSTEM"),
+        TransactionType::ToolProposal => ("Propose", "LLM"),
+        TransactionType::ToolExecution => ("Execute", "KERNEL"),
+        TransactionType::ProcessComplete => ("Complete", "SYSTEM"),
+        TransactionType::Reasoning => ("Reasoning", "KERNEL"),
+    }
 }
 
 /// Extract tool name or other info from a transaction payload.

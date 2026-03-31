@@ -1,5 +1,6 @@
 //! Storage error types.
 
+#[allow(deprecated)]
 use aura_core::{AgentId, TxId};
 use thiserror::Error;
 
@@ -32,6 +33,7 @@ pub enum StoreError {
 
     /// The requested transaction hash was not found in the store.
     #[deprecated(note = "reserved for future use — not currently produced by RocksStore")]
+    #[allow(deprecated)]
     #[error("transaction not found: {0}")]
     TransactionNotFound(TxId),
 

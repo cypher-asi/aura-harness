@@ -7,13 +7,14 @@ use std::fmt;
 
 macro_rules! define_id {
     (
-        $(#[doc = $doc:expr])*
+        $(#[$meta:meta])*
         $name:ident, $len:expr, $serde_mod:expr, truncate = $trunc:expr
     ) => {
-        $(#[doc = $doc])*
+        $(#[$meta])*
         #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
         pub struct $name(#[serde(with = $serde_mod)] pub [u8; $len]);
 
+        #[allow(deprecated)]
         impl $name {
             #[must_use]
             pub const fn new(bytes: [u8; $len]) -> Self {
@@ -41,6 +42,7 @@ macro_rules! define_id {
             }
         }
 
+        #[allow(deprecated)]
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let hex = self.to_hex();
@@ -53,6 +55,7 @@ macro_rules! define_id {
             }
         }
 
+        #[allow(deprecated)]
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let hex = self.to_hex();
@@ -127,10 +130,12 @@ impl AgentId {
 // ============================================================================
 
 define_id!(
+    #[deprecated(note = "use Hash — TxId is a legacy alias")]
     /// Transaction identifier - 32 bytes, typically a hash of tx content.
     TxId, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
 );
 
+#[allow(deprecated)]
 impl TxId {
     /// Generate a `TxId` by hashing content.
     #[must_use]

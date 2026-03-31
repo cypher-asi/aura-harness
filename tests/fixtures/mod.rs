@@ -1,6 +1,7 @@
 //! Shared test fixtures for AURA OS.
 //!
 //! Provides common test data and helpers used across all crates.
+#![allow(deprecated)]
 
 use aura_core::{
     Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectKind, EffectStatus,

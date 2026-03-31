@@ -19,6 +19,7 @@ fn create_test_tx(agent_id: AgentId) -> Transaction {
     )
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_enqueue_dequeue() {
     let (store, _dir) = create_test_store();

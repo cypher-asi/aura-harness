@@ -8,6 +8,7 @@ use proptest::prelude::*;
 // ID Roundtrip Tests
 // ============================================================================
 
+#[allow(deprecated)]
 mod id_tests {
     use super::*;
     use aura_core::{ActionId, AgentId, TxId};
