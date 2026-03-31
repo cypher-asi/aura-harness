@@ -42,8 +42,19 @@ fn test_policy_allows_fs_read() {
 }
 
 #[test]
-fn test_policy_blocks_unknown_tool() {
+fn test_default_policy_allows_unlisted_tool() {
     let policy = Policy::with_defaults();
+    let tool_call = ToolCall::new("unknown.tool", serde_json::json!({}));
+    let payload = serde_json::to_vec(&tool_call).unwrap();
+    let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
+
+    let result = policy.check(&proposal);
+    assert!(result.allowed);
+}
+
+#[test]
+fn test_restrictive_policy_blocks_unknown_tool() {
+    let policy = Policy::new(PolicyConfig::restrictive());
     let tool_call = ToolCall::new("unknown.tool", serde_json::json!({}));
     let payload = serde_json::to_vec(&tool_call).unwrap();
     let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
@@ -138,8 +149,14 @@ fn test_always_allow_does_not_require_approval() {
 }
 
 #[test]
-fn test_denied_tool_requires_approval() {
+fn test_unlisted_tool_allowed_by_default() {
     let policy = Policy::with_defaults();
+    assert!(!policy.requires_approval("some_unknown_tool"));
+}
+
+#[test]
+fn test_unlisted_tool_denied_in_restrictive() {
+    let policy = Policy::new(PolicyConfig::restrictive());
     assert!(policy.requires_approval("some_unknown_tool"));
 }
 
@@ -152,8 +169,15 @@ fn test_check_tool_always_allow() {
 }
 
 #[test]
-fn test_check_tool_denied() {
+fn test_check_tool_unlisted_allowed_by_default() {
     let policy = Policy::with_defaults();
+    let result = policy.check_tool("evil_tool", &serde_json::json!({}));
+    assert!(result.allowed);
+}
+
+#[test]
+fn test_check_tool_denied_in_restrictive() {
+    let policy = Policy::new(PolicyConfig::restrictive());
     let result = policy.check_tool("evil_tool", &serde_json::json!({}));
     assert!(!result.allowed);
     assert!(result.reason.unwrap().contains("not allowed"));
@@ -286,7 +310,7 @@ fn test_add_allowed_tools_batch() {
 
 #[test]
 fn test_policy_add_allowed_tools() {
-    let mut policy = Policy::with_defaults();
+    let mut policy = Policy::new(PolicyConfig::restrictive());
     assert!(policy.requires_approval("custom_installed_tool"));
 
     policy.add_allowed_tools(vec!["custom_installed_tool"]);

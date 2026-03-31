@@ -57,6 +57,10 @@ pub struct PolicyConfig {
     pub max_proposals: usize,
     /// Custom permission overrides for specific tools
     pub tool_permissions: HashMap<String, PermissionLevel>,
+    /// When true, tools not in `allowed_tools` or `tool_permissions` get
+    /// `AlwaysAllow` instead of `Deny`. The kernel is the sole gateway, so
+    /// the default is open; use [`PolicyConfig::restrictive`] to lock down.
+    pub allow_unlisted: bool,
 }
 
 impl Default for PolicyConfig {
@@ -81,6 +85,7 @@ impl Default for PolicyConfig {
             allowed_tools,
             max_proposals: 8,
             tool_permissions: HashMap::new(),
+            allow_unlisted: true,
         }
     }
 }
@@ -93,6 +98,7 @@ impl PolicyConfig {
     }
 
     /// Create a restrictive config with only read-only tools.
+    /// Unlisted tools are denied.
     #[must_use]
     pub fn restrictive() -> Self {
         let mut allowed_tools = HashSet::new();
@@ -103,6 +109,7 @@ impl PolicyConfig {
 
         Self {
             allowed_tools,
+            allow_unlisted: false,
             ..Self::default()
         }
     }
@@ -179,11 +186,15 @@ impl Policy {
             return *level;
         }
 
-        if !self.config.allowed_tools.contains(tool) {
-            return PermissionLevel::Deny;
+        if self.config.allowed_tools.contains(tool) {
+            return default_tool_permission(tool);
         }
 
-        default_tool_permission(tool)
+        if self.config.allow_unlisted {
+            return PermissionLevel::AlwaysAllow;
+        }
+
+        PermissionLevel::Deny
     }
 
     /// Check if a tool is approved for this session.
