@@ -57,6 +57,7 @@ pub mod git;
 #[allow(dead_code)]
 mod helpers;
 mod kernel_executor;
+mod kernel_gateway;
 // TODO: parser is WIP — remove allow once integrated
 #[allow(dead_code)]
 pub(crate) mod parser;
@@ -93,6 +94,7 @@ pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS, DEFAULT_MODEL, FALLBACK_MODEL};
 pub use events::{AgentLoopEvent, TurnEvent};
 pub use kernel_executor::KernelToolExecutor;
+pub use kernel_gateway::{KernelModelGateway, KernelToolGateway};
 pub use runtime::{
     ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,
 };
