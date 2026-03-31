@@ -88,5 +88,5 @@ pub enum TurnEvent {
     },
 }
 
-/// Backward-compatible alias for `TurnEvent`.
+/// Backward-compatible alias. Prefer [`TurnEvent`] for new code.
 pub type AgentLoopEvent = TurnEvent;

@@ -13,29 +13,42 @@ use crate::schedule::Schedule;
 use crate::state::AutomatonState;
 use crate::types::{AutomatonId, AutomatonInfo, AutomatonStatus};
 
+/// A long-running background task registered with [`AutomatonRuntime`].
+///
+/// Implementations define lifecycle hooks and a recurring `tick` that drives execution.
 #[async_trait::async_trait]
 pub trait Automaton: Send + Sync + 'static {
+    /// Returns the automaton's type identifier (e.g. `"dev-loop"`, `"chat"`).
     fn kind(&self) -> &str;
 
+    /// Returns the default schedule for this automaton. Defaults to [`Schedule::OnDemand`].
     fn default_schedule(&self) -> Schedule {
         Schedule::OnDemand
     }
 
+    /// Called once after installation, before the first tick. Use for setup work.
     async fn on_install(&self, _ctx: &TickContext) -> Result<(), AutomatonError> {
         Ok(())
     }
 
+    /// Called repeatedly while the automaton is running. Return [`TickOutcome`] to
+    /// signal whether to continue, finish, or yield.
     async fn tick(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError>;
 
+    /// Called after the run loop exits (whether by completion, cancellation, or error).
     async fn on_stop(&self, _ctx: &TickContext) -> Result<(), AutomatonError> {
         Ok(())
     }
 }
 
+/// Result of a single [`Automaton::tick`] invocation.
 #[derive(Debug, Clone)]
 pub enum TickOutcome {
+    /// The automaton should be ticked again immediately.
     Continue,
+    /// The automaton has finished its work and should be cleaned up.
     Done,
+    /// The automaton is yielding control (e.g. waiting for external input).
     Yield { reason: String },
 }
 
@@ -47,6 +60,7 @@ struct RunningAutomaton {
     event_tx: mpsc::Sender<AutomatonEvent>,
 }
 
+/// Manages the lifecycle of [`Automaton`] instances (install, run, stop, list).
 pub struct AutomatonRuntime {
     instances: Arc<DashMap<String, RunningAutomaton>>,
 }
@@ -58,6 +72,7 @@ impl AutomatonRuntime {
         }
     }
 
+    /// Installs and starts an automaton, returning a handle and an event receiver.
     #[allow(clippy::unused_async)]
     pub async fn install(
         &self,
@@ -213,6 +228,7 @@ impl AutomatonRuntime {
         instances.remove(id.as_str());
     }
 
+    /// Returns metadata for all currently registered automaton instances.
     pub fn list(&self) -> Vec<AutomatonInfo> {
         self.instances
             .iter()
@@ -226,6 +242,7 @@ impl AutomatonRuntime {
             .map(|entry| entry.value().info.clone())
     }
 
+    /// Cancels the automaton with the given ID. Returns an error if not found.
     pub fn stop(&self, id: &str) -> Result<(), AutomatonError> {
         if let Some(entry) = self.instances.get(id) {
             entry.value().cancel.cancel();

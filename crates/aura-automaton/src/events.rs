@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+/// Events emitted by an automaton during its lifecycle (start, stop, tool use, progress, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AutomatonEvent {

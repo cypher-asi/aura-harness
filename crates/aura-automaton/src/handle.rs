@@ -3,6 +3,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::types::{AutomatonId, AutomatonStatus};
 
+/// Client-side handle for controlling a running [`crate::runtime::Automaton`] (stop, pause, resume, status).
 pub struct AutomatonHandle {
     id: AutomatonId,
     cancel: CancellationToken,

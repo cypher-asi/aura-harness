@@ -35,6 +35,7 @@ pub use kernel::{Kernel, KernelConfig, ProcessResult, Proposer};
 pub use policy::{default_tool_permission, PermissionLevel, Policy, PolicyConfig, PolicyResult};
 pub use router::ExecutorRouter;
 
+/// Errors from the deterministic kernel (store, reasoner, serialization).
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
     #[error("store error: {0}")]

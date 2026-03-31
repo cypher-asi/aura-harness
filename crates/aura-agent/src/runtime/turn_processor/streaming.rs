@@ -15,7 +15,7 @@ use tracing::{error, info};
 /// allowing real-time display of the response as it's generated.
 pub type StreamCallback = Box<dyn Fn(StreamCallbackEvent) + Send + Sync>;
 
-/// Backward-compatible alias for `TurnEvent`.
+/// Backward-compatible alias. Prefer [`TurnEvent`] for new code.
 pub type StreamCallbackEvent = TurnEvent;
 
 /// Classify an LLM error message into a machine-readable code and recoverability.

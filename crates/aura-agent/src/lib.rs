@@ -103,6 +103,7 @@ pub use types::{
     ToolCallResult,
 };
 
+/// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error("model error: {0}")]

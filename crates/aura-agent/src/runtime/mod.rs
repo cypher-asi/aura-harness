@@ -15,6 +15,7 @@ pub use turn_processor::{
     StreamCallbackEvent, ToolCache, TurnConfig, TurnEntry, TurnProcessor, TurnResult,
 };
 
+/// Errors from the turn processor and process manager runtime layer.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("model error: {0}")]

@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+/// Errors from automaton lifecycle operations (install, tick, stop) and runtime management.
 #[derive(Debug, Error)]
 pub enum AutomatonError {
     #[error("automaton not found: {0}")]
