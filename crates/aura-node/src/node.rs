@@ -5,6 +5,7 @@ use crate::config::NodeConfig;
 use crate::domain::HttpDomainApi;
 use crate::router::{create_router, RouterState};
 use crate::scheduler::Scheduler;
+use anyhow::Context;
 use aura_automaton::AutomatonRuntime;
 use aura_kernel::Executor;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
@@ -16,7 +17,6 @@ use aura_tools::{ToolCatalog, ToolConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use anyhow::Context;
 use tracing::{info, warn};
 
 /// The Aura Node runtime.
@@ -80,11 +80,8 @@ impl Node {
 
         let tools = catalog.visible_tools(ToolProfile::Core, &tool_config);
         let domain_exec = Arc::new(DomainToolExecutor::new(domain_api.clone()));
-        let resolver = crate::executor_factory::build_tool_resolver(
-            &catalog,
-            &tool_config,
-            Some(domain_exec),
-        );
+        let resolver =
+            crate::executor_factory::build_tool_resolver(&catalog, &tool_config, Some(domain_exec));
         let resolver: Arc<dyn Executor> = Arc::new(resolver);
         let executors = vec![resolver];
         info!("Executors configured");

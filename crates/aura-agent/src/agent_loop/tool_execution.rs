@@ -55,7 +55,10 @@ async fn execute_and_cache_tools(
     if tool_calls.is_empty() {
         return None;
     }
-    info!(tool_count = tool_calls.len(), "Processing tool_use stop reason");
+    info!(
+        tool_count = tool_calls.len(),
+        "Processing tool_use stop reason"
+    );
     for tc in &tool_calls {
         info!(
             tool_use_id = %tc.id,
@@ -66,8 +69,10 @@ async fn execute_and_cache_tools(
     }
 
     let (cached_results, uncached_calls) = split_cached(&tool_calls, &state.tool_cache);
-    let cached_ids: HashSet<String> =
-        cached_results.iter().map(|r| r.tool_use_id.clone()).collect();
+    let cached_ids: HashSet<String> = cached_results
+        .iter()
+        .map(|r| r.tool_use_id.clone())
+        .collect();
     info!(
         cached_count = cached_results.len(),
         execute_count = uncached_calls.len(),
@@ -97,10 +102,7 @@ async fn execute_and_cache_tools(
     })
 }
 
-fn emit_and_log_results(
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    tools: &ExecutedTools,
-) {
+fn emit_and_log_results(event_tx: Option<&Sender<AgentLoopEvent>>, tools: &ExecutedTools) {
     for r in &tools.all_results {
         let tool_name = tools
             .tool_calls
@@ -320,4 +322,3 @@ pub(super) fn push_tool_result_message_with_context(
         messages.push(Message::new(aura_reasoner::Role::User, blocks));
     }
 }
-

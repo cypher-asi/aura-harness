@@ -228,11 +228,7 @@ mod stub_domain {
         ) -> anyhow::Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
-        async fn list_messages(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<Vec<MessageDescriptor>> {
+        async fn list_messages(&self, _: &str, _: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
             Ok(vec![])
         }
         async fn save_message(&self, _: SaveMessageParams) -> anyhow::Result<()> {
@@ -244,10 +240,7 @@ mod stub_domain {
         ) -> anyhow::Result<SessionDescriptor> {
             anyhow::bail!("stub")
         }
-        async fn get_active_session(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<SessionDescriptor>> {
+        async fn get_active_session(&self, _: &str) -> anyhow::Result<Option<SessionDescriptor>> {
             Ok(None)
         }
         async fn orbit_api_call(
@@ -278,10 +271,9 @@ async fn domain_tool_succeeds_with_inaccessible_workspace() {
     use crate::domain_tools::DomainToolExecutor;
 
     let cat = Arc::new(ToolCatalog::new());
-    let resolver =
-        ToolResolver::new(cat, ToolConfig::default()).with_domain_executor(Arc::new(
-            DomainToolExecutor::new(Arc::new(stub_domain::StubDomainApi)),
-        ));
+    let resolver = ToolResolver::new(cat, ToolConfig::default()).with_domain_executor(Arc::new(
+        DomainToolExecutor::new(Arc::new(stub_domain::StubDomainApi)),
+    ));
 
     let ctx = ExecuteContext::new(
         AgentId::generate(),
@@ -315,10 +307,9 @@ async fn get_project_succeeds_with_inaccessible_workspace() {
     use crate::domain_tools::DomainToolExecutor;
 
     let cat = Arc::new(ToolCatalog::new());
-    let resolver =
-        ToolResolver::new(cat, ToolConfig::default()).with_domain_executor(Arc::new(
-            DomainToolExecutor::new(Arc::new(stub_domain::StubDomainApi)),
-        ));
+    let resolver = ToolResolver::new(cat, ToolConfig::default()).with_domain_executor(Arc::new(
+        DomainToolExecutor::new(Arc::new(stub_domain::StubDomainApi)),
+    ));
 
     let ctx = ExecuteContext::new(
         AgentId::generate(),

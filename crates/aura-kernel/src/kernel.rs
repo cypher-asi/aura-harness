@@ -176,8 +176,7 @@ where
             if p.proposals.len() > max {
                 warn!(
                     count = p.proposals.len(),
-                    max,
-                    "Truncating proposals to max_proposals limit"
+                    max, "Truncating proposals to max_proposals limit"
                 );
                 p.proposals.truncate(max);
             }

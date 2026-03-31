@@ -180,8 +180,7 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
 
     state.messages.push(Message::user(text));
 
-    let (process_result, streamed_text) =
-        handlers::run_agent_turn(state, &tx, inbox_seq).await;
+    let (process_result, streamed_text) = handlers::run_agent_turn(state, &tx, inbox_seq).await;
 
     match process_result {
         Ok(result) => {
@@ -257,4 +256,3 @@ async fn enqueue_and_dequeue(state: &mut LoopState<'_>, text: &str) -> Option<(T
 
     Some((tx, inbox_seq))
 }
-

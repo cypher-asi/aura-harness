@@ -270,4 +270,3 @@ fn convert_descriptors_to_messages(descriptors: &[MessageDescriptor]) -> Vec<Mes
         })
         .collect()
 }
-

@@ -5,7 +5,7 @@ use rustyline::Editor;
 use crate::session::Session;
 
 /// Submit a user prompt to the agent and display the response.
-pub(crate) async fn handle_prompt(session: &mut Session, text: &str) {
+pub async fn handle_prompt(session: &mut Session, text: &str) {
     println!("{} Processing...\n", "▶".blue().bold());
 
     match session.submit_prompt(text).await {
@@ -41,7 +41,7 @@ pub(crate) async fn handle_prompt(session: &mut Session, text: &str) {
 }
 
 /// Print current session status (agent ID, sequence, provider).
-pub(crate) fn handle_status(session: &Session) {
+pub fn handle_status(session: &Session) {
     println!("{}", "Session Status".cyan().bold());
     println!("  Agent ID: {}", session.agent_id());
     println!("  Sequence: {}", session.current_seq());
@@ -52,13 +52,13 @@ pub(crate) fn handle_status(session: &Session) {
 /// TODO: Implement - currently prints placeholder message.
 ///
 /// Display the last `n` conversation history entries.
-pub(crate) fn handle_history(_session: &Session, _n: usize) {
+pub fn handle_history(_session: &Session, _n: usize) {
     println!("{} History display not yet implemented", "ℹ".blue().bold());
     println!();
 }
 
 /// Approve the currently pending tool-execution request.
-pub(crate) fn handle_approve(session: &Session) {
+pub fn handle_approve(session: &Session) {
     if let Err(e) = session.approve_pending() {
         eprintln!("{} {}", "Error:".red().bold(), e);
     } else {
@@ -68,7 +68,7 @@ pub(crate) fn handle_approve(session: &Session) {
 }
 
 /// Deny the currently pending tool-execution request.
-pub(crate) fn handle_deny(session: &Session) {
+pub fn handle_deny(session: &Session) {
     if let Err(e) = session.deny_pending() {
         eprintln!("{} {}", "Error:".red().bold(), e);
     } else {
@@ -80,13 +80,13 @@ pub(crate) fn handle_deny(session: &Session) {
 /// TODO: Implement - currently prints placeholder message.
 ///
 /// Display pending file-level changes (not yet implemented).
-pub(crate) fn handle_diff(_session: &Session) {
+pub fn handle_diff(_session: &Session) {
     println!("{} Diff display not yet implemented", "ℹ".blue().bold());
     println!();
 }
 
 /// Prompt for zOS credentials and authenticate to obtain a JWT.
-pub(crate) async fn handle_login(session: &mut Session, rl: &mut Editor<(), DefaultHistory>) {
+pub async fn handle_login(session: &mut Session, rl: &mut Editor<(), DefaultHistory>) {
     let email = match rl.readline("  Email: ") {
         Ok(e) if !e.trim().is_empty() => e.trim().to_string(),
         Ok(_) => {
@@ -155,7 +155,7 @@ pub(crate) async fn handle_login(session: &mut Session, rl: &mut Editor<(), Defa
 }
 
 /// Clear stored credentials and invalidate the remote session.
-pub(crate) async fn handle_logout(session: &mut Session) {
+pub async fn handle_logout(session: &mut Session) {
     if let Some(stored) = aura_auth::CredentialStore::load() {
         let client = match aura_auth::ZosClient::new() {
             Ok(c) => c,
@@ -180,7 +180,7 @@ pub(crate) async fn handle_logout(session: &mut Session) {
 }
 
 /// Show current authentication status from stored credentials.
-pub(crate) fn handle_whoami() {
+pub fn handle_whoami() {
     match aura_auth::CredentialStore::load() {
         Some(session) => {
             println!("{}", "Authentication".cyan().bold());

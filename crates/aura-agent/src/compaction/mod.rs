@@ -246,7 +246,7 @@ struct CompactionParams {
     tail_chars: Option<usize>,
 }
 
-fn select_compaction_candidates(
+const fn select_compaction_candidates(
     messages: &[Message],
     config: &CompactionConfig,
 ) -> Option<CompactionParams> {

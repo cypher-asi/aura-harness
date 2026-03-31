@@ -3,11 +3,11 @@
 
 use super::ws_handler::populate_tool_definitions;
 use super::{Session, WsContext};
+use crate::executor_factory;
 use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
     SessionUsage, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
 };
-use crate::executor_factory;
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -63,10 +63,7 @@ pub(super) fn handle_session_init(
     }));
 }
 
-pub(super) fn build_kernel_executor(
-    session: &Session,
-    ctx: &WsContext,
-) -> KernelToolExecutor {
+pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> KernelToolExecutor {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
         Arc::new(DomainToolExecutor::with_session_context(

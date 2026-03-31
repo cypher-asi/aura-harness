@@ -350,4 +350,3 @@ impl TaskRunAutomaton {
         Ok(TickOutcome::Done)
     }
 }
-

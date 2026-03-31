@@ -5,7 +5,7 @@ use aura_tools::domain_tools::DomainToolExecutor;
 use aura_tools::{ToolCatalog, ToolConfig, ToolResolver};
 use std::sync::Arc;
 
-pub(crate) fn build_tool_resolver(
+pub fn build_tool_resolver(
     catalog: &Arc<ToolCatalog>,
     tool_config: &ToolConfig,
     domain_exec: Option<Arc<DomainToolExecutor>>,
@@ -17,7 +17,7 @@ pub(crate) fn build_tool_resolver(
     resolver
 }
 
-pub(crate) fn build_executor_router(resolver: ToolResolver) -> ExecutorRouter {
+pub fn build_executor_router(resolver: ToolResolver) -> ExecutorRouter {
     let mut router = ExecutorRouter::new();
     router.add_executor(Arc::new(resolver));
     router

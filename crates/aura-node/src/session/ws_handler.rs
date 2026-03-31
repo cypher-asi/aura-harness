@@ -303,4 +303,3 @@ fn start_turn(
         message_id,
     })
 }
-

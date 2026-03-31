@@ -50,7 +50,7 @@ fn strip_property_descriptions(mut schema: serde_json::Value) -> serde_json::Val
 // Core tools (filesystem, shell, search)
 // ============================================================================
 
-pub(crate) fn core_tool_definitions() -> Vec<ToolDefinition> {
+pub fn core_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = filesystem_tools();
     tools.extend(shell_tools());
     tools.extend(search_tools());
@@ -186,7 +186,7 @@ fn search_tools() -> Vec<ToolDefinition> {
 // Chat agent tools
 // ============================================================================
 
-pub(crate) fn chat_management_tools() -> Vec<ToolDefinition> {
+pub fn chat_management_tools() -> Vec<ToolDefinition> {
     let mut tools = spec_tool_definitions();
     tools.extend(task_tool_definitions());
     tools.extend(project_tool_definitions());
@@ -196,7 +196,7 @@ pub(crate) fn chat_management_tools() -> Vec<ToolDefinition> {
     tools
 }
 
-pub(crate) fn orbit_tool_definitions() -> Vec<ToolDefinition> {
+pub fn orbit_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         compact_tool(
             "orbit_push",
@@ -251,7 +251,7 @@ pub(crate) fn orbit_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
-pub(crate) fn network_tool_definitions() -> Vec<ToolDefinition> {
+pub fn network_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         compact_tool(
             "post_to_feed",
@@ -316,7 +316,7 @@ fn dev_loop_tool_definitions() -> Vec<ToolDefinition> {
 // Engine tools
 // ============================================================================
 
-pub(crate) fn engine_specific_tools() -> Vec<ToolDefinition> {
+pub fn engine_specific_tools() -> Vec<ToolDefinition> {
     vec![
         tool(
             "task_done",

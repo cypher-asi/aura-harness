@@ -188,12 +188,7 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
     cmd.current_dir(&workspace);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
 
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        cmd.output(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await {
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);

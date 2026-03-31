@@ -3,7 +3,7 @@
 /// Input that doesn't start with `/` is treated as a [`Command::Prompt`].
 /// Slash-prefixed input is parsed as a named command (e.g. `/status`, `/quit`).
 #[derive(Debug)]
-pub(crate) enum Command {
+pub enum Command {
     /// Free-text prompt sent to the agent for processing.
     Prompt(String),
     /// Display session status (agent ID, sequence, provider).

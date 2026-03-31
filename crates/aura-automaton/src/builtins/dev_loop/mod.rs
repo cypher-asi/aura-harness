@@ -226,4 +226,3 @@ pub fn forward_agent_event(
         tracing::warn!("automaton event channel full or closed: {e}");
     }
 }
-

@@ -266,10 +266,7 @@ impl Store for RocksStore {
             }
 
             let entry = serde_json::from_slice::<RecordEntry>(&value).map_err(|e| {
-                StoreError::Deserialization(format!(
-                    "record seq={}: {e}",
-                    record_key.seq
-                ))
+                StoreError::Deserialization(format!("record seq={}: {e}", record_key.seq))
             })?;
             entries.push(entry);
 

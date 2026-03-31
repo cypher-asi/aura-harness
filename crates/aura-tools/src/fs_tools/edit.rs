@@ -124,10 +124,7 @@ fn find_match_in_content(
              Use replace_all=true to replace all, or make the search text more specific."
         )))
     } else if replace_all {
-        Ok((
-            content.replace(old_text_norm, new_text_norm),
-            exact_count,
-        ))
+        Ok((content.replace(old_text_norm, new_text_norm), exact_count))
     } else {
         Ok((content.replacen(old_text_norm, new_text_norm, 1), 1))
     }
@@ -191,9 +188,20 @@ pub fn fs_edit(
     replace_all: bool,
 ) -> Result<ToolResult, ToolError> {
     let edit = validate_edit_input(sandbox, path, old_text, new_text)?;
-    let (new_content, replacements) =
-        find_match_in_content(&edit.content, &edit.old_text_norm, &edit.new_text_norm, replace_all)?;
-    apply_edit(&edit.resolved, path, &edit.content, new_content, edit.had_crlf, replacements)
+    let (new_content, replacements) = find_match_in_content(
+        &edit.content,
+        &edit.old_text_norm,
+        &edit.new_text_norm,
+        replace_all,
+    )?;
+    apply_edit(
+        &edit.resolved,
+        path,
+        &edit.content,
+        new_content,
+        edit.had_crlf,
+        replacements,
+    )
 }
 
 /// `fs_edit` tool: edit a file by replacing text.

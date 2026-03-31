@@ -258,7 +258,10 @@ impl StreamAccumulator {
         }
 
         if let Some(ref err_msg) = self.stream_error {
-            if self.text_content.is_empty() && self.tool_uses.is_empty() && self.current_tool_use.is_none() {
+            if self.text_content.is_empty()
+                && self.tool_uses.is_empty()
+                && self.current_tool_use.is_none()
+            {
                 return Err(ReasonerError::Internal(format!(
                     "stream terminated with error: {err_msg}"
                 )));

@@ -293,17 +293,14 @@ mod tests {
         let runtime = AutomatonRuntime::new();
 
         let (handle, _rx) = runtime
-            .install(
-                Box::new(ImmediateAutomaton),
-                serde_json::json!({}),
-                None,
-            )
+            .install(Box::new(ImmediateAutomaton), serde_json::json!({}), None)
             .await
             .unwrap();
 
         let list = runtime.list();
         assert!(
-            list.iter().any(|info| info.id.as_str() == handle.id().as_str()),
+            list.iter()
+                .any(|info| info.id.as_str() == handle.id().as_str()),
             "installed automaton should appear in list()"
         );
         assert_eq!(list.len(), 1);
@@ -315,11 +312,7 @@ mod tests {
         let runtime = AutomatonRuntime::new();
 
         let (handle, mut rx) = runtime
-            .install(
-                Box::new(ImmediateAutomaton),
-                serde_json::json!({}),
-                None,
-            )
+            .install(Box::new(ImmediateAutomaton), serde_json::json!({}), None)
             .await
             .unwrap();
 
@@ -327,11 +320,7 @@ mod tests {
 
         let mut saw_started = false;
         let mut saw_done = false;
-        while let Ok(evt) = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            rx.recv(),
-        )
-        .await
+        while let Ok(evt) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
         {
             match evt {
                 Some(AutomatonEvent::Started { .. }) => saw_started = true,

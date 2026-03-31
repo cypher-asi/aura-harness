@@ -294,7 +294,9 @@ where
             .as_deref()
             .unwrap_or(&self.config.model);
 
-        let max_tokens = step_config.thinking_budget.unwrap_or(self.config.max_tokens);
+        let max_tokens = step_config
+            .thinking_budget
+            .unwrap_or(self.config.max_tokens);
         let request = ModelRequest::builder(model, &self.config.system_prompt)
             .messages(messages.to_vec())
             .tools(tools)
@@ -325,8 +327,7 @@ where
                     if executed_tools.len() > max {
                         warn!(
                             count = executed_tools.len(),
-                            max,
-                            "Truncating tool results to max_tool_calls limit"
+                            max, "Truncating tool results to max_tool_calls limit"
                         );
                         executed_tools.truncate(max);
                     }

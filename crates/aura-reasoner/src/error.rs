@@ -42,7 +42,7 @@ pub enum ReasonerError {
 
 impl ReasonerError {
     #[must_use]
-    pub fn is_insufficient_credits(&self) -> bool {
+    pub const fn is_insufficient_credits(&self) -> bool {
         matches!(self, Self::InsufficientCredits(_))
     }
 }

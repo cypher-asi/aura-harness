@@ -1,7 +1,7 @@
 use colored::Colorize;
 
 /// Print the available commands and their descriptions.
-pub(crate) fn print_help() {
+pub fn print_help() {
     println!("{}", "Available Commands".cyan().bold());
     println!();
     println!("  {}    Submit a prompt to the agent", "<text>".green());
@@ -20,7 +20,7 @@ pub(crate) fn print_help() {
     println!();
 }
 
-pub(crate) fn banner() -> String {
+pub fn banner() -> String {
     format!(
         r"
 {}

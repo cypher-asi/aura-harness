@@ -18,6 +18,13 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Deserialize;
+
+type PtySetup = (
+    String,
+    Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    Box<dyn Read + Send>,
+    Box<dyn std::io::Write + Send>,
+);
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -111,18 +118,7 @@ async fn open_pty(
     Some((shell, master, reader, writer))
 }
 
-fn setup_pty(
-    cols: u16,
-    rows: u16,
-) -> Result<
-    (
-        String,
-        Arc<Mutex<Box<dyn MasterPty + Send>>>,
-        Box<dyn Read + Send>,
-        Box<dyn std::io::Write + Send>,
-    ),
-    String,
-> {
+fn setup_pty(cols: u16, rows: u16) -> Result<PtySetup, String> {
     let shell = default_shell();
     let cwd = default_cwd();
     let pty_system = native_pty_system();

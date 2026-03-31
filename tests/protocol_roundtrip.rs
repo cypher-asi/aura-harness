@@ -63,7 +63,10 @@ fn tool_auth_roundtrip_protocol_to_core() {
         let back_json = serde_json::to_string(&core_val).expect("re-serialize core ToolAuth");
         let roundtrip: aura_protocol::ToolAuth =
             serde_json::from_str(&back_json).expect("deserialize back to protocol ToolAuth");
-        assert_eq!(proto_val, &roundtrip, "ToolAuth roundtrip failed for {json}");
+        assert_eq!(
+            proto_val, &roundtrip,
+            "ToolAuth roundtrip failed for {json}"
+        );
     }
 }
 

@@ -44,7 +44,12 @@ where
         Ok(messages)
     }
 
-    fn load_history(&self, agent_id: AgentId, current_seq: u64, messages: &mut Vec<Message>) -> anyhow::Result<()> {
+    fn load_history(
+        &self,
+        agent_id: AgentId,
+        current_seq: u64,
+        messages: &mut Vec<Message>,
+    ) -> anyhow::Result<()> {
         let start_seq = current_seq
             .saturating_sub(self.config.context_window as u64)
             .max(1);
