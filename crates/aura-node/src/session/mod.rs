@@ -53,6 +53,8 @@ pub struct Session {
     /// Real project directory on the host filesystem.
     /// When set, tool execution uses this path directly.
     pub project_path: Option<PathBuf>,
+    /// Optional base directory that project_path must reside under (remote VM mode).
+    pub(super) project_base: Option<PathBuf>,
     /// Whether `session_init` has been received.
     pub initialized: bool,
     /// Available tool definitions (builtin + external).
@@ -89,6 +91,7 @@ impl Session {
             workspace: default_workspace.clone(),
             workspace_base: default_workspace,
             project_path: None,
+            project_base: None,
             initialized: false,
             tool_definitions: Vec::new(),
             context_window_tokens: 200_000,
@@ -151,6 +154,18 @@ impl Session {
                 .any(|c| matches!(c, std::path::Component::ParentDir))
             {
                 return Err("project_path must not contain '..' components".into());
+            }
+            // When project_base is configured (remote VM mode), validate that
+            // the project path is under it to prevent sandbox escape.
+            if let Some(ref base) = self.project_base {
+                let normalized = lexical_normalize(&candidate);
+                let normalized_base = lexical_normalize(base);
+                if !normalized.starts_with(&normalized_base) {
+                    return Err(format!(
+                        "project_path must be under {}",
+                        base.display()
+                    ));
+                }
             }
             self.project_path = Some(candidate);
         }
@@ -255,4 +270,78 @@ pub struct WsContext {
     pub automaton_controller: Option<Arc<dyn AutomatonController>>,
     /// Optional project base for remapping project paths (from `AURA_PROJECT_BASE`).
     pub project_base: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_protocol::SessionInit;
+
+    fn test_session(project_base: Option<&str>) -> Session {
+        let tmp = std::env::temp_dir().join("aura-test-session");
+        let _ = std::fs::create_dir_all(&tmp);
+        let mut s = Session::new(tmp);
+        s.project_base = project_base.map(PathBuf::from);
+        s
+    }
+
+    fn init_with_project_path(path: &str) -> SessionInit {
+        SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            workspace: None,
+            project_path: Some(path.into()),
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+        }
+    }
+
+    #[test]
+    fn project_path_allowed_when_no_base() {
+        let mut session = test_session(None);
+        let init = init_with_project_path("/any/absolute/path");
+        assert!(session.apply_init(init).is_ok());
+        assert_eq!(session.project_path.unwrap().to_str().unwrap(), "/any/absolute/path");
+    }
+
+    #[test]
+    fn project_path_allowed_under_base() {
+        let mut session = test_session(Some("/home/aura"));
+        let init = init_with_project_path("/home/aura/myproject");
+        assert!(session.apply_init(init).is_ok());
+    }
+
+    #[test]
+    fn project_path_blocked_outside_base() {
+        let mut session = test_session(Some("/home/aura"));
+        let init = init_with_project_path("/etc/passwd");
+        let result = session.apply_init(init);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be under"));
+    }
+
+    #[test]
+    fn project_path_blocked_with_traversal() {
+        let mut session = test_session(Some("/home/aura"));
+        let init = init_with_project_path("/home/aura/../etc/passwd");
+        let result = session.apply_init(init);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn project_path_rejects_relative() {
+        let mut session = test_session(None);
+        let init = init_with_project_path("relative/path");
+        let result = session.apply_init(init);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("absolute"));
+    }
 }
