@@ -143,3 +143,5 @@ impl From<aura_reasoner::ReasonerError> for AgentError {
 
 #[cfg(test)]
 mod event_sequence_tests;
+#[cfg(test)]
+mod store_migration_tests;

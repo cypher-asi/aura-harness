@@ -7,6 +7,48 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::warn;
 
+/// Resolve the canonical store path, migrating from legacy `store/` if needed.
+///
+/// Canonical path: `{data_dir}/db`. If a legacy `{data_dir}/store` directory
+/// exists and the canonical one does not, performs a one-time rename migration.
+pub fn resolve_store_path(data_dir: &Path) -> PathBuf {
+    let canonical = data_dir.join("db");
+    let legacy = data_dir.join("store");
+
+    if canonical.exists() {
+        if legacy.exists() {
+            tracing::warn!(
+                canonical = %canonical.display(),
+                legacy = %legacy.display(),
+                "Both 'db' and 'store' directories exist. Using canonical 'db' path. \
+                 Please manually reconcile or remove the legacy 'store' directory."
+            );
+        }
+        return canonical;
+    }
+    if legacy.exists() {
+        match std::fs::rename(&legacy, &canonical) {
+            Ok(()) => {
+                tracing::info!(
+                    from = %legacy.display(),
+                    to = %canonical.display(),
+                    "Migrated store from legacy path to canonical path"
+                );
+                return canonical;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    legacy = %legacy.display(),
+                    "Failed to migrate store — falling back to legacy path"
+                );
+                return legacy;
+            }
+        }
+    }
+    canonical
+}
+
 pub fn open_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
     Ok(Arc::new(RocksStore::open(path, false)?))
 }

@@ -195,7 +195,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     };
     let identity = Identity::new(&zns_id, "Terminal Agent");
 
-    let store_path = data_dir.join("store");
+    let store_path = session_helpers::resolve_store_path(&data_dir);
     let store = session_helpers::open_store(&store_path)?;
 
     record_loader::load_existing_records(&store, identity.agent_id, &cmd_tx);

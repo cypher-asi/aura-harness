@@ -100,7 +100,7 @@ impl NodeConfig {
     /// Get the `RocksDB` path.
     #[must_use]
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("db")
+        aura_agent::session_bootstrap::resolve_store_path(&self.data_dir)
     }
 
     /// Get the workspaces base path.
