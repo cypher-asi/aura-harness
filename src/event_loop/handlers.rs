@@ -3,7 +3,7 @@
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
-use aura_core::Transaction;
+use aura_core::{SystemKind, Transaction, TransactionType};
 use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -173,6 +173,25 @@ pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, passwor
                         .await;
                 } else {
                     state.agent_loop.set_auth_token(Some(token));
+                    let auth_payload = serde_json::json!({
+                        "system_kind": SystemKind::AuthChange,
+                        "action": "login",
+                        "display_name": display,
+                        "zid": zid,
+                    });
+                    if let Ok(payload_bytes) = serde_json::to_vec(&auth_payload) {
+                        let auth_tx = Transaction::new_chained(
+                            state.agent_id,
+                            TransactionType::System,
+                            payload_bytes,
+                            None,
+                        );
+                        if let Err(e) = state.kernel.process_direct(auth_tx).await {
+                            warn!(error = %e, "Failed to record auth login via kernel");
+                        }
+                    } else {
+                        warn!("Failed to serialize auth login payload");
+                    }
                     let _ = state
                         .commands
                         .send(UiCommand::ShowSuccess(format!(
@@ -199,7 +218,8 @@ pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, passwor
 }
 
 pub(super) async fn handle_logout(state: &mut LoopState<'_>) {
-    if let Some(stored) = aura_auth::CredentialStore::load() {
+    let session_before = aura_auth::CredentialStore::load();
+    if let Some(stored) = session_before.as_ref() {
         if let Ok(client) = aura_auth::ZosClient::new() {
             client.logout(&stored.access_token).await;
         }
@@ -207,6 +227,27 @@ pub(super) async fn handle_logout(state: &mut LoopState<'_>) {
     match aura_auth::CredentialStore::clear() {
         Ok(()) => {
             state.agent_loop.set_auth_token(None);
+            if let Some(stored) = session_before {
+                let auth_payload = serde_json::json!({
+                    "system_kind": SystemKind::AuthChange,
+                    "action": "logout",
+                    "display_name": stored.display_name,
+                    "zid": stored.primary_zid,
+                });
+                if let Ok(payload_bytes) = serde_json::to_vec(&auth_payload) {
+                    let auth_tx = Transaction::new_chained(
+                        state.agent_id,
+                        TransactionType::System,
+                        payload_bytes,
+                        None,
+                    );
+                    if let Err(e) = state.kernel.process_direct(auth_tx).await {
+                        warn!(error = %e, "Failed to record auth logout via kernel");
+                    }
+                } else {
+                    warn!("Failed to serialize auth logout payload");
+                }
+            }
             let _ = state
                 .commands
                 .send(UiCommand::ShowSuccess("Logged out".to_string()))

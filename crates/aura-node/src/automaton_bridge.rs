@@ -5,6 +5,8 @@
 //! It handles: JWT injection, tool executor wiring, event broadcasting,
 //! and non-blocking task execution.
 
+// TODO(Phase 8e): KernelDomainGateway wrapping DomainApi mutations through kernel.process()
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -21,6 +21,9 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
+// TODO(Phase 8): GitExecutor for kernel-recorded git mutations
+// TODO(Phase 8): BuildVerifyExecutor for kernel-recorded build/test
+
 mod context;
 pub mod executor;
 mod kernel;
