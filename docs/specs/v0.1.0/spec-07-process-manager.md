@@ -153,7 +153,7 @@ impl Hash {
 
 ```mermaid
 sequenceDiagram
-    participant TP as TurnProcessor
+    participant TP as AgentLoop
     participant K as Kernel
     participant PM as ProcessManager
     participant TX as Transaction_Channel
@@ -506,7 +506,7 @@ self.tx_sender.send(tx).await;
 
 ---
 
-## 9) TurnProcessor Integration
+## 9) AgentLoop Integration (was TurnProcessor)
 
 ### 9.1 Configuration
 
@@ -802,7 +802,7 @@ loop {
 - [x] Add ThresholdResult enum (Completed/Pending)
 
 ### Phase 3: Integration
-- [x] Integrate ProcessManager into TurnProcessor with sync_threshold_ms config
+- [x] Integrate ProcessManager into AgentLoop with sync_threshold_ms config
 - [x] Wire completion channel into app event loop for processing ProcessComplete transactions
 
 ### Phase 4: Testing
@@ -819,7 +819,7 @@ loop {
 | `aura-core/src/ids.rs` | Add `Hash` (32-byte), `ProcessId` (16-byte) types |
 | `aura-core/src/types.rs` | Update `Transaction`, add `TransactionType::ProcessComplete`, `ProcessPending`, `ActionResultPayload` |
 | `aura-kernel/src/process_manager.rs` | New file: `ProcessManager`, `ProcessManagerConfig`, `RunningProcess`, `ProcessOutput` |
-| `aura-kernel/src/turn_processor.rs` | Integrate ProcessManager, add threshold handling |
+| `aura-agent/src/agent_loop/` | Integrate ProcessManager, add threshold handling |
 | `aura-tools/src/fs_tools.rs` | Add `ThresholdResult`, `cmd_spawn`, `cmd_run_with_threshold`, `wait_with_threshold` |
 | `src/main.rs` | Wire completion channel into event loop |
 | `aura-cli/src/session.rs` | Handle ProcessComplete transactions |

@@ -240,19 +240,19 @@ Centralized tool definitions with JSON Schema.
 
 ---
 
-### Phase 13: Turn Processor (`aura-kernel` extension)
-**Status:** 🔴 Not Started
+### Phase 13: AgentLoop Orchestration (was Turn Processor)
+**Status:** 🟢 Complete
 
-Claude Code-like multi-step conversation loop.
+Multi-step agentic conversation loop (sole orchestrator).
 
-- [ ] Define `TurnConfig` struct
-- [ ] Implement `TurnProcessor` struct
-- [ ] Conversation loop (model → tool_use → tool_result → repeat)
-- [ ] Tool call extraction from `tool_use` blocks
-- [ ] Tool result injection as `tool_result` blocks
-- [ ] Step recording for replay
-- [ ] Budget enforcement (max steps, max tool calls)
-- [ ] Timeout handling
+- [x] `AgentLoop` struct with `AgentLoopConfig` (replaced original `TurnProcessor` design)
+- [x] Conversation loop (model → tool_use → tool_result → repeat) with streaming
+- [x] Tool execution via `KernelToolExecutor` (parallel mode, per-tool timeouts, policy deny)
+- [x] Tool result caching, blocking detection, stall detection
+- [x] Budget enforcement (max iterations, credit budget, exploration allowance)
+- [x] Timeout handling, cancellation support
+- [x] Context compaction and thinking taper
+- [x] `TurnEvent` unified streaming events (including `StreamReset` for fallback determinism)
 
 ---
 

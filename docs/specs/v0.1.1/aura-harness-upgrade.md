@@ -97,7 +97,7 @@ The runtime's kernel uses this system prompt instead of the static one from `age
 **Files to modify in aura-harness:**
 
 - WebSocket handler (wherever `/stream` is implemented) — parse `session_init` message type
-- `aura-kernel/src/turn.rs` — accept dynamic system prompt in `TurnProcessor`
+- `aura-agent/src/agent_loop/` — accept dynamic system prompt in `AgentLoop` (was `TurnProcessor`)
 - `aura-core/src/types.rs` — add `SessionInit` message type
 
 ---
@@ -108,7 +108,7 @@ The runtime's kernel uses this system prompt instead of the static one from `age
 
 **What the runtime has today:** Env vars `AURA_MODEL_PROVIDER`, `AURA_MODEL_NAME`. The `AnthropicProvider` reads these at startup.
 
-**Recommendation:** Include model config in the `session_init` message (see R2). The runtime's `ModelProvider` should accept per-session overrides. The `TurnProcessor` passes the session's model config to the provider for each completion call.
+**Recommendation:** Include model config in the `session_init` message (see R2). The runtime's `ModelProvider` should accept per-session overrides. The `AgentLoop` passes the session's model config to the provider for each completion call.
 
 ```json
 {

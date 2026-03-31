@@ -1242,7 +1242,7 @@ impl ProgressBar {
 // aura-cli/src/main.rs
 
 use aura_terminal::{Terminal, Theme, App, UiEvent, UiCommand};
-use aura_kernel::TurnProcessor;
+use aura_agent::AgentLoop;  // Was: aura_kernel::TurnProcessor
 use aura_reasoner::AnthropicProvider;
 use clap::Parser;
 use tokio::sync::mpsc;
@@ -1277,7 +1277,7 @@ async fn main() -> anyhow::Result<()> {
     
     // Initialize kernel components
     let provider = AnthropicProvider::from_env()?;
-    let processor = TurnProcessor::new(provider);
+    let agent_loop = AgentLoop::new(config);  // Was: TurnProcessor::new(provider)
     
     // Create terminal app
     let mut app = App::new()
@@ -1293,7 +1293,7 @@ async fn main() -> anyhow::Result<()> {
     
     // Spawn kernel bridge task
     let bridge_handle = tokio::spawn(async move {
-        crate::bridge::run(processor, ui_rx, cmd_tx).await
+        crate::bridge::run(agent_loop, ui_rx, cmd_tx).await
     });
     
     // Run UI (blocking)
@@ -1312,11 +1312,11 @@ async fn main() -> anyhow::Result<()> {
 //! Bridge between kernel events and terminal UI
 
 use aura_terminal::{UiEvent, UiCommand, Message, MessageRole, ToolCard};
-use aura_kernel::TurnProcessor;
+use aura_agent::AgentLoop;  // Was: aura_kernel::TurnProcessor
 use tokio::sync::mpsc;
 
 pub async fn run(
-    mut processor: TurnProcessor,
+    mut agent_loop: AgentLoop,  // Was: TurnProcessor
     mut events: mpsc::Receiver<UiEvent>,
     commands: mpsc::Sender<UiCommand>,
 ) -> anyhow::Result<()> {

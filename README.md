@@ -94,7 +94,7 @@ ANTHROPIC_API_KEY=your-key npm start   # listens on :3000
 | `aura-tools` | Tool registry, sandboxed filesystem and command execution, domain tool wiring |
 | `aura-reasoner` | Provider-agnostic `ModelProvider` trait: Anthropic HTTP, proxy routing, mock, retries |
 | `aura-kernel` | Deterministic single-step kernel: context, reasoning, policy, execution, record commit |
-| `aura-agent` | Multi-step orchestration (`AgentLoop`, `TurnProcessor`, `ProcessManager`), task runner, and agent-level policies |
+| `aura-agent` | Multi-step orchestration (`AgentLoop`, `ProcessManager`), tool execution (`KernelToolExecutor`), task runner, and agent-level policies |
 | `aura-terminal` | Ratatui-based terminal UI library: themes, components, input handling, layout |
 | `aura-cli` | Interactive REPL with slash commands, wired to session and agent handling |
 | `aura-auth` | zOS login client and JWT credential store (`~/.aura/credentials.json`) for proxy mode |

@@ -932,10 +932,10 @@ pub trait StatsStore: Send + Sync {
 ### 7.1 Kernel Integration
 
 ```rust
-// In aura-kernel/src/turn_processor.rs
+// In aura-agent/src/agent_loop/ (was: aura-kernel/src/turn_processor.rs)
 
-impl<P: ModelProvider, S: Store> TurnProcessor<P, S> {
-    pub async fn process_turn(
+impl AgentLoop {  // Was: TurnProcessor<P, S>
+    pub async fn run(  // Was: process_turn
         &self,
         agent_id: AgentId,
         tx: Transaction,
