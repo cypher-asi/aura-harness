@@ -19,13 +19,13 @@ use aura_automaton::{
     AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton,
 };
 use aura_core::AgentId;
-use aura_kernel::ExecutorRouter;
 use aura_reasoner::ModelProvider;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
-use aura_tools::{ToolConfig, ToolResolver};
+use aura_tools::ToolConfig;
 
+use crate::executor_factory;
 use crate::jwt_domain::JwtDomainApi;
 
 const EVENT_BROADCAST_CAPACITY: usize = 512;
@@ -90,16 +90,17 @@ impl AutomatonBridge {
         project_id: Option<&str>,
         workspace: &std::path::Path,
     ) -> Arc<KernelToolExecutor> {
-        let mut resolver = ToolResolver::new(self.catalog.clone(), self.tool_config.clone());
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
             auth_token.map(String::from),
             project_id.map(String::from),
         ));
-        resolver = resolver.with_domain_executor(domain_exec);
-
-        let mut router = ExecutorRouter::new();
-        router.add_executor(Arc::new(resolver));
+        let resolver = executor_factory::build_tool_resolver(
+            &self.catalog,
+            &self.tool_config,
+            Some(domain_exec),
+        );
+        let router = executor_factory::build_executor_router(resolver);
 
         Arc::new(KernelToolExecutor::new(
             router,

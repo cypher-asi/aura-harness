@@ -7,9 +7,8 @@ use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
     SessionUsage, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
 };
+use crate::executor_factory;
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
-use aura_kernel::ExecutorRouter;
-use aura_tools::ToolResolver;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -68,17 +67,17 @@ pub(super) fn build_kernel_executor(
     session: &Session,
     ctx: &WsContext,
 ) -> KernelToolExecutor {
-    let mut resolver = ToolResolver::new(ctx.catalog.clone(), ctx.tool_config.clone());
-
-    if let Some(ref domain_api) = ctx.domain_api {
+    let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
-        let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
-            domain_api.clone(),
+        Arc::new(DomainToolExecutor::with_session_context(
+            api.clone(),
             session.auth_token.clone(),
             session.project_id.clone(),
-        ));
-        resolver = resolver.with_domain_executor(domain_exec);
-    }
+        ))
+    });
+
+    let mut resolver =
+        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec);
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
@@ -93,14 +92,13 @@ pub(super) fn build_kernel_executor(
         }
     }
 
-    let mut executor_router = ExecutorRouter::new();
-    executor_router.add_executor(Arc::new(resolver));
+    let router = executor_factory::build_executor_router(resolver);
 
     let workspace = match session.project_path {
         Some(ref pp) => pp.clone(),
         None => session.workspace.join(session.agent_id.to_hex()),
     };
-    KernelToolExecutor::new(executor_router, session.agent_id, workspace)
+    KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
 pub(super) async fn forward_events_to_ws(

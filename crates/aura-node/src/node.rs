@@ -12,7 +12,7 @@ use aura_store::RocksStore;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
-use aura_tools::{ToolCatalog, ToolConfig, ToolResolver};
+use aura_tools::{ToolCatalog, ToolConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -80,8 +80,11 @@ impl Node {
 
         let tools = catalog.visible_tools(ToolProfile::Core, &tool_config);
         let domain_exec = Arc::new(DomainToolExecutor::new(domain_api.clone()));
-        let resolver = ToolResolver::new(catalog.clone(), tool_config.clone())
-            .with_domain_executor(domain_exec);
+        let resolver = crate::executor_factory::build_tool_resolver(
+            &catalog,
+            &tool_config,
+            Some(domain_exec),
+        );
         let resolver: Arc<dyn Executor> = Arc::new(resolver);
         let executors = vec![resolver];
         info!("Executors configured");
@@ -122,6 +125,7 @@ impl Node {
             domain_api: Some(domain_api),
             automaton_controller,
             automaton_bridge,
+            failed_txs: Arc::new(dashmap::DashMap::new()),
         };
         let app = create_router(state);
 

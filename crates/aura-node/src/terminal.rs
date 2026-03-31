@@ -277,6 +277,11 @@ async fn wait_for_spawn(socket: &mut WebSocket) -> Option<SpawnMsg> {
                     rows: cm.rows,
                 });
             }
+            let err = serde_json::json!({"type": "error", "message": "expected spawn message"});
+            let _ = socket.send(Message::Text(err.to_string())).await;
+        } else {
+            let err = serde_json::json!({"type": "error", "message": "invalid JSON"});
+            let _ = socket.send(Message::Text(err.to_string())).await;
         }
     }
     None

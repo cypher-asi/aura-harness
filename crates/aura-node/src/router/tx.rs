@@ -58,9 +58,12 @@ pub(super) async fn submit_tx_handler(
     info!(hash = %tx.hash, agent_id = %agent_id, "Transaction enqueued");
 
     let scheduler = state.scheduler.clone();
+    let failed_txs = state.failed_txs.clone();
+    let tx_id_hex = tx.hash.to_hex();
     tokio::spawn(async move {
         if let Err(e) = scheduler.schedule_agent(agent_id).await {
             error!(error = %e, "Failed to process agent");
+            failed_txs.insert(tx_id_hex, e.to_string());
         }
     });
 
@@ -110,9 +113,21 @@ pub(super) async fn tx_status_handler(
             )
         })?;
 
-    let status = if entries.iter().any(|e| e.tx.hash == tx_hash) {
-        "processed"
-    } else if state.store.has_pending_tx(agent_id).unwrap_or(false) {
+    if entries.iter().any(|e| e.tx.hash == tx_hash) {
+        return Ok(Json(TxStatusResponse {
+            tx_id: tx_id_hex,
+            status: "processed".to_string(),
+        }));
+    }
+
+    if let Some(err) = state.failed_txs.get(&tx_id_hex) {
+        return Ok(Json(TxStatusResponse {
+            tx_id: tx_id_hex,
+            status: format!("failed: {}", err.value()),
+        }));
+    }
+
+    let status = if state.store.has_pending_tx(agent_id).unwrap_or(false) {
         "pending"
     } else {
         "unknown"

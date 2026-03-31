@@ -156,6 +156,7 @@ impl TestServer {
             domain_api: None,
             automaton_controller: None,
             automaton_bridge: None,
+            failed_txs: Arc::new(dashmap::DashMap::new()),
         };
         let app = create_router(state);
 

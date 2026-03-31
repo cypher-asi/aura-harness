@@ -19,6 +19,7 @@ use axum::{
     Json, Router,
 };
 use bytes::Bytes;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
@@ -54,6 +55,8 @@ pub struct RouterState {
     pub automaton_controller: Option<Arc<dyn AutomatonController>>,
     /// Concrete bridge for event subscription (same object as automaton_controller).
     pub automaton_bridge: Option<Arc<AutomatonBridge>>,
+    /// tx_id (hex) -> error message for scheduling failures after 202 acceptance.
+    pub failed_txs: Arc<DashMap<String, String>>,
 }
 
 impl Clone for RouterState {
@@ -68,6 +71,7 @@ impl Clone for RouterState {
             domain_api: self.domain_api.clone(),
             automaton_controller: self.automaton_controller.clone(),
             automaton_bridge: self.automaton_bridge.clone(),
+            failed_txs: self.failed_txs.clone(),
         }
     }
 }

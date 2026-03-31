@@ -32,6 +32,7 @@
 pub(crate) mod automaton_bridge;
 mod config;
 pub(crate) mod domain;
+pub(crate) mod executor_factory;
 pub(crate) mod jwt_domain;
 mod node;
 pub(crate) mod protocol;
