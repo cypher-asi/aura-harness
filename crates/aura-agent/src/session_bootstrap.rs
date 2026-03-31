@@ -54,16 +54,22 @@ pub fn open_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
 }
 
 #[must_use]
-pub fn build_tool_executor(
-    agent_id: aura_core::AgentId,
-    workspace: PathBuf,
-) -> (KernelToolExecutor, Vec<ToolDefinition>) {
+pub fn build_executor_router() -> (ExecutorRouter, Vec<ToolDefinition>) {
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(ToolExecutor::with_defaults()));
 
     let tool_registry = DefaultToolRegistry::new();
     let tools = tool_registry.list();
 
+    (executor_router, tools)
+}
+
+#[must_use]
+pub fn build_tool_executor(
+    agent_id: aura_core::AgentId,
+    workspace: PathBuf,
+) -> (KernelToolExecutor, Vec<ToolDefinition>) {
+    let (executor_router, tools) = build_executor_router();
     let kernel_executor = KernelToolExecutor::new(executor_router, agent_id, workspace);
     (kernel_executor, tools)
 }
@@ -76,7 +82,7 @@ pub fn load_auth_token() -> Option<String> {
 }
 
 pub struct ProviderSelection {
-    pub provider: Box<dyn ModelProvider>,
+    pub provider: Box<dyn ModelProvider + Send + Sync>,
     pub name: String,
 }
 

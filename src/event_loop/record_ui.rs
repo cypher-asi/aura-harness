@@ -88,16 +88,6 @@ pub(super) async fn send_record_to_ui(
     let _ = commands.send(UiCommand::NewRecord(record_summary)).await;
 }
 
-/// Compute a context hash for a record entry.
-pub(super) fn compute_context_hash(seq: u64, tx: &Transaction) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&seq.to_be_bytes());
-    hasher.update(tx.hash.as_bytes());
-    hasher.update(&tx.ts_ms.to_be_bytes());
-    hasher.update(&tx.payload);
-    *hasher.finalize().as_bytes()
-}
-
 /// Create a response transaction for the assistant's message.
 pub(super) fn create_response_transaction(agent_id: AgentId, response_text: &str) -> Transaction {
     Transaction::new_chained(

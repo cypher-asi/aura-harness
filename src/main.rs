@@ -12,8 +12,9 @@ mod session_helpers;
 
 use cli::{Cli, Commands, RunArgs, UiMode};
 
-use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
+use aura_agent::{AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager, ProcessManagerConfig};
 use aura_core::{Identity, Transaction};
+use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use clap::Parser;
@@ -202,9 +203,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
     api_server::start_api_server(cmd_tx.clone()).await;
 
-    let agent_workspace = workspace_root.join(identity.agent_id.to_hex());
-    let (kernel_executor, tools) =
-        session_helpers::build_tool_executor(identity.agent_id, agent_workspace);
+    let (executor_router, tools) = session_helpers::build_executor_router();
 
     let config = session_helpers::default_agent_config();
     let agent_loop = AgentLoop::new(config);
@@ -219,11 +218,28 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     if selection.name != "anthropic" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }
-    let provider: Arc<dyn ModelProvider> = Arc::from(selection.provider);
+    let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::from(selection.provider);
+
+    let kernel_config = KernelConfig {
+        workspace_base: workspace_root.clone(),
+        ..KernelConfig::default()
+    };
+    let agent_id = identity.agent_id;
+    let kernel = Arc::new(
+        Kernel::new(
+            store.clone() as Arc<dyn aura_store::Store>,
+            provider,
+            executor_router,
+            kernel_config,
+            agent_id,
+        )
+        .expect("Failed to create kernel"),
+    );
+
+    let model_gateway = KernelModelGateway::new(kernel.clone());
+    let tool_gateway = KernelToolGateway::new(kernel.clone());
 
     let cmd_tx_clone = cmd_tx.clone();
-    let store_clone = store.clone();
-    let agent_id = identity.agent_id;
     let process_manager_clone = Arc::clone(&process_manager);
 
     let processor_handle = tokio::spawn(async move {
@@ -233,10 +249,10 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
             process_completions: process_rx,
             commands: cmd_tx_clone,
             agent_loop: &mut agent_loop,
-            provider: provider.as_ref(),
-            executor: &kernel_executor,
+            model_gateway: &model_gateway,
+            tool_gateway: &tool_gateway,
             tools: &tools,
-            store: store_clone,
+            kernel,
             agent_id,
             _process_manager: process_manager_clone,
         };
