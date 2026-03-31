@@ -283,11 +283,23 @@ fn wait_with_hard_timeout(
 /// Validate a command string against the allowlist.
 ///
 /// When the allowlist is non-empty, the first whitespace-delimited token
-/// of the command string must appear in the list.
+/// of the command string must appear in the list. Shell metacharacters
+/// that could chain additional commands are rejected.
 fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), ToolError> {
     if allowlist.is_empty() {
         return Ok(());
     }
+
+    // Block shell metacharacters that allow command chaining
+    let dangerous = [";", "&&", "||", "|", "$(", "`", "\n"];
+    for meta in &dangerous {
+        if command.contains(meta) {
+            return Err(ToolError::CommandNotAllowed(format!(
+                "shell metacharacter '{meta}' not allowed"
+            )));
+        }
+    }
+
     let program = command.split_whitespace().next().unwrap_or(command);
     if !allowlist.iter().any(|a| a == program) {
         return Err(ToolError::CommandNotAllowed(program.into()));
@@ -779,6 +791,40 @@ mod tests {
     fn test_command_allowlist_extracts_first_token() {
         let allowlist = vec!["cargo".to_string()];
         assert!(check_command_allowlist("cargo build --release", &allowlist).is_ok());
+    }
+
+    #[test]
+    fn test_command_allowlist_blocks_semicolon_chaining() {
+        let allowlist = vec!["cargo".to_string()];
+        let result = check_command_allowlist("cargo; rm -rf /", &allowlist);
+        assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+    }
+
+    #[test]
+    fn test_command_allowlist_blocks_and_chaining() {
+        let allowlist = vec!["cargo".to_string()];
+        let result = check_command_allowlist("cargo && cat /etc/passwd", &allowlist);
+        assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+    }
+
+    #[test]
+    fn test_command_allowlist_blocks_pipe() {
+        let allowlist = vec!["cargo".to_string()];
+        let result = check_command_allowlist("cargo | grep secret", &allowlist);
+        assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+    }
+
+    #[test]
+    fn test_command_allowlist_blocks_subshell() {
+        let allowlist = vec!["echo".to_string()];
+        let result = check_command_allowlist("echo $(cat /etc/passwd)", &allowlist);
+        assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+    }
+
+    #[test]
+    fn test_command_allowlist_no_metachar_check_without_allowlist() {
+        // When no allowlist, metacharacters are allowed (no restriction)
+        assert!(check_command_allowlist("echo; rm -rf /", &[]).is_ok());
     }
 
     #[test]
