@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::module_name_repetitions)]
-#![allow(dead_code)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::missing_errors_doc)]

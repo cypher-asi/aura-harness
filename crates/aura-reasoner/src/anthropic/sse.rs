@@ -29,7 +29,7 @@ where
     S: Stream<Item = Result<bytes::Bytes, E>> + Unpin,
     E: std::error::Error + Send + Sync + 'static,
 {
-    type Item = anyhow::Result<StreamEvent>;
+    type Item = Result<StreamEvent, ReasonerError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.finished {
@@ -58,16 +58,14 @@ where
                         self.finished = true;
                         return Poll::Ready(Some(Err(ReasonerError::Internal(format!(
                             "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes"
-                        ))
-                        .into())));
+                        )))));
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
                     self.finished = true;
                     return Poll::Ready(Some(Err(ReasonerError::Request(format!(
                         "Stream error: {e}"
-                    ))
-                    .into())));
+                    )))));
                 }
                 Poll::Ready(None) => {
                     self.finished = true;

@@ -13,7 +13,6 @@
     clippy::doc_markdown,
     clippy::must_use_candidate,
     clippy::match_same_arms,
-    clippy::too_many_lines,
     clippy::single_match,
     clippy::single_match_else,
     clippy::option_if_let_else,

@@ -60,7 +60,7 @@ use async_trait::async_trait;
 
 /// Type alias for a boxed stream of streaming events.
 pub type StreamEventStream =
-    Pin<Box<dyn Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<StreamEvent, ReasonerError>> + Send + 'static>>;
 
 /// Provider-agnostic interface for model completions.
 ///

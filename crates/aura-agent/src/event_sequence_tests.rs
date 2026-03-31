@@ -68,7 +68,7 @@ impl ModelProvider for StreamingMockProvider {
     ) -> Result<StreamEventStream, ReasonerError> {
         let response = self.inner.complete(request).await?;
 
-        let mut events: Vec<anyhow::Result<StreamEvent>> = Vec::new();
+        let mut events: Vec<Result<StreamEvent, ReasonerError>> = Vec::new();
 
         events.push(Ok(StreamEvent::MessageStart {
             message_id: "msg_test".to_string(),

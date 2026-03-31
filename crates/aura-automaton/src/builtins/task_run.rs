@@ -62,6 +62,8 @@ impl TaskRunAutomaton {
 struct TaskRunConfig {
     project_id: String,
     task_id: String,
+    // TODO: will be used when task sessions tag their agent instance
+    #[allow(dead_code)]
     agent_instance_id: String,
 }
 

@@ -6,7 +6,7 @@ fn forwards_valid_tool_input_snapshot() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     forward_agent_event(
         &tx,
-        aura_agent::events::AgentLoopEvent::ToolInputSnapshot {
+        aura_agent::AgentLoopEvent::ToolInputSnapshot {
             id: "tool-1".to_string(),
             name: "run_command".to_string(),
             input: r#"{"command":"npm run build"}"#.to_string(),
@@ -29,7 +29,7 @@ fn drops_invalid_tool_input_snapshot_json() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     forward_agent_event(
         &tx,
-        aura_agent::events::AgentLoopEvent::ToolInputSnapshot {
+        aura_agent::AgentLoopEvent::ToolInputSnapshot {
             id: "tool-1".to_string(),
             name: "run_command".to_string(),
             input: "{".to_string(),

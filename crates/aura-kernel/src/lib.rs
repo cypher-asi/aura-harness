@@ -41,8 +41,6 @@ pub enum KernelError {
     Store(String),
     #[error("reasoner error: {0}")]
     Reasoner(String),
-    #[error("policy denied: {0}")]
-    PolicyDenied(String),
     #[error("timeout: {0}")]
     Timeout(String),
     #[error("serialization error: {0}")]

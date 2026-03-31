@@ -40,6 +40,13 @@ pub enum ReasonerError {
     Internal(String),
 }
 
+impl ReasonerError {
+    #[must_use]
+    pub fn is_insufficient_credits(&self) -> bool {
+        matches!(self, Self::InsufficientCredits(_))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

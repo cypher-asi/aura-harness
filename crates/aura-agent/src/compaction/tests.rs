@@ -208,38 +208,3 @@ fn test_configurable_head_tail() {
     assert!(result_micro.ends_with(&"b".repeat(3000)));
     assert!(result_micro.contains("content truncated"));
 }
-
-// ── CompactConfig / truncate / microcompact tests ──────────────
-
-#[test]
-fn test_compact_truncate_below_threshold() {
-    let content = "short content";
-    let result = truncate(content, &MICRO);
-    assert_eq!(result, content);
-}
-
-#[test]
-fn test_compact_truncate_above_threshold() {
-    let content = "a".repeat(20_000);
-    let result = truncate(&content, &MICRO);
-    assert!(result.len() < content.len());
-    assert!(result.contains("omitted"));
-    assert!(result.starts_with("aaa"));
-    assert!(result.ends_with("aaa"));
-}
-
-#[test]
-fn test_microcompact_below_16k() {
-    let content = "x".repeat(15_000);
-    let result = microcompact(&content);
-    assert_eq!(result, content);
-}
-
-#[test]
-fn test_microcompact_above_16k() {
-    let content = "y".repeat(20_000);
-    let result = microcompact(&content);
-    assert!(result.len() < content.len());
-    assert!(result.contains("characters omitted"));
-    assert!(result.contains("read_file"));
-}

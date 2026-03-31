@@ -70,11 +70,12 @@ impl AnthropicProvider {
     /// # Errors
     ///
     /// Returns error if client creation fails.
-    pub fn new(config: AnthropicConfig) -> anyhow::Result<Self> {
+    pub fn new(config: AnthropicConfig) -> Result<Self, ReasonerError> {
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .timeout(std::time::Duration::from_millis(config.timeout_ms))
-            .build()?;
+            .build()
+            .map_err(|e| ReasonerError::Internal(format!("HTTP client creation failed: {e}")))?;
         Ok(Self { client, config })
     }
 
@@ -83,8 +84,9 @@ impl AnthropicProvider {
     /// # Errors
     ///
     /// Returns error if configuration or client creation fails.
-    pub fn from_env() -> anyhow::Result<Self> {
-        let config = AnthropicConfig::from_env()?;
+    pub fn from_env() -> Result<Self, ReasonerError> {
+        let config = AnthropicConfig::from_env()
+            .map_err(|e| ReasonerError::Internal(format!("config error: {e}")))?;
         Self::new(config)
     }
 

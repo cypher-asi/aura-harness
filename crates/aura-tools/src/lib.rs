@@ -26,7 +26,7 @@
 
 pub mod automaton_tools;
 pub mod catalog;
-pub mod definitions;
+pub(crate) mod definitions;
 pub mod domain_tools;
 mod error;
 mod executor;

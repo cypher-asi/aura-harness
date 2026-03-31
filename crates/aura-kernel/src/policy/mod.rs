@@ -53,7 +53,7 @@ pub struct PolicyConfig {
     pub allowed_action_kinds: HashSet<ActionKind>,
     /// Allowed tools
     pub allowed_tools: HashSet<String>,
-    /// Maximum proposals per request. Exposed via [`Policy::max_proposals`]; the kernel does not yet cap proposal count.
+    /// Maximum proposals per request. Exposed via [`Policy::max_proposals`]; the kernel truncates proposals exceeding this limit.
     pub max_proposals: usize,
     /// Custom permission overrides for specific tools
     pub tool_permissions: HashMap<String, PermissionLevel>,

@@ -49,7 +49,11 @@ const MAX_RETRIES_PER_TASK: u32 = 2;
 
 struct DevLoopConfig {
     project_id: String,
+    // TODO: will be used when dev-loop sessions tag their agent instance
+    #[allow(dead_code)]
     agent_instance_id: String,
+    // TODO: will be used for model selection in dev-loop
+    #[allow(dead_code)]
     model: String,
 }
 
@@ -179,9 +183,9 @@ pub fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
 
 pub fn forward_agent_event(
     tx: &tokio::sync::mpsc::Sender<AutomatonEvent>,
-    evt: aura_agent::events::AgentLoopEvent,
+    evt: aura_agent::AgentLoopEvent,
 ) {
-    use aura_agent::events::AgentLoopEvent;
+    use aura_agent::AgentLoopEvent;
     let automaton_event = match evt {
         AgentLoopEvent::TextDelta(d) => AutomatonEvent::TextDelta { delta: d },
         AgentLoopEvent::ThinkingDelta(d) => AutomatonEvent::ThinkingDelta { delta: d },

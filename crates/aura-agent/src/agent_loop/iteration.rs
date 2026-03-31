@@ -75,7 +75,7 @@ fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
         return classify_reasoner_error(re);
     }
     let msg = e.to_string();
-    if msg.contains("402") {
+    if msg.contains("402 Payment") || msg.contains("402 ") {
         LlmCallError::InsufficientCredits(msg)
     } else {
         LlmCallError::Fatal(msg)

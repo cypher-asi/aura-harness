@@ -145,9 +145,13 @@ where
     async fn next_stream_event(
         &self,
         stream: &mut std::pin::Pin<
-            Box<dyn futures_util::Stream<Item = anyhow::Result<StreamEvent>> + Send + 'static>,
+            Box<
+                dyn futures_util::Stream<Item = Result<StreamEvent, aura_reasoner::ReasonerError>>
+                    + Send
+                    + 'static,
+            >,
         >,
-    ) -> Option<anyhow::Result<StreamEvent>> {
+    ) -> Option<Result<StreamEvent, aura_reasoner::ReasonerError>> {
         if let Some(token) = &self.cancellation_token {
             tokio::select! {
                 biased;

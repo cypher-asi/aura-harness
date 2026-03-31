@@ -55,6 +55,8 @@ pub struct AutomatonInfo {
     pub updated_at: DateTime<Utc>,
 }
 
+// TODO: TaskExecution and related types are reserved for task history tracking
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskExecution {
     pub task_id: String,
@@ -66,6 +68,7 @@ pub struct TaskExecution {
     pub file_ops: Vec<FileOpRecord>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskOutcome {
@@ -74,12 +77,14 @@ pub enum TaskOutcome {
     Skipped { reason: String },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileOpRecord {
     pub path: String,
     pub op_type: FileOpType,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileOpType {
@@ -88,6 +93,7 @@ pub enum FileOpType {
     Deleted,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FollowUpSuggestion {
     pub title: String,
