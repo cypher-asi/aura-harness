@@ -139,11 +139,23 @@ impl AgentLoop {
                     debug!("Stream error, falling back to non-streaming: {e}");
                     emit(
                         event_tx,
-                        AgentLoopEvent::Warning(format!(
-                            "Stream error, retrying without streaming: {e}"
-                        )),
+                        AgentLoopEvent::StreamReset {
+                            reason: format!("Stream error, retrying without streaming: {e}"),
+                        },
                     );
-                    return provider.complete(request).await.map_err(Into::into);
+                    let response = provider.complete(request).await.map_err(anyhow::Error::from)?;
+                    for block in &response.message.content {
+                        match block {
+                            aura_reasoner::ContentBlock::Text { text } => {
+                                emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+                            }
+                            aura_reasoner::ContentBlock::Thinking { thinking, .. } => {
+                                emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Ok(response);
                 }
                 None => break,
             }

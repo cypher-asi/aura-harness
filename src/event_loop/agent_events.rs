@@ -76,6 +76,18 @@ pub(super) async fn forward_agent_events(
             | AgentLoopEvent::ThinkingComplete
             | AgentLoopEvent::StepComplete
             | AgentLoopEvent::ToolComplete { .. } => {}
+            AgentLoopEvent::StreamReset { reason } => {
+                debug!(reason = %reason, "Stream reset received");
+                if state.streaming_active {
+                    let _ = commands.send(UiCommand::FinishStreaming).await;
+                    state.streaming_active = false;
+                }
+                if state.thinking_active {
+                    let _ = commands.send(UiCommand::FinishThinking).await;
+                    state.thinking_active = false;
+                }
+                state.had_text = false;
+            }
             AgentLoopEvent::Warning(msg) => {
                 let _ = commands.send(UiCommand::ShowWarning(msg)).await;
             }

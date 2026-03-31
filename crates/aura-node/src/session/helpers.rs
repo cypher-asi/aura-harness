@@ -136,6 +136,7 @@ pub(super) async fn forward_events_to_ws(
             | AgentLoopEvent::IterationComplete { .. }
             | AgentLoopEvent::ThinkingComplete
             | AgentLoopEvent::StepComplete
+            | AgentLoopEvent::StreamReset { .. }
             | AgentLoopEvent::Warning(_) => continue,
         };
         if outbound.try_send(msg).is_err() {

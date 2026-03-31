@@ -72,6 +72,14 @@ pub enum TurnEvent {
     /// Streaming is complete for the current step.
     StepComplete,
 
+    /// Streaming was interrupted and restarted. Consumers must discard
+    /// any buffered partial content for the current iteration and treat
+    /// subsequent events as the authoritative source.
+    StreamReset {
+        /// Human-readable reason for the reset.
+        reason: String,
+    },
+
     /// A warning was injected into the context.
     Warning(String),
 
