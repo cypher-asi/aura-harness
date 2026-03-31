@@ -72,7 +72,7 @@ impl Scheduler {
         workspace_base: PathBuf,
     ) -> Self {
         let kernel_config = KernelConfig {
-            workspace_base: workspace_base.clone(),
+            workspace_base,
             ..KernelConfig::default()
         };
         let config = AgentLoopConfig::default();

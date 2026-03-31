@@ -1,4 +1,4 @@
-//! Kernel gateway adapters that bridge the new Kernel API to existing AgentLoop traits.
+//! Kernel gateway adapters that bridge the new Kernel API to existing `AgentLoop` traits.
 //!
 //! - [`KernelToolGateway`] implements [`AgentToolExecutor`] by routing tool calls
 //!   through [`Kernel::process_tools`].
@@ -25,7 +25,8 @@ pub struct KernelToolGateway {
 }
 
 impl KernelToolGateway {
-    pub fn new(kernel: Arc<Kernel>) -> Self {
+    #[must_use]
+    pub const fn new(kernel: Arc<Kernel>) -> Self {
         Self { kernel }
     }
 }
@@ -78,7 +79,8 @@ pub struct KernelModelGateway {
 }
 
 impl KernelModelGateway {
-    pub fn new(kernel: Arc<Kernel>) -> Self {
+    #[must_use]
+    pub const fn new(kernel: Arc<Kernel>) -> Self {
         Self { kernel }
     }
 }

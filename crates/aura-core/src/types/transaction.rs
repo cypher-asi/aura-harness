@@ -43,7 +43,7 @@ pub enum TransactionType {
 pub enum SystemKind {
     /// Automaton start, stop, pause, resume
     AutomatonLifecycle,
-    /// Domain API mutations: create_spec, delete_spec, transition_task, save_message
+    /// Domain API mutations: `create_spec`, `delete_spec`, `transition_task`, `save_message`
     DomainMutation,
     /// Login, logout
     AuthChange,

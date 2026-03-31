@@ -93,6 +93,7 @@ pub(crate) mod task_executor;
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS, DEFAULT_MODEL, FALLBACK_MODEL};
 pub use events::{AgentLoopEvent, TurnEvent};
+#[allow(deprecated)]
 pub use kernel_executor::KernelToolExecutor;
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway};
 pub use runtime::{
