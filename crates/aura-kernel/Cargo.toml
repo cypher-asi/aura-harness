@@ -18,6 +18,7 @@ tokio = { workspace = true }
 hex = "0.4"
 bytes = { workspace = true }
 async-trait = "0.1"
+futures-util = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -31,7 +31,7 @@ pub use context::{Context, ContextBuilder};
 pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
 };
-pub use kernel::{Kernel, KernelConfig, ProcessResult, Proposer};
+pub use kernel::{Kernel, KernelConfig, ProcessResult, ReasonResult, ReasonStreamHandle, ToolOutput};
 pub use policy::{default_tool_permission, PermissionLevel, Policy, PolicyConfig, PolicyResult};
 pub use router::ExecutorRouter;
 
