@@ -9,6 +9,52 @@ This document describes the system architecture in two sections:
 
 ## Part 1: Architecture
 
+### Overview
+
+Aura is a deterministic multi-agent runtime. Many agents run concurrently,
+each maintaining its own append-only record log. A pluggable LLM provider
+supplies reasoning; all side effects — filesystem writes, shell commands,
+domain API calls — flow through authorized executors that capture structured
+results. The full history of every agent is replayable from its record alone.
+
+The central design decision is a strict separation between **orchestration**
+and **determinism**:
+
+**The AgentLoop** is the orchestration layer. It owns the multi-step
+model-call-then-tool-execution cycle: building prompts, streaming responses,
+managing token budgets, compacting context when the window fills, detecting
+stalls, and emitting real-time `TurnEvent`s to whatever UI is attached
+(terminal, WebSocket, CLI). The AgentLoop is intentionally stateless with
+respect to persistence — it never touches the store, the policy engine, or
+the record log directly. It receives a `ModelProvider` and a
+`ToolExecutor` as trait objects and is unaware that these are kernel
+gateways.
+
+**The Kernel** is the deterministic core. It mediates every external
+interaction: every LLM call passes through `Kernel::reason()`, every tool
+execution passes through `Kernel::process()`, and every state change
+produces a `RecordEntry` committed atomically to the store. The kernel
+enforces policy (permission levels, session-scoped approvals), computes
+context hashes for integrity verification, and maintains monotonic
+sequencing. Given the same record, the kernel always produces the same
+output.
+
+This separation yields two properties:
+
+1. **Auditability.** Because the kernel records every reasoning call, every
+   tool proposal, every policy decision, and every effect, the full
+   execution history is inspectable and replayable without a live LLM.
+
+2. **Composability.** Because the AgentLoop depends only on trait
+   interfaces, the same loop drives interactive TUI sessions, headless
+   server workers, CLI REPLs, and long-running automaton workflows — all
+   backed by the same kernel, storage, and reasoning stack.
+
+The bridge between the two layers is a set of **gateway** types
+(`KernelModelGateway`, `KernelToolGateway`) that implement the traits the
+AgentLoop expects while routing calls through the kernel's recording and
+policy pipeline. The AgentLoop never knows the difference.
+
 ### Crate Summary
 
 | Crate | Role |
