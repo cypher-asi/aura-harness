@@ -19,6 +19,8 @@ mod parity_tests;
 #[cfg(test)]
 mod cutover_tests;
 #[cfg(test)]
+mod pipeline_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_advanced;
