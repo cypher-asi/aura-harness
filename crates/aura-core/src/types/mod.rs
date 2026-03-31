@@ -25,7 +25,7 @@ pub use tool::{
     InstalledToolDefinition, ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolExecution,
     ToolProposal, ToolResult,
 };
-pub use transaction::{Transaction, TransactionType};
+pub use transaction::{SystemKind, Transaction, TransactionType};
 
 #[cfg(test)]
 mod tests {

@@ -34,6 +34,23 @@ pub enum TransactionType {
     Reasoning,
 }
 
+/// Sub-categorization for System transactions.
+///
+/// Enables record scanning to filter by system event category without
+/// full payload deserialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemKind {
+    /// Automaton start, stop, pause, resume
+    AutomatonLifecycle,
+    /// Domain API mutations: create_spec, delete_spec, transition_task, save_message
+    DomainMutation,
+    /// Login, logout
+    AuthChange,
+    /// Config changes, schema migrations (future use)
+    Infrastructure,
+}
+
 /// An immutable transaction input to the system.
 ///
 /// Transactions are the only way state can change in Aura.

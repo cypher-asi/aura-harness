@@ -100,6 +100,7 @@ impl Node {
         let automaton_runtime = Arc::new(AutomatonRuntime::new());
         let automaton_bridge: Option<Arc<AutomatonBridge>> = Some(Arc::new(AutomatonBridge::new(
             automaton_runtime.clone(),
+            store.clone() as Arc<dyn aura_store::Store>,
             domain_api.clone(),
             provider.clone(),
             catalog.clone(),

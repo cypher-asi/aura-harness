@@ -25,7 +25,7 @@ pub use ids::{ActionId, AgentId, Hash, ProcessId, TxId};
 pub use types::{
     Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,
     EffectKind, EffectStatus, Identity, InstalledToolDefinition, ProcessPending, Proposal,
-    ProposalSet, RecordEntry, RejectedProposal, ToolAuth, ToolCall, ToolCallContext, ToolDecision,
-    ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent, Trace, Transaction,
-    TransactionType,
+    ProposalSet, RecordEntry, RejectedProposal, SystemKind, ToolAuth, ToolCall, ToolCallContext,
+    ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent, Trace,
+    Transaction, TransactionType,
 };

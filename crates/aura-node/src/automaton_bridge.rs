@@ -11,15 +11,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::sync::broadcast;
-use tracing::info;
+use tracing::{info, warn};
 
 use aura_agent::agent_runner::AgentRunnerConfig;
-use aura_agent::KernelToolExecutor;
+use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_automaton::{
     AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton,
 };
-use aura_core::AgentId;
+use aura_core::{AgentId, SystemKind, Transaction, TransactionType};
+use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
+use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
@@ -33,6 +35,7 @@ const EVENT_BROADCAST_CAPACITY: usize = 512;
 /// Concrete [`AutomatonController`] wired to the real runtime.
 pub struct AutomatonBridge {
     runtime: Arc<AutomatonRuntime>,
+    store: Arc<dyn Store>,
     domain: Arc<dyn DomainApi>,
     provider: Arc<dyn ModelProvider + Send + Sync>,
     catalog: Arc<ToolCatalog>,
@@ -46,6 +49,7 @@ pub struct AutomatonBridge {
 impl AutomatonBridge {
     pub fn new(
         runtime: Arc<AutomatonRuntime>,
+        store: Arc<dyn Store>,
         domain: Arc<dyn DomainApi>,
         provider: Arc<dyn ModelProvider + Send + Sync>,
         catalog: Arc<ToolCatalog>,
@@ -53,6 +57,7 @@ impl AutomatonBridge {
     ) -> Self {
         Self {
             runtime,
+            store,
             domain,
             provider,
             catalog,
@@ -82,14 +87,18 @@ impl AutomatonBridge {
         }
     }
 
-    /// Build a `KernelToolExecutor` that automatons use for file/command tools.
-    fn build_tool_executor(
+    /// Build a per-agent [`Kernel`] backed by the shared store.
+    ///
+    /// The returned kernel owns an `ExecutorRouter` wired to the domain API
+    /// (with optional JWT + project context) and serves as the single authority
+    /// for tool execution and model reasoning recording for this agent.
+    fn build_kernel(
         &self,
         domain: Arc<dyn DomainApi>,
         auth_token: Option<&str>,
         project_id: Option<&str>,
         workspace: &std::path::Path,
-    ) -> Arc<KernelToolExecutor> {
+    ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
             auth_token.map(String::from),
@@ -101,12 +110,62 @@ impl AutomatonBridge {
             Some(domain_exec),
         );
         let router = executor_factory::build_executor_router(resolver);
+        let agent_id = AgentId::generate();
+        let config = KernelConfig {
+            workspace_base: workspace.to_path_buf(),
+            ..KernelConfig::default()
+        };
 
-        Arc::new(KernelToolExecutor::new(
+        match Kernel::new(
+            self.store.clone(),
+            self.provider.clone(),
             router,
-            AgentId::generate(),
-            workspace.to_path_buf(),
-        ))
+            config,
+            agent_id,
+        ) {
+            Ok(k) => Arc::new(k),
+            Err(e) => {
+                warn!(error = %e, "Kernel::new failed, falling back to fresh agent id");
+                let fallback_router = executor_factory::build_executor_router(
+                    executor_factory::build_tool_resolver(&self.catalog, &self.tool_config, None),
+                );
+                Arc::new(
+                    Kernel::new(
+                        self.store.clone(),
+                        self.provider.clone(),
+                        fallback_router,
+                        KernelConfig {
+                            workspace_base: workspace.to_path_buf(),
+                            ..KernelConfig::default()
+                        },
+                        AgentId::generate(),
+                    )
+                    .expect("fallback Kernel::new must succeed"),
+                )
+            }
+        }
+    }
+
+    /// Record an automaton lifecycle event as a System transaction.
+    fn record_lifecycle_event(&self, agent_id: AgentId, automaton_id: &str, event: &str) {
+        let payload = serde_json::json!({
+            "system_kind": SystemKind::AutomatonLifecycle,
+            "automaton_id": automaton_id,
+            "event": event,
+        });
+        let Ok(payload_bytes) = serde_json::to_vec(&payload) else {
+            warn!("Failed to serialize lifecycle event payload");
+            return;
+        };
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::System,
+            payload_bytes,
+            None,
+        );
+        if let Err(e) = self.store.enqueue_tx(&tx) {
+            warn!(error = %e, "Failed to record automaton lifecycle event");
+        }
     }
 
     /// Spawn a background task that forwards `mpsc` events to a `broadcast` channel.
@@ -225,26 +284,30 @@ impl AutomatonController for AutomatonBridge {
 
         let domain = self.domain_with_jwt(auth_token.as_deref());
         let effective_workspace = workspace_root.clone();
-        let tool_executor = if let Some(ref ws) = effective_workspace {
-            self.build_tool_executor(domain.clone(), auth_token.as_deref(), Some(project_id), ws)
-        } else {
-            self.build_tool_executor(
-                domain.clone(),
-                auth_token.as_deref(),
-                Some(project_id),
-                std::path::Path::new("."),
-            )
-        };
+        let ws_path = effective_workspace
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        let kernel = self.build_kernel(
+            domain.clone(),
+            auth_token.as_deref(),
+            Some(project_id),
+            ws_path,
+        );
+        let model_gw: Arc<dyn ModelProvider> =
+            Arc::new(KernelModelGateway::new(kernel.clone()));
+        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
+            Arc::new(KernelToolGateway::new(kernel.clone()));
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
 
         let automaton = DevLoopAutomaton::new(
             domain,
-            self.provider.clone(),
+            model_gw,
             runner_config,
             self.catalog.clone(),
         )
-        .with_tool_executor(tool_executor);
+        .with_tool_executor(tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,
@@ -260,6 +323,7 @@ impl AutomatonController for AutomatonBridge {
             .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
 
         let automaton_id = handle.id().as_str().to_string();
+        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_dev_loop");
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
         info!(project_id, automaton_id = %automaton_id, "Dev loop started");
@@ -313,26 +377,30 @@ impl AutomatonController for AutomatonBridge {
     ) -> Result<String, String> {
         let domain = self.domain_with_jwt(auth_token.as_deref());
         let effective_workspace = workspace_root.clone();
-        let tool_executor = if let Some(ref ws) = effective_workspace {
-            self.build_tool_executor(domain.clone(), auth_token.as_deref(), Some(project_id), ws)
-        } else {
-            self.build_tool_executor(
-                domain.clone(),
-                auth_token.as_deref(),
-                Some(project_id),
-                std::path::Path::new("."),
-            )
-        };
+        let ws_path = effective_workspace
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        let kernel = self.build_kernel(
+            domain.clone(),
+            auth_token.as_deref(),
+            Some(project_id),
+            ws_path,
+        );
+        let model_gw: Arc<dyn ModelProvider> =
+            Arc::new(KernelModelGateway::new(kernel.clone()));
+        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
+            Arc::new(KernelToolGateway::new(kernel.clone()));
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
 
         let automaton = TaskRunAutomaton::new(
             domain,
-            self.provider.clone(),
+            model_gw,
             runner_config,
             self.catalog.clone(),
         )
-        .with_tool_executor(tool_executor);
+        .with_tool_executor(tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,
@@ -349,6 +417,7 @@ impl AutomatonController for AutomatonBridge {
             .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
 
         let automaton_id = handle.id().as_str().to_string();
+        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_task_run");
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
         info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
