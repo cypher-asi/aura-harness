@@ -29,67 +29,74 @@ This document describes the system architecture in two sections:
 
 ### Dependency Graph
 
-```mermaid
-graph BT
-  core[aura-core]
-  store[aura-store]
-  reasoner[aura-reasoner]
-  kernel[aura-kernel]
-  tools[aura-tools]
-  agent[aura-agent]
-  protocol[aura-protocol]
-  auth[aura-auth]
-  terminal[aura-terminal]
-  cli[aura-cli]
-  automaton[aura-automaton]
-  node[aura-node]
-  root["aura (binary)"]
+Crates are arranged in layers — each layer may only depend on layers below it.
+Arrows (`───▶`) show the primary dependency spine; side-annotations list
+additional cross-cutting dependencies.
 
-  store --> core
-  reasoner --> core
-  kernel --> core
-  kernel --> store
-  kernel --> reasoner
-  tools --> core
-  tools --> kernel
-  tools --> reasoner
-  agent --> core
-  agent --> kernel
-  agent --> reasoner
-  agent --> tools
-  agent --> store
-  agent --> auth
-  protocol -.-> |"no aura-* deps"| protocol
-  auth -.-> |"no aura-* deps"| auth
-  terminal -.-> |"no aura-* deps"| terminal
-  cli --> core
-  cli --> agent
-  cli --> auth
-  cli --> store
-  cli --> reasoner
-  cli --> tools
-  cli --> kernel
-  automaton --> agent
-  automaton --> core
-  automaton --> tools
-  automaton --> reasoner
-  node --> core
-  node --> protocol
-  node --> store
-  node --> tools
-  node --> reasoner
-  node --> kernel
-  node --> agent
-  node --> automaton
-  root --> terminal
-  root --> core
-  root --> kernel
-  root --> store
-  root --> reasoner
-  root --> tools
-  root --> agent
-  root --> auth
-  root --> node
+```
+ Standalone (no aura-* dependencies)
+ ┌────────────────┐  ┌────────────┐  ┌──────────────┐
+ │ aura-protocol  │  │  aura-auth │  │aura-terminal │
+ └────────────────┘  └────────────┘  └──────────────┘
+
+ L0  Foundation
+ ┌──────────────────────────────────────────────────┐
+ │                   aura-core                      │
+ │  IDs, types, hashing, time, errors               │
+ └────────────────────────┬─────────────────────────┘
+                          │
+ L1  Storage & Reasoning  │
+ ┌────────────────────────┴─────────────────────────┐
+ │          ┌──────────┐       ┌──────────────┐     │
+ │          │aura-store│       │aura-reasoner │     │
+ │          │  → core  │       │    → core    │     │
+ │          └────┬─────┘       └──────┬───────┘     │
+ └───────────────┼────────────────────┼─────────────┘
+                 │                    │
+ L2  Kernel      ▼                    ▼
+ ┌──────────────────────────────────────────────────┐
+ │                  aura-kernel                     │
+ │  → core, store, reasoner                         │
+ └────────────────────────┬─────────────────────────┘
+                          │
+ L3  Tools                ▼
+ ┌──────────────────────────────────────────────────┐
+ │                  aura-tools                      │
+ │  → core, kernel, reasoner                        │
+ └────────────────────────┬─────────────────────────┘
+                          │
+ L4  Agent                ▼
+ ┌──────────────────────────────────────────────────┐
+ │                  aura-agent                      │
+ │  → core, kernel, reasoner, tools, store, auth    │
+ └────────────────────────┬─────────────────────────┘
+                          │
+ L5  Higher Consumers     ▼
+ ┌──────────────────────────────────────────────────┐
+ │  ┌──────────────┐            ┌────────────┐      │
+ │  │aura-automaton│            │  aura-cli  │      │
+ │  │ → agent,core │            │ → agent,   │      │
+ │  │   tools,     │            │   core,auth│      │
+ │  │   reasoner   │            │   store,   │      │
+ │  └──────┬───────┘            │   reasoner,│      │
+ │         │                    │   tools,   │      │
+ │         │                    │   kernel   │      │
+ │         │                    └────────────┘      │
+ └─────────┼────────────────────────────────────────┘
+           │
+ L6  Server▼
+ ┌──────────────────────────────────────────────────┐
+ │                   aura-node                      │
+ │  → core, protocol, store, reasoner, kernel,      │
+ │    tools, agent, automaton                        │
+ └────────────────────────┬─────────────────────────┘
+                          │
+ L7  Binary               ▼
+ ┌──────────────────────────────────────────────────┐
+ │                 aura (binary)                    │
+ │  → terminal, core, kernel, store, reasoner,      │
+ │    tools, agent, auth, node                      │
+ └──────────────────────────────────────────────────┘
 ```
 
 Crates are described below in dependency order — most fundamental first.
@@ -311,14 +318,12 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 
 #### Core Orchestration
 
-```mermaid
-flowchart LR
-  AL[AgentLoop] --> MP[ModelProvider]
-  AL --> KTG[KernelToolGateway]
-  KTG --> ER[ExecutorRouter]
-  ER --> TE[ToolExecutor]
-  TE --> S[Sandbox]
-  AL -->|events| EC[Event Channel]
+```
+ AgentLoop ──▶ ModelProvider
+     │
+     ├──▶ KernelToolGateway ──▶ ExecutorRouter ──▶ ToolExecutor ──▶ Sandbox
+     │
+     └──events──▶ Event Channel
 ```
 
 | Type | Purpose |
@@ -335,30 +340,80 @@ flowchart LR
 
 #### AgentLoop Iteration
 
-```mermaid
-flowchart TD
-  start([Begin Iteration]) --> compact[Compact context if needed]
-  compact --> build[Build model request]
-  build --> call[Call model provider]
-  call --> stream{Use streaming}
-  stream -->|yes| accumulate[Collect stream events into response]
-  stream -->|no| direct[Run non streaming complete call]
-  accumulate --> emit_iter[Emit iteration complete event]
-  direct --> emit_iter
-  emit_iter --> stop{Stop reason}
-  stop -->|EndTurn| done([Return result])
-  stop -->|MaxTokens| handle_max[Handle max tokens]
-  stop -->|ToolUse| tools[Handle tool use]
-  handle_max --> done
-  tools --> cache_split[Split cached and uncached tools]
-  cache_split --> block_check[Split blocked and executable tools]
-  block_check --> execute[Execute tools]
-  execute --> track[Track blocking stall and exploration]
-  track --> build_check{Write succeeded}
-  build_check -->|yes| auto_build[Run auto build check]
-  build_check -->|no| next[Next iteration]
-  auto_build --> next
-  next --> start
+```
+ ┌─────────────────────┐
+ │   Begin Iteration   │◄──────────────────────────────┐
+ └──────────┬──────────┘                               │
+            ▼                                          │
+ ┌─────────────────────┐                               │
+ │ Compact context     │                               │
+ │ (if needed)         │                               │
+ └──────────┬──────────┘                               │
+            ▼                                          │
+ ┌─────────────────────┐                               │
+ │ Build model request │                               │
+ └──────────┬──────────┘                               │
+            ▼                                          │
+ ┌─────────────────────┐                               │
+ │ Call model provider │                               │
+ └──────────┬──────────┘                               │
+            ▼                                          │
+       ┌─────────┐  yes  ┌───────────────────┐         │
+       │Streaming│──────▶│ Accumulate stream  │         │
+       │    ?    │       │ events             │         │
+       └────┬────┘       └─────────┬─────────┘         │
+         no │                      │                    │
+            ▼                      │                    │
+    ┌───────────────┐              │                    │
+    │ Run complete  │              │                    │
+    │ call          │              │                    │
+    └───────┬───────┘              │                    │
+            │◄─────────────────────┘                    │
+            ▼                                          │
+ ┌─────────────────────┐                               │
+ │ Emit iteration      │                               │
+ │ complete event      │                               │
+ └──────────┬──────────┘                               │
+            ▼                                          │
+       ┌──────────┐                                    │
+       │  Stop    │                                    │
+       │  reason? │                                    │
+       └─┬──┬──┬──┘                                    │
+         │  │  │                                       │
+ EndTurn │  │  │ ToolUse                               │
+         │  │  │                                       │
+         │  │  ▼                                       │
+         │  │ ┌─────────────────────────────┐          │
+         │  │ │ Split cached / uncached     │          │
+         │  │ └─────────────┬───────────────┘          │
+         │  │               ▼                          │
+         │  │ ┌─────────────────────────────┐          │
+         │  │ │ Split blocked / executable  │          │
+         │  │ └─────────────┬───────────────┘          │
+         │  │               ▼                          │
+         │  │ ┌─────────────────────────────┐          │
+         │  │ │ Execute tools               │          │
+         │  │ └─────────────┬───────────────┘          │
+         │  │               ▼                          │
+         │  │ ┌─────────────────────────────┐          │
+         │  │ │ Track blocking / stall /    │          │
+         │  │ │ exploration                 │          │
+         │  │ └─────────────┬───────────────┘          │
+         │  │               ▼                          │
+         │  │          ┌──────────┐  yes ┌───────────┐ │
+         │  │          │  Write   │─────▶│ Auto-build│ │
+         │  │          │succeeded?│      │ check     │ │
+         │  │          └────┬─────┘      └─────┬─────┘ │
+         │  │            no │                  │       │
+         │  │               ▼                  ▼       │
+         │  │           ┌──────────────────────────┐   │
+         │  │           │     Next iteration       │───┘
+         │  │           └──────────────────────────┘
+         │  │ MaxTokens
+         ▼  ▼
+ ┌─────────────────┐
+ │  Return result  │
+ └─────────────────┘
 ```
 
 #### Submodules
@@ -818,30 +873,34 @@ sequenceDiagram
 
 ### Data Lifecycle Summary
 
-```mermaid
-flowchart LR
-    subgraph Input
-        A[User Prompt] --> B[Transaction]
-    end
-    
-    subgraph Processing
-        B --> C[AgentLoop]
-        C --> D[ModelProvider]
-        D --> E[ModelResponse]
-        E --> F{StopReason}
-        F -->|ToolUse| G[KernelToolGateway]
-        G --> H[ExecutorRouter]
-        H --> I[ToolExecutor + Sandbox]
-        I --> J[Effect]
-        J --> C
-        F -->|EndTurn| K[AgentLoopResult]
-    end
-    
-    subgraph Output
-        K --> L[Record Entry]
-        L --> M[RocksDB Store]
-        K --> N[TurnEvents → UI/WebSocket]
-    end
+```
+ INPUT                 PROCESSING                                      OUTPUT
+ ─────                 ──────────                                      ──────
+
+ User Prompt           ┌─────────────────────────────────────────┐
+     │                 │                                         │
+     ▼                 │  AgentLoop                              │
+ Transaction ─────────▶│     │                                   │
+                       │     ▼                                   │
+                       │  ModelProvider ──▶ ModelResponse         │
+                       │                       │                 │
+                       │                  StopReason?            │
+                       │                 ╱          ╲            │
+                       │           ToolUse          EndTurn      │     Record Entry
+                       │              │                │         │──▶  ──▶ RocksDB
+                       │              ▼                ▼         │
+                       │  KernelToolGateway      AgentLoopResult │──▶  TurnEvents
+                       │       │                                 │     ──▶ UI / WS
+                       │       ▼                                 │
+                       │  ExecutorRouter                         │
+                       │       │                                 │
+                       │       ▼                                 │
+                       │  ToolExecutor + Sandbox                 │
+                       │       │                                 │
+                       │       ▼                                 │
+                       │    Effect ───────▶ (back to AgentLoop)  │
+                       │                                         │
+                       └─────────────────────────────────────────┘
 ```
 
 Every user interaction follows the same fundamental path: input becomes a transaction, the `AgentLoop` orchestrates model calls and tool execution in a loop, results are emitted as `TurnEvent`s for real-time display, and the final state is persisted as a `RecordEntry` in the append-only log.
