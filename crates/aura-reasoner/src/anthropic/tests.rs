@@ -7,6 +7,7 @@ use super::{AnthropicConfig, AnthropicProvider, ApiError, RoutingMode};
 use crate::{
     Message, ModelProvider, ModelRequest, ReasonerError, ThinkingConfig, ToolChoice, ToolDefinition,
 };
+use std::time::Duration;
 
 #[test]
 fn test_config_new() {
@@ -333,5 +334,43 @@ async fn test_direct_mode_sends_caching_beta_header() {
     assert!(
         captured.contains("prompt-caching-2024-07-31"),
         "anthropic-beta header should include prompt-caching beta tag.\nCaptured headers:\n{captured}"
+    );
+}
+
+#[tokio::test]
+async fn test_complete_timeout() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let _server = tokio::spawn(async move {
+        loop {
+            let Ok((_socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
+
+    let config = AnthropicConfig {
+        api_key: "test-key".to_string(),
+        default_model: "test-model".to_string(),
+        timeout_ms: 200,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Direct,
+        fallback_model: None,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("test-model", "system")
+        .message(Message::user("test"))
+        .build();
+
+    let result = provider.complete(request).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, ReasonerError::Timeout),
+        "expected Timeout, got: {err:?}"
     );
 }

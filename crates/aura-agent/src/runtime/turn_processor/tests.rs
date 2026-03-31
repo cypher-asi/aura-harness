@@ -384,3 +384,52 @@ async fn test_replay_mode_skips_model() {
     assert_eq!(result.steps, 1);
     assert!(!result.had_failures);
 }
+
+#[tokio::test]
+async fn test_stream_callback_emits_events() {
+    use crate::events::TurnEvent;
+    use std::sync::Mutex;
+
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+
+    let provider = Arc::new(MockProvider::simple_response("Hello from stream!"));
+    let store = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let executor = ExecutorRouter::new();
+    let tool_registry = Arc::new(DefaultToolRegistry::new());
+
+    let config = TurnConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..TurnConfig::default()
+    };
+
+    let collected: Arc<Mutex<Vec<TurnEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collected_clone = collected.clone();
+    let callback: StreamCallback = Box::new(move |event| {
+        collected_clone
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(event);
+    });
+
+    let processor = TurnProcessor::new(provider, store, executor, tool_registry, config)
+        .with_stream_callback(callback);
+
+    let agent_id = AgentId::generate();
+    let messages = vec![Message::user("Hello")];
+    let result = processor
+        .process_turn_with_messages(agent_id, messages)
+        .await
+        .unwrap();
+
+    assert_eq!(result.steps, 1);
+
+    let events = collected
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let has_text_delta = events.iter().any(|e| matches!(e, TurnEvent::TextDelta(_)));
+    let has_step_complete = events.iter().any(|e| matches!(e, TurnEvent::StepComplete));
+
+    assert!(has_text_delta, "expected at least one TextDelta event");
+    assert!(has_step_complete, "expected a StepComplete event");
+}

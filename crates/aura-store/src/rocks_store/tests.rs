@@ -345,3 +345,65 @@ fn test_record_entry_with_complex_data() {
     assert_eq!(retrieved.decision.rejected.len(), 1);
     assert_eq!(retrieved.decision.rejected[0].reason, "test rejection");
 }
+
+#[test]
+fn test_scan_record_deserialization_error() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    store.enqueue_tx(&tx).unwrap();
+    let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let entry = RecordEntry::builder(1, tx).build();
+    store
+        .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+        .unwrap();
+
+    let record_key = RecordKey::new(agent_id, 1);
+    let cf = store.db.cf_handle(cf::RECORD).unwrap();
+    store
+        .db
+        .put_cf(&cf, record_key.encode(), b"not valid json {{{{")
+        .unwrap();
+
+    let result = store.scan_record(agent_id, 1, 10);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, StoreError::Deserialization(_)),
+        "expected Deserialization, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_dequeue_tx_inbox_corruption() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let head_key = AgentMetaKey::inbox_head(agent_id);
+    let tail_key = AgentMetaKey::inbox_tail(agent_id);
+    let cf_meta = store.db.cf_handle(cf::AGENT_META).unwrap();
+
+    store
+        .db
+        .put_cf(&cf_meta, head_key.encode(), 0u64.to_be_bytes())
+        .unwrap();
+    store
+        .db
+        .put_cf(&cf_meta, tail_key.encode(), 1u64.to_be_bytes())
+        .unwrap();
+
+    let result = store.dequeue_tx(agent_id);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InboxCorruption {
+                agent_id: _,
+                expected_seq: 0,
+            }
+        ),
+        "expected InboxCorruption, got: {err:?}"
+    );
+}

@@ -253,3 +253,87 @@ impl Default for AutomatonRuntime {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ImmediateAutomaton;
+
+    #[async_trait::async_trait]
+    impl Automaton for ImmediateAutomaton {
+        fn kind(&self) -> &str {
+            "immediate"
+        }
+
+        async fn tick(&self, _ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
+            Ok(TickOutcome::Done)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_automaton_runtime_install_and_list() {
+        let runtime = AutomatonRuntime::new();
+
+        let (handle, _rx) = runtime
+            .install(
+                Box::new(ImmediateAutomaton),
+                serde_json::json!({}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let list = runtime.list();
+        assert!(
+            list.iter().any(|info| info.id.as_str() == handle.id().as_str()),
+            "installed automaton should appear in list()"
+        );
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].kind, "immediate");
+    }
+
+    #[tokio::test]
+    async fn test_automaton_runtime_start_stop() {
+        let runtime = AutomatonRuntime::new();
+
+        let (handle, mut rx) = runtime
+            .install(
+                Box::new(ImmediateAutomaton),
+                serde_json::json!({}),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let id = handle.id().as_str().to_string();
+
+        let mut saw_started = false;
+        let mut saw_done = false;
+        while let Ok(evt) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            rx.recv(),
+        )
+        .await
+        {
+            match evt {
+                Some(AutomatonEvent::Started { .. }) => saw_started = true,
+                Some(AutomatonEvent::Done) => {
+                    saw_done = true;
+                    break;
+                }
+                None => break,
+                _ => {}
+            }
+        }
+
+        assert!(saw_started, "should have received Started event");
+        assert!(saw_done, "should have received Done event");
+
+        let stop_result = runtime.stop(&id);
+        assert!(
+            stop_result.is_err(),
+            "stop after completion should return NotFound since the instance is cleaned up"
+        );
+    }
+}
