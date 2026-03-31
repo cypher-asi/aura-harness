@@ -4,6 +4,7 @@ mod input;
 mod markdown;
 mod overlays;
 mod panels;
+mod segments;
 mod text;
 
 #[cfg(test)]

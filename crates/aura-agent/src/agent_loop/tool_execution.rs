@@ -5,28 +5,31 @@ use std::collections::HashSet;
 use crate::constants::{tool_result_cache_key, CACHEABLE_TOOLS};
 use aura_reasoner::{ContentBlock, Message, ModelResponse, ToolResultContent};
 use tokio::sync::mpsc::Sender;
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::blocking::detection::{detect_all_blocked, BlockingContext};
-use crate::blocking::stall::StallDetector;
-use crate::budget::ExplorationState;
-use crate::build;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
-use crate::read_guard::ReadGuardState;
-use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
+use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 
 use super::streaming;
-use super::{AgentLoop, AgentLoopConfig, LoopState};
+use super::{AgentLoop, LoopState};
 
 fn is_cacheable(tool_name: &str) -> bool {
     CACHEABLE_TOOLS.contains(&tool_name)
 }
 
+struct ExecutedTools {
+    tool_calls: Vec<ToolCallInfo>,
+    all_results: Vec<ToolCallResult>,
+    side_messages: Vec<String>,
+    is_stalled: bool,
+    blocked_ids: HashSet<String>,
+    cached_ids: HashSet<String>,
+}
+
 /// Handle `StopReason::ToolUse` — cache, execute, emit, stall-check.
 ///
 /// Returns `true` if the loop should break.
-#[allow(clippy::too_many_lines)]
 pub(super) async fn handle_tool_use(
     agent: &AgentLoop,
     response: &ModelResponse,
@@ -34,14 +37,25 @@ pub(super) async fn handle_tool_use(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
 ) -> bool {
+    let tools = match execute_and_cache_tools(agent, response, executor, state).await {
+        Some(t) => t,
+        None => return true,
+    };
+    emit_and_log_results(event_tx, &tools);
+    check_termination_conditions(event_tx, state, tools)
+}
+
+async fn execute_and_cache_tools(
+    agent: &AgentLoop,
+    response: &ModelResponse,
+    executor: &dyn AgentToolExecutor,
+    state: &mut LoopState,
+) -> Option<ExecutedTools> {
     let tool_calls = extract_tool_calls(response);
     if tool_calls.is_empty() {
-        return true;
+        return None;
     }
-    info!(
-        tool_count = tool_calls.len(),
-        "Processing tool_use stop reason"
-    );
+    info!(tool_count = tool_calls.len(), "Processing tool_use stop reason");
     for tc in &tool_calls {
         info!(
             tool_use_id = %tc.id,
@@ -52,10 +66,8 @@ pub(super) async fn handle_tool_use(
     }
 
     let (cached_results, uncached_calls) = split_cached(&tool_calls, &state.tool_cache);
-    let cached_ids: HashSet<String> = cached_results
-        .iter()
-        .map(|r| r.tool_use_id.clone())
-        .collect();
+    let cached_ids: HashSet<String> =
+        cached_results.iter().map(|r| r.tool_use_id.clone()).collect();
     info!(
         cached_count = cached_results.len(),
         execute_count = uncached_calls.len(),
@@ -74,14 +86,30 @@ pub(super) async fn handle_tool_use(
 
     let mut all_results: Vec<ToolCallResult> = cached_results;
     all_results.extend(executed_results);
-    for r in &all_results {
-        let tool_name = tool_calls
+
+    Some(ExecutedTools {
+        tool_calls,
+        all_results,
+        side_messages,
+        is_stalled,
+        blocked_ids,
+        cached_ids,
+    })
+}
+
+fn emit_and_log_results(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    tools: &ExecutedTools,
+) {
+    for r in &tools.all_results {
+        let tool_name = tools
+            .tool_calls
             .iter()
             .find(|t| t.id == r.tool_use_id)
             .map_or("unknown", |t| t.name.as_str());
-        let source = if cached_ids.contains(&r.tool_use_id) {
+        let source = if tools.cached_ids.contains(&r.tool_use_id) {
             "cache"
-        } else if blocked_ids.contains(&r.tool_use_id) {
+        } else if tools.blocked_ids.contains(&r.tool_use_id) {
             "blocked"
         } else {
             "executor"
@@ -97,37 +125,60 @@ pub(super) async fn handle_tool_use(
             "Tool call completed"
         );
     }
-    emit_tool_results(event_tx, &all_results, &tool_calls);
+    emit_tool_results(event_tx, &tools.all_results, &tools.tool_calls);
+}
 
-    let should_stop = all_results.iter().any(|r| r.stop_loop);
+fn emit_stop_error(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    state: &mut LoopState,
+    code: &str,
+    msg: &str,
+) {
+    helpers::append_warning(&mut state.messages, msg);
+    streaming::emit(
+        event_tx,
+        AgentLoopEvent::Error {
+            code: code.to_string(),
+            message: msg.to_string(),
+            recoverable: false,
+        },
+    );
+    state.result.stalled = true;
+}
 
-    let all_errors = !all_results.is_empty() && all_results.iter().all(|r| r.is_error);
+fn check_termination_conditions(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    state: &mut LoopState,
+    tools: ExecutedTools,
+) -> bool {
+    let should_stop = tools.all_results.iter().any(|r| r.stop_loop);
+
+    let all_errors = !tools.all_results.is_empty() && tools.all_results.iter().all(|r| r.is_error);
     if all_errors {
         state.consecutive_all_error_iterations += 1;
     } else {
         state.consecutive_all_error_iterations = 0;
     }
 
-    push_tool_result_message_with_context(&mut state.messages, all_results, side_messages);
+    push_tool_result_message_with_context(
+        &mut state.messages,
+        tools.all_results,
+        tools.side_messages,
+    );
 
     if should_stop {
         return true;
     }
 
-    if is_stalled {
-        let msg = "CRITICAL: Agent appears stalled — repeatedly failing \
-                   to write to the same files. Stopping to prevent \
-                   infinite loop. Try a different approach or ask for help.";
-        helpers::append_warning(&mut state.messages, msg);
-        streaming::emit(
+    if tools.is_stalled {
+        emit_stop_error(
             event_tx,
-            AgentLoopEvent::Error {
-                code: "stall_detected".to_string(),
-                message: msg.to_string(),
-                recoverable: false,
-            },
+            state,
+            "stall_detected",
+            "CRITICAL: Agent appears stalled — repeatedly failing \
+             to write to the same files. Stopping to prevent \
+             infinite loop. Try a different approach or ask for help.",
         );
-        state.result.stalled = true;
         return true;
     }
 
@@ -139,16 +190,7 @@ pub(super) async fn handle_tool_use(
              The agent appears stuck. Stopping to prevent waste.",
             state.consecutive_all_error_iterations
         );
-        helpers::append_warning(&mut state.messages, &msg);
-        streaming::emit(
-            event_tx,
-            AgentLoopEvent::Error {
-                code: "consecutive_errors".to_string(),
-                message: msg,
-                recoverable: false,
-            },
-        );
-        state.result.stalled = true;
+        emit_stop_error(event_tx, state, "consecutive_errors", &msg);
         return true;
     }
 
@@ -279,220 +321,3 @@ pub(super) fn push_tool_result_message_with_context(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Core tool result processing (blocking, execution, tracking, build)
-// ---------------------------------------------------------------------------
-
-impl AgentLoop {
-    /// Process tool call results from one iteration.
-    ///
-    /// Returns `(results, side_messages, is_stalled, blocked_ids)` where
-    /// `side_messages` are warning/build texts that should be embedded into
-    /// the `tool_result` user message rather than pushed as separate messages
-    /// (which would violate Anthropic's `tool_use/tool_result` adjacency
-    /// requirement), and `blocked_ids` tracks which tool calls were blocked
-    /// by detection policy (for accurate source labelling in logs).
-    pub(crate) async fn process_tool_results(
-        &self,
-        tool_calls: &[ToolCallInfo],
-        executor: &dyn AgentToolExecutor,
-        state: &mut LoopState,
-    ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>) {
-        let mut side_messages: Vec<String> = Vec::new();
-
-        let (blocked_results, to_execute) = partition_blocked(
-            tool_calls,
-            &state.blocking_ctx,
-            &state.read_guard,
-            &mut side_messages,
-        );
-
-        let blocked_ids: HashSet<String> = blocked_results
-            .iter()
-            .map(|r| r.tool_use_id.clone())
-            .collect();
-
-        let executed = if to_execute.is_empty() {
-            Vec::new()
-        } else {
-            executor.execute(&to_execute).await
-        };
-
-        let any_write_success = track_tool_effects(
-            &to_execute,
-            &executed,
-            &mut state.blocking_ctx,
-            &mut state.read_guard,
-            &mut state.exploration_state,
-            &mut state.had_any_write,
-        );
-
-        let stalled = check_stall_detection(&mut state.stall_detector, &to_execute, &executed);
-
-        if any_write_success && state.build_cooldown == 0 {
-            if let Some(build_text) = run_auto_build(
-                &self.config,
-                executor,
-                &mut state.build_cooldown,
-                state.build_baseline.as_ref(),
-            )
-            .await
-            {
-                side_messages.push(build_text);
-            }
-        }
-
-        if any_write_success {
-            state.blocking_ctx.exploration_allowance += 2;
-        }
-
-        let mut all_results = blocked_results;
-        all_results.extend(executed);
-        (all_results, side_messages, stalled, blocked_ids)
-    }
-}
-
-fn partition_blocked(
-    tool_calls: &[ToolCallInfo],
-    blocking_ctx: &BlockingContext,
-    read_guard: &ReadGuardState,
-    side_messages: &mut Vec<String>,
-) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
-    let mut blocked = Vec::new();
-    let mut to_execute = Vec::new();
-
-    for tool in tool_calls {
-        let check = detect_all_blocked(tool, blocking_ctx, read_guard);
-        if check.blocked {
-            let msg = check
-                .recovery_message
-                .unwrap_or_else(|| "Blocked".to_string());
-            let path_hint = tool
-                .input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            warn!(
-                tool_use_id = %tool.id,
-                tool_name = %tool.name,
-                path = path_hint,
-                reason = %msg,
-                "Tool call blocked by detection policy"
-            );
-            side_messages.push(msg.clone());
-            blocked.push(ToolCallResult {
-                tool_use_id: tool.id.clone(),
-                content: format!("[BLOCKED] {msg}"),
-                is_error: true,
-                stop_loop: false,
-            });
-        } else {
-            to_execute.push(tool.clone());
-        }
-    }
-
-    (blocked, to_execute)
-}
-
-fn track_tool_effects(
-    to_execute: &[ToolCallInfo],
-    executed: &[ToolCallResult],
-    blocking_ctx: &mut BlockingContext,
-    read_guard: &mut ReadGuardState,
-    exploration_state: &mut ExplorationState,
-    had_any_write: &mut bool,
-) -> bool {
-    let mut any_write_success = false;
-
-    for exec_result in executed {
-        let Some(tool) = to_execute.iter().find(|t| t.id == exec_result.tool_use_id) else {
-            continue;
-        };
-
-        if helpers::is_exploration_tool(&tool.name) {
-            exploration_state.count += 1;
-            if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
-                if tool.input.get("start_line").is_some() {
-                    read_guard.record_range_read(path);
-                } else {
-                    read_guard.record_full_read(path);
-                }
-            }
-        }
-
-        if helpers::is_write_tool(&tool.name) {
-            if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
-                if exec_result.is_error {
-                    blocking_ctx.on_write_failure(path);
-                } else {
-                    blocking_ctx.on_write_success(path, read_guard);
-                    any_write_success = true;
-                    *had_any_write = true;
-                }
-            } else if exec_result.is_error {
-                blocking_ctx.on_malformed_write();
-            }
-        }
-
-        if crate::constants::COMMAND_TOOLS.contains(&tool.name.as_str()) {
-            blocking_ctx.on_command_result(!exec_result.is_error);
-        }
-    }
-
-    any_write_success
-}
-
-fn check_stall_detection(
-    stall_detector: &mut StallDetector,
-    to_execute: &[ToolCallInfo],
-    executed: &[ToolCallResult],
-) -> bool {
-    let mut write_targets = HashSet::new();
-    let mut any_write_success = false;
-    let mut writes_attempted = false;
-
-    for exec_result in executed {
-        if let Some(tool) = to_execute.iter().find(|t| t.id == exec_result.tool_use_id) {
-            if helpers::is_write_tool(&tool.name) {
-                writes_attempted = true;
-                if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
-                    write_targets.insert(path.to_string());
-                    if !exec_result.is_error {
-                        any_write_success = true;
-                    }
-                }
-            }
-        }
-    }
-
-    let stalled = stall_detector.update(&write_targets, any_write_success, writes_attempted);
-    if stalled {
-        warn!(
-            streak = stall_detector.streak(),
-            "Stall detected: same write targets failing repeatedly"
-        );
-    }
-    stalled
-}
-
-async fn run_auto_build(
-    config: &AgentLoopConfig,
-    executor: &dyn AgentToolExecutor,
-    build_cooldown: &mut usize,
-    build_baseline: Option<&BuildBaseline>,
-) -> Option<String> {
-    if let Some(build_result) = executor.auto_build_check().await {
-        *build_cooldown = config.auto_build_cooldown;
-        if !build_result.success {
-            let annotated = build_baseline.map_or_else(
-                || build_result.output.clone(),
-                |baseline| build::annotate_build_output(&build_result.output, baseline),
-            );
-            return Some(format!(
-                "Build check failed with {} error(s):\n\n{annotated}",
-                build_result.error_count
-            ));
-        }
-    }
-    None
-}

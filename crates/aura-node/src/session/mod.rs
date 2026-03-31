@@ -3,6 +3,7 @@
 //! Each WebSocket connection maps to a `Session` that maintains conversation
 //! state, tool configuration, and token accounting across turns.
 
+mod helpers;
 mod ws_handler;
 
 pub use ws_handler::handle_ws_connection;

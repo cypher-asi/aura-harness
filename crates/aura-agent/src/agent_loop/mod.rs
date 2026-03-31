@@ -8,6 +8,7 @@ mod context;
 mod iteration;
 mod streaming;
 mod tool_execution;
+mod tool_processing;
 #[cfg(test)]
 mod tool_execution_tests;
 

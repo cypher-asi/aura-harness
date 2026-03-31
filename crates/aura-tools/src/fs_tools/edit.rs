@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use aura_core::ToolDefinition;
 use aura_core::ToolResult;
 use std::fs;
+use std::path::PathBuf;
 use tracing::{debug, instrument};
 
 /// Try fuzzy (trimmed, line-wise) matching when exact match fails.
@@ -51,6 +52,123 @@ fn fuzzy_line_match(content: &str, old_text: &str) -> Result<Option<(usize, usiz
     }
 }
 
+struct ValidatedEdit {
+    resolved: PathBuf,
+    content: String,
+    had_crlf: bool,
+    old_text_norm: String,
+    new_text_norm: String,
+}
+
+fn validate_edit_input(
+    sandbox: &Sandbox,
+    path: &str,
+    old_text: &str,
+    new_text: &str,
+) -> Result<ValidatedEdit, ToolError> {
+    let resolved = sandbox.resolve_existing(path)?;
+    debug!(?resolved, "Editing file");
+
+    if !resolved.is_file() {
+        return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
+    }
+
+    let raw_content = fs::read_to_string(&resolved).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("read_to_string({}): {e}", resolved.display()),
+        ))
+    })?;
+
+    let had_crlf = raw_content.contains("\r\n");
+    let content = if had_crlf {
+        raw_content.replace("\r\n", "\n")
+    } else {
+        raw_content
+    };
+
+    Ok(ValidatedEdit {
+        resolved,
+        content,
+        had_crlf,
+        old_text_norm: old_text.replace("\r\n", "\n"),
+        new_text_norm: new_text.replace("\r\n", "\n"),
+    })
+}
+
+fn find_match_in_content(
+    content: &str,
+    old_text_norm: &str,
+    new_text_norm: &str,
+    replace_all: bool,
+) -> Result<(String, usize), ToolError> {
+    let exact_count = content.matches(old_text_norm).count();
+
+    if exact_count == 0 {
+        match fuzzy_line_match(content, old_text_norm) {
+            Ok(Some((start, end))) => {
+                let mut buf = String::with_capacity(content.len());
+                buf.push_str(&content[..start]);
+                buf.push_str(new_text_norm);
+                buf.push_str(&content[end..]);
+                Ok((buf, 1))
+            }
+            Ok(None) => Err(ToolError::InvalidArguments(
+                "The specified text was not found in the file".to_string(),
+            )),
+            Err(msg) => Err(ToolError::InvalidArguments(msg)),
+        }
+    } else if !replace_all && exact_count > 1 {
+        Err(ToolError::InvalidArguments(format!(
+            "Found {exact_count} occurrences of the search text. \
+             Use replace_all=true to replace all, or make the search text more specific."
+        )))
+    } else if replace_all {
+        Ok((
+            content.replace(old_text_norm, new_text_norm),
+            exact_count,
+        ))
+    } else {
+        Ok((content.replacen(old_text_norm, new_text_norm, 1), 1))
+    }
+}
+
+fn apply_edit(
+    resolved: &PathBuf,
+    path: &str,
+    content: &str,
+    new_content: String,
+    had_crlf: bool,
+    replacements: usize,
+) -> Result<ToolResult, ToolError> {
+    if !content.is_empty() && new_content.len() < content.len() / 5 {
+        return Err(ToolError::InvalidArguments(
+            "Edit would reduce file to less than 20% of original size. \
+             This likely indicates truncated content."
+                .to_string(),
+        ));
+    }
+
+    let final_content = if had_crlf {
+        new_content.replace('\n', "\r\n")
+    } else {
+        new_content
+    };
+
+    fs::write(resolved, &final_content).map_err(|e| {
+        ToolError::Io(std::io::Error::new(
+            e.kind(),
+            format!("write({}): {e}", resolved.display()),
+        ))
+    })?;
+
+    Ok(ToolResult::success(
+        "edit_file",
+        format!("Replaced {replacements} occurrence(s) in {path}"),
+    )
+    .with_metadata("replacements", replacements.to_string()))
+}
+
 /// Edit a file by replacing text.
 ///
 /// When `replace_all` is `false` (default), exactly one occurrence must exist
@@ -72,96 +190,10 @@ pub fn fs_edit(
     new_text: &str,
     replace_all: bool,
 ) -> Result<ToolResult, ToolError> {
-    let resolved = sandbox.resolve_existing(path)?;
-    debug!(?resolved, "Editing file");
-
-    if !resolved.is_file() {
-        return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
-    }
-
-    let raw_content = fs::read_to_string(&resolved).map_err(|e| {
-        ToolError::Io(std::io::Error::new(
-            e.kind(),
-            format!("read_to_string({}): {e}", resolved.display()),
-        ))
-    })?;
-
-    // Detect CRLF and normalise to LF for matching
-    let had_crlf = raw_content.contains("\r\n");
-    let content = if had_crlf {
-        raw_content.replace("\r\n", "\n")
-    } else {
-        raw_content
-    };
-    let old_text_norm = old_text.replace("\r\n", "\n");
-    let new_text_norm = new_text.replace("\r\n", "\n");
-
-    let exact_count = content.matches(old_text_norm.as_str()).count();
-
-    let (new_content, replacements) = if exact_count == 0 {
-        // Try fuzzy line-wise match
-        match fuzzy_line_match(&content, &old_text_norm) {
-            Ok(Some((start, end))) => {
-                let mut buf = String::with_capacity(content.len());
-                buf.push_str(&content[..start]);
-                buf.push_str(&new_text_norm);
-                buf.push_str(&content[end..]);
-                (buf, 1usize)
-            }
-            Ok(None) => {
-                return Err(ToolError::InvalidArguments(
-                    "The specified text was not found in the file".to_string(),
-                ));
-            }
-            Err(msg) => {
-                return Err(ToolError::InvalidArguments(msg));
-            }
-        }
-    } else if !replace_all && exact_count > 1 {
-        return Err(ToolError::InvalidArguments(format!(
-            "Found {exact_count} occurrences of the search text. \
-             Use replace_all=true to replace all, or make the search text more specific."
-        )));
-    } else if replace_all {
-        (
-            content.replace(old_text_norm.as_str(), &new_text_norm),
-            exact_count,
-        )
-    } else {
-        (
-            content.replacen(old_text_norm.as_str(), &new_text_norm, 1),
-            1,
-        )
-    };
-
-    // Shrinkage guard
-    if !content.is_empty() && new_content.len() < content.len() / 5 {
-        return Err(ToolError::InvalidArguments(
-            "Edit would reduce file to less than 20% of original size. \
-             This likely indicates truncated content."
-                .to_string(),
-        ));
-    }
-
-    // Restore CRLF if the original file used it
-    let final_content = if had_crlf {
-        new_content.replace('\n', "\r\n")
-    } else {
-        new_content
-    };
-
-    fs::write(&resolved, &final_content).map_err(|e| {
-        ToolError::Io(std::io::Error::new(
-            e.kind(),
-            format!("write({}): {e}", resolved.display()),
-        ))
-    })?;
-
-    Ok(ToolResult::success(
-        "edit_file",
-        format!("Replaced {replacements} occurrence(s) in {path}"),
-    )
-    .with_metadata("replacements", replacements.to_string()))
+    let edit = validate_edit_input(sandbox, path, old_text, new_text)?;
+    let (new_content, replacements) =
+        find_match_in_content(&edit.content, &edit.old_text_norm, &edit.new_text_norm, replace_all)?;
+    apply_edit(&edit.resolved, path, &edit.content, new_content, edit.had_crlf, replacements)
 }
 
 /// `fs_edit` tool: edit a file by replacing text.
@@ -230,271 +262,5 @@ impl Tool for FsEditTool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn create_test_sandbox() -> (Sandbox, TempDir) {
-        let dir = TempDir::new().unwrap();
-        let sandbox = Sandbox::new(dir.path()).unwrap();
-        (sandbox, dir)
-    }
-
-    #[test]
-    fn test_fs_edit_single_replacement() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("edit.txt"), "Hello, World!").unwrap();
-
-        let result = fs_edit(&sandbox, "edit.txt", "World", "Aura", false).unwrap();
-        assert!(result.ok);
-        assert_eq!(result.metadata.get("replacements").unwrap(), "1");
-
-        let content = fs::read_to_string(dir.path().join("edit.txt")).unwrap();
-        assert_eq!(content, "Hello, Aura!");
-    }
-
-    #[test]
-    fn test_fs_edit_replace_all() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("edit.txt"), "foo bar foo baz foo").unwrap();
-
-        let result = fs_edit(&sandbox, "edit.txt", "foo", "qux", true).unwrap();
-        assert!(result.ok);
-        assert_eq!(result.metadata.get("replacements").unwrap(), "3");
-
-        let content = fs::read_to_string(dir.path().join("edit.txt")).unwrap();
-        assert_eq!(content, "qux bar qux baz qux");
-    }
-
-    #[test]
-    fn test_fs_edit_multi_match_without_replace_all_errors() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("edit.txt"), "foo bar foo baz foo").unwrap();
-
-        let result = fs_edit(&sandbox, "edit.txt", "foo", "qux", false);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-        if let Err(ToolError::InvalidArguments(msg)) = result {
-            assert!(msg.contains("3 occurrences"));
-            assert!(msg.contains("replace_all=true"));
-        }
-    }
-
-    #[test]
-    fn test_fs_edit_text_not_found() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("edit.txt"), "Hello, World!").unwrap();
-
-        let result = fs_edit(&sandbox, "edit.txt", "NotFound", "Replacement", false);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-    }
-
-    #[test]
-    fn test_fs_edit_not_a_file() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::create_dir(dir.path().join("dir")).unwrap();
-
-        let result = fs_edit(&sandbox, "dir", "old", "new", false);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-    }
-
-    #[test]
-    fn test_fs_edit_multiline() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let content = "line1\nold_content\nline3";
-        fs::write(dir.path().join("multi.txt"), content).unwrap();
-
-        let result = fs_edit(&sandbox, "multi.txt", "old_content", "new_content", false).unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("multi.txt")).unwrap();
-        assert_eq!(updated, "line1\nnew_content\nline3");
-    }
-
-    #[test]
-    fn test_fs_edit_fuzzy_match_whitespace_difference() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        // File has extra leading whitespace
-        let content = "fn main() {\n    let x = 1;\n    let y = 2;\n}\n";
-        fs::write(dir.path().join("fuzzy.rs"), content).unwrap();
-
-        // old_text has different indentation (trimmed)
-        let old_text = "let x = 1;\nlet y = 2;";
-        let new_text = "let x = 10;\nlet y = 20;";
-
-        let result = fs_edit(&sandbox, "fuzzy.rs", old_text, new_text, false).unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("fuzzy.rs")).unwrap();
-        assert!(updated.contains("let x = 10;"));
-        assert!(updated.contains("let y = 20;"));
-    }
-
-    #[test]
-    fn test_fs_edit_fuzzy_match_no_match() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("nope.txt"), "alpha\nbeta\ngamma\n").unwrap();
-
-        let result = fs_edit(&sandbox, "nope.txt", "totally\ndifferent", "new", false);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-        if let Err(ToolError::InvalidArguments(msg)) = result {
-            assert!(msg.contains("not found"));
-        }
-    }
-
-    #[test]
-    fn test_fs_edit_shrinkage_guard_rejects_large_reduction() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let big_content = "a\n".repeat(500);
-        fs::write(dir.path().join("shrink.txt"), &big_content).unwrap();
-
-        // Replace the entire content with something tiny
-        let result = fs_edit(&sandbox, "shrink.txt", &big_content, "x", false);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-        if let Err(ToolError::InvalidArguments(msg)) = result {
-            assert!(msg.contains("20%"));
-        }
-    }
-
-    #[test]
-    fn test_fs_edit_shrinkage_guard_allows_normal_edit() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let content = "Hello, World! This is a test file with enough content.";
-        fs::write(dir.path().join("normal.txt"), content).unwrap();
-
-        let result = fs_edit(&sandbox, "normal.txt", "World", "Aura", false).unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("normal.txt")).unwrap();
-        assert_eq!(
-            updated,
-            "Hello, Aura! This is a test file with enough content."
-        );
-    }
-
-    #[test]
-    fn test_fs_edit_crlf_normalization() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        // Write a CRLF file
-        let crlf_content = "line1\r\nline2\r\nline3\r\n";
-        fs::write(dir.path().join("crlf.txt"), crlf_content).unwrap();
-
-        let result = fs_edit(&sandbox, "crlf.txt", "line2", "replaced", false).unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("crlf.txt")).unwrap();
-        // Output should still be CRLF
-        assert!(updated.contains("\r\n"));
-        assert!(updated.contains("replaced"));
-        assert!(!updated.contains("line2"));
-    }
-
-    #[test]
-    fn test_fs_edit_empty_file_text_not_found() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("empty.txt"), "").unwrap();
-
-        let result = fs_edit(&sandbox, "empty.txt", "anything", "new", false);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-    }
-
-    #[test]
-    fn test_fs_edit_old_text_with_regex_special_chars() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let content = "value = arr[0].map(|x| x + 1);";
-        fs::write(dir.path().join("regex_chars.rs"), content).unwrap();
-
-        let result = fs_edit(
-            &sandbox,
-            "regex_chars.rs",
-            "arr[0].map(|x| x + 1)",
-            "arr[0].filter(|x| x > 0)",
-            false,
-        )
-        .unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("regex_chars.rs")).unwrap();
-        assert_eq!(updated, "value = arr[0].filter(|x| x > 0);");
-    }
-
-    #[test]
-    fn test_fs_edit_old_text_with_parentheses_and_braces() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let content = "fn foo() { bar(baz{}) }";
-        fs::write(dir.path().join("parens.txt"), content).unwrap();
-
-        let result = fs_edit(&sandbox, "parens.txt", "bar(baz{})", "qux()", false).unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("parens.txt")).unwrap();
-        assert_eq!(updated, "fn foo() { qux() }");
-    }
-
-    #[test]
-    fn test_fs_edit_nonexistent_file() {
-        let (sandbox, _dir) = create_test_sandbox();
-
-        let result = fs_edit(&sandbox, "nope.txt", "old", "new", false);
-        assert!(matches!(result, Err(ToolError::PathNotFound(_))));
-    }
-
-    #[test]
-    fn test_fs_edit_replace_all_zero_occurrences() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("none.txt"), "hello world").unwrap();
-
-        let result = fs_edit(&sandbox, "none.txt", "zzz", "xxx", true);
-        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
-    }
-
-    #[test]
-    fn test_fs_edit_single_char_replacement() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        fs::write(dir.path().join("char.txt"), "a+b=c").unwrap();
-
-        let result = fs_edit(&sandbox, "char.txt", "+", "-", false).unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("char.txt")).unwrap();
-        assert_eq!(updated, "a-b=c");
-    }
-
-    #[test]
-    fn test_fs_edit_multiline_replacement_preserves_context() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let content = "header\nfn old() {\n    body();\n}\nfooter\n";
-        fs::write(dir.path().join("multi.rs"), content).unwrap();
-
-        let result = fs_edit(
-            &sandbox,
-            "multi.rs",
-            "fn old() {\n    body();\n}",
-            "fn new() {\n    new_body();\n}",
-            false,
-        )
-        .unwrap();
-        assert!(result.ok);
-
-        let updated = fs::read_to_string(dir.path().join("multi.rs")).unwrap();
-        assert!(updated.starts_with("header\n"));
-        assert!(updated.ends_with("footer\n"));
-        assert!(updated.contains("fn new()"));
-    }
-}
+#[path = "edit_tests.rs"]
+mod tests;

@@ -240,6 +240,82 @@ pub fn try_signature_compact(content: &str) -> Option<String> {
     }
 }
 
+struct CompactionParams {
+    compact_end: usize,
+    head_chars: Option<usize>,
+    tail_chars: Option<usize>,
+}
+
+fn select_compaction_candidates(
+    messages: &[Message],
+    config: &CompactionConfig,
+) -> Option<CompactionParams> {
+    if messages.len() <= config.preserve_recent + 1 {
+        return None;
+    }
+    let compact_end = messages.len().saturating_sub(config.preserve_recent);
+    let is_micro = config.preserve_recent == CompactionConfig::micro().preserve_recent
+        && config.tool_result_max_chars == CompactionConfig::micro().tool_result_max_chars;
+    let (head_chars, tail_chars) = if is_micro {
+        (Some(6000_usize), Some(3000_usize))
+    } else {
+        (None, None)
+    };
+    Some(CompactionParams {
+        compact_end,
+        head_chars,
+        tail_chars,
+    })
+}
+
+fn compact_content_block(
+    block: &mut aura_reasoner::ContentBlock,
+    config: &CompactionConfig,
+    head_chars: Option<usize>,
+    tail_chars: Option<usize>,
+) {
+    match block {
+        aura_reasoner::ContentBlock::ToolResult { content, .. } => {
+            let text = match content {
+                aura_reasoner::ToolResultContent::Text(t) => t.clone(),
+                aura_reasoner::ToolResultContent::Json(v) => {
+                    serde_json::to_string(v).unwrap_or_default()
+                }
+            };
+            if text.len() > config.tool_result_max_chars {
+                let compacted = try_signature_compact(&text).unwrap_or_else(|| {
+                    truncate_content(&text, config.tool_result_max_chars, head_chars, tail_chars)
+                });
+                if compacted.len() <= config.tool_result_max_chars || compacted.len() < text.len() {
+                    *content = aura_reasoner::ToolResultContent::Text(compacted);
+                } else {
+                    *content = aura_reasoner::ToolResultContent::Text(truncate_content(
+                        &text,
+                        config.tool_result_max_chars,
+                        head_chars,
+                        tail_chars,
+                    ));
+                }
+            }
+        }
+        aura_reasoner::ContentBlock::Text { text } => {
+            if text.len() > config.text_max_chars {
+                if let Some(sig) = try_signature_compact(text) {
+                    if sig.len() <= config.text_max_chars || sig.len() < text.len() {
+                        *text = sig;
+                    } else {
+                        *text =
+                            truncate_content(text, config.text_max_chars, head_chars, tail_chars);
+                    }
+                } else {
+                    *text = truncate_content(text, config.text_max_chars, head_chars, tail_chars);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Compact older messages using the given tier configuration.
 ///
 /// Preserves the first message (cache anchor) and the most recent
@@ -249,79 +325,13 @@ pub fn try_signature_compact(content: &str) -> Option<String> {
 /// For text blocks, attempts Rust signature extraction before falling back to
 /// head/tail truncation. For the micro tier, uses asymmetric head=6000/tail=3000.
 pub fn compact_older_messages(messages: &mut [Message], config: &CompactionConfig) {
-    if messages.len() <= config.preserve_recent + 1 {
-        return;
-    }
-
-    let compact_end = messages.len().saturating_sub(config.preserve_recent);
-
-    let is_micro = config.preserve_recent == CompactionConfig::micro().preserve_recent
-        && config.tool_result_max_chars == CompactionConfig::micro().tool_result_max_chars;
-
-    let (head_chars, tail_chars) = if is_micro {
-        (Some(6000_usize), Some(3000_usize))
-    } else {
-        (None, None)
+    let params = match select_compaction_candidates(messages, config) {
+        Some(p) => p,
+        None => return,
     };
-
-    for msg in &mut messages[1..compact_end] {
+    for msg in &mut messages[1..params.compact_end] {
         for block in &mut msg.content {
-            match block {
-                aura_reasoner::ContentBlock::ToolResult { content, .. } => {
-                    let text = match content {
-                        aura_reasoner::ToolResultContent::Text(t) => t.clone(),
-                        aura_reasoner::ToolResultContent::Json(v) => {
-                            serde_json::to_string(v).unwrap_or_default()
-                        }
-                    };
-                    if text.len() > config.tool_result_max_chars {
-                        let compacted = try_signature_compact(&text).unwrap_or_else(|| {
-                            truncate_content(
-                                &text,
-                                config.tool_result_max_chars,
-                                head_chars,
-                                tail_chars,
-                            )
-                        });
-                        if compacted.len() <= config.tool_result_max_chars
-                            || compacted.len() < text.len()
-                        {
-                            *content = aura_reasoner::ToolResultContent::Text(compacted);
-                        } else {
-                            *content = aura_reasoner::ToolResultContent::Text(truncate_content(
-                                &text,
-                                config.tool_result_max_chars,
-                                head_chars,
-                                tail_chars,
-                            ));
-                        }
-                    }
-                }
-                aura_reasoner::ContentBlock::Text { text } => {
-                    if text.len() > config.text_max_chars {
-                        if let Some(sig) = try_signature_compact(text) {
-                            if sig.len() <= config.text_max_chars || sig.len() < text.len() {
-                                *text = sig;
-                            } else {
-                                *text = truncate_content(
-                                    text,
-                                    config.text_max_chars,
-                                    head_chars,
-                                    tail_chars,
-                                );
-                            }
-                        } else {
-                            *text = truncate_content(
-                                text,
-                                config.text_max_chars,
-                                head_chars,
-                                tail_chars,
-                            );
-                        }
-                    }
-                }
-                _ => {}
-            }
+            compact_content_block(block, config, params.head_chars, params.tail_chars);
         }
     }
 }

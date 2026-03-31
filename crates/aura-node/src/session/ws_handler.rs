@@ -1,19 +1,15 @@
 //! WebSocket connection handler and turn management.
 
+use super::helpers;
 use super::{Session, WsContext};
 use crate::protocol::{
-    self, AssistantMessageEnd, AssistantMessageStart, ErrorMsg, FilesChanged, InboundMessage,
-    OutboundMessage, SessionInit, SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolInfo,
-    ToolResultMsg, ToolUseStart, UserMessage,
+    AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
-use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
-use aura_kernel::ExecutorRouter;
+use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult};
 use aura_reasoner::Message;
 use aura_tools::catalog::ToolProfile;
-use aura_tools::ToolResolver;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -123,7 +119,7 @@ async fn run_active_turn_select(
         join_result = &mut turn.join_handle => {
             let message_id = turn.message_id.clone();
             turn.stream_forward_handle.abort();
-            finalize_turn(session, join_result, &message_id, outbound_tx);
+            helpers::finalize_turn(session, join_result, &message_id, outbound_tx);
             TurnAction::TurnFinished
         }
     }
@@ -187,7 +183,7 @@ fn dispatch_idle_message(
 ) -> IdleAction {
     match serde_json::from_str::<InboundMessage>(raw) {
         Ok(InboundMessage::SessionInit(init)) => {
-            handle_session_init(session, *init, outbound_tx, ctx);
+            helpers::handle_session_init(session, *init, outbound_tx, ctx);
             IdleAction::Continue
         }
         Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx) {
@@ -218,58 +214,7 @@ fn dispatch_idle_message(
     }
 }
 
-/// Handle a `session_init` message.
-fn handle_session_init(
-    session: &mut Session,
-    init: SessionInit,
-    outbound_tx: &mpsc::Sender<OutboundMessage>,
-    ctx: &WsContext,
-) {
-    if session.initialized {
-        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
-            code: "already_initialized".into(),
-            message: "Session has already been initialized".into(),
-            recoverable: true,
-        }));
-        return;
-    }
-
-    if let Err(e) = session.apply_init(init) {
-        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
-            code: "invalid_workspace".into(),
-            message: e,
-            recoverable: true,
-        }));
-        return;
-    }
-
-    if let (Some(ref base), Some(ref pp)) = (&ctx.project_base, &session.project_path) {
-        let slug = pp.file_name().and_then(|n| n.to_str()).unwrap_or("default");
-        session.project_path = Some(base.join(slug));
-    }
-
-    populate_tool_definitions(session, ctx);
-
-    let tools: Vec<ToolInfo> = session
-        .tool_definitions
-        .iter()
-        .map(protocol::tool_info_from_definition)
-        .collect();
-
-    info!(
-        session_id = %session.session_id,
-        model = %session.model,
-        tool_count = tools.len(),
-        "Session initialized"
-    );
-
-    let _ = outbound_tx.try_send(OutboundMessage::SessionReady(SessionReady {
-        session_id: session.session_id.clone(),
-        tools,
-    }));
-}
-
-fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) {
+pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) {
     session.tool_definitions = ctx
         .catalog
         .visible_tools(ToolProfile::Agent, &ctx.tool_config);
@@ -310,7 +255,7 @@ fn start_turn(
 
     session.messages.push(Message::user(&msg.content));
 
-    let kernel_executor = build_kernel_executor(session, ctx, &msg);
+    let kernel_executor = helpers::build_kernel_executor(session, ctx);
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
@@ -348,7 +293,8 @@ fn start_turn(
     });
 
     let outbound_for_stream = outbound_tx.clone();
-    let stream_forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_for_stream));
+    let stream_forward_handle =
+        tokio::spawn(helpers::forward_events_to_ws(event_rx, outbound_for_stream));
 
     Some(ActiveTurn {
         cancel_token,
@@ -358,188 +304,3 @@ fn start_turn(
     })
 }
 
-fn build_kernel_executor(
-    session: &Session,
-    ctx: &WsContext,
-    _msg: &UserMessage,
-) -> KernelToolExecutor {
-    let mut resolver = ToolResolver::new(ctx.catalog.clone(), ctx.tool_config.clone());
-
-    if let Some(ref domain_api) = ctx.domain_api {
-        use aura_tools::domain_tools::DomainToolExecutor;
-        let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
-            domain_api.clone(),
-            session.auth_token.clone(),
-            session.project_id.clone(),
-        ));
-        resolver = resolver.with_domain_executor(domain_exec);
-    }
-
-    if let Some(ref controller) = ctx.automaton_controller {
-        let project_id = session.project_id.clone().unwrap_or_default();
-        let workspace_root = session.project_path.clone();
-        for tool in aura_tools::automaton_tools::devloop_control_tools(
-            controller.clone(),
-            project_id,
-            workspace_root,
-            session.auth_token.clone(),
-        ) {
-            resolver.register(tool);
-        }
-    }
-
-    let mut executor_router = ExecutorRouter::new();
-    executor_router.add_executor(Arc::new(resolver));
-
-    let workspace = match session.project_path {
-        Some(ref pp) => pp.clone(),
-        None => session.workspace.join(session.agent_id.to_hex()),
-    };
-    KernelToolExecutor::new(executor_router, session.agent_id, workspace)
-}
-
-async fn forward_events_to_ws(
-    mut event_rx: mpsc::Receiver<AgentLoopEvent>,
-    outbound: mpsc::Sender<OutboundMessage>,
-) {
-    while let Some(event) = event_rx.recv().await {
-        let msg = match event {
-            AgentLoopEvent::TextDelta(text) => OutboundMessage::TextDelta(TextDelta { text }),
-            AgentLoopEvent::ThinkingDelta(thinking) => {
-                OutboundMessage::ThinkingDelta(ThinkingDelta { thinking })
-            }
-            AgentLoopEvent::ToolStart { id, name } => {
-                OutboundMessage::ToolUseStart(ToolUseStart { id, name })
-            }
-            AgentLoopEvent::ToolResult {
-                tool_use_id,
-                tool_name,
-                content,
-                is_error,
-            } => OutboundMessage::ToolResult(ToolResultMsg {
-                name: tool_name,
-                result: content,
-                is_error,
-                tool_use_id: Some(tool_use_id),
-            }),
-            AgentLoopEvent::Error {
-                code,
-                message,
-                recoverable,
-            } => OutboundMessage::Error(ErrorMsg {
-                code,
-                message,
-                recoverable,
-            }),
-            AgentLoopEvent::ToolInputSnapshot { .. }
-            | AgentLoopEvent::ToolComplete { .. }
-            | AgentLoopEvent::IterationComplete { .. }
-            | AgentLoopEvent::ThinkingComplete
-            | AgentLoopEvent::StepComplete
-            | AgentLoopEvent::Warning(_) => continue,
-        };
-        if outbound.try_send(msg).is_err() {
-            break;
-        }
-    }
-}
-
-/// Process the result of a completed turn and update session state.
-fn finalize_turn(
-    session: &mut Session,
-    join_result: Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
-    message_id: &str,
-    outbound_tx: &mpsc::Sender<OutboundMessage>,
-) {
-    let result = match join_result {
-        Ok(inner) => inner,
-        Err(e) => {
-            error!(session_id = %session.session_id, error = %e, "Turn task panicked");
-            send_turn_error(outbound_tx, message_id);
-            return;
-        }
-    };
-
-    match result {
-        Ok(loop_result) => {
-            apply_turn_result(session, &loop_result, message_id, outbound_tx);
-        }
-        Err(e) => {
-            error!(session_id = %session.session_id, error = %e, "Turn processing failed");
-            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
-                code: "turn_error".into(),
-                message: format!("Turn processing failed: {e}"),
-                recoverable: true,
-            }));
-        }
-    }
-}
-
-fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id: &str) {
-    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
-        code: "internal_error".into(),
-        message: "Turn processing task panicked".into(),
-        recoverable: false,
-    }));
-    let _ = outbound_tx.try_send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
-        message_id: message_id.to_string(),
-        stop_reason: "error".into(),
-        usage: SessionUsage::default(),
-        files_changed: FilesChanged::default(),
-    }));
-}
-
-fn apply_turn_result(
-    session: &mut Session,
-    loop_result: &AgentLoopResult,
-    message_id: &str,
-    outbound_tx: &mpsc::Sender<OutboundMessage>,
-) {
-    session.messages.clone_from(&loop_result.messages);
-
-    let input_tokens = loop_result.total_input_tokens;
-    let output_tokens = loop_result.total_output_tokens;
-    session.cumulative_input_tokens += input_tokens;
-    session.cumulative_output_tokens += output_tokens;
-
-    let stop_reason = if loop_result.timed_out {
-        "cancelled"
-    } else if loop_result.insufficient_credits {
-        "insufficient_credits"
-    } else if loop_result.llm_error.is_some() {
-        "end_turn_with_errors"
-    } else {
-        "end_turn"
-    };
-
-    let context_utilization = if session.context_window_tokens > 0 {
-        #[allow(clippy::cast_precision_loss)]
-        let ratio = input_tokens as f32 / session.context_window_tokens as f32;
-        ratio.min(1.0)
-    } else {
-        0.0
-    };
-
-    let _ = outbound_tx.try_send(OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
-        message_id: message_id.to_string(),
-        stop_reason: stop_reason.into(),
-        usage: SessionUsage {
-            input_tokens,
-            output_tokens,
-            cumulative_input_tokens: session.cumulative_input_tokens,
-            cumulative_output_tokens: session.cumulative_output_tokens,
-            context_utilization,
-            model: session.model.clone(),
-            provider: String::new(),
-        },
-        files_changed: FilesChanged::default(),
-    }));
-
-    info!(
-        session_id = %session.session_id,
-        timed_out = loop_result.timed_out,
-        iterations = loop_result.iterations,
-        history_len = session.messages.len(),
-        "Turn complete"
-    );
-}
