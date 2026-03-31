@@ -89,18 +89,18 @@ ANTHROPIC_API_KEY=your-key npm start   # listens on :3000
 
 | Crate | Description |
 |---|---|
-| `aura-core` | Shared domain types, strongly-typed IDs, hashing, serialization, and model identifiers |
+| `aura-core` | Shared domain types, strongly-typed IDs, hashing, time, serialization, and error types |
 | `aura-store` | RocksDB persistence: record log, agent metadata, and inbox with atomic batch commits |
-| `aura-tools` | Tool registry, sandboxed filesystem and command execution, domain tool wiring |
-| `aura-reasoner` | Provider-agnostic `ModelProvider` trait: Anthropic HTTP, proxy routing, mock, retries |
-| `aura-kernel` | Deterministic single-step kernel: context, reasoning, policy, execution, record commit |
-| `aura-agent` | Multi-step orchestration (`AgentLoop`, `ProcessManager`), tool execution (`KernelToolExecutor`), task runner, and agent-level policies |
+| `aura-reasoner` | Provider-agnostic `ModelProvider` trait: Anthropic HTTP, proxy routing, mock, streaming, retries |
+| `aura-kernel` | Deterministic kernel: context building, reasoning, policy, execution routing, record commit |
+| `aura-tools` | Tool registry, sandboxed filesystem and command execution, domain tool wiring, automaton tools |
+| `aura-agent` | Multi-step orchestration (`AgentLoop`), tool execution gateways, task runner, budgets, compaction, and agent-level policies |
+| `aura-protocol` | Serde types for the `/stream` WebSocket API (session init, messages, events, approvals) |
+| `aura-auth` | zOS login client and JWT credential store (`~/.aura/credentials.json`) for proxy mode |
 | `aura-terminal` | Ratatui-based terminal UI library: themes, components, input handling, layout |
 | `aura-cli` | Interactive REPL with slash commands, wired to session and agent handling |
-| `aura-auth` | zOS login client and JWT credential store (`~/.aura/credentials.json`) for proxy mode |
-| `aura-automaton` | Automaton lifecycle, scheduling, runtime, state, and built-in automatons (chat, dev loop, etc.) |
-| `aura-node` | HTTP router, scheduler, and per-agent worker loops with single-writer guarantee |
-| `aura-protocol` | Serde types for the `/stream` WebSocket API (session init, messages, events, approvals) |
+| `aura-automaton` | Automaton lifecycle, scheduling, runtime, state, and built-in automatons (chat, dev loop, spec gen, task run) |
+| `aura-node` | HTTP router, WebSocket sessions, scheduler, and per-agent worker loops with single-writer guarantee |
 | `aura-gateway-ts` | Optional Express gateway for local `/propose` LLM routing (TypeScript) |
 
 ## Project Structure
@@ -110,31 +110,41 @@ aura-harness/
   Cargo.toml                # workspace root + `aura` binary
   Dockerfile                # multi-stage build, headless on :8080
   .env.example              # environment variable template
+  index.html                # landing page
   src/
     main.rs                 # CLI entry: TUI, headless, login/logout/whoami
     cli.rs                  # clap command definitions
-    event_loop.rs           # terminal event loop
+    event_loop/             # terminal event loop
+      mod.rs                #   EventLoopContext, run_event_loop
+      handlers.rs           #   UI event handlers
+      agent_events.rs       #   agent turn event processing
+      record_ui.rs          #   record display helpers
     api_server.rs           # embedded /health endpoint for TUI mode
+    session_helpers.rs      # session bootstrap re-exports + defaults
     record_loader.rs        # record loading utilities
   crates/
-    aura-core/              # shared types, IDs, hashing
+    aura-core/              # shared types, IDs, hashing, time
     aura-store/             # RocksDB storage backend
-    aura-tools/             # tool registry, sandboxed FS/cmd
-    aura-reasoner/          # LLM provider abstraction
-    aura-kernel/            # deterministic kernel
+    aura-reasoner/          # LLM provider abstraction + Anthropic
+    aura-kernel/            # deterministic kernel + policy + executor
+    aura-tools/             # tool registry, sandboxed FS/cmd, domain tools
+    aura-agent/             # agent loop + runtime + verify + file_ops
+    aura-protocol/          # WebSocket stream API types
+    aura-auth/              # zOS login, credential store
     aura-terminal/          # ratatui TUI library
     aura-cli/               # interactive REPL (separate binary)
-    aura-agent/             # agent loop + runtime + file_ops + verify
-    aura-auth/              # zOS login, credential store
     aura-automaton/         # automaton lifecycle and built-ins
     aura-node/              # HTTP server, scheduler, workers
-    aura-protocol/          # WebSocket stream API types
   aura-gateway-ts/          # optional TypeScript gateway
-    src/index.ts
-    src/reasoner.ts
-  tests/                    # integration, e2e, proptest
-  specs/                    # design specifications
+    src/
+      index.ts              #   Express server + /propose endpoint
+      reasoner.ts           #   Anthropic SDK integration
+      types.ts              #   request/response types
+  tests/                    # integration, e2e, proptest, pipeline
   docs/                     # supplementary documentation
+    architecture.md         #   full architecture reference
+    specs/                  #   design specifications (v0.1.0, v0.1.1)
+    refactoring/            #   refactoring checklists
 ```
 
 ## System Diagram
@@ -149,8 +159,8 @@ aura-harness/
                              ┌──────────────▼───────────────────┐
                              │         HTTP / WebSocket         │
                              │     Router  (Axum on :8080)      │
-                             │  /health /tx /agents /stream     │
-                             │  /automaton/*                    │
+                             │  /health /tx /stream /agents/*   │
+                             │  /api/* /automaton/* /ws/*       │
                              └──────────────┬───────────────────┘
                                             │
                     ┌───────────────────────▼──────────────────────────┐
@@ -213,7 +223,7 @@ Environment variables (see [`.env.example`](.env.example)):
 | `AURA_ANTHROPIC_MODEL` | `claude-opus-4-6` | Model identifier |
 | `AURA_MODEL_TIMEOUT_MS` | `60000` | LLM request timeout |
 | `AURA_DATA_DIR` | `./aura_data` | Data directory for RocksDB and workspaces |
-| `BIND_ADDR` | `127.0.0.1:8080` | HTTP server bind address |
+| `AURA_LISTEN_ADDR` | `127.0.0.1:8080` | HTTP server bind address (also accepts `BIND_ADDR`) |
 
 ### Gateway (optional)
 

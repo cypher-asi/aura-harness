@@ -267,6 +267,7 @@ dependencies = [
  "aura-reasoner",
  "aura-store",
  "bytes",
+ "futures-util",
  "hex",
  "serde_json",
  "tempfile",

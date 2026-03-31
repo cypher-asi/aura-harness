@@ -13,16 +13,16 @@ This document describes the system architecture in two sections:
 
 | Crate | Role |
 |------|------|
-| `aura-core` | Foundational domain types, IDs, hashing, and shared errors used across all crates. |
+| `aura-core` | Foundational domain types, IDs, hashing, time, and shared errors used across all crates. |
 | `aura-store` | Durable RocksDB-backed storage for agent records, metadata, and inbox queues. |
 | `aura-reasoner` | Model-provider abstraction for completion and streaming APIs. |
 | `aura-kernel` | Deterministic execution kernel with router, policies, sandboxing, and scheduler primitives. |
-| `aura-tools` | Tool catalog and built-in/external tool execution implementations. |
+| `aura-tools` | Tool catalog, built-in/external tool execution, sandboxed filesystem and command tools. |
 | `aura-agent` | Main agent orchestration loop: model calls, tool execution, streaming, budgets, and compaction. |
 | `aura-protocol` | Wire-level request/response/event types for transport boundaries. |
 | `aura-auth` | Auth token extraction/validation utilities for node and agent startup. |
-| `aura-terminal` | Terminal UI layer and event-loop glue for interactive sessions. |
-| `aura-cli` | Minimal command-line REPL over the shared agent runtime. |
+| `aura-terminal` | Terminal UI layer: Ratatui-based TUI with themes, components, input, and rendering. |
+| `aura-cli` | Interactive command-line REPL over the shared agent runtime. |
 | `aura-automaton` | Workflow/automation helpers that drive scripted agent behavior. |
 | `aura-node` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
 | `aura` | Root binary wiring for launch modes, runtime setup, and top-level command entrypoints. |
@@ -48,30 +48,48 @@ graph BT
   store --> core
   reasoner --> core
   kernel --> core
+  kernel --> store
+  kernel --> reasoner
+  tools --> core
   tools --> kernel
+  tools --> reasoner
+  agent --> core
   agent --> kernel
   agent --> reasoner
   agent --> tools
   agent --> store
   agent --> auth
-  protocol -.-> |"wire-compatible, no dep"| core
-  terminal -.-> |"UI only"| core
+  protocol -.-> |"no aura-* deps"| protocol
+  auth -.-> |"no aura-* deps"| auth
+  terminal -.-> |"no aura-* deps"| terminal
+  cli --> core
   cli --> agent
+  cli --> auth
   cli --> store
   cli --> reasoner
+  cli --> tools
+  cli --> kernel
   automaton --> agent
+  automaton --> core
+  automaton --> tools
   automaton --> reasoner
-  node --> agent
+  node --> core
+  node --> protocol
   node --> store
+  node --> tools
   node --> reasoner
   node --> kernel
-  node --> tools
-  node --> protocol
-  root --> agent
+  node --> agent
+  node --> automaton
   root --> terminal
-  root --> node
-  root --> auth
+  root --> core
+  root --> kernel
   root --> store
+  root --> reasoner
+  root --> tools
+  root --> agent
+  root --> auth
+  root --> node
 ```
 
 Crates are described below in dependency order — most fundamental first.
@@ -80,25 +98,34 @@ Crates are described below in dependency order — most fundamental first.
 
 ### 1. `aura-core` — Domain Types & IDs
 
-The foundation crate. Zero internal dependencies. Defines all shared domain types, strongly-typed identifiers, hashing, and error types used across the system.
+The foundation crate. Zero internal dependencies. Defines all shared domain types, strongly-typed identifiers, hashing, time utilities, and error types used across the system.
 
 #### Key Types
 
 | Type | Purpose |
 |------|---------|
 | `AgentId` | 32-byte agent identifier (BLAKE3 or UUID-derived) |
-| `TxId` | 32-byte transaction identifier (content-addressed) |
+| `TxId` | 32-byte transaction identifier (content-addressed, deprecated) |
 | `ActionId` | 16-byte action identifier (random) |
 | `ProcessId` | 16-byte background process identifier |
 | `Hash` | 32-byte BLAKE3 digest with chaining support |
-| `Transaction` | Inbound work unit: `tx_id`, `agent_id`, `TransactionType`, `payload` |
-| `TransactionType` | `UserPrompt`, `AgentMsg`, `SessionStart`, `System`, ... |
+| `Transaction` | Inbound work unit: `agent_id`, `TransactionType`, `payload` |
+| `TransactionType` | `UserPrompt`, `AgentMsg`, `SessionStart`, `System`, `Reasoning`, ... |
 | `Action` | Authorized operation: `action_id`, `ActionKind`, serialized payload |
 | `ActionKind` | `Propose`, `Delegate`, `Record`, `System`, ... |
 | `Effect` | Result of executing an action: `EffectKind`, `EffectStatus`, payload |
 | `RecordEntry` | Immutable log entry: `seq`, `tx`, `context_hash`, proposals, actions, effects |
 | `ToolCall` | Tool invocation: `tool` name + `args` (JSON) |
 | `ToolResult` | Tool output: `content`, `is_error`, `metadata` |
+| `ToolProposal` | Tool call with decision context |
+| `ToolExecution` | Tool call + result pair |
+| `ToolCallContext` | Contextual metadata for tool calls |
+| `ToolDefinition` | Tool name + description + JSON Schema for input |
+| `CacheControl` | Cache control hints for tool definitions |
+| `InstalledToolDefinition` | External tool with endpoint, auth, schema |
+| `Identity` | Agent identity struct |
+| `AgentStatus` | Agent lifecycle status enum |
+| `ProcessPending` | Pending background process descriptor |
 | `AuraError` | Unified error enum (storage, serialization, kernel, executor, reasoner, validation) |
 
 #### Submodules
@@ -106,9 +133,11 @@ The foundation crate. Zero internal dependencies. Defines all shared domain type
 | Module | Contents |
 |--------|----------|
 | `ids` | `AgentId`, `TxId`, `ActionId`, `ProcessId`, `Hash` — macro-generated newtypes with hex serde |
-| `types` | All domain structs/enums — barrel re-export from `action`, `effect`, `proposal`, `record`, `tool`, `transaction`, ... |
+| `types` | All domain structs/enums — barrel re-export from `action`, `effect`, `identity`, `process`, `proposal`, `reasoner_types`, `record`, `status`, `tool`, `transaction` |
 | `hash` | BLAKE3 helpers: `hash_bytes`, `hash_many`, `compute_context_hash`, `Hasher` |
+| `time` | `now_ms` timestamp helper |
 | `error` | `AuraError` with `thiserror` and `From` impls |
+| `serde_helpers` | (crate-private) Custom serde modules for hex-encoded bytes, hashes, etc. |
 
 ---
 
@@ -120,9 +149,10 @@ RocksDB-backed durable storage with column families for the record log, agent me
 
 | Type | Purpose |
 |------|---------|
-| `Store` (trait) | Abstract storage API: `enqueue_tx`, `dequeue_tx`, `append_entry_atomic`, `scan_record`, ... |
+| `Store` (trait) | Abstract storage API: `enqueue_tx`, `dequeue_tx`, `append_entry_atomic`, `append_entry_direct`, `append_entries_batch`, `scan_record`, `get_record_entry`, `get_agent_status`, `set_agent_status`, `has_pending_tx`, `get_inbox_depth`, ... |
 | `RocksStore` | `Store` implementation over RocksDB with configurable `sync_writes` |
-| `StoreError` | Error enum: `RocksDb`, `SequenceMismatch`, `ColumnFamilyNotFound`, `InboxCorruption`, ... |
+| `DequeueToken` | Opaque token from `dequeue_tx` carrying the inbox sequence |
+| `StoreError` | Error enum: `RocksDb`, `SequenceMismatch`, `ColumnFamilyNotFound`, `InboxCorruption`, `InvalidKey`, ... |
 
 #### Column Families
 
@@ -136,10 +166,11 @@ RocksDB-backed durable storage with column families for the record log, agent me
 
 | Module | Contents |
 |--------|----------|
-| `store` | `Store` trait definition |
+| `store` | `Store` trait definition, `DequeueToken` |
 | `rocks_store` | `RocksStore` implementation, `WriteBatch` atomics |
-| `keys` | `RecordKey`, `AgentMetaKey`, `InboxKey` with `KeyCodec` encoding |
+| `keys` | `RecordKey`, `AgentMetaKey`, `InboxKey` with `KeyCodec` encoding, `MetaField` enum |
 | `error` | `StoreError` enum |
+| `cf` | Column family name constants (`RECORD`, `AGENT_META`, `INBOX`) |
 
 ---
 
@@ -151,24 +182,28 @@ Provider-agnostic interface for LLM completions. Defines normalized message type
 
 | Type | Purpose |
 |------|---------|
-| `ModelProvider` (trait) | `complete(ModelRequest) -> ModelResponse`, `complete_streaming` → `StreamEventStream` |
+| `ModelProvider` (trait) | `complete(ModelRequest) -> ModelResponse`, `complete_streaming` → `StreamEventStream`, `health_check` |
 | `ModelRequest` | `model`, `system`, `messages`, `tools`, `tool_choice`, `max_tokens`, `thinking`, auth headers |
+| `ModelRequestBuilder` | Builder pattern for constructing `ModelRequest` |
 | `ModelResponse` | `stop_reason`, `message`, `usage`, `trace`, `model_used` |
 | `Message` | `role` (`User`/`Assistant`) + `content: Vec<ContentBlock>` |
 | `ContentBlock` | `Text`, `Thinking`, `Image`, `ToolUse { id, name, input }`, `ToolResult { tool_use_id, content, is_error }` |
 | `StopReason` | `EndTurn`, `ToolUse`, `MaxTokens`, `StopSequence` |
-| `ToolDefinition` | Tool name + description + JSON Schema for input |
+| `ToolChoice` | Tool selection mode |
+| `ToolDefinition` | Tool name + description + JSON Schema (re-exported from `aura-core`) |
 | `StreamEvent` | SSE-style events: `TextDelta`, `ThinkingDelta`, `InputJsonDelta`, `ContentBlockStart/Stop`, ... |
 | `StreamAccumulator` | Folds `StreamEvent`s into a complete `ModelResponse` |
 | `AnthropicProvider` | HTTP client with retry, model chain fallback, proxy/direct routing |
+| `AnthropicConfig` | Provider configuration: model, routing mode, timeouts |
+| `RoutingMode` | `Proxy` or `Direct` |
 | `MockProvider` | Queued/canned responses for testing |
 
 #### Submodules
 
 | Module | Contents |
 |--------|----------|
-| `types/` | `Message`, `ContentBlock`, `Role`, `ModelRequest`, `ModelResponse`, `Usage`, `StopReason`, `StreamEvent`, `StreamAccumulator`, `ToolChoice`, `ToolDefinition` |
-| `anthropic/` | `AnthropicProvider`, `AnthropicConfig`, `RoutingMode`, SSE parser |
+| `types/` | `Message`, `ContentBlock`, `Role`, `ImageSource`, `ModelRequest`, `ModelRequestBuilder`, `ThinkingConfig`, `ModelResponse`, `Usage`, `ProviderTrace`, `StopReason`, `StreamEvent`, `StreamContentType`, `StreamAccumulator`, `AccumulatedToolUse`, `ToolChoice` |
+| `anthropic/` | `AnthropicProvider`, `AnthropicConfig`, `RoutingMode`, SSE parser, API type conversion |
 | `mock` | `MockProvider`, `MockResponse` |
 | `request` | `ProposeRequest`, `RecordSummary`, `ProposeLimits` (kernel propose flow) |
 | `error` | `ReasonerError` |
@@ -177,14 +212,18 @@ Provider-agnostic interface for LLM completions. Defines normalized message type
 
 ### 4. `aura-kernel` — Deterministic Kernel
 
-The invariant core. Builds context from the record, calls the reasoner, enforces policy, dispatches execution through the router, and produces `RecordEntry`s. Given the same record, produces the same output.
+The invariant core. Builds context from the record, calls the reasoner, enforces policy, dispatches execution through the router, and produces `RecordEntry`s. Given the same record, produces the same output. Uses dynamic dispatch (`Arc<dyn Store>`, `Arc<dyn ModelProvider>`) rather than generic type parameters.
 
 #### Key Types
 
 | Type | Purpose |
 |------|---------|
-| `Kernel<S, R>` | End-to-end step processor: `process(tx, next_seq) -> ProcessResult` |
-| `Proposer` (trait) | `propose(ProposeRequest) -> ProposalSet` — pluggable model/mock |
+| `Kernel` | End-to-end step processor bound to a specific agent, with `process_direct`, `process_dequeued`, `reason`, `reason_streaming`, `process_tools` |
+| `KernelConfig` | `record_window_size`, `policy`, `workspace_base`, `replay_mode`, `proposal_timeout_ms` |
+| `ProcessResult` | `entry`, `tool_output`, `had_failures` |
+| `ReasonResult` | `entry`, `response` — result of a reasoning call |
+| `ReasonStreamHandle` | Handle for recording streaming results (completed or failed) |
+| `ToolOutput` | Single tool execution output: `tool_use_id`, `content`, `is_error` |
 | `ExecutorRouter` | Routes `Action`s to the first matching `Executor` in a registry |
 | `Executor` (trait) | `execute(ctx, action) -> Effect`, `can_handle(action) -> bool` |
 | `ExecuteContext` | Per-action context: `agent_id`, `action_id`, `workspace_root`, `limits` |
@@ -192,18 +231,20 @@ The invariant core. Builds context from the record, calls the reasoner, enforces
 | `Policy` | Runtime permission engine with session approval memory |
 | `PolicyConfig` | Allowed action kinds, tool allowlists, per-tool `PermissionLevel` overrides |
 | `PermissionLevel` | `AlwaysAllow`, `AskOnce`, `AlwaysAsk`, `Deny` |
+| `PolicyResult` | Result of a policy check |
 | `ContextBuilder` | Builds `Context` (context hash + record summaries) from transaction + record window |
 | `decode_tool_effect` | Parses an `Effect` back into human-readable `DecodedToolResult` |
+| `KernelError` | Error enum: `Store`, `Reasoner`, `Timeout`, `Serialization`, `Internal` |
 
 #### Submodules
 
 | Module | Contents |
 |--------|----------|
-| `executor` | `Executor` trait, `ExecuteContext`, `ExecuteLimits`, `decode_tool_effect` |
+| `executor` | `Executor` trait, `ExecutorError`, `ExecuteContext`, `ExecuteLimits`, `DecodedToolResult`, `decode_tool_effect` |
 | `router` | `ExecutorRouter` — fan-out dispatch to registered executors |
-| `policy` | `Policy`, `PolicyConfig`, `PermissionLevel`, `default_tool_permission` |
+| `policy` | `Policy`, `PolicyConfig`, `PolicyResult`, `PermissionLevel`, `default_tool_permission` |
 | `context` | `Context`, `ContextBuilder` |
-| `kernel` | `Kernel`, `KernelConfig`, `ProcessResult`, `Proposer` |
+| `kernel` | `Kernel`, `KernelConfig`, `ProcessResult`, `ReasonResult`, `ReasonStreamHandle`, `ToolOutput` |
 
 ---
 
@@ -215,28 +256,37 @@ Filesystem, command, search, and domain tools. Sandboxed execution ensures agent
 
 | Type | Purpose |
 |------|---------|
-| `ToolRegistry` (trait) | `list() -> Vec<ToolDefinition>`, `get(name) -> Option<ToolDefinition>` |
+| `ToolRegistry` (trait) | `list() -> Vec<ToolDefinition>`, `get(name) -> Option<ToolDefinition>`, `has(name) -> bool` |
 | `DefaultToolRegistry` | HashMap-backed registry pre-loaded with builtin tools |
 | `ToolExecutor` | Dispatches `ToolCall`s to registered `Tool` impls; implements `Executor` |
 | `ToolResolver` | Catalog-backed visibility + optional domain executor fallback; implements `Executor` |
 | `ToolCatalog` | Merged catalog of all tools with profile-based visibility (`Core`, `Agent`, `Engine`) |
 | `Sandbox` | Path validation: canonicalize, prefix-check, symlink guard |
-| `Tool` (trait) | `execute(ToolCall, Sandbox) -> ToolResult` — individual tool implementation |
-| `ToolConfig` | Feature flags: `enable_fs`, `enable_commands`, `command_allowlist`, size limits |
+| `Tool` (trait) | `name()`, `definition()`, `execute(ToolCall, Sandbox) -> ToolResult` — individual tool implementation |
+| `ToolConfig` | Feature flags and size limits |
+| `ToolError` | Tool execution error enum with `error_code()` and `is_recoverable()` |
 
 #### Built-in Tools (`fs_tools/`)
 
 | Tool | Module | Description |
 |------|--------|-------------|
-| `fs.ls` | `ls.rs` | Directory listing |
-| `fs.read` | `read.rs` | File read with size limits |
-| `fs.write` | `write.rs` | File write (creates directories) |
-| `fs.edit` | `edit.rs` | Targeted string replacement in files |
-| `fs.stat` | `stat.rs` | File metadata |
-| `fs.find` | `find.rs` | File search by name pattern |
-| `fs.delete` | `delete.rs` | File deletion |
-| `search.code` | `search/` | Ripgrep-powered code search |
-| `cmd.run` | `cmd/` | Shell command execution with sync/async threshold |
+| `list_files` | `ls.rs` | Directory listing |
+| `read_file` | `read.rs` | File read with size limits |
+| `write_file` | `write.rs` | File write (creates directories) |
+| `edit_file` | `edit.rs` | Targeted string replacement in files |
+| `stat_file` | `stat.rs` | File metadata |
+| `find_files` | `find.rs` | File search by name pattern |
+| `delete_file` | `delete.rs` | File deletion |
+| `search_code` | `search/` | Ripgrep-powered code search |
+| `run_command` | `cmd/` | Shell command execution with sync/async threshold |
+
+#### Domain Tools (`domain_tools/`)
+
+HTTP/API-backed tools dispatched through `DomainToolExecutor`. Provides handlers for specs, tasks, projects, storage, orbit, and network operations via the `DomainApi` trait.
+
+#### Automaton Tools (`automaton_tools`)
+
+Dev-loop and task control tools (`start_dev_loop`, `pause_dev_loop`, `stop_dev_loop`, `run_task`) gated behind an `AutomatonController` trait, registered separately from the default builtin set.
 
 #### Submodules
 
@@ -245,11 +295,13 @@ Filesystem, command, search, and domain tools. Sandboxed execution ensures agent
 | `registry` | `ToolRegistry` trait, `DefaultToolRegistry` |
 | `executor` | `ToolExecutor` — dispatches to `Tool` impls, builds `Sandbox` |
 | `resolver` | `ToolResolver` — catalog + domain executor integration |
-| `catalog` | `ToolCatalog`, `ToolProfile`, `ToolOwner` |
+| `catalog` | `ToolCatalog`, `ToolProfile`, `ToolOwner`, `CatalogEntry` |
 | `sandbox` | `Sandbox` — path confinement and validation |
+| `tool` | `Tool` trait, `ToolContext`, `builtin_tools()`, `read_only_builtin_tools()` |
+| `definitions` | Static `ToolDefinition` sets for catalog profiles |
 | `fs_tools/` | All built-in tool implementations |
-| `domain_tools` | HTTP-based external tool execution |
-| `automaton_tools` | Tools available to automaton workflows |
+| `domain_tools/` | `DomainToolExecutor`, `DomainApi` trait, per-area handlers (orbit, network, specs, tasks, project, storage) |
+| `automaton_tools` | `AutomatonController` trait and dev-loop/task tools |
 
 ---
 
@@ -262,8 +314,8 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 ```mermaid
 flowchart LR
   AL[AgentLoop] --> MP[ModelProvider]
-  AL --> KTE[KernelToolExecutor]
-  KTE --> ER[ExecutorRouter]
+  AL --> KTG[KernelToolGateway]
+  KTG --> ER[ExecutorRouter]
   ER --> TE[ToolExecutor]
   TE --> S[Sandbox]
   AL -->|events| EC[Event Channel]
@@ -273,10 +325,13 @@ flowchart LR
 |------|---------|
 | `AgentLoop` | Multi-step loop: model call → tool execution → repeat until `EndTurn` or budget exhaustion |
 | `AgentLoopConfig` | Tunables: `max_iterations`, `max_tokens`, `stream_timeout`, `credit_budget`, `exploration_allowance`, `system_prompt`, `model`, auth headers, `tool_hints`, thinking taper |
-| `KernelToolExecutor` | Bridges `AgentToolExecutor` → `ExecutorRouter`: parallel/sequential mode, per-tool timeouts, policy deny |
+| `KernelToolGateway` | Bridges agent tool execution → `ExecutorRouter`: parallel/sequential mode, per-tool timeouts, policy deny |
+| `KernelModelGateway` | Bridges agent model calls → kernel reasoning |
 | `AgentToolExecutor` (trait) | `execute(&[ToolCallInfo]) -> Vec<ToolCallResult>` + optional `auto_build_check` |
 | `TurnEvent` | Unified streaming events: `TextDelta`, `ThinkingDelta`, `ToolStart`, `ToolResult`, `IterationComplete`, `StreamReset`, `Error`, ... |
+| `AgentLoopEvent` | Type alias for `TurnEvent` |
 | `AgentLoopResult` | Final outcome: token totals, iteration count, `stalled`/`timed_out`/`insufficient_credits` flags, messages |
+| `AgentError` | Error enum: model, tool, timeout, build, internal variants |
 
 #### AgentLoop Iteration
 
@@ -311,49 +366,58 @@ flowchart TD
 | Module | Contents |
 |--------|----------|
 | `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration.rs` (model calls), `streaming.rs` (event emission), `tool_execution.rs` (cache/execute/emit), `tool_processing.rs` (blocking/stall/build), `context.rs` (compaction) |
-| `kernel_executor.rs` | `KernelToolExecutor` — parallel/sequential, timeout, policy |
+| `kernel_gateway.rs` | `KernelToolGateway`, `KernelModelGateway` — kernel bridge implementations |
+| `kernel_executor.rs` | `KernelToolExecutor` (deprecated alias) |
 | `events.rs` | `TurnEvent` enum (alias: `AgentLoopEvent`) |
-| `types.rs` | `AgentToolExecutor` trait, `ToolCallInfo`, `ToolCallResult`, `AgentLoopResult`, `BuildBaseline` |
+| `types.rs` | `AgentToolExecutor` trait, `ToolCallInfo`, `ToolCallResult`, `AgentLoopResult`, `BuildBaseline`, `AutoBuildResult` |
 | `blocking/` | `detection/` (write-failure tracking, read-guard), `stall.rs` (repeated-target detection) |
 | `budget.rs` | `BudgetState`, `ExplorationState` — token and exploration tracking |
+| `constants.rs` | Shared constants: model names, iteration limits, thresholds, tool categories |
 | `compaction/` | Context window compression when approaching token limits |
 | `build.rs` | Build output parsing and baseline annotation |
-| `prompts/` | `system/` (system prompt generation), `fix/` (error recovery prompts), `context.rs` |
+| `prompts/` | `system/` (system prompt generation), `fix/` (error recovery prompts), `context.rs`, `turn_kernel_system.rs` |
 | `verify/` | Build verification runner, error signatures, test baseline capture |
 | `runtime/process_manager/` | `ProcessManager` — background process tracking with completion callbacks |
+| `agent_runner/` | Higher-level agent run coordination (`AgentRunner`, `AgentRunnerConfig`, task execution) |
 | `session_bootstrap.rs` | `resolve_store_path`, `open_store`, `build_tool_executor`, `select_provider`, `load_auth_token` |
 | `sanitize.rs` | Message sanitization (malformed tool_use/tool_result repair) |
 | `read_guard.rs` | Tracks which files have been read (full vs range) to prevent redundant reads |
 | `helpers.rs` | `is_write_tool`, `is_exploration_tool`, `append_warning` |
-| `policy.rs` | Agent-level policy checks |
+| `policy.rs` | Agent-level policy checks, task complexity/budgets |
 | `planning.rs` | Plan detection and handling |
 | `shell_parse.rs` | Shell command output parsing |
+| `self_review.rs` | Self-review guard |
 | `task_context.rs` | Task-scoped context for multi-task agents |
 | `task_executor/` | Task execution handlers |
-| `agent_runner/` | Higher-level agent run coordination |
-| `file_ops/` | File operation tracking, workspace mapping |
-| `git.rs` | Git integration helpers |
+| `file_ops/` | File operation pipeline: apply, validation, stub detection, workspace mapping, file walkers |
+| `git.rs` | Git integration helpers (`is_git_repo`, `git_commit`, `git_push`, `list_unpushed_commits`) |
 | `message_conversion.rs` | Protocol ↔ internal message conversion |
+| `parser.rs` | Message/output parsing utilities |
 
 ---
 
 ### 7. `aura-protocol` — Wire Protocol Types
 
-Serde types for the `/stream` WebSocket API. Consumed by both the harness server (`aura-node`) and external clients (e.g., `aura-os-link`). Self-contained — no dependency on `aura-core` (wire-compatible by convention).
+Serde types for the `/stream` WebSocket API. Consumed by both the harness server (`aura-node`) and external clients. Self-contained — no dependency on any `aura-*` crate (wire-compatible by convention).
 
 | Type | Direction | Purpose |
 |------|-----------|---------|
 | `InboundMessage` | Client → Server | `SessionInit`, `UserMessage`, `Cancel`, `ApprovalResponse` |
-| `OutboundMessage` | Server → Client | `SessionReady`, `TextDelta`, `ThinkingDelta`, `ToolUseStart`, `ToolResult`, `AssistantMessageEnd`, `Error` |
+| `OutboundMessage` | Server → Client | `SessionReady`, `AssistantMessageStart`, `TextDelta`, `ThinkingDelta`, `ToolUseStart`, `ToolResult`, `AssistantMessageEnd`, `Error` |
 | `SessionInit` | Inbound | System prompt, model, max tokens, installed tools, workspace, auth, conversation history |
+| `UserMessage` | Inbound | User message content |
+| `ApprovalResponse` | Inbound | Approval decision for tool execution |
+| `SessionReady` | Outbound | Session confirmation with tool list |
 | `SessionUsage` | Outbound | Per-turn token counts, context utilization, model/provider name |
 | `InstalledTool` | Inbound | External tool definition with endpoint, auth, schema |
+| `ConversationMessage` | Both | Conversation history message |
+| `FilesChanged` | Outbound | File operation tracking (embedded in `AssistantMessageEnd`) |
 
 ---
 
 ### 8. `aura-auth` — Authentication
 
-JWT credential management for proxy-routed LLM access (zOS login).
+JWT credential management for proxy-routed LLM access (zOS login). No dependency on any `aura-*` crate.
 
 | Type | Purpose |
 |------|---------|
@@ -366,31 +430,57 @@ JWT credential management for proxy-routed LLM access (zOS login).
 
 ### 9. `aura-terminal` — Terminal UI
 
-Ratatui-based TUI library. Provides the `App` state machine, themed rendering, input handling, and a component library. Communicates with the orchestration layer through `UiEvent`/`UiCommand` channels.
+Ratatui-based TUI library. Provides the `App` state machine, themed rendering, input handling, and a component library. Communicates with the orchestration layer through `UiEvent`/`UiCommand` channels. No dependency on any `aura-*` crate.
 
 | Type | Purpose |
 |------|---------|
 | `App` | UI state machine: messages, tools, streaming content, approval state, panel focus |
 | `AppState` | `Idle`, `Processing`, `AwaitingApproval`, `ShowingHelp`, `LoginEmail`, `LoginPassword` |
 | `Terminal` | Ratatui terminal wrapper with theme and rendering |
-| `Theme` | Color scheme (cyber, matrix, synthwave, minimal, light) |
+| `Theme` | Color scheme with `ThemeColors` and `BorderStyle` |
 | `UiEvent` | User actions: `UserMessage`, `Approve`, `Cancel`, `Quit`, `NewSession`, ... |
 | `UiCommand` | System → UI: `AppendText`, `ShowTool`, `CompleteTool`, `RequestApproval`, ... |
 
 #### Components
 
-`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `CodeBlock`, `DiffView`
+`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`
+
+#### Submodules
+
+| Module | Contents |
+|--------|----------|
+| `app/` | `App` state machine, command handling, key bindings, formatting |
+| `renderer/` | Panel rendering, segments, markdown, text, input, overlays |
+| `events` | `UiEvent`, `UiCommand`, `MessageData`, `MessageRole`, `ToolData`, `RecordSummary` |
+| `components/` | Reusable UI widgets: header, input, message, tool card, status, progress, diff, code block |
+| `themes/` | `Theme`, `ThemeColors`, `BorderStyle`, color constants |
+| `animation/` | `Spinner`, `SpinnerStyle` |
+| `input/` | `InputHistory` |
+| `layout/` | `LayoutMode`, responsive sizing |
 
 ---
 
 ### 10. `aura-cli` — Interactive REPL
 
-Standalone binary with an interactive command-line session. Wires `AgentLoop` to a REPL with slash commands.
+Binary-only crate providing an interactive command-line session. Wires `AgentLoop` to a REPL with slash commands.
 
 | Type | Purpose |
 |------|---------|
 | `Session` | Holds `AgentLoop`, provider, executor, store, messages, identity |
 | `SessionConfig` | `data_dir`, `workspace_root`, `provider`, `agent_name`, `loop_config` |
+| `Command` | Slash-command enum: `/status`, `/history`, `/login`, `/logout`, `/whoami`, `/approve`, `/deny`, `/diff`, `/help`, `/quit` |
+| `ApprovalQueue` | Pending approval requests |
+
+#### Submodules
+
+| Module | Contents |
+|--------|----------|
+| `session` | `Session`, `SessionConfig` |
+| `commands` | `Command` enum parsing |
+| `handlers` | Command handlers (`handle_prompt`, `handle_status`, `handle_history`, `handle_login`, ...) |
+| `approval` | `ApprovalRequest`, `ApprovalDecision`, `ApprovalQueue` |
+| `session_helpers` | Re-exports from `aura_agent::session_bootstrap` |
+| `ui` | `print_help`, `banner` |
 
 ---
 
@@ -404,10 +494,36 @@ Long-running automaton workflows that drive `AgentLoop` on a schedule.
 | `AutomatonRuntime` | Installs, runs, and cancels automaton instances |
 | `AutomatonHandle` | Control handle for a running automaton |
 | `Schedule` | Tick scheduling configuration |
+| `AutomatonState` | Runtime state for an automaton instance |
+| `AutomatonId` | Unique automaton identifier |
+| `AutomatonInfo` | Metadata about a running automaton |
+| `AutomatonStatus` | Lifecycle status enum |
+| `AutomatonError` | Error enum |
+| `AutomatonEvent` | Events emitted during automaton execution |
+| `TickContext` | Context provided to each automaton tick |
 
 #### Built-in Automatons
 
-`ChatAutomaton`, `DevLoopAutomaton`, `SpecGenAutomaton`, `TaskRunAutomaton`
+| Automaton | Module | Description |
+|-----------|--------|-------------|
+| `ChatAutomaton` | `builtins/chat.rs` | Interactive chat sessions |
+| `DevLoopAutomaton` | `builtins/dev_loop/` | Iterative development loop with commit-and-push support |
+| `SpecGenAutomaton` | `builtins/spec_gen.rs` | Specification generation |
+| `TaskRunAutomaton` | `builtins/task_run.rs` | Task execution |
+
+#### Submodules
+
+| Module | Contents |
+|--------|----------|
+| `runtime` | `Automaton` trait, `TickOutcome`, `AutomatonRuntime` |
+| `handle` | `AutomatonHandle` |
+| `schedule` | `Schedule` |
+| `state` | `AutomatonState` |
+| `types` | `AutomatonId`, `AutomatonInfo`, `AutomatonStatus`, `TaskExecution`, `TaskOutcome`, `FileOpRecord` |
+| `context` | `TickContext` |
+| `events` | `AutomatonEvent` |
+| `error` | `AutomatonError` |
+| `builtins/` | `ChatAutomaton`, `DevLoopAutomaton`, `SpecGenAutomaton`, `TaskRunAutomaton` |
 
 ---
 
@@ -419,6 +535,7 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 |------|---------|
 | `Node` | Top-level server: binds listener, opens store, starts scheduler + router |
 | `NodeConfig` | `port`, `host`, `data_dir`, `sync_writes`, `workspace_base`, ... |
+| `NodeError` | Server error types |
 | `Scheduler` | Per-agent mutex scheduling; drains inbox via worker |
 | `RouterState` | Axum shared state: store, scheduler, config, provider, catalog, automaton controller |
 | `Session` | WebSocket session state: agent ID, model config, installed tools, messages, workspace |
@@ -429,8 +546,20 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 |----------|--------|---------|
 | `/health` | GET | Liveness check |
 | `/tx` | POST | Submit transaction |
-| `/api/files/*` | GET | File serving from workspace |
-| `/stream` | GET (WS upgrade) | WebSocket session for interactive use |
+| `/tx/status/:agent_id/:tx_id` | GET | Transaction status |
+| `/agents/:agent_id/head` | GET | Read agent head sequence |
+| `/agents/:agent_id/record` | GET | Scan agent record log |
+| `/api/files` | GET | List files from workspace |
+| `/api/read-file` | GET | Read file content from workspace |
+| `/workspace/resolve` | GET | Resolve workspace path |
+| `/stream` | GET (WS) | WebSocket session for interactive use |
+| `/stream/automaton/:automaton_id` | GET (WS) | WebSocket for automaton streaming |
+| `/ws/terminal` | GET (WS) | Terminal WebSocket |
+| `/automaton/start` | POST | Start an automaton |
+| `/automaton/list` | GET | List running automatons |
+| `/automaton/:automaton_id/status` | GET | Automaton status |
+| `/automaton/:automaton_id/pause` | POST | Pause automaton |
+| `/automaton/:automaton_id/stop` | POST | Stop automaton |
 
 #### Submodules
 
@@ -442,6 +571,12 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 | `scheduler.rs` | `Scheduler` — per-agent locking and dispatch |
 | `worker.rs` | `process_agent` — dequeue + `AgentLoop` execution |
 | `session/` | `Session` state, `handle_ws_connection`, `TurnEvent` → `OutboundMessage` mapping |
+| `terminal.rs` | Terminal WebSocket handler |
+| `automaton_bridge.rs` | Bridge between automaton runtime and node sessions |
+| `domain.rs` | `HttpDomainApi` — HTTP-backed `DomainApi` implementation |
+| `jwt_domain.rs` | `JwtDomainApi` — JWT-authenticated domain API |
+| `executor_factory.rs` | `build_tool_resolver`, `build_executor_router` |
+| `protocol.rs` | Helper conversions between protocol and internal types |
 
 ---
 
@@ -453,8 +588,8 @@ The primary entry point. Supports TUI mode (default) and headless mode.
 |--------|---------|
 | `main.rs` | CLI parse, auth subcommands (`login`/`logout`/`whoami`), `run_with_args` |
 | `cli.rs` | Clap definitions: `Cli`, `Commands`, `RunArgs`, `UiMode` (Terminal/None) |
-| `event_loop/` | Terminal event loop: `EventLoopContext`, `run_event_loop` — bridges `UiEvent` ↔ `AgentLoop` ↔ `UiCommand` |
-| `session_helpers.rs` | Re-exports from `aura_agent::session_bootstrap` |
+| `event_loop/` | Terminal event loop: `EventLoopContext`, `run_event_loop` — bridges `UiEvent` ↔ `AgentLoop` ↔ `UiCommand`. Subfiles: `handlers.rs`, `agent_events.rs`, `record_ui.rs` |
+| `session_helpers.rs` | Re-exports from `aura_agent::session_bootstrap`, plus `default_agent_config` |
 | `api_server.rs` | Embedded `/health` endpoint for TUI mode |
 | `record_loader.rs` | Record loading utilities |
 
@@ -473,7 +608,7 @@ sequenceDiagram
     participant EL as Event Loop (src/event_loop)
     participant AL as AgentLoop (aura-agent)
     participant MP as ModelProvider (aura-reasoner)
-    participant KTE as KernelToolExecutor
+    participant KTG as KernelToolGateway
     participant ER as ExecutorRouter (aura-kernel)
     participant Tools as ToolExecutor (aura-tools)
     participant FS as Filesystem
@@ -496,15 +631,15 @@ sequenceDiagram
             AL->>AL: Extract ToolCallInfo from response
             AL->>AL: Check cache (CACHEABLE_TOOLS)
             AL->>AL: Check blocking detection
-            AL->>KTE: executor.execute(uncached_tools)
-            KTE->>KTE: Policy check (deny → error result)
-            KTE->>ER: router.execute(ctx, action) per tool
+            AL->>KTG: executor.execute(uncached_tools)
+            KTG->>KTG: Policy check (deny → error result)
+            KTG->>ER: router.execute(ctx, action) per tool
             ER->>Tools: tool_executor.execute(ctx, action)
             Tools->>FS: Sandboxed filesystem/command operation
             FS-->>Tools: Result
             Tools-->>ER: Effect
-            ER-->>KTE: Effect → decode_tool_effect → ToolCallResult
-            KTE-->>AL: Vec<ToolCallResult>
+            ER-->>KTG: Effect → decode_tool_effect → ToolCallResult
+            KTG-->>AL: Vec<ToolCallResult>
             AL->>AL: Track effects (blocking, stall, exploration)
             AL->>AL: Auto-build check if write succeeded
             AL-->>EL: TurnEvent::ToolResult for each tool
@@ -533,7 +668,7 @@ sequenceDiagram
     participant Sess as Session State
     participant AL as AgentLoop
     participant MP as ModelProvider
-    participant KTE as KernelToolExecutor
+    participant KTG as KernelToolGateway
     participant Tools as ToolExecutor
 
     Client->>WS: Connect to /stream
@@ -551,9 +686,9 @@ sequenceDiagram
         WS-->>Client: { type: "text_delta", text: "..." }
 
         alt Tool execution
-            AL->>KTE: Execute tools
-            KTE->>Tools: Sandboxed execution
-            Tools-->>KTE: Results
+            AL->>KTG: Execute tools
+            KTG->>Tools: Sandboxed execution
+            Tools-->>KTG: Results
             AL-->>WS: TurnEvent::ToolResult → OutboundMessage::ToolResult
             WS-->>Client: { type: "tool_result", name, result, is_error }
         end
@@ -584,7 +719,7 @@ sequenceDiagram
     participant Worker
     participant AL as AgentLoop
     participant MP as ModelProvider
-    participant KTE as KernelToolExecutor
+    participant KTG as KernelToolGateway
 
     Client->>Router: POST /tx { agent_id, payload }
     Router->>Store: store.enqueue_tx(transaction)
@@ -595,20 +730,20 @@ sequenceDiagram
     Sched->>Worker: process_agent(agent_id, store, provider, ...)
 
     Worker->>Store: store.dequeue_tx(agent_id)
-    Store-->>Worker: (inbox_seq, Transaction)
+    Store-->>Worker: (DequeueToken, Transaction)
     Worker->>AL: agent_loop.run(provider, executor, tools, messages)
 
     loop AgentLoop iterations
         AL->>MP: Model call
         MP-->>AL: ModelResponse
         alt Tool execution
-            AL->>KTE: Execute tools
-            KTE-->>AL: Results
+            AL->>KTG: Execute tools
+            KTG-->>AL: Results
         end
     end
 
     AL-->>Worker: AgentLoopResult
-    Worker->>Store: store.append_entry_atomic(agent_id, seq, entry, inbox_seq)
+    Worker->>Store: store.append_entry_atomic(agent_id, seq, entry, dequeue_token)
     Worker-->>Sched: Done
 
     Client->>Router: GET /agents/{id}/record?from=1&limit=10
@@ -631,7 +766,7 @@ sequenceDiagram
     participant REPL as CLI Session
     participant AL as AgentLoop
     participant MP as ModelProvider
-    participant KTE as KernelToolExecutor
+    participant KTG as KernelToolGateway
 
     User->>REPL: Types prompt at > 
     REPL->>REPL: session.messages.push(user message)
@@ -641,8 +776,8 @@ sequenceDiagram
         AL->>MP: Model call
         AL-->>REPL: TurnEvent::TextDelta (printed to stdout)
         alt Tools
-            AL->>KTE: Execute
-            KTE-->>AL: Results
+            AL->>KTG: Execute
+            KTG-->>AL: Results
             AL-->>REPL: TurnEvent::ToolResult (printed)
         end
     end
@@ -694,7 +829,7 @@ flowchart LR
         C --> D[ModelProvider]
         D --> E[ModelResponse]
         E --> F{StopReason}
-        F -->|ToolUse| G[KernelToolExecutor]
+        F -->|ToolUse| G[KernelToolGateway]
         G --> H[ExecutorRouter]
         H --> I[ToolExecutor + Sandbox]
         I --> J[Effect]
