@@ -260,11 +260,23 @@ fn wait_with_hard_timeout(
 /// Validate a command string against the allowlist.
 ///
 /// When the allowlist is non-empty, the first whitespace-delimited token
-/// of the command string must appear in the list.
+/// of the command string must appear in the list. Shell metacharacters
+/// that could chain additional commands are rejected.
 fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), ToolError> {
     if allowlist.is_empty() {
         return Ok(());
     }
+
+    // Block shell metacharacters that allow command chaining
+    let dangerous = [";", "&&", "||", "|", "$(", "`", "\n"];
+    for meta in &dangerous {
+        if command.contains(meta) {
+            return Err(ToolError::CommandNotAllowed(format!(
+                "shell metacharacter '{meta}' not allowed"
+            )));
+        }
+    }
+
     let program = command.split_whitespace().next().unwrap_or(command);
     if !allowlist.iter().any(|a| a == program) {
         return Err(ToolError::CommandNotAllowed(program.into()));

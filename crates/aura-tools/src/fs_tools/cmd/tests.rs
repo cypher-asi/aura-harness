@@ -357,6 +357,39 @@ fn test_command_allowlist_extracts_first_token() {
 }
 
 #[test]
+fn test_command_allowlist_blocks_semicolon_chaining() {
+    let allowlist = vec!["cargo".to_string()];
+    let result = check_command_allowlist("cargo; rm -rf /", &allowlist);
+    assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+}
+
+#[test]
+fn test_command_allowlist_blocks_and_chaining() {
+    let allowlist = vec!["cargo".to_string()];
+    let result = check_command_allowlist("cargo && cat /etc/passwd", &allowlist);
+    assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+}
+
+#[test]
+fn test_command_allowlist_blocks_pipe() {
+    let allowlist = vec!["cargo".to_string()];
+    let result = check_command_allowlist("cargo | grep secret", &allowlist);
+    assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+}
+
+#[test]
+fn test_command_allowlist_blocks_subshell() {
+    let allowlist = vec!["echo".to_string()];
+    let result = check_command_allowlist("echo $(cat /etc/passwd)", &allowlist);
+    assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+}
+
+#[test]
+fn test_command_allowlist_no_metachar_check_without_allowlist() {
+    assert!(check_command_allowlist("echo; rm -rf /", &[]).is_ok());
+}
+
+#[test]
 fn test_output_to_tool_result_exit_code_metadata() {
     #[cfg(windows)]
     let status = {

@@ -60,6 +60,7 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
 
     let mut session = Session::new(ctx.workspace_base.clone());
     session.auth_token = ctx.auth_token.clone();
+    session.project_base = ctx.project_base.clone();
     info!(session_id = %session.session_id, "WebSocket connection opened");
 
     let mut active_turn: Option<ActiveTurn> = None;
