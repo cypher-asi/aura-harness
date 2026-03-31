@@ -103,7 +103,7 @@ async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction
         return;
     }
 
-    if let Ok(Some((inbox_seq, tx))) = state.store.dequeue_tx(state.agent_id) {
+    if let Ok(Some((token, tx))) = state.store.dequeue_tx(state.agent_id) {
         let context_hash = compute_context_hash(state.seq, &tx);
         let entry = RecordEntry::builder(state.seq, tx.clone())
             .context_hash(context_hash)
@@ -112,7 +112,7 @@ async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction
         if let Err(e) =
             state
                 .store
-                .append_entry_atomic(state.agent_id, state.seq, &entry, inbox_seq)
+                .append_entry_atomic(state.agent_id, state.seq, &entry, token.inbox_seq())
         {
             error!(error = %e, "Failed to persist completion record");
         } else {
@@ -199,9 +199,9 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
 
 async fn drain_stale_inbox(state: &mut LoopState<'_>) {
     let mut stale_count = 0;
-    while let Ok(Some((stale_inbox_seq, stale_tx))) = state.store.dequeue_tx(state.agent_id) {
+    while let Ok(Some((stale_token, stale_tx))) = state.store.dequeue_tx(state.agent_id) {
         warn!(
-            stale_inbox_seq = stale_inbox_seq,
+            stale_inbox_seq = stale_token.inbox_seq(),
             stale_tx_type = ?stale_tx.tx_type,
             "Discarding stale inbox transaction"
         );
@@ -212,7 +212,7 @@ async fn drain_stale_inbox(state: &mut LoopState<'_>) {
             state.agent_id,
             state.seq,
             &stale_entry,
-            stale_inbox_seq,
+            stale_token.inbox_seq(),
         ) {
             error!(error = %e, "Failed to clear stale transaction");
             break;
@@ -238,7 +238,7 @@ async fn enqueue_and_dequeue(state: &mut LoopState<'_>, text: &str) -> Option<(T
         return None;
     }
 
-    let (inbox_seq, dequeued_tx) = match state.store.dequeue_tx(state.agent_id) {
+    let (token, dequeued_tx) = match state.store.dequeue_tx(state.agent_id) {
         Ok(Some(item)) => item,
         Ok(None) => {
             error!("Transaction was enqueued but not found in inbox");
@@ -254,5 +254,5 @@ async fn enqueue_and_dequeue(state: &mut LoopState<'_>, text: &str) -> Option<(T
         error!("Transaction mismatch after draining stale entries");
     }
 
-    Some((tx, inbox_seq))
+    Some((tx, token.inbox_seq()))
 }

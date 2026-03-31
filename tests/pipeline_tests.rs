@@ -42,7 +42,7 @@ async fn test_full_pipeline_enqueue_process_record() {
     store.enqueue_tx(&tx).unwrap();
     assert!(store.has_pending_tx(agent_id).unwrap());
 
-    let (inbox_seq, dequeued_tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, dequeued_tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
     assert_eq!(dequeued_tx.hash, tx.hash);
 
     let config = AgentLoopConfig::default();
@@ -67,7 +67,7 @@ async fn test_full_pipeline_enqueue_process_record() {
         .context_hash([0u8; 32])
         .build();
     store
-        .append_entry_atomic(agent_id, next_seq, &entry, inbox_seq)
+        .append_entry_atomic(agent_id, next_seq, &entry, token.inbox_seq())
         .unwrap();
 
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
@@ -108,7 +108,7 @@ async fn test_pipeline_multiple_transactions() {
     let executor = KernelToolExecutor::new(router, agent_id, ws_path);
 
     let mut processed = 0u64;
-    while let Some((inbox_seq, tx)) = store.dequeue_tx(agent_id).unwrap() {
+    while let Some((token, tx)) = store.dequeue_tx(agent_id).unwrap() {
         let head_seq = store.get_head_seq(agent_id).unwrap();
         let next_seq = head_seq + 1;
 
@@ -123,7 +123,7 @@ async fn test_pipeline_multiple_transactions() {
             .context_hash([next_seq as u8; 32])
             .build();
         store
-            .append_entry_atomic(agent_id, next_seq, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, next_seq, &entry, token.inbox_seq())
             .unwrap();
         processed += 1;
     }
@@ -203,12 +203,12 @@ async fn test_deterministic_record_entry_seq() {
         );
         store.enqueue_tx(&tx).unwrap();
 
-        let (inbox_seq, dequeued) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, dequeued) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = aura_core::RecordEntry::builder(i, dequeued)
             .context_hash([i as u8; 32])
             .build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -255,7 +255,7 @@ async fn test_multi_agent_concurrent_processing() {
             let router = ExecutorRouter::new();
             let executor = KernelToolExecutor::new(router, agent_id, ws_path);
 
-            let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+            let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
             let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
             let messages = vec![aura_reasoner::Message::user(prompt)];
             let _result = agent_loop
@@ -267,7 +267,7 @@ async fn test_multi_agent_concurrent_processing() {
                 .context_hash([1u8; 32])
                 .build();
             store
-                .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+                .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
                 .unwrap();
 
             agent_id
@@ -318,22 +318,22 @@ async fn test_agents_independent_state() {
 
     // Process agent_a's 3 messages
     for seq in 1..=3 {
-        let (inbox_seq, tx) = store.dequeue_tx(agent_a).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_a).unwrap().unwrap();
         let entry = aura_core::RecordEntry::builder(seq, tx)
             .context_hash([seq as u8; 32])
             .build();
         store
-            .append_entry_atomic(agent_a, seq, &entry, inbox_seq)
+            .append_entry_atomic(agent_a, seq, &entry, token.inbox_seq())
             .unwrap();
     }
 
     // Process agent_b's 1 message
-    let (inbox_seq, tx) = store.dequeue_tx(agent_b).unwrap().unwrap();
+    let (token, tx) = store.dequeue_tx(agent_b).unwrap().unwrap();
     let entry = aura_core::RecordEntry::builder(1, tx)
         .context_hash([1u8; 32])
         .build();
     store
-        .append_entry_atomic(agent_b, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent_b, 1, &entry, token.inbox_seq())
         .unwrap();
 
     assert_eq!(store.get_head_seq(agent_a).unwrap(), 3);
@@ -372,7 +372,7 @@ async fn test_pipeline_with_tool_use() {
     );
     store.enqueue_tx(&tx).unwrap();
 
-    let (inbox_seq, dequeued) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, dequeued) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
     let config = AgentLoopConfig::default();
     let agent_loop = AgentLoop::new(config);
@@ -401,7 +401,7 @@ async fn test_pipeline_with_tool_use() {
         .context_hash([1u8; 32])
         .build();
     store
-        .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
         .unwrap();
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
 }

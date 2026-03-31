@@ -147,7 +147,7 @@ impl Store for RocksStore {
     }
 
     #[instrument(skip(self), fields(agent_id = %agent_id))]
-    fn dequeue_tx(&self, agent_id: AgentId) -> Result<Option<(u64, Transaction)>, StoreError> {
+    fn dequeue_tx(&self, agent_id: AgentId) -> Result<Option<(crate::store::DequeueToken, Transaction)>, StoreError> {
         let cf_inbox = self.cf(cf::INBOX)?;
 
         // Get current inbox head and tail
@@ -170,7 +170,8 @@ impl Store for RocksStore {
             let tx: Transaction = serde_json::from_slice(&bytes)
                 .map_err(|e| StoreError::Deserialization(e.to_string()))?;
             debug!(inbox_seq = head, "Transaction dequeued");
-            Ok(Some((head, tx)))
+            let token = crate::store::DequeueToken { inbox_seq: head };
+            Ok(Some((token, tx)))
         } else {
             Err(StoreError::InboxCorruption {
                 agent_id,
@@ -230,6 +231,79 @@ impl Store for RocksStore {
         self.db.write_opt(batch, &self.write_opts())?;
 
         debug!("Record entry committed atomically");
+        Ok(())
+    }
+
+    #[instrument(skip(self, entry), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_direct(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+    ) -> Result<(), StoreError> {
+        let cf_record = self.cf(cf::RECORD)?;
+        let cf_meta = self.cf(cf::AGENT_META)?;
+
+        let current_head = self.get_head_seq(agent_id)?;
+        if next_seq != current_head + 1 {
+            return Err(StoreError::SequenceMismatch {
+                expected: current_head + 1,
+                actual: next_seq,
+            });
+        }
+
+        let entry_bytes = serde_json::to_vec(entry)?;
+        let record_key = RecordKey::new(agent_id, next_seq);
+        let head_seq_key = AgentMetaKey::head_seq(agent_id);
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
+        batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
+
+        self.db.write_opt(batch, &self.write_opts())?;
+
+        debug!("Record entry committed (direct)");
+        Ok(())
+    }
+
+    #[instrument(skip(self, entries), fields(agent_id = %agent_id, base_seq, count = entries.len()))]
+    fn append_entries_batch(
+        &self,
+        agent_id: AgentId,
+        base_seq: u64,
+        entries: &[RecordEntry],
+    ) -> Result<(), StoreError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let cf_record = self.cf(cf::RECORD)?;
+        let cf_meta = self.cf(cf::AGENT_META)?;
+
+        let current_head = self.get_head_seq(agent_id)?;
+        if base_seq != current_head + 1 {
+            return Err(StoreError::SequenceMismatch {
+                expected: current_head + 1,
+                actual: base_seq,
+            });
+        }
+
+        let mut batch = WriteBatch::default();
+        let head_seq_key = AgentMetaKey::head_seq(agent_id);
+
+        for (i, entry) in entries.iter().enumerate() {
+            let seq = base_seq + i as u64;
+            let entry_bytes = serde_json::to_vec(entry)?;
+            let record_key = RecordKey::new(agent_id, seq);
+            batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
+        }
+
+        let last_seq = base_seq + entries.len() as u64 - 1;
+        batch.put_cf(&cf_meta, head_seq_key.encode(), last_seq.to_be_bytes());
+
+        self.db.write_opt(batch, &self.write_opts())?;
+
+        debug!(last_seq, "Batch record entries committed");
         Ok(())
     }
 

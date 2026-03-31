@@ -30,8 +30,8 @@ fn test_enqueue_dequeue() {
     let result = store.dequeue_tx(agent_id).unwrap();
     assert!(result.is_some());
 
-    let (inbox_seq, dequeued_tx) = result.unwrap();
-    assert_eq!(inbox_seq, 0);
+    let (token, dequeued_tx) = result.unwrap();
+    assert_eq!(token.inbox_seq(), 0);
     assert_eq!(dequeued_tx.tx_id(), tx.tx_id());
 }
 
@@ -55,7 +55,7 @@ fn test_atomic_commit() {
     let head_seq = store.get_head_seq(agent_id).unwrap();
     assert_eq!(head_seq, 0);
 
-    let (inbox_seq, _) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, _) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
     let entry = RecordEntry::builder(1, tx)
         .context_hash([0u8; 32])
@@ -64,7 +64,7 @@ fn test_atomic_commit() {
         .build();
 
     store
-        .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
         .unwrap();
 
     let new_head = store.get_head_seq(agent_id).unwrap();
@@ -84,7 +84,7 @@ fn test_scan_record() {
     for i in 1..=5 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
         #[allow(clippy::cast_possible_truncation)] // i is always 1-5 in test
         let entry = RecordEntry::builder(i, tx)
@@ -92,7 +92,7 @@ fn test_scan_record() {
             .build();
 
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -129,12 +129,12 @@ fn test_sequence_mismatch() {
     let tx = create_test_tx(agent_id);
 
     store.enqueue_tx(&tx).unwrap();
-    let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
     let entry = RecordEntry::builder(5, tx) // Wrong seq - should be 1
         .build();
 
-    let result = store.append_entry_atomic(agent_id, 5, &entry, inbox_seq);
+    let result = store.append_entry_atomic(agent_id, 5, &entry, token.inbox_seq());
     assert!(matches!(result, Err(StoreError::SequenceMismatch { .. })));
 }
 
@@ -169,10 +169,10 @@ fn test_multiple_agents_isolated() {
     assert_eq!(store.get_inbox_depth(agent1).unwrap(), 1);
     assert_eq!(store.get_inbox_depth(agent2).unwrap(), 1);
 
-    let (inbox_seq, tx) = store.dequeue_tx(agent1).unwrap().unwrap();
+    let (token, tx) = store.dequeue_tx(agent1).unwrap().unwrap();
     let entry = RecordEntry::builder(1, tx).build();
     store
-        .append_entry_atomic(agent1, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent1, 1, &entry, token.inbox_seq())
         .unwrap();
 
     assert_eq!(store.get_head_seq(agent1).unwrap(), 1);
@@ -192,10 +192,10 @@ fn test_large_inbox_depth() {
     assert_eq!(store.get_inbox_depth(agent_id).unwrap(), 100);
 
     for seq in 1..=100 {
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(seq, tx).build();
         store
-            .append_entry_atomic(agent_id, seq, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, seq, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -220,10 +220,10 @@ fn test_scan_partial_range() {
     for i in 1..=10 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -242,10 +242,10 @@ fn test_scan_beyond_end() {
     for i in 1..=5 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -322,7 +322,7 @@ fn test_record_entry_with_complex_data() {
 
     let tx = create_test_tx(agent_id);
     store.enqueue_tx(&tx).unwrap();
-    let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
     let mut decision = Decision::new();
     let action_id = aura_core::ActionId::generate();
@@ -336,7 +336,7 @@ fn test_record_entry_with_complex_data() {
         .build();
 
     store
-        .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
         .unwrap();
 
     let retrieved = store.get_record_entry(agent_id, 1).unwrap();
@@ -353,10 +353,10 @@ fn test_scan_record_deserialization_error() {
 
     let tx = create_test_tx(agent_id);
     store.enqueue_tx(&tx).unwrap();
-    let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
     let entry = RecordEntry::builder(1, tx).build();
     store
-        .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
         .unwrap();
 
     let record_key = RecordKey::new(agent_id, 1);
@@ -406,4 +406,187 @@ fn test_dequeue_tx_inbox_corruption() {
         ),
         "expected InboxCorruption, got: {err:?}"
     );
+}
+
+// ========================================================================
+// Direct Append Tests (no inbox coupling)
+// ========================================================================
+
+#[test]
+fn test_append_entry_direct() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    let entry = RecordEntry::builder(1, tx).context_hash([1u8; 32]).build();
+
+    store.append_entry_direct(agent_id, 1, &entry).unwrap();
+
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
+    let retrieved = store.get_record_entry(agent_id, 1).unwrap();
+    assert_eq!(retrieved.seq, 1);
+    assert_eq!(retrieved.context_hash, [1u8; 32]);
+}
+
+#[test]
+fn test_append_entry_direct_sequence_mismatch() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    let entry = RecordEntry::builder(5, tx).build();
+
+    let result = store.append_entry_direct(agent_id, 5, &entry);
+    assert!(matches!(result, Err(StoreError::SequenceMismatch { .. })));
+}
+
+#[test]
+fn test_append_entry_direct_multiple() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    for i in 1..=5 {
+        let tx = create_test_tx(agent_id);
+        let entry = RecordEntry::builder(i, tx)
+            .context_hash([i as u8; 32])
+            .build();
+        store.append_entry_direct(agent_id, i, &entry).unwrap();
+    }
+
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 5);
+    let entries = store.scan_record(agent_id, 1, 10).unwrap();
+    assert_eq!(entries.len(), 5);
+}
+
+#[test]
+fn test_append_entry_direct_does_not_touch_inbox() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    store.enqueue_tx(&tx).unwrap();
+    assert_eq!(store.get_inbox_depth(agent_id).unwrap(), 1);
+
+    let entry_tx = create_test_tx(agent_id);
+    let entry = RecordEntry::builder(1, entry_tx).build();
+    store.append_entry_direct(agent_id, 1, &entry).unwrap();
+
+    assert_eq!(
+        store.get_inbox_depth(agent_id).unwrap(),
+        1,
+        "Direct append must not drain inbox"
+    );
+}
+
+// ========================================================================
+// Batch Append Tests
+// ========================================================================
+
+#[test]
+fn test_append_entries_batch_empty() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    store
+        .append_entries_batch(agent_id, 1, &[])
+        .unwrap();
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 0);
+}
+
+#[test]
+fn test_append_entries_batch_single() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    let entry = RecordEntry::builder(1, tx).context_hash([1u8; 32]).build();
+
+    store.append_entries_batch(agent_id, 1, &[entry]).unwrap();
+
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
+    let retrieved = store.get_record_entry(agent_id, 1).unwrap();
+    assert_eq!(retrieved.context_hash, [1u8; 32]);
+}
+
+#[test]
+fn test_append_entries_batch_multiple() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let entries: Vec<RecordEntry> = (1..=5)
+        .map(|i| {
+            let tx = create_test_tx(agent_id);
+            RecordEntry::builder(i, tx)
+                .context_hash([i as u8; 32])
+                .build()
+        })
+        .collect();
+
+    store.append_entries_batch(agent_id, 1, &entries).unwrap();
+
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 5);
+    let scanned = store.scan_record(agent_id, 1, 10).unwrap();
+    assert_eq!(scanned.len(), 5);
+    for (i, entry) in scanned.iter().enumerate() {
+        assert_eq!(entry.seq, (i + 1) as u64);
+        assert_eq!(entry.context_hash, [(i + 1) as u8; 32]);
+    }
+}
+
+#[test]
+fn test_append_entries_batch_sequence_mismatch() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    let entry = RecordEntry::builder(5, tx).build();
+
+    let result = store.append_entries_batch(agent_id, 5, &[entry]);
+    assert!(matches!(result, Err(StoreError::SequenceMismatch { .. })));
+}
+
+#[test]
+fn test_append_entries_batch_continues_from_existing() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx1 = create_test_tx(agent_id);
+    let entry1 = RecordEntry::builder(1, tx1).build();
+    store.append_entry_direct(agent_id, 1, &entry1).unwrap();
+
+    let entries: Vec<RecordEntry> = (2..=4)
+        .map(|i| {
+            let tx = create_test_tx(agent_id);
+            RecordEntry::builder(i, tx).build()
+        })
+        .collect();
+    store.append_entries_batch(agent_id, 2, &entries).unwrap();
+
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 4);
+    let scanned = store.scan_record(agent_id, 1, 10).unwrap();
+    assert_eq!(scanned.len(), 4);
+}
+
+// ========================================================================
+// DequeueToken + append_entry_dequeued Tests
+// ========================================================================
+
+#[test]
+fn test_append_entry_dequeued() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let tx = create_test_tx(agent_id);
+    store.enqueue_tx(&tx).unwrap();
+
+    let (token, dequeued_tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    assert_eq!(token.inbox_seq(), 0);
+
+    let entry = RecordEntry::builder(1, dequeued_tx).build();
+    store
+        .append_entry_dequeued(agent_id, 1, &entry, token)
+        .unwrap();
+
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
+    assert!(!store.has_pending_tx(agent_id).unwrap());
 }

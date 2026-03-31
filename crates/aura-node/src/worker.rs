@@ -28,7 +28,7 @@ pub async fn process_agent(
     let mut processed = 0u64;
 
     loop {
-        let Some((inbox_seq, tx)) = store.dequeue_tx(agent_id)? else {
+        let Some((token, tx)) = store.dequeue_tx(agent_id)? else {
             debug!(processed, "Inbox empty, worker done");
             break;
         };
@@ -37,7 +37,7 @@ pub async fn process_agent(
         let next_seq = head_seq + 1;
 
         debug!(
-            inbox_seq,
+            inbox_seq = token.inbox_seq(),
             head_seq,
             next_seq,
             hash = %tx.hash,
@@ -60,7 +60,7 @@ pub async fn process_agent(
             .context_hash(context_hash)
             .build();
 
-        store.append_entry_atomic(agent_id, next_seq, &entry, inbox_seq)?;
+        store.append_entry_atomic(agent_id, next_seq, &entry, token.inbox_seq())?;
 
         if result.llm_error.is_some() {
             warn!(seq = next_seq, "Transaction processed with LLM error");

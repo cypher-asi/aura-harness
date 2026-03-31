@@ -127,7 +127,7 @@ async fn persist_response_record(state: &mut LoopState<'_>, total_text: &str) {
         return;
     }
 
-    if let Ok(Some((resp_inbox_seq, resp_tx))) = state.store.dequeue_tx(state.agent_id) {
+    if let Ok(Some((resp_token, resp_tx))) = state.store.dequeue_tx(state.agent_id) {
         let context_hash = compute_context_hash(state.seq, &resp_tx);
         let entry = RecordEntry::builder(state.seq, resp_tx.clone())
             .context_hash(context_hash)
@@ -136,7 +136,7 @@ async fn persist_response_record(state: &mut LoopState<'_>, total_text: &str) {
         if let Err(e) =
             state
                 .store
-                .append_entry_atomic(state.agent_id, state.seq, &entry, resp_inbox_seq)
+                .append_entry_atomic(state.agent_id, state.seq, &entry, resp_token.inbox_seq())
         {
             error!(error = %e, "Failed to persist response record");
         } else {
@@ -177,7 +177,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
 
     if let Err(e) = state.store.enqueue_tx(&session_tx) {
         error!(error = %e, "Failed to enqueue session start");
-    } else if let Ok(Some((inbox_seq, tx))) = state.store.dequeue_tx(state.agent_id) {
+    } else if let Ok(Some((token, tx))) = state.store.dequeue_tx(state.agent_id) {
         let context_hash = compute_context_hash(state.seq, &tx);
         let entry = RecordEntry::builder(state.seq, tx.clone())
             .context_hash(context_hash)
@@ -186,7 +186,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
         if let Err(e) =
             state
                 .store
-                .append_entry_atomic(state.agent_id, state.seq, &entry, inbox_seq)
+                .append_entry_atomic(state.agent_id, state.seq, &entry, token.inbox_seq())
         {
             error!(error = %e, "Failed to persist session start record");
         } else {

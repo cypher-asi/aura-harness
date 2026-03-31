@@ -129,6 +129,39 @@ where
         self.config.workspace_base.join(agent_id.to_hex())
     }
 
+    /// Process a transaction from a direct (non-inbox) source.
+    ///
+    /// This is API scaffolding for the kernel-as-sole-gateway migration.
+    /// During migration, callers continue to use [`process`](Kernel::process) directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if storage operations or proposal processing fails.
+    pub async fn process_direct(
+        &self,
+        tx: Transaction,
+        next_seq: u64,
+    ) -> Result<ProcessResult, crate::KernelError> {
+        self.process(tx, next_seq).await
+    }
+
+    /// Process a transaction dequeued from the inbox.
+    ///
+    /// This is API scaffolding for the kernel-as-sole-gateway migration.
+    /// The `_dequeue_token` will be used in Phase 2+ for inbox-coupled commit.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if storage operations or proposal processing fails.
+    pub async fn process_dequeued(
+        &self,
+        tx: Transaction,
+        next_seq: u64,
+        _dequeue_token: aura_store::DequeueToken,
+    ) -> Result<ProcessResult, crate::KernelError> {
+        self.process(tx, next_seq).await
+    }
+
     /// Process a transaction and produce a record entry.
     ///
     /// # Errors

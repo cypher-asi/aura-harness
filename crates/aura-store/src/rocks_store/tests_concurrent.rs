@@ -37,11 +37,11 @@ fn test_interleaved_agent_operations() {
         }
 
         for agent in &agents {
-            let (inbox_seq, tx) = store.dequeue_tx(*agent).unwrap().unwrap();
+            let (token, tx) = store.dequeue_tx(*agent).unwrap().unwrap();
             let seq = u64::try_from(round).expect("round fits in u64") + 1;
             let entry = RecordEntry::builder(seq, tx).build();
             store
-                .append_entry_atomic(*agent, seq, &entry, inbox_seq)
+                .append_entry_atomic(*agent, seq, &entry, token.inbox_seq())
                 .unwrap();
         }
     }
@@ -61,10 +61,10 @@ fn test_reopen_store() {
 
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(1, tx).build();
         store
-            .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
             .unwrap();
 
         store
@@ -108,10 +108,10 @@ async fn test_concurrent_writes_different_agents() {
                 Bytes::from_static(b"test payload"),
             );
             store.enqueue_tx(&tx).unwrap();
-            let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+            let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
             let entry = RecordEntry::builder(1, tx).build();
             store
-                .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+                .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
                 .unwrap();
             agent_id
         }));
@@ -137,10 +137,10 @@ async fn test_concurrent_reads_and_writes() {
     for i in 1..=5 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -168,10 +168,10 @@ async fn test_concurrent_reads_and_writes() {
                 Bytes::from(format!("payload-{i}")),
             );
             store_w.enqueue_tx(&tx).unwrap();
-            let (inbox_seq, tx) = store_w.dequeue_tx(other_agent).unwrap().unwrap();
+            let (token, tx) = store_w.dequeue_tx(other_agent).unwrap().unwrap();
             let entry = RecordEntry::builder(i, tx).build();
             store_w
-                .append_entry_atomic(other_agent, i, &entry, inbox_seq)
+                .append_entry_atomic(other_agent, i, &entry, token.inbox_seq())
                 .unwrap();
         }
     }));
@@ -233,8 +233,8 @@ fn test_crash_recovery_inbox_persists() {
         let store = RocksStore::open(dir.path(), false).unwrap();
         assert_eq!(store.get_inbox_depth(agent_id).unwrap(), 3);
 
-        let (inbox_seq, _) = store.dequeue_tx(agent_id).unwrap().unwrap();
-        assert_eq!(inbox_seq, 0);
+        let (token, _) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        assert_eq!(token.inbox_seq(), 0);
     }
 }
 
@@ -248,11 +248,11 @@ fn test_crash_recovery_record_entries_persist() {
         for i in 1..=5 {
             let tx = create_test_tx(agent_id);
             store.enqueue_tx(&tx).unwrap();
-            let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+            let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
             let byte = u8::try_from(i).expect("test index fits in u8");
             let entry = RecordEntry::builder(i, tx).context_hash([byte; 32]).build();
             store
-                .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+                .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
                 .unwrap();
         }
     }
@@ -282,10 +282,10 @@ fn test_crash_recovery_multiple_agents() {
             for i in 1..=((idx + 1) as u64) {
                 let tx = create_test_tx(*agent_id);
                 store.enqueue_tx(&tx).unwrap();
-                let (inbox_seq, tx) = store.dequeue_tx(*agent_id).unwrap().unwrap();
+                let (token, tx) = store.dequeue_tx(*agent_id).unwrap().unwrap();
                 let entry = RecordEntry::builder(i, tx).build();
                 store
-                    .append_entry_atomic(*agent_id, i, &entry, inbox_seq)
+                    .append_entry_atomic(*agent_id, i, &entry, token.inbox_seq())
                     .unwrap();
             }
             store
@@ -318,10 +318,10 @@ fn test_scan_single_entry() {
 
     let tx = create_test_tx(agent_id);
     store.enqueue_tx(&tx).unwrap();
-    let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
     let entry = RecordEntry::builder(1, tx).build();
     store
-        .append_entry_atomic(agent_id, 1, &entry, inbox_seq)
+        .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
         .unwrap();
 
     let entries = store.scan_record(agent_id, 1, 1).unwrap();
@@ -337,10 +337,10 @@ fn test_scan_with_large_limit() {
     for i in 1..=20 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -356,10 +356,10 @@ fn test_scan_from_seq_zero() {
     for i in 1..=3 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -375,10 +375,10 @@ fn test_scan_from_nonexistent_seq() {
     for i in 1..=3 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
@@ -394,10 +394,10 @@ fn test_scan_limit_one_returns_single_entry() {
     for i in 1..=5 {
         let tx = create_test_tx(agent_id);
         store.enqueue_tx(&tx).unwrap();
-        let (inbox_seq, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
         let entry = RecordEntry::builder(i, tx).build();
         store
-            .append_entry_atomic(agent_id, i, &entry, inbox_seq)
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
             .unwrap();
     }
 
