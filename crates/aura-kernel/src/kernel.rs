@@ -225,6 +225,11 @@ impl Kernel {
         })
     }
 
+    /// Get a reference to the underlying store.
+    pub fn store(&self) -> &Arc<dyn Store> {
+        &self.store
+    }
+
     // -----------------------------------------------------------------------
     // Sequence helpers
     // -----------------------------------------------------------------------

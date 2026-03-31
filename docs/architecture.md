@@ -1,5 +1,7 @@
 # Aura Harness — Architecture
 
+> **⚠ Migration in progress:** The codebase is transitioning to kernel-mediated execution. Some flows below still show the pre-migration path. The kernel-as-sole-gateway model is the target architecture described in [docs/invariants.md](invariants.md).
+
 This document describes the system architecture in two sections:
 
 1. **Architecture** — every crate from most fundamental to least, with key types and submodules.
@@ -8,6 +10,24 @@ This document describes the system architecture in two sections:
 ---
 
 ## Part 1: Architecture
+
+### Crate Summary
+
+| Crate | Role |
+|------|------|
+| `aura-core` | Foundational domain types, IDs, hashing, and shared errors used across all crates. |
+| `aura-store` | Durable RocksDB-backed storage for agent records, metadata, and inbox queues. |
+| `aura-reasoner` | Model-provider abstraction for completion and streaming APIs. |
+| `aura-kernel` | Deterministic execution kernel with router, policies, sandboxing, and scheduler primitives. |
+| `aura-tools` | Tool catalog and built-in/external tool execution implementations. |
+| `aura-agent` | Main agent orchestration loop: model calls, tool execution, streaming, budgets, and compaction. |
+| `aura-protocol` | Wire-level request/response/event types for transport boundaries. |
+| `aura-auth` | Auth token extraction/validation utilities for node and agent startup. |
+| `aura-terminal` | Terminal UI layer and event-loop glue for interactive sessions. |
+| `aura-cli` | Minimal command-line REPL over the shared agent runtime. |
+| `aura-automaton` | Workflow/automation helpers that drive scripted agent behavior. |
+| `aura-node` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
+| `aura` | Root binary wiring for launch modes, runtime setup, and top-level command entrypoints. |
 
 ### Dependency Graph
 
@@ -264,26 +284,26 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  start([Begin Iteration]) --> compact[Compact if needed]
-  compact --> build[Build ModelRequest]
-  build --> call[Call ModelProvider]
-  call --> stream{Streaming?}
-  stream -->|Yes| accumulate[Accumulate StreamEvents → ModelResponse]
-  stream -->|No| direct[provider.complete → ModelResponse]
-  accumulate --> emit_iter[Emit IterationComplete]
+  start([Begin Iteration]) --> compact[Compact context if needed]
+  compact --> build[Build model request]
+  build --> call[Call model provider]
+  call --> stream{Use streaming}
+  stream -->|yes| accumulate[Collect stream events into response]
+  stream -->|no| direct[Run non streaming complete call]
+  accumulate --> emit_iter[Emit iteration complete event]
   direct --> emit_iter
-  emit_iter --> stop{StopReason?}
-  stop -->|EndTurn| done([Return Result])
+  emit_iter --> stop{Stop reason}
+  stop -->|EndTurn| done([Return result])
   stop -->|MaxTokens| handle_max[Handle max tokens]
-  stop -->|ToolUse| tools[handle_tool_use]
+  stop -->|ToolUse| tools[Handle tool use]
   handle_max --> done
-  tools --> cache_split[Split cached vs uncached]
-  cache_split --> block_check[Partition blocked vs executable]
-  block_check --> execute[executor.execute]
-  execute --> track[Track effects: blocking, stall, exploration]
-  track --> build_check{Write succeeded?}
-  build_check -->|Yes| auto_build[Auto-build check]
-  build_check -->|No| next[Next iteration]
+  tools --> cache_split[Split cached and uncached tools]
+  cache_split --> block_check[Split blocked and executable tools]
+  block_check --> execute[Execute tools]
+  execute --> track[Track blocking stall and exploration]
+  track --> build_check{Write succeeded}
+  build_check -->|yes| auto_build[Run auto build check]
+  build_check -->|no| next[Next iteration]
   auto_build --> next
   next --> start
 ```

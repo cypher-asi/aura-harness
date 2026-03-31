@@ -36,10 +36,9 @@
 //!   memory.  A periodic eviction sweep is a potential future improvement.
 
 use crate::worker::process_agent;
-use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
+use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_core::{AgentId, AgentStatus};
-use aura_kernel::Executor;
-use aura_kernel::ExecutorRouter;
+use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
 use aura_reasoner::{ModelProvider, ToolDefinition};
 use aura_store::Store;
 use dashmap::DashMap;
@@ -58,8 +57,8 @@ pub struct Scheduler {
     agent_loop: AgentLoop,
     executors: Vec<Arc<dyn Executor>>,
     tools: Vec<ToolDefinition>,
-    workspace_base: PathBuf,
     agent_locks: DashMap<AgentId, AgentLock>,
+    kernel_config: KernelConfig,
 }
 
 impl Scheduler {
@@ -72,6 +71,10 @@ impl Scheduler {
         tools: Vec<ToolDefinition>,
         workspace_base: PathBuf,
     ) -> Self {
+        let kernel_config = KernelConfig {
+            workspace_base: workspace_base.clone(),
+            ..KernelConfig::default()
+        };
         let config = AgentLoopConfig::default();
         Self {
             store,
@@ -79,8 +82,8 @@ impl Scheduler {
             agent_loop: AgentLoop::new(config),
             executors,
             tools,
-            workspace_base,
             agent_locks: DashMap::new(),
+            kernel_config,
         }
     }
 
@@ -99,7 +102,8 @@ impl Scheduler {
 
     /// Schedule processing for an agent.
     ///
-    /// This will acquire the agent lock and process all pending transactions.
+    /// Constructs a per-agent [`Kernel`] and routes all transactions through
+    /// kernel-mediated processing.
     #[instrument(skip(self), fields(agent_id = %agent_id))]
     pub async fn schedule_agent(&self, agent_id: AgentId) -> anyhow::Result<u64> {
         let status = self.store.get_agent_status(agent_id)?;
@@ -116,22 +120,21 @@ impl Scheduler {
         let lock = self.get_lock(agent_id);
         let _guard = lock.lock().await;
 
-        debug!("Lock acquired, processing");
+        debug!("Lock acquired, constructing kernel for agent");
 
-        let workspace = self.workspace_base.join(agent_id.to_hex());
         let router = self.build_executor_router();
-        let kernel_executor = KernelToolExecutor::new(router, agent_id, workspace);
+        let kernel = Arc::new(
+            Kernel::new(
+                self.store.clone(),
+                self.provider.clone(),
+                router,
+                self.kernel_config.clone(),
+                agent_id,
+            )
+            .map_err(|e| anyhow::anyhow!("kernel construction failed: {e}"))?,
+        );
 
-        match process_agent(
-            agent_id,
-            self.store.clone(),
-            self.provider.clone(),
-            &self.agent_loop,
-            &kernel_executor,
-            &self.tools,
-        )
-        .await
-        {
+        match process_agent(agent_id, kernel, &self.agent_loop, &self.tools).await {
             Ok(count) => {
                 info!(processed = count, "Agent processing complete");
                 Ok(count)
