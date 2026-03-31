@@ -8,6 +8,7 @@ use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
     SessionUsage, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
 };
+#[allow(deprecated)]
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
 use aura_kernel::{Kernel, KernelConfig};
 use std::sync::Arc;
@@ -64,7 +65,7 @@ pub(super) fn handle_session_init(
     }));
 }
 
-#[allow(dead_code)] // Retained until Phase 9 removes it
+#[allow(dead_code, deprecated)]
 pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> KernelToolExecutor {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;

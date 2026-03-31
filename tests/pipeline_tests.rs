@@ -3,6 +3,7 @@
 //! Tests the full pipeline: transaction submission → agent processing → record entry creation.
 //! Also includes determinism and concurrency tests.
 
+#[allow(deprecated)]
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
 use aura_core::{AgentId, Transaction, TransactionType};
 use aura_kernel::ExecutorRouter;

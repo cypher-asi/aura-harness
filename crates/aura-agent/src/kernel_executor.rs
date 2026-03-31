@@ -30,6 +30,7 @@ const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 /// and converts `Effect`s back into `ToolCallResult`s. Supports sequential
 /// and parallel execution modes, per-tool timeouts, and optional policy
 /// enforcement.
+#[deprecated(note = "use KernelToolGateway instead")]
 pub struct KernelToolExecutor {
     executor: ExecutorRouter,
     agent_id: AgentId,
@@ -39,6 +40,7 @@ pub struct KernelToolExecutor {
     policy: Option<Policy>,
 }
 
+#[allow(deprecated)]
 impl KernelToolExecutor {
     /// Create a new executor bridge with sequential mode, 120 s timeout, and no policy.
     #[must_use]
@@ -152,6 +154,7 @@ impl KernelToolExecutor {
 }
 
 #[async_trait]
+#[allow(deprecated)]
 impl AgentToolExecutor for KernelToolExecutor {
     async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
         match self.execution_mode {

@@ -1,7 +1,5 @@
 # Aura Harness — Architecture
 
-> **⚠ Migration in progress:** The codebase is transitioning to kernel-mediated execution. Some flows below still show the pre-migration path. The kernel-as-sole-gateway model is the target architecture described in [docs/invariants.md](invariants.md).
-
 This document describes the system architecture in two sections:
 
 1. **Architecture** — every crate from most fundamental to least, with key types and submodules.

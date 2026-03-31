@@ -1,3 +1,4 @@
+#[allow(deprecated)]
 use crate::KernelToolExecutor;
 use aura_kernel::ExecutorRouter;
 use aura_reasoner::{AnthropicProvider, MockProvider, ModelProvider, ToolDefinition};
@@ -65,6 +66,7 @@ pub fn build_executor_router() -> (ExecutorRouter, Vec<ToolDefinition>) {
 }
 
 #[must_use]
+#[allow(deprecated)]
 pub fn build_tool_executor(
     agent_id: aura_core::AgentId,
     workspace: PathBuf,
