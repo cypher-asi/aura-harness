@@ -6,8 +6,8 @@
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
 use aura_core::{Action, AgentId, ToolCall};
-use aura_kernel::{ExecutorRouter, PermissionLevel, Policy};
 use aura_kernel::{decode_tool_effect, ExecuteContext};
+use aura_kernel::{ExecutorRouter, PermissionLevel, Policy};
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -55,14 +55,14 @@ impl KernelToolExecutor {
 
     /// Switch to parallel execution mode.
     #[must_use]
-    pub fn with_parallel(mut self) -> Self {
+    pub const fn with_parallel(mut self) -> Self {
         self.execution_mode = ToolExecutionMode::Parallel;
         self
     }
 
     /// Override the per-tool timeout.
     #[must_use]
-    pub fn with_timeout(mut self, dur: Duration) -> Self {
+    pub const fn with_timeout(mut self, dur: Duration) -> Self {
         self.tool_timeout = dur;
         self
     }
@@ -117,37 +117,36 @@ impl KernelToolExecutor {
         let ctx = ExecuteContext::new(self.agent_id, action.action_id, self.workspace.clone());
         let timeout_dur = self.tool_timeout;
 
-        match tokio::time::timeout(timeout_dur, self.executor.execute(&ctx, &action)).await {
-            Ok(effect) => {
-                let decoded = decode_tool_effect(&effect);
-                info!(
-                    tool_use_id = %tool.id,
-                    tool_name = %tool.name,
-                    is_error = decoded.is_error,
-                    effect_status = ?effect.status,
-                    result_len = decoded.content.len(),
-                    workspace = %self.workspace.display(),
-                    "Tool execution completed"
-                );
-                ToolCallResult {
-                    tool_use_id: tool.id.clone(),
-                    content: decoded.content,
-                    is_error: decoded.is_error,
-                    stop_loop: false,
-                }
+        if let Ok(effect) =
+            tokio::time::timeout(timeout_dur, self.executor.execute(&ctx, &action)).await
+        {
+            let decoded = decode_tool_effect(&effect);
+            info!(
+                tool_use_id = %tool.id,
+                tool_name = %tool.name,
+                is_error = decoded.is_error,
+                effect_status = ?effect.status,
+                result_len = decoded.content.len(),
+                workspace = %self.workspace.display(),
+                "Tool execution completed"
+            );
+            ToolCallResult {
+                tool_use_id: tool.id.clone(),
+                content: decoded.content,
+                is_error: decoded.is_error,
+                stop_loop: false,
             }
-            Err(_) => {
-                warn!(
-                    tool_use_id = %tool.id,
-                    tool_name = %tool.name,
-                    timeout_ms = timeout_dur.as_millis() as u64,
-                    "Tool timed out"
-                );
-                ToolCallResult::error(
-                    &tool.id,
-                    format!("Tool timed out after {}ms", timeout_dur.as_millis()),
-                )
-            }
+        } else {
+            warn!(
+                tool_use_id = %tool.id,
+                tool_name = %tool.name,
+                timeout_ms = timeout_dur.as_millis() as u64,
+                "Tool timed out"
+            );
+            ToolCallResult::error(
+                &tool.id,
+                format!("Tool timed out after {}ms", timeout_dur.as_millis()),
+            )
         }
     }
 }

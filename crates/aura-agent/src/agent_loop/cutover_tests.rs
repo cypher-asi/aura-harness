@@ -56,12 +56,7 @@ async fn agentloop_simple_text_response() {
     let agent = AgentLoop::new(default_config());
 
     let result = agent
-        .run(
-            &provider,
-            &executor,
-            vec![Message::user("Hello")],
-            vec![],
-        )
+        .run(&provider, &executor, vec![Message::user("Hello")], vec![])
         .await
         .unwrap();
 
@@ -81,7 +76,10 @@ async fn agentloop_tool_use_then_text() {
         .with_response(MockResponse::text("I listed the files."));
 
     let executor = MockExecutor {
-        results: vec![ToolCallResult::success("placeholder", "file1.txt\nfile2.txt")],
+        results: vec![ToolCallResult::success(
+            "placeholder",
+            "file1.txt\nfile2.txt",
+        )],
     };
     let agent = AgentLoop::new(default_config());
 
@@ -144,12 +142,7 @@ async fn agentloop_end_turn_stops_loop() {
     let agent = AgentLoop::new(default_config());
 
     let result = agent
-        .run(
-            &provider,
-            &executor,
-            vec![Message::user("Hello")],
-            vec![],
-        )
+        .run(&provider, &executor, vec![Message::user("Hello")], vec![])
         .await
         .unwrap();
 
@@ -207,12 +200,7 @@ async fn agentloop_model_override() {
     let agent = AgentLoop::new(config);
 
     let result = agent
-        .run(
-            &provider,
-            &executor,
-            vec![Message::user("Hello")],
-            vec![],
-        )
+        .run(&provider, &executor, vec![Message::user("Hello")], vec![])
         .await
         .unwrap();
 
@@ -231,12 +219,7 @@ async fn agentloop_run_and_run_with_events_equivalent() {
     let agent = AgentLoop::new(config);
 
     let result_run = agent
-        .run(
-            &provider_a,
-            &executor,
-            vec![Message::user("Hello")],
-            vec![],
-        )
+        .run(&provider_a, &executor, vec![Message::user("Hello")], vec![])
         .await
         .unwrap();
 
@@ -388,12 +371,7 @@ async fn agentloop_token_accounting() {
     let agent = AgentLoop::new(default_config());
 
     let result = agent
-        .run(
-            &provider,
-            &executor,
-            vec![Message::user("Hello")],
-            vec![],
-        )
+        .run(&provider, &executor, vec![Message::user("Hello")], vec![])
         .await
         .unwrap();
 
@@ -547,7 +525,10 @@ async fn agentloop_integ_policy_deny() {
             .iter()
             .any(|block| matches!(block, ContentBlock::ToolResult { is_error: true, .. }))
     });
-    assert!(has_error_result, "denied tool calls must produce error tool_result blocks");
+    assert!(
+        has_error_result,
+        "denied tool calls must produce error tool_result blocks"
+    );
     assert!(result.llm_error.is_none());
 }
 

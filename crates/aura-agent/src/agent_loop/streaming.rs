@@ -143,7 +143,10 @@ impl AgentLoop {
                             reason: format!("Stream error, retrying without streaming: {e}"),
                         },
                     );
-                    let response = provider.complete(request).await.map_err(anyhow::Error::from)?;
+                    let response = provider
+                        .complete(request)
+                        .await
+                        .map_err(anyhow::Error::from)?;
                     for block in &response.message.content {
                         match block {
                             aura_reasoner::ContentBlock::Text { text } => {

@@ -1,7 +1,6 @@
 use aura_reasoner::{
-    ContentBlock, Message, MockProvider, ModelProvider, ModelRequest, ModelResponse,
-    ProviderTrace, ReasonerError, StopReason, StreamContentType, StreamEvent, StreamEventStream,
-    Usage,
+    ContentBlock, Message, MockProvider, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
+    ReasonerError, StopReason, StreamContentType, StreamEvent, StreamEventStream, Usage,
 };
 use futures_util::stream;
 use tokio::sync::mpsc;

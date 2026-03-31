@@ -36,7 +36,11 @@ fn default_config() -> AgentLoopConfig {
 }
 
 fn read_file_tool() -> ToolDefinition {
-    ToolDefinition::new("read_file", "Read a file", serde_json::json!({"type": "object"}))
+    ToolDefinition::new(
+        "read_file",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )
 }
 
 #[tokio::test]
@@ -244,7 +248,10 @@ async fn contract_streaming_events_ordered() {
 #[tokio::test]
 async fn contract_tool_cache_hit_matches_original() {
     let executor = MockExecutor {
-        results: vec![ToolCallResult::success("placeholder", "cached file contents")],
+        results: vec![ToolCallResult::success(
+            "placeholder",
+            "cached file contents",
+        )],
     };
 
     let provider = MockProvider::new()

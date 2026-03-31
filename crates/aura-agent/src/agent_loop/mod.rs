@@ -15,9 +15,9 @@ mod tool_processing;
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
-mod parity_tests;
-#[cfg(test)]
 mod cutover_tests;
+#[cfg(test)]
+mod parity_tests;
 #[cfg(test)]
 mod pipeline_tests;
 #[cfg(test)]
@@ -131,7 +131,7 @@ pub struct AgentLoop {
 impl AgentLoop {
     /// Create a new agent loop with the given configuration.
     #[must_use]
-    pub fn new(config: AgentLoopConfig) -> Self {
+    pub const fn new(config: AgentLoopConfig) -> Self {
         Self { config }
     }
 

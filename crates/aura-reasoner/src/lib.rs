@@ -130,13 +130,14 @@ pub trait ModelProvider: Send + Sync {
     ) -> Result<StreamEventStream, ReasonerError> {
         let response = self.complete(request).await?;
 
-        let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![Ok(StreamEvent::MessageStart {
-            message_id: response.trace.request_id.clone().unwrap_or_default(),
-            model: response.trace.model.clone(),
-            input_tokens: Some(response.usage.input_tokens),
-            cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
-            cache_read_input_tokens: response.usage.cache_read_input_tokens,
-        })];
+        let mut events: Vec<Result<StreamEvent, ReasonerError>> =
+            vec![Ok(StreamEvent::MessageStart {
+                message_id: response.trace.request_id.clone().unwrap_or_default(),
+                model: response.trace.model.clone(),
+                input_tokens: Some(response.usage.input_tokens),
+                cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+                cache_read_input_tokens: response.usage.cache_read_input_tokens,
+            })];
 
         for (index, block) in response.message.content.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
@@ -150,7 +151,10 @@ pub trait ModelProvider: Send + Sync {
                     events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
                     events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
                 }
-                ContentBlock::Thinking { thinking, signature } => {
+                ContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => {
                     events.push(Ok(StreamEvent::ContentBlockStart {
                         index: idx,
                         content_type: StreamContentType::Thinking,

@@ -115,8 +115,7 @@ async fn parallel_read_tools_execute_concurrently() {
     let tmp = tempfile::tempdir().unwrap();
     let workspace = tmp.path().to_path_buf();
 
-    let executor =
-        KernelToolExecutor::new(stub_router(), agent_id, workspace).with_parallel();
+    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_parallel();
 
     let provider = MockProvider::new()
         .with_response(two_tool_use_response())
@@ -134,7 +133,10 @@ async fn parallel_read_tools_execute_concurrently() {
         serde_json::json!({"type": "object"}),
     )];
 
-    let result = agent.run(&provider, &executor, messages, tools).await.unwrap();
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
 
     assert_eq!(result.iterations, 2, "should run tool-use + final turn");
     assert!(result.total_text.contains("done"));
@@ -146,8 +148,7 @@ async fn parallel_tools_preserve_result_order() {
     let tmp = tempfile::tempdir().unwrap();
     let workspace = tmp.path().to_path_buf();
 
-    let executor =
-        KernelToolExecutor::new(stub_router(), agent_id, workspace).with_parallel();
+    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_parallel();
 
     let calls = vec![
         make_tool_call_info("t1", "read_file"),
@@ -200,8 +201,7 @@ async fn policy_deny_returns_error_result() {
         PolicyConfig::default().with_tool_permission("delete_file", PermissionLevel::Deny);
     let policy = Policy::new(policy_config);
 
-    let executor =
-        KernelToolExecutor::new(stub_router(), agent_id, workspace).with_policy(policy);
+    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_policy(policy);
 
     let calls = vec![make_tool_call_info("t1", "delete_file")];
     let results = executor.execute(&calls).await;
@@ -225,8 +225,7 @@ async fn policy_deny_does_not_block_allowed_tools() {
         PolicyConfig::default().with_tool_permission("delete_file", PermissionLevel::Deny);
     let policy = Policy::new(policy_config);
 
-    let executor =
-        KernelToolExecutor::new(stub_router(), agent_id, workspace).with_policy(policy);
+    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_policy(policy);
 
     let calls = vec![make_tool_call_info("t1", "read_file")];
     let results = executor.execute(&calls).await;

@@ -388,16 +388,8 @@ async fn pipeline_every_tool_emits_result_event() {
         .with_response(MockResponse {
             stop_reason: StopReason::ToolUse,
             content: vec![
-                ContentBlock::tool_use(
-                    "t1",
-                    "read_file",
-                    serde_json::json!({"path": "a.txt"}),
-                ),
-                ContentBlock::tool_use(
-                    "t2",
-                    "read_file",
-                    serde_json::json!({"path": "b.txt"}),
-                ),
+                ContentBlock::tool_use("t1", "read_file", serde_json::json!({"path": "a.txt"})),
+                ContentBlock::tool_use("t2", "read_file", serde_json::json!({"path": "b.txt"})),
             ],
             usage: Usage::new(100, 50),
         })
