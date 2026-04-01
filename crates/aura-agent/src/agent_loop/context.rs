@@ -13,6 +13,16 @@ use crate::sanitize;
 use super::streaming;
 use super::{AgentLoopConfig, LoopState};
 
+fn reserved_output_tokens(config: &AgentLoopConfig, max_ctx: u64) -> u64 {
+    u64::from(config.max_tokens).min(max_ctx)
+}
+
+fn compaction_pressure_tokens(config: &AgentLoopConfig, estimated_tokens: u64, max_ctx: u64) -> u64 {
+    estimated_tokens
+        .saturating_add(reserved_output_tokens(config, max_ctx))
+        .min(max_ctx)
+}
+
 /// Sanitize messages and apply compaction if context utilization is high.
 #[allow(clippy::cast_precision_loss)]
 pub(super) fn compact_if_needed(config: &AgentLoopConfig, state: &mut LoopState) {
@@ -30,7 +40,8 @@ pub(super) fn compact_if_needed(config: &AgentLoopConfig, state: &mut LoopState)
         .unwrap_or_default()
         .max(heuristic_tokens);
     state.result.estimated_context_tokens = estimated_tokens;
-    let utilization = estimated_tokens as f64 / max_ctx as f64;
+    let pressure_tokens = compaction_pressure_tokens(config, estimated_tokens, max_ctx);
+    let utilization = pressure_tokens as f64 / max_ctx as f64;
 
     if let Some(tier) = compaction::select_tier(utilization) {
         debug!(utilization, "Compacting context");
@@ -126,4 +137,37 @@ pub(super) fn should_stop_for_budget(
         total_tokens,
         config.credit_budget,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compaction_pressure_tokens, reserved_output_tokens};
+    use crate::agent_loop::AgentLoopConfig;
+
+    #[test]
+    fn reserves_max_tokens_for_output_headroom() {
+        let config = AgentLoopConfig {
+            max_tokens: 16_384,
+            ..AgentLoopConfig::default()
+        };
+        assert_eq!(reserved_output_tokens(&config, 200_000), 16_384);
+    }
+
+    #[test]
+    fn reserve_is_capped_by_context_window() {
+        let config = AgentLoopConfig {
+            max_tokens: 16_384,
+            ..AgentLoopConfig::default()
+        };
+        assert_eq!(reserved_output_tokens(&config, 8_000), 8_000);
+    }
+
+    #[test]
+    fn pressure_tokens_include_output_reserve() {
+        let config = AgentLoopConfig {
+            max_tokens: 20_000,
+            ..AgentLoopConfig::default()
+        };
+        assert_eq!(compaction_pressure_tokens(&config, 60_000, 100_000), 80_000);
+    }
 }
