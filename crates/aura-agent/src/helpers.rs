@@ -113,10 +113,10 @@ pub fn infer_file_changes(
     let existed_before = base_path.map(|base| base.join(path).exists());
     let kind = match tool_name {
         "write_file" => {
-            if existed_before.unwrap_or(false) {
-                FileChangeKind::Modify
-            } else {
+            if matches!(existed_before, Some(false)) {
                 FileChangeKind::Create
+            } else {
+                FileChangeKind::Modify
             }
         }
         "edit_file" => FileChangeKind::Modify,
@@ -254,6 +254,14 @@ mod tests {
 
         let input = serde_json::json!({"path": "src/lib.rs"});
         let changes = infer_file_changes("write_file", &input, Some(dir.path()));
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0].kind, FileChangeKind::Modify));
+    }
+
+    #[test]
+    fn test_infer_file_changes_write_defaults_to_modify_without_base_path() {
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let changes = infer_file_changes("write_file", &input, None);
         assert_eq!(changes.len(), 1);
         assert!(matches!(changes[0].kind, FileChangeKind::Modify));
     }
