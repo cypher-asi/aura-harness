@@ -8,7 +8,9 @@ use crate::budget::ExplorationState;
 use crate::build;
 use crate::helpers;
 use crate::read_guard::ReadGuardState;
-use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
+use crate::types::{
+    AgentLoopResult, AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult,
+};
 use tracing::warn;
 
 use super::{AgentLoop, AgentLoopConfig, LoopState};
@@ -51,6 +53,7 @@ impl AgentLoop {
         let any_write_success = track_tool_effects(
             &to_execute,
             &executed,
+            &mut state.result,
             &mut state.blocking_ctx,
             &mut state.read_guard,
             &mut state.exploration_state,
@@ -115,6 +118,7 @@ fn partition_blocked(
                 content: format!("[BLOCKED] {msg}"),
                 is_error: true,
                 stop_loop: false,
+                file_changes: Vec::new(),
             });
         } else {
             to_execute.push(tool.clone());
@@ -127,6 +131,7 @@ fn partition_blocked(
 fn track_tool_effects(
     to_execute: &[ToolCallInfo],
     executed: &[ToolCallResult],
+    result: &mut AgentLoopResult,
     blocking_ctx: &mut BlockingContext,
     read_guard: &mut ReadGuardState,
     exploration_state: &mut ExplorationState,
@@ -158,6 +163,9 @@ fn track_tool_effects(
                     blocking_ctx.on_write_success(path, read_guard);
                     any_write_success = true;
                     *had_any_write = true;
+                    for change in &exec_result.file_changes {
+                        result.record_file_change(change.clone());
+                    }
                 }
             } else if exec_result.is_error {
                 blocking_ctx.on_malformed_write();

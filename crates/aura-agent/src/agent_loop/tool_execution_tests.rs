@@ -13,12 +13,14 @@ fn tool_results_are_emitted_before_context_texts() {
             content: "ok 1".to_string(),
             is_error: false,
             stop_loop: false,
+            file_changes: Vec::new(),
         },
         ToolCallResult {
             tool_use_id: "tool_2".to_string(),
             content: "ok 2".to_string(),
             is_error: true,
             stop_loop: false,
+            file_changes: Vec::new(),
         },
     ];
     let context = vec!["Build check failed".to_string()];

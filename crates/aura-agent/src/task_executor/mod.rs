@@ -131,6 +131,7 @@ impl AgentToolExecutor for TaskToolExecutor {
                         .to_string(),
                     is_error: true,
                     stop_loop: false,
+                    file_changes: Vec::new(),
                 });
                 continue;
             }

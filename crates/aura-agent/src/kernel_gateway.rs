@@ -5,6 +5,7 @@
 //! - [`KernelModelGateway`] implements [`ModelProvider`] by routing completions
 //!   through [`Kernel::reason`] and [`Kernel::reason_streaming`].
 
+use crate::helpers;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
 use aura_kernel::Kernel;
@@ -50,6 +51,15 @@ impl AgentToolExecutor for KernelToolGateway {
                             content: output.content,
                             is_error: output.is_error,
                             stop_loop: false,
+                            file_changes: if output.is_error {
+                                Vec::new()
+                            } else {
+                                helpers::infer_file_changes(
+                                    &tool_calls[i].name,
+                                    &tool_calls[i].input,
+                                    None,
+                                )
+                            },
                         }
                     } else {
                         let tc = &tool_calls[i];
@@ -104,11 +114,10 @@ impl ModelProvider for KernelModelGateway {
         &self,
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
-        let (handle, stream) = self
-            .kernel
-            .reason_streaming(request)
-            .await
-            .map_err(|e| ReasonerError::Internal(format!("kernel reason_streaming error: {e}")))?;
+        let (handle, stream) =
+            self.kernel.reason_streaming(request).await.map_err(|e| {
+                ReasonerError::Internal(format!("kernel reason_streaming error: {e}"))
+            })?;
 
         // TODO: In Phase 5+, wrap the stream to auto-record via the handle.
         drop(handle);

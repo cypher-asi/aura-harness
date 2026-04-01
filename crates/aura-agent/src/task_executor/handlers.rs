@@ -76,6 +76,7 @@ impl TaskToolExecutor {
                 content: error_prompt,
                 is_error: true,
                 stop_loop: false,
+                file_changes: Vec::new(),
             });
             return;
         }
@@ -86,6 +87,7 @@ impl TaskToolExecutor {
                 content: review_prompt,
                 is_error: true,
                 stop_loop: false,
+                file_changes: Vec::new(),
             });
             return;
         }
@@ -96,6 +98,7 @@ impl TaskToolExecutor {
                 content: no_write_prompt,
                 is_error: true,
                 stop_loop: false,
+                file_changes: Vec::new(),
             });
             return;
         }
@@ -106,6 +109,7 @@ impl TaskToolExecutor {
                 content: stub_prompt,
                 is_error: true,
                 stop_loop: false,
+                file_changes: Vec::new(),
             });
         } else {
             results.push(ToolCallResult {
@@ -113,6 +117,7 @@ impl TaskToolExecutor {
                 content: r#"{"status":"completed"}"#.to_string(),
                 is_error: false,
                 stop_loop: true,
+                file_changes: Vec::new(),
             });
             *stop = true;
         }
@@ -274,6 +279,7 @@ impl TaskToolExecutor {
                     ),
                     is_error: false,
                     stop_loop: false,
+                    file_changes: Vec::new(),
                 });
             }
             Err(reason) => {
@@ -282,6 +288,7 @@ impl TaskToolExecutor {
                     content: format!("Plan rejected: {reason}. Revise and resubmit."),
                     is_error: true,
                     stop_loop: false,
+                    file_changes: Vec::new(),
                 });
             }
         }
@@ -293,6 +300,7 @@ impl TaskToolExecutor {
             content: self.task_context.clone(),
             is_error: false,
             stop_loop: false,
+            file_changes: Vec::new(),
         });
     }
 

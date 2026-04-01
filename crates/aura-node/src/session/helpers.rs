@@ -15,6 +15,18 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
+fn summarize_files_changed(loop_result: &AgentLoopResult) -> FilesChanged {
+    let mut files_changed = FilesChanged::default();
+    for change in &loop_result.file_changes {
+        match change.kind {
+            aura_agent::FileChangeKind::Create => files_changed.created.push(change.path.clone()),
+            aura_agent::FileChangeKind::Modify => files_changed.modified.push(change.path.clone()),
+            aura_agent::FileChangeKind::Delete => files_changed.deleted.push(change.path.clone()),
+        }
+    }
+    files_changed
+}
+
 pub(super) fn handle_session_init(
     session: &mut Session,
     init: SessionInit,
@@ -251,6 +263,7 @@ pub(super) fn apply_turn_result(
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     session.messages.clone_from(&loop_result.messages);
+    let files_changed = summarize_files_changed(loop_result);
 
     let input_tokens = loop_result.total_input_tokens;
     let output_tokens = loop_result.total_output_tokens;
@@ -297,7 +310,7 @@ pub(super) fn apply_turn_result(
             model: session.model.clone(),
             provider: session.provider_name.clone(),
         },
-        files_changed: FilesChanged::default(),
+        files_changed,
     }));
 
     info!(
@@ -307,4 +320,34 @@ pub(super) fn apply_turn_result(
         history_len = session.messages.len(),
         "Turn complete"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_files_changed;
+    use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
+
+    #[test]
+    fn summarize_files_changed_groups_by_operation() {
+        let mut loop_result = AgentLoopResult::default();
+        loop_result.file_changes = vec![
+            FileChange {
+                path: "src/new.rs".into(),
+                kind: FileChangeKind::Create,
+            },
+            FileChange {
+                path: "src/lib.rs".into(),
+                kind: FileChangeKind::Modify,
+            },
+            FileChange {
+                path: "src/old.rs".into(),
+                kind: FileChangeKind::Delete,
+            },
+        ];
+
+        let summary = summarize_files_changed(&loop_result);
+        assert_eq!(summary.created, vec!["src/new.rs"]);
+        assert_eq!(summary.modified, vec!["src/lib.rs"]);
+        assert_eq!(summary.deleted, vec!["src/old.rs"]);
+    }
 }

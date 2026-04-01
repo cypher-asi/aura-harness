@@ -234,6 +234,7 @@ fn split_cached(
                     content: hit.clone(),
                     is_error: false,
                     stop_loop: false,
+                    file_changes: Vec::new(),
                 });
                 continue;
             }

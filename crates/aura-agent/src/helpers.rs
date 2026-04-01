@@ -1,6 +1,9 @@
 //! Helper functions for the agent loop.
 
 use aura_reasoner::{ContentBlock, Message, Role};
+use std::path::Path;
+
+use crate::types::{FileChange, FileChangeKind};
 
 /// Append a warning as a text block to the last user message, or push a new
 /// user message if the last message isn't a user message.
@@ -94,6 +97,42 @@ pub fn summarize_write_input(
         }
         _ => None,
     }
+}
+
+/// Infer file mutations for a successful write tool call.
+#[must_use]
+pub fn infer_file_changes(
+    tool_name: &str,
+    input: &serde_json::Value,
+    base_path: Option<&Path>,
+) -> Vec<FileChange> {
+    let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+        return Vec::new();
+    };
+
+    let existed_before = base_path.map(|base| base.join(path).exists());
+    let kind = match tool_name {
+        "write_file" => {
+            if existed_before.unwrap_or(false) {
+                FileChangeKind::Modify
+            } else {
+                FileChangeKind::Create
+            }
+        }
+        "edit_file" => FileChangeKind::Modify,
+        "delete_file" => {
+            if matches!(existed_before, Some(false)) {
+                return Vec::new();
+            }
+            FileChangeKind::Delete
+        }
+        _ => return Vec::new(),
+    };
+
+    vec![FileChange {
+        path: path.to_string(),
+        kind,
+    }]
 }
 
 #[cfg(test)]
@@ -194,5 +233,28 @@ mod tests {
         assert!(summarize_write_input("search_code", &input).is_none());
         assert!(summarize_write_input("run_command", &input).is_none());
         assert!(summarize_write_input("totally_unknown", &input).is_none());
+    }
+
+    #[test]
+    fn test_infer_file_changes_write_create_without_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = serde_json::json!({"path": "src/new.rs"});
+        let changes = infer_file_changes("write_file", &input, Some(dir.path()));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, "src/new.rs");
+        assert!(matches!(changes[0].kind, FileChangeKind::Create));
+    }
+
+    #[test]
+    fn test_infer_file_changes_write_modify_with_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("src/lib.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "old").unwrap();
+
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let changes = infer_file_changes("write_file", &input, Some(dir.path()));
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0].kind, FileChangeKind::Modify));
     }
 }
