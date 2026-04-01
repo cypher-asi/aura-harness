@@ -244,4 +244,27 @@ async fn test_compaction_uses_api_input_tokens() {
 
     assert_eq!(result.iterations, 2);
     assert_eq!(result.total_input_tokens, 180_000 + 185_000);
+    assert_eq!(result.estimated_context_tokens, 185_050);
+}
+
+#[tokio::test]
+async fn test_context_estimate_includes_cache_tokens() {
+    let config = AgentLoopConfig::default();
+    let agent = AgentLoop::new(config);
+    let executor = MockExecutor { results: vec![] };
+    let provider = MockProvider::new().with_response(MockResponse {
+        stop_reason: StopReason::EndTurn,
+        content: vec![ContentBlock::text("Hello!")],
+        usage: Usage::new(100_000, 2_000).with_cache(Some(5_000), Some(7_000)),
+    });
+    let messages = vec![Message::user("hello")];
+    let tools = vec![];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(result.iterations, 1);
+    assert_eq!(result.estimated_context_tokens, 114_000);
 }

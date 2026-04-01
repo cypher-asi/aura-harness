@@ -22,18 +22,25 @@ pub(super) fn compact_if_needed(config: &AgentLoopConfig, state: &mut LoopState)
         return;
     };
 
-    let utilization = if let Some(api_tokens) = state.last_input_tokens {
-        api_tokens as f64 / max_ctx as f64
-    } else {
-        let char_count = compaction::estimate_message_chars(&state.messages);
-        let estimated_tokens = char_count / CHARS_PER_TOKEN;
-        estimated_tokens as f64 / max_ctx as f64
-    };
+    let char_count = compaction::estimate_message_chars(&state.messages);
+    #[allow(clippy::cast_possible_truncation)]
+    let heuristic_tokens = (char_count / CHARS_PER_TOKEN) as u64;
+    let estimated_tokens = state
+        .last_context_tokens_estimate
+        .unwrap_or_default()
+        .max(heuristic_tokens);
+    state.result.estimated_context_tokens = estimated_tokens;
+    let utilization = estimated_tokens as f64 / max_ctx as f64;
 
     if let Some(tier) = compaction::select_tier(utilization) {
         debug!(utilization, "Compacting context");
         compaction::compact_older_messages(&mut state.messages, &tier);
         sanitize::validate_and_repair(&mut state.messages);
+        #[allow(clippy::cast_possible_truncation)]
+        let compacted_tokens =
+            (compaction::estimate_message_chars(&state.messages) / CHARS_PER_TOKEN) as u64;
+        state.last_context_tokens_estimate = Some(compacted_tokens);
+        state.result.estimated_context_tokens = compacted_tokens;
     }
 }
 

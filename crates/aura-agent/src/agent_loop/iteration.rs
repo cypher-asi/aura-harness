@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::compaction;
+use crate::constants::CHARS_PER_TOKEN;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::sanitize;
@@ -130,7 +131,6 @@ pub(super) fn accumulate_response(state: &mut LoopState, response: &ModelRespons
         .unwrap_or_default();
     state.result.total_cache_read_input_tokens +=
         response.usage.cache_read_input_tokens.unwrap_or_default();
-    state.last_input_tokens = Some(response.usage.input_tokens);
 
     for block in &response.message.content {
         match block {
@@ -144,6 +144,24 @@ pub(super) fn accumulate_response(state: &mut LoopState, response: &ModelRespons
 
     state.messages.push(response.message.clone());
     summarize_write_inputs(&mut state.messages);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let message_tokens =
+        (compaction::estimate_message_chars(&state.messages) / CHARS_PER_TOKEN) as u64;
+    let provider_tokens = response
+        .usage
+        .input_tokens
+        .saturating_add(response.usage.output_tokens)
+        .saturating_add(
+            response
+                .usage
+                .cache_creation_input_tokens
+                .unwrap_or_default(),
+        )
+        .saturating_add(response.usage.cache_read_input_tokens.unwrap_or_default());
+    let estimated_context_tokens = provider_tokens.max(message_tokens);
+    state.last_context_tokens_estimate = Some(estimated_context_tokens);
+    state.result.estimated_context_tokens = estimated_context_tokens;
 }
 
 /// Replace large write-tool inputs with summaries to save context space.

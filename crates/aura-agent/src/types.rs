@@ -205,6 +205,8 @@ pub struct AgentLoopResult {
     pub total_cache_creation_input_tokens: u64,
     /// Total cache read input tokens used across all iterations.
     pub total_cache_read_input_tokens: u64,
+    /// Best-effort estimate of the current occupied context window in tokens.
+    pub estimated_context_tokens: u64,
     /// Number of iterations completed.
     pub iterations: usize,
     /// Final message history.

@@ -34,6 +34,8 @@ pub struct Session {
     pub system_prompt: String,
     /// Model identifier.
     pub model: String,
+    /// Provider identifier for this session.
+    pub provider_name: String,
     /// Max tokens per response.
     pub max_tokens: u32,
     /// Sampling temperature.
@@ -87,6 +89,7 @@ impl Session {
             agent_id: AgentId::generate(),
             system_prompt: String::new(),
             model: aura_agent::DEFAULT_MODEL.to_string(),
+            provider_name: String::new(),
             max_tokens: 16384,
             temperature: None,
             max_turns: 25,
@@ -169,10 +172,7 @@ impl Session {
                 let normalized = lexical_normalize(&candidate);
                 let normalized_base = lexical_normalize(base);
                 if !normalized.starts_with(&normalized_base) {
-                    return Err(format!(
-                        "project_path must be under {}",
-                        base.display()
-                    ));
+                    return Err(format!("project_path must be under {}", base.display()));
                 }
             }
             self.project_path = Some(candidate);
@@ -319,7 +319,10 @@ mod tests {
         let mut session = test_session(None);
         let init = init_with_project_path("/any/absolute/path");
         assert!(session.apply_init(init).is_ok());
-        assert_eq!(session.project_path.unwrap().to_str().unwrap(), "/any/absolute/path");
+        assert_eq!(
+            session.project_path.unwrap().to_str().unwrap(),
+            "/any/absolute/path"
+        );
     }
 
     #[test]

@@ -260,6 +260,7 @@ mod tests {
             usage: SessionUsage {
                 input_tokens: 100,
                 output_tokens: 50,
+                estimated_context_tokens: 150,
                 cache_creation_input_tokens: 25,
                 cache_read_input_tokens: 10,
                 cumulative_input_tokens: 200,
@@ -282,6 +283,7 @@ mod tests {
         assert_eq!(json["stop_reason"], "end_turn");
         assert_eq!(json["usage"]["input_tokens"], 100);
         assert_eq!(json["usage"]["output_tokens"], 50);
+        assert_eq!(json["usage"]["estimated_context_tokens"], 150);
         assert_eq!(json["usage"]["cache_creation_input_tokens"], 25);
         assert_eq!(json["usage"]["cache_read_input_tokens"], 10);
         assert_eq!(json["usage"]["cumulative_cache_creation_input_tokens"], 50);
@@ -328,6 +330,7 @@ mod tests {
         let usage = SessionUsage::default();
         assert_eq!(usage.input_tokens, 0);
         assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.estimated_context_tokens, 0);
         assert_eq!(usage.cumulative_input_tokens, 0);
         assert_eq!(usage.cumulative_output_tokens, 0);
         assert!((usage.context_utilization - 0.0).abs() < f32::EPSILON);

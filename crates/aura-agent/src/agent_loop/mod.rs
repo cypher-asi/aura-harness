@@ -268,7 +268,7 @@ pub struct LoopState {
     pub(crate) exploration_compaction_done: bool,
     pub(crate) build_cooldown: usize,
     pub(crate) thinking_budget: u32,
-    pub(crate) last_input_tokens: Option<u64>,
+    pub(crate) last_context_tokens_estimate: Option<u64>,
     pub(crate) messages: Vec<Message>,
     pub(crate) build_baseline: Option<BuildBaseline>,
     /// Consecutive iterations where every tool call returned an error.
@@ -290,7 +290,7 @@ impl LoopState {
             exploration_compaction_done: false,
             build_cooldown: 0,
             thinking_budget: config.max_tokens,
-            last_input_tokens: None,
+            last_context_tokens_estimate: None,
             messages,
             build_baseline: None,
             consecutive_all_error_iterations: 0,

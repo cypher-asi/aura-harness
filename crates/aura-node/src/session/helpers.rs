@@ -101,7 +101,10 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
     KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
-pub(super) fn build_kernel(session: &Session, ctx: &WsContext) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
+pub(super) fn build_kernel(
+    session: &Session,
+    ctx: &WsContext,
+) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
         Arc::new(DomainToolExecutor::with_session_context(
@@ -251,6 +254,7 @@ pub(super) fn apply_turn_result(
 
     let input_tokens = loop_result.total_input_tokens;
     let output_tokens = loop_result.total_output_tokens;
+    let estimated_context_tokens = loop_result.estimated_context_tokens;
     let cache_creation_input_tokens = loop_result.total_cache_creation_input_tokens;
     let cache_read_input_tokens = loop_result.total_cache_read_input_tokens;
     session.cumulative_input_tokens += input_tokens;
@@ -270,7 +274,7 @@ pub(super) fn apply_turn_result(
 
     let context_utilization = if session.context_window_tokens > 0 {
         #[allow(clippy::cast_precision_loss)]
-        let ratio = input_tokens as f32 / session.context_window_tokens as f32;
+        let ratio = estimated_context_tokens as f32 / session.context_window_tokens as f32;
         ratio.min(1.0)
     } else {
         0.0
@@ -282,6 +286,7 @@ pub(super) fn apply_turn_result(
         usage: SessionUsage {
             input_tokens,
             output_tokens,
+            estimated_context_tokens,
             cache_creation_input_tokens,
             cache_read_input_tokens,
             cumulative_input_tokens: session.cumulative_input_tokens,
@@ -290,7 +295,7 @@ pub(super) fn apply_turn_result(
             cumulative_cache_read_input_tokens: session.cumulative_cache_read_input_tokens,
             context_utilization,
             model: session.model.clone(),
-            provider: String::new(),
+            provider: session.provider_name.clone(),
         },
         files_changed: FilesChanged::default(),
     }));
