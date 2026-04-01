@@ -251,8 +251,12 @@ pub(super) fn apply_turn_result(
 
     let input_tokens = loop_result.total_input_tokens;
     let output_tokens = loop_result.total_output_tokens;
+    let cache_creation_input_tokens = loop_result.total_cache_creation_input_tokens;
+    let cache_read_input_tokens = loop_result.total_cache_read_input_tokens;
     session.cumulative_input_tokens += input_tokens;
     session.cumulative_output_tokens += output_tokens;
+    session.cumulative_cache_creation_input_tokens += cache_creation_input_tokens;
+    session.cumulative_cache_read_input_tokens += cache_read_input_tokens;
 
     let stop_reason = if loop_result.timed_out {
         "cancelled"
@@ -278,8 +282,12 @@ pub(super) fn apply_turn_result(
         usage: SessionUsage {
             input_tokens,
             output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
             cumulative_input_tokens: session.cumulative_input_tokens,
             cumulative_output_tokens: session.cumulative_output_tokens,
+            cumulative_cache_creation_input_tokens: session.cumulative_cache_creation_input_tokens,
+            cumulative_cache_read_input_tokens: session.cumulative_cache_read_input_tokens,
             context_utilization,
             model: session.model.clone(),
             provider: String::new(),

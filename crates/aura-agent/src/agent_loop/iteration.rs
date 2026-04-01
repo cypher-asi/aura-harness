@@ -124,6 +124,12 @@ impl AgentLoop {
 pub(super) fn accumulate_response(state: &mut LoopState, response: &ModelResponse) {
     state.result.total_input_tokens += response.usage.input_tokens;
     state.result.total_output_tokens += response.usage.output_tokens;
+    state.result.total_cache_creation_input_tokens += response
+        .usage
+        .cache_creation_input_tokens
+        .unwrap_or_default();
+    state.result.total_cache_read_input_tokens +=
+        response.usage.cache_read_input_tokens.unwrap_or_default();
     state.last_input_tokens = Some(response.usage.input_tokens);
 
     for block in &response.message.content {

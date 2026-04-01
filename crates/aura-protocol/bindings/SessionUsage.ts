@@ -3,7 +3,7 @@
 /**
  * Token usage information for a session.
  */
-export type SessionUsage = { input_tokens: bigint, output_tokens: bigint, cumulative_input_tokens: bigint, cumulative_output_tokens: bigint, 
+export type SessionUsage = { input_tokens: bigint, output_tokens: bigint, cache_creation_input_tokens: bigint, cache_read_input_tokens: bigint, cumulative_input_tokens: bigint, cumulative_output_tokens: bigint, cumulative_cache_creation_input_tokens: bigint, cumulative_cache_read_input_tokens: bigint, 
 /**
  * Fraction of the model's context window consumed (0.0–1.0).
  */

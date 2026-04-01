@@ -48,6 +48,10 @@ pub struct Session {
     pub cumulative_input_tokens: u64,
     /// Cumulative output tokens across all turns.
     pub cumulative_output_tokens: u64,
+    /// Cumulative cache creation input tokens across all turns.
+    pub cumulative_cache_creation_input_tokens: u64,
+    /// Cumulative cache read input tokens across all turns.
+    pub cumulative_cache_read_input_tokens: u64,
     /// Workspace directory for this session (sandboxed fallback).
     pub workspace: PathBuf,
     /// Base directory that workspace must reside under.
@@ -90,6 +94,8 @@ impl Session {
             messages: Vec::new(),
             cumulative_input_tokens: 0,
             cumulative_output_tokens: 0,
+            cumulative_cache_creation_input_tokens: 0,
+            cumulative_cache_read_input_tokens: 0,
             workspace: default_workspace.clone(),
             workspace_base: default_workspace,
             project_path: None,

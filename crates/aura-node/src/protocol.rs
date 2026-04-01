@@ -260,8 +260,12 @@ mod tests {
             usage: SessionUsage {
                 input_tokens: 100,
                 output_tokens: 50,
+                cache_creation_input_tokens: 25,
+                cache_read_input_tokens: 10,
                 cumulative_input_tokens: 200,
                 cumulative_output_tokens: 100,
+                cumulative_cache_creation_input_tokens: 50,
+                cumulative_cache_read_input_tokens: 20,
                 context_utilization: 0.5,
                 model: aura_agent::DEFAULT_MODEL.to_string(),
                 provider: "anthropic".to_string(),
@@ -278,6 +282,10 @@ mod tests {
         assert_eq!(json["stop_reason"], "end_turn");
         assert_eq!(json["usage"]["input_tokens"], 100);
         assert_eq!(json["usage"]["output_tokens"], 50);
+        assert_eq!(json["usage"]["cache_creation_input_tokens"], 25);
+        assert_eq!(json["usage"]["cache_read_input_tokens"], 10);
+        assert_eq!(json["usage"]["cumulative_cache_creation_input_tokens"], 50);
+        assert_eq!(json["usage"]["cumulative_cache_read_input_tokens"], 20);
         assert_eq!(json["usage"]["model"], aura_agent::DEFAULT_MODEL);
         assert_eq!(json["files_changed"]["created"][0], "new.txt");
         assert_eq!(json["files_changed"]["modified"][0], "old.txt");
