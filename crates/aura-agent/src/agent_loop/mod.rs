@@ -286,11 +286,11 @@ impl AgentLoop {
         let recovery_steps = [
             (
                 crate::compaction::CompactionConfig::aggressive(),
-                "Context limit reached; compacting older context and retrying.",
+                "Context limit reached; compacting older context, trimming response budget, and retrying.",
             ),
             (
                 crate::compaction::CompactionConfig::micro(),
-                "Context is still too large; applying emergency compaction and retrying.",
+                "Context is still too large; applying emergency compaction, trimming response budget again, and retrying.",
             ),
         ];
         let mut last_error = initial_error;
@@ -301,6 +301,8 @@ impl AgentLoop {
                 continue;
             }
 
+            state.thinking_budget =
+                (state.thinking_budget / 2).max(self.config.thinking_min_budget);
             streaming::emit(event_tx, AgentLoopEvent::Warning(warning.to_string()));
 
             let request = state.build_request(&self.config, tools, iteration);

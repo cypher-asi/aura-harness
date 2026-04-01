@@ -5,6 +5,7 @@ use aura_reasoner::{
     ProviderTrace, ReasonerError, StopReason, ToolDefinition, Usage,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 use super::{AgentLoop, AgentLoopConfig};
@@ -32,6 +33,7 @@ impl AgentToolExecutor for MockExecutor {
 struct OverflowThenSuccessProvider {
     failures_before_success: usize,
     call_count: AtomicUsize,
+    seen_max_tokens: Mutex<Vec<u32>>,
 }
 
 #[async_trait::async_trait]
@@ -40,7 +42,11 @@ impl ModelProvider for OverflowThenSuccessProvider {
         "overflow-then-success"
     }
 
-    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        self.seen_max_tokens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(request.max_tokens);
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call < self.failures_before_success {
             return Err(ReasonerError::Api {
@@ -317,6 +323,7 @@ async fn test_prompt_overflow_retries_after_compaction() {
     let provider = OverflowThenSuccessProvider {
         failures_before_success: 1,
         call_count: AtomicUsize::new(0),
+        seen_max_tokens: Mutex::new(Vec::new()),
     };
     let large = "history ".repeat(1_200);
     let messages = vec![
@@ -349,6 +356,7 @@ async fn test_prompt_overflow_fails_fast_when_compaction_cannot_help() {
     let provider = OverflowThenSuccessProvider {
         failures_before_success: usize::MAX,
         call_count: AtomicUsize::new(0),
+        seen_max_tokens: Mutex::new(Vec::new()),
     };
     let messages = vec![Message::user("hello")];
 
@@ -373,6 +381,7 @@ async fn test_prompt_overflow_uses_emergency_compaction_when_aggressive_cannot_h
     let provider = OverflowThenSuccessProvider {
         failures_before_success: 1,
         call_count: AtomicUsize::new(0),
+        seen_max_tokens: Mutex::new(Vec::new()),
     };
     let large = "history ".repeat(1_200);
     let messages = vec![
@@ -402,4 +411,43 @@ async fn test_prompt_overflow_uses_emergency_compaction_when_aggressive_cannot_h
     assert!(warnings
         .iter()
         .any(|msg| msg.contains("emergency compaction")));
+}
+
+#[tokio::test]
+async fn test_prompt_overflow_retry_reduces_response_budget() {
+    let config = AgentLoopConfig {
+        max_context_tokens: Some(20_000),
+        max_tokens: 16_384,
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let executor = MockExecutor { results: vec![] };
+    let provider = OverflowThenSuccessProvider {
+        failures_before_success: 1,
+        call_count: AtomicUsize::new(0),
+        seen_max_tokens: Mutex::new(Vec::new()),
+    };
+    let large = "history ".repeat(1_200);
+    let messages = vec![
+        Message::user(large.clone()),
+        Message::assistant(large.clone()),
+        Message::user(large.clone()),
+        Message::assistant(large.clone()),
+        Message::user("Please continue"),
+    ];
+
+    let result = agent
+        .run(&provider, &executor, messages, vec![])
+        .await
+        .unwrap();
+    let seen_max_tokens = provider
+        .seen_max_tokens
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+
+    assert!(result.llm_error.is_none());
+    assert_eq!(seen_max_tokens.len(), 2);
+    assert!(seen_max_tokens[1] < seen_max_tokens[0]);
+    assert_eq!(seen_max_tokens[1], 8_192);
 }
