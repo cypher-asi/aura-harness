@@ -1,10 +1,14 @@
 //! Core agent loop tests: config defaults, simple runs, error handling, max-tokens.
 
 use aura_reasoner::{
-    ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition, Usage,
+    ContentBlock, Message, MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse,
+    ProviderTrace, ReasonerError, StopReason, ToolDefinition, Usage,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::mpsc;
 
 use super::{AgentLoop, AgentLoopConfig};
+use crate::events::AgentLoopEvent;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 
 struct MockExecutor {
@@ -22,6 +26,39 @@ impl AgentToolExecutor for MockExecutor {
                 ..r.clone()
             })
             .collect()
+    }
+}
+
+struct OverflowThenSuccessProvider {
+    failures_before_success: usize,
+    call_count: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for OverflowThenSuccessProvider {
+    fn name(&self) -> &'static str {
+        "overflow-then-success"
+    }
+
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        let call = self.call_count.fetch_add(1, Ordering::SeqCst);
+        if call < self.failures_before_success {
+            return Err(ReasonerError::Api {
+                status: 400,
+                message: "input length and max_tokens exceed context limit".to_string(),
+            });
+        }
+
+        Ok(ModelResponse::new(
+            StopReason::EndTurn,
+            Message::assistant("Recovered after overflow."),
+            Usage::new(400, 120),
+            ProviderTrace::new("overflow-mock", 0),
+        ))
+    }
+
+    async fn health_check(&self) -> bool {
+        true
     }
 }
 
@@ -267,4 +304,102 @@ async fn test_context_estimate_includes_cache_tokens() {
 
     assert_eq!(result.iterations, 1);
     assert_eq!(result.estimated_context_tokens, 114_000);
+}
+
+#[tokio::test]
+async fn test_prompt_overflow_retries_after_compaction() {
+    let config = AgentLoopConfig {
+        max_context_tokens: Some(20_000),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let executor = MockExecutor { results: vec![] };
+    let provider = OverflowThenSuccessProvider {
+        failures_before_success: 1,
+        call_count: AtomicUsize::new(0),
+    };
+    let large = "history ".repeat(1_200);
+    let messages = vec![
+        Message::user(large.clone()),
+        Message::assistant(large.clone()),
+        Message::user(large.clone()),
+        Message::assistant(large.clone()),
+        Message::user("Please continue"),
+    ];
+
+    let result = agent
+        .run(&provider, &executor, messages, vec![])
+        .await
+        .unwrap();
+
+    assert_eq!(provider.call_count.load(Ordering::SeqCst), 2);
+    assert!(result.llm_error.is_none());
+    assert_eq!(result.iterations, 1);
+    assert!(result.total_text.contains("Recovered after overflow."));
+}
+
+#[tokio::test]
+async fn test_prompt_overflow_fails_fast_when_compaction_cannot_help() {
+    let config = AgentLoopConfig {
+        max_context_tokens: Some(20_000),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let executor = MockExecutor { results: vec![] };
+    let provider = OverflowThenSuccessProvider {
+        failures_before_success: usize::MAX,
+        call_count: AtomicUsize::new(0),
+    };
+    let messages = vec![Message::user("hello")];
+
+    let result = agent
+        .run(&provider, &executor, messages, vec![])
+        .await
+        .unwrap();
+
+    assert_eq!(provider.call_count.load(Ordering::SeqCst), 1);
+    assert!(result.total_text.is_empty());
+    assert!(result.llm_error.is_some());
+}
+
+#[tokio::test]
+async fn test_prompt_overflow_uses_emergency_compaction_when_aggressive_cannot_help() {
+    let config = AgentLoopConfig {
+        max_context_tokens: Some(20_000),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let executor = MockExecutor { results: vec![] };
+    let provider = OverflowThenSuccessProvider {
+        failures_before_success: 1,
+        call_count: AtomicUsize::new(0),
+    };
+    let large = "history ".repeat(1_200);
+    let messages = vec![
+        Message::user(large.clone()),
+        Message::assistant(large.clone()),
+        Message::user(large.clone()),
+        Message::assistant(large.clone()),
+        Message::user("Please continue"),
+    ];
+    let (tx, mut rx) = mpsc::channel(16);
+
+    let result = agent
+        .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
+        .await
+        .unwrap();
+
+    let mut warnings = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AgentLoopEvent::Warning(msg) = event {
+            warnings.push(msg);
+        }
+    }
+
+    assert_eq!(provider.call_count.load(Ordering::SeqCst), 2);
+    assert!(result.llm_error.is_none());
+    assert!(result.total_text.contains("Recovered after overflow."));
+    assert!(warnings
+        .iter()
+        .any(|msg| msg.contains("emergency compaction")));
 }

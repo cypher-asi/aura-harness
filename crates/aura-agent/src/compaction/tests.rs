@@ -208,3 +208,12 @@ fn test_configurable_head_tail() {
     assert!(result_micro.ends_with(&"b".repeat(3000)));
     assert!(result_micro.contains("content truncated"));
 }
+
+#[test]
+fn test_truncate_scales_oversized_head_tail_requests() {
+    let content = "c".repeat(4_000);
+    let result = truncate_content(&content, 400, Some(6_000), Some(3_000));
+
+    assert!(result.contains("content truncated"));
+    assert!(result.len() < content.len());
+}

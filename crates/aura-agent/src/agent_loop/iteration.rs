@@ -25,6 +25,7 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 /// Describes why an LLM call failed, allowing the main loop to break cleanly.
 pub(super) enum LlmCallError {
     InsufficientCredits(String),
+    PromptTooLong(String),
     Fatal(String),
 }
 
@@ -47,7 +48,7 @@ impl LlmCallError {
                     },
                 );
             }
-            Self::Fatal(msg) => {
+            Self::PromptTooLong(msg) | Self::Fatal(msg) => {
                 streaming::emit(
                     event_tx,
                     AgentLoopEvent::Error {
@@ -67,6 +68,7 @@ fn classify_reasoner_error(e: &aura_reasoner::ReasonerError) -> LlmCallError {
         aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
             LlmCallError::InsufficientCredits(msg.clone())
         }
+        other if other.is_context_overflow() => LlmCallError::PromptTooLong(other.to_string()),
         other => LlmCallError::Fatal(other.to_string()),
     }
 }
@@ -78,9 +80,31 @@ fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
     let msg = e.to_string();
     if msg.contains("402 Payment") || msg.contains("402 ") {
         LlmCallError::InsufficientCredits(msg)
+    } else if message_indicates_context_overflow(&msg) {
+        LlmCallError::PromptTooLong(msg)
     } else {
         LlmCallError::Fatal(msg)
     }
+}
+
+fn message_indicates_context_overflow(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    [
+        "prompt is too long",
+        "prompt too long",
+        "prompt too large",
+        "context length exceeded",
+        "context window exceeded",
+        "context window limit",
+        "exceeds context window",
+        "exceed the model context window",
+        "input length and max_tokens exceed context limit",
+        "requested tokens exceed the context window",
+        "request exceeds the context window",
+        "too many tokens",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 impl AgentLoop {

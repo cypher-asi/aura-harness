@@ -74,8 +74,19 @@ pub fn truncate_content(
         return content.to_string();
     }
 
-    let head = head_chars.unwrap_or(max_chars / 3);
-    let tail = tail_chars.unwrap_or(max_chars / 3);
+    let mut head = head_chars.unwrap_or(max_chars / 3);
+    let mut tail = tail_chars.unwrap_or(max_chars / 3);
+
+    if head + tail > max_chars {
+        let requested_total = head + tail;
+        if requested_total == 0 {
+            head = 0;
+            tail = 0;
+        } else {
+            head = max_chars.saturating_mul(head) / requested_total;
+            tail = max_chars.saturating_sub(head);
+        }
+    }
 
     let head = head.min(content.len());
     let tail = tail.min(content.len().saturating_sub(head));

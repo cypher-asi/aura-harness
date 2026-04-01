@@ -45,6 +45,41 @@ impl ReasonerError {
     pub const fn is_insufficient_credits(&self) -> bool {
         matches!(self, Self::InsufficientCredits(_))
     }
+
+    #[must_use]
+    pub fn is_context_overflow(&self) -> bool {
+        match self {
+            Self::Api { status, message } => {
+                *status == 413
+                    || ((*status == 400 || *status == 422)
+                        && message_indicates_context_overflow(message))
+            }
+            Self::Request(message) | Self::Parse(message) | Self::Internal(message) => {
+                message_indicates_context_overflow(message)
+            }
+            Self::RateLimited(_) | Self::InsufficientCredits(_) | Self::Timeout => false,
+        }
+    }
+}
+
+fn message_indicates_context_overflow(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    [
+        "prompt is too long",
+        "prompt too long",
+        "prompt too large",
+        "context length exceeded",
+        "context window exceeded",
+        "context window limit",
+        "exceeds context window",
+        "exceed the model context window",
+        "input length and max_tokens exceed context limit",
+        "requested tokens exceed the context window",
+        "request exceeds the context window",
+        "too many tokens",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 #[cfg(test)]
@@ -125,5 +160,32 @@ mod tests {
         write!(&mut buf, "{err:?}").unwrap();
         assert!(buf.contains("Internal"));
         assert!(buf.contains("bad request"));
+    }
+
+    #[test]
+    fn test_context_overflow_detection_for_api_error() {
+        let err = ReasonerError::Api {
+            status: 400,
+            message: "input length and max_tokens exceed context limit".to_string(),
+        };
+        assert!(err.is_context_overflow());
+    }
+
+    #[test]
+    fn test_context_overflow_detection_for_413() {
+        let err = ReasonerError::Api {
+            status: 413,
+            message: "request entity too large".to_string(),
+        };
+        assert!(err.is_context_overflow());
+    }
+
+    #[test]
+    fn test_context_overflow_detection_ignores_other_api_errors() {
+        let err = ReasonerError::Api {
+            status: 400,
+            message: "invalid api key".to_string(),
+        };
+        assert!(!err.is_context_overflow());
     }
 }

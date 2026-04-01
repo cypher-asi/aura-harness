@@ -211,6 +211,26 @@ impl AgentLoop {
                 .await
             {
                 Ok(r) => r,
+                Err(iteration::LlmCallError::PromptTooLong(msg)) => {
+                    match self
+                        .retry_after_context_overflow(
+                            provider,
+                            &tools,
+                            iteration,
+                            event_tx.as_ref(),
+                            cancellation_token.as_ref(),
+                            &mut state,
+                            msg,
+                        )
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            e.apply(&mut state.result, event_tx.as_ref());
+                            break;
+                        }
+                    }
+                }
                 Err(e) => {
                     e.apply(&mut state.result, event_tx.as_ref());
                     break;
@@ -251,6 +271,52 @@ impl AgentLoop {
                 tool_execution::handle_tool_use(self, response, executor, event_tx, state).await
             }
         }
+    }
+
+    async fn retry_after_context_overflow(
+        &self,
+        provider: &dyn ModelProvider,
+        tools: &[ToolDefinition],
+        iteration: usize,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
+        cancellation_token: Option<&CancellationToken>,
+        state: &mut LoopState,
+        initial_error: String,
+    ) -> Result<aura_reasoner::ModelResponse, iteration::LlmCallError> {
+        let recovery_steps = [
+            (
+                crate::compaction::CompactionConfig::aggressive(),
+                "Context limit reached; compacting older context and retrying.",
+            ),
+            (
+                crate::compaction::CompactionConfig::micro(),
+                "Context is still too large; applying emergency compaction and retrying.",
+            ),
+        ];
+        let mut last_error = initial_error;
+
+        for (tier, warning) in recovery_steps {
+            if !context::compact_for_overflow(state, tier) {
+                debug!("Skipping overflow retry because compaction made no progress");
+                continue;
+            }
+
+            streaming::emit(event_tx, AgentLoopEvent::Warning(warning.to_string()));
+
+            let request = state.build_request(&self.config, tools, iteration);
+            match self
+                .call_model(provider, request, event_tx, cancellation_token)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(iteration::LlmCallError::PromptTooLong(msg)) => {
+                    last_error = msg;
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
+        Err(iteration::LlmCallError::PromptTooLong(last_error))
     }
 }
 
