@@ -170,3 +170,98 @@ const REFINER_SYSTEM_PROMPT: &str = "You are a memory curator for an AI agent. G
 extracted from a work session, decide which to KEEP or DROP. For kept items, refine their key names \
 for consistency and assign confidence (0.0-1.0) and importance (0.0-1.0) scores. Be selective: \
 only keep genuinely useful long-term knowledge. Drop transient observations.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{CandidateType, MemoryCandidate};
+
+    fn make_candidate(key: &str) -> MemoryCandidate {
+        MemoryCandidate {
+            candidate_type: CandidateType::Fact,
+            key: Some(key.to_string()),
+            value: serde_json::Value::String("val".to_string()),
+            summary: None,
+            source_hint: "test".to_string(),
+            preliminary_confidence: 0.7,
+            preliminary_importance: 0.5,
+        }
+    }
+
+    #[test]
+    fn extract_float_present() {
+        assert!((extract_float("confidence=0.85 rest", "confidence=").unwrap() - 0.85).abs() < 1e-3);
+    }
+
+    #[test]
+    fn extract_float_missing() {
+        assert!(extract_float("no match", "confidence=").is_none());
+    }
+
+    #[test]
+    fn extract_float_malformed() {
+        assert!(extract_float("confidence=abc", "confidence=").is_none());
+    }
+
+    #[test]
+    fn extract_quoted_double_quoted() {
+        let result = extract_quoted("key=\"hello world\" rest", "key=");
+        assert_eq!(result.unwrap(), "hello world");
+    }
+
+    #[test]
+    fn extract_quoted_unquoted() {
+        let result = extract_quoted("key=bare_value rest", "key=");
+        assert_eq!(result.unwrap(), "bare_value");
+    }
+
+    #[test]
+    fn extract_quoted_missing() {
+        assert!(extract_quoted("no match", "key=").is_none());
+    }
+
+    #[test]
+    fn parse_response_valid_keep_drop() {
+        let candidates = vec![make_candidate("a"), make_candidate("b")];
+        let response = "1. KEEP key=\"alpha\" confidence=0.9 importance=0.8\n2. DROP key=\"beta\" confidence=0.3 importance=0.1";
+        let refined = LlmRefiner::parse_response(response, &candidates);
+        assert_eq!(refined.len(), 2);
+        assert!(refined[0].keep);
+        assert!(!refined[1].keep);
+        assert_eq!(refined[0].key, "alpha");
+    }
+
+    #[test]
+    fn parse_response_out_of_range_index_ignored() {
+        let candidates = vec![make_candidate("a")];
+        let response = "1. KEEP key=\"a\" confidence=0.9 importance=0.8\n5. KEEP key=\"bad\" confidence=0.9 importance=0.8";
+        let refined = LlmRefiner::parse_response(response, &candidates);
+        assert_eq!(refined.len(), 1);
+    }
+
+    #[test]
+    fn parse_response_malformed_lines_skipped() {
+        let candidates = vec![make_candidate("a")];
+        let response = "garbage\n1. KEEP key=\"a\" confidence=0.9 importance=0.8\nmore garbage";
+        let refined = LlmRefiner::parse_response(response, &candidates);
+        assert_eq!(refined.len(), 1);
+        assert!(refined[0].keep);
+    }
+
+    #[test]
+    fn parse_response_empty() {
+        let candidates = vec![make_candidate("a"), make_candidate("b")];
+        let response = "";
+        let refined = LlmRefiner::parse_response(response, &candidates);
+        assert_eq!(refined.len(), 2);
+        assert!(refined.iter().all(|r| r.keep));
+    }
+
+    #[test]
+    fn build_prompt_smoke_test() {
+        let candidates = vec![make_candidate("test_key")];
+        let prompt = LlmRefiner::build_prompt(&candidates);
+        assert!(prompt.contains("test_key"));
+        assert!(prompt.contains("KEEP|DROP"));
+    }
+}

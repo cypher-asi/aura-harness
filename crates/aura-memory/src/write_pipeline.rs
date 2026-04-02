@@ -200,7 +200,7 @@ impl MemoryWritePipeline {
             .list_events(agent_id, self.config.max_events_per_agent + overflow_buffer)?;
         if events.len() > self.config.max_events_per_agent {
             for event in events.iter().skip(self.config.max_events_per_agent) {
-                let _ = self.store.delete_event(agent_id, event.event_id);
+                self.store.delete_event(agent_id, event.event_id)?;
             }
         }
 

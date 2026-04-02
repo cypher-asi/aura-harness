@@ -21,7 +21,7 @@ pub fn render_skills_xml(skills: &[SkillMeta]) -> String {
             "<skill name=\"{}\" description=\"{}\" location=\"{}\"/>",
             xml_escape(&s.name),
             xml_escape(&s.description),
-            s.source,
+            xml_escape(&s.source.to_string()),
         );
     }
     buf.push_str("</available_skills>");
@@ -101,5 +101,44 @@ mod tests {
         assert!(xml.contains("&lt;special&gt;"));
         assert!(xml.contains("&amp;"));
         assert!(xml.contains("&quot;chars&quot;"));
+    }
+
+    #[test]
+    fn extra_source_with_special_chars_escaped() {
+        let meta = vec![SkillMeta {
+            name: "extra-skill".to_string(),
+            description: "test".to_string(),
+            source: SkillSource::Extra(std::path::PathBuf::from("/path/<with>&\"special\"")),
+            model_invocable: true,
+            user_invocable: false,
+        }];
+        let xml = render_skills_xml(&meta);
+        assert!(xml.contains("&lt;with&gt;"));
+        assert!(xml.contains("&amp;"));
+        assert!(xml.contains("&quot;special&quot;"));
+        assert!(!xml.contains("location=\"extra:/path/<with>"));
+    }
+
+    #[test]
+    fn multiple_skills_all_present() {
+        let meta = vec![
+            SkillMeta {
+                name: "alpha".to_string(),
+                description: "first".to_string(),
+                source: SkillSource::Workspace,
+                model_invocable: true,
+                user_invocable: true,
+            },
+            SkillMeta {
+                name: "beta".to_string(),
+                description: "second".to_string(),
+                source: SkillSource::Personal,
+                model_invocable: false,
+                user_invocable: true,
+            },
+        ];
+        let xml = render_skills_xml(&meta);
+        assert!(xml.contains("name=\"alpha\""));
+        assert!(xml.contains("name=\"beta\""));
     }
 }

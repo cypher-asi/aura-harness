@@ -100,3 +100,119 @@ impl HeuristicExtractor {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_agent::AgentLoopResult;
+
+    #[test]
+    fn empty_text_yields_no_candidates() {
+        let extractor = HeuristicExtractor;
+        let result = AgentLoopResult::default();
+        let candidates = extractor.extract(&result);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn pattern_match_extracts_fact() {
+        let extractor = HeuristicExtractor;
+        let result = AgentLoopResult {
+            total_text: "The project uses React for the frontend".to_string(),
+            iterations: 1,
+            ..Default::default()
+        };
+        let candidates = extractor.extract(&result);
+        let fact_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.key.as_deref() == Some("project_technology"))
+            .collect();
+        assert!(!fact_candidates.is_empty());
+    }
+
+    #[test]
+    fn value_truncation_at_period() {
+        let extractor = HeuristicExtractor;
+        let result = AgentLoopResult {
+            total_text: "the build command is cargo build. And more text".to_string(),
+            iterations: 1,
+            ..Default::default()
+        };
+        let candidates = extractor.extract(&result);
+        let bc: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.key.as_deref() == Some("build_command"))
+            .collect();
+        assert!(!bc.is_empty());
+        if let serde_json::Value::String(s) = &bc[0].value {
+            assert!(!s.contains('.'));
+        }
+    }
+
+    #[test]
+    fn output_capped_at_15() {
+        let extractor = HeuristicExtractor;
+        let mut text = String::new();
+        for i in 0..20 {
+            text.push_str(&format!("the project uses tech{i}. "));
+        }
+        let result = AgentLoopResult {
+            total_text: text,
+            iterations: 1,
+            ..Default::default()
+        };
+        let candidates = extractor.extract(&result);
+        assert!(candidates.len() <= 15);
+    }
+
+    #[test]
+    fn iterations_zero_skips_task_outcome() {
+        let extractor = HeuristicExtractor;
+        let result = AgentLoopResult {
+            total_text: "the project uses Go".to_string(),
+            iterations: 0,
+            ..Default::default()
+        };
+        let candidates = extractor.extract(&result);
+        let events: Vec<_> = candidates
+            .iter()
+            .filter(|c| matches!(c.candidate_type, CandidateType::Event))
+            .collect();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn timed_out_outcome() {
+        let extractor = HeuristicExtractor;
+        let result = AgentLoopResult {
+            iterations: 5,
+            timed_out: true,
+            ..Default::default()
+        };
+        let candidates = extractor.extract(&result);
+        let event = candidates
+            .iter()
+            .find(|c| matches!(c.candidate_type, CandidateType::Event))
+            .unwrap();
+        if let Some(ref summary) = event.summary {
+            assert!(summary.contains("timed_out"));
+        }
+    }
+
+    #[test]
+    fn completed_outcome() {
+        let extractor = HeuristicExtractor;
+        let result = AgentLoopResult {
+            iterations: 3,
+            ..Default::default()
+        };
+        let candidates = extractor.extract(&result);
+        let event = candidates
+            .iter()
+            .find(|c| matches!(c.candidate_type, CandidateType::Event))
+            .unwrap();
+        if let Some(ref summary) = event.summary {
+            assert!(summary.contains("completed"));
+        }
+    }
+}

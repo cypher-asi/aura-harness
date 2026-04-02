@@ -50,9 +50,9 @@ pub fn activate(skill: &Skill, arguments: &str) -> Result<SkillActivation, Skill
     // $ARGUMENTS substitution (full argument string)
     content = content.replace("$ARGUMENTS", arguments);
 
-    // $N shorthand — only replace `$` followed by digits that are not part of
-    // a longer identifier (e.g. `${…}` was already handled).
-    for (idx, arg) in args.iter().enumerate() {
+    // $N shorthand — replace in reverse order so that `$10` is handled before
+    // `$1` (which would otherwise partially match, leaving a stray `0`).
+    for (idx, arg) in args.iter().enumerate().rev() {
         let placeholder = format!("${idx}");
         content = content.replace(&placeholder, arg);
     }
@@ -124,5 +124,47 @@ mod tests {
         let skill = test_skill("Read ${SKILL_DIR}/config.yaml");
         let act = activate(&skill, "").unwrap();
         assert!(act.rendered_content.contains("/skills/test-skill/config.yaml"));
+    }
+
+    #[test]
+    fn dollar_10_not_mangled_by_dollar_1() {
+        let skill = test_skill("First=$1 Tenth=$10");
+        let act = activate(&skill, "z0 alpha z2 z3 z4 z5 z6 z7 z8 z9 TENTH").unwrap();
+        assert_eq!(
+            act.rendered_content, "First=alpha Tenth=TENTH",
+            "got: {}",
+            act.rendered_content
+        );
+    }
+
+    #[test]
+    fn out_of_range_argument_index_becomes_empty() {
+        let skill = test_skill("Value: $ARGUMENTS[99]");
+        let act = activate(&skill, "only_one").unwrap();
+        assert_eq!(act.rendered_content, "Value: ");
+    }
+
+    #[test]
+    fn empty_arguments_with_dollar_zero() {
+        let skill = test_skill("Arg: $0");
+        let act = activate(&skill, "").unwrap();
+        assert_eq!(act.rendered_content, "Arg: $0");
+    }
+
+    #[test]
+    fn fork_context_detected() {
+        let skill = Skill {
+            frontmatter: SkillFrontmatter {
+                name: "test-skill".to_string(),
+                description: "test".to_string(),
+                context: Some("fork".to_string()),
+                ..SkillFrontmatter::default()
+            },
+            body: "body".to_string(),
+            source: SkillSource::Workspace,
+            dir_path: PathBuf::from("/skills/test-skill"),
+        };
+        let act = activate(&skill, "").unwrap();
+        assert!(act.fork_context);
     }
 }

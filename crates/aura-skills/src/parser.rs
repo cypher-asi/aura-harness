@@ -115,4 +115,38 @@ Step 2: Push
         assert!(validate_name("Deploy").is_err());
         assert!(validate_name("my_skill").is_err());
     }
+
+    #[test]
+    fn invalid_yaml_content() {
+        let content = "---\n: invalid: yaml: [[\n---\nbody";
+        let result = parse_skill_md(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_closing_delimiter() {
+        let content = "---\nname: test\ndescription: no closing\n";
+        let result = parse_skill_md(content);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_body_after_frontmatter() {
+        let content = "---\nname: test\ndescription: empty body\n---";
+        let (fm, body) = parse_skill_md(content).unwrap();
+        assert_eq!(fm.name, "test");
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn name_with_unicode() {
+        let content = "---\nname: dé­ploy\ndescription: test\n---\nbody";
+        assert!(parse_skill_md(content).is_err());
+    }
+
+    #[test]
+    fn name_with_underscore() {
+        let content = "---\nname: my_skill\ndescription: test\n---\nbody";
+        assert!(parse_skill_md(content).is_err());
+    }
 }

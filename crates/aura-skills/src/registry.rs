@@ -174,4 +174,101 @@ mod tests {
         let skill = reg.get("deploy").unwrap();
         assert_eq!(skill.frontmatter.description, "workspace version");
     }
+
+    #[test]
+    fn get_not_found() {
+        let reg = SkillRegistry::new();
+        assert!(reg.get("nonexistent").is_err());
+    }
+
+    #[test]
+    fn model_invocable_metadata_filters() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws").join("skills");
+
+        let dir = ws.join("visible");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: visible\ndescription: shown\n---\nBody.",
+        ).unwrap();
+
+        let dir2 = ws.join("hidden");
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(
+            dir2.join("SKILL.md"),
+            "---\nname: hidden\ndescription: not shown\ndisable-model-invocation: true\n---\nBody.",
+        ).unwrap();
+
+        let loader = SkillLoader::new(SkillLoaderConfig {
+            workspace_root: Some(tmp.path().join("ws")),
+            ..SkillLoaderConfig::default()
+        });
+        let mut reg = SkillRegistry::new();
+        reg.reload(&loader);
+
+        let meta = reg.model_invocable_metadata();
+        assert!(meta.iter().any(|m| m.name == "visible"));
+        assert!(!meta.iter().any(|m| m.name == "hidden"));
+    }
+
+    #[test]
+    fn user_invocable_metadata_filters() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws").join("skills");
+
+        let dir = ws.join("user-skill");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: user-skill\ndescription: user can invoke\nuser-invocable: true\n---\nBody.",
+        ).unwrap();
+
+        let dir2 = ws.join("model-only");
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(
+            dir2.join("SKILL.md"),
+            "---\nname: model-only\ndescription: not user invocable\n---\nBody.",
+        ).unwrap();
+
+        let loader = SkillLoader::new(SkillLoaderConfig {
+            workspace_root: Some(tmp.path().join("ws")),
+            ..SkillLoaderConfig::default()
+        });
+        let mut reg = SkillRegistry::new();
+        reg.reload(&loader);
+
+        let meta = reg.user_invocable_metadata();
+        assert!(meta.iter().any(|m| m.name == "user-skill"));
+        assert!(!meta.iter().any(|m| m.name == "model-only"));
+    }
+
+    #[test]
+    fn skills_for_paths_empty_paths() {
+        let reg = SkillRegistry::new();
+        let result = reg.skills_for_paths(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn skills_for_paths_no_match() {
+        let tmp = TempDir::new().unwrap();
+        let ws = tmp.path().join("ws").join("skills");
+        let dir = ws.join("path-skill");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: path-skill\ndescription: test\npaths:\n  - src/components\n---\nBody.",
+        ).unwrap();
+
+        let loader = SkillLoader::new(SkillLoaderConfig {
+            workspace_root: Some(tmp.path().join("ws")),
+            ..SkillLoaderConfig::default()
+        });
+        let mut reg = SkillRegistry::new();
+        reg.reload(&loader);
+
+        let result = reg.skills_for_paths(&["tests/unit".to_string()]);
+        assert!(result.is_empty());
+    }
 }

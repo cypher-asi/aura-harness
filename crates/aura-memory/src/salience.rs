@@ -92,3 +92,178 @@ fn normalized_access(count: u32) -> f32 {
     let log_max = 101.0_f32.ln();
     (log_count / log_max).min(1.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+    use chrono::{Duration, Utc};
+
+    fn make_fact(importance: f32, access_count: u32, hours_ago: i64) -> Fact {
+        let now = Utc::now();
+        let last = now - Duration::hours(hours_ago);
+        Fact {
+            fact_id: FactId::generate(),
+            agent_id: AgentId::generate(),
+            key: "k".to_string(),
+            value: serde_json::Value::String("v".to_string()),
+            confidence: 0.9,
+            source: crate::types::FactSource::Extracted,
+            importance,
+            access_count,
+            last_accessed: last,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn make_event(importance: f32, hours_ago: i64) -> AgentEvent {
+        let now = Utc::now();
+        AgentEvent {
+            event_id: AgentEventId::generate(),
+            agent_id: AgentId::generate(),
+            event_type: "t".to_string(),
+            summary: "s".to_string(),
+            metadata: serde_json::Value::Null,
+            importance,
+            access_count: 0,
+            last_accessed: now,
+            timestamp: now - Duration::hours(hours_ago),
+        }
+    }
+
+    fn make_procedure(success_rate: f32, exec_count: u32, hours_ago: i64) -> Procedure {
+        let now = Utc::now();
+        Procedure {
+            procedure_id: ProcedureId::generate(),
+            agent_id: AgentId::generate(),
+            name: "p".to_string(),
+            trigger: "t".to_string(),
+            steps: vec!["a".to_string()],
+            context_constraints: serde_json::Value::Null,
+            success_rate,
+            execution_count: exec_count,
+            last_used: now - Duration::hours(hours_ago),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn recency_decay_same_instant() {
+        let now = Utc::now();
+        let val = recency_decay(now, now);
+        assert!((val - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn recency_decay_large_gap_near_zero() {
+        let now = Utc::now();
+        let old = now - Duration::days(365);
+        let val = recency_decay(old, now);
+        assert!(val < 0.01);
+    }
+
+    #[test]
+    fn recency_decay_monotonically_decreases() {
+        let now = Utc::now();
+        let v1 = recency_decay(now - Duration::hours(1), now);
+        let v2 = recency_decay(now - Duration::hours(24), now);
+        let v3 = recency_decay(now - Duration::hours(168), now);
+        assert!(v1 > v2);
+        assert!(v2 > v3);
+    }
+
+    #[test]
+    fn normalized_access_zero() {
+        assert_eq!(normalized_access(0), 0.0);
+    }
+
+    #[test]
+    fn normalized_access_high_count_capped() {
+        let val = normalized_access(10_000);
+        assert!(val <= 1.0);
+        assert!(val > 0.9);
+    }
+
+    #[test]
+    fn estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_short() {
+        assert_eq!(estimate_tokens("abcd"), 1);
+    }
+
+    #[test]
+    fn estimate_tokens_exact_multiple() {
+        assert_eq!(estimate_tokens("12345678"), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_partial() {
+        assert_eq!(estimate_tokens("abc"), 1);
+    }
+
+    #[test]
+    fn score_fact_finite() {
+        let now = Utc::now();
+        let f = make_fact(0.8, 5, 0);
+        let s = score_fact(&f, now);
+        assert!(s.is_finite());
+        assert!(s > 0.0);
+    }
+
+    #[test]
+    fn score_fact_more_important_ranks_higher() {
+        let now = Utc::now();
+        let high = make_fact(0.9, 5, 0);
+        let low = make_fact(0.1, 5, 0);
+        assert!(score_fact(&high, now) > score_fact(&low, now));
+    }
+
+    #[test]
+    fn score_event_finite() {
+        let now = Utc::now();
+        let e = make_event(0.8, 0);
+        let s = score_event(&e, now);
+        assert!(s.is_finite());
+        assert!(s > 0.0);
+    }
+
+    #[test]
+    fn score_event_recent_ranks_higher() {
+        let now = Utc::now();
+        let recent = make_event(0.5, 1);
+        let old = make_event(0.5, 720);
+        assert!(score_event(&recent, now) > score_event(&old, now));
+    }
+
+    #[test]
+    fn score_procedure_finite() {
+        let now = Utc::now();
+        let p = make_procedure(0.8, 10, 0);
+        let s = score_procedure(&p, now);
+        assert!(s.is_finite());
+        assert!(s > 0.0);
+    }
+
+    #[test]
+    fn estimate_fact_tokens_positive() {
+        let f = make_fact(0.5, 0, 0);
+        assert!(estimate_fact_tokens(&f) > 0);
+    }
+
+    #[test]
+    fn estimate_event_tokens_positive() {
+        let e = make_event(0.5, 0);
+        assert!(estimate_event_tokens(&e) > 0);
+    }
+
+    #[test]
+    fn estimate_procedure_tokens_positive() {
+        let p = make_procedure(0.5, 1, 0);
+        assert!(estimate_procedure_tokens(&p) > 0);
+    }
+}
