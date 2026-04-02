@@ -139,6 +139,17 @@ impl MemoryStore {
         Ok(facts)
     }
 
+    /// Increment the access count and update the last-accessed timestamp for a fact.
+    ///
+    /// # Errors
+    /// Returns error if the fact is not found or on write failure.
+    pub fn touch_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError> {
+        let mut fact = self.get_fact(agent_id, fact_id)?;
+        fact.access_count += 1;
+        fact.last_accessed = Utc::now();
+        self.put_fact(&fact)
+    }
+
     /// Delete a specific fact.
     ///
     /// # Errors
