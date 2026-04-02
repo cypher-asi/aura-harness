@@ -257,6 +257,89 @@ The most likely levers are:
 - smarter compaction before prompts grow large
 - reducing unnecessary first-turn sprawl on long prompts
 
+## Follow-up Experiments We Rejected
+
+After this A/B, we tried two follow-up changes aimed at lowering the runtime penalty.
+
+### 1. Leaner system prompt
+
+Goal:
+
+- reduce prompt size
+- reduce planning chatter
+- improve runtime
+
+Result:
+
+- runtime improved a lot
+- effective cost also improved
+- but one scenario failed the quality check
+
+Why we rejected it:
+
+- it traded away instruction quality and task reliability
+- that is not acceptable for a coding-agent harness
+
+Neutral read:
+
+- a smaller prompt is not automatically a better prompt
+- for harness work, preserving output quality matters more than winning a single latency number
+
+### 2. Removing the automatic cache breakpoint on the last user message
+
+Goal:
+
+- reduce cache overhead on dynamic user content
+- improve runtime while keeping quality stable
+
+Result:
+
+- runtime improved compared to the earlier cache-on baseline
+- quality still passed
+- but billed input and effective cost got materially worse
+
+Why we rejected it:
+
+- it made the system faster by shifting more prompt work back into expensive billed input
+- that is not a clean product win
+
+Neutral read:
+
+- Anthropic prompt caching works best when stable reusable prefixes are clearly marked
+- removing a breakpoint from the end of the conversational prefix reduced reuse more than it helped runtime
+
+## Current Keep/Reject Decision
+
+Keep:
+
+- truthful cache read/write reporting
+- better context occupancy estimation
+- provider and file-change reporting
+- compaction with reserved output headroom
+- overflow recovery and bounded retry
+- prompt caching toggle for A/B evaluation
+- benchmark suite and comparison tooling
+
+Reject for now:
+
+- leaner prompt variant that hurts quality
+- cache-breakpoint removal that improves runtime but worsens cost
+
+## Current Recommendation
+
+The current best validated state is still the committed `v4` cache-on implementation plus the cache-on vs cache-off A/B runner.
+
+That means our next optimization target should not be:
+
+- "use less prompt text at any cost"
+- "remove cache markers and hope runtime improves"
+
+It should be:
+
+- reduce redundant tool output and read-heavy prompt growth
+- improve long-session prompt shaping without weakening instructions
+- keep measuring cost, speed, reliability, and quality together
+
 ## Repeatable Command
 
 From `aura-os`:
