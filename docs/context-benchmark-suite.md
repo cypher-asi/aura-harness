@@ -230,12 +230,53 @@ This is the clearest sign of economic value:
 This one still got cheaper with cache-on, but only slightly.
 The runtime penalty was larger than the cost savings.
 
+## Clean-State Validation
+
+After cleaning both working trees and rerunning the direct live benchmark on the
+same local stack, we also captured a cleaner, narrower A/B on the
+`harness-context-static-site` scenario alone.
+
+Artifacts:
+
+- cache on: [aura-benchmark-usage-summary.json](/Users/shahrozkhan/Documents/zero/aura-os/interface/test-results/clean-post-merge-cache-on/aura-benchmark-usage-summary.json)
+- cache off: [aura-benchmark-usage-summary.json](/Users/shahrozkhan/Documents/zero/aura-os/interface/test-results/clean-post-merge-cache-off/aura-benchmark-usage-summary.json)
+- compare: [clean-post-merge-cache-on-vs-off.json](/Users/shahrozkhan/Documents/zero/aura-os/interface/test-results/clean-post-merge-cache-on-vs-off.json)
+
+### Clean static-site result
+
+Cache on vs cache off:
+
+- billed input delta: `-258205`
+- billed output delta: `-1482`
+- estimated effective cost delta: `-1.212202`
+- total run wall-clock delta: `-49764 ms`
+- prompt input footprint delta: `-162099`
+- max context utilization delta: `-0.1092`
+
+This is the strongest clean proof we have so far for the current V1 work:
+
+- **cache on was cheaper**
+- **cache on was faster**
+- **cache on kept context pressure lower**
+- **both runs still passed quality**
+
 ## Practical Interpretation
 
 The current evidence suggests:
 
 - prompt caching is already giving us real cost value on repeated-turn workloads
 - prompt caching is not yet giving us a speed win in this harness setup
+
+The newer clean static-site A/B shows that this can swing the other way on a
+more focused workload:
+
+- cache on was both cheaper and faster in that clean run
+
+So the most honest current read is:
+
+- repeated-turn economics are clearly better with caching
+- runtime behavior depends on workload shape
+- we should keep using both suite-level and focused clean A/B runs
 
 So the neutral product read is:
 
@@ -414,6 +455,31 @@ This script:
 - starts a second no-cache harness on a separate port
 - runs the same suite against that harness
 - writes a comparison report
+
+## Direct Runner Note
+
+If you run the Node benchmark directly instead of the wrapper scripts, you must
+source the local auth token first or the live harness will fail in proxy mode.
+
+Example:
+
+```bash
+cd /Users/shahrozkhan/Documents/zero/aura-os
+set -a
+source ./evals/local-stack/.runtime/auth.env
+set +a
+
+cd interface
+AURA_EVAL_RESULTS_DIR=test-results/manual-run \
+  AURA_EVAL_SCENARIO_ID=harness-context-static-site \
+  node ./scripts/run-harness-context-benchmark.mjs
+```
+
+Without that token, the live harness benchmark can fail with:
+
+- `Proxy mode requires a JWT auth token`
+
+That is a benchmark setup issue, not a harness regression.
 
 ## Recommended Future Suite Additions
 
