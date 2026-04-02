@@ -418,3 +418,21 @@ pub(super) async fn stats(
     let agent_id = parse_agent_id(&agent_hex)?;
     store.stats(agent_id).map(Json).map_err(store_err)
 }
+
+// ============================================================================
+// Consolidation
+// ============================================================================
+
+pub(super) async fn consolidate(
+    State(state): State<RouterState>,
+    Path(agent_hex): Path<String>,
+) -> ApiResult<aura_memory::ConsolidationReport> {
+    let agent_id = parse_agent_id(&agent_hex)?;
+    let mm = state.memory_manager.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "memory system not configured" })),
+        )
+    })?;
+    mm.consolidate(agent_id).await.map(Json).map_err(store_err)
+}

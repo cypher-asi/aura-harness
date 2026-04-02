@@ -1,5 +1,6 @@
-//! Top-level facade that owns the store, retriever, and write pipeline.
+//! Top-level facade that owns the store, retriever, write pipeline, and consolidator.
 
+use crate::consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 use crate::error::MemoryError;
 use crate::refinement::{LlmRefiner, RefinerConfig};
 use crate::retrieval::{MemoryRetriever, RetrievalConfig};
@@ -12,10 +13,12 @@ use aura_reasoner::ModelProvider;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 
+/// Top-level memory facade owning the store, retriever, write pipeline, and consolidator.
 pub struct MemoryManager {
     store: Arc<MemoryStore>,
     retriever: MemoryRetriever,
     pipeline: MemoryWritePipeline,
+    consolidator: MemoryConsolidator,
 }
 
 impl MemoryManager {
@@ -26,16 +29,20 @@ impl MemoryManager {
         refiner_config: RefinerConfig,
         write_config: WriteConfig,
         retrieval_config: RetrievalConfig,
+        consolidation_config: ConsolidationConfig,
     ) -> Self {
         let store = Arc::new(MemoryStore::new(db));
         let retriever = MemoryRetriever::new(Arc::clone(&store), retrieval_config);
-        let refiner = LlmRefiner::new(provider, refiner_config);
+        let refiner = LlmRefiner::new(Arc::clone(&provider), refiner_config);
         let pipeline = MemoryWritePipeline::new(Arc::clone(&store), refiner, write_config);
+        let consolidator =
+            MemoryConsolidator::new(Arc::clone(&store), provider, consolidation_config);
 
         Self {
             store,
             retriever,
             pipeline,
+            consolidator,
         }
     }
 
@@ -97,6 +104,17 @@ impl MemoryManager {
         result: &AgentLoopResult,
     ) -> Result<WriteReport, MemoryError> {
         self.ingest(agent_id, result).await
+    }
+
+    /// Run post-session consolidation (forget, compress, evolve) for an agent.
+    ///
+    /// # Errors
+    /// Returns error on store I/O or model provider failure.
+    pub async fn consolidate(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<ConsolidationReport, MemoryError> {
+        self.consolidator.consolidate(agent_id).await
     }
 
     /// Get a reference to the underlying memory store.

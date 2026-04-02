@@ -8,6 +8,7 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::option_if_let_else)]
 
+mod consolidation;
 mod error;
 mod extraction;
 mod manager;
@@ -17,6 +18,7 @@ mod store;
 mod types;
 mod write_pipeline;
 
+pub use consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 pub use error::MemoryError;
 pub use manager::MemoryManager;
 pub use refinement::RefinerConfig;

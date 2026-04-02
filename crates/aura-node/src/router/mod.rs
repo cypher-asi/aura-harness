@@ -124,6 +124,7 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/memory/:agent_id/snapshot", get(memory::snapshot))
         .route("/memory/:agent_id/wipe", post(memory::wipe))
         .route("/memory/:agent_id/stats", get(memory::stats))
+        .route("/memory/:agent_id/consolidate", post(memory::consolidate))
         // Skills CRUD
         .route("/api/skills", get(skills::list_skills))
         .route("/api/skills/:name", get(skills::get_skill))
