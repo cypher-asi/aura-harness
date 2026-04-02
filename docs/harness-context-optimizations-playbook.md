@@ -9,6 +9,22 @@ It answers four questions:
 3. How do we test it?
 4. What did the live benchmark actually prove?
 
+## Current Status
+
+What is solid right now:
+
+- richer cache-aware usage reporting is implemented end to end
+- Aura OS now consumes and persists the richer usage correctly
+- context occupancy, overflow recovery, and file-change reporting are improved
+- clean same-system cache-on vs cache-off benchmarks now show real wins on the
+  scenarios we trust most
+
+What is still more exploratory:
+
+- broader live benchmark coverage across many more task shapes
+- more aggressive tool-output shaping beyond repeated cached reads
+- semantic compaction and longer-horizon session rollover work
+
 ## Why This Work Matters
 
 For a coding agent, harness quality is not just a performance concern.
@@ -138,6 +154,9 @@ The only difference was:
 - cache on
 - cache off
 
+These numbers are from the clean, post-merge static-site benchmark baseline we
+froze for repeatable comparison.
+
 ### Cache On
 
 - success: yes
@@ -186,6 +205,10 @@ For this clean benchmark run, the optimized harness with caching enabled was:
 This is important because it is not just a telemetry win.
 On this scenario, it produced a real product win.
 
+We also validated the same pattern on a second clean node-server patch
+scenario. That matters because it makes this less likely to be a one-off lucky
+run.
+
 ## What We Validate
 
 We do not rely on one giant benchmark alone.
@@ -223,6 +246,21 @@ This gives us a fair same-system comparison for:
 - speed
 - context pressure
 - quality
+
+## Merge-Readiness Notes
+
+Why this is mergeable as V1:
+
+- the runtime changes are covered by deterministic Rust tests
+- Aura OS wiring is covered by server and session tests
+- benchmark pricing now fails loudly when pricing is unknown
+- clean benchmark baselines are frozen for post-merge verification
+
+What we should still keep doing after merge:
+
+- restart the live harness before final benchmark passes to avoid stale-process noise
+- keep validator-backed fixture scenarios as regression gates
+- add more cross-tool and longer-horizon scenarios in the next phase
 
 ## Benchmarking Rules We Should Keep
 

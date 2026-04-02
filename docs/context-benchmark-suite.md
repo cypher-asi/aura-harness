@@ -17,6 +17,17 @@ It is intentionally small right now.
 The goal is not to cover every edge case yet.
 The goal is to give us a repeatable baseline that is good enough to catch meaningful changes.
 
+## How To Read This Document
+
+There are two layers of evidence here:
+
+1. historical benchmark runs that helped us steer the design
+2. the current clean baselines we trust most for merge readiness
+
+The clean baselines are the strongest evidence.
+The older runs are still useful because they explain what we tried, what
+shifted over time, and which ideas we rejected.
+
 ## Current Scenarios
 
 ### 1. `harness-context-static-site`
@@ -71,7 +82,7 @@ Generated artifacts:
 - `interface/test-results/baseline-harness-suite-v4/aura-benchmark-usage-summary.json`
 - `test-results/harness-suite-v4-compare.json`
 
-## Latest Neutral Read
+## Historical Suite Read
 
 These results are from the current optimized harness branch compared to `origin/main`.
 
@@ -230,7 +241,7 @@ This is the clearest sign of economic value:
 This one still got cheaper with cache-on, but only slightly.
 The runtime penalty was larger than the cost savings.
 
-## Clean-State Validation
+## Current Strongest Evidence: Clean-State Validation
 
 After cleaning both working trees and rerunning the direct live benchmark on the
 same local stack, we also captured a cleaner, narrower A/B on the
@@ -258,6 +269,34 @@ This is the strongest clean proof we have so far for the current V1 work:
 - **cache on was cheaper**
 - **cache on was faster**
 - **cache on kept context pressure lower**
+- **both runs passed quality**
+
+## Second Clean Baseline: Node-Server Patch
+
+We also reran a second clean cache-on vs cache-off A/B on a validator-backed
+node-server patch scenario after restarting the live harness from current code.
+
+Artifacts:
+
+- cache on: [node-server-cache-on-summary.json](/Users/shahrozkhan/Documents/zero/aura-os/evals/reports/baselines/harness-context/node-server-cache-on-summary.json)
+- cache off: [node-server-cache-off-summary.json](/Users/shahrozkhan/Documents/zero/aura-os/evals/reports/baselines/harness-context/node-server-cache-off-summary.json)
+- compare: [node-server-cache-on-vs-off.json](/Users/shahrozkhan/Documents/zero/aura-os/evals/reports/baselines/harness-context/node-server-cache-on-vs-off.json)
+
+### Clean node-server result
+
+Cache on vs cache off:
+
+- billed input delta: `-188028`
+- billed output delta: `-354`
+- estimated effective cost delta: `-$0.758723`
+- total run wall-clock delta: `-13650 ms`
+- both runs passed quality
+
+This matters because it shows the same direction on a second workload:
+
+- **cache on was cheaper**
+- **cache on was faster**
+- **quality was preserved**
 - **both runs still passed quality**
 
 ## Practical Interpretation
@@ -427,7 +466,7 @@ It is a lower-layer prompt-footprint benchmark for the exact path we changed.
 - the harness-layer reduction is real and tested
 - the dedicated live eval scenario for this exact optimization still needs work before we should trust it as an end-to-end product benchmark
 
-So the neutral read is:
+So the current best read is:
 
 - this looks like a good low-risk prompt-footprint optimization
 - we should keep validating it in broader live evals before making larger cost/latency claims
