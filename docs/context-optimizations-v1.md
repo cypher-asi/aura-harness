@@ -147,19 +147,21 @@ Current branch 4-turn harness benchmark snapshot:
 - model: `claude-opus-4-6`
 - provider: `anthropic`
 - turns: `4`
-- billed input tokens: `112`
-- billed output tokens: `6377`
-- cache write tokens: `128717`
-- cache read tokens: `107994`
-- prompt footprint tokens: `236823`
-- max estimated context tokens: `16774`
-- max context utilization: `0.08387`
+- billed input tokens: `92`
+- billed output tokens: `5453`
+- cache write tokens: `115217`
+- cache read tokens: `87635`
+- prompt footprint tokens: `202944`
+- max estimated context tokens: `20085`
+- max context utilization: `0.100425`
 - file-change count: `4`
+- estimated effective cost: `$0.9007`
+- average time to first event: `2657.5 ms`
 
 Important takeaway:
 
-- Old-style telemetry would have made this look like roughly a `112` input-token session.
-- The improved harness can now show that the session actually involved `236823` prompt-footprint tokens once cache activity is accounted for.
+- Old-style telemetry would have made this look like roughly a `92` input-token session.
+- The improved harness can now show that the session actually involved `202944` prompt-footprint tokens once cache activity is accounted for.
 
 That is not just “more numbers.”
 It is the difference between:
@@ -176,25 +178,29 @@ We also ran the exact same direct harness benchmark against:
 
 ### `origin/main`
 
-- billed input tokens: `99`
-- billed output tokens: `6054`
+- billed input tokens: `98`
+- billed output tokens: `5907`
 - cache write tokens reported: `0`
 - cache read tokens reported: `0`
-- prompt footprint tokens reported: `99`
+- prompt footprint tokens reported: `98`
 - max estimated context tokens reported: `0`
 - provider: blank
 - file-change count reported: `0`
+- estimated effective cost: `$0.1482`
+- quality pass: `false`
 
 ### Current branch
 
-- billed input tokens: `111`
-- billed output tokens: `7595`
-- cache write tokens reported: `156625`
-- cache read tokens reported: `176365`
-- prompt footprint tokens reported: `333101`
-- max estimated context tokens reported: `19268`
+- billed input tokens: `92`
+- billed output tokens: `5453`
+- cache write tokens reported: `115217`
+- cache read tokens reported: `87635`
+- prompt footprint tokens reported: `202944`
+- max estimated context tokens reported: `20085`
 - provider: `anthropic`
-- file-change count reported: `2`
+- file-change count reported: `4`
+- estimated effective cost: `$0.9007`
+- quality pass: `true`
 
 ### What changed in practical terms
 
@@ -202,6 +208,7 @@ We also ran the exact same direct harness benchmark against:
 - The old harness did not expose a meaningful context occupancy estimate.
 - The old harness left provider blank.
 - The old harness did not surface file changes in this benchmark.
+- The current harness finished with a better quality outcome on this benchmark, but it did not reduce effective cost yet.
 
 So the comparison is best understood as a **truthfulness and control improvement** more than a pure “token spend reduction” claim.
 
