@@ -30,3 +30,6 @@ pub use salience::{estimate_tokens, score_event, score_fact, score_procedure};
 pub use store::{MemoryStats, MemoryStore};
 pub use types::{AgentEvent, Fact, FactSource, MemoryCandidate, MemoryPacket, Procedure};
 pub use write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
+
+#[cfg(test)]
+mod store_tests;

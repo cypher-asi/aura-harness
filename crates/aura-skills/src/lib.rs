@@ -54,3 +54,6 @@ pub use loader::SkillLoader;
 pub use manager::SkillManager;
 pub use registry::SkillRegistry;
 pub use types::{Skill, SkillActivation, SkillFrontmatter, SkillMeta, SkillSource};
+
+#[cfg(test)]
+mod integration_tests;
