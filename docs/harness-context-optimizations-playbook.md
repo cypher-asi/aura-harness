@@ -18,12 +18,16 @@ What is solid right now:
 - context occupancy, overflow recovery, and file-change reporting are improved
 - clean same-system cache-on vs cache-off benchmarks now show real wins on the
   scenarios we trust most
+- the live Aura OS API benchmark lane is working again for full lifecycle
+  validation of org -> agent -> project -> spec -> task -> build flows
 
 What is still more exploratory:
 
 - broader live benchmark coverage across many more task shapes
 - more aggressive tool-output shaping beyond repeated cached reads
 - semantic compaction and longer-horizon session rollover work
+- a fully consistent live automaton/session telemetry story across every API
+  benchmark scenario
 
 ## Why This Work Matters
 
@@ -246,6 +250,30 @@ This gives us a fair same-system comparison for:
 - speed
 - context pressure
 - quality
+
+### Layer 4: Live Aura OS API benchmarks
+
+We also run the real Aura lifecycle through the local API benchmark lane:
+
+- org resolution or creation
+- agent creation
+- project import
+- spec generation
+- task extraction
+- autonomous build loop execution
+- artifact verification
+
+This is not the best lane for fine-grained harness telemetry yet.
+It is the best lane for validating that the real product loop still works after
+we change the harness.
+
+Current honest read:
+
+- this lane is valuable and should stay in the test strategy
+- it already catches real product regressions and brittle eval assertions
+- some scenarios still surface richer session telemetry more reliably than
+  others, so direct harness benchmarks remain the source of truth for the
+  cache/context numbers we use in merge decisions
 
 ## Merge-Readiness Notes
 
