@@ -391,6 +391,14 @@ So the neutral read is:
 - this looks like a good low-risk prompt-footprint optimization
 - we should keep validating it in broader live evals before making larger cost/latency claims
 
+We also verified the repeated-turn effect directly at the message-history level:
+
+- a two-turn repeated `read_file` replay with a `9000` character cached payload saves at least `4500` characters from the reinserted message history
+- using the harness heuristic, that is again about `1125` prompt tokens saved on the repeated turn itself
+
+That matters because it confirms the saving is not just a string helper detail.
+It actually reduces the message footprint that the next model call sees.
+
 ## Repeatable Command
 
 From `aura-os`:
