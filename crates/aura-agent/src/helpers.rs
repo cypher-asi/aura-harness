@@ -346,6 +346,32 @@ mod tests {
     }
 
     #[test]
+    fn test_summarize_cached_tool_result_cuts_large_search_code_footprint() {
+        let input = serde_json::json!({"pattern": "fn main", "path": "src"});
+        let content = "b".repeat(6_000);
+        let summary = summarize_cached_tool_result("search_code", &input, &content).unwrap();
+        let saved_chars = content.len() - summary.len();
+        assert!(summary.len() <= 2_300, "summary should stay compact");
+        assert!(
+            saved_chars >= 3_500,
+            "expected at least 3.5k chars saved, got {saved_chars}"
+        );
+    }
+
+    #[test]
+    fn test_summarize_cached_tool_result_cuts_large_list_files_footprint() {
+        let input = serde_json::json!({"path": "."});
+        let content = "c".repeat(3_000);
+        let summary = summarize_cached_tool_result("list_files", &input, &content).unwrap();
+        let saved_chars = content.len() - summary.len();
+        assert!(summary.len() <= 1_400, "summary should stay compact");
+        assert!(
+            saved_chars >= 1_500,
+            "expected at least 1.5k chars saved, got {saved_chars}"
+        );
+    }
+
+    #[test]
     fn test_infer_file_changes_write_create_without_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let input = serde_json::json!({"path": "src/new.rs"});

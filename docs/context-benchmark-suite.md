@@ -363,6 +363,21 @@ Measured outcome:
 - at least `4500` characters are removed from the repeated prompt payload
 - using the harness `4 chars ≈ 1 token` heuristic, that is at least about `1125` prompt tokens saved per repeated hit
 
+We also checked the other shaped read-heavy tools with deterministic payloads:
+
+- repeated `search_code` cache hit with `6000` characters:
+  - shaped result stays at or below `2300` characters
+  - at least `3500` characters removed
+  - about `875` prompt tokens saved per repeated hit
+- repeated `list_files` cache hit with `3000` characters:
+  - shaped result stays at or below `1400` characters
+  - at least `1500` characters removed
+  - about `375` prompt tokens saved per repeated hit
+
+That gives us a simple working range for the current optimization:
+
+- roughly `375` to `1125` prompt tokens saved per repeated large cache hit depending on tool type
+
 This is not yet a full product benchmark.
 It is a lower-layer prompt-footprint benchmark for the exact path we changed.
 
