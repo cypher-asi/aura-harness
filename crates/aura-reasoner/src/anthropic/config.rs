@@ -23,6 +23,8 @@ pub struct AnthropicConfig {
     pub routing_mode: RoutingMode,
     /// Optional fallback model when the primary is overloaded (429/529).
     pub fallback_model: Option<String>,
+    /// Whether Anthropic prompt-caching directives should be attached.
+    pub prompt_caching_enabled: bool,
 }
 
 impl AnthropicConfig {
@@ -76,6 +78,10 @@ impl AnthropicConfig {
         let fallback_model = std::env::var("AURA_ANTHROPIC_FALLBACK_MODEL")
             .ok()
             .filter(|s| !s.is_empty());
+        let prompt_caching_enabled = !matches!(
+            std::env::var("AURA_DISABLE_PROMPT_CACHING").ok().as_deref(),
+            Some("1" | "true" | "TRUE" | "yes" | "YES")
+        );
 
         Ok(Self {
             api_key,
@@ -85,6 +91,7 @@ impl AnthropicConfig {
             base_url,
             routing_mode,
             fallback_model,
+            prompt_caching_enabled,
         })
     }
 
@@ -99,6 +106,7 @@ impl AnthropicConfig {
             base_url: "https://api.anthropic.com".to_string(),
             routing_mode: RoutingMode::Direct,
             fallback_model: None,
+            prompt_caching_enabled: true,
         }
     }
 }

@@ -184,6 +184,95 @@ on the same suite.
 
 That would give us a real same-system economic A/B instead of comparing against an older protocol that hides cache costs.
 
+## Cache On Vs Cache Off
+
+We ran that A/B on the current harness branch using the same `v4` suite.
+
+Artifacts:
+
+- cache on: [aura-benchmark-usage-summary.json](/Users/shahrozkhan/Documents/zero/aura-os/interface/test-results/current-harness-suite-v4/aura-benchmark-usage-summary.json)
+- cache off: [aura-benchmark-usage-summary.json](/Users/shahrozkhan/Documents/zero/aura-os/interface/test-results/current-harness-suite-v4-nocache/aura-benchmark-usage-summary.json)
+- compare: [harness-suite-v4-cache-on-vs-off.json](/Users/shahrozkhan/Documents/zero/aura-os/test-results/harness-suite-v4-cache-on-vs-off.json)
+
+### Aggregate result
+
+Current harness with caching enabled vs the same harness with caching disabled:
+
+- billed input delta: `-346763`
+- billed output delta: `+4520`
+- estimated effective cost delta: `-0.391341`
+- total run wall-clock delta: `+129537 ms`
+
+So on this suite:
+
+- **cache on was cheaper**
+- **cache on was slower**
+
+### Repeated repo-iteration scenario
+
+- billed input delta: `-282418`
+- billed output delta: `+1804`
+- estimated effective cost delta: `-0.369782`
+- run wall-clock delta: `+66215 ms`
+
+This is the clearest sign of economic value:
+
+- repeated long-horizon work reused enough prefix that cache-on reduced effective cost materially
+- but total runtime still increased
+
+### Static-site scenario
+
+- billed input delta: `-64345`
+- billed output delta: `+2716`
+- estimated effective cost delta: `-0.021559`
+- run wall-clock delta: `+63322 ms`
+
+This one still got cheaper with cache-on, but only slightly.
+The runtime penalty was larger than the cost savings.
+
+## Practical Interpretation
+
+The current evidence suggests:
+
+- prompt caching is already giving us real cost value on repeated-turn workloads
+- prompt caching is not yet giving us a speed win in this harness setup
+
+So the neutral product read is:
+
+- **cost win:** yes, on this same-system A/B
+- **speed win:** no, not yet
+- **reliability win:** neutral in this suite
+- **quality:** both sides passed these scenarios
+
+That means the next optimization target should be:
+
+- keep the cost savings,
+- reduce the runtime overhead.
+
+The most likely levers are:
+
+- smaller and more stable prompts
+- less verbose output
+- better tool-output shaping
+- smarter compaction before prompts grow large
+- reducing unnecessary first-turn sprawl on long prompts
+
+## Repeatable Command
+
+From `aura-os`:
+
+```bash
+cd /Users/shahrozkhan/Documents/zero/aura-os
+./evals/local-stack/bin/run-harness-context-cache-ab.sh
+```
+
+This script:
+
+- runs the suite against the current local harness
+- starts a second no-cache harness on a separate port
+- runs the same suite against that harness
+- writes a comparison report
+
 ## Recommended Future Suite Additions
 
 1. A reliability stress case that pushes closer to the context ceiling.

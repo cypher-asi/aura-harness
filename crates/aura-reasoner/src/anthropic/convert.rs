@@ -33,16 +33,26 @@ pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<Ap
     }
 }
 
-/// Build the system block as a JSON array with `cache_control` for prompt caching.
-pub(super) fn build_system_block(system_prompt: &str) -> serde_json::Value {
-    serde_json::json!([{
-        "type": "text",
-        "text": system_prompt,
-        "cache_control": {"type": "ephemeral"}
-    }])
+/// Build the system block as a JSON array, optionally adding `cache_control`.
+pub(super) fn build_system_block(system_prompt: &str, prompt_caching_enabled: bool) -> serde_json::Value {
+    if prompt_caching_enabled {
+        serde_json::json!([{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"}
+        }])
+    } else {
+        serde_json::json!([{
+            "type": "text",
+            "text": system_prompt
+        }])
+    }
 }
 
-pub(super) fn convert_messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
+pub(super) fn convert_messages_to_api(
+    messages: &[Message],
+    prompt_caching_enabled: bool,
+) -> Vec<ApiMessage> {
     let mut api_messages: Vec<ApiMessage> = messages
         .iter()
         .map(|msg| {
@@ -106,15 +116,17 @@ pub(super) fn convert_messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
         })
         .collect();
 
-    if let Some(last_user) = api_messages.iter_mut().rev().find(|m| m.role == "user") {
-        if let Some(last_block) = last_user.content.last_mut() {
-            let ephemeral = serde_json::json!({"type": "ephemeral"});
-            match last_block {
-                ApiContent::Text { cache_control, .. }
-                | ApiContent::ToolResult { cache_control, .. } => {
-                    *cache_control = Some(ephemeral);
+    if prompt_caching_enabled {
+        if let Some(last_user) = api_messages.iter_mut().rev().find(|m| m.role == "user") {
+            if let Some(last_block) = last_user.content.last_mut() {
+                let ephemeral = serde_json::json!({"type": "ephemeral"});
+                match last_block {
+                    ApiContent::Text { cache_control, .. }
+                    | ApiContent::ToolResult { cache_control, .. } => {
+                        *cache_control = Some(ephemeral);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -122,7 +134,10 @@ pub(super) fn convert_messages_to_api(messages: &[Message]) -> Vec<ApiMessage> {
     api_messages
 }
 
-pub(super) fn convert_tools_to_api(tools: &[ToolDefinition]) -> Vec<ApiTool> {
+pub(super) fn convert_tools_to_api(
+    tools: &[ToolDefinition],
+    prompt_caching_enabled: bool,
+) -> Vec<ApiTool> {
     let has_any_cache_control = tools.iter().any(|t| t.cache_control.is_some());
 
     let mut api_tools: Vec<ApiTool> = tools
@@ -138,7 +153,7 @@ pub(super) fn convert_tools_to_api(tools: &[ToolDefinition]) -> Vec<ApiTool> {
         })
         .collect();
 
-    if !has_any_cache_control {
+    if prompt_caching_enabled && !has_any_cache_control {
         if let Some(last_tool) = api_tools.last_mut() {
             last_tool.cache_control = Some(serde_json::json!({"type": "ephemeral"}));
         }
