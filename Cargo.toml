@@ -53,6 +53,7 @@ members = [
     "crates/aura-node",
     "crates/aura-protocol",
     "crates/aura-memory",
+    "crates/aura-skills",
 ]
 
 [workspace.package]
@@ -73,6 +74,9 @@ crossterm = "0.28"
 
 # Hashing
 blake3 = "1.5"
+
+# YAML
+serde_yaml = "0.9"
 
 # Error handling
 thiserror = "1.0"

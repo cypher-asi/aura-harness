@@ -1,0 +1,128 @@
+//! Skill activation — argument substitution and content rendering.
+//!
+//! When a skill is invoked with arguments, placeholders in the skill body are
+//! replaced with concrete values before the content is returned.
+
+use crate::error::SkillError;
+use crate::types::{Skill, SkillActivation};
+
+/// Activate a skill by substituting placeholders with the provided arguments.
+///
+/// Supported substitutions:
+/// - `$ARGUMENTS` — replaced with the full argument string
+/// - `$ARGUMENTS[N]` — replaced with the Nth (0-based) whitespace-split argument
+/// - `$N` (e.g. `$0`, `$1`) — shorthand for `$ARGUMENTS[N]`
+/// - `${SKILL_DIR}` — replaced with the skill's directory path
+///
+/// Backtick command injection is recognised but **not yet implemented**;
+/// those placeholders are left as-is.
+///
+/// # Errors
+///
+/// Returns [`SkillError::Activation`] if argument substitution fails.
+pub fn activate(skill: &Skill, arguments: &str) -> Result<SkillActivation, SkillError> {
+    let args: Vec<&str> = arguments.split_whitespace().collect();
+    let dir_str = skill.dir_path.to_string_lossy();
+
+    let mut content = skill.body.clone();
+
+    // ${SKILL_DIR} substitution
+    content = content.replace("${SKILL_DIR}", &dir_str);
+
+    // $ARGUMENTS[N] substitution (must come before $ARGUMENTS to avoid partial match)
+    let mut i = 0;
+    while let Some(start) = content[i..].find("$ARGUMENTS[") {
+        let abs_start = i + start;
+        if let Some(end) = content[abs_start..].find(']') {
+            let idx_str = &content[abs_start + 11..abs_start + end];
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                let replacement = args.get(idx).copied().unwrap_or("");
+                let full_placeholder = &content[abs_start..=abs_start + end].to_string();
+                content = content.replacen(full_placeholder, replacement, 1);
+            } else {
+                i = abs_start + end + 1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    // $ARGUMENTS substitution (full argument string)
+    content = content.replace("$ARGUMENTS", arguments);
+
+    // $N shorthand — only replace `$` followed by digits that are not part of
+    // a longer identifier (e.g. `${…}` was already handled).
+    for (idx, arg) in args.iter().enumerate() {
+        let placeholder = format!("${idx}");
+        content = content.replace(&placeholder, arg);
+    }
+
+    // TODO: `!`command`` injection — execute shell commands embedded in the
+    // skill body and replace them with their stdout. Skipped for Phase 1.
+
+    let fork_context = skill
+        .frontmatter
+        .context
+        .as_deref()
+        .is_some_and(|c| c == "fork");
+
+    Ok(SkillActivation {
+        skill_name: skill.frontmatter.name.clone(),
+        rendered_content: content,
+        allowed_tools: skill
+            .frontmatter
+            .allowed_tools
+            .clone()
+            .unwrap_or_default(),
+        fork_context,
+        agent_type: skill.frontmatter.agent.clone(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{SkillFrontmatter, SkillSource};
+    use std::path::PathBuf;
+
+    fn test_skill(body: &str) -> Skill {
+        Skill {
+            frontmatter: SkillFrontmatter {
+                name: "test-skill".to_string(),
+                description: "test".to_string(),
+                ..SkillFrontmatter::default()
+            },
+            body: body.to_string(),
+            source: SkillSource::Workspace,
+            dir_path: PathBuf::from("/skills/test-skill"),
+        }
+    }
+
+    #[test]
+    fn substitutes_full_arguments() {
+        let skill = test_skill("Run: $ARGUMENTS");
+        let act = activate(&skill, "deploy production").unwrap();
+        assert_eq!(act.rendered_content, "Run: deploy production");
+    }
+
+    #[test]
+    fn substitutes_indexed_arguments() {
+        let skill = test_skill("Env: $ARGUMENTS[0], Target: $ARGUMENTS[1]");
+        let act = activate(&skill, "staging us-east-1").unwrap();
+        assert_eq!(act.rendered_content, "Env: staging, Target: us-east-1");
+    }
+
+    #[test]
+    fn substitutes_dollar_n_shorthand() {
+        let skill = test_skill("Deploy $0 to $1");
+        let act = activate(&skill, "app prod").unwrap();
+        assert_eq!(act.rendered_content, "Deploy app to prod");
+    }
+
+    #[test]
+    fn substitutes_skill_dir() {
+        let skill = test_skill("Read ${SKILL_DIR}/config.yaml");
+        let act = activate(&skill, "").unwrap();
+        assert!(act.rendered_content.contains("/skills/test-skill/config.yaml"));
+    }
+}

@@ -28,6 +28,7 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         automaton_bridge: None,
         failed_txs: Arc::new(DashMap::new()),
         memory_manager: None,
+        skill_manager: None,
     }
 }
 

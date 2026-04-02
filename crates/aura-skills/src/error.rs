@@ -1,0 +1,35 @@
+//! Error types for the skill system.
+
+use thiserror::Error;
+
+/// All errors that can occur in skill parsing, loading, activation, or registry ops.
+#[derive(Error, Debug)]
+pub enum SkillError {
+    /// A skill with the given name was not found in the registry.
+    #[error("skill not found: {0}")]
+    NotFound(String),
+
+    /// Failed to parse a SKILL.md file (bad frontmatter, missing delimiters, etc.).
+    #[error("parse error: {0}")]
+    Parse(String),
+
+    /// The skill name violates naming constraints (lowercase, hyphens, digits, 1-64 chars).
+    #[error("invalid skill name: {0}")]
+    InvalidName(String),
+
+    /// Filesystem I/O failure.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// YAML deserialization failure in frontmatter.
+    #[error("yaml error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+
+    /// Failure during skill activation (argument substitution, rendering, etc.).
+    #[error("activation error: {0}")]
+    Activation(String),
+
+    /// Shell command execution failed during backtick command injection.
+    #[error("command execution error: {0}")]
+    CommandExecution(String),
+}
