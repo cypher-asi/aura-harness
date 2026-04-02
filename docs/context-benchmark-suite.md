@@ -340,6 +340,42 @@ It should be:
 - improve long-session prompt shaping without weakening instructions
 - keep measuring cost, speed, reliability, and quality together
 
+## Targeted Cached-Read Microbenchmark
+
+We also added a smaller harness-layer optimization aimed at repeated read-heavy cache hits.
+
+What it does:
+
+- keeps first-time tool results unchanged
+- shortens only large repeated cache hits for cacheable read-only tools
+- leaves write tools and non-cacheable tools untouched
+
+This is intentionally narrower than semantic compaction.
+It is meant to reduce prompt bloat from re-inserting the same large read result over and over.
+
+### Verified result
+
+The deterministic harness test covers a repeated `read_file` cache hit with a `9000` character payload.
+
+Measured outcome:
+
+- shaped cached result stays at or below `4300` characters
+- at least `4500` characters are removed from the repeated prompt payload
+- using the harness `4 chars ≈ 1 token` heuristic, that is at least about `1125` prompt tokens saved per repeated hit
+
+This is not yet a full product benchmark.
+It is a lower-layer prompt-footprint benchmark for the exact path we changed.
+
+### Honest status
+
+- the harness-layer reduction is real and tested
+- the dedicated live eval scenario for this exact optimization still needs work before we should trust it as an end-to-end product benchmark
+
+So the neutral read is:
+
+- this looks like a good low-risk prompt-footprint optimization
+- we should keep validating it in broader live evals before making larger cost/latency claims
+
 ## Repeatable Command
 
 From `aura-os`:

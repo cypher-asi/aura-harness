@@ -1,6 +1,7 @@
 //! Helper functions for the agent loop.
 
 use aura_reasoner::{ContentBlock, Message, Role};
+use serde_json::Value;
 use std::path::Path;
 
 use crate::types::{FileChange, FileChangeKind};
@@ -96,6 +97,76 @@ pub fn summarize_write_input(
             }))
         }
         _ => None,
+    }
+}
+
+/// Collapse oversized repeated cache hits for read-only tools.
+///
+/// First-time tool outputs stay untouched. This only shapes large results that
+/// the model has already seen earlier in the same run, which helps limit prompt
+/// growth from repeated reads and searches without weakening the initial result.
+#[must_use]
+pub fn summarize_cached_tool_result(
+    tool_name: &str,
+    input: &Value,
+    content: &str,
+) -> Option<String> {
+    if std::env::var("AURA_DISABLE_CACHED_RESULT_SHAPING")
+        .ok()
+        .as_deref()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    {
+        return None;
+    }
+
+    let (reuse_threshold, max_chars, head_chars, tail_chars) = match tool_name {
+        "read_file" => (8_000, 4_000, 3_000, 500),
+        "search_code" => (4_000, 2_000, 1_500, 250),
+        "list_files" | "find_files" => (2_500, 1_200, 900, 150),
+        "stat_file" => (1_500, 900, 650, 100),
+        _ => return None,
+    };
+
+    if content.len() <= reuse_threshold {
+        return None;
+    }
+
+    let descriptor = cached_tool_descriptor(input);
+    let truncated = crate::compaction::truncate_content(
+        content,
+        max_chars,
+        Some(head_chars),
+        Some(tail_chars),
+    );
+    Some(format!(
+        "Cached result reused from earlier identical `{tool_name}` call{descriptor}. Full output was {} chars.\n\n{truncated}",
+        content.len()
+    ))
+}
+
+fn cached_tool_descriptor(input: &Value) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
+        parts.push(format!("path={path}"));
+    }
+    if let Some(pattern) = input.get("pattern").and_then(|v| v.as_str()) {
+        parts.push(format!("pattern={pattern}"));
+    }
+    if let Some(query) = input.get("query").and_then(|v| v.as_str()) {
+        parts.push(format!("query={query}"));
+    }
+    if let Some(start_line) = input.get("start_line").and_then(|v| v.as_u64()) {
+        parts.push(format!("start_line={start_line}"));
+    }
+    if let Some(end_line) = input.get("end_line").and_then(|v| v.as_u64()) {
+        parts.push(format!("end_line={end_line}"));
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
     }
 }
 
@@ -233,6 +304,45 @@ mod tests {
         assert!(summarize_write_input("search_code", &input).is_none());
         assert!(summarize_write_input("run_command", &input).is_none());
         assert!(summarize_write_input("totally_unknown", &input).is_none());
+    }
+
+    #[test]
+    fn test_summarize_cached_tool_result_for_large_read_file() {
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let content = "a".repeat(9_000);
+        let summary = summarize_cached_tool_result("read_file", &input, &content).unwrap();
+        assert!(summary.contains("Cached result reused"));
+        assert!(summary.contains("path=src/lib.rs"));
+        assert!(summary.contains("Full output was 9000 chars"));
+        assert!(summary.contains("truncated"));
+        assert!(summary.len() < content.len());
+    }
+
+    #[test]
+    fn test_summarize_cached_tool_result_cuts_large_read_file_footprint_substantially() {
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let content = "a".repeat(9_000);
+        let summary = summarize_cached_tool_result("read_file", &input, &content).unwrap();
+        let saved_chars = content.len() - summary.len();
+        assert!(summary.len() <= 4_300, "summary should stay compact");
+        assert!(
+            saved_chars >= 4_500,
+            "expected at least 4.5k chars saved, got {saved_chars}"
+        );
+    }
+
+    #[test]
+    fn test_summarize_cached_tool_result_leaves_small_result_unchanged() {
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let content = "fn main() {}\n";
+        assert!(summarize_cached_tool_result("read_file", &input, content).is_none());
+    }
+
+    #[test]
+    fn test_summarize_cached_tool_result_ignores_unknown_tools() {
+        let input = serde_json::json!({"command": "pwd"});
+        let content = "x".repeat(10_000);
+        assert!(summarize_cached_tool_result("run_command", &input, &content).is_none());
     }
 
     #[test]

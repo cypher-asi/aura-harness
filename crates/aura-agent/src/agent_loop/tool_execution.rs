@@ -218,7 +218,7 @@ fn extract_tool_calls(response: &ModelResponse) -> Vec<ToolCallInfo> {
         .collect()
 }
 
-fn split_cached(
+pub(super) fn split_cached(
     tool_calls: &[ToolCallInfo],
     cache: &std::collections::HashMap<String, String>,
 ) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
@@ -229,9 +229,11 @@ fn split_cached(
         if is_cacheable(&tc.name) {
             let key = tool_result_cache_key(&tc.name, &tc.input);
             if let Some(hit) = cache.get(&key) {
+                let content = helpers::summarize_cached_tool_result(&tc.name, &tc.input, hit)
+                    .unwrap_or_else(|| hit.clone());
                 cached.push(ToolCallResult {
                     tool_use_id: tc.id.clone(),
-                    content: hit.clone(),
+                    content,
                     is_error: false,
                     stop_loop: false,
                     file_changes: Vec::new(),
