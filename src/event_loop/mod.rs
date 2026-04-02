@@ -30,6 +30,8 @@ pub struct EventLoopContext<'a> {
     pub kernel: Arc<Kernel>,
     pub agent_id: AgentId,
     pub _process_manager: Arc<ProcessManager>,
+    /// Optional memory manager for prompt injection and result ingestion.
+    pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -42,6 +44,7 @@ pub(super) struct LoopState<'a> {
     pub(super) tools: &'a [ToolDefinition],
     pub(super) kernel: Arc<Kernel>,
     pub(super) agent_id: AgentId,
+    pub(super) memory_manager: Option<Arc<aura_memory::MemoryManager>>,
 }
 
 /// Run the event processing loop.
@@ -59,6 +62,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         kernel,
         agent_id,
         _process_manager,
+        memory_manager,
     } = ctx;
 
     let mut state = LoopState {
@@ -70,6 +74,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         tools,
         kernel,
         agent_id,
+        memory_manager,
     };
 
     loop {
@@ -185,6 +190,10 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     send_record_to_ui(state.commands, prompt_result.entry.seq, &tx, &prompt_result.entry).await;
 
     state.messages.push(Message::user(text));
+
+    if let Some(ref mm) = state.memory_manager {
+        mm.prepare_context(state.agent_id, state.agent_loop.config_mut());
+    }
 
     let (process_result, streamed_text) = handlers::run_agent_turn(state).await;
 

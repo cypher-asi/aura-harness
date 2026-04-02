@@ -181,6 +181,60 @@ impl ProcessId {
     }
 }
 
+// ============================================================================
+// Fact ID (16 bytes)
+// ============================================================================
+
+define_id!(
+    /// Fact identifier - 16 bytes.
+    FactId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+);
+
+impl FactId {
+    /// Generate a new random `FactId`.
+    #[must_use]
+    pub fn generate() -> Self {
+        let uuid = uuid::Uuid::new_v4();
+        Self(*uuid.as_bytes())
+    }
+}
+
+// ============================================================================
+// Agent Event ID (16 bytes)
+// ============================================================================
+
+define_id!(
+    /// Agent event identifier - 16 bytes.
+    AgentEventId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+);
+
+impl AgentEventId {
+    /// Generate a new random `AgentEventId`.
+    #[must_use]
+    pub fn generate() -> Self {
+        let uuid = uuid::Uuid::new_v4();
+        Self(*uuid.as_bytes())
+    }
+}
+
+// ============================================================================
+// Procedure ID (16 bytes)
+// ============================================================================
+
+define_id!(
+    /// Procedure identifier - 16 bytes.
+    ProcedureId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+);
+
+impl ProcedureId {
+    /// Generate a new random `ProcedureId`.
+    #[must_use]
+    pub fn generate() -> Self {
+        let uuid = uuid::Uuid::new_v4();
+        Self(*uuid.as_bytes())
+    }
+}
+
 // Re-export hex for crate-internal convenience
 pub(crate) use hex;
 

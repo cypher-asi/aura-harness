@@ -124,6 +124,7 @@ impl Node {
             automaton_controller,
             automaton_bridge,
             failed_txs: Arc::new(dashmap::DashMap::new()),
+            memory_manager: None,
         };
         let app = create_router(state);
 

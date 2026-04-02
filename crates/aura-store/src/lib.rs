@@ -29,4 +29,10 @@ pub mod cf {
     pub const AGENT_META: &str = "agent_meta";
     /// Inbox (durable per-agent transaction queue)
     pub const INBOX: &str = "inbox";
+    /// Memory: per-agent semantic facts
+    pub const MEMORY_FACTS: &str = "memory_facts";
+    /// Memory: per-agent episodic events
+    pub const MEMORY_EVENTS: &str = "memory_events";
+    /// Memory: per-agent procedural patterns
+    pub const MEMORY_PROCEDURES: &str = "memory_procedures";
 }

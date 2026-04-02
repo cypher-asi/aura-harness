@@ -120,6 +120,7 @@ dependencies = [
  "aura-auth",
  "aura-core",
  "aura-kernel",
+ "aura-memory",
  "aura-node",
  "aura-protocol",
  "aura-reasoner",
@@ -277,6 +278,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aura-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-agent",
+ "aura-core",
+ "aura-reasoner",
+ "aura-store",
+ "chrono",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "aura-node"
 version = "0.1.0"
 dependencies = [
@@ -286,6 +307,7 @@ dependencies = [
  "aura-automaton",
  "aura-core",
  "aura-kernel",
+ "aura-memory",
  "aura-protocol",
  "aura-reasoner",
  "aura-store",
@@ -294,6 +316,7 @@ dependencies = [
  "base64 0.22.1",
  "blake3",
  "bytes",
+ "chrono",
  "dashmap",
  "dirs",
  "dotenvy",

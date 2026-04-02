@@ -274,6 +274,9 @@ fn start_turn(
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
+    if let Some(ref mm) = ctx.memory_manager {
+        mm.prepare_context(session.agent_id, &mut config);
+    }
     let agent_loop = AgentLoop::new(config);
 
     let tools = session.tool_definitions.clone();

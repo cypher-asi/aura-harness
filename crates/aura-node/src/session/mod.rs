@@ -274,6 +274,8 @@ pub struct WsContext {
     pub automaton_controller: Option<Arc<dyn AutomatonController>>,
     /// Optional project base for remapping project paths (from `AURA_PROJECT_BASE`).
     pub project_base: Option<PathBuf>,
+    /// Optional memory manager for prompt injection and result ingestion.
+    pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
 }
 
 #[cfg(test)]

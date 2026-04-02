@@ -21,7 +21,7 @@ pub mod types;
 
 pub use error::{AuraError, Result};
 #[allow(deprecated)]
-pub use ids::{ActionId, AgentId, Hash, ProcessId, TxId};
+pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcessId, ProcedureId, TxId};
 pub use types::{
     Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,
     EffectKind, EffectStatus, Identity, InstalledToolDefinition, ProcessPending, Proposal,
