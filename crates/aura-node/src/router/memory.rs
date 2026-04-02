@@ -65,13 +65,12 @@ fn memory_store(
 }
 
 fn store_err(e: aura_memory::MemoryError) -> (StatusCode, Json<serde_json::Value>) {
-    let msg = e.to_string();
-    let status = if msg.contains("not found") {
+    let status = if e.is_not_found() {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };
-    (status, Json(serde_json::json!({ "error": msg })))
+    (status, Json(serde_json::json!({ "error": e.to_string() })))
 }
 
 // ============================================================================

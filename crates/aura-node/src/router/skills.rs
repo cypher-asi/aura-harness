@@ -12,13 +12,12 @@ use serde::{Deserialize, Serialize};
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
 fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
-    let msg = e.to_string();
-    let status = if msg.contains("not found") {
+    let status = if e.is_not_found() {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::BAD_REQUEST
     };
-    (status, Json(serde_json::json!({ "error": msg })))
+    (status, Json(serde_json::json!({ "error": e.to_string() })))
 }
 
 fn require_skills(
