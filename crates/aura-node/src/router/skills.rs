@@ -1,28 +1,30 @@
-//! Skills CRUD API endpoints — list, get, activate, and per-agent install/uninstall.
+//! Skills CRUD API endpoints — list, get, create, activate, and per-agent install/uninstall.
 
 use super::RouterState;
-use aura_skills::{SkillActivation, SkillFrontmatter, SkillInstallation, SkillMeta, SkillSource};
+use aura_skills::{SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, RwLock};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
 fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
-    let status = if e.is_not_found() {
+    let msg = e.to_string();
+    let status = if msg.contains("not found") {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::BAD_REQUEST
     };
-    (status, Json(serde_json::json!({ "error": e.to_string() })))
+    (status, Json(serde_json::json!({ "error": msg })))
 }
 
 fn require_skills(
     state: &RouterState,
-) -> Result<&std::sync::Arc<aura_skills::SkillManager>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<&Arc<RwLock<SkillManager>>, (StatusCode, Json<serde_json::Value>)> {
     state.skill_manager.as_ref().ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -68,7 +70,10 @@ pub(super) async fn list_skills(
     State(state): State<RouterState>,
 ) -> ApiResult<Vec<SkillMeta>> {
     let mgr = require_skills(&state)?;
-    Ok(Json(mgr.list_all()))
+    let guard = mgr.read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    Ok(Json(guard.list_all()))
 }
 
 /// `GET /api/skills/:name` — get full skill details.
@@ -77,7 +82,10 @@ pub(super) async fn get_skill(
     Path(name): Path<String>,
 ) -> ApiResult<SkillDetail> {
     let mgr = require_skills(&state)?;
-    let skill = mgr.get(&name).map_err(skill_err)?;
+    let guard = mgr.read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    let skill = guard.get(&name).map_err(skill_err)?;
     Ok(Json(SkillDetail {
         name: skill.frontmatter.name.clone(),
         description: skill.frontmatter.description.clone(),
@@ -101,8 +109,48 @@ pub(super) async fn activate_skill(
     Json(body): Json<ActivateBody>,
 ) -> ApiResult<ActivationResponse> {
     let mgr = require_skills(&state)?;
-    let activation = mgr.activate(&name, &body.arguments).map_err(skill_err)?;
+    let guard = mgr.read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    let activation = guard.activate(&name, &body.arguments).map_err(skill_err)?;
     Ok(Json(activation.into()))
+}
+
+// -- Skill creation --
+
+/// Request body for creating a new skill.
+#[derive(Deserialize)]
+pub(super) struct CreateSkillBody {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub user_invocable: bool,
+}
+
+/// `POST /api/skills` — create a new skill (writes SKILL.md to personal dir).
+pub(super) async fn create_skill(
+    State(state): State<RouterState>,
+    Json(body): Json<CreateSkillBody>,
+) -> Result<(StatusCode, Json<SkillDetail>), (StatusCode, Json<serde_json::Value>)> {
+    let mgr = require_skills(&state)?;
+    let mut guard = mgr.write().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    let skill = guard
+        .create(&body.name, &body.description, &body.body, body.user_invocable)
+        .map_err(skill_err)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(SkillDetail {
+            name: skill.frontmatter.name.clone(),
+            description: skill.frontmatter.description.clone(),
+            source: skill.source.clone(),
+            body: skill.body.clone(),
+            frontmatter: skill.frontmatter.clone(),
+        }),
+    ))
 }
 
 // -- Per-agent installation endpoints --
@@ -110,9 +158,7 @@ pub(super) async fn activate_skill(
 /// Request body for installing a skill for an agent.
 #[derive(Deserialize)]
 pub(super) struct InstallBody {
-    /// Name of the skill to install.
     pub name: String,
-    /// Optional source URL the skill was fetched from.
     #[serde(default)]
     pub source_url: Option<String>,
 }
@@ -123,7 +169,10 @@ pub(super) async fn list_agent_skills(
     Path(agent_id): Path<String>,
 ) -> ApiResult<Vec<SkillInstallation>> {
     let mgr = require_skills(&state)?;
-    let installations = mgr.list_agent_skills(&agent_id).map_err(skill_err)?;
+    let guard = mgr.read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    let installations = guard.list_agent_skills(&agent_id).map_err(skill_err)?;
     Ok(Json(installations))
 }
 
@@ -134,7 +183,10 @@ pub(super) async fn install_agent_skill(
     Json(body): Json<InstallBody>,
 ) -> Result<(StatusCode, Json<SkillInstallation>), (StatusCode, Json<serde_json::Value>)> {
     let mgr = require_skills(&state)?;
-    let installation = mgr
+    let guard = mgr.read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    let installation = guard
         .install_for_agent(&agent_id, &body.name, body.source_url)
         .map_err(skill_err)?;
     Ok((StatusCode::CREATED, Json(installation)))
@@ -146,7 +198,10 @@ pub(super) async fn uninstall_agent_skill(
     Path((agent_id, name)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     let mgr = require_skills(&state)?;
-    mgr.uninstall_from_agent(&agent_id, &name)
+    let guard = mgr.read().map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+    })?;
+    guard.uninstall_from_agent(&agent_id, &name)
         .map_err(skill_err)?;
     Ok(StatusCode::NO_CONTENT)
 }

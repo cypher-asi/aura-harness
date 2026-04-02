@@ -4,6 +4,7 @@ use crate::activation;
 use crate::error::SkillError;
 use crate::install::{SkillInstallStore, SkillInstallation};
 use crate::loader::SkillLoader;
+use crate::parser::validate_name;
 use crate::prompt;
 use crate::registry::SkillRegistry;
 use crate::types::{Skill, SkillActivation, SkillMeta};
@@ -98,6 +99,50 @@ impl SkillManager {
     pub fn reload(&mut self) {
         self.registry.reload(&self.loader);
         info!("skills reloaded — {} skills available", self.registry.len());
+    }
+
+    /// Create a new skill by writing a SKILL.md to the personal skills directory,
+    /// then reload the registry so it's immediately available.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillError`] if the name is invalid, the target directory cannot
+    /// be resolved, or the filesystem write fails.
+    pub fn create(
+        &mut self,
+        name: &str,
+        description: &str,
+        body: &str,
+        user_invocable: bool,
+    ) -> Result<Skill, SkillError> {
+        validate_name(name)?;
+
+        let target_dir = self
+            .loader
+            .config()
+            .personal_dir
+            .clone()
+            .ok_or_else(|| {
+                SkillError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "personal skills directory not configured",
+                ))
+            })?;
+
+        let skill_dir = target_dir.join(name);
+        std::fs::create_dir_all(&skill_dir)?;
+
+        let mut yaml = format!("name: {name}\ndescription: {description}\n");
+        if user_invocable {
+            yaml.push_str("user-invocable: true\n");
+        }
+
+        let content = format!("---\n{yaml}---\n{body}");
+        std::fs::write(skill_dir.join("SKILL.md"), &content)?;
+
+        info!(name, "skill created on disk");
+        self.reload();
+        self.registry.get(name).map(|s| s.clone())
     }
 
     /// Access the inner registry (e.g. for path-based matching).
