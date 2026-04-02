@@ -34,7 +34,10 @@ pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<Ap
 }
 
 /// Build the system block as a JSON array, optionally adding `cache_control`.
-pub(super) fn build_system_block(system_prompt: &str, prompt_caching_enabled: bool) -> serde_json::Value {
+pub(super) fn build_system_block(
+    system_prompt: &str,
+    prompt_caching_enabled: bool,
+) -> serde_json::Value {
     if prompt_caching_enabled {
         serde_json::json!([{
             "type": "text",

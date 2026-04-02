@@ -132,12 +132,8 @@ pub fn summarize_cached_tool_result(
     }
 
     let descriptor = cached_tool_descriptor(input);
-    let truncated = crate::compaction::truncate_content(
-        content,
-        max_chars,
-        Some(head_chars),
-        Some(tail_chars),
-    );
+    let truncated =
+        crate::compaction::truncate_content(content, max_chars, Some(head_chars), Some(tail_chars));
     Some(format!(
         "Cached result reused from earlier identical `{tool_name}` call{descriptor}. Full output was {} chars.\n\n{truncated}",
         content.len()

@@ -24,10 +24,10 @@ use aura_core::{AgentId, SystemKind, Transaction, TransactionType};
 use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
-use aura_tools::ToolConfig;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
+use aura_tools::ToolConfig;
 
 use crate::executor_factory;
 use crate::jwt_domain::JwtDomainApi;

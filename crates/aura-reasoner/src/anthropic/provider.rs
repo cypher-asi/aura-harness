@@ -85,8 +85,7 @@ impl AnthropicProvider {
             RoutingMode::Direct => {
                 req_builder = req_builder.header("x-api-key", &self.config.api_key);
                 if prompt_caching_enabled {
-                    req_builder =
-                        req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
+                    req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
                 }
             }
             RoutingMode::Proxy => {
@@ -97,8 +96,7 @@ impl AnthropicProvider {
                 })?;
                 req_builder = req_builder.header("authorization", format!("Bearer {token}"));
                 if prompt_caching_enabled {
-                    req_builder =
-                        req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
+                    req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
                 }
                 if let Some(ref v) = request_ctx.aura_project_id {
                     req_builder = req_builder.header("X-Aura-Project-Id", v);

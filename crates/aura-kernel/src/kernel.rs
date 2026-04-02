@@ -16,9 +16,9 @@
 //! 3. **Monotonic sequencing** — the internal counter guarantees strictly
 //!    increasing sequence numbers without requiring the caller to supply them.
 
-use crate::ExecutorRouter;
 use crate::executor::ExecuteContext;
 use crate::policy::{Policy, PolicyConfig};
+use crate::ExecutorRouter;
 use aura_core::{
     Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectStatus, Proposal, ProposalSet,
     RecordEntry, ToolCall, ToolProposal, Transaction, TransactionType,
@@ -714,7 +714,7 @@ pub mod legacy {
     use super::*;
     use aura_core::{Action, ActionId, Decision, Effect, EffectStatus, ProposalSet, Transaction};
     use aura_reasoner::ProposeRequest;
-    use tokio::time::{Duration, timeout};
+    use tokio::time::{timeout, Duration};
 
     #[async_trait::async_trait]
     pub trait Proposer: Send + Sync {

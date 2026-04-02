@@ -134,7 +134,11 @@ fn test_cache_control_omitted_when_prompt_caching_disabled() {
     let json = serde_json::to_string(&system).unwrap();
     assert!(!json.contains("cache_control"));
 
-    let messages = vec![Message::user("Hello"), Message::assistant("Hi!"), Message::user("How are you?")];
+    let messages = vec![
+        Message::user("Hello"),
+        Message::assistant("Hi!"),
+        Message::user("How are you?"),
+    ];
     let api_msgs = convert_messages_to_api(&messages, false);
     if let ApiContent::Text { cache_control, .. } = &api_msgs[2].content[0] {
         assert!(cache_control.is_none());
@@ -143,8 +147,16 @@ fn test_cache_control_omitted_when_prompt_caching_disabled() {
     }
 
     let tools = vec![
-        ToolDefinition::new("fs.read", "Read a file", serde_json::json!({"type": "object"})),
-        ToolDefinition::new("fs.write", "Write a file", serde_json::json!({"type": "object"})),
+        ToolDefinition::new(
+            "fs.read",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        ),
+        ToolDefinition::new(
+            "fs.write",
+            "Write a file",
+            serde_json::json!({"type": "object"}),
+        ),
     ];
     let api_tools = convert_tools_to_api(&tools, false);
     assert!(api_tools.iter().all(|tool| tool.cache_control.is_none()));

@@ -56,7 +56,10 @@ fn cached_read_hits_are_compacted_before_reinsertion() {
     };
     let mut cache = HashMap::new();
     let long_content = "a".repeat(9_000);
-    cache.insert(tool_result_cache_key(&call.name, &call.input), long_content.clone());
+    cache.insert(
+        tool_result_cache_key(&call.name, &call.input),
+        long_content.clone(),
+    );
 
     let (cached, uncached) = split_cached(&[call], &cache);
 
@@ -75,7 +78,10 @@ fn repeated_cached_reads_reduce_message_footprint_across_turns() {
     };
     let mut cache = HashMap::new();
     let long_content = "a".repeat(9_000);
-    cache.insert(tool_result_cache_key(&call.name, &call.input), long_content.clone());
+    cache.insert(
+        tool_result_cache_key(&call.name, &call.input),
+        long_content.clone(),
+    );
 
     let mut shaped_messages = vec![Message::user("Read the same file again.")];
     let (shaped_cached, _) = split_cached(std::slice::from_ref(&call), &cache);
