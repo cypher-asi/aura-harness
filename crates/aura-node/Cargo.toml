@@ -18,7 +18,10 @@ aura-tools = { path = "../aura-tools" }
 aura-reasoner = { path = "../aura-reasoner" }
 aura-kernel = { path = "../aura-kernel" }
 aura-agent = { path = "../aura-agent" }
+aura-memory = { path = "../aura-memory" }
 aura-automaton = { path = "../aura-automaton" }
+aura-skills = { path = "../aura-skills" }
+chrono = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

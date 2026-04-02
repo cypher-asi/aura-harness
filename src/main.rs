@@ -255,6 +255,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
             kernel,
             agent_id,
             _process_manager: process_manager_clone,
+            memory_manager: None,
         };
         event_loop::run_event_loop(ctx).await
     });

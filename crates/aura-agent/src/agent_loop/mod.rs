@@ -140,6 +140,11 @@ impl AgentLoop {
         self.config.auth_token = token;
     }
 
+    /// Get a mutable reference to the config for external injection.
+    pub fn config_mut(&mut self) -> &mut AgentLoopConfig {
+        &mut self.config
+    }
+
     /// Run the agent loop with the given provider, executor, and initial messages.
     ///
     /// Backward-compatible entry point that delegates to

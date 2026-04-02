@@ -27,6 +27,8 @@ use tracing::{error, info, instrument};
 
 mod automaton;
 mod files;
+mod memory;
+mod skills;
 mod tx;
 mod ws;
 
@@ -57,6 +59,10 @@ pub struct RouterState {
     pub automaton_bridge: Option<Arc<AutomatonBridge>>,
     /// tx_id (hex) -> error message for scheduling failures after 202 acceptance.
     pub failed_txs: Arc<DashMap<String, String>>,
+    /// Optional memory manager for CRUD API and session injection.
+    pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    /// Optional skill manager for skill CRUD API and prompt injection.
+    pub skill_manager: Option<Arc<aura_skills::SkillManager>>,
 }
 
 impl Clone for RouterState {
@@ -72,6 +78,8 @@ impl Clone for RouterState {
             automaton_controller: self.automaton_controller.clone(),
             automaton_bridge: self.automaton_bridge.clone(),
             failed_txs: self.failed_txs.clone(),
+            memory_manager: self.memory_manager.clone(),
+            skill_manager: self.skill_manager.clone(),
         }
     }
 }
@@ -103,6 +111,32 @@ pub fn create_router(state: RouterState) -> Router {
         .route(
             "/automaton/:automaton_id/stop",
             post(automaton_stop_handler),
+        )
+        // Memory CRUD
+        .route("/memory/:agent_id/facts", get(memory::list_facts).post(memory::create_fact))
+        .route("/memory/:agent_id/facts/:id", get(memory::get_fact).put(memory::update_fact).delete(memory::delete_fact))
+        .route("/memory/:agent_id/facts/by-key/:key", get(memory::get_fact_by_key))
+        .route("/memory/:agent_id/events", get(memory::list_events).post(memory::create_event))
+        .route("/memory/:agent_id/events/:id", axum::routing::delete(memory::delete_event))
+        .route("/memory/:agent_id/events/bulk-delete", post(memory::bulk_delete_events))
+        .route("/memory/:agent_id/procedures", get(memory::list_procedures).post(memory::create_procedure))
+        .route("/memory/:agent_id/procedures/:id", get(memory::get_procedure).put(memory::update_procedure).delete(memory::delete_procedure))
+        .route("/memory/:agent_id/snapshot", get(memory::snapshot))
+        .route("/memory/:agent_id/wipe", post(memory::wipe))
+        .route("/memory/:agent_id/stats", get(memory::stats))
+        .route("/memory/:agent_id/consolidate", post(memory::consolidate))
+        // Skills CRUD
+        .route("/api/skills", get(skills::list_skills))
+        .route("/api/skills/:name", get(skills::get_skill))
+        .route("/api/skills/:name/activate", post(skills::activate_skill))
+        // Per-agent skill installations
+        .route(
+            "/api/agents/:agent_id/skills",
+            get(skills::list_agent_skills).post(skills::install_agent_skill),
+        )
+        .route(
+            "/api/agents/:agent_id/skills/:name",
+            axum::routing::delete(skills::uninstall_agent_skill),
         )
         .with_state(state)
         .layer(TraceLayer::new_for_http())

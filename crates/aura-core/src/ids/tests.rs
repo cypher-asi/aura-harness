@@ -244,3 +244,123 @@ fn process_id_json_roundtrip() {
     let parsed: ProcessId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, parsed);
 }
+
+// ============================================================================
+// FactId
+// ============================================================================
+
+#[test]
+fn fact_id_hex_roundtrip() {
+    let id = FactId::generate();
+    let hex = id.to_hex();
+    let parsed = FactId::from_hex(&hex).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn fact_id_json_roundtrip() {
+    let id = FactId::generate();
+    let json = serde_json::to_string(&id).unwrap();
+    let parsed: FactId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn fact_id_generate_uniqueness() {
+    let ids: Vec<FactId> = (0..100).map(|_| FactId::generate()).collect();
+    for i in 0..ids.len() {
+        for j in (i + 1)..ids.len() {
+            assert_ne!(ids[i], ids[j], "Generated FactIds should be unique");
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn proptest_fact_id_hex_roundtrip(bytes in any::<[u8; 16]>()) {
+        let id = FactId::new(bytes);
+        let hex = id.to_hex();
+        let parsed = FactId::from_hex(&hex).unwrap();
+        prop_assert_eq!(id, parsed);
+    }
+}
+
+// ============================================================================
+// AgentEventId
+// ============================================================================
+
+#[test]
+fn agent_event_id_hex_roundtrip() {
+    let id = AgentEventId::generate();
+    let hex = id.to_hex();
+    let parsed = AgentEventId::from_hex(&hex).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn agent_event_id_json_roundtrip() {
+    let id = AgentEventId::generate();
+    let json = serde_json::to_string(&id).unwrap();
+    let parsed: AgentEventId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn agent_event_id_generate_uniqueness() {
+    let ids: Vec<AgentEventId> = (0..100).map(|_| AgentEventId::generate()).collect();
+    for i in 0..ids.len() {
+        for j in (i + 1)..ids.len() {
+            assert_ne!(ids[i], ids[j], "Generated AgentEventIds should be unique");
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn proptest_agent_event_id_hex_roundtrip(bytes in any::<[u8; 16]>()) {
+        let id = AgentEventId::new(bytes);
+        let hex = id.to_hex();
+        let parsed = AgentEventId::from_hex(&hex).unwrap();
+        prop_assert_eq!(id, parsed);
+    }
+}
+
+// ============================================================================
+// ProcedureId
+// ============================================================================
+
+#[test]
+fn procedure_id_hex_roundtrip() {
+    let id = ProcedureId::generate();
+    let hex = id.to_hex();
+    let parsed = ProcedureId::from_hex(&hex).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn procedure_id_json_roundtrip() {
+    let id = ProcedureId::generate();
+    let json = serde_json::to_string(&id).unwrap();
+    let parsed: ProcedureId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn procedure_id_generate_uniqueness() {
+    let ids: Vec<ProcedureId> = (0..100).map(|_| ProcedureId::generate()).collect();
+    for i in 0..ids.len() {
+        for j in (i + 1)..ids.len() {
+            assert_ne!(ids[i], ids[j], "Generated ProcedureIds should be unique");
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn proptest_procedure_id_hex_roundtrip(bytes in any::<[u8; 16]>()) {
+        let id = ProcedureId::new(bytes);
+        let hex = id.to_hex();
+        let parsed = ProcedureId::from_hex(&hex).unwrap();
+        prop_assert_eq!(id, parsed);
+    }
+}

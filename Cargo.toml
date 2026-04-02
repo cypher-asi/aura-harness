@@ -15,6 +15,7 @@ aura-store = { path = "crates/aura-store" }
 aura-reasoner = { path = "crates/aura-reasoner" }
 aura-tools = { path = "crates/aura-tools" }
 aura-agent = { path = "crates/aura-agent" }
+aura-memory = { path = "crates/aura-memory" }
 aura-auth = { path = "crates/aura-auth" }
 aura-node = { path = "crates/aura-node" }
 anyhow = "1.0"
@@ -51,6 +52,8 @@ members = [
     "crates/aura-automaton",
     "crates/aura-node",
     "crates/aura-protocol",
+    "crates/aura-memory",
+    "crates/aura-skills",
 ]
 
 [workspace.package]
@@ -71,6 +74,9 @@ crossterm = "0.28"
 
 # Hashing
 blake3 = "1.5"
+
+# YAML
+serde_yaml = "0.9"
 
 # Error handling
 thiserror = "1.0"

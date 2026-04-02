@@ -69,7 +69,15 @@ impl RocksStore {
         opts.create_missing_column_families(true);
 
         // Define column families
-        let cf_names = [cf::RECORD, cf::AGENT_META, cf::INBOX];
+        let cf_names = [
+            cf::RECORD,
+            cf::AGENT_META,
+            cf::INBOX,
+            cf::MEMORY_FACTS,
+            cf::MEMORY_EVENTS,
+            cf::MEMORY_PROCEDURES,
+            cf::AGENT_SKILLS,
+        ];
         let cf_descriptors: Vec<_> = cf_names
             .iter()
             .map(|name| {
@@ -92,6 +100,13 @@ impl RocksStore {
         self.db
             .cf_handle(name)
             .ok_or_else(|| StoreError::ColumnFamilyNotFound(name.to_string()))
+    }
+
+    /// Expose the underlying `RocksDB` handle for subsystems (e.g. memory store)
+    /// that share the same database instance.
+    #[must_use]
+    pub const fn db_handle(&self) -> &Arc<DBWithThreadMode<MultiThreaded>> {
+        &self.db
     }
 
     /// Create write options based on `sync_writes` setting.
