@@ -129,6 +129,15 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/api/skills", get(skills::list_skills))
         .route("/api/skills/:name", get(skills::get_skill))
         .route("/api/skills/:name/activate", post(skills::activate_skill))
+        // Per-agent skill installations
+        .route(
+            "/api/agents/:agent_id/skills",
+            get(skills::list_agent_skills).post(skills::install_agent_skill),
+        )
+        .route(
+            "/api/agents/:agent_id/skills/:name",
+            axum::routing::delete(skills::uninstall_agent_skill),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }

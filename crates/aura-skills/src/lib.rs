@@ -38,6 +38,7 @@
 
 pub mod activation;
 pub mod error;
+pub mod install;
 pub mod loader;
 pub mod manager;
 pub mod parser;
@@ -46,6 +47,7 @@ pub mod registry;
 pub mod types;
 
 pub use error::SkillError;
+pub use install::{SkillInstallStore, SkillInstallation};
 pub use loader::SkillLoader;
 pub use manager::SkillManager;
 pub use registry::SkillRegistry;

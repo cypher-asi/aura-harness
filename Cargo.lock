@@ -370,7 +370,10 @@ name = "aura-skills"
 version = "0.1.0"
 dependencies = [
  "aura-core",
+ "aura-store",
+ "chrono",
  "dirs",
+ "rocksdb",
  "serde",
  "serde_json",
  "serde_yaml",

@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-core = { path = "../aura-core" }
+aura-store = { path = "../aura-store" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -15,6 +16,8 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 dirs = { workspace = true }
+rocksdb = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

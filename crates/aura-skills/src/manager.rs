@@ -2,19 +2,25 @@
 
 use crate::activation;
 use crate::error::SkillError;
+use crate::install::{SkillInstallStore, SkillInstallation};
 use crate::loader::SkillLoader;
 use crate::prompt;
 use crate::registry::SkillRegistry;
 use crate::types::{Skill, SkillActivation, SkillMeta};
+use chrono::Utc;
+use std::sync::Arc;
 use tracing::info;
 
 /// Top-level entry point for the skill system.
 ///
 /// Owns a [`SkillLoader`] and [`SkillRegistry`], and exposes methods for
 /// listing, activating, and injecting skills into agent prompts.
+/// Optionally holds a [`SkillInstallStore`] for per-agent installation tracking.
 pub struct SkillManager {
     registry: SkillRegistry,
     loader: SkillLoader,
+    /// Optional RocksDB-backed per-agent installation store.
+    install_store: Option<Arc<SkillInstallStore>>,
 }
 
 impl SkillManager {
@@ -24,7 +30,30 @@ impl SkillManager {
         let mut registry = SkillRegistry::new();
         registry.reload(&loader);
         info!("skill manager initialized with {} skills", registry.len());
-        Self { registry, loader }
+        Self {
+            registry,
+            loader,
+            install_store: None,
+        }
+    }
+
+    /// Create a new manager with a RocksDB-backed installation store.
+    #[must_use]
+    pub fn with_install_store(loader: SkillLoader, store: Arc<SkillInstallStore>) -> Self {
+        let mut registry = SkillRegistry::new();
+        registry.reload(&loader);
+        info!("skill manager initialized with {} skills", registry.len());
+        Self {
+            registry,
+            loader,
+            install_store: Some(store),
+        }
+    }
+
+    /// Access the underlying install store, if configured.
+    #[must_use]
+    pub const fn install_store(&self) -> Option<&Arc<SkillInstallStore>> {
+        self.install_store.as_ref()
     }
 
     /// Inject model-invocable skill metadata into the given system prompt.
@@ -75,5 +104,69 @@ impl SkillManager {
     #[must_use]
     pub const fn registry(&self) -> &SkillRegistry {
         &self.registry
+    }
+
+    // -- Per-agent installation tracking --
+
+    fn require_install_store(&self) -> Result<&SkillInstallStore, SkillError> {
+        self.install_store
+            .as_deref()
+            .ok_or_else(|| SkillError::Activation("install store not configured".to_string()))
+    }
+
+    /// Install a skill for a specific agent, recording it in the persistent store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillError`] if the install store is not configured or the
+    /// write fails.
+    pub fn install_for_agent(
+        &self,
+        agent_id: &str,
+        skill_name: &str,
+        source_url: Option<String>,
+    ) -> Result<SkillInstallation, SkillError> {
+        let store = self.require_install_store()?;
+        let installation = SkillInstallation {
+            agent_id: agent_id.to_string(),
+            skill_name: skill_name.to_string(),
+            source_url,
+            installed_at: Utc::now(),
+            version: None,
+        };
+        store.install(&installation)?;
+        info!(agent_id, skill_name, "skill installed for agent");
+        Ok(installation)
+    }
+
+    /// Uninstall a skill from a specific agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillError`] if the install store is not configured or the
+    /// delete fails.
+    pub fn uninstall_from_agent(
+        &self,
+        agent_id: &str,
+        skill_name: &str,
+    ) -> Result<(), SkillError> {
+        let store = self.require_install_store()?;
+        store.uninstall(agent_id, skill_name)?;
+        info!(agent_id, skill_name, "skill uninstalled from agent");
+        Ok(())
+    }
+
+    /// List all skills installed for a specific agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SkillError`] if the install store is not configured or the
+    /// read fails.
+    pub fn list_agent_skills(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<SkillInstallation>, SkillError> {
+        let store = self.require_install_store()?;
+        store.list_for_agent(agent_id)
     }
 }
