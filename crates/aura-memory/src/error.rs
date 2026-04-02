@@ -46,3 +46,16 @@ impl From<rocksdb::Error> for MemoryError {
         Self::Store(err.to_string())
     }
 }
+
+impl MemoryError {
+    /// Returns `true` when this error indicates a missing entity.
+    #[must_use]
+    pub const fn is_not_found(&self) -> bool {
+        matches!(
+            self,
+            Self::FactNotFound { .. }
+                | Self::EventNotFound { .. }
+                | Self::ProcedureNotFound { .. }
+        )
+    }
+}

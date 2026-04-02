@@ -42,10 +42,7 @@ impl SkillInstallStore {
         self.db
             .cf_handle(aura_store::cf::AGENT_SKILLS)
             .ok_or_else(|| {
-                SkillError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "agent_skills column family not found",
-                ))
+                SkillError::Store("agent_skills column family not found".to_string())
             })
     }
 
@@ -74,9 +71,9 @@ impl SkillInstallStore {
         let key = Self::key(&installation.agent_id, &installation.skill_name);
         let value =
             serde_json::to_vec(installation).map_err(|e| SkillError::Parse(e.to_string()))?;
-        self.db.put_cf(&cf, key, value).map_err(|e| {
-            SkillError::Io(std::io::Error::other(e.to_string()))
-        })
+        self.db
+            .put_cf(&cf, key, value)
+            .map_err(|e| SkillError::Store(e.to_string()))
     }
 
     /// Uninstall a skill for an agent.
@@ -87,9 +84,9 @@ impl SkillInstallStore {
     pub fn uninstall(&self, agent_id: &str, skill_name: &str) -> Result<(), SkillError> {
         let cf = self.cf_handle()?;
         let key = Self::key(agent_id, skill_name);
-        self.db.delete_cf(&cf, key).map_err(|e| {
-            SkillError::Io(std::io::Error::other(e.to_string()))
-        })
+        self.db
+            .delete_cf(&cf, key)
+            .map_err(|e| SkillError::Store(e.to_string()))
     }
 
     /// List all skills installed for an agent.
@@ -107,9 +104,7 @@ impl SkillInstallStore {
 
         let mut installations = Vec::new();
         for item in iter {
-            let (k, v) = item.map_err(|e| {
-                SkillError::Io(std::io::Error::other(e.to_string()))
-            })?;
+            let (k, v) = item.map_err(|e| SkillError::Store(e.to_string()))?;
             if !k.starts_with(&prefix) {
                 break;
             }
@@ -128,9 +123,9 @@ impl SkillInstallStore {
     pub fn is_installed(&self, agent_id: &str, skill_name: &str) -> Result<bool, SkillError> {
         let cf = self.cf_handle()?;
         let key = Self::key(agent_id, skill_name);
-        let exists = self.db.get_cf(&cf, key).map_err(|e| {
-            SkillError::Io(std::io::Error::other(e.to_string()))
-        })?;
+        let exists = self.db
+            .get_cf(&cf, key)
+            .map_err(|e| SkillError::Store(e.to_string()))?;
         Ok(exists.is_some())
     }
 }

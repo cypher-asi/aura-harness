@@ -77,6 +77,9 @@ impl MemoryManager {
     ///
     /// Called before the agent loop starts a turn. Strips any existing
     /// `<agent_memory>` block to ensure idempotency, then appends a fresh one.
+    ///
+    /// Memory retrieval failures are intentionally logged and swallowed so
+    /// that a store hiccup does not prevent the agent from running its turn.
     pub fn prepare_context(
         &self,
         agent_id: AgentId,
@@ -99,9 +102,7 @@ impl MemoryManager {
         }
     }
 
-    /// Process an agent loop result through the two-stage write pipeline.
-    ///
-    /// Called after the agent loop completes a turn.
+    /// Alias for [`ingest`](Self::ingest) — use `ingest` for new code.
     ///
     /// # Errors
     /// Returns error on extraction, refinement, or storage failure.

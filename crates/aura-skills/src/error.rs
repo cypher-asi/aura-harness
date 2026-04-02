@@ -32,4 +32,16 @@ pub enum SkillError {
     /// Shell command execution failed during backtick command injection.
     #[error("command execution error: {0}")]
     CommandExecution(String),
+
+    /// Persistent storage failure (RocksDB column family or I/O).
+    #[error("store error: {0}")]
+    Store(String),
+}
+
+impl SkillError {
+    /// Returns `true` when this error indicates a missing entity.
+    #[must_use]
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::NotFound(_))
+    }
 }

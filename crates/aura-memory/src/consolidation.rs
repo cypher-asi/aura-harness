@@ -123,6 +123,7 @@ impl MemoryConsolidator {
         self.evolve_facts(agent_id, &mut report).await?;
 
         info!(
+            %agent_id,
             facts_forgotten = report.facts_forgotten,
             procedures_forgotten = report.procedures_forgotten,
             events_compressed = report.events_compressed,
@@ -243,7 +244,8 @@ impl MemoryConsolidator {
         }
 
         for event in &oldest {
-            let _ = self.store.delete_event(agent_id, event.event_id);
+            self.store
+                .delete_event_direct(agent_id, event.timestamp, event.event_id)?;
         }
 
         report.events_compressed = summaries.len();
@@ -389,6 +391,7 @@ impl MemoryConsolidator {
     ) -> Result<(), MemoryError> {
         let now = Utc::now();
         let mut to_delete = Vec::new();
+        let mut evolved_indices = Vec::new();
 
         for line in response.lines() {
             let trimmed = line.trim();
@@ -416,6 +419,10 @@ impl MemoryConsolidator {
                 }
             } else if let Some(rest) = trimmed.strip_prefix("EVOLVE ") {
                 if let Some(idx) = parse_single_index(rest, facts.len()) {
+                    if evolved_indices.contains(&idx) || to_delete.contains(&idx) {
+                        continue;
+                    }
+                    evolved_indices.push(idx);
                     let mut fact = facts[idx].clone();
                     if let Some(val) = extract_quoted_value(rest, "value=") {
                         fact.value = serde_json::Value::String(val);

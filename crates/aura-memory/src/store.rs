@@ -1,11 +1,30 @@
 //! RocksDB-backed memory store.
+//!
+//! # Key Encoding
+//!
+//! Each column family uses a composite key prefixed by the agent ID so that
+//! prefix iteration can efficiently list all items for a single agent.
+//!
+//! | CF | Key format | Size (bytes) |
+//! |----|------------|--------------|
+//! | `memory_facts` | `agent_id (32) ++ fact_id (16)` | 48 |
+//! | `memory_events` | `agent_id (32) ++ timestamp_ms_be (8) ++ event_id (16)` | 56 |
+//! | `memory_procedures` | `agent_id (32) ++ procedure_id (16)` | 48 |
+//!
+//! Events are ordered by timestamp within each agent prefix, enabling
+//! efficient chronological and reverse-chronological scans.
+//!
+//! # Atomicity
+//!
+//! Multi-key mutations (bulk deletes, wipe) use [`WriteBatch`] so that
+//! they are applied atomically — no partial state is observable on failure.
 
 use crate::error::MemoryError;
 use crate::types::{AgentEvent, Fact, Procedure};
 use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
 use aura_store::cf;
 use chrono::{DateTime, Utc};
-use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded};
+use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded, WriteBatch};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,6 +36,13 @@ impl MemoryStore {
     #[must_use]
     pub const fn new(db: Arc<DBWithThreadMode<MultiThreaded>>) -> Self {
         Self { db }
+    }
+
+    /// Expose the raw DB handle for callers that need to wrap operations in
+    /// `spawn_blocking`.
+    #[must_use]
+    pub fn db(&self) -> &Arc<DBWithThreadMode<MultiThreaded>> {
+        &self.db
     }
 
     fn cf_handle(
@@ -56,6 +82,11 @@ impl MemoryStore {
         agent_id.as_bytes().to_vec()
     }
 
+    /// Compute the exclusive upper-bound key for prefix iteration.
+    ///
+    /// Increments the last non-0xFF byte. When all bytes are 0xFF, appends a
+    /// zero byte to form a key that is lexicographically greater than any
+    /// valid agent prefix.
     fn agent_prefix_end(agent_id: AgentId) -> Vec<u8> {
         let mut end = agent_id.as_bytes().to_vec();
         for byte in end.iter_mut().rev() {
@@ -102,6 +133,9 @@ impl MemoryStore {
 
     /// Find a fact by its semantic key within an agent's fact store.
     ///
+    /// Iterates the agent's fact prefix directly, deserializing only until
+    /// a match is found, avoiding loading all facts into memory.
+    ///
     /// # Errors
     /// Returns error on CF lookup or deserialization failure.
     pub fn get_fact_by_key(
@@ -109,8 +143,26 @@ impl MemoryStore {
         agent_id: AgentId,
         key: &str,
     ) -> Result<Option<Fact>, MemoryError> {
-        let facts = self.list_facts(agent_id)?;
-        Ok(facts.into_iter().find(|f| f.key == key))
+        let cf = self.cf_handle(cf::MEMORY_FACTS)?;
+        let prefix = Self::agent_prefix(agent_id);
+        let end = Self::agent_prefix_end(agent_id);
+        let iter = self.db.iterator_cf(
+            &cf,
+            IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+
+        for item in iter {
+            let (k, v) = item?;
+            if k.as_ref() >= end.as_slice() {
+                break;
+            }
+            let fact: Fact = serde_json::from_slice(&v)
+                .map_err(|e| MemoryError::Deserialization(e.to_string()))?;
+            if fact.key == key {
+                return Ok(Some(fact));
+            }
+        }
+        Ok(None)
     }
 
     /// List all facts for an agent.
@@ -243,7 +295,27 @@ impl MemoryStore {
         Ok(events)
     }
 
+    /// Delete a specific event using its known timestamp for direct key
+    /// construction, avoiding a full scan.
+    ///
+    /// # Errors
+    /// Returns error on CF lookup or write failure.
+    pub fn delete_event_direct(
+        &self,
+        agent_id: AgentId,
+        timestamp: DateTime<Utc>,
+        event_id: AgentEventId,
+    ) -> Result<(), MemoryError> {
+        let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
+        let key = Self::event_key(agent_id, timestamp, event_id);
+        self.db.delete_cf(&cf, key)?;
+        Ok(())
+    }
+
     /// Delete a specific event by scanning to find its timestamp-based key.
+    ///
+    /// Prefer [`delete_event_direct`](Self::delete_event_direct) when the
+    /// event's timestamp is known.
     ///
     /// # Errors
     /// Returns `EventNotFound` if missing, or on write failure.
@@ -252,21 +324,34 @@ impl MemoryStore {
         agent_id: AgentId,
         event_id: AgentEventId,
     ) -> Result<(), MemoryError> {
-        let events = self.list_events(agent_id, 100_000)?;
-        if let Some(event) = events.iter().find(|e| e.event_id == event_id) {
-            let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
-            let key = Self::event_key(agent_id, event.timestamp, event_id);
-            self.db.delete_cf(&cf, key)?;
-            Ok(())
-        } else {
-            Err(MemoryError::EventNotFound {
-                agent_id: agent_id.to_hex(),
-                event_id: event_id.to_hex(),
-            })
+        let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
+        let prefix = Self::agent_prefix(agent_id);
+        let end = Self::agent_prefix_end(agent_id);
+        let iter = self.db.iterator_cf(
+            &cf,
+            IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+
+        for item in iter {
+            let (k, v) = item?;
+            if k.as_ref() >= end.as_slice() {
+                break;
+            }
+            let event: AgentEvent = serde_json::from_slice(&v)
+                .map_err(|e| MemoryError::Deserialization(e.to_string()))?;
+            if event.event_id == event_id {
+                self.db.delete_cf(&cf, k)?;
+                return Ok(());
+            }
         }
+        Err(MemoryError::EventNotFound {
+            agent_id: agent_id.to_hex(),
+            event_id: event_id.to_hex(),
+        })
     }
 
-    /// Delete all events before a given timestamp.
+    /// Delete all events before a given timestamp using a `WriteBatch` for
+    /// atomicity.
     ///
     /// # Errors
     /// Returns error on CF lookup or write failure.
@@ -288,7 +373,8 @@ impl MemoryStore {
             IteratorMode::From(&prefix, rocksdb::Direction::Forward),
         );
 
-        let mut keys_to_delete = Vec::new();
+        let mut batch = WriteBatch::default();
+        let mut deleted = 0usize;
         for item in iter {
             let (k, _) = item?;
             if k.as_ref() >= cutoff.as_slice() {
@@ -297,12 +383,12 @@ impl MemoryStore {
             if k.len() < prefix.len() || k[..prefix.len()] != *prefix.as_slice() {
                 break;
             }
-            keys_to_delete.push(k.to_vec());
+            batch.delete_cf(&cf, &k);
+            deleted += 1;
         }
 
-        let deleted = keys_to_delete.len();
-        for key in &keys_to_delete {
-            self.db.delete_cf(&cf, key)?;
+        if deleted > 0 {
+            self.db.write(batch)?;
         }
         Ok(deleted)
     }
@@ -385,41 +471,85 @@ impl MemoryStore {
 
     // === Aggregate ===
 
-    /// Delete all memory (facts, events, procedures) for an agent.
+    /// Atomically delete all memory (facts, events, procedures) for an agent.
+    ///
+    /// Uses a single `WriteBatch` so the operation is all-or-nothing.
     ///
     /// # Errors
     /// Returns error on CF lookup or write failure.
     pub fn delete_all(&self, agent_id: AgentId) -> Result<(), MemoryError> {
-        let facts = self.list_facts(agent_id)?;
-        for fact in &facts {
-            self.delete_fact(agent_id, fact.fact_id)?;
-        }
-        let events = self.list_events(agent_id, 100_000)?;
-        for event in &events {
-            let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
-            let key = Self::event_key(agent_id, event.timestamp, event.event_id);
-            self.db.delete_cf(&cf, key)?;
-        }
-        let procs = self.list_procedures(agent_id)?;
-        for proc in &procs {
-            self.delete_procedure(agent_id, proc.procedure_id)?;
+        let cf_facts = self.cf_handle(cf::MEMORY_FACTS)?;
+        let cf_events = self.cf_handle(cf::MEMORY_EVENTS)?;
+        let cf_procs = self.cf_handle(cf::MEMORY_PROCEDURES)?;
+
+        let prefix = Self::agent_prefix(agent_id);
+        let end = Self::agent_prefix_end(agent_id);
+        let mut batch = WriteBatch::default();
+
+        Self::batch_delete_range(&self.db, &cf_facts, &prefix, &end, &mut batch)?;
+        Self::batch_delete_range(&self.db, &cf_events, &prefix, &end, &mut batch)?;
+        Self::batch_delete_range(&self.db, &cf_procs, &prefix, &end, &mut batch)?;
+
+        self.db.write(batch)?;
+        Ok(())
+    }
+
+    fn batch_delete_range(
+        db: &DBWithThreadMode<MultiThreaded>,
+        cf: &Arc<rocksdb::BoundColumnFamily<'_>>,
+        prefix: &[u8],
+        end: &[u8],
+        batch: &mut WriteBatch,
+    ) -> Result<(), MemoryError> {
+        let iter = db.iterator_cf(
+            cf,
+            IteratorMode::From(prefix, rocksdb::Direction::Forward),
+        );
+        for item in iter {
+            let (k, _) = item?;
+            if k.as_ref() >= end {
+                break;
+            }
+            batch.delete_cf(cf, &k);
         }
         Ok(())
     }
 
-    /// Get aggregate stats for an agent's memory.
+    /// Count items in a column family for a given agent without deserializing
+    /// values.
+    fn count_for_agent(
+        &self,
+        cf_name: &str,
+        agent_id: AgentId,
+    ) -> Result<usize, MemoryError> {
+        let cf = self.cf_handle(cf_name)?;
+        let prefix = Self::agent_prefix(agent_id);
+        let end = Self::agent_prefix_end(agent_id);
+        let iter = self.db.iterator_cf(
+            &cf,
+            IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+
+        let mut count = 0usize;
+        for item in iter {
+            let (k, _) = item?;
+            if k.as_ref() >= end.as_slice() {
+                break;
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Get aggregate stats for an agent's memory without deserializing values.
     ///
     /// # Errors
-    /// Returns error on CF lookup or deserialization failure.
+    /// Returns error on CF lookup or iteration failure.
     pub fn stats(&self, agent_id: AgentId) -> Result<MemoryStats, MemoryError> {
-        let facts = self.list_facts(agent_id)?;
-        let events = self.list_events(agent_id, 100_000)?;
-        let procs = self.list_procedures(agent_id)?;
-
         Ok(MemoryStats {
-            facts: facts.len(),
-            events: events.len(),
-            procedures: procs.len(),
+            facts: self.count_for_agent(cf::MEMORY_FACTS, agent_id)?,
+            events: self.count_for_agent(cf::MEMORY_EVENTS, agent_id)?,
+            procedures: self.count_for_agent(cf::MEMORY_PROCEDURES, agent_id)?,
         })
     }
 }

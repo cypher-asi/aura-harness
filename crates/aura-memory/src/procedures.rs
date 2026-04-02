@@ -241,7 +241,7 @@ impl ProcedureExtractor {
 
         self.store.put_procedure(&procedure)?;
         self.enforce_capacity(agent_id)?;
-        info!(name = %procedure.name, steps = procedure.steps.len(), "Created new procedure");
+        info!(%agent_id, name = %procedure.name, steps = procedure.steps.len(), "Created new procedure");
         Ok(Some(procedure))
     }
 

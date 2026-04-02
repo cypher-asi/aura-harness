@@ -99,7 +99,7 @@ impl MemoryWritePipeline {
                     self.write_event(agent_id, candidate, &mut report)?;
                 }
                 CandidateType::Procedure => {
-                    // Procedural memory write — deferred to a later phase.
+                    report.candidates_dropped += 1;
                 }
             }
         }
@@ -107,6 +107,7 @@ impl MemoryWritePipeline {
         self.enforce_capacity(agent_id)?;
 
         info!(
+            %agent_id,
             extracted = report.candidates_extracted,
             refined = report.candidates_refined,
             facts = report.facts_written,
@@ -200,7 +201,8 @@ impl MemoryWritePipeline {
             .list_events(agent_id, self.config.max_events_per_agent + overflow_buffer)?;
         if events.len() > self.config.max_events_per_agent {
             for event in events.iter().skip(self.config.max_events_per_agent) {
-                self.store.delete_event(agent_id, event.event_id)?;
+                self.store
+                    .delete_event_direct(agent_id, event.timestamp, event.event_id)?;
             }
         }
 

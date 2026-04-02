@@ -34,16 +34,18 @@
 //! let activation = manager.activate("deploy", "production us-east-1");
 //! ```
 
+#![forbid(unsafe_code)]
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 
-pub mod activation;
+pub(crate) mod activation;
 pub mod error;
-pub mod install;
+pub(crate) mod install;
 pub mod loader;
-pub mod manager;
-pub mod parser;
-pub mod prompt;
-pub mod registry;
+pub(crate) mod manager;
+pub(crate) mod parser;
+pub(crate) mod prompt;
+pub(crate) mod registry;
 pub mod types;
 
 pub use error::SkillError;

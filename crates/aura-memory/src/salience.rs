@@ -39,12 +39,12 @@ pub const fn estimate_tokens(text: &str) -> usize {
 /// Estimate the token cost of a fact's prompt representation.
 #[must_use]
 pub fn estimate_fact_tokens(fact: &Fact) -> usize {
-    let val = match &fact.value {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
+    let val_len = match &fact.value {
+        serde_json::Value::String(s) => s.len(),
+        other => other.to_string().len(),
     };
-    let line = format!("- {}: {} (confidence: {:.2})", fact.key, val, fact.confidence);
-    estimate_tokens(&line)
+    let overhead = 4 + fact.key.len() + 18;
+    (val_len + overhead).div_ceil(4)
 }
 
 /// Estimate the token cost of an event's prompt representation.
