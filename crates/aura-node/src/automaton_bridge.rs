@@ -24,10 +24,10 @@ use aura_core::{AgentId, SystemKind, Transaction, TransactionType};
 use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
+use aura_tools::ToolConfig;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
-use aura_tools::ToolConfig;
 
 use crate::executor_factory;
 use crate::jwt_domain::JwtDomainApi;
@@ -100,6 +100,7 @@ impl AutomatonBridge {
         auth_token: Option<&str>,
         project_id: Option<&str>,
         workspace: &std::path::Path,
+        use_workspace_base_as_root: bool,
     ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -115,6 +116,7 @@ impl AutomatonBridge {
         let agent_id = AgentId::generate();
         let config = KernelConfig {
             workspace_base: workspace.to_path_buf(),
+            use_workspace_base_as_root,
             ..KernelConfig::default()
         };
 
@@ -138,6 +140,7 @@ impl AutomatonBridge {
                         fallback_router,
                         KernelConfig {
                             workspace_base: workspace.to_path_buf(),
+                            use_workspace_base_as_root,
                             ..KernelConfig::default()
                         },
                         AgentId::generate(),
@@ -159,12 +162,7 @@ impl AutomatonBridge {
             warn!("Failed to serialize lifecycle event payload");
             return;
         };
-        let tx = Transaction::new_chained(
-            agent_id,
-            TransactionType::System,
-            payload_bytes,
-            None,
-        );
+        let tx = Transaction::new_chained(agent_id, TransactionType::System, payload_bytes, None);
         if let Err(e) = self.store.enqueue_tx(&tx) {
             warn!(error = %e, "Failed to record automaton lifecycle event");
         }
@@ -295,21 +293,17 @@ impl AutomatonController for AutomatonBridge {
             auth_token.as_deref(),
             Some(project_id),
             ws_path,
+            effective_workspace.is_some(),
         );
-        let model_gw: Arc<dyn ModelProvider> =
-            Arc::new(KernelModelGateway::new(kernel.clone()));
+        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
 
-        let automaton = DevLoopAutomaton::new(
-            domain,
-            model_gw,
-            runner_config,
-            self.catalog.clone(),
-        )
-        .with_tool_executor(tool_gw);
+        let automaton =
+            DevLoopAutomaton::new(domain, model_gw, runner_config, self.catalog.clone())
+                .with_tool_executor(tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,
@@ -388,21 +382,17 @@ impl AutomatonController for AutomatonBridge {
             auth_token.as_deref(),
             Some(project_id),
             ws_path,
+            effective_workspace.is_some(),
         );
-        let model_gw: Arc<dyn ModelProvider> =
-            Arc::new(KernelModelGateway::new(kernel.clone()));
+        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
 
-        let automaton = TaskRunAutomaton::new(
-            domain,
-            model_gw,
-            runner_config,
-            self.catalog.clone(),
-        )
-        .with_tool_executor(tool_gw);
+        let automaton =
+            TaskRunAutomaton::new(domain, model_gw, runner_config, self.catalog.clone())
+                .with_tool_executor(tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,

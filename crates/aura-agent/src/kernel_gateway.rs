@@ -141,6 +141,8 @@ mod tests {
     use aura_kernel::{ExecutorRouter, KernelConfig};
     use aura_reasoner::{Message, MockProvider};
     use aura_store::RocksStore;
+    use aura_tools::ToolExecutor;
+    use serde_json::json;
     use tempfile::TempDir;
 
     fn create_test_kernel() -> (Arc<Kernel>, TempDir, TempDir) {
@@ -158,6 +160,29 @@ mod tests {
         };
         let kernel = Arc::new(Kernel::new(store, provider, executor, config, agent_id).unwrap());
         (kernel, db_dir, ws_dir)
+    }
+
+    fn create_tool_kernel(
+        workspace_root: &std::path::Path,
+        use_workspace_base_as_root: bool,
+    ) -> (Arc<Kernel>, TempDir) {
+        let db_dir = TempDir::new().unwrap();
+        let agent_id = AgentId::generate();
+        let store: Arc<dyn aura_store::Store> =
+            Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("gateway test response"));
+        let mut executor = ExecutorRouter::new();
+        executor.add_executor(Arc::new(ToolExecutor::with_defaults()));
+        let config = KernelConfig {
+            workspace_base: workspace_root.to_path_buf(),
+            use_workspace_base_as_root,
+            ..KernelConfig::default()
+        };
+        (
+            Arc::new(Kernel::new(store, provider, executor, config, agent_id).unwrap()),
+            db_dir,
+        )
     }
 
     #[tokio::test]
@@ -185,5 +210,39 @@ mod tests {
         let gateway = KernelToolGateway::new(kernel);
         let results = gateway.execute(&[]).await;
         assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tool_gateway_reads_from_workspace_root_when_configured() {
+        let ws_dir = TempDir::new().unwrap();
+        std::fs::write(
+            ws_dir.path().join("reference.md"),
+            "This file lives in the workspace root.",
+        )
+        .unwrap();
+
+        let (kernel, _db_dir) = create_tool_kernel(ws_dir.path(), true);
+        let gateway = KernelToolGateway::new(kernel);
+        let results = gateway
+            .execute(&[ToolCallInfo {
+                id: "tool-1".into(),
+                name: "read_file".into(),
+                input: json!({ "path": "reference.md" }),
+            }])
+            .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(
+            !results[0].is_error,
+            "tool output was {}",
+            results[0].content
+        );
+
+        let tool_result: aura_core::ToolResult = serde_json::from_str(&results[0].content).unwrap();
+        assert!(tool_result.ok);
+        assert_eq!(
+            String::from_utf8_lossy(&tool_result.stdout),
+            "This file lives in the workspace root."
+        );
     }
 }

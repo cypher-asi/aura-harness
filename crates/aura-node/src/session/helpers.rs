@@ -27,6 +27,18 @@ fn summarize_files_changed(loop_result: &AgentLoopResult) -> FilesChanged {
     files_changed
 }
 
+fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
+    if let Some(ref project_path) = session.project_path {
+        return (project_path.clone(), true);
+    }
+
+    if session.workspace != session.workspace_base {
+        return (session.workspace.clone(), true);
+    }
+
+    (session.workspace.clone(), false)
+}
+
 pub(super) fn handle_session_init(
     session: &mut Session,
     init: SessionInit,
@@ -106,10 +118,7 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
 
     let router = executor_factory::build_executor_router(resolver);
 
-    let workspace = match session.project_path {
-        Some(ref pp) => pp.clone(),
-        None => session.workspace.join(session.agent_id.to_hex()),
-    };
+    let (workspace, _) = resolve_session_workspace(session);
     KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
@@ -144,13 +153,11 @@ pub(super) fn build_kernel(
 
     let router = executor_factory::build_executor_router(resolver);
 
-    let workspace = match session.project_path {
-        Some(ref pp) => pp.clone(),
-        None => session.workspace.join(session.agent_id.to_hex()),
-    };
+    let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
 
     let config = KernelConfig {
         workspace_base: workspace,
+        use_workspace_base_as_root,
         ..KernelConfig::default()
     };
 
@@ -324,8 +331,10 @@ pub(super) fn apply_turn_result(
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_files_changed;
+    use super::{resolve_session_workspace, summarize_files_changed};
+    use crate::session::Session;
     use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
+    use std::path::PathBuf;
 
     #[test]
     fn summarize_files_changed_groups_by_operation() {
@@ -349,5 +358,37 @@ mod tests {
         assert_eq!(summary.created, vec!["src/new.rs"]);
         assert_eq!(summary.modified, vec!["src/lib.rs"]);
         assert_eq!(summary.deleted, vec!["src/old.rs"]);
+    }
+
+    #[test]
+    fn resolve_session_workspace_uses_project_path_directly() {
+        let mut session = Session::new(PathBuf::from("/tmp/aura"));
+        session.project_path = Some(PathBuf::from("/tmp/project"));
+
+        let (workspace, use_workspace_base_as_root) = resolve_session_workspace(&session);
+
+        assert_eq!(workspace, PathBuf::from("/tmp/project"));
+        assert!(use_workspace_base_as_root);
+    }
+
+    #[test]
+    fn resolve_session_workspace_uses_explicit_workspace_directly() {
+        let mut session = Session::new(PathBuf::from("/tmp/aura"));
+        session.workspace = PathBuf::from("/tmp/aura/session-123");
+
+        let (workspace, use_workspace_base_as_root) = resolve_session_workspace(&session);
+
+        assert_eq!(workspace, PathBuf::from("/tmp/aura/session-123"));
+        assert!(use_workspace_base_as_root);
+    }
+
+    #[test]
+    fn resolve_session_workspace_keeps_base_for_default_workspace() {
+        let session = Session::new(PathBuf::from("/tmp/aura"));
+
+        let (workspace, use_workspace_base_as_root) = resolve_session_workspace(&session);
+
+        assert_eq!(workspace, PathBuf::from("/tmp/aura"));
+        assert!(!use_workspace_base_as_root);
     }
 }
