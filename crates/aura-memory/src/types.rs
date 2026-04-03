@@ -171,6 +171,12 @@ pub struct RefinedCandidate {
     pub confidence: f32,
     pub importance: f32,
     pub keep: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
 }
 
 #[cfg(test)]

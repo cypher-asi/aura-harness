@@ -300,22 +300,31 @@ async fn start_turn(
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
-    if let Some(ref mm) = ctx.memory_manager {
-        let mem_id = session.memory_agent_id();
-        mm.prepare_context(mem_id, &mut config).await;
-        config.observers.push(mm.turn_observer(mem_id, session.auth_token.clone()));
-    }
+
+    // Resolve active skill names before creating the memory observer so we can
+    // forward them for procedure extraction.
+    let mut active_skill_names: Vec<String> = Vec::new();
     if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
         if let Ok(mgr) = sm.read() {
             let injected = mgr.inject_agent_skills(agent_id, &mut config.system_prompt);
             if !injected.is_empty() {
+                active_skill_names = injected.iter().map(|s| s.name.clone()).collect();
                 debug!(
                     session_id = %session.session_id,
-                    skill_count = injected.len(),
+                    skill_count = active_skill_names.len(),
                     "Injected agent skills into prompt"
                 );
             }
         }
+    }
+    if let Some(ref mm) = ctx.memory_manager {
+        let mem_id = session.memory_agent_id();
+        mm.prepare_context(mem_id, &mut config).await;
+        config.observers.push(mm.turn_observer_with_skills(
+            mem_id,
+            session.auth_token.clone(),
+            active_skill_names,
+        ));
     }
     let agent_loop = AgentLoop::new(config);
 
