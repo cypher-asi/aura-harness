@@ -68,9 +68,9 @@ impl SkillManager {
     ///
     /// Looks up installed skill names from the persistent store, filters the
     /// registry to those that are both installed *and* model-invocable, then
-    /// appends the `<available_skills>` XML block. Returns the metadata for
-    /// the skills that were actually injected (useful for surfacing in
-    /// `SessionReady`).
+    /// appends full skill content (description + body) so the agent can follow
+    /// the instructions directly. Returns the metadata for the skills that
+    /// were injected (useful for surfacing in `SessionReady`).
     ///
     /// Accepts the agent ID as a hex string (64-char BLAKE3 hash) and converts
     /// it to `AgentId`. Returns an empty vec if the ID is invalid, the install
@@ -80,9 +80,24 @@ impl SkillManager {
         agent_id_hex: &str,
         system_prompt: &mut String,
     ) -> Vec<SkillMeta> {
-        let filtered = self.agent_skill_meta(agent_id_hex);
-        prompt::inject_into_prompt(system_prompt, &filtered);
-        filtered
+        let skills = self.agent_skills_full(agent_id_hex);
+        if skills.is_empty() {
+            return Vec::new();
+        }
+        let entries: Vec<prompt::SkillPromptEntry<'_>> = skills
+            .iter()
+            .map(|s| prompt::SkillPromptEntry {
+                name: &s.frontmatter.name,
+                description: &s.frontmatter.description,
+                body: &s.body,
+                dir_path: &s.dir_path,
+            })
+            .collect();
+        prompt::inject_full_skills(system_prompt, &entries);
+        skills
+            .iter()
+            .map(|s| crate::registry::skill_to_meta(s))
+            .collect()
     }
 
     /// Return model-invocable [`SkillMeta`] for only the skills installed for
@@ -90,6 +105,15 @@ impl SkillManager {
     ///
     /// Accepts the agent ID as a hex string (64-char BLAKE3 hash).
     pub fn agent_skill_meta(&self, agent_id_hex: &str) -> Vec<SkillMeta> {
+        self.agent_skills_full(agent_id_hex)
+            .iter()
+            .map(|s| crate::registry::skill_to_meta(s))
+            .collect()
+    }
+
+    /// Return full [`Skill`] objects (with body) for skills installed for
+    /// `agent_id` that are also model-invocable.
+    fn agent_skills_full(&self, agent_id_hex: &str) -> Vec<Skill> {
         let agent_id = match AgentId::from_hex(agent_id_hex) {
             Ok(id) => id,
             Err(_) => {
@@ -116,9 +140,13 @@ impl SkillManager {
             .map(|i| i.skill_name.as_str())
             .collect();
         self.registry
-            .model_invocable_metadata()
+            .all_skills()
             .into_iter()
-            .filter(|m| installed_names.contains(m.name.as_str()))
+            .filter(|s| {
+                !s.frontmatter.disable_model_invocation.unwrap_or(false)
+                    && installed_names.contains(s.frontmatter.name.as_str())
+            })
+            .cloned()
             .collect()
     }
 

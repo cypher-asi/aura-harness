@@ -8,6 +8,10 @@ use crate::scheduler::Scheduler;
 use anyhow::Context;
 use aura_automaton::AutomatonRuntime;
 use aura_kernel::Executor;
+use aura_memory::{
+    ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
+    WriteConfig,
+};
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
 use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
@@ -124,6 +128,17 @@ impl Node {
         let skill_manager = Arc::new(RwLock::new(skill_manager_inner));
         info!(skills = skill_count, "Skill manager ready");
 
+        let memory_manager = Arc::new(MemoryManager::new(
+            store.db_handle().clone(),
+            provider.clone(),
+            RefinerConfig::default(),
+            WriteConfig::default(),
+            RetrievalConfig::default(),
+            ConsolidationConfig::default(),
+            ProcedureConfig::default(),
+        ));
+        info!("Memory manager ready");
+
         let state = RouterState {
             store,
             scheduler,
@@ -135,7 +150,7 @@ impl Node {
             automaton_controller,
             automaton_bridge,
             failed_txs: Arc::new(dashmap::DashMap::new()),
-            memory_manager: None,
+            memory_manager: Some(memory_manager),
             skill_manager: Some(skill_manager),
         };
         let app = create_router(state);

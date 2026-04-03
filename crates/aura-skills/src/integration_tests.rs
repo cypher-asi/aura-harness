@@ -554,10 +554,12 @@ fn inject_agent_skills_only_includes_installed() {
     assert!(names.contains(&"lint"));
     assert!(!names.contains(&"test-runner"));
 
-    assert!(prompt.contains("<available_skills>"));
+    assert!(prompt.contains("<agent_skills>"));
     assert!(prompt.contains("name=\"deploy\""));
     assert!(prompt.contains("name=\"lint\""));
     assert!(!prompt.contains("name=\"test-runner\""));
+    assert!(prompt.contains("Body for deploy."), "skill body should be injected");
+    assert!(prompt.contains("Body for lint."), "skill body should be injected");
 }
 
 #[test]
