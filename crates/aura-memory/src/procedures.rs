@@ -5,7 +5,7 @@
 //! keyword overlap with their trigger text.
 
 use crate::error::MemoryError;
-use crate::store::MemoryStoreApi;
+use crate::store::MemoryStore;
 use crate::types::Procedure;
 use aura_core::{AgentId, ProcedureId};
 use chrono::Utc;
@@ -39,7 +39,7 @@ impl Default for ProcedureConfig {
 /// Tracks tool-call step patterns across sessions. When a pattern recurs
 /// at least `min_occurrences` times it is promoted to a stored [`Procedure`].
 pub struct ProcedureExtractor {
-    store: Arc<dyn MemoryStoreApi>,
+    store: Arc<MemoryStore>,
     config: ProcedureConfig,
 }
 
@@ -52,6 +52,12 @@ pub struct StepSequence {
     pub task_hint: Option<String>,
     /// Whether the overall turn was considered successful.
     pub succeeded: bool,
+    /// Skill that was active when this sequence was observed.
+    #[serde(default)]
+    pub skill_name: Option<String>,
+    /// Description of the active skill (used for relevance scoring).
+    #[serde(default)]
+    pub skill_description: Option<String>,
 }
 
 /// Minimum similarity ratio (0.0–1.0) for two step sequences to be
@@ -61,7 +67,7 @@ const SIMILARITY_THRESHOLD: f32 = 0.7;
 impl ProcedureExtractor {
     /// Create a new extractor backed by the given store and configuration.
     #[must_use]
-    pub fn new(store: Arc<dyn MemoryStoreApi>, config: ProcedureConfig) -> Self {
+    pub const fn new(store: Arc<MemoryStore>, config: ProcedureConfig) -> Self {
         Self { store, config }
     }
 
@@ -189,7 +195,7 @@ impl ProcedureExtractor {
                     proc.steps = merge_steps(&proc.steps, &sequence.steps);
                 }
                 self.store.put_procedure(&proc)?;
-                debug!(%agent_id, name = %proc.name, executions = proc.execution_count, "Updated procedure");
+                debug!(name = %proc.name, executions = proc.execution_count, "Updated procedure");
                 return Ok(Some(proc));
             }
         }
@@ -225,6 +231,15 @@ impl ProcedureExtractor {
             .clone()
             .unwrap_or_else(|| sequence.steps.first().cloned().unwrap_or_default());
 
+        let skill_relevance = sequence.skill_name.as_ref().map(|_| {
+            compute_skill_relevance(
+                &name,
+                &trigger,
+                &sequence.steps,
+                sequence.skill_description.as_deref().unwrap_or(""),
+            )
+        });
+
         let procedure = Procedure {
             procedure_id: ProcedureId::generate(),
             agent_id,
@@ -237,11 +252,13 @@ impl ProcedureExtractor {
             last_used: now,
             created_at: now,
             updated_at: now,
+            skill_name: sequence.skill_name.clone(),
+            skill_relevance,
         };
 
         self.store.put_procedure(&procedure)?;
         self.enforce_capacity(agent_id)?;
-        info!(%agent_id, name = %procedure.name, steps = procedure.steps.len(), "Created new procedure");
+        info!(name = %procedure.name, steps = procedure.steps.len(), "Created new procedure");
         Ok(Some(procedure))
     }
 
@@ -335,6 +352,45 @@ fn tokenize_words(text: &str) -> Vec<&str> {
         .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
         .filter(|w| w.len() > 2)
         .collect()
+}
+
+/// Compute how relevant a procedure is to a skill based on word overlap
+/// between the procedure's content (name, trigger, steps) and the skill
+/// description. Returns a score in 0.0–1.0.
+#[allow(clippy::cast_precision_loss)]
+pub fn compute_skill_relevance(
+    proc_name: &str,
+    proc_trigger: &str,
+    proc_steps: &[String],
+    skill_description: &str,
+) -> f32 {
+    if skill_description.is_empty() {
+        return 0.5;
+    }
+
+    let skill_words: Vec<&str> = tokenize_words(skill_description);
+    if skill_words.is_empty() {
+        return 0.5;
+    }
+
+    let steps_text = proc_steps.join(" ");
+    let proc_text = format!("{proc_name} {proc_trigger} {steps_text}");
+    let proc_words: Vec<&str> = tokenize_words(&proc_text);
+    if proc_words.is_empty() {
+        return 0.0;
+    }
+
+    let overlap = proc_words
+        .iter()
+        .filter(|pw| {
+            skill_words
+                .iter()
+                .any(|sw| sw.eq_ignore_ascii_case(pw))
+        })
+        .count();
+
+    let score = overlap as f32 / proc_words.len().max(1) as f32;
+    score.min(1.0)
 }
 
 #[cfg(test)]
@@ -449,5 +505,38 @@ mod tests {
         assert!(!words.contains(&"ab"));
         assert!(words.contains(&"abc"));
         assert!(words.contains(&"abcd"));
+    }
+
+    #[test]
+    fn skill_relevance_high_overlap() {
+        let score = compute_skill_relevance(
+            "deploy production",
+            "deploy the application",
+            &["build".into(), "push".into(), "deploy".into()],
+            "deploy applications to production environments",
+        );
+        assert!(score > 0.3, "expected high relevance, got {score}");
+    }
+
+    #[test]
+    fn skill_relevance_no_overlap() {
+        let score = compute_skill_relevance(
+            "user preferences",
+            "remember dark mode setting",
+            &["store_preference".into()],
+            "deploy applications to production environments",
+        );
+        assert!(score < 0.3, "expected low relevance, got {score}");
+    }
+
+    #[test]
+    fn skill_relevance_empty_description() {
+        let score = compute_skill_relevance(
+            "deploy flow",
+            "deploy",
+            &["build".into()],
+            "",
+        );
+        assert!((score - 0.5).abs() < f32::EPSILON);
     }
 }

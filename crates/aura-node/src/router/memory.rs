@@ -4,7 +4,7 @@ use super::RouterState;
 use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
 use aura_memory::{AgentEvent, Fact, FactSource, MemoryStoreApi, Procedure};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -290,16 +290,29 @@ pub(super) async fn bulk_delete_events(
 // Procedures
 // ============================================================================
 
+#[derive(Deserialize, Default)]
+pub(super) struct ProcedureListParams {
+    pub skill: Option<String>,
+    pub min_relevance: Option<f32>,
+}
+
 pub(super) async fn list_procedures(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
+    Query(params): Query<ProcedureListParams>,
 ) -> ApiResult<Vec<Procedure>> {
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
-    store
-        .list_procedures(agent_id)
-        .map(Json)
-        .map_err(store_err)
+    let mut procs = store.list_procedures(agent_id).map_err(store_err)?;
+
+    if let Some(ref skill) = params.skill {
+        procs.retain(|p| p.skill_name.as_deref() == Some(skill.as_str()));
+    }
+    if let Some(min_rel) = params.min_relevance {
+        procs.retain(|p| p.skill_relevance.unwrap_or(0.0) >= min_rel);
+    }
+
+    Ok(Json(procs))
 }
 
 pub(super) async fn get_procedure(
@@ -323,6 +336,10 @@ pub(super) struct CreateProcedureBody {
     pub steps: Vec<String>,
     #[serde(default)]
     pub context_constraints: serde_json::Value,
+    #[serde(default)]
+    pub skill_name: Option<String>,
+    #[serde(default)]
+    pub skill_relevance: Option<f32>,
 }
 
 pub(super) async fn create_procedure(
@@ -345,15 +362,29 @@ pub(super) async fn create_procedure(
         last_used: now,
         created_at: now,
         updated_at: now,
+        skill_name: body.skill_name,
+        skill_relevance: body.skill_relevance,
     };
     store.put_procedure(&proc).map_err(store_err)?;
     Ok(Json(proc))
 }
 
+#[derive(Deserialize)]
+pub(super) struct UpdateProcedureBody {
+    pub name: String,
+    pub trigger: String,
+    #[serde(default)]
+    pub steps: Vec<String>,
+    #[serde(default)]
+    pub context_constraints: serde_json::Value,
+    pub skill_name: Option<String>,
+    pub skill_relevance: Option<f32>,
+}
+
 pub(super) async fn update_procedure(
     State(state): State<RouterState>,
     Path((agent_hex, proc_hex)): Path<(String, String)>,
-    Json(body): Json<CreateProcedureBody>,
+    Json(body): Json<UpdateProcedureBody>,
 ) -> ApiResult<Procedure> {
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
@@ -365,6 +396,10 @@ pub(super) async fn update_procedure(
     proc.trigger = body.trigger;
     proc.steps = body.steps;
     proc.context_constraints = body.context_constraints;
+    if body.skill_name.is_some() || body.skill_relevance.is_some() {
+        proc.skill_name = body.skill_name;
+        proc.skill_relevance = body.skill_relevance;
+    }
     proc.updated_at = Utc::now();
     store.put_procedure(&proc).map_err(store_err)?;
     Ok(Json(proc))
