@@ -36,6 +36,7 @@ pub(crate) mod executor_factory;
 pub(crate) mod jwt_domain;
 mod node;
 pub(crate) mod protocol;
+pub(crate) mod provider_factory;
 pub(crate) mod router;
 pub(crate) mod scheduler;
 pub(crate) mod session;
@@ -48,8 +49,8 @@ pub use node::Node;
 pub use aura_protocol::{
     ApprovalResponse, AssistantMessageEnd, AssistantMessageStart, ConversationMessage, ErrorMsg,
     FileOp, FilesChanged, InboundMessage, InstalledTool, OutboundMessage, SessionInit,
-    SessionReady, SessionUsage, TextDelta, ThinkingDelta, ToolAuth as ProtocolToolAuth, ToolInfo,
-    ToolResultMsg, ToolUseStart, UserMessage,
+    SessionProviderConfig, SessionReady, SessionUsage, TextDelta, ThinkingDelta,
+    ToolAuth as ProtocolToolAuth, ToolInfo, ToolResultMsg, ToolUseStart, UserMessage,
 };
 
 #[cfg(feature = "test-support")]

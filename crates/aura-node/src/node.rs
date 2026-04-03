@@ -3,12 +3,12 @@
 use crate::automaton_bridge::AutomatonBridge;
 use crate::config::NodeConfig;
 use crate::domain::HttpDomainApi;
+use crate::provider_factory::create_default_model_provider;
 use crate::router::{create_router, RouterState};
 use crate::scheduler::Scheduler;
 use anyhow::Context;
 use aura_automaton::AutomatonRuntime;
 use aura_kernel::Executor;
-use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolProfile;
@@ -17,7 +17,7 @@ use aura_tools::{ToolCatalog, ToolConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tracing::info;
 
 /// The Aura Node runtime.
 pub struct Node {
@@ -86,7 +86,7 @@ impl Node {
         let executors = vec![resolver];
         info!("Executors configured");
 
-        let provider = Self::create_model_provider();
+        let provider = create_default_model_provider();
 
         let scheduler = Arc::new(Scheduler::new(
             store.clone(),
@@ -145,35 +145,6 @@ impl Node {
 
         Ok(())
     }
-
-    /// Create a `ModelProvider` for WebSocket sessions.
-    ///
-    /// Tries `AnthropicProvider` from environment, falls back to `MockProvider`.
-    fn create_model_provider() -> Arc<dyn ModelProvider + Send + Sync> {
-        match AnthropicConfig::from_env() {
-            Ok(config) => {
-                let mode_label = if config.routing_mode == aura_reasoner::RoutingMode::Proxy {
-                    "proxy"
-                } else {
-                    "direct"
-                };
-                match AnthropicProvider::new(config) {
-                    Ok(provider) => {
-                        info!(mode = mode_label, "LLM provider ready ({mode_label} mode)");
-                        Arc::new(provider)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to create LLM provider, using mock");
-                        Arc::new(MockProvider::simple_response("(mock provider)"))
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "LLM provider not configured, using mock");
-                Arc::new(MockProvider::simple_response("(mock provider)"))
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -228,6 +199,6 @@ mod tests {
 
     #[test]
     fn test_create_model_provider_returns_something() {
-        let _provider = Node::create_model_provider();
+        let _provider = create_default_model_provider();
     }
 }

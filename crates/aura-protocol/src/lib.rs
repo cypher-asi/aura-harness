@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 #[cfg(feature = "typescript")]
 use ts_rs::TS;
@@ -86,6 +87,52 @@ pub struct SessionInit {
     /// Organization UUID for X-Aura-Org-Id billing header.
     #[serde(default)]
     pub aura_org_id: Option<String>,
+    /// Stable agent identifier override.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Optional per-session provider override for BYOK/runtime isolation.
+    #[serde(default)]
+    pub provider_config: Option<SessionProviderConfig>,
+}
+
+/// Optional per-session provider override used for BYOK-style runtime resolution.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct SessionProviderConfig {
+    /// Provider identifier (currently `anthropic`).
+    pub provider: String,
+    /// Optional routing mode (`direct` or `proxy`).
+    #[serde(default)]
+    pub routing_mode: Option<String>,
+    /// Optional API key for direct provider access.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional explicit base URL override.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Optional provider default model for this session.
+    #[serde(default)]
+    pub default_model: Option<String>,
+    /// Optional fallback model.
+    #[serde(default)]
+    pub fallback_model: Option<String>,
+    /// Optional prompt-caching toggle override.
+    #[serde(default)]
+    pub prompt_caching_enabled: Option<bool>,
+}
+
+impl fmt::Debug for SessionProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionProviderConfig")
+            .field("provider", &self.provider)
+            .field("routing_mode", &self.routing_mode)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("fallback_model", &self.fallback_model)
+            .field("prompt_caching_enabled", &self.prompt_caching_enabled)
+            .finish()
+    }
 }
 
 /// Payload for `user_message`.

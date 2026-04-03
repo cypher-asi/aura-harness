@@ -11,6 +11,7 @@ pub use ws_handler::handle_ws_connection;
 use crate::protocol::{self, SessionInit};
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{AgentId, InstalledToolDefinition};
+use aura_protocol::SessionProviderConfig;
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
@@ -36,6 +37,10 @@ pub struct Session {
     pub model: String,
     /// Provider identifier for this session.
     pub provider_name: String,
+    /// Optional provider override resolved from `session_init`.
+    pub provider_config: Option<SessionProviderConfig>,
+    /// Optional concrete provider override built from `provider_config`.
+    pub provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
     /// Max tokens per response.
     pub max_tokens: u32,
     /// Sampling temperature.
@@ -90,6 +95,8 @@ impl Session {
             system_prompt: String::new(),
             model: aura_agent::DEFAULT_MODEL.to_string(),
             provider_name: String::new(),
+            provider_config: None,
+            provider_override: None,
             max_tokens: 16384,
             temperature: None,
             max_turns: 25,
@@ -180,6 +187,12 @@ impl Session {
         if let Some(token) = init.token {
             self.auth_token = Some(token);
         }
+        if let Some(agent_id) = init.agent_id {
+            self.agent_id = AgentId::from_hex(&agent_id).unwrap_or_else(|_| {
+                let hash = blake3::hash(agent_id.as_bytes());
+                AgentId::new(*hash.as_bytes())
+            });
+        }
         if let Some(pid) = init.project_id {
             self.project_id = Some(pid);
         }
@@ -191,6 +204,9 @@ impl Session {
         }
         if let Some(id) = init.aura_org_id {
             self.aura_org_id = Some(id);
+        }
+        if let Some(provider_config) = init.provider_config {
+            self.provider_config = Some(provider_config);
         }
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
@@ -313,6 +329,8 @@ mod tests {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            agent_id: None,
+            provider_config: None,
         }
     }
 
