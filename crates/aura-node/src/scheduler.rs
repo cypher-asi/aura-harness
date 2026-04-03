@@ -54,11 +54,12 @@ type AgentLock = Arc<Mutex<()>>;
 pub struct Scheduler {
     store: Arc<dyn Store>,
     provider: Arc<dyn ModelProvider + Send + Sync>,
-    agent_loop: AgentLoop,
+    agent_loop_config: AgentLoopConfig,
     executors: Vec<Arc<dyn Executor>>,
     tools: Vec<ToolDefinition>,
     agent_locks: DashMap<AgentId, AgentLock>,
     kernel_config: KernelConfig,
+    memory_manager: Option<Arc<aura_memory::MemoryManager>>,
 }
 
 impl Scheduler {
@@ -75,16 +76,22 @@ impl Scheduler {
             workspace_base,
             ..KernelConfig::default()
         };
-        let config = AgentLoopConfig::default();
         Self {
             store,
             provider,
-            agent_loop: AgentLoop::new(config),
+            agent_loop_config: AgentLoopConfig::default(),
             executors,
             tools,
             agent_locks: DashMap::new(),
             kernel_config,
+            memory_manager: None,
         }
+    }
+
+    /// Attach a memory manager so worker-processed turns get memory ingestion.
+    pub fn with_memory_manager(mut self, mm: Arc<aura_memory::MemoryManager>) -> Self {
+        self.memory_manager = Some(mm);
+        self
     }
 
     /// Get or create lock for an agent.
@@ -134,7 +141,13 @@ impl Scheduler {
             .map_err(|e| anyhow::anyhow!("kernel construction failed: {e}"))?,
         );
 
-        match process_agent(agent_id, kernel, &self.agent_loop, &self.tools).await {
+        let mut config = self.agent_loop_config.clone();
+        if let Some(ref mm) = self.memory_manager {
+            config.observers.push(mm.turn_observer(agent_id));
+        }
+        let agent_loop = AgentLoop::new(config);
+
+        match process_agent(agent_id, kernel, &agent_loop, &self.tools).await {
             Ok(count) => {
                 info!(processed = count, "Agent processing complete");
                 Ok(count)

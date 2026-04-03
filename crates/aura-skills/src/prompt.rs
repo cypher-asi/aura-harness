@@ -1,8 +1,17 @@
 //! System-prompt injection — formats skill metadata as compact XML.
 
 use std::fmt::Write;
+use std::path::Path;
 
 use crate::types::SkillMeta;
+
+/// Entry for full skill injection (includes body content).
+pub struct SkillPromptEntry<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub body: &'a str,
+    pub dir_path: &'a Path,
+}
 
 /// Render a list of skill metadata entries as an `<available_skills>` XML block
 /// suitable for injection into a system prompt.
@@ -28,11 +37,56 @@ pub fn render_skills_xml(skills: &[SkillMeta]) -> String {
     buf
 }
 
+/// Render full skill entries with their body content for prompt injection.
+///
+/// Each skill is rendered as an `<agent_skill>` element containing the
+/// description and full SKILL.md body, so the agent can follow the
+/// instructions directly without needing to read external files.
+#[must_use]
+pub fn render_full_skills_xml(skills: &[SkillPromptEntry<'_>]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+
+    let mut buf = String::from(
+        "<agent_skills>\n\
+         When users ask you to perform tasks, check if any of the available skills below are relevant. \
+         Each skill contains instructions you should follow when the skill applies.\n\n",
+    );
+    for s in skills {
+        let _ = write!(
+            buf,
+            "<agent_skill name=\"{}\" skillPath=\"{}\">",
+            xml_escape(s.name),
+            xml_escape(&s.dir_path.display().to_string()),
+        );
+        let _ = write!(buf, "{}", xml_escape(s.description));
+        if !s.body.is_empty() {
+            let _ = write!(buf, "\n\n{}", s.body);
+        }
+        buf.push_str("</agent_skill>\n");
+    }
+    buf.push_str("</agent_skills>");
+    buf
+}
+
 /// Inject skill metadata into a system prompt string.
 ///
 /// Appends the rendered XML block after a blank line separator.
 pub fn inject_into_prompt(system_prompt: &mut String, skills: &[SkillMeta]) {
     let xml = render_skills_xml(skills);
+    if xml.is_empty() {
+        return;
+    }
+    system_prompt.push_str("\n\n");
+    system_prompt.push_str(&xml);
+}
+
+/// Inject full skill content into a system prompt string.
+///
+/// Appends the rendered XML block (with skill bodies) after a blank line separator.
+pub fn inject_full_skills(system_prompt: &mut String, skills: &[SkillPromptEntry<'_>]) {
+    let xml = render_full_skills_xml(skills);
     if xml.is_empty() {
         return;
     }

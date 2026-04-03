@@ -13,11 +13,12 @@ use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{AgentId, InstalledToolDefinition};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_store::Store;
+use aura_skills::SkillManager;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 // ============================================================================
@@ -79,6 +80,8 @@ pub struct Session {
     pub aura_session_id: Option<String>,
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
+    /// Harness-level agent ID for per-agent skill lookup.
+    pub skill_agent_id: Option<String>,
 }
 
 impl Session {
@@ -111,6 +114,7 @@ impl Session {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            skill_agent_id: None,
         }
     }
 
@@ -191,6 +195,9 @@ impl Session {
         }
         if let Some(id) = init.aura_org_id {
             self.aura_org_id = Some(id);
+        }
+        if let Some(id) = init.agent_id {
+            self.skill_agent_id = Some(id);
         }
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
@@ -282,6 +289,8 @@ pub struct WsContext {
     pub project_base: Option<PathBuf>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    /// Optional skill manager for per-agent skill injection into prompts.
+    pub skill_manager: Option<Arc<RwLock<SkillManager>>>,
 }
 
 #[cfg(test)]
@@ -313,6 +322,7 @@ mod tests {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            agent_id: None,
         }
     }
 

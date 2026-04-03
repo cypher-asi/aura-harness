@@ -94,6 +94,12 @@ impl SkillLoader {
         results
     }
 
+    /// Get a reference to the config.
+    #[must_use]
+    pub const fn config(&self) -> &SkillLoaderConfig {
+        &self.config
+    }
+
     /// Get a mutable reference to the config for runtime adjustments.
     pub fn config_mut(&mut self) -> &mut SkillLoaderConfig {
         &mut self.config

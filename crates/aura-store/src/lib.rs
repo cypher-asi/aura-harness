@@ -35,6 +35,8 @@ pub mod cf {
     pub const MEMORY_EVENTS: &str = "memory_events";
     /// Memory: per-agent procedural patterns
     pub const MEMORY_PROCEDURES: &str = "memory_procedures";
+    /// Memory: event ID → timestamp secondary index
+    pub const MEMORY_EVENT_INDEX: &str = "memory_event_index";
     /// Skill installations per agent
     pub const AGENT_SKILLS: &str = "agent_skills";
 }

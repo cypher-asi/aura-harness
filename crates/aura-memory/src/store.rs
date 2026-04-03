@@ -9,6 +9,7 @@
 //! |----|------------|--------------|
 //! | `memory_facts` | `agent_id (32) ++ fact_id (16)` | 48 |
 //! | `memory_events` | `agent_id (32) ++ timestamp_ms_be (8) ++ event_id (16)` | 56 |
+//! | `memory_event_index` | `agent_id (32) ++ event_id (16)` | 48 |
 //! | `memory_procedures` | `agent_id (32) ++ procedure_id (16)` | 48 |
 //!
 //! Events are ordered by timestamp within each agent prefix, enabling
@@ -27,6 +28,34 @@ use chrono::{DateTime, Utc};
 use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded, WriteBatch};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Abstraction over the memory store for testability.
+///
+/// All operations are blocking — callers on async runtimes should wrap
+/// calls in `tokio::task::spawn_blocking`.
+pub trait MemoryStoreApi: Send + Sync {
+    fn put_fact(&self, fact: &Fact) -> Result<(), MemoryError>;
+    fn get_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<Fact, MemoryError>;
+    fn get_fact_by_key(&self, agent_id: AgentId, key: &str) -> Result<Option<Fact>, MemoryError>;
+    fn list_facts(&self, agent_id: AgentId) -> Result<Vec<Fact>, MemoryError>;
+    fn touch_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError>;
+    fn delete_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError>;
+
+    fn put_event(&self, event: &AgentEvent) -> Result<(), MemoryError>;
+    fn list_events(&self, agent_id: AgentId, limit: usize) -> Result<Vec<AgentEvent>, MemoryError>;
+    fn list_events_since(&self, agent_id: AgentId, since: DateTime<Utc>) -> Result<Vec<AgentEvent>, MemoryError>;
+    fn delete_event_direct(&self, agent_id: AgentId, timestamp: DateTime<Utc>, event_id: AgentEventId) -> Result<(), MemoryError>;
+    fn delete_event(&self, agent_id: AgentId, event_id: AgentEventId) -> Result<(), MemoryError>;
+    fn delete_events_before(&self, agent_id: AgentId, before: DateTime<Utc>) -> Result<usize, MemoryError>;
+
+    fn put_procedure(&self, proc: &Procedure) -> Result<(), MemoryError>;
+    fn get_procedure(&self, agent_id: AgentId, procedure_id: ProcedureId) -> Result<Procedure, MemoryError>;
+    fn list_procedures(&self, agent_id: AgentId) -> Result<Vec<Procedure>, MemoryError>;
+    fn delete_procedure(&self, agent_id: AgentId, procedure_id: ProcedureId) -> Result<(), MemoryError>;
+
+    fn delete_all(&self, agent_id: AgentId) -> Result<(), MemoryError>;
+    fn stats(&self, agent_id: AgentId) -> Result<MemoryStats, MemoryError>;
+}
 
 pub struct MemoryStore {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
@@ -78,6 +107,13 @@ impl MemoryStore {
         key
     }
 
+    fn event_index_key(agent_id: AgentId, event_id: AgentEventId) -> Vec<u8> {
+        let mut key = Vec::with_capacity(48);
+        key.extend_from_slice(agent_id.as_bytes());
+        key.extend_from_slice(event_id.as_bytes());
+        key
+    }
+
     fn agent_prefix(agent_id: AgentId) -> Vec<u8> {
         agent_id.as_bytes().to_vec()
     }
@@ -87,7 +123,7 @@ impl MemoryStore {
     /// Increments the last non-0xFF byte. When all bytes are 0xFF, appends a
     /// zero byte to form a key that is lexicographically greater than any
     /// valid agent prefix.
-    fn agent_prefix_end(agent_id: AgentId) -> Vec<u8> {
+    pub(crate) fn agent_prefix_end(agent_id: AgentId) -> Vec<u8> {
         let mut end = agent_id.as_bytes().to_vec();
         for byte in end.iter_mut().rev() {
             if *byte < 0xFF {
@@ -100,13 +136,54 @@ impl MemoryStore {
         end
     }
 
-    // === Facts ===
+    fn batch_delete_range(
+        db: &DBWithThreadMode<MultiThreaded>,
+        cf: &Arc<rocksdb::BoundColumnFamily<'_>>,
+        prefix: &[u8],
+        end: &[u8],
+        batch: &mut WriteBatch,
+    ) -> Result<(), MemoryError> {
+        let iter = db.iterator_cf(
+            cf,
+            IteratorMode::From(prefix, rocksdb::Direction::Forward),
+        );
+        for item in iter {
+            let (k, _) = item?;
+            if k.as_ref() >= end {
+                break;
+            }
+            batch.delete_cf(cf, &k);
+        }
+        Ok(())
+    }
 
-    /// Store or overwrite a fact.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or serialization/write failure.
-    pub fn put_fact(&self, fact: &Fact) -> Result<(), MemoryError> {
+    fn count_for_agent(
+        &self,
+        cf_name: &str,
+        agent_id: AgentId,
+    ) -> Result<usize, MemoryError> {
+        let cf = self.cf_handle(cf_name)?;
+        let prefix = Self::agent_prefix(agent_id);
+        let end = Self::agent_prefix_end(agent_id);
+        let iter = self.db.iterator_cf(
+            &cf,
+            IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+
+        let mut count = 0usize;
+        for item in iter {
+            let (k, _) = item?;
+            if k.as_ref() >= end.as_slice() {
+                break;
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
+}
+
+impl MemoryStoreApi for MemoryStore {
+    fn put_fact(&self, fact: &Fact) -> Result<(), MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_FACTS)?;
         let key = Self::fact_key(fact.agent_id, fact.fact_id);
         let value = serde_json::to_vec(fact)?;
@@ -114,11 +191,7 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Get a specific fact by agent and fact ID.
-    ///
-    /// # Errors
-    /// Returns `FactNotFound` if missing, or on deserialization failure.
-    pub fn get_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<Fact, MemoryError> {
+    fn get_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<Fact, MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_FACTS)?;
         let key = Self::fact_key(agent_id, fact_id);
         match self.db.get_cf(&cf, key)? {
@@ -131,14 +204,7 @@ impl MemoryStore {
         }
     }
 
-    /// Find a fact by its semantic key within an agent's fact store.
-    ///
-    /// Iterates the agent's fact prefix directly, deserializing only until
-    /// a match is found, avoiding loading all facts into memory.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or deserialization failure.
-    pub fn get_fact_by_key(
+    fn get_fact_by_key(
         &self,
         agent_id: AgentId,
         key: &str,
@@ -165,11 +231,7 @@ impl MemoryStore {
         Ok(None)
     }
 
-    /// List all facts for an agent.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or deserialization failure.
-    pub fn list_facts(&self, agent_id: AgentId) -> Result<Vec<Fact>, MemoryError> {
+    fn list_facts(&self, agent_id: AgentId) -> Result<Vec<Fact>, MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_FACTS)?;
         let prefix = Self::agent_prefix(agent_id);
         let end = Self::agent_prefix_end(agent_id);
@@ -191,47 +253,34 @@ impl MemoryStore {
         Ok(facts)
     }
 
-    /// Increment the access count and update the last-accessed timestamp for a fact.
-    ///
-    /// # Errors
-    /// Returns error if the fact is not found or on write failure.
-    pub fn touch_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError> {
+    fn touch_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError> {
         let mut fact = self.get_fact(agent_id, fact_id)?;
         fact.access_count += 1;
         fact.last_accessed = Utc::now();
         self.put_fact(&fact)
     }
 
-    /// Delete a specific fact.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or write failure.
-    pub fn delete_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError> {
+    fn delete_fact(&self, agent_id: AgentId, fact_id: FactId) -> Result<(), MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_FACTS)?;
         let key = Self::fact_key(agent_id, fact_id);
         self.db.delete_cf(&cf, key)?;
         Ok(())
     }
 
-    // === Events ===
-
-    /// Store an episodic event.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or serialization/write failure.
-    pub fn put_event(&self, event: &AgentEvent) -> Result<(), MemoryError> {
+    fn put_event(&self, event: &AgentEvent) -> Result<(), MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
         let key = Self::event_key(event.agent_id, event.timestamp, event.event_id);
         let value = serde_json::to_vec(event)?;
         self.db.put_cf(&cf, key, value)?;
+
+        let idx_cf = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
+        let idx_key = Self::event_index_key(event.agent_id, event.event_id);
+        self.db
+            .put_cf(&idx_cf, idx_key, event.timestamp.timestamp_millis().to_be_bytes())?;
         Ok(())
     }
 
-    /// List most recent events for an agent (reverse chronological).
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or deserialization failure.
-    pub fn list_events(
+    fn list_events(
         &self,
         agent_id: AgentId,
         limit: usize,
@@ -260,11 +309,7 @@ impl MemoryStore {
         Ok(events)
     }
 
-    /// List events since a given timestamp (forward chronological).
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or deserialization failure.
-    pub fn list_events_since(
+    fn list_events_since(
         &self,
         agent_id: AgentId,
         since: DateTime<Utc>,
@@ -295,12 +340,7 @@ impl MemoryStore {
         Ok(events)
     }
 
-    /// Delete a specific event using its known timestamp for direct key
-    /// construction, avoiding a full scan.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or write failure.
-    pub fn delete_event_direct(
+    fn delete_event_direct(
         &self,
         agent_id: AgentId,
         timestamp: DateTime<Utc>,
@@ -309,58 +349,55 @@ impl MemoryStore {
         let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
         let key = Self::event_key(agent_id, timestamp, event_id);
         self.db.delete_cf(&cf, key)?;
+
+        let idx_cf = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
+        let idx_key = Self::event_index_key(agent_id, event_id);
+        self.db.delete_cf(&idx_cf, idx_key)?;
         Ok(())
     }
 
-    /// Delete a specific event by scanning to find its timestamp-based key.
-    ///
-    /// Prefer [`delete_event_direct`](Self::delete_event_direct) when the
-    /// event's timestamp is known.
-    ///
-    /// # Errors
-    /// Returns `EventNotFound` if missing, or on write failure.
-    pub fn delete_event(
+    fn delete_event(
         &self,
         agent_id: AgentId,
         event_id: AgentEventId,
     ) -> Result<(), MemoryError> {
-        let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
-        let prefix = Self::agent_prefix(agent_id);
-        let end = Self::agent_prefix_end(agent_id);
-        let iter = self.db.iterator_cf(
-            &cf,
-            IteratorMode::From(&prefix, rocksdb::Direction::Forward),
-        );
+        let idx_cf = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
+        let idx_key = Self::event_index_key(agent_id, event_id);
 
-        for item in iter {
-            let (k, v) = item?;
-            if k.as_ref() >= end.as_slice() {
-                break;
+        match self.db.get_cf(&idx_cf, &idx_key)? {
+            Some(ts_bytes) => {
+                let ts_arr: [u8; 8] = <[u8; 8]>::try_from(&ts_bytes[..]).map_err(
+                    |_| MemoryError::Deserialization("invalid timestamp in event index".into()),
+                )?;
+                let ts_millis = i64::from_be_bytes(ts_arr);
+                let timestamp =
+                    chrono::DateTime::from_timestamp_millis(ts_millis).ok_or_else(|| {
+                        MemoryError::Deserialization(
+                            "invalid timestamp millis in event index".into(),
+                        )
+                    })?;
+
+                let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
+                let key = Self::event_key(agent_id, timestamp, event_id);
+                self.db.delete_cf(&cf, key)?;
+
+                self.db.delete_cf(&idx_cf, idx_key)?;
+                Ok(())
             }
-            let event: AgentEvent = serde_json::from_slice(&v)
-                .map_err(|e| MemoryError::Deserialization(e.to_string()))?;
-            if event.event_id == event_id {
-                self.db.delete_cf(&cf, k)?;
-                return Ok(());
-            }
+            None => Err(MemoryError::EventNotFound {
+                agent_id: agent_id.to_hex(),
+                event_id: event_id.to_hex(),
+            }),
         }
-        Err(MemoryError::EventNotFound {
-            agent_id: agent_id.to_hex(),
-            event_id: event_id.to_hex(),
-        })
     }
 
-    /// Delete all events before a given timestamp using a `WriteBatch` for
-    /// atomicity.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or write failure.
-    pub fn delete_events_before(
+    fn delete_events_before(
         &self,
         agent_id: AgentId,
         before: DateTime<Utc>,
     ) -> Result<usize, MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
+        let idx_cf = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
         let prefix = Self::agent_prefix(agent_id);
         let cutoff = {
             let mut k = Vec::with_capacity(40);
@@ -384,6 +421,15 @@ impl MemoryStore {
                 break;
             }
             batch.delete_cf(&cf, &k);
+
+            if k.len() >= 56 {
+                let event_id_bytes = &k[40..56];
+                let mut idx_key = Vec::with_capacity(48);
+                idx_key.extend_from_slice(agent_id.as_bytes());
+                idx_key.extend_from_slice(event_id_bytes);
+                batch.delete_cf(&idx_cf, idx_key);
+            }
+
             deleted += 1;
         }
 
@@ -393,13 +439,7 @@ impl MemoryStore {
         Ok(deleted)
     }
 
-    // === Procedures ===
-
-    /// Store or overwrite a procedure.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or serialization/write failure.
-    pub fn put_procedure(&self, proc: &Procedure) -> Result<(), MemoryError> {
+    fn put_procedure(&self, proc: &Procedure) -> Result<(), MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_PROCEDURES)?;
         let key = Self::procedure_key(proc.agent_id, proc.procedure_id);
         let value = serde_json::to_vec(proc)?;
@@ -407,11 +447,7 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Get a specific procedure by agent and procedure ID.
-    ///
-    /// # Errors
-    /// Returns `ProcedureNotFound` if missing, or on deserialization failure.
-    pub fn get_procedure(
+    fn get_procedure(
         &self,
         agent_id: AgentId,
         procedure_id: ProcedureId,
@@ -428,11 +464,7 @@ impl MemoryStore {
         }
     }
 
-    /// List all procedures for an agent.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or deserialization failure.
-    pub fn list_procedures(&self, agent_id: AgentId) -> Result<Vec<Procedure>, MemoryError> {
+    fn list_procedures(&self, agent_id: AgentId) -> Result<Vec<Procedure>, MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_PROCEDURES)?;
         let prefix = Self::agent_prefix(agent_id);
         let end = Self::agent_prefix_end(agent_id);
@@ -454,11 +486,7 @@ impl MemoryStore {
         Ok(procs)
     }
 
-    /// Delete a specific procedure.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or write failure.
-    pub fn delete_procedure(
+    fn delete_procedure(
         &self,
         agent_id: AgentId,
         procedure_id: ProcedureId,
@@ -469,18 +497,11 @@ impl MemoryStore {
         Ok(())
     }
 
-    // === Aggregate ===
-
-    /// Atomically delete all memory (facts, events, procedures) for an agent.
-    ///
-    /// Uses a single `WriteBatch` so the operation is all-or-nothing.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or write failure.
-    pub fn delete_all(&self, agent_id: AgentId) -> Result<(), MemoryError> {
+    fn delete_all(&self, agent_id: AgentId) -> Result<(), MemoryError> {
         let cf_facts = self.cf_handle(cf::MEMORY_FACTS)?;
         let cf_events = self.cf_handle(cf::MEMORY_EVENTS)?;
         let cf_procs = self.cf_handle(cf::MEMORY_PROCEDURES)?;
+        let cf_idx = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
 
         let prefix = Self::agent_prefix(agent_id);
         let end = Self::agent_prefix_end(agent_id);
@@ -489,63 +510,13 @@ impl MemoryStore {
         Self::batch_delete_range(&self.db, &cf_facts, &prefix, &end, &mut batch)?;
         Self::batch_delete_range(&self.db, &cf_events, &prefix, &end, &mut batch)?;
         Self::batch_delete_range(&self.db, &cf_procs, &prefix, &end, &mut batch)?;
+        Self::batch_delete_range(&self.db, &cf_idx, &prefix, &end, &mut batch)?;
 
         self.db.write(batch)?;
         Ok(())
     }
 
-    fn batch_delete_range(
-        db: &DBWithThreadMode<MultiThreaded>,
-        cf: &Arc<rocksdb::BoundColumnFamily<'_>>,
-        prefix: &[u8],
-        end: &[u8],
-        batch: &mut WriteBatch,
-    ) -> Result<(), MemoryError> {
-        let iter = db.iterator_cf(
-            cf,
-            IteratorMode::From(prefix, rocksdb::Direction::Forward),
-        );
-        for item in iter {
-            let (k, _) = item?;
-            if k.as_ref() >= end {
-                break;
-            }
-            batch.delete_cf(cf, &k);
-        }
-        Ok(())
-    }
-
-    /// Count items in a column family for a given agent without deserializing
-    /// values.
-    fn count_for_agent(
-        &self,
-        cf_name: &str,
-        agent_id: AgentId,
-    ) -> Result<usize, MemoryError> {
-        let cf = self.cf_handle(cf_name)?;
-        let prefix = Self::agent_prefix(agent_id);
-        let end = Self::agent_prefix_end(agent_id);
-        let iter = self.db.iterator_cf(
-            &cf,
-            IteratorMode::From(&prefix, rocksdb::Direction::Forward),
-        );
-
-        let mut count = 0usize;
-        for item in iter {
-            let (k, _) = item?;
-            if k.as_ref() >= end.as_slice() {
-                break;
-            }
-            count += 1;
-        }
-        Ok(count)
-    }
-
-    /// Get aggregate stats for an agent's memory without deserializing values.
-    ///
-    /// # Errors
-    /// Returns error on CF lookup or iteration failure.
-    pub fn stats(&self, agent_id: AgentId) -> Result<MemoryStats, MemoryError> {
+    fn stats(&self, agent_id: AgentId) -> Result<MemoryStats, MemoryError> {
         Ok(MemoryStats {
             facts: self.count_for_agent(cf::MEMORY_FACTS, agent_id)?,
             events: self.count_for_agent(cf::MEMORY_EVENTS, agent_id)?,
