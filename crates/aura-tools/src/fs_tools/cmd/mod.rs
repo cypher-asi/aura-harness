@@ -61,6 +61,13 @@ pub fn cmd_spawn(
         c
     };
 
+    #[cfg(windows)]
+    {
+        if let Some(fresh_path) = refresh_system_path() {
+            cmd.env("PATH", fresh_path);
+        }
+    }
+
     cmd.current_dir(&working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -254,6 +261,63 @@ fn wait_with_hard_timeout(
             ));
         }
         thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Read the current Machine + User PATH from the Windows registry/environment.
+/// Returns `None` if reading fails (non-Windows or error).
+#[cfg(windows)]
+fn refresh_system_path() -> Option<String> {
+    let user_path: String = std::process::Command::new("cmd.exe")
+        .args(["/C", "echo %PATH%"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if user_path.is_empty() || user_path == "%PATH%" {
+        return None;
+    }
+    // cmd /C echo %PATH% returns the process PATH which is the same stale one.
+    // Instead, read directly from the registry.
+    let machine_reg = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+            "/v",
+            "Path",
+        ])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.contains("REG_"))
+                .and_then(|l| l.split("REG_EXPAND_SZ").nth(1).or_else(|| l.split("REG_SZ").nth(1)))
+                .map(|v| v.trim().to_string())
+        });
+    let user_reg = std::process::Command::new("reg")
+        .args(["query", r"HKCU\Environment", "/v", "Path"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.contains("REG_"))
+                .and_then(|l| l.split("REG_EXPAND_SZ").nth(1).or_else(|| l.split("REG_SZ").nth(1)))
+                .map(|v| v.trim().to_string())
+        });
+
+    match (machine_reg, user_reg) {
+        (Some(m), Some(u)) => Some(format!("{m};{u}")),
+        (Some(m), None) => Some(m),
+        (None, Some(u)) => {
+            let current = std::env::var("PATH").unwrap_or_default();
+            Some(format!("{current};{u}"))
+        }
+        (None, None) => None,
     }
 }
 
