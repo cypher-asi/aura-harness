@@ -13,6 +13,14 @@ use chrono::Utc;
 use std::sync::Arc;
 use tracing::info;
 
+/// Parse an agent ID string as UUID (blake3-derived) or 64-char hex.
+fn parse_agent_id(s: &str) -> Option<AgentId> {
+    if let Ok(uuid) = uuid::Uuid::parse_str(s) {
+        return Some(AgentId::from_uuid(uuid));
+    }
+    AgentId::from_hex(s).ok()
+}
+
 /// Top-level entry point for the skill system.
 ///
 /// Owns a [`SkillLoader`] and [`SkillRegistry`], and exposes methods for
@@ -72,15 +80,15 @@ impl SkillManager {
     /// the instructions directly. Returns the metadata for the skills that
     /// were injected (useful for surfacing in `SessionReady`).
     ///
-    /// Accepts the agent ID as a hex string (64-char BLAKE3 hash) and converts
+    /// Accepts the agent ID as a UUID or 64-char hex string and converts
     /// it to `AgentId`. Returns an empty vec if the ID is invalid, the install
     /// store is not configured, or the agent has no installed skills.
     pub fn inject_agent_skills(
         &self,
-        agent_id_hex: &str,
+        agent_id_str: &str,
         system_prompt: &mut String,
     ) -> Vec<SkillMeta> {
-        let skills = self.agent_skills_full(agent_id_hex);
+        let skills = self.agent_skills_full(agent_id_str);
         if skills.is_empty() {
             return Vec::new();
         }
@@ -103,9 +111,9 @@ impl SkillManager {
     /// Return model-invocable [`SkillMeta`] for only the skills installed for
     /// `agent_id`, without modifying a prompt.
     ///
-    /// Accepts the agent ID as a hex string (64-char BLAKE3 hash).
-    pub fn agent_skill_meta(&self, agent_id_hex: &str) -> Vec<SkillMeta> {
-        self.agent_skills_full(agent_id_hex)
+    /// Accepts the agent ID as a UUID or 64-char hex string.
+    pub fn agent_skill_meta(&self, agent_id_str: &str) -> Vec<SkillMeta> {
+        self.agent_skills_full(agent_id_str)
             .iter()
             .map(|s| crate::registry::skill_to_meta(s))
             .collect()
@@ -113,11 +121,11 @@ impl SkillManager {
 
     /// Return full [`Skill`] objects (with body) for skills installed for
     /// `agent_id` that are also model-invocable.
-    fn agent_skills_full(&self, agent_id_hex: &str) -> Vec<Skill> {
-        let agent_id = match AgentId::from_hex(agent_id_hex) {
-            Ok(id) => id,
-            Err(_) => {
-                tracing::warn!(agent_id_hex, "invalid agent ID hex for skill lookup");
+    fn agent_skills_full(&self, agent_id_str: &str) -> Vec<Skill> {
+        let agent_id = match parse_agent_id(agent_id_str) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(agent_id_str, "invalid agent ID for skill lookup");
                 return Vec::new();
             }
         };
@@ -310,10 +318,13 @@ impl SkillManager {
     ///
     /// Returns paths with `~` expanded to the user's home directory, and
     /// deduplicated command names.
-    pub fn agent_permissions(&self, agent_id_hex: &str) -> AgentSkillPermissions {
-        let agent_id = match AgentId::from_hex(agent_id_hex) {
-            Ok(id) => id,
-            Err(_) => return AgentSkillPermissions::default(),
+    pub fn agent_permissions(&self, agent_id_str: &str) -> AgentSkillPermissions {
+        let agent_id = match parse_agent_id(agent_id_str) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(agent_id_str, "agent_permissions: invalid agent ID");
+                return AgentSkillPermissions::default();
+            }
         };
         let store = match self.install_store.as_deref() {
             Some(s) => s,

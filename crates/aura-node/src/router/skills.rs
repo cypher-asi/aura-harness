@@ -13,8 +13,11 @@ use std::sync::{Arc, RwLock};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
-fn parse_agent_id(hex: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
-    AgentId::from_hex(hex).map_err(|e| {
+fn parse_agent_id(s: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
+    if let Ok(uuid) = uuid::Uuid::parse_str(s) {
+        return Ok(AgentId::from_uuid(uuid));
+    }
+    AgentId::from_hex(s).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": format!("invalid agent_id: {e}") })),
