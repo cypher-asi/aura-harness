@@ -101,7 +101,7 @@ pub use runtime::{
 };
 pub use types::{
     AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo,
-    ToolCallResult,
+    ToolCallResult, TurnObserver, TurnObservers,
 };
 
 /// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).

@@ -6,7 +6,7 @@
 //! 3. **Evolve** — LLM-assisted fact merging, contradiction resolution, and insight creation.
 
 use crate::error::MemoryError;
-use crate::store::MemoryStore;
+use crate::store::MemoryStoreApi;
 use crate::types::{AgentEvent, Fact, FactSource};
 use aura_core::{AgentEventId, AgentId, FactId};
 use aura_reasoner::{Message, ModelProvider, ModelRequest};
@@ -85,7 +85,7 @@ pub struct ConsolidationReport {
 
 /// Post-session consolidator that prunes, compresses, and evolves agent memories.
 pub struct MemoryConsolidator {
-    store: Arc<MemoryStore>,
+    store: Arc<dyn MemoryStoreApi>,
     provider: Arc<dyn ModelProvider>,
     config: ConsolidationConfig,
 }
@@ -94,7 +94,7 @@ impl MemoryConsolidator {
     /// Create a new consolidator backed by the given store and model provider.
     #[must_use]
     pub fn new(
-        store: Arc<MemoryStore>,
+        store: Arc<dyn MemoryStoreApi>,
         provider: Arc<dyn ModelProvider>,
         config: ConsolidationConfig,
     ) -> Self {
@@ -118,7 +118,7 @@ impl MemoryConsolidator {
     ) -> Result<ConsolidationReport, MemoryError> {
         let mut report = ConsolidationReport::default();
 
-        self.forget(agent_id, &mut report)?;
+        self.forget(agent_id, &mut report).await?;
         self.compress_events(agent_id, &mut report).await?;
         self.evolve_facts(agent_id, &mut report).await?;
 
@@ -142,42 +142,48 @@ impl MemoryConsolidator {
     // ========================================================================
 
     /// Deterministic pruning of low-value facts and underperforming procedures.
-    fn forget(
+    async fn forget(
         &self,
         agent_id: AgentId,
         report: &mut ConsolidationReport,
     ) -> Result<(), MemoryError> {
-        let now = Utc::now();
-        let access_cutoff_secs = self.config.access_forget_days * 86_400;
+        let store = Arc::clone(&self.store);
+        let config = self.config.clone();
+        let (facts_forgotten, procedures_forgotten) = tokio::task::spawn_blocking(move || {
+            let mut ff = 0usize;
+            let mut pf = 0usize;
+            let now = Utc::now();
+            let access_cutoff_secs = config.access_forget_days * 86_400;
 
-        let facts = self.store.list_facts(agent_id)?;
-        for fact in &facts {
-            let age_secs = (now - fact.updated_at).num_seconds();
-            if fact.importance < self.config.importance_forget_threshold
-                && fact.access_count == 0
-                && age_secs > access_cutoff_secs
-            {
-                self.store.delete_fact(agent_id, fact.fact_id)?;
-                report.facts_forgotten += 1;
+            let facts = store.list_facts(agent_id)?;
+            for fact in &facts {
+                let age_secs = (now - fact.updated_at).num_seconds();
+                if fact.importance < config.importance_forget_threshold
+                    && fact.access_count == 0
+                    && age_secs > access_cutoff_secs
+                {
+                    store.delete_fact(agent_id, fact.fact_id)?;
+                    ff += 1;
+                }
             }
-        }
 
-        let procedures = self.store.list_procedures(agent_id)?;
-        for proc in &procedures {
-            if proc.success_rate < self.config.procedure_forget_threshold
-                && proc.execution_count >= self.config.procedure_min_executions
-            {
-                self.store.delete_procedure(agent_id, proc.procedure_id)?;
-                report.procedures_forgotten += 1;
+            let procedures = store.list_procedures(agent_id)?;
+            for proc in &procedures {
+                if proc.success_rate < config.procedure_forget_threshold
+                    && proc.execution_count >= config.procedure_min_executions
+                {
+                    store.delete_procedure(agent_id, proc.procedure_id)?;
+                    pf += 1;
+                }
             }
-        }
+            Ok::<_, MemoryError>((ff, pf))
+        })
+        .await
+        .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??;
 
-        debug!(
-            facts_forgotten = report.facts_forgotten,
-            procedures_forgotten = report.procedures_forgotten,
-            "Forget phase complete"
-        );
-
+        report.facts_forgotten = facts_forgotten;
+        report.procedures_forgotten = procedures_forgotten;
+        debug!(%agent_id, facts_forgotten, procedures_forgotten, "Forget phase complete");
         Ok(())
     }
 
@@ -191,20 +197,28 @@ impl MemoryConsolidator {
         agent_id: AgentId,
         report: &mut ConsolidationReport,
     ) -> Result<(), MemoryError> {
-        let all_events = self.store.list_events(agent_id, 100_000)?;
-        if all_events.len() <= self.config.max_events_before_compression {
+        // Read phase — blocking
+        let store = Arc::clone(&self.store);
+        let threshold = self.config.max_events_before_compression;
+        let all_events = {
+            let s = Arc::clone(&store);
+            tokio::task::spawn_blocking(move || s.list_events(agent_id, 100_000))
+                .await
+                .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??
+        };
+
+        if all_events.len() <= threshold {
             return Ok(());
         }
 
-        // `list_events` returns reverse-chronological; the tail contains the oldest.
-        let overflow = all_events.len() - self.config.max_events_before_compression;
-        let oldest: Vec<&AgentEvent> = all_events.iter().rev().take(overflow).collect();
-
+        let overflow = all_events.len() - threshold;
+        let oldest: Vec<AgentEvent> = all_events.into_iter().rev().take(overflow).collect();
         if oldest.is_empty() {
             return Ok(());
         }
 
-        let prompt = Self::build_compress_prompt(&oldest);
+        // LLM phase — async
+        let prompt = Self::build_compress_prompt(&oldest.iter().collect::<Vec<_>>());
         let request = ModelRequest::builder(&self.config.model, COMPRESS_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
             .max_tokens(2048)
@@ -224,39 +238,38 @@ impl MemoryConsolidator {
             return Ok(());
         }
 
-        let now = Utc::now();
-        for summary in &summaries {
-            let event = AgentEvent {
-                event_id: AgentEventId::generate(),
-                agent_id,
-                event_type: "consolidated_summary".to_string(),
-                summary: summary.clone(),
-                metadata: serde_json::json!({
-                    "source": "consolidation",
-                    "original_count": overflow
-                }),
-                importance: 0.6,
-                access_count: 0,
-                last_accessed: now,
-                timestamp: now,
-            };
-            self.store.put_event(&event)?;
-        }
+        // Write phase — blocking
+        let s = Arc::clone(&store);
+        let (compressed, deleted) = tokio::task::spawn_blocking(move || {
+            let now = Utc::now();
+            for summary in &summaries {
+                let event = AgentEvent {
+                    event_id: AgentEventId::generate(),
+                    agent_id,
+                    event_type: "consolidated_summary".to_string(),
+                    summary: summary.clone(),
+                    metadata: serde_json::json!({
+                        "source": "consolidation",
+                        "original_count": overflow
+                    }),
+                    importance: 0.6,
+                    access_count: 0,
+                    last_accessed: now,
+                    timestamp: now,
+                };
+                s.put_event(&event)?;
+            }
+            for event in &oldest {
+                s.delete_event_direct(agent_id, event.timestamp, event.event_id)?;
+            }
+            Ok::<_, MemoryError>((summaries.len(), oldest.len()))
+        })
+        .await
+        .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??;
 
-        for event in &oldest {
-            self.store
-                .delete_event_direct(agent_id, event.timestamp, event.event_id)?;
-        }
-
-        report.events_compressed = summaries.len();
-        report.events_deleted = oldest.len();
-
-        debug!(
-            compressed = report.events_compressed,
-            deleted = report.events_deleted,
-            "Compress phase complete"
-        );
-
+        report.events_compressed = compressed;
+        report.events_deleted = deleted;
+        debug!(%agent_id, compressed, deleted, "Compress phase complete");
         Ok(())
     }
 
@@ -305,14 +318,25 @@ impl MemoryConsolidator {
         agent_id: AgentId,
         report: &mut ConsolidationReport,
     ) -> Result<(), MemoryError> {
-        let facts = self.store.list_facts(agent_id)?;
+        // Read phase — blocking
+        let store = Arc::clone(&self.store);
+        let (facts, recent_events) = {
+            let s = Arc::clone(&store);
+            tokio::task::spawn_blocking(move || {
+                let facts = s.list_facts(agent_id)?;
+                let events = s.list_events(agent_id, 50)?;
+                Ok::<_, MemoryError>((facts, events))
+            })
+            .await
+            .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??
+        };
+
         if facts.len() < 2 {
             return Ok(());
         }
 
-        let recent_events = self.store.list_events(agent_id, 50)?;
+        // LLM phase — async
         let prompt = Self::build_evolve_prompt(&facts, &recent_events);
-
         let request = ModelRequest::builder(&self.config.model, EVOLVE_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
             .max_tokens(2048)
@@ -326,9 +350,21 @@ impl MemoryConsolidator {
             .map_err(|e| MemoryError::Provider(e.to_string()))?;
 
         let text = response.message.text_content();
-        self.apply_evolution(&text, agent_id, &facts, report)?;
+
+        // Write phase — blocking (apply_evolution logic inlined)
+        let s = Arc::clone(&store);
+        let (merged, evolved, insights) = tokio::task::spawn_blocking(move || {
+            apply_evolution(&*s, &text, agent_id, &facts)
+        })
+        .await
+        .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??;
+
+        report.facts_merged = merged;
+        report.facts_evolved = evolved;
+        report.insights_created = insights;
 
         debug!(
+            %agent_id,
             merged = report.facts_merged,
             evolved = report.facts_evolved,
             insights = report.insights_created,
@@ -380,90 +416,93 @@ impl MemoryConsolidator {
 
         prompt
     }
+}
 
-    /// Apply LLM-recommended evolution actions to the fact store.
-    fn apply_evolution(
-        &self,
-        response: &str,
-        agent_id: AgentId,
-        facts: &[Fact],
-        report: &mut ConsolidationReport,
-    ) -> Result<(), MemoryError> {
-        let now = Utc::now();
-        let mut to_delete = Vec::new();
-        let mut evolved_indices = Vec::new();
+/// Apply LLM-recommended evolution actions to the fact store.
+/// Returns (facts_merged, facts_evolved, insights_created).
+fn apply_evolution(
+    store: &dyn MemoryStoreApi,
+    response: &str,
+    agent_id: AgentId,
+    facts: &[Fact],
+) -> Result<(usize, usize, usize), MemoryError> {
+    let now = Utc::now();
+    let mut to_delete = Vec::new();
+    let mut evolved_indices = Vec::new();
+    let mut merged = 0usize;
+    let mut evolved = 0usize;
+    let mut insights = 0usize;
 
-        for line in response.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            if let Some(rest) = trimmed.strip_prefix("MERGE ") {
-                if let Some((src, dst)) = parse_merge_indices(rest, facts.len()) {
-                    if to_delete.contains(&src) || to_delete.contains(&dst) {
-                        continue;
-                    }
-                    to_delete.push(src);
-                    let mut target = facts[dst].clone();
-                    if let Some(val) = extract_quoted_value(rest, "value=") {
-                        target.value = serde_json::Value::String(val);
-                    }
-                    if let Some(key) = extract_quoted_value(rest, "key=") {
-                        target.key = key;
-                    }
-                    target.source = FactSource::Consolidated;
-                    target.updated_at = now;
-                    self.store.put_fact(&target)?;
-                    report.facts_merged += 1;
-                }
-            } else if let Some(rest) = trimmed.strip_prefix("EVOLVE ") {
-                if let Some(idx) = parse_single_index(rest, facts.len()) {
-                    if evolved_indices.contains(&idx) || to_delete.contains(&idx) {
-                        continue;
-                    }
-                    evolved_indices.push(idx);
-                    let mut fact = facts[idx].clone();
-                    if let Some(val) = extract_quoted_value(rest, "value=") {
-                        fact.value = serde_json::Value::String(val);
-                    }
-                    if let Some(conf) = extract_float_value(rest, "confidence=") {
-                        fact.confidence = conf;
-                    }
-                    fact.source = FactSource::Consolidated;
-                    fact.updated_at = now;
-                    self.store.put_fact(&fact)?;
-                    report.facts_evolved += 1;
-                }
-            } else if let Some(rest) = trimmed.strip_prefix("INSIGHT ") {
-                let key = extract_quoted_value(rest, "key=");
-                let value = extract_quoted_value(rest, "value=");
-                if let (Some(k), Some(v)) = (key, value) {
-                    let fact = Fact {
-                        fact_id: FactId::generate(),
-                        agent_id,
-                        key: k,
-                        value: serde_json::Value::String(v),
-                        confidence: 0.7,
-                        source: FactSource::Consolidated,
-                        importance: 0.5,
-                        access_count: 0,
-                        last_accessed: now,
-                        created_at: now,
-                        updated_at: now,
-                    };
-                    self.store.put_fact(&fact)?;
-                    report.insights_created += 1;
-                }
-            }
+    for line in response.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
         }
 
-        for &idx in &to_delete {
-            self.store.delete_fact(agent_id, facts[idx].fact_id)?;
+        if let Some(rest) = trimmed.strip_prefix("MERGE ") {
+            if let Some((src, dst)) = parse_merge_indices(rest, facts.len()) {
+                if to_delete.contains(&src) || to_delete.contains(&dst) {
+                    continue;
+                }
+                to_delete.push(src);
+                let mut target = facts[dst].clone();
+                if let Some(val) = extract_quoted_value(rest, "value=") {
+                    target.value = serde_json::Value::String(val);
+                }
+                if let Some(key) = extract_quoted_value(rest, "key=") {
+                    target.key = key;
+                }
+                target.source = FactSource::Consolidated;
+                target.updated_at = now;
+                store.put_fact(&target)?;
+                merged += 1;
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("EVOLVE ") {
+            if let Some(idx) = parse_single_index(rest, facts.len()) {
+                if evolved_indices.contains(&idx) || to_delete.contains(&idx) {
+                    continue;
+                }
+                evolved_indices.push(idx);
+                let mut fact = facts[idx].clone();
+                if let Some(val) = extract_quoted_value(rest, "value=") {
+                    fact.value = serde_json::Value::String(val);
+                }
+                if let Some(conf) = extract_float_value(rest, "confidence=") {
+                    fact.confidence = conf;
+                }
+                fact.source = FactSource::Consolidated;
+                fact.updated_at = now;
+                store.put_fact(&fact)?;
+                evolved += 1;
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("INSIGHT ") {
+            let key = extract_quoted_value(rest, "key=");
+            let value = extract_quoted_value(rest, "value=");
+            if let (Some(k), Some(v)) = (key, value) {
+                let fact = Fact {
+                    fact_id: FactId::generate(),
+                    agent_id,
+                    key: k,
+                    value: serde_json::Value::String(v),
+                    confidence: 0.7,
+                    source: FactSource::Consolidated,
+                    importance: 0.5,
+                    access_count: 0,
+                    last_accessed: now,
+                    created_at: now,
+                    updated_at: now,
+                };
+                store.put_fact(&fact)?;
+                insights += 1;
+            }
         }
-
-        Ok(())
     }
+
+    for &idx in &to_delete {
+        store.delete_fact(agent_id, facts[idx].fact_id)?;
+    }
+
+    Ok((merged, evolved, insights))
 }
 
 // ============================================================================

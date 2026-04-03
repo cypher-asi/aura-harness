@@ -2,22 +2,25 @@
 
 use crate::consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 use crate::error::MemoryError;
+use crate::extraction::ConversationTurn;
 use crate::procedures::{ProcedureConfig, ProcedureExtractor, StepSequence};
 use crate::refinement::{LlmRefiner, RefinerConfig};
 use crate::retrieval::{MemoryRetriever, RetrievalConfig};
-use crate::store::MemoryStore;
+use crate::store::{MemoryStore, MemoryStoreApi};
 use crate::types::{MemoryPacket, Procedure};
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
 use aura_agent::AgentLoopResult;
-use aura_core::{AgentId, ProcedureId};
+use aura_core::AgentId;
+use aura_core::ProcedureId;
 use aura_reasoner::ModelProvider;
+use async_trait::async_trait;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 
 /// Top-level memory facade owning the store, retriever, write pipeline,
 /// procedure extractor, and consolidator.
 pub struct MemoryManager {
-    store: Arc<MemoryStore>,
+    store: Arc<dyn MemoryStoreApi>,
     retriever: MemoryRetriever,
     pipeline: MemoryWritePipeline,
     procedure_extractor: ProcedureExtractor,
@@ -35,7 +38,7 @@ impl MemoryManager {
         consolidation_config: ConsolidationConfig,
         procedure_config: ProcedureConfig,
     ) -> Self {
-        let store = Arc::new(MemoryStore::new(db));
+        let store: Arc<dyn MemoryStoreApi> = Arc::new(MemoryStore::new(db));
         let retriever = MemoryRetriever::new(Arc::clone(&store), retrieval_config);
         let refiner = LlmRefiner::new(Arc::clone(&provider), refiner_config);
         let pipeline = MemoryWritePipeline::new(Arc::clone(&store), refiner, write_config);
@@ -57,8 +60,8 @@ impl MemoryManager {
     ///
     /// # Errors
     /// Returns error on store read failure.
-    pub fn retrieve(&self, agent_id: AgentId) -> Result<MemoryPacket, MemoryError> {
-        self.retriever.retrieve(agent_id)
+    pub async fn retrieve(&self, agent_id: AgentId) -> Result<MemoryPacket, MemoryError> {
+        self.retriever.retrieve(agent_id).await
     }
 
     /// Ingest an agent loop result through the write pipeline.
@@ -70,17 +73,15 @@ impl MemoryManager {
         agent_id: AgentId,
         result: &AgentLoopResult,
     ) -> Result<WriteReport, MemoryError> {
-        self.pipeline.ingest(agent_id, result).await
+        let turn = ConversationTurn::from_messages(&result.messages, &result.total_text);
+        self.pipeline.ingest(agent_id, result, turn.as_ref()).await
     }
 
     /// Inject agent memory into the system prompt of an `AgentLoopConfig`.
     ///
     /// Called before the agent loop starts a turn. Strips any existing
     /// `<agent_memory>` block to ensure idempotency, then appends a fresh one.
-    ///
-    /// Memory retrieval failures are intentionally logged and swallowed so
-    /// that a store hiccup does not prevent the agent from running its turn.
-    pub fn prepare_context(
+    pub async fn prepare_context(
         &self,
         agent_id: AgentId,
         config: &mut aura_agent::AgentLoopConfig,
@@ -89,7 +90,7 @@ impl MemoryManager {
             config.system_prompt.truncate(idx);
         }
 
-        match self.retrieve(agent_id) {
+        match self.retrieve(agent_id).await {
             Ok(packet) => {
                 let block = packet.format_for_prompt();
                 if !block.is_empty() {
@@ -102,7 +103,10 @@ impl MemoryManager {
         }
     }
 
-    /// Alias for [`ingest`](Self::ingest) — use `ingest` for new code.
+    /// Process an agent loop result through the write pipeline.
+    ///
+    /// Extracts the last conversation turn from message history and feeds
+    /// both heuristic and LLM extraction.
     ///
     /// # Errors
     /// Returns error on extraction, refinement, or storage failure.
@@ -111,7 +115,8 @@ impl MemoryManager {
         agent_id: AgentId,
         result: &AgentLoopResult,
     ) -> Result<WriteReport, MemoryError> {
-        self.ingest(agent_id, result).await
+        let turn = ConversationTurn::from_messages(&result.messages, &result.total_text);
+        self.pipeline.ingest(agent_id, result, turn.as_ref()).await
     }
 
     /// Run post-session consolidation (forget, compress, evolve) for an agent.
@@ -178,7 +183,37 @@ impl MemoryManager {
 
     /// Get a reference to the underlying memory store.
     #[must_use]
-    pub const fn store(&self) -> &Arc<MemoryStore> {
+    pub fn store(&self) -> &Arc<dyn MemoryStoreApi> {
         &self.store
+    }
+
+    /// Create a `TurnObserver` that feeds completed turns into this manager.
+    ///
+    /// Attach the returned observer to `AgentLoopConfig::observers` so memory
+    /// ingestion fires automatically inside the agent loop.
+    pub fn turn_observer(
+        self: &Arc<Self>,
+        agent_id: AgentId,
+    ) -> Arc<dyn aura_agent::TurnObserver> {
+        Arc::new(MemoryTurnObserver {
+            manager: Arc::clone(self),
+            agent_id,
+        })
+    }
+}
+
+/// Adapter that implements [`aura_agent::TurnObserver`] by delegating to
+/// [`MemoryManager::process_result`].
+struct MemoryTurnObserver {
+    manager: Arc<MemoryManager>,
+    agent_id: AgentId,
+}
+
+#[async_trait]
+impl aura_agent::TurnObserver for MemoryTurnObserver {
+    async fn on_turn_complete(&self, result: &AgentLoopResult) {
+        if let Err(e) = self.manager.process_result(self.agent_id, result).await {
+            tracing::warn!(error = %e, "Memory ingestion failed after turn");
+        }
     }
 }

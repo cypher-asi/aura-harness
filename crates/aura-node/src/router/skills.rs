@@ -1,6 +1,7 @@
 //! Skills CRUD API endpoints — list, get, create, activate, and per-agent install/uninstall.
 
 use super::RouterState;
+use aura_core::AgentId;
 use aura_skills::{SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource};
 use axum::{
     extract::{Path, State},
@@ -13,13 +14,21 @@ use std::sync::{Arc, RwLock};
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
 fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
-    let msg = e.to_string();
-    let status = if msg.contains("not found") {
+    let status = if e.is_not_found() {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::BAD_REQUEST
     };
-    (status, Json(serde_json::json!({ "error": msg })))
+    (status, Json(serde_json::json!({ "error": e.to_string() })))
+}
+
+fn parse_agent_id(hex: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
+    AgentId::from_hex(hex).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("invalid agent_id: {e}") })),
+        )
+    })
 }
 
 fn require_skills(
@@ -166,28 +175,30 @@ pub(super) struct InstallBody {
 /// `GET /api/agents/:agent_id/skills` — list skills installed for an agent.
 pub(super) async fn list_agent_skills(
     State(state): State<RouterState>,
-    Path(agent_id): Path<String>,
+    Path(agent_hex): Path<String>,
 ) -> ApiResult<Vec<SkillInstallation>> {
+    let agent_id = parse_agent_id(&agent_hex)?;
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
     })?;
-    let installations = guard.list_agent_skills(&agent_id).map_err(skill_err)?;
+    let installations = guard.list_agent_skills(agent_id).map_err(skill_err)?;
     Ok(Json(installations))
 }
 
 /// `POST /api/agents/:agent_id/skills` — install a skill for an agent.
 pub(super) async fn install_agent_skill(
     State(state): State<RouterState>,
-    Path(agent_id): Path<String>,
+    Path(agent_hex): Path<String>,
     Json(body): Json<InstallBody>,
 ) -> Result<(StatusCode, Json<SkillInstallation>), (StatusCode, Json<serde_json::Value>)> {
+    let agent_id = parse_agent_id(&agent_hex)?;
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
     })?;
     let installation = guard
-        .install_for_agent(&agent_id, &body.name, body.source_url)
+        .install_for_agent(agent_id, &body.name, body.source_url)
         .map_err(skill_err)?;
     Ok((StatusCode::CREATED, Json(installation)))
 }
@@ -195,13 +206,14 @@ pub(super) async fn install_agent_skill(
 /// `DELETE /api/agents/:agent_id/skills/:name` — uninstall a skill from an agent.
 pub(super) async fn uninstall_agent_skill(
     State(state): State<RouterState>,
-    Path((agent_id, name)): Path<(String, String)>,
+    Path((agent_hex, name)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let agent_id = parse_agent_id(&agent_hex)?;
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
     })?;
-    guard.uninstall_from_agent(&agent_id, &name)
+    guard.uninstall_from_agent(agent_id, &name)
         .map_err(skill_err)?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -1,9 +1,9 @@
-//! Orchestrates Stage 1 (heuristic) -> Stage 2 (LLM) -> dedup -> write.
+//! Orchestrates Stage 1 (heuristic) -> Stage 2 (LLM extraction + refinement) -> write.
 
 use crate::error::MemoryError;
-use crate::extraction::HeuristicExtractor;
+use crate::extraction::{ConversationTurn, HeuristicExtractor};
 use crate::refinement::LlmRefiner;
-use crate::store::MemoryStore;
+use crate::store::MemoryStoreApi;
 use crate::types::{AgentEvent, CandidateType, Fact, FactSource, RefinedCandidate};
 use aura_agent::AgentLoopResult;
 use aura_core::{AgentEventId, AgentId, FactId};
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 pub struct MemoryWritePipeline {
-    store: Arc<MemoryStore>,
+    store: Arc<dyn MemoryStoreApi>,
     extractor: HeuristicExtractor,
     refiner: LlmRefiner,
     config: WriteConfig,
@@ -48,7 +48,7 @@ pub struct WriteReport {
 
 impl MemoryWritePipeline {
     #[must_use]
-    pub const fn new(store: Arc<MemoryStore>, refiner: LlmRefiner, config: WriteConfig) -> Self {
+    pub fn new(store: Arc<dyn MemoryStoreApi>, refiner: LlmRefiner, config: WriteConfig) -> Self {
         Self {
             store,
             extractor: HeuristicExtractor,
@@ -57,7 +57,11 @@ impl MemoryWritePipeline {
         }
     }
 
-    /// Ingest an `AgentLoopResult` through the two-stage pipeline.
+    /// Ingest an `AgentLoopResult` through the pipeline.
+    ///
+    /// Stage 1: free heuristic extraction on assistant text.
+    /// Stage 2: LLM call (Haiku) that sees the full conversation turn and
+    ///          refines heuristic candidates + extracts new facts.
     ///
     /// # Errors
     /// Returns error on extraction, refinement, or storage failure.
@@ -65,20 +69,21 @@ impl MemoryWritePipeline {
         &self,
         agent_id: AgentId,
         result: &AgentLoopResult,
+        turn: Option<&ConversationTurn>,
     ) -> Result<WriteReport, MemoryError> {
         let mut report = WriteReport::default();
 
-        // Stage 1: Heuristic extraction
+        // Stage 1: Heuristic extraction (free, no LLM)
         let candidates = self.extractor.extract(result);
         report.candidates_extracted = candidates.len();
 
-        if candidates.is_empty() {
-            debug!("No memory candidates extracted, skipping refinement");
+        if candidates.is_empty() && turn.is_none() {
+            debug!("No memory candidates and no conversation turn, skipping");
             return Ok(report);
         }
 
-        // Stage 2: LLM refinement
-        let refined = self.refiner.refine(candidates).await?;
+        // Stage 2: LLM extraction + refinement in one call
+        let refined = self.refiner.extract_and_refine(candidates, turn).await?;
         report.candidates_refined = refined.len();
 
         for candidate in &refined {
@@ -99,7 +104,7 @@ impl MemoryWritePipeline {
                     self.write_event(agent_id, candidate, &mut report)?;
                 }
                 CandidateType::Procedure => {
-                    report.candidates_dropped += 1;
+                    // Procedural memory write — deferred to a later phase.
                 }
             }
         }
@@ -107,7 +112,6 @@ impl MemoryWritePipeline {
         self.enforce_capacity(agent_id)?;
 
         info!(
-            %agent_id,
             extracted = report.candidates_extracted,
             refined = report.candidates_refined,
             facts = report.facts_written,
@@ -201,8 +205,7 @@ impl MemoryWritePipeline {
             .list_events(agent_id, self.config.max_events_per_agent + overflow_buffer)?;
         if events.len() > self.config.max_events_per_agent {
             for event in events.iter().skip(self.config.max_events_per_agent) {
-                self.store
-                    .delete_event_direct(agent_id, event.timestamp, event.event_id)?;
+                self.store.delete_event(agent_id, event.event_id)?;
             }
         }
 

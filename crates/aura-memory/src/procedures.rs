@@ -5,7 +5,7 @@
 //! keyword overlap with their trigger text.
 
 use crate::error::MemoryError;
-use crate::store::MemoryStore;
+use crate::store::MemoryStoreApi;
 use crate::types::Procedure;
 use aura_core::{AgentId, ProcedureId};
 use chrono::Utc;
@@ -39,7 +39,7 @@ impl Default for ProcedureConfig {
 /// Tracks tool-call step patterns across sessions. When a pattern recurs
 /// at least `min_occurrences` times it is promoted to a stored [`Procedure`].
 pub struct ProcedureExtractor {
-    store: Arc<MemoryStore>,
+    store: Arc<dyn MemoryStoreApi>,
     config: ProcedureConfig,
 }
 
@@ -61,7 +61,7 @@ const SIMILARITY_THRESHOLD: f32 = 0.7;
 impl ProcedureExtractor {
     /// Create a new extractor backed by the given store and configuration.
     #[must_use]
-    pub const fn new(store: Arc<MemoryStore>, config: ProcedureConfig) -> Self {
+    pub fn new(store: Arc<dyn MemoryStoreApi>, config: ProcedureConfig) -> Self {
         Self { store, config }
     }
 
@@ -189,7 +189,7 @@ impl ProcedureExtractor {
                     proc.steps = merge_steps(&proc.steps, &sequence.steps);
                 }
                 self.store.put_procedure(&proc)?;
-                debug!(name = %proc.name, executions = proc.execution_count, "Updated procedure");
+                debug!(%agent_id, name = %proc.name, executions = proc.execution_count, "Updated procedure");
                 return Ok(Some(proc));
             }
         }

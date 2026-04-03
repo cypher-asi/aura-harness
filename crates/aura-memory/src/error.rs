@@ -33,11 +33,20 @@ pub enum MemoryError {
 
     #[error("provider error: {0}")]
     Provider(String),
+
+    #[error("blocking task failed: {0}")]
+    BlockingTaskFailed(String),
 }
 
 impl From<serde_json::Error> for MemoryError {
     fn from(err: serde_json::Error) -> Self {
-        Self::Serialization(err.to_string())
+        if err.classify() == serde_json::error::Category::Data
+            || err.classify() == serde_json::error::Category::Eof
+        {
+            Self::Deserialization(err.to_string())
+        } else {
+            Self::Serialization(err.to_string())
+        }
     }
 }
 

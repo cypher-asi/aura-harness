@@ -1,6 +1,7 @@
 //! Core types for the agent orchestration layer.
 
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// Information about a tool call to be executed.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -206,6 +207,21 @@ pub struct AgentLoopResult {
     /// Final message history.
     pub messages: Vec<aura_reasoner::Message>,
 }
+
+/// Observer notified after every completed agent turn.
+///
+/// Implementations receive the full `AgentLoopResult` (including message
+/// history) so they can perform post-turn work such as memory ingestion.
+/// Observers are called **inside** `AgentLoop::run_with_events`, making
+/// them impossible to skip regardless of the calling entry point (WS,
+/// terminal, worker, etc.).
+#[async_trait]
+pub trait TurnObserver: Send + Sync {
+    async fn on_turn_complete(&self, result: &AgentLoopResult);
+}
+
+/// Convenience type for a shared collection of turn observers.
+pub type TurnObservers = Vec<Arc<dyn TurnObserver>>;
 
 /// Implementors execute tool calls and optionally provide build integration.
 ///

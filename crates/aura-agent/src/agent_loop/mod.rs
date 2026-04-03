@@ -28,6 +28,7 @@ mod tests;
 mod tests_advanced;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aura_reasoner::{Message, ModelProvider, ModelRequest, StopReason, ToolDefinition};
@@ -44,10 +45,10 @@ use crate::constants::{
 };
 use crate::events::AgentLoopEvent;
 use crate::read_guard::ReadGuardState;
-use crate::types::{AgentLoopResult, AgentToolExecutor, BuildBaseline};
+use crate::types::{AgentLoopResult, AgentToolExecutor, BuildBaseline, TurnObserver};
 
 /// Configuration for the agent loop.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentLoopConfig {
     /// Maximum iterations (model calls).
     pub max_iterations: usize,
@@ -93,6 +94,19 @@ pub struct AgentLoopConfig {
     pub aura_session_id: Option<String>,
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
+    /// Post-turn observers (e.g. memory ingestion).
+    /// Called automatically at the end of every turn inside the loop.
+    pub observers: Vec<Arc<dyn TurnObserver>>,
+}
+
+impl std::fmt::Debug for AgentLoopConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentLoopConfig")
+            .field("max_iterations", &self.max_iterations)
+            .field("model", &self.model)
+            .field("observers", &self.observers.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for AgentLoopConfig {
@@ -119,6 +133,7 @@ impl Default for AgentLoopConfig {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            observers: Vec::new(),
         }
     }
 }
@@ -238,6 +253,11 @@ impl AgentLoop {
         }
 
         state.result.messages = state.messages;
+
+        for observer in &self.config.observers {
+            observer.on_turn_complete(&state.result).await;
+        }
+
         Ok(state.result)
     }
 
