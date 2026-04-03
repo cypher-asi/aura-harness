@@ -259,9 +259,12 @@ fn wait_with_hard_timeout(
 
 /// Validate a command string against the allowlist.
 ///
-/// When the allowlist is non-empty, the first whitespace-delimited token
-/// of the command string must appear in the list. Shell metacharacters
-/// that could chain additional commands are rejected.
+/// When the allowlist is non-empty, the command must match at least one entry.
+/// Single-token entries match the first token of the command (program name).
+/// Multi-token entries (containing whitespace) match as a prefix of the full
+/// command, enabling rules like `"start obsidian://"` that restrict both the
+/// program and its arguments. Shell metacharacters that could chain additional
+/// commands are rejected.
 fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), ToolError> {
     if allowlist.is_empty() {
         return Ok(());
@@ -278,7 +281,14 @@ fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), To
     }
 
     let program = command.split_whitespace().next().unwrap_or(command);
-    if !allowlist.iter().any(|a| a == program) {
+    let allowed = allowlist.iter().any(|a| {
+        if a.contains(' ') {
+            command.starts_with(a.as_str())
+        } else {
+            a == program
+        }
+    });
+    if !allowed {
         return Err(ToolError::CommandNotAllowed(program.into()));
     }
     Ok(())
