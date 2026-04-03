@@ -140,6 +140,8 @@ pub fn skill_to_meta(skill: &Skill) -> SkillMeta {
         source: skill.source.clone(),
         model_invocable: !skill.frontmatter.disable_model_invocation.unwrap_or(false),
         user_invocable: skill.frontmatter.user_invocable.unwrap_or(false),
+        requested_paths: skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
+        requested_commands: skill.frontmatter.allowed_commands.clone().unwrap_or_default(),
     }
 }
 

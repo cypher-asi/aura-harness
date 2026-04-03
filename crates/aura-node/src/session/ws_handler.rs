@@ -256,7 +256,24 @@ async fn start_turn(
 
     session.messages.push(Message::user(&msg.content));
 
-    let kernel = match helpers::build_kernel(session, ctx) {
+    let mut tool_config = ctx.tool_config.clone();
+    if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
+        if let Ok(mgr) = sm.read() {
+            let perms = mgr.agent_permissions(agent_id);
+            if !perms.extra_paths.is_empty() || !perms.extra_commands.is_empty() {
+                debug!(
+                    session_id = %session.session_id,
+                    extra_paths = perms.extra_paths.len(),
+                    extra_commands = perms.extra_commands.len(),
+                    "Merging skill permissions into tool config"
+                );
+                tool_config.extra_allowed_paths.extend(perms.extra_paths);
+                tool_config.command_allowlist.extend(perms.extra_commands);
+            }
+        }
+    }
+
+    let kernel = match helpers::build_kernel_with_config(session, ctx, &tool_config) {
         Ok(k) => k,
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Failed to build kernel");

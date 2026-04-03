@@ -84,9 +84,16 @@ impl ToolExecutor {
         }
 
         let workspace_root = ctx.workspace_root.clone();
-        let sandbox = tokio::task::spawn_blocking(move || Sandbox::new(&workspace_root))
-            .await
-            .map_err(|e| ToolError::CommandFailed(format!("sandbox init task panicked: {e}")))??;
+        let extra_paths = self.config.extra_allowed_paths.clone();
+        let sandbox = tokio::task::spawn_blocking(move || {
+            if extra_paths.is_empty() {
+                Sandbox::new(&workspace_root)
+            } else {
+                Sandbox::with_extra_roots(&workspace_root, &extra_paths)
+            }
+        })
+        .await
+        .map_err(|e| ToolError::CommandFailed(format!("sandbox init task panicked: {e}")))??;
         let tool_ctx = ToolContext {
             sandbox,
             config: self.config.clone(),

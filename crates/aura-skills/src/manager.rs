@@ -257,6 +257,8 @@ impl SkillManager {
         agent_id: AgentId,
         skill_name: &str,
         source_url: Option<String>,
+        approved_paths: Vec<String>,
+        approved_commands: Vec<String>,
     ) -> Result<SkillInstallation, SkillError> {
         let store = self.require_install_store()?;
         let installation = SkillInstallation {
@@ -265,6 +267,8 @@ impl SkillManager {
             source_url,
             installed_at: Utc::now(),
             version: None,
+            approved_paths,
+            approved_commands,
         };
         store.install(&installation)?;
         info!(%agent_id, skill_name, "skill installed for agent");
@@ -301,4 +305,61 @@ impl SkillManager {
         let store = self.require_install_store()?;
         store.list_for_agent(agent_id)
     }
+
+    /// Collect all approved permissions from skills installed for an agent.
+    ///
+    /// Returns paths with `~` expanded to the user's home directory, and
+    /// deduplicated command names.
+    pub fn agent_permissions(&self, agent_id_hex: &str) -> AgentSkillPermissions {
+        let agent_id = match AgentId::from_hex(agent_id_hex) {
+            Ok(id) => id,
+            Err(_) => return AgentSkillPermissions::default(),
+        };
+        let store = match self.install_store.as_deref() {
+            Some(s) => s,
+            None => return AgentSkillPermissions::default(),
+        };
+        let installed = match store.list_for_agent(agent_id) {
+            Ok(list) => list,
+            Err(_) => return AgentSkillPermissions::default(),
+        };
+
+        let home = dirs::home_dir();
+        let mut paths = Vec::new();
+        let mut commands = Vec::new();
+        let mut seen_paths = std::collections::HashSet::new();
+        let mut seen_cmds = std::collections::HashSet::new();
+
+        for inst in &installed {
+            for p in &inst.approved_paths {
+                let expanded = if let Some(ref h) = home {
+                    p.replace('~', &h.display().to_string())
+                } else {
+                    p.clone()
+                };
+                if seen_paths.insert(expanded.clone()) {
+                    paths.push(std::path::PathBuf::from(expanded));
+                }
+            }
+            for c in &inst.approved_commands {
+                if seen_cmds.insert(c.clone()) {
+                    commands.push(c.clone());
+                }
+            }
+        }
+
+        AgentSkillPermissions {
+            extra_paths: paths,
+            extra_commands: commands,
+        }
+    }
+}
+
+/// Aggregated permissions from all skills installed for an agent.
+#[derive(Debug, Default)]
+pub struct AgentSkillPermissions {
+    /// Filesystem paths the agent is allowed to access (expanded, absolute).
+    pub extra_paths: Vec<std::path::PathBuf>,
+    /// Shell commands the agent is allowed to run.
+    pub extra_commands: Vec<String>,
 }

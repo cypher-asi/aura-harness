@@ -62,6 +62,9 @@ pub struct ToolConfig {
     pub sync_threshold_ms: u64,
     /// Maximum timeout for async processes (milliseconds).
     pub max_async_timeout_ms: u64,
+    /// Extra filesystem paths to allow beyond the workspace root.
+    /// Granted by skill permissions at runtime.
+    pub extra_allowed_paths: Vec<std::path::PathBuf>,
 }
 
 impl Default for ToolConfig {
@@ -73,6 +76,7 @@ impl Default for ToolConfig {
             max_read_bytes: 5 * 1024 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,
+            extra_allowed_paths: vec![],
         }
     }
 }

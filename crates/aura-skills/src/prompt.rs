@@ -120,6 +120,8 @@ mod tests {
             source: SkillSource::Workspace,
             model_invocable: true,
             user_invocable: true,
+            requested_paths: vec![],
+            requested_commands: vec![],
         }];
         let xml = render_skills_xml(&meta);
         assert!(xml.contains("<available_skills>"));
@@ -136,6 +138,8 @@ mod tests {
             source: SkillSource::Personal,
             model_invocable: true,
             user_invocable: false,
+            requested_paths: vec![],
+            requested_commands: vec![],
         }];
         inject_into_prompt(&mut prompt, &meta);
         assert!(prompt.starts_with("You are an assistant."));
@@ -150,6 +154,8 @@ mod tests {
             source: SkillSource::Bundled,
             model_invocable: true,
             user_invocable: false,
+            requested_paths: vec![],
+            requested_commands: vec![],
         }];
         let xml = render_skills_xml(&meta);
         assert!(xml.contains("&lt;special&gt;"));
@@ -165,6 +171,8 @@ mod tests {
             source: SkillSource::Extra(std::path::PathBuf::from("/path/<with>&\"special\"")),
             model_invocable: true,
             user_invocable: false,
+            requested_paths: vec![],
+            requested_commands: vec![],
         }];
         let xml = render_skills_xml(&meta);
         assert!(xml.contains("&lt;with&gt;"));
@@ -182,6 +190,8 @@ mod tests {
                 source: SkillSource::Workspace,
                 model_invocable: true,
                 user_invocable: true,
+                requested_paths: vec![],
+                requested_commands: vec![],
             },
             SkillMeta {
                 name: "beta".to_string(),
@@ -189,6 +199,8 @@ mod tests {
                 source: SkillSource::Personal,
                 model_invocable: false,
                 user_invocable: true,
+                requested_paths: vec![],
+                requested_commands: vec![],
             },
         ];
         let xml = render_skills_xml(&meta);

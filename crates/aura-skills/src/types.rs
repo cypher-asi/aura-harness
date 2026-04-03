@@ -57,6 +57,14 @@ pub struct SkillFrontmatter {
     /// Shell interpreter to use for backtick command injection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// Filesystem paths the skill needs access to (outside the project sandbox).
+    /// Values may include `~` for home-directory expansion and `discover:` prefixes
+    /// for client-side auto-discovery at install time.
+    #[serde(rename = "allowed-paths", skip_serializing_if = "Option::is_none")]
+    pub allowed_paths: Option<Vec<String>>,
+    /// Shell commands the skill needs to run (e.g. `obsidian-cli`).
+    #[serde(rename = "allowed-commands", skip_serializing_if = "Option::is_none")]
+    pub allowed_commands: Option<Vec<String>>,
 }
 
 /// A fully loaded skill with frontmatter, markdown body, and provenance.
@@ -127,6 +135,12 @@ pub struct SkillMeta {
     pub model_invocable: bool,
     /// Whether the user can invoke this skill directly.
     pub user_invocable: bool,
+    /// Filesystem paths the skill requests access to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_paths: Vec<String>,
+    /// Shell commands the skill requests access to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_commands: Vec<String>,
 }
 
 /// Result of activating (rendering) a skill with concrete arguments.

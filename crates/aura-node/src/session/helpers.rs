@@ -120,7 +120,11 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
     KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
-pub(super) fn build_kernel(session: &Session, ctx: &WsContext) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
+pub(super) fn build_kernel_with_config(
+    session: &Session,
+    ctx: &WsContext,
+    tool_config: &aura_tools::ToolConfig,
+) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
         Arc::new(DomainToolExecutor::with_session_context(
@@ -131,7 +135,7 @@ pub(super) fn build_kernel(session: &Session, ctx: &WsContext) -> Result<Arc<Ker
     });
 
     let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec);
+        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec);
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();

@@ -5,8 +5,8 @@
 //! Keys are `{agent_id}\0{skill_name}` so prefix iteration can list all
 //! skills for a single agent.
 
-use aura_core::AgentId;
 use crate::error::SkillError;
+use aura_core::AgentId;
 use chrono::{DateTime, Utc};
 use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded};
 use serde::{Deserialize, Serialize};
@@ -25,13 +25,23 @@ pub struct SkillInstallation {
     pub installed_at: DateTime<Utc>,
     /// Optional version string.
     pub version: Option<String>,
+    /// Filesystem paths the user approved at install time.
+    #[serde(default)]
+    pub approved_paths: Vec<String>,
+    /// Shell commands the user approved at install time.
+    #[serde(default)]
+    pub approved_commands: Vec<String>,
 }
 
 /// Abstraction over the skill installation store for testability.
 pub trait SkillInstallStoreApi: Send + Sync {
+    /// Install a skill for an agent.
     fn install(&self, installation: &SkillInstallation) -> Result<(), SkillError>;
+    /// Uninstall a skill for an agent.
     fn uninstall(&self, agent_id: AgentId, skill_name: &str) -> Result<(), SkillError>;
+    /// List all skills installed for an agent.
     fn list_for_agent(&self, agent_id: AgentId) -> Result<Vec<SkillInstallation>, SkillError>;
+    /// Check if a skill is installed for an agent.
     fn is_installed(&self, agent_id: AgentId, skill_name: &str) -> Result<bool, SkillError>;
 }
 
@@ -51,7 +61,10 @@ impl SkillInstallStore {
         self.db
             .cf_handle(aura_store::cf::AGENT_SKILLS)
             .ok_or_else(|| {
-                SkillError::Store("agent_skills column family not found".to_string())
+                SkillError::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "agent_skills column family not found",
+                ))
             })
     }
 
@@ -116,7 +129,8 @@ impl SkillInstallStoreApi for SkillInstallStore {
     fn is_installed(&self, agent_id: AgentId, skill_name: &str) -> Result<bool, SkillError> {
         let cf = self.cf_handle()?;
         let key = Self::key(agent_id, skill_name);
-        let exists = self.db
+        let exists = self
+            .db
             .get_cf(&cf, key)
             .map_err(|e| SkillError::Store(e.to_string()))?;
         Ok(exists.is_some())

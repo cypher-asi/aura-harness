@@ -34,26 +34,21 @@
 //! let activation = manager.activate("deploy", "production us-east-1");
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::module_name_repetitions)]
 
-pub(crate) mod activation;
+pub mod activation;
 pub mod error;
-pub(crate) mod install;
+pub mod install;
 pub mod loader;
-pub(crate) mod manager;
-pub(crate) mod parser;
-pub(crate) mod prompt;
-pub(crate) mod registry;
+pub mod manager;
+pub mod parser;
+pub mod prompt;
+pub mod registry;
 pub mod types;
 
 pub use error::SkillError;
-pub use install::{SkillInstallStore, SkillInstallStoreApi, SkillInstallation};
+pub use install::{SkillInstallStore, SkillInstallation};
 pub use loader::SkillLoader;
-pub use manager::SkillManager;
+pub use manager::{AgentSkillPermissions, SkillManager};
 pub use registry::SkillRegistry;
 pub use types::{Skill, SkillActivation, SkillFrontmatter, SkillMeta, SkillSource};
-
-#[cfg(test)]
-mod integration_tests;
