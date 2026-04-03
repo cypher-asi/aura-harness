@@ -25,7 +25,7 @@ pub struct RefinerConfig {
 impl Default for RefinerConfig {
     fn default() -> Self {
         Self {
-            model: "claude-3-5-haiku-latest".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             auth_token: None,
         }
     }
