@@ -331,7 +331,24 @@ impl SkillManager {
         let mut seen_cmds = std::collections::HashSet::new();
 
         for inst in &installed {
-            for p in &inst.approved_paths {
+            let (inst_paths, inst_cmds) = if inst.approved_paths.is_empty()
+                && inst.approved_commands.is_empty()
+            {
+                // Fall back to the skill's frontmatter declarations when the
+                // installation record has no explicit approvals (pre-permission
+                // installs or UI that hasn't implemented the approval prompt yet).
+                match self.registry.get(&inst.skill_name) {
+                    Ok(skill) => (
+                        skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
+                        skill.frontmatter.allowed_commands.clone().unwrap_or_default(),
+                    ),
+                    Err(_) => (Vec::new(), Vec::new()),
+                }
+            } else {
+                (inst.approved_paths.clone(), inst.approved_commands.clone())
+            };
+
+            for p in &inst_paths {
                 let expanded = if let Some(ref h) = home {
                     p.replace('~', &h.display().to_string())
                 } else {
@@ -341,7 +358,7 @@ impl SkillManager {
                     paths.push(std::path::PathBuf::from(expanded));
                 }
             }
-            for c in &inst.approved_commands {
+            for c in &inst_cmds {
                 if seen_cmds.insert(c.clone()) {
                     commands.push(c.clone());
                 }
