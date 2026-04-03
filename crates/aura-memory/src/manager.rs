@@ -115,8 +115,21 @@ impl MemoryManager {
         agent_id: AgentId,
         result: &AgentLoopResult,
     ) -> Result<WriteReport, MemoryError> {
+        self.process_result_with_token(agent_id, result, None).await
+    }
+
+    /// Like [`process_result`](Self::process_result) but with an explicit
+    /// auth token for proxy-mode LLM calls.
+    pub async fn process_result_with_token(
+        &self,
+        agent_id: AgentId,
+        result: &AgentLoopResult,
+        auth_token: Option<String>,
+    ) -> Result<WriteReport, MemoryError> {
         let turn = ConversationTurn::from_messages(&result.messages, &result.total_text);
-        self.pipeline.ingest(agent_id, result, turn.as_ref()).await
+        self.pipeline
+            .ingest_with_token(agent_id, result, turn.as_ref(), auth_token)
+            .await
     }
 
     /// Run post-session consolidation (forget, compress, evolve) for an agent.
@@ -189,15 +202,20 @@ impl MemoryManager {
 
     /// Create a `TurnObserver` that feeds completed turns into this manager.
     ///
+    /// The `auth_token` is the session JWT needed for proxy-mode LLM calls
+    /// (used by the Haiku extraction model).
+    ///
     /// Attach the returned observer to `AgentLoopConfig::observers` so memory
     /// ingestion fires automatically inside the agent loop.
     pub fn turn_observer(
         self: &Arc<Self>,
         agent_id: AgentId,
+        auth_token: Option<String>,
     ) -> Arc<dyn aura_agent::TurnObserver> {
         Arc::new(MemoryTurnObserver {
             manager: Arc::clone(self),
             agent_id,
+            auth_token,
         })
     }
 }
@@ -207,12 +225,17 @@ impl MemoryManager {
 struct MemoryTurnObserver {
     manager: Arc<MemoryManager>,
     agent_id: AgentId,
+    auth_token: Option<String>,
 }
 
 #[async_trait]
 impl aura_agent::TurnObserver for MemoryTurnObserver {
     async fn on_turn_complete(&self, result: &AgentLoopResult) {
-        if let Err(e) = self.manager.process_result(self.agent_id, result).await {
+        if let Err(e) = self
+            .manager
+            .process_result_with_token(self.agent_id, result, self.auth_token.clone())
+            .await
+        {
             tracing::warn!(error = %e, "Memory ingestion failed after turn");
         }
     }

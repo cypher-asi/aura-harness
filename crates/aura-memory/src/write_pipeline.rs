@@ -71,6 +71,16 @@ impl MemoryWritePipeline {
         result: &AgentLoopResult,
         turn: Option<&ConversationTurn>,
     ) -> Result<WriteReport, MemoryError> {
+        self.ingest_with_token(agent_id, result, turn, None).await
+    }
+
+    pub async fn ingest_with_token(
+        &self,
+        agent_id: AgentId,
+        result: &AgentLoopResult,
+        turn: Option<&ConversationTurn>,
+        auth_token: Option<String>,
+    ) -> Result<WriteReport, MemoryError> {
         let mut report = WriteReport::default();
 
         // Stage 1: Heuristic extraction (free, no LLM)
@@ -83,7 +93,10 @@ impl MemoryWritePipeline {
         }
 
         // Stage 2: LLM extraction + refinement in one call
-        let refined = self.refiner.extract_and_refine(candidates, turn).await?;
+        let refined = self
+            .refiner
+            .extract_and_refine(candidates, turn, auth_token)
+            .await?;
         report.candidates_refined = refined.len();
 
         for candidate in &refined {

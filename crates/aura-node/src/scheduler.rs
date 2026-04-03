@@ -138,7 +138,7 @@ impl Scheduler {
 
         let mut config = self.agent_loop_config.clone();
         if let Some(ref mm) = self.memory_manager {
-            config.observers.push(mm.turn_observer(agent_id));
+            config.observers.push(mm.turn_observer(agent_id, None));
         }
         let agent_loop = AgentLoop::new(config);
 

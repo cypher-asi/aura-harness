@@ -48,6 +48,7 @@ impl LlmRefiner {
         &self,
         candidates: Vec<MemoryCandidate>,
         turn: Option<&ConversationTurn>,
+        auth_token_override: Option<String>,
     ) -> Result<Vec<RefinedCandidate>, MemoryError> {
         if candidates.is_empty() && turn.is_none() {
             return Ok(Vec::new());
@@ -55,10 +56,11 @@ impl LlmRefiner {
 
         let prompt = Self::build_extraction_prompt(&candidates, turn);
 
+        let effective_token = auth_token_override.or_else(|| self.config.auth_token.clone());
         let request = ModelRequest::builder(&self.config.model, EXTRACTOR_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
             .max_tokens(1024)
-            .auth_token(self.config.auth_token.clone())
+            .auth_token(effective_token)
             .build();
 
         let response = self
@@ -77,7 +79,7 @@ impl LlmRefiner {
         &self,
         candidates: Vec<MemoryCandidate>,
     ) -> Result<Vec<RefinedCandidate>, MemoryError> {
-        self.extract_and_refine(candidates, None).await
+        self.extract_and_refine(candidates, None, None).await
     }
 
     fn build_extraction_prompt(
