@@ -93,12 +93,24 @@ impl Node {
 
         let provider = Self::create_model_provider();
 
+        let memory_manager = Arc::new(MemoryManager::new(
+            store.db_handle().clone(),
+            provider.clone(),
+            RefinerConfig::default(),
+            WriteConfig::default(),
+            RetrievalConfig::default(),
+            ConsolidationConfig::default(),
+            ProcedureConfig::default(),
+        ));
+        info!("Memory manager ready");
+
         let scheduler = Arc::new(Scheduler::new(
             store.clone(),
             provider.clone(),
             executors,
             tools,
             self.config.workspaces_path(),
+            Some(Arc::clone(&memory_manager)),
         ));
         info!("Scheduler ready");
 
@@ -127,17 +139,6 @@ impl Node {
         let skill_count = skill_manager_inner.list_all().len();
         let skill_manager = Arc::new(RwLock::new(skill_manager_inner));
         info!(skills = skill_count, "Skill manager ready");
-
-        let memory_manager = Arc::new(MemoryManager::new(
-            store.db_handle().clone(),
-            provider.clone(),
-            RefinerConfig::default(),
-            WriteConfig::default(),
-            RetrievalConfig::default(),
-            ConsolidationConfig::default(),
-            ProcedureConfig::default(),
-        ));
-        info!("Memory manager ready");
 
         let state = RouterState {
             store,

@@ -70,12 +70,12 @@ impl Sandbox {
             })?;
         }
 
-        let root = root.canonicalize().map_err(|e| {
+        let root = strip_unc_prefix(&root.canonicalize().map_err(|e| {
             ToolError::Io(std::io::Error::new(
                 e.kind(),
                 format!("canonicalize({}): {e}", root.display()),
             ))
-        })?;
+        })?);
         debug!(?root, "Sandbox initialized");
 
         Ok(Self {
@@ -103,6 +103,7 @@ impl Sandbox {
             }
             match path.canonicalize() {
                 Ok(canonical) => {
+                    let canonical = strip_unc_prefix(&canonical);
                     debug!(?canonical, "Added extra sandbox root");
                     sandbox.extra_roots.push(canonical);
                 }
@@ -167,13 +168,12 @@ impl Sandbox {
             return Err(ToolError::PathNotFound(path.as_ref().display().to_string()));
         }
 
-        // Re-canonicalize to resolve symlinks
-        let canonical = resolved.canonicalize().map_err(|e| {
+        let canonical = strip_unc_prefix(&resolved.canonicalize().map_err(|e| {
             ToolError::Io(std::io::Error::new(
                 e.kind(),
                 format!("canonicalize({}): {e}", resolved.display()),
             ))
-        })?;
+        })?);
 
         if !self.is_within_allowed(&canonical) {
             return Err(ToolError::SandboxViolation {
@@ -186,10 +186,13 @@ impl Sandbox {
 
     /// Check whether a path falls under the primary root or any extra root.
     fn is_within_allowed(&self, path: &Path) -> bool {
-        if path.starts_with(&self.root) {
+        let normalized = strip_unc_prefix(path);
+        if normalized.starts_with(&self.root) {
             return true;
         }
-        self.extra_roots.iter().any(|r| path.starts_with(r))
+        self.extra_roots
+            .iter()
+            .any(|r| normalized.starts_with(r))
     }
 
     /// Resolve a path for a new file (doesn't need to exist).
@@ -228,6 +231,17 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 
     components.iter().collect()
+}
+
+/// Strip the `\\?\` verbatim prefix that Windows `canonicalize()` adds.
+/// On non-Windows this is a no-op.
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s.starts_with(r"\\?\") {
+        PathBuf::from(&s[4..])
+    } else {
+        path.to_path_buf()
+    }
 }
 
 fn is_workspace_root_alias(path: &Path) -> bool {
@@ -315,9 +329,9 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello").unwrap();
 
-        // Should resolve
         let resolved = sandbox.resolve_existing("test.txt").unwrap();
-        assert_eq!(resolved, file_path.canonicalize().unwrap());
+        let expected = strip_unc_prefix(&file_path.canonicalize().unwrap());
+        assert_eq!(resolved, expected);
     }
 
     #[test]
