@@ -1,10 +1,16 @@
-//! Stage 2: LLM refinement of pre-filtered candidates.
+//! Stage 2: LLM-powered fact extraction and refinement.
+//!
+//! Combines conversation-aware extraction with heuristic candidate refinement
+//! in a single cheap LLM call (Haiku by default).
 
 use crate::error::MemoryError;
+use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, RefinedCandidate};
 use aura_reasoner::{Message, ModelProvider, ModelRequest};
 use std::fmt::Write;
 use std::sync::Arc;
+
+const MAX_TURN_TEXT_LEN: usize = 3000;
 
 pub struct LlmRefiner {
     provider: Arc<dyn ModelProvider>,
@@ -16,26 +22,40 @@ pub struct RefinerConfig {
     pub auth_token: Option<String>,
 }
 
+impl Default for RefinerConfig {
+    fn default() -> Self {
+        Self {
+            model: "claude-3-5-haiku-latest".to_string(),
+            auth_token: None,
+        }
+    }
+}
+
 impl LlmRefiner {
     pub fn new(provider: Arc<dyn ModelProvider>, config: RefinerConfig) -> Self {
         Self { provider, config }
     }
 
-    /// Refine a batch of memory candidates via the LLM.
+    /// Extract facts from a conversation turn AND refine heuristic candidates
+    /// in a single LLM call.
+    ///
+    /// When no conversation turn is available (e.g. automated runs with no
+    /// user message), falls back to refining heuristic candidates only.
     ///
     /// # Errors
     /// Returns error on provider failure or unparseable response.
-    pub async fn refine(
+    pub async fn extract_and_refine(
         &self,
         candidates: Vec<MemoryCandidate>,
+        turn: Option<&ConversationTurn>,
     ) -> Result<Vec<RefinedCandidate>, MemoryError> {
-        if candidates.is_empty() {
+        if candidates.is_empty() && turn.is_none() {
             return Ok(Vec::new());
         }
 
-        let prompt = Self::build_prompt(&candidates);
+        let prompt = Self::build_extraction_prompt(&candidates, turn);
 
-        let request = ModelRequest::builder(&self.config.model, REFINER_SYSTEM_PROMPT)
+        let request = ModelRequest::builder(&self.config.model, EXTRACTOR_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
             .max_tokens(1024)
             .auth_token(self.config.auth_token.clone())
@@ -51,35 +71,70 @@ impl LlmRefiner {
         Ok(Self::parse_response(&response_text, &candidates))
     }
 
-    fn build_prompt(candidates: &[MemoryCandidate]) -> String {
-        let mut prompt = String::from(
-            "Given these candidate memories extracted from a work session, decide which to keep.\n\nCandidates:\n",
-        );
+    /// Backward-compatible entry point that only refines existing candidates
+    /// without conversation context.
+    pub async fn refine(
+        &self,
+        candidates: Vec<MemoryCandidate>,
+    ) -> Result<Vec<RefinedCandidate>, MemoryError> {
+        self.extract_and_refine(candidates, None).await
+    }
 
-        for (i, c) in candidates.iter().enumerate() {
-            let type_str = match c.candidate_type {
-                CandidateType::Fact => "fact",
-                CandidateType::Event => "event",
-                CandidateType::Procedure => "procedure",
-            };
-            let key_str = c.key.as_deref().unwrap_or("(none)");
-            let summary_str = c.summary.as_deref().unwrap_or("");
-            let _ = writeln!(
-                prompt,
-                "{}. {}: key={}, value={}, source={} {}",
-                i + 1,
-                type_str,
-                key_str,
-                c.value,
-                c.source_hint,
-                summary_str
+    fn build_extraction_prompt(
+        candidates: &[MemoryCandidate],
+        turn: Option<&ConversationTurn>,
+    ) -> String {
+        let mut prompt = String::new();
+
+        if let Some(turn) = turn {
+            prompt.push_str("## Conversation turn\n\n");
+            prompt.push_str("User: ");
+            let user_msg = truncate(&turn.user_message, MAX_TURN_TEXT_LEN);
+            prompt.push_str(&user_msg);
+            prompt.push_str("\n\nAssistant: ");
+            let assistant_msg = truncate(&turn.assistant_text, MAX_TURN_TEXT_LEN);
+            prompt.push_str(&assistant_msg);
+            prompt.push_str("\n\n");
+        }
+
+        if !candidates.is_empty() {
+            prompt.push_str("## Pre-extracted candidates\n\n");
+            for (i, c) in candidates.iter().enumerate() {
+                let type_str = match c.candidate_type {
+                    CandidateType::Fact => "fact",
+                    CandidateType::Event => "event",
+                    CandidateType::Procedure => "procedure",
+                };
+                let key_str = c.key.as_deref().unwrap_or("(none)");
+                let summary_str = c.summary.as_deref().unwrap_or("");
+                let _ = writeln!(
+                    prompt,
+                    "{}. {}: key={}, value={}, source={} {}",
+                    i + 1,
+                    type_str,
+                    key_str,
+                    c.value,
+                    c.source_hint,
+                    summary_str
+                );
+            }
+            prompt.push('\n');
+        }
+
+        prompt.push_str("## Instructions\n\n");
+
+        if !candidates.is_empty() {
+            prompt.push_str(
+                "For each pre-extracted candidate, respond with one line:\n\
+                 N. KEEP|DROP key=\"refined_key\" confidence=0.X importance=0.X\n\n",
             );
         }
 
         prompt.push_str(
-            "\nFor each candidate, respond with one line in this format:\n\
-             N. KEEP|DROP key=\"refined_key\" confidence=0.X importance=0.X reason=\"...\"\n\
-             Where N is the candidate number.",
+            "If the conversation contains facts worth remembering long-term, \
+             output additional lines:\n\
+             FACT key=\"snake_case_key\" value=\"the fact\" confidence=0.X importance=0.X\n\n\
+             If there are no new facts to extract, output nothing extra.",
         );
 
         prompt
@@ -95,6 +150,15 @@ impl LlmRefiner {
                 continue;
             }
 
+            // Try parsing as a FACT line (new extraction)
+            if line.starts_with("FACT ") {
+                if let Some(candidate) = parse_fact_line(line) {
+                    refined.push(candidate);
+                    continue;
+                }
+            }
+
+            // Try parsing as a numbered candidate refinement (N. KEEP|DROP ...)
             let parts: Vec<&str> = line.splitn(2, ". ").collect();
             if parts.len() != 2 {
                 continue;
@@ -126,6 +190,7 @@ impl LlmRefiner {
             });
         }
 
+        // Candidates not addressed by the LLM are kept by default
         for (i, c) in candidates.iter().enumerate() {
             if !seen_indices.contains(&i) {
                 refined.push(RefinedCandidate {
@@ -142,6 +207,23 @@ impl LlmRefiner {
 
         refined
     }
+}
+
+fn parse_fact_line(line: &str) -> Option<RefinedCandidate> {
+    let key = extract_quoted(line, "key=")?;
+    let value = extract_quoted(line, "value=")?;
+    let confidence = extract_float(line, "confidence=").unwrap_or(0.8);
+    let importance = extract_float(line, "importance=").unwrap_or(0.5);
+
+    Some(RefinedCandidate {
+        candidate_type: CandidateType::Fact,
+        key,
+        value: serde_json::Value::String(value),
+        summary: None,
+        confidence,
+        importance,
+        keep: true,
+    })
 }
 
 fn extract_float(text: &str, prefix: &str) -> Option<f32> {
@@ -166,10 +248,35 @@ fn extract_quoted(text: &str, prefix: &str) -> Option<String> {
     }
 }
 
-const REFINER_SYSTEM_PROMPT: &str = "You are a memory curator for an AI agent. Given candidate memories \
-extracted from a work session, decide which to KEEP or DROP. For kept items, refine their key names \
-for consistency and assign confidence (0.0-1.0) and importance (0.0-1.0) scores. Be selective: \
-only keep genuinely useful long-term knowledge. Drop transient observations.";
+fn truncate(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
+    }
+}
+
+const EXTRACTOR_SYSTEM_PROMPT: &str = "\
+You are a memory system for an AI agent. After each conversation turn you \
+extract facts worth remembering long-term and refine any pre-extracted candidates.
+
+What to extract:
+- Explicit user preferences (favorite tools, languages, pets, etc.)
+- Personal facts the user shares (name, role, company, location)
+- Technical decisions and project details
+- Constraints or requirements stated by the user
+- Recurring patterns or conventions
+
+What NOT to extract:
+- Transient requests ('fix this bug', 'run the tests')
+- Greetings or conversational filler
+- Information already covered by a pre-extracted candidate
+
+Output format — one line per item:
+- For pre-extracted candidates: N. KEEP|DROP key=\"refined_key\" confidence=0.X importance=0.X
+- For newly extracted facts: FACT key=\"snake_case_key\" value=\"concise fact\" confidence=0.X importance=0.X
+
+Be selective. Only extract facts that would be useful across future sessions.";
 
 #[cfg(test)]
 mod tests {
@@ -258,9 +365,40 @@ mod tests {
     }
 
     #[test]
-    fn build_prompt_smoke_test() {
+    fn parse_fact_line_valid() {
+        let line = "FACT key=\"favorite_dog\" value=\"Belgian Malanois\" confidence=0.95 importance=0.6";
+        let result = parse_fact_line(line).unwrap();
+        assert_eq!(result.key, "favorite_dog");
+        assert_eq!(result.value, serde_json::Value::String("Belgian Malanois".into()));
+        assert!((result.confidence - 0.95).abs() < 1e-3);
+        assert!(result.keep);
+    }
+
+    #[test]
+    fn parse_response_with_new_facts() {
+        let candidates = vec![make_candidate("a")];
+        let response = "1. KEEP key=\"a\" confidence=0.9 importance=0.8\nFACT key=\"pet\" value=\"dog\" confidence=0.85 importance=0.5";
+        let refined = LlmRefiner::parse_response(response, &candidates);
+        assert_eq!(refined.len(), 2);
+        assert_eq!(refined[1].key, "pet");
+    }
+
+    #[test]
+    fn build_extraction_prompt_with_turn() {
+        let turn = ConversationTurn {
+            user_message: "My favorite dog is a Belgian Malanois".to_string(),
+            assistant_text: "Great choice!".to_string(),
+        };
+        let prompt = LlmRefiner::build_extraction_prompt(&[], Some(&turn));
+        assert!(prompt.contains("Belgian Malanois"));
+        assert!(prompt.contains("Great choice!"));
+        assert!(prompt.contains("FACT"));
+    }
+
+    #[test]
+    fn build_extraction_prompt_without_turn() {
         let candidates = vec![make_candidate("test_key")];
-        let prompt = LlmRefiner::build_prompt(&candidates);
+        let prompt = LlmRefiner::build_extraction_prompt(&candidates, None);
         assert!(prompt.contains("test_key"));
         assert!(prompt.contains("KEEP|DROP"));
     }

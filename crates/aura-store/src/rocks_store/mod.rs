@@ -76,6 +76,7 @@ impl RocksStore {
             cf::MEMORY_FACTS,
             cf::MEMORY_EVENTS,
             cf::MEMORY_PROCEDURES,
+            cf::MEMORY_EVENT_INDEX,
             cf::AGENT_SKILLS,
         ];
         let cf_descriptors: Vec<_> = cf_names

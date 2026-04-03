@@ -1,5 +1,5 @@
 use crate::error::MemoryError;
-use crate::store::{MemoryStats, MemoryStore};
+use crate::store::{MemoryStats, MemoryStore, MemoryStoreApi};
 use crate::types::{AgentEvent, Fact, FactSource, Procedure};
 use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
 use chrono::{Duration, Utc};
@@ -18,6 +18,7 @@ fn test_db(dir: &std::path::Path) -> Arc<DBWithThreadMode<MultiThreaded>> {
         ColumnFamilyDescriptor::new("memory_facts", Options::default()),
         ColumnFamilyDescriptor::new("memory_events", Options::default()),
         ColumnFamilyDescriptor::new("memory_procedures", Options::default()),
+        ColumnFamilyDescriptor::new("memory_event_index", Options::default()),
         ColumnFamilyDescriptor::new("agent_skills", Options::default()),
     ];
 
@@ -755,4 +756,38 @@ fn delete_event_scan_among_many() {
     let remaining = store.list_events(agent, 100).unwrap();
     assert_eq!(remaining.len(), 9);
     assert!(remaining.iter().all(|e| e.event_id != target_id));
+}
+
+// ====================================================================
+// TEST-12: agent_prefix_end edge cases
+// ====================================================================
+
+#[test]
+fn agent_prefix_end_normal_case() {
+    let agent = AgentId::new([0u8; 32]);
+    let end = MemoryStore::agent_prefix_end(agent);
+    let mut expected = [0u8; 32].to_vec();
+    *expected.last_mut().unwrap() = 1;
+    assert_eq!(end, expected);
+}
+
+#[test]
+fn agent_prefix_end_all_0xff() {
+    let agent = AgentId::new([0xFF; 32]);
+    let end = MemoryStore::agent_prefix_end(agent);
+    let mut expected = vec![0u8; 32];
+    expected.push(0);
+    assert_eq!(end, expected);
+}
+
+#[test]
+fn agent_prefix_end_last_byte_0xff() {
+    let mut bytes = [0u8; 32];
+    bytes[31] = 0xFF;
+    let agent = AgentId::new(bytes);
+    let end = MemoryStore::agent_prefix_end(agent);
+    let mut expected = bytes.to_vec();
+    expected[31] = 0;
+    expected[30] = 1;
+    assert_eq!(end, expected);
 }

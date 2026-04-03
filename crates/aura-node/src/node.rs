@@ -10,12 +10,13 @@ use anyhow::Context;
 use aura_automaton::AutomatonRuntime;
 use aura_kernel::Executor;
 use aura_store::RocksStore;
+use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
 use aura_tools::{ToolCatalog, ToolConfig};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -113,6 +114,16 @@ impl Node {
             info!("Automaton runtime ready");
         }
 
+        let skill_loader = SkillLoader::with_defaults(
+            Some(self.config.workspaces_path()),
+            None,
+        );
+        let skill_install_store = Arc::new(SkillInstallStore::new(store.db_handle().clone()));
+        let skill_manager_inner = SkillManager::with_install_store(skill_loader, skill_install_store);
+        let skill_count = skill_manager_inner.list_all().len();
+        let skill_manager = Arc::new(RwLock::new(skill_manager_inner));
+        info!(skills = skill_count, "Skill manager ready");
+
         let state = RouterState {
             store,
             scheduler,
@@ -125,7 +136,7 @@ impl Node {
             automaton_bridge,
             failed_txs: Arc::new(dashmap::DashMap::new()),
             memory_manager: None,
-            skill_manager: None,
+            skill_manager: Some(skill_manager),
         };
         let app = create_router(state);
 

@@ -113,6 +113,12 @@ impl SkillRegistry {
             .collect()
     }
 
+    /// Return references to all registered skills.
+    #[must_use]
+    pub fn all_skills(&self) -> Vec<&Skill> {
+        self.skills.values().collect()
+    }
+
     /// Number of skills in the registry.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -127,7 +133,7 @@ impl SkillRegistry {
 }
 
 /// Convert a [`Skill`] to lightweight [`SkillMeta`].
-fn skill_to_meta(skill: &Skill) -> SkillMeta {
+pub fn skill_to_meta(skill: &Skill) -> SkillMeta {
     SkillMeta {
         name: skill.frontmatter.name.clone(),
         description: skill.frontmatter.description.clone(),

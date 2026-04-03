@@ -6,7 +6,7 @@ use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
-    SessionUsage, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
+    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
 };
 use crate::provider_factory::create_provider_from_session_config;
 #[allow(deprecated)]
@@ -96,16 +96,35 @@ pub(super) fn handle_session_init(
         .map(protocol::tool_info_from_definition)
         .collect();
 
+    let skills: Vec<SkillInfo> = match (&ctx.skill_manager, &session.skill_agent_id) {
+        (Some(sm), Some(agent_id)) => {
+            if let Ok(mgr) = sm.read() {
+                mgr.agent_skill_meta(agent_id)
+                    .into_iter()
+                    .map(|m| SkillInfo {
+                        name: m.name,
+                        description: m.description,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    };
+
     info!(
         session_id = %session.session_id,
         model = %session.model,
         tool_count = tools.len(),
+        skill_count = skills.len(),
         "Session initialized"
     );
 
     let _ = outbound_tx.try_send(OutboundMessage::SessionReady(SessionReady {
         session_id: session.session_id.clone(),
         tools,
+        skills,
     }));
 }
 

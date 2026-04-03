@@ -14,11 +14,12 @@ use aura_core::{AgentId, InstalledToolDefinition};
 use aura_protocol::SessionProviderConfig;
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_store::Store;
+use aura_skills::SkillManager;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 // ============================================================================
@@ -84,6 +85,8 @@ pub struct Session {
     pub aura_session_id: Option<String>,
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
+    /// Harness-level agent ID for per-agent skill lookup.
+    pub skill_agent_id: Option<String>,
 }
 
 impl Session {
@@ -118,6 +121,7 @@ impl Session {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            skill_agent_id: None,
         }
     }
 
@@ -188,6 +192,7 @@ impl Session {
             self.auth_token = Some(token);
         }
         if let Some(agent_id) = init.agent_id {
+            self.skill_agent_id = Some(agent_id.clone());
             self.agent_id = AgentId::from_hex(&agent_id).unwrap_or_else(|_| {
                 let hash = blake3::hash(agent_id.as_bytes());
                 AgentId::new(*hash.as_bytes())
@@ -298,6 +303,8 @@ pub struct WsContext {
     pub project_base: Option<PathBuf>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    /// Optional skill manager for per-agent skill injection into prompts.
+    pub skill_manager: Option<Arc<RwLock<SkillManager>>>,
 }
 
 #[cfg(test)]

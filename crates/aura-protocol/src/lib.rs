@@ -87,7 +87,9 @@ pub struct SessionInit {
     /// Organization UUID for X-Aura-Org-Id billing header.
     #[serde(default)]
     pub aura_org_id: Option<String>,
-    /// Stable agent identifier override.
+    /// Harness-level agent ID for per-agent skill lookup.
+    /// Set by the caller (e.g. aura-os) so the harness can resolve which
+    /// skills are installed for this agent.
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Optional per-session provider override for BYOK/runtime isolation.
@@ -188,12 +190,23 @@ pub enum OutboundMessage {
 pub struct SessionReady {
     pub session_id: String,
     pub tools: Vec<ToolInfo>,
+    /// Skills that are active (installed + resolved) for this session's agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<SkillInfo>,
 }
 
 /// Minimal tool info for the `session_ready` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct ToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// Minimal skill info surfaced in `session_ready`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct SkillInfo {
     pub name: String,
     pub description: String,
 }

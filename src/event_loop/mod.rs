@@ -65,6 +65,13 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         memory_manager,
     } = ctx;
 
+    if let Some(ref mm) = memory_manager {
+        agent_loop
+            .config_mut()
+            .observers
+            .push(mm.turn_observer(agent_id));
+    }
+
     let mut state = LoopState {
         messages: Vec::new(),
         commands: &commands,
@@ -192,7 +199,7 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     state.messages.push(Message::user(text));
 
     if let Some(ref mm) = state.memory_manager {
-        mm.prepare_context(state.agent_id, state.agent_loop.config_mut());
+        mm.prepare_context(state.agent_id, state.agent_loop.config_mut()).await;
     }
 
     let (process_result, streamed_text) = handlers::run_agent_turn(state).await;

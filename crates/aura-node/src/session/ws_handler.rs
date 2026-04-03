@@ -170,7 +170,7 @@ async fn run_idle_select(
     ctx: &WsContext,
 ) -> IdleAction {
     match classify_ws_frame(ws_rx.next().await) {
-        WsAction::Message(raw) => dispatch_idle_message(&raw, session, outbound_tx, ctx),
+        WsAction::Message(raw) => dispatch_idle_message(&raw, session, outbound_tx, ctx).await,
         WsAction::Close => {
             debug!(session_id = %session.session_id, "Client sent close frame");
             IdleAction::Close
@@ -179,7 +179,7 @@ async fn run_idle_select(
     }
 }
 
-fn dispatch_idle_message(
+async fn dispatch_idle_message(
     raw: &str,
     session: &mut Session,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
@@ -190,7 +190,7 @@ fn dispatch_idle_message(
             helpers::handle_session_init(session, *init, outbound_tx, ctx);
             IdleAction::Continue
         }
-        Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx) {
+        Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx).await {
             Some(turn) => IdleAction::StartTurn(turn),
             None => IdleAction::Continue,
         },
@@ -235,7 +235,7 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
 }
 
 /// Prepare and spawn a turn as a background task.
-fn start_turn(
+async fn start_turn(
     session: &mut Session,
     msg: UserMessage,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
@@ -278,7 +278,20 @@ fn start_turn(
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
     if let Some(ref mm) = ctx.memory_manager {
-        mm.prepare_context(session.agent_id, &mut config);
+        mm.prepare_context(session.agent_id, &mut config).await;
+        config.observers.push(mm.turn_observer(session.agent_id));
+    }
+    if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
+        if let Ok(mgr) = sm.read() {
+            let injected = mgr.inject_agent_skills(agent_id, &mut config.system_prompt);
+            if !injected.is_empty() {
+                debug!(
+                    session_id = %session.session_id,
+                    skill_count = injected.len(),
+                    "Injected agent skills into prompt"
+                );
+            }
+        }
     }
     let agent_loop = AgentLoop::new(config);
 
