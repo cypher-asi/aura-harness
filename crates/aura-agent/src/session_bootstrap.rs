@@ -12,18 +12,28 @@ use tracing::warn;
 ///
 /// Canonical path: `{data_dir}/db`. If a legacy `{data_dir}/store` directory
 /// exists and the canonical one does not, performs a one-time rename migration.
+/// If both exist, the legacy directory is automatically removed.
 pub fn resolve_store_path(data_dir: &Path) -> PathBuf {
     let canonical = data_dir.join("db");
     let legacy = data_dir.join("store");
 
     if canonical.exists() {
         if legacy.exists() {
-            tracing::warn!(
-                canonical = %canonical.display(),
-                legacy = %legacy.display(),
-                "Both 'db' and 'store' directories exist. Using canonical 'db' path. \
-                 Please manually reconcile or remove the legacy 'store' directory."
-            );
+            match std::fs::remove_dir_all(&legacy) {
+                Ok(()) => {
+                    tracing::info!(
+                        legacy = %legacy.display(),
+                        "Removed stale legacy 'store' directory"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        legacy = %legacy.display(),
+                        "Failed to remove legacy 'store' directory — please remove it manually"
+                    );
+                }
+            }
         }
         return canonical;
     }

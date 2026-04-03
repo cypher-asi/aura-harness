@@ -257,16 +257,25 @@ async fn start_turn(
     session.messages.push(Message::user(&msg.content));
 
     let mut tool_config = ctx.tool_config.clone();
+    let has_sm = ctx.skill_manager.is_some();
+    let has_aid = session.skill_agent_id.is_some();
+    info!(
+        session_id = %session.session_id,
+        has_skill_manager = has_sm,
+        has_skill_agent_id = has_aid,
+        skill_agent_id = ?session.skill_agent_id,
+        "Skill permission check starting"
+    );
     if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
         if let Ok(mgr) = sm.read() {
             let perms = mgr.agent_permissions(agent_id);
+            info!(
+                session_id = %session.session_id,
+                extra_paths = ?perms.extra_paths,
+                extra_commands = ?perms.extra_commands,
+                "Skill permissions resolved"
+            );
             if !perms.extra_paths.is_empty() || !perms.extra_commands.is_empty() {
-                debug!(
-                    session_id = %session.session_id,
-                    extra_paths = perms.extra_paths.len(),
-                    extra_commands = perms.extra_commands.len(),
-                    "Merging skill permissions into tool config"
-                );
                 tool_config.extra_allowed_paths.extend(perms.extra_paths);
                 tool_config.command_allowlist.extend(perms.extra_commands);
             }

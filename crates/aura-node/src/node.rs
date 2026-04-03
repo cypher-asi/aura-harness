@@ -50,7 +50,8 @@ impl Node {
         info!("Starting Aura Node");
         info!(data_dir = ?self.config.data_dir, "Data directory");
 
-        tokio::fs::create_dir_all(self.config.db_path())
+        let db_path = self.config.db_path();
+        tokio::fs::create_dir_all(&db_path)
             .await
             .context("creating database directory")?;
         tokio::fs::create_dir_all(self.config.workspaces_path())
@@ -58,7 +59,7 @@ impl Node {
             .context("creating workspaces directory")?;
 
         let store = Arc::new(
-            RocksStore::open(self.config.db_path(), self.config.sync_writes)
+            RocksStore::open(&db_path, self.config.sync_writes)
                 .context("opening RocksDB store")?,
         );
         info!("Store opened");
