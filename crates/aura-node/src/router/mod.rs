@@ -112,7 +112,7 @@ pub fn create_router(state: RouterState) -> Router {
             "/automaton/:automaton_id/stop",
             post(automaton_stop_handler),
         )
-        // Memory CRUD
+        // Memory CRUD (canonical paths)
         .route("/memory/:agent_id/facts", get(memory::list_facts).post(memory::create_fact))
         .route("/memory/:agent_id/facts/:id", get(memory::get_fact).put(memory::update_fact).delete(memory::delete_fact))
         .route("/memory/:agent_id/facts/by-key/:key", get(memory::get_fact_by_key))
@@ -125,6 +125,17 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/memory/:agent_id/wipe", post(memory::wipe))
         .route("/memory/:agent_id/stats", get(memory::stats))
         .route("/memory/:agent_id/consolidate", post(memory::consolidate))
+        // Memory aliases (aura-os proxy sends /api/agents/:id/memory/...)
+        .route("/api/agents/:agent_id/memory", get(memory::snapshot).delete(memory::wipe))
+        .route("/api/agents/:agent_id/memory/facts", get(memory::list_facts).post(memory::create_fact))
+        .route("/api/agents/:agent_id/memory/facts/:id", get(memory::get_fact).put(memory::update_fact).delete(memory::delete_fact))
+        .route("/api/agents/:agent_id/memory/facts/by-key/:key", get(memory::get_fact_by_key))
+        .route("/api/agents/:agent_id/memory/events", get(memory::list_events).post(memory::create_event))
+        .route("/api/agents/:agent_id/memory/events/:id", axum::routing::delete(memory::delete_event))
+        .route("/api/agents/:agent_id/memory/procedures", get(memory::list_procedures).post(memory::create_procedure))
+        .route("/api/agents/:agent_id/memory/procedures/:id", get(memory::get_procedure).put(memory::update_procedure).delete(memory::delete_procedure))
+        .route("/api/agents/:agent_id/memory/stats", get(memory::stats))
+        .route("/api/agents/:agent_id/memory/consolidate", post(memory::consolidate))
         // Skills CRUD
         .route("/api/skills", get(skills::list_skills).post(skills::create_skill))
         .route("/api/skills/:name", get(skills::get_skill))
