@@ -2,12 +2,13 @@
 
 use crate::activation;
 use crate::error::SkillError;
-use crate::install::{SkillInstallStore, SkillInstallation};
+use crate::install::{SkillInstallStore, SkillInstallStoreApi, SkillInstallation};
 use crate::loader::SkillLoader;
 use crate::parser::validate_name;
 use crate::prompt;
 use crate::registry::SkillRegistry;
 use crate::types::{Skill, SkillActivation, SkillMeta};
+use aura_core::AgentId;
 use chrono::Utc;
 use std::sync::Arc;
 use tracing::info;
@@ -61,6 +62,64 @@ impl SkillManager {
     pub fn inject_skills(&self, system_prompt: &mut String) {
         let meta = self.registry.model_invocable_metadata();
         prompt::inject_into_prompt(system_prompt, &meta);
+    }
+
+    /// Inject only the skills installed for `agent_id` into the system prompt.
+    ///
+    /// Looks up installed skill names from the persistent store, filters the
+    /// registry to those that are both installed *and* model-invocable, then
+    /// appends the `<available_skills>` XML block. Returns the metadata for
+    /// the skills that were actually injected (useful for surfacing in
+    /// `SessionReady`).
+    ///
+    /// Accepts the agent ID as a hex string (64-char BLAKE3 hash) and converts
+    /// it to `AgentId`. Returns an empty vec if the ID is invalid, the install
+    /// store is not configured, or the agent has no installed skills.
+    pub fn inject_agent_skills(
+        &self,
+        agent_id_hex: &str,
+        system_prompt: &mut String,
+    ) -> Vec<SkillMeta> {
+        let filtered = self.agent_skill_meta(agent_id_hex);
+        prompt::inject_into_prompt(system_prompt, &filtered);
+        filtered
+    }
+
+    /// Return model-invocable [`SkillMeta`] for only the skills installed for
+    /// `agent_id`, without modifying a prompt.
+    ///
+    /// Accepts the agent ID as a hex string (64-char BLAKE3 hash).
+    pub fn agent_skill_meta(&self, agent_id_hex: &str) -> Vec<SkillMeta> {
+        let agent_id = match AgentId::from_hex(agent_id_hex) {
+            Ok(id) => id,
+            Err(_) => {
+                tracing::warn!(agent_id_hex, "invalid agent ID hex for skill lookup");
+                return Vec::new();
+            }
+        };
+        let store = match self.install_store.as_deref() {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        let installed = match store.list_for_agent(agent_id) {
+            Ok(list) => list,
+            Err(e) => {
+                tracing::warn!(%agent_id, error = %e, "failed to list agent skills");
+                return Vec::new();
+            }
+        };
+        if installed.is_empty() {
+            return Vec::new();
+        }
+        let installed_names: std::collections::HashSet<&str> = installed
+            .iter()
+            .map(|i| i.skill_name.as_str())
+            .collect();
+        self.registry
+            .model_invocable_metadata()
+            .into_iter()
+            .filter(|m| installed_names.contains(m.name.as_str()))
+            .collect()
     }
 
     /// Activate a skill by name with the given argument string.
@@ -167,20 +226,20 @@ impl SkillManager {
     /// write fails.
     pub fn install_for_agent(
         &self,
-        agent_id: &str,
+        agent_id: AgentId,
         skill_name: &str,
         source_url: Option<String>,
     ) -> Result<SkillInstallation, SkillError> {
         let store = self.require_install_store()?;
         let installation = SkillInstallation {
-            agent_id: agent_id.to_string(),
+            agent_id,
             skill_name: skill_name.to_string(),
             source_url,
             installed_at: Utc::now(),
             version: None,
         };
         store.install(&installation)?;
-        info!(agent_id, skill_name, "skill installed for agent");
+        info!(%agent_id, skill_name, "skill installed for agent");
         Ok(installation)
     }
 
@@ -192,12 +251,12 @@ impl SkillManager {
     /// delete fails.
     pub fn uninstall_from_agent(
         &self,
-        agent_id: &str,
+        agent_id: AgentId,
         skill_name: &str,
     ) -> Result<(), SkillError> {
         let store = self.require_install_store()?;
         store.uninstall(agent_id, skill_name)?;
-        info!(agent_id, skill_name, "skill uninstalled from agent");
+        info!(%agent_id, skill_name, "skill uninstalled from agent");
         Ok(())
     }
 
@@ -209,7 +268,7 @@ impl SkillManager {
     /// read fails.
     pub fn list_agent_skills(
         &self,
-        agent_id: &str,
+        agent_id: AgentId,
     ) -> Result<Vec<SkillInstallation>, SkillError> {
         let store = self.require_install_store()?;
         store.list_for_agent(agent_id)

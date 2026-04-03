@@ -173,6 +173,7 @@ mod tests {
                     description: "Write a file".to_string(),
                 },
             ],
+            skills: vec![],
         });
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "session_ready");
@@ -389,6 +390,7 @@ mod tests {
             OutboundMessage::SessionReady(SessionReady {
                 session_id: "s".into(),
                 tools: vec![],
+                skills: vec![],
             }),
             OutboundMessage::AssistantMessageStart(AssistantMessageStart {
                 message_id: "m".into(),

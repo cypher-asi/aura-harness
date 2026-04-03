@@ -1,7 +1,8 @@
 #![allow(clippy::needless_pass_by_value)]
 
+use aura_core::AgentId;
 use crate::error::SkillError;
-use crate::install::{SkillInstallStore, SkillInstallation};
+use crate::install::{SkillInstallStore, SkillInstallStoreApi, SkillInstallation};
 use crate::loader::{SkillLoader, SkillLoaderConfig};
 use crate::manager::SkillManager;
 use crate::types::SkillSource;
@@ -27,6 +28,7 @@ fn test_db(dir: &Path) -> Arc<DBWithThreadMode<MultiThreaded>> {
         ColumnFamilyDescriptor::new("memory_facts", Options::default()),
         ColumnFamilyDescriptor::new("memory_events", Options::default()),
         ColumnFamilyDescriptor::new("memory_procedures", Options::default()),
+        ColumnFamilyDescriptor::new("memory_event_index", Options::default()),
         ColumnFamilyDescriptor::new("agent_skills", Options::default()),
     ];
 
@@ -58,6 +60,13 @@ fn workspace_loader(workspace: &Path) -> SkillLoader {
         workspace_root: Some(workspace.to_path_buf()),
         ..SkillLoaderConfig::default()
     })
+}
+
+fn test_agent_id(label: &str) -> AgentId {
+    let mut bytes = [0u8; 32];
+    let src = label.as_bytes();
+    bytes[..src.len().min(32)].copy_from_slice(&src[..src.len().min(32)]);
+    AgentId::new(bytes)
 }
 
 // ===========================================================================
@@ -198,8 +207,9 @@ fn install_store_install_writes_to_db() {
     let db = test_db(tmp.path());
     let store = SkillInstallStore::new(db);
 
+    let agent1 = test_agent_id("agent-1");
     let inst = SkillInstallation {
-        agent_id: "agent-1".to_string(),
+        agent_id: agent1,
         skill_name: "deploy".to_string(),
         source_url: Some("https://example.com/deploy".to_string()),
         installed_at: Utc::now(),
@@ -207,7 +217,7 @@ fn install_store_install_writes_to_db() {
     };
 
     store.install(&inst).unwrap();
-    assert!(store.is_installed("agent-1", "deploy").unwrap());
+    assert!(store.is_installed(agent1, "deploy").unwrap());
 }
 
 #[test]
@@ -216,10 +226,13 @@ fn install_store_list_for_agent_returns_correct_skills() {
     let db = test_db(tmp.path());
     let store = SkillInstallStore::new(db);
 
+    let agent1 = test_agent_id("agent-1");
+    let agent2 = test_agent_id("agent-2");
+
     for name in &["alpha", "beta", "gamma"] {
         store
             .install(&SkillInstallation {
-                agent_id: "agent-1".to_string(),
+                agent_id: agent1,
                 skill_name: (*name).to_string(),
                 source_url: None,
                 installed_at: Utc::now(),
@@ -230,7 +243,7 @@ fn install_store_list_for_agent_returns_correct_skills() {
 
     store
         .install(&SkillInstallation {
-            agent_id: "agent-2".to_string(),
+            agent_id: agent2,
             skill_name: "other".to_string(),
             source_url: None,
             installed_at: Utc::now(),
@@ -238,7 +251,7 @@ fn install_store_list_for_agent_returns_correct_skills() {
         })
         .unwrap();
 
-    let agent1_skills = store.list_for_agent("agent-1").unwrap();
+    let agent1_skills = store.list_for_agent(agent1).unwrap();
     assert_eq!(agent1_skills.len(), 3);
     let names: Vec<&str> = agent1_skills.iter().map(|s| s.skill_name.as_str()).collect();
     assert!(names.contains(&"alpha"));
@@ -253,11 +266,14 @@ fn install_store_is_installed_returns_true_false() {
     let db = test_db(tmp.path());
     let store = SkillInstallStore::new(db);
 
-    assert!(!store.is_installed("agent-1", "deploy").unwrap());
+    let agent1 = test_agent_id("agent-1");
+    let agent2 = test_agent_id("agent-2");
+
+    assert!(!store.is_installed(agent1, "deploy").unwrap());
 
     store
         .install(&SkillInstallation {
-            agent_id: "agent-1".to_string(),
+            agent_id: agent1,
             skill_name: "deploy".to_string(),
             source_url: None,
             installed_at: Utc::now(),
@@ -265,9 +281,9 @@ fn install_store_is_installed_returns_true_false() {
         })
         .unwrap();
 
-    assert!(store.is_installed("agent-1", "deploy").unwrap());
-    assert!(!store.is_installed("agent-1", "other-skill").unwrap());
-    assert!(!store.is_installed("agent-2", "deploy").unwrap());
+    assert!(store.is_installed(agent1, "deploy").unwrap());
+    assert!(!store.is_installed(agent1, "other-skill").unwrap());
+    assert!(!store.is_installed(agent2, "deploy").unwrap());
 }
 
 #[test]
@@ -276,9 +292,11 @@ fn install_store_uninstall_removes_installation() {
     let db = test_db(tmp.path());
     let store = SkillInstallStore::new(db);
 
+    let agent1 = test_agent_id("agent-1");
+
     store
         .install(&SkillInstallation {
-            agent_id: "agent-1".to_string(),
+            agent_id: agent1,
             skill_name: "deploy".to_string(),
             source_url: None,
             installed_at: Utc::now(),
@@ -286,10 +304,10 @@ fn install_store_uninstall_removes_installation() {
         })
         .unwrap();
 
-    assert!(store.is_installed("agent-1", "deploy").unwrap());
-    store.uninstall("agent-1", "deploy").unwrap();
-    assert!(!store.is_installed("agent-1", "deploy").unwrap());
-    assert!(store.list_for_agent("agent-1").unwrap().is_empty());
+    assert!(store.is_installed(agent1, "deploy").unwrap());
+    store.uninstall(agent1, "deploy").unwrap();
+    assert!(!store.is_installed(agent1, "deploy").unwrap());
+    assert!(store.list_for_agent(agent1).unwrap().is_empty());
 }
 
 // ===========================================================================
@@ -306,11 +324,12 @@ fn manager_install_for_agent() {
     let loader = workspace_loader(tmp_ws.path());
     let mgr = SkillManager::with_install_store(loader, store);
 
+    let agent1 = test_agent_id("agent-1");
     let inst = mgr
-        .install_for_agent("agent-1", "deploy", Some("https://example.com".to_string()))
+        .install_for_agent(agent1, "deploy", Some("https://example.com".to_string()))
         .unwrap();
 
-    assert_eq!(inst.agent_id, "agent-1");
+    assert_eq!(inst.agent_id, agent1);
     assert_eq!(inst.skill_name, "deploy");
     assert_eq!(inst.source_url.as_deref(), Some("https://example.com"));
 }
@@ -325,11 +344,12 @@ fn manager_list_agent_skills() {
     let loader = workspace_loader(tmp_ws.path());
     let mgr = SkillManager::with_install_store(loader, store);
 
-    mgr.install_for_agent("agent-1", "deploy", None).unwrap();
-    mgr.install_for_agent("agent-1", "test-runner", None)
+    let agent1 = test_agent_id("agent-1");
+    mgr.install_for_agent(agent1, "deploy", None).unwrap();
+    mgr.install_for_agent(agent1, "test-runner", None)
         .unwrap();
 
-    let skills = mgr.list_agent_skills("agent-1").unwrap();
+    let skills = mgr.list_agent_skills(agent1).unwrap();
     assert_eq!(skills.len(), 2);
 }
 
@@ -341,13 +361,14 @@ fn manager_uninstall_from_agent() {
     let store = Arc::new(SkillInstallStore::new(db));
 
     let loader = workspace_loader(tmp_ws.path());
-    let mgr = SkillManager::with_install_store(loader, Arc::clone(&store));
+    let mgr = SkillManager::with_install_store(loader, store);
 
-    mgr.install_for_agent("agent-1", "deploy", None).unwrap();
-    assert_eq!(mgr.list_agent_skills("agent-1").unwrap().len(), 1);
+    let agent1 = test_agent_id("agent-1");
+    mgr.install_for_agent(agent1, "deploy", None).unwrap();
+    assert_eq!(mgr.list_agent_skills(agent1).unwrap().len(), 1);
 
-    mgr.uninstall_from_agent("agent-1", "deploy").unwrap();
-    assert!(mgr.list_agent_skills("agent-1").unwrap().is_empty());
+    mgr.uninstall_from_agent(agent1, "deploy").unwrap();
+    assert!(mgr.list_agent_skills(agent1).unwrap().is_empty());
 }
 
 #[test]
@@ -355,13 +376,15 @@ fn manager_without_install_store_returns_error() {
     let tmp = TempDir::new().unwrap();
     let mgr = SkillManager::new(workspace_loader(tmp.path()));
 
-    let err = mgr.install_for_agent("agent-1", "x", None).unwrap_err();
+    let agent1 = test_agent_id("agent-1");
+
+    let err = mgr.install_for_agent(agent1, "x", None).unwrap_err();
     assert!(matches!(err, SkillError::Activation(_)));
 
-    let err = mgr.list_agent_skills("agent-1").unwrap_err();
+    let err = mgr.list_agent_skills(agent1).unwrap_err();
     assert!(matches!(err, SkillError::Activation(_)));
 
-    let err = mgr.uninstall_from_agent("agent-1", "x").unwrap_err();
+    let err = mgr.uninstall_from_agent(agent1, "x").unwrap_err();
     assert!(matches!(err, SkillError::Activation(_)));
 }
 
@@ -399,7 +422,7 @@ fn skill_error_is_not_found_returns_false_for_other_variants() {
 #[test]
 fn skill_installation_serde_round_trip() {
     let original = SkillInstallation {
-        agent_id: "agent-42".to_string(),
+        agent_id: test_agent_id("agent-42"),
         skill_name: "my-skill".to_string(),
         source_url: Some("https://example.com/skill".to_string()),
         installed_at: Utc::now(),
@@ -418,8 +441,9 @@ fn skill_installation_serde_round_trip() {
 
 #[test]
 fn skill_installation_serde_round_trip_minimal() {
+    let agent_a = test_agent_id("a");
     let original = SkillInstallation {
-        agent_id: "a".to_string(),
+        agent_id: agent_a,
         skill_name: "b".to_string(),
         source_url: None,
         installed_at: Utc::now(),
@@ -429,7 +453,7 @@ fn skill_installation_serde_round_trip_minimal() {
     let json = serde_json::to_string(&original).unwrap();
     let deserialized: SkillInstallation = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(deserialized.agent_id, "a");
+    assert_eq!(deserialized.agent_id, agent_a);
     assert_eq!(deserialized.skill_name, "b");
     assert!(deserialized.source_url.is_none());
     assert!(deserialized.version.is_none());
@@ -463,13 +487,17 @@ fn multiple_agents_different_skills() {
     let db = test_db(tmp.path());
     let store = SkillInstallStore::new(db);
 
-    let agents = [("agent-a", vec!["deploy", "lint"]), ("agent-b", vec!["test-runner"]), ("agent-c", vec!["deploy", "test-runner", "lint"])];
+    let agent_a = test_agent_id("agent-a");
+    let agent_b = test_agent_id("agent-b");
+    let agent_c = test_agent_id("agent-c");
+
+    let agents = [(agent_a, vec!["deploy", "lint"]), (agent_b, vec!["test-runner"]), (agent_c, vec!["deploy", "test-runner", "lint"])];
 
     for (agent, skills) in &agents {
         for skill in skills {
             store
                 .install(&SkillInstallation {
-                    agent_id: agent.to_string(),
+                    agent_id: *agent,
                     skill_name: skill.to_string(),
                     source_url: None,
                     installed_at: Utc::now(),
@@ -479,23 +507,105 @@ fn multiple_agents_different_skills() {
         }
     }
 
-    let a_skills = store.list_for_agent("agent-a").unwrap();
+    let a_skills = store.list_for_agent(agent_a).unwrap();
     assert_eq!(a_skills.len(), 2);
 
-    let b_skills = store.list_for_agent("agent-b").unwrap();
+    let b_skills = store.list_for_agent(agent_b).unwrap();
     assert_eq!(b_skills.len(), 1);
     assert_eq!(b_skills[0].skill_name, "test-runner");
 
-    let c_skills = store.list_for_agent("agent-c").unwrap();
+    let c_skills = store.list_for_agent(agent_c).unwrap();
     assert_eq!(c_skills.len(), 3);
 
-    assert!(store.is_installed("agent-a", "deploy").unwrap());
-    assert!(!store.is_installed("agent-b", "deploy").unwrap());
-    assert!(store.is_installed("agent-c", "deploy").unwrap());
+    assert!(store.is_installed(agent_a, "deploy").unwrap());
+    assert!(!store.is_installed(agent_b, "deploy").unwrap());
+    assert!(store.is_installed(agent_c, "deploy").unwrap());
 }
 
 // ===========================================================================
-// 8. Activation edge cases (through manager)
+// 8. inject_agent_skills filters to only installed skills
+// ===========================================================================
+
+#[test]
+fn inject_agent_skills_only_includes_installed() {
+    let tmp_ws = TempDir::new().unwrap();
+    let tmp_db = TempDir::new().unwrap();
+    let skills = tmp_ws.path().join("skills");
+    make_skill_dir(&skills, "deploy", "Deploy the app");
+    make_skill_dir(&skills, "test-runner", "Run tests");
+    make_skill_dir(&skills, "lint", "Run linter");
+
+    let db = test_db(tmp_db.path());
+    let store = Arc::new(SkillInstallStore::new(db));
+    let loader = workspace_loader(tmp_ws.path());
+    let mgr = SkillManager::with_install_store(loader, store);
+
+    let agent_id = test_agent_id("inject-test");
+    let agent_hex = agent_id.to_hex();
+    mgr.install_for_agent(agent_id, "deploy", None).unwrap();
+    mgr.install_for_agent(agent_id, "lint", None).unwrap();
+
+    let mut prompt = "You are an assistant.".to_string();
+    let injected = mgr.inject_agent_skills(&agent_hex, &mut prompt);
+
+    assert_eq!(injected.len(), 2);
+    let names: Vec<&str> = injected.iter().map(|m| m.name.as_str()).collect();
+    assert!(names.contains(&"deploy"));
+    assert!(names.contains(&"lint"));
+    assert!(!names.contains(&"test-runner"));
+
+    assert!(prompt.contains("<available_skills>"));
+    assert!(prompt.contains("name=\"deploy\""));
+    assert!(prompt.contains("name=\"lint\""));
+    assert!(!prompt.contains("name=\"test-runner\""));
+}
+
+#[test]
+fn inject_agent_skills_empty_when_none_installed() {
+    let tmp_ws = TempDir::new().unwrap();
+    let tmp_db = TempDir::new().unwrap();
+    let skills = tmp_ws.path().join("skills");
+    make_skill_dir(&skills, "deploy", "Deploy the app");
+
+    let db = test_db(tmp_db.path());
+    let store = Arc::new(SkillInstallStore::new(db));
+    let loader = workspace_loader(tmp_ws.path());
+    let mgr = SkillManager::with_install_store(loader, store);
+
+    let agent_id = test_agent_id("no-skills");
+    let agent_hex = agent_id.to_hex();
+    let mut prompt = "System prompt.".to_string();
+    let injected = mgr.inject_agent_skills(&agent_hex, &mut prompt);
+
+    assert!(injected.is_empty());
+    assert_eq!(prompt, "System prompt.");
+}
+
+#[test]
+fn agent_skill_meta_returns_only_installed_and_model_invocable() {
+    let tmp_ws = TempDir::new().unwrap();
+    let tmp_db = TempDir::new().unwrap();
+    let skills = tmp_ws.path().join("skills");
+    make_skill_dir(&skills, "deploy", "Deploy the app");
+    make_skill_dir_ext(&skills, "hidden", "disable-model-invocation: true\n");
+
+    let db = test_db(tmp_db.path());
+    let store = Arc::new(SkillInstallStore::new(db));
+    let loader = workspace_loader(tmp_ws.path());
+    let mgr = SkillManager::with_install_store(loader, store);
+
+    let agent_id = test_agent_id("meta-test");
+    let agent_hex = agent_id.to_hex();
+    mgr.install_for_agent(agent_id, "deploy", None).unwrap();
+    mgr.install_for_agent(agent_id, "hidden", None).unwrap();
+
+    let meta = mgr.agent_skill_meta(&agent_hex);
+    assert_eq!(meta.len(), 1);
+    assert_eq!(meta[0].name, "deploy");
+}
+
+// ===========================================================================
+// 9. Activation edge cases (through manager)
 // ===========================================================================
 
 #[test]
