@@ -292,8 +292,9 @@ async fn start_turn(
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
     if let Some(ref mm) = ctx.memory_manager {
-        mm.prepare_context(session.agent_id, &mut config).await;
-        config.observers.push(mm.turn_observer(session.agent_id, session.auth_token.clone()));
+        let mem_id = session.memory_agent_id();
+        mm.prepare_context(mem_id, &mut config).await;
+        config.observers.push(mm.turn_observer(mem_id, session.auth_token.clone()));
     }
     if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
         if let Ok(mgr) = sm.read() {

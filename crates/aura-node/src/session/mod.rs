@@ -206,6 +206,20 @@ impl Session {
         Ok(())
     }
 
+    /// Return a deterministic `AgentId` for memory keying.
+    ///
+    /// When the session carries an `aura_agent_id` (the aura-os UUID),
+    /// derive the `AgentId` from it so memory queries from the UI use the
+    /// same key. Falls back to the random session `agent_id`.
+    pub(super) fn memory_agent_id(&self) -> AgentId {
+        if let Some(ref uuid_str) = self.aura_agent_id {
+            if let Ok(uuid) = uuid::Uuid::parse_str(uuid_str) {
+                return AgentId::from_uuid(uuid);
+            }
+        }
+        self.agent_id
+    }
+
     /// Build an `AgentLoopConfig` from session state.
     pub(super) fn agent_loop_config(&self) -> AgentLoopConfig {
         let base_prompt = if self.system_prompt.is_empty() {
