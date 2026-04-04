@@ -50,7 +50,7 @@ pub fn cmd_spawn(
     #[cfg(windows)]
     let mut cmd = {
         let mut c = Command::new("cmd.exe");
-        c.args(["/C", &full_command]);
+        c.args(["/S", "/C", &format!("\"{}\"", full_command)]);
         c
     };
 
@@ -66,6 +66,8 @@ pub fn cmd_spawn(
         if let Some(fresh_path) = refresh_system_path() {
             cmd.env("PATH", fresh_path);
         }
+        cmd.env("PYTHONUTF8", "1");
+        cmd.env("PYTHONIOENCODING", "utf-8");
     }
 
     cmd.current_dir(&working_dir)

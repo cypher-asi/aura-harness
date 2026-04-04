@@ -301,8 +301,10 @@ async fn start_turn(
                 extra_commands = ?perms.extra_commands,
                 "Skill permissions resolved"
             );
-            if !perms.extra_paths.is_empty() || !perms.extra_commands.is_empty() {
+            if !perms.extra_paths.is_empty() {
                 tool_config.extra_allowed_paths.extend(perms.extra_paths);
+            }
+            if !perms.extra_commands.is_empty() && !tool_config.command_allowlist.is_empty() {
                 tool_config.command_allowlist.extend(perms.extra_commands);
             }
         }
