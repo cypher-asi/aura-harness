@@ -103,6 +103,25 @@ pub struct UserMessage {
     /// first iteration to explicitly direct the model toward these tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_hints: Option<Vec<String>>,
+    /// Optional image/text attachments (base64-encoded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<MessageAttachment>>,
+}
+
+/// A user-supplied attachment (image or text file) sent with a message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct MessageAttachment {
+    /// `"image"` or `"text"`.
+    #[serde(rename = "type")]
+    pub type_: String,
+    /// MIME type (e.g. `"image/png"`).
+    pub media_type: String,
+    /// Base64-encoded payload.
+    pub data: String,
+    /// Optional filename.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Payload for `approval_response`.

@@ -6,7 +6,7 @@ use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
 use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway};
-use aura_reasoner::Message;
+use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -254,7 +254,33 @@ async fn start_turn(
         },
     ));
 
-    session.messages.push(Message::user(&msg.content));
+    let user_msg = if let Some(ref attachments) = msg.attachments {
+        let image_atts: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.type_ == "image")
+            .collect();
+        if !image_atts.is_empty() {
+            let mut blocks: Vec<ContentBlock> = Vec::new();
+            if !msg.content.is_empty() {
+                blocks.push(ContentBlock::text(&msg.content));
+            }
+            for att in &image_atts {
+                blocks.push(ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: att.media_type.clone(),
+                        data: att.data.clone(),
+                    },
+                });
+            }
+            Message::new(Role::User, blocks)
+        } else {
+            Message::user(&msg.content)
+        }
+    } else {
+        Message::user(&msg.content)
+    };
+    session.messages.push(user_msg);
 
     let mut tool_config = ctx.tool_config.clone();
     let has_sm = ctx.skill_manager.is_some();
