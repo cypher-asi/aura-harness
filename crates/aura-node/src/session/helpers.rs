@@ -6,7 +6,8 @@ use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
-    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
+    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg,
+    ToolUseStart,
 };
 #[allow(deprecated)]
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
@@ -206,8 +207,11 @@ pub(super) async fn forward_events_to_ws(
                 message,
                 recoverable,
             }),
-            AgentLoopEvent::ToolInputSnapshot { .. }
-            | AgentLoopEvent::ToolComplete { .. }
+            AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
+                let parsed = serde_json::from_str(&input).unwrap_or(serde_json::json!({}));
+                OutboundMessage::ToolCallSnapshot(ToolCallSnapshot { id, name, input: parsed })
+            }
+            AgentLoopEvent::ToolComplete { .. }
             | AgentLoopEvent::IterationComplete { .. }
             | AgentLoopEvent::ThinkingComplete
             | AgentLoopEvent::StepComplete

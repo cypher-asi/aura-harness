@@ -151,6 +151,8 @@ pub enum OutboundMessage {
     ThinkingDelta(ThinkingDelta),
     /// A tool use has started.
     ToolUseStart(ToolUseStart),
+    /// Snapshot of a tool call with accumulated input (streamed incrementally).
+    ToolCallSnapshot(ToolCallSnapshot),
     /// Result of a tool execution.
     ToolResult(ToolResultMsg),
     /// End of an assistant message (turn complete).
@@ -213,6 +215,15 @@ pub struct ThinkingDelta {
 pub struct ToolUseStart {
     pub id: String,
     pub name: String,
+}
+
+/// Payload for `tool_call_snapshot` -- incrementally accumulated tool input.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ToolCallSnapshot {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
 }
 
 /// Payload for `tool_result`.
