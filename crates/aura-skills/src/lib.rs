@@ -49,7 +49,7 @@ pub(crate) mod registry;
 pub mod types;
 
 pub use error::SkillError;
-pub use install::{SkillInstallStore, SkillInstallation};
+pub use install::{SkillInstallStore, SkillInstallStoreApi, SkillInstallation};
 pub use loader::SkillLoader;
 pub use manager::SkillManager;
 pub use registry::SkillRegistry;

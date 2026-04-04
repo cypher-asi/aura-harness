@@ -74,11 +74,8 @@ pub(super) async fn handle_agent_success(
     persist_response_via_kernel(state, &result.total_text).await;
     emit_response_to_ui(state, &result, streamed_text).await;
 
-    if let Some(ref mm) = state.memory_manager {
-        if let Err(e) = mm.process_result(state.agent_id, &result).await {
-            warn!(error = %e, "Memory process_result failed");
-        }
-    }
+    // Memory ingestion now fires automatically via TurnObserver inside
+    // AgentLoop::run_with_events — no manual call needed here.
 
     if let Some(ref err) = result.llm_error {
         let _ = state

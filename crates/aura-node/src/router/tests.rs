@@ -1,6 +1,11 @@
 use super::*;
 use aura_core::AgentId;
+use aura_memory::{
+    ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
+    WriteConfig,
+};
 use aura_reasoner::MockProvider;
+use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_store::RocksStore;
 use axum::body::Body;
 use axum::http::Request;
@@ -312,4 +317,494 @@ async fn test_nonexistent_route_returns_404() {
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// ============================================================================
+// Helper: RouterState with real memory + skill managers
+// ============================================================================
+
+fn test_router_state_with_managers() -> RouterState {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.keep();
+    let rocks = RocksStore::open(&dir, false).unwrap();
+    let db = rocks.db_handle().clone();
+    let store: Arc<dyn Store> = Arc::new(rocks);
+
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("mock"));
+    let scheduler = Arc::new(Scheduler::new(
+        store.clone(),
+        provider.clone(),
+        vec![],
+        vec![],
+        std::path::PathBuf::from("/tmp/workspaces"),
+    ));
+
+    let memory_manager = Arc::new(MemoryManager::new(
+        db.clone(),
+        provider.clone(),
+        RefinerConfig::default(),
+        WriteConfig::default(),
+        RetrievalConfig::default(),
+        ConsolidationConfig::default(),
+        ProcedureConfig::default(),
+    ));
+
+    let skill_store = Arc::new(SkillInstallStore::new(db));
+    let loader = SkillLoader::with_defaults(None, None);
+    let skill_manager = Arc::new(std::sync::RwLock::new(
+        SkillManager::with_install_store(loader, skill_store),
+    ));
+
+    RouterState {
+        store,
+        scheduler,
+        config: NodeConfig::default(),
+        provider,
+        tool_config: ToolConfig::default(),
+        catalog: Arc::new(ToolCatalog::new()),
+        domain_api: None,
+        automaton_controller: None,
+        automaton_bridge: None,
+        failed_txs: Arc::new(DashMap::new()),
+        memory_manager: Some(memory_manager),
+        skill_manager: Some(skill_manager),
+    }
+}
+
+// ============================================================================
+// Memory Facts
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_create_and_list_facts() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({
+        "key": "language",
+        "value": "Rust",
+        "confidence": 0.9,
+        "importance": 0.7
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let facts: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0]["key"], "language");
+}
+
+#[tokio::test]
+async fn test_memory_get_fact_by_key() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "key": "framework", "value": "Axum" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri(format!(
+            "/memory/{}/facts/by-key/framework",
+            agent_id.to_hex()
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let fact: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(fact["key"], "framework");
+    assert_eq!(fact["value"], "Axum");
+}
+
+#[tokio::test]
+async fn test_memory_delete_fact() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "key": "temp", "value": "delete me" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let fact: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let fact_id = fact["fact_id"].as_str().unwrap();
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "/memory/{}/facts/{}",
+            agent_id.to_hex(),
+            fact_id
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let facts: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert!(facts.is_empty());
+}
+
+// ============================================================================
+// Memory Events
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_create_and_list_events() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({
+        "event_type": "task_run",
+        "summary": "completed build"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/events", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/events", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let events: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["event_type"], "task_run");
+}
+
+// ============================================================================
+// Memory Procedures
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_create_and_list_procedures() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({
+        "name": "deploy",
+        "trigger": "user says deploy",
+        "steps": ["cargo build", "cargo test", "deploy binary"]
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/procedures", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/procedures", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let procs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(procs.len(), 1);
+    assert_eq!(procs[0]["name"], "deploy");
+}
+
+// ============================================================================
+// Memory Stats & Wipe
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_stats() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/stats", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stats: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(stats["facts"], 0);
+    assert_eq!(stats["events"], 0);
+    assert_eq!(stats["procedures"], 0);
+}
+
+#[tokio::test]
+async fn test_memory_wipe() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "key": "k", "value": "v" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let _ = app.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/wipe", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/stats", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let stats: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(stats["facts"], 0);
+    assert_eq!(stats["events"], 0);
+}
+
+#[tokio::test]
+async fn test_memory_snapshot() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "key": "lang", "value": "Rust" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let _ = app.clone().oneshot(req).await.unwrap();
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/snapshot", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let snapshot: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(snapshot["facts"].as_array().unwrap().len(), 1);
+    assert!(snapshot["events"].as_array().unwrap().is_empty());
+    assert!(snapshot["procedures"].as_array().unwrap().is_empty());
+}
+
+// ============================================================================
+// Memory — invalid agent id
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_invalid_agent_id() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/memory/bad-hex/facts")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ============================================================================
+// Memory — 503 when not configured
+// ============================================================================
+
+#[tokio::test]
+async fn test_memory_returns_503_when_not_configured() {
+    let store = create_test_store();
+    let state = test_router_state(store);
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/facts", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// ============================================================================
+// Skills
+// ============================================================================
+
+#[tokio::test]
+async fn test_skills_list() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/api/skills")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let skills: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert!(skills.is_empty() || skills.iter().all(|s| s["name"].is_string()));
+}
+
+#[tokio::test]
+async fn test_skills_get_not_found() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/api/skills/nonexistent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_skills_agent_install_and_list() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "name": "test-skill" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req = Request::builder()
+        .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let installs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0]["skill_name"], "test-skill");
+}
+
+#[tokio::test]
+async fn test_skills_agent_uninstall() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "name": "removable" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "/api/agents/{}/skills/removable",
+            agent_id.to_hex()
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let req = Request::builder()
+        .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let installs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert!(installs.is_empty());
+}
+
+#[tokio::test]
+async fn test_skills_returns_503_when_not_configured() {
+    let store = create_test_store();
+    let state = test_router_state(store);
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/api/skills")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

@@ -6,8 +6,9 @@ use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
-    SessionUsage, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
+    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
 };
+use crate::provider_factory::create_provider_from_session_config;
 #[allow(deprecated)]
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
 use aura_kernel::{Kernel, KernelConfig};
@@ -45,6 +46,8 @@ pub(super) fn handle_session_init(
     outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) {
+    let provider_config = init.provider_config.clone();
+
     if session.initialized {
         let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "already_initialized".into(),
@@ -52,6 +55,23 @@ pub(super) fn handle_session_init(
             recoverable: true,
         }));
         return;
+    }
+
+    if let Some(provider_config) = provider_config {
+        match create_provider_from_session_config(&provider_config) {
+            Ok(provider) => {
+                session.provider_name = provider.name().to_string();
+                session.provider_override = Some(provider);
+            }
+            Err(e) => {
+                let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                    code: "invalid_provider_config".into(),
+                    message: e.to_string(),
+                    recoverable: true,
+                }));
+                return;
+            }
+        }
     }
 
     if let Err(e) = session.apply_init(init) {
@@ -76,16 +96,35 @@ pub(super) fn handle_session_init(
         .map(protocol::tool_info_from_definition)
         .collect();
 
+    let skills: Vec<SkillInfo> = match (&ctx.skill_manager, &session.skill_agent_id) {
+        (Some(sm), Some(agent_id)) => {
+            if let Ok(mgr) = sm.read() {
+                mgr.agent_skill_meta(agent_id)
+                    .into_iter()
+                    .map(|m| SkillInfo {
+                        name: m.name,
+                        description: m.description,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    };
+
     info!(
         session_id = %session.session_id,
         model = %session.model,
         tool_count = tools.len(),
+        skill_count = skills.len(),
         "Session initialized"
     );
 
     let _ = outbound_tx.try_send(OutboundMessage::SessionReady(SessionReady {
         session_id: session.session_id.clone(),
         tools,
+        skills,
     }));
 }
 
@@ -163,7 +202,10 @@ pub(super) fn build_kernel(
 
     let kernel = Kernel::new(
         ctx.store.clone(),
-        ctx.provider.clone(),
+        session
+            .provider_override
+            .clone()
+            .unwrap_or_else(|| ctx.provider.clone()),
         router,
         config,
         session.agent_id,

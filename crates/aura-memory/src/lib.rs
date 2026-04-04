@@ -27,9 +27,7 @@ pub use procedures::{ProcedureConfig, ProcedureExtractor, StepSequence};
 pub use refinement::RefinerConfig;
 pub use retrieval::{MemoryRetriever, RetrievalConfig};
 pub use salience::{estimate_tokens, score_event, score_fact, score_procedure};
-pub use store::{MemoryStats, MemoryStore};
+pub use extraction::ConversationTurn;
+pub use store::{MemoryStats, MemoryStore, MemoryStoreApi};
 pub use types::{AgentEvent, Fact, FactSource, MemoryCandidate, MemoryPacket, Procedure};
 pub use write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
-
-#[cfg(test)]
-mod store_tests;

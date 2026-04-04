@@ -21,7 +21,7 @@ use axum::{
 use bytes::Bytes;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, instrument};
 
@@ -62,7 +62,7 @@ pub struct RouterState {
     /// Optional memory manager for CRUD API and session injection.
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
     /// Optional skill manager for skill CRUD API and prompt injection.
-    pub skill_manager: Option<Arc<aura_skills::SkillManager>>,
+    pub skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
 }
 
 impl Clone for RouterState {
@@ -126,7 +126,7 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/memory/:agent_id/stats", get(memory::stats))
         .route("/memory/:agent_id/consolidate", post(memory::consolidate))
         // Skills CRUD
-        .route("/api/skills", get(skills::list_skills))
+        .route("/api/skills", get(skills::list_skills).post(skills::create_skill))
         .route("/api/skills/:name", get(skills::get_skill))
         .route("/api/skills/:name/activate", post(skills::activate_skill))
         // Per-agent skill installations

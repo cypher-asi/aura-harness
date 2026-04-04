@@ -2,6 +2,62 @@
 
 use crate::types::{CandidateType, MemoryCandidate};
 use aura_agent::AgentLoopResult;
+use aura_reasoner::Role;
+
+/// The user message and assistant response for a single conversation turn.
+///
+/// Built from `AgentLoopResult.messages` so the memory pipeline can see
+/// what the user actually said (not just the assistant's output).
+#[derive(Debug, Clone)]
+pub struct ConversationTurn {
+    pub user_message: String,
+    pub assistant_text: String,
+}
+
+impl ConversationTurn {
+    /// Extract the last turn from a finished message history.
+    ///
+    /// Walks backward to find the final assistant text and the user message
+    /// that preceded it. Returns `None` if either side is empty.
+    #[must_use]
+    pub fn from_messages(messages: &[aura_reasoner::Message], total_text: &str) -> Option<Self> {
+        let assistant_text = if total_text.is_empty() {
+            // Fallback: collect from trailing assistant messages
+            let text: String = messages
+                .iter()
+                .rev()
+                .take_while(|m| m.role == Role::Assistant)
+                .map(|m| m.text_content())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("");
+            if text.is_empty() {
+                return None;
+            }
+            text
+        } else {
+            total_text.to_string()
+        };
+
+        let user_message = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::User)
+            .map(|m| m.text_content())
+            .unwrap_or_default();
+
+        if user_message.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            user_message,
+            assistant_text,
+        })
+    }
+}
 
 pub struct HeuristicExtractor;
 

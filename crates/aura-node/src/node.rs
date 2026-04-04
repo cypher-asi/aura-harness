@@ -3,21 +3,22 @@
 use crate::automaton_bridge::AutomatonBridge;
 use crate::config::NodeConfig;
 use crate::domain::HttpDomainApi;
+use crate::provider_factory::create_default_model_provider;
 use crate::router::{create_router, RouterState};
 use crate::scheduler::Scheduler;
 use anyhow::Context;
 use aura_automaton::AutomatonRuntime;
 use aura_kernel::Executor;
-use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
+use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
 use aura_tools::{ToolCatalog, ToolConfig};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tracing::info;
 
 /// The Aura Node runtime.
 pub struct Node {
@@ -86,7 +87,7 @@ impl Node {
         let executors = vec![resolver];
         info!("Executors configured");
 
-        let provider = Self::create_model_provider();
+        let provider = create_default_model_provider();
 
         let scheduler = Arc::new(Scheduler::new(
             store.clone(),
@@ -113,6 +114,16 @@ impl Node {
             info!("Automaton runtime ready");
         }
 
+        let skill_loader = SkillLoader::with_defaults(
+            Some(self.config.workspaces_path()),
+            None,
+        );
+        let skill_install_store = Arc::new(SkillInstallStore::new(store.db_handle().clone()));
+        let skill_manager_inner = SkillManager::with_install_store(skill_loader, skill_install_store);
+        let skill_count = skill_manager_inner.list_all().len();
+        let skill_manager = Arc::new(RwLock::new(skill_manager_inner));
+        info!(skills = skill_count, "Skill manager ready");
+
         let state = RouterState {
             store,
             scheduler,
@@ -125,7 +136,7 @@ impl Node {
             automaton_bridge,
             failed_txs: Arc::new(dashmap::DashMap::new()),
             memory_manager: None,
-            skill_manager: None,
+            skill_manager: Some(skill_manager),
         };
         let app = create_router(state);
 
@@ -144,35 +155,6 @@ impl Node {
             .context("running HTTP server")?;
 
         Ok(())
-    }
-
-    /// Create a `ModelProvider` for WebSocket sessions.
-    ///
-    /// Tries `AnthropicProvider` from environment, falls back to `MockProvider`.
-    fn create_model_provider() -> Arc<dyn ModelProvider + Send + Sync> {
-        match AnthropicConfig::from_env() {
-            Ok(config) => {
-                let mode_label = if config.routing_mode == aura_reasoner::RoutingMode::Proxy {
-                    "proxy"
-                } else {
-                    "direct"
-                };
-                match AnthropicProvider::new(config) {
-                    Ok(provider) => {
-                        info!(mode = mode_label, "LLM provider ready ({mode_label} mode)");
-                        Arc::new(provider)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to create LLM provider, using mock");
-                        Arc::new(MockProvider::simple_response("(mock provider)"))
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "LLM provider not configured, using mock");
-                Arc::new(MockProvider::simple_response("(mock provider)"))
-            }
-        }
     }
 }
 
@@ -228,6 +210,6 @@ mod tests {
 
     #[test]
     fn test_create_model_provider_returns_something() {
-        let _provider = Node::create_model_provider();
+        let _provider = create_default_model_provider();
     }
 }

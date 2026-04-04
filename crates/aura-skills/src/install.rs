@@ -5,6 +5,7 @@
 //! Keys are `{agent_id}\0{skill_name}` so prefix iteration can list all
 //! skills for a single agent.
 
+use aura_core::AgentId;
 use crate::error::SkillError;
 use chrono::{DateTime, Utc};
 use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded};
@@ -15,7 +16,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInstallation {
     /// The agent this skill is installed for.
-    pub agent_id: String,
+    pub agent_id: AgentId,
     /// Name of the installed skill.
     pub skill_name: String,
     /// Optional URL the skill was installed from.
@@ -24,6 +25,14 @@ pub struct SkillInstallation {
     pub installed_at: DateTime<Utc>,
     /// Optional version string.
     pub version: Option<String>,
+}
+
+/// Abstraction over the skill installation store for testability.
+pub trait SkillInstallStoreApi: Send + Sync {
+    fn install(&self, installation: &SkillInstallation) -> Result<(), SkillError>;
+    fn uninstall(&self, agent_id: AgentId, skill_name: &str) -> Result<(), SkillError>;
+    fn list_for_agent(&self, agent_id: AgentId) -> Result<Vec<SkillInstallation>, SkillError>;
+    fn is_installed(&self, agent_id: AgentId, skill_name: &str) -> Result<bool, SkillError>;
 }
 
 /// Tracks per-agent skill installations in `RocksDB`.
@@ -46,29 +55,28 @@ impl SkillInstallStore {
             })
     }
 
-    fn key(agent_id: &str, skill_name: &str) -> Vec<u8> {
-        let mut key = Vec::with_capacity(agent_id.len() + 1 + skill_name.len());
-        key.extend_from_slice(agent_id.as_bytes());
+    fn key(agent_id: AgentId, skill_name: &str) -> Vec<u8> {
+        let hex = agent_id.to_hex();
+        let mut key = Vec::with_capacity(hex.len() + 1 + skill_name.len());
+        key.extend_from_slice(hex.as_bytes());
         key.push(0);
         key.extend_from_slice(skill_name.as_bytes());
         key
     }
 
-    fn agent_prefix(agent_id: &str) -> Vec<u8> {
-        let mut prefix = Vec::with_capacity(agent_id.len() + 1);
-        prefix.extend_from_slice(agent_id.as_bytes());
+    fn agent_prefix(agent_id: AgentId) -> Vec<u8> {
+        let hex = agent_id.to_hex();
+        let mut prefix = Vec::with_capacity(hex.len() + 1);
+        prefix.extend_from_slice(hex.as_bytes());
         prefix.push(0);
         prefix
     }
+}
 
-    /// Install a skill for an agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SkillError`] if the column family is missing or the write fails.
-    pub fn install(&self, installation: &SkillInstallation) -> Result<(), SkillError> {
+impl SkillInstallStoreApi for SkillInstallStore {
+    fn install(&self, installation: &SkillInstallation) -> Result<(), SkillError> {
         let cf = self.cf_handle()?;
-        let key = Self::key(&installation.agent_id, &installation.skill_name);
+        let key = Self::key(installation.agent_id, &installation.skill_name);
         let value =
             serde_json::to_vec(installation).map_err(|e| SkillError::Parse(e.to_string()))?;
         self.db
@@ -76,12 +84,7 @@ impl SkillInstallStore {
             .map_err(|e| SkillError::Store(e.to_string()))
     }
 
-    /// Uninstall a skill for an agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SkillError`] if the column family is missing or the delete fails.
-    pub fn uninstall(&self, agent_id: &str, skill_name: &str) -> Result<(), SkillError> {
+    fn uninstall(&self, agent_id: AgentId, skill_name: &str) -> Result<(), SkillError> {
         let cf = self.cf_handle()?;
         let key = Self::key(agent_id, skill_name);
         self.db
@@ -89,12 +92,7 @@ impl SkillInstallStore {
             .map_err(|e| SkillError::Store(e.to_string()))
     }
 
-    /// List all skills installed for an agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SkillError`] if the column family is missing or iteration fails.
-    pub fn list_for_agent(&self, agent_id: &str) -> Result<Vec<SkillInstallation>, SkillError> {
+    fn list_for_agent(&self, agent_id: AgentId) -> Result<Vec<SkillInstallation>, SkillError> {
         let cf = self.cf_handle()?;
         let prefix = Self::agent_prefix(agent_id);
         let iter = self.db.iterator_cf(
@@ -115,12 +113,7 @@ impl SkillInstallStore {
         Ok(installations)
     }
 
-    /// Check if a skill is installed for an agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SkillError`] if the column family is missing or the read fails.
-    pub fn is_installed(&self, agent_id: &str, skill_name: &str) -> Result<bool, SkillError> {
+    fn is_installed(&self, agent_id: AgentId, skill_name: &str) -> Result<bool, SkillError> {
         let cf = self.cf_handle()?;
         let key = Self::key(agent_id, skill_name);
         let exists = self.db
