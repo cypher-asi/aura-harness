@@ -245,6 +245,7 @@ impl Session {
             system_prompt,
             max_tokens: self.max_tokens,
             max_context_tokens: Some(self.context_window_tokens),
+            stream_timeout: std::time::Duration::from_secs(180),
             auth_token: self.auth_token.clone(),
             aura_project_id: self.project_id.clone(),
             aura_agent_id: self.aura_agent_id.clone(),
