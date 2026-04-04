@@ -266,61 +266,80 @@ fn wait_with_hard_timeout(
     }
 }
 
-/// Read the current Machine + User PATH from the Windows registry/environment.
-/// Returns `None` if reading fails (non-Windows or error).
+/// Read the current Machine + User PATH from the Windows registry and merge it
+/// with the process PATH so that both registry entries (which may have been
+/// updated since the harness started) and session-only entries (e.g. Python
+/// user-scripts installed via pip) are available to child processes.
 #[cfg(windows)]
 fn refresh_system_path() -> Option<String> {
-    let user_path: String = std::process::Command::new("cmd.exe")
-        .args(["/C", "echo %PATH%"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    fn read_reg_path(key: &str) -> Option<String> {
+        std::process::Command::new("reg")
+            .args(["query", key, "/v", "Path"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.contains("REG_"))
+                    .and_then(|l| {
+                        l.split("REG_EXPAND_SZ")
+                            .nth(1)
+                            .or_else(|| l.split("REG_SZ").nth(1))
+                    })
+                    .map(|v| v.trim().to_string())
+            })
+            .map(|p| expand_env_vars(&p))
+    }
 
-    if user_path.is_empty() || user_path == "%PATH%" {
+    let machine_reg = read_reg_path(
+        r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+    );
+    let user_reg = read_reg_path(r"HKCU\Environment");
+
+    let process_path = std::env::var("PATH").unwrap_or_default();
+
+    let mut segments: Vec<&str> = Vec::new();
+
+    if let Some(ref m) = machine_reg {
+        segments.extend(m.split(';').filter(|s| !s.is_empty()));
+    }
+    if let Some(ref u) = user_reg {
+        segments.extend(u.split(';').filter(|s| !s.is_empty()));
+    }
+    for entry in process_path.split(';').filter(|s| !s.is_empty()) {
+        if !segments.iter().any(|existing| existing.eq_ignore_ascii_case(entry)) {
+            segments.push(entry);
+        }
+    }
+
+    if segments.is_empty() {
         return None;
     }
-    // cmd /C echo %PATH% returns the process PATH which is the same stale one.
-    // Instead, read directly from the registry.
-    let machine_reg = std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-            "/v",
-            "Path",
-        ])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.contains("REG_"))
-                .and_then(|l| l.split("REG_EXPAND_SZ").nth(1).or_else(|| l.split("REG_SZ").nth(1)))
-                .map(|v| v.trim().to_string())
-        });
-    let user_reg = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Environment", "/v", "Path"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.contains("REG_"))
-                .and_then(|l| l.split("REG_EXPAND_SZ").nth(1).or_else(|| l.split("REG_SZ").nth(1)))
-                .map(|v| v.trim().to_string())
-        });
 
-    match (machine_reg, user_reg) {
-        (Some(m), Some(u)) => Some(format!("{m};{u}")),
-        (Some(m), None) => Some(m),
-        (None, Some(u)) => {
-            let current = std::env::var("PATH").unwrap_or_default();
-            Some(format!("{current};{u}"))
+    Some(segments.join(";"))
+}
+
+/// Expand `%VAR%` patterns in a string using the current process environment.
+/// Registry PATH values are stored as REG_EXPAND_SZ with variables like
+/// `%SystemRoot%`, `%USERPROFILE%`, etc. that must be resolved before use.
+#[cfg(windows)]
+fn expand_env_vars(input: &str) -> String {
+    let mut result = input.to_string();
+    while let Some(start) = result.find('%') {
+        if let Some(end) = result[start + 1..].find('%') {
+            let var_name = &result[start + 1..start + 1 + end];
+            let replacement = std::env::var(var_name).unwrap_or_default();
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                replacement,
+                &result[start + 1 + end + 1..]
+            );
+        } else {
+            break;
         }
-        (None, None) => None,
     }
+    result
 }
 
 /// Validate a command string against the allowlist.
