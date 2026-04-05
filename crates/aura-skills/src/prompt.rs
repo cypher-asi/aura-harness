@@ -62,7 +62,7 @@ pub fn render_full_skills_xml(skills: &[SkillPromptEntry<'_>]) -> String {
         );
         let _ = write!(buf, "{}", xml_escape(s.description));
         if !s.body.is_empty() {
-            let _ = write!(buf, "\n\n{}", s.body);
+            let _ = write!(buf, "\n\n{}", xml_escape(s.body));
         }
         buf.push_str("</agent_skill>\n");
     }

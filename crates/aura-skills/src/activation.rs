@@ -6,11 +6,52 @@
 use crate::error::SkillError;
 use crate::types::{Skill, SkillActivation};
 
+/// Split an argument string respecting single and double quotes.
+///
+/// Unquoted regions are split on whitespace. Inside `"..."` or `'...'`,
+/// whitespace is preserved. Backslash inside double quotes escapes the
+/// next character. Returns the list of individual arguments.
+fn split_quoted_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '\\' if in_double => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
 /// Activate a skill by substituting placeholders with the provided arguments.
 ///
 /// Supported substitutions:
 /// - `$ARGUMENTS` — replaced with the full argument string
-/// - `$ARGUMENTS[N]` — replaced with the Nth (0-based) whitespace-split argument
+/// - `$ARGUMENTS[N]` — replaced with the Nth (0-based) argument (supports quoted args with spaces)
 /// - `$N` (e.g. `$0`, `$1`) — shorthand for `$ARGUMENTS[N]`
 /// - `${SKILL_DIR}` — replaced with the skill's directory path
 ///
@@ -21,7 +62,7 @@ use crate::types::{Skill, SkillActivation};
 ///
 /// Returns [`SkillError::Activation`] if argument substitution fails.
 pub fn activate(skill: &Skill, arguments: &str) -> Result<SkillActivation, SkillError> {
-    let args: Vec<&str> = arguments.split_whitespace().collect();
+    let args: Vec<String> = split_quoted_args(arguments);
     let dir_str = skill.dir_path.to_string_lossy();
 
     let mut content = skill.body.clone();
@@ -36,7 +77,7 @@ pub fn activate(skill: &Skill, arguments: &str) -> Result<SkillActivation, Skill
         if let Some(end) = content[abs_start..].find(']') {
             let idx_str = &content[abs_start + 11..abs_start + end];
             if let Ok(idx) = idx_str.parse::<usize>() {
-                let replacement = args.get(idx).copied().unwrap_or("");
+                let replacement = args.get(idx).map(|s| s.as_str()).unwrap_or("");
                 let full_placeholder = &content[abs_start..=abs_start + end].to_string();
                 content = content.replacen(full_placeholder, replacement, 1);
             } else {

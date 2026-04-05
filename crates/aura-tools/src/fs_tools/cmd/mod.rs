@@ -6,6 +6,33 @@ use aura_core::ToolDefinition;
 use aura_core::ToolResult;
 use tracing::{debug, instrument};
 
+/// Quote a single argument for safe inclusion in a shell command string.
+///
+/// On Unix, wraps in single quotes with internal `'` escaped as `'\''`.
+/// On Windows, wraps in double quotes with internal `"` escaped as `\"`.
+/// Arguments that are purely alphanumeric (plus `-._/=:@`) are returned as-is.
+fn shell_quote_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._/=:@".contains(&b))
+    {
+        return arg.to_string();
+    }
+
+    #[cfg(windows)]
+    {
+        let escaped = arg.replace('"', "\\\"");
+        format!("\"{}\"", escaped)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let escaped = arg.replace('\'', "'\\''");
+        format!("'{}'", escaped)
+    }
+}
+
 /// Result of a threshold-based wait operation.
 ///
 /// When a command is run with a sync threshold:
@@ -44,7 +71,8 @@ pub fn cmd_spawn(
     let full_command = if args.is_empty() {
         program.to_string()
     } else {
-        format!("{} {}", program, args.join(" "))
+        let quoted_args: Vec<String> = args.iter().map(|a| shell_quote_arg(a)).collect();
+        format!("{} {}", program, quoted_args.join(" "))
     };
 
     #[cfg(windows)]
@@ -355,9 +383,12 @@ fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), To
         return Ok(());
     }
 
-    // Block shell metacharacters that allow command chaining
-    let dangerous = [";", "&&", "||", "|", "$(", "`", "\n"];
-    for meta in &dangerous {
+    let dangerous: &[&str] = if cfg!(windows) {
+        &[";", "&&", "||", "|", "$(", "`", "\n", "&", ">", "<", "^"]
+    } else {
+        &[";", "&&", "||", "|", "$(", "`", "\n", ">", "<", "<("]
+    };
+    for meta in dangerous {
         if command.contains(meta) {
             return Err(ToolError::CommandNotAllowed(format!(
                 "shell metacharacter '{meta}' not allowed"

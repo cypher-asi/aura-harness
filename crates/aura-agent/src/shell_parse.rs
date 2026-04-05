@@ -88,12 +88,14 @@ pub fn extract_prose_command(
     shell_indicators: &[&str],
 ) -> Option<String> {
     for line in text.lines() {
-        let trimmed = line.trim().to_lowercase();
+        let original = line.trim();
+        let lowered = original.to_lowercase();
         for prefix in prefixes {
-            if !trimmed.starts_with(prefix) {
+            if !lowered.starts_with(prefix) {
                 continue;
             }
-            let after_prefix = &line.trim()[prefix.len()..];
+            // Safe: prefixes are ASCII-only so byte length is identical in both cases.
+            let after_prefix = &original[prefix.len()..];
             if !shell_indicators
                 .iter()
                 .any(|ind| after_prefix.to_lowercase().starts_with(ind))

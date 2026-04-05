@@ -13,6 +13,15 @@ use chrono::Utc;
 use std::sync::Arc;
 use tracing::info;
 
+/// Escape a string for use inside a YAML double-quoted scalar.
+fn yaml_escape_scalar(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 /// Parse an agent ID string as UUID (blake3-derived) or 64-char hex.
 fn parse_agent_id(s: &str) -> Option<AgentId> {
     if let Ok(uuid) = uuid::Uuid::parse_str(s) {
@@ -227,7 +236,11 @@ impl SkillManager {
         let skill_dir = target_dir.join(name);
         std::fs::create_dir_all(&skill_dir)?;
 
-        let mut yaml = format!("name: {name}\ndescription: {description}\n");
+        let mut yaml = format!(
+            "name: \"{}\"\ndescription: \"{}\"\n",
+            yaml_escape_scalar(name),
+            yaml_escape_scalar(description),
+        );
         if user_invocable {
             yaml.push_str("user-invocable: true\n");
         }
