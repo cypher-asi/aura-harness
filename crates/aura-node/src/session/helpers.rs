@@ -9,6 +9,7 @@ use crate::protocol::{
     SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg,
     ToolUseStart,
 };
+use crate::provider_factory::create_provider_from_session_config;
 #[allow(deprecated)]
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
 use aura_kernel::{Kernel, KernelConfig};
@@ -46,6 +47,8 @@ pub(super) fn handle_session_init(
     outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) {
+    let provider_config = init.provider_config.clone();
+
     if session.initialized {
         let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "already_initialized".into(),
@@ -53,6 +56,23 @@ pub(super) fn handle_session_init(
             recoverable: true,
         }));
         return;
+    }
+
+    if let Some(provider_config) = provider_config {
+        match create_provider_from_session_config(&provider_config) {
+            Ok(provider) => {
+                session.provider_name = provider.name().to_string();
+                session.provider_override = Some(provider);
+            }
+            Err(e) => {
+                let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                    code: "invalid_provider_config".into(),
+                    message: e.to_string(),
+                    recoverable: true,
+                }));
+                return;
+            }
+        }
     }
 
     if let Err(e) = session.apply_init(init) {
@@ -184,7 +204,10 @@ pub(super) fn build_kernel_with_config(
 
     let kernel = Kernel::new(
         ctx.store.clone(),
-        ctx.provider.clone(),
+        session
+            .provider_override
+            .clone()
+            .unwrap_or_else(|| ctx.provider.clone()),
         router,
         config,
         session.agent_id,
