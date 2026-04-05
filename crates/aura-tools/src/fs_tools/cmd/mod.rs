@@ -50,7 +50,8 @@ pub fn cmd_spawn(
     #[cfg(windows)]
     let mut cmd = {
         let mut c = Command::new("cmd.exe");
-        c.args(["/S", "/C", &format!("\"{}\"", full_command)]);
+        let trimmed = full_command.trim_matches('"');
+        c.args(["/S", "/C", &format!("\"{}\"", trimmed)]);
         c
     };
 
