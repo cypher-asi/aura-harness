@@ -141,6 +141,8 @@ impl Node {
         let skill_manager = Arc::new(RwLock::new(skill_manager_inner));
         info!(skills = skill_count, "Skill manager ready");
 
+        let router_url = std::env::var("AURA_ROUTER_URL").ok();
+
         let state = RouterState {
             store,
             scheduler,
@@ -154,6 +156,7 @@ impl Node {
             failed_txs: Arc::new(dashmap::DashMap::new()),
             memory_manager: Some(memory_manager),
             skill_manager: Some(skill_manager),
+            router_url,
         };
         let app = create_router(state);
 

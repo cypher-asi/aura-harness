@@ -24,6 +24,7 @@ pub(super) async fn ws_upgrade_handler(
         project_base: state.config.project_base.clone(),
         memory_manager: state.memory_manager.clone(),
         skill_manager: state.skill_manager.clone(),
+        router_url: state.router_url.clone(),
     };
     ws.on_upgrade(move |socket| handle_ws_connection(socket, ctx))
 }

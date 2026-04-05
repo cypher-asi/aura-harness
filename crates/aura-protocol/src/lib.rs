@@ -30,6 +30,8 @@ pub enum InboundMessage {
     Cancel,
     /// Respond to an approval request.
     ApprovalResponse(ApprovalResponse),
+    /// Request image or 3D generation.
+    GenerationRequest(GenerationRequest),
 }
 
 /// A prior conversation message used to hydrate session history.
@@ -175,6 +177,32 @@ pub struct ApprovalResponse {
     pub tool_use_id: String,
     pub approved: bool,
 }
+/// Payload for `generation_request`.
+///
+/// Fields are mode-dependent:
+/// - `mode == "image"`: uses `prompt` (required), `model`, `size`, `images`, `is_iteration`
+/// - `mode == "3d"`:    uses `image_url` (required), `prompt` (optional hint)
+///
+/// Both modes accept `project_id` for artifact storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct GenerationRequest {
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_iteration: Option<bool>,
+}
 
 // ============================================================================
 // Outbound Messages (Server → Client)
@@ -203,6 +231,16 @@ pub enum OutboundMessage {
     AssistantMessageEnd(AssistantMessageEnd),
     /// An error occurred.
     Error(ErrorMsg),
+    /// Generation started.
+    GenerationStart(GenerationStart),
+    /// Generation progress update.
+    GenerationProgress(GenerationProgressMsg),
+    /// Partial image data (progressive rendering).
+    GenerationPartialImage(GenerationPartialImage),
+    /// Generation completed successfully.
+    GenerationCompleted(GenerationCompleted),
+    /// Generation failed.
+    GenerationError(GenerationErrorMsg),
 }
 
 /// Payload for `session_ready`.
@@ -343,6 +381,51 @@ pub struct ErrorMsg {
     pub code: String,
     pub message: String,
     pub recoverable: bool,
+}
+// ============================================================================
+// Generation Event Types
+// ============================================================================
+
+/// Payload for `generation_start`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct GenerationStart {
+    pub mode: String,
+}
+
+/// Payload for `generation_progress`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct GenerationProgressMsg {
+    pub percent: f64,
+    pub message: String,
+}
+
+/// Payload for `generation_partial_image`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct GenerationPartialImage {
+    pub data: String,
+}
+
+/// Payload for `generation_completed`.
+///
+/// The `payload` field carries the raw response from the generation backend,
+/// whose shape varies by mode (image vs 3D).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct GenerationCompleted {
+    pub mode: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+/// Payload for `generation_error`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct GenerationErrorMsg {
+    pub code: String,
+    pub message: String,
 }
 
 // ============================================================================

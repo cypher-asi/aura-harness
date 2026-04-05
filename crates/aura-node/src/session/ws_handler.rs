@@ -1,13 +1,12 @@
 //! WebSocket connection handler and turn management.
 
+use super::generation::{self, GenerationTurn};
 use super::helpers;
 use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
-use aura_agent::{
-    AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
-};
+use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway};
 use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
@@ -19,7 +18,12 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 /// State for a turn that is currently being processed in the background.
-struct ActiveTurn {
+enum ActiveTurn {
+    Agent(AgentTurn),
+    Generation(GenerationTurn),
+}
+
+struct AgentTurn {
     cancel_token: CancellationToken,
     join_handle: JoinHandle<anyhow::Result<AgentLoopResult>>,
     stream_forward_handle: JoinHandle<()>,
@@ -63,7 +67,6 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let mut session = Session::new(ctx.workspace_base.clone());
     session.auth_token = ctx.auth_token.clone();
     session.project_base = ctx.project_base.clone();
-    session.provider_name = ctx.provider.name().to_string();
     info!(session_id = %session.session_id, "WebSocket connection opened");
 
     let mut active_turn: Option<ActiveTurn> = None;
@@ -104,41 +107,67 @@ async fn run_active_turn_select(
     session: &mut Session,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) -> TurnAction {
-    tokio::select! {
-        biased;
-        msg_result = ws_rx.next() => {
-            match classify_ws_frame(msg_result) {
-                WsAction::Message(raw) => {
-                    handle_msg_during_turn(&raw, turn, session, outbound_tx);
-                    TurnAction::Continue
+    match turn {
+        ActiveTurn::Agent(agent) => {
+            tokio::select! {
+                biased;
+                msg_result = ws_rx.next() => {
+                    match classify_ws_frame(msg_result) {
+                        WsAction::Message(raw) => {
+                            handle_msg_during_turn(&raw, &agent.cancel_token, session, outbound_tx);
+                            TurnAction::Continue
+                        }
+                        WsAction::Close => {
+                            debug!(session_id = %session.session_id, "Client closed during active turn");
+                            agent.cancel_token.cancel();
+                            TurnAction::Close
+                        }
+                        WsAction::Continue => TurnAction::Continue,
+                    }
                 }
-                WsAction::Close => {
-                    debug!(session_id = %session.session_id, "Client closed during active turn");
-                    turn.cancel_token.cancel();
-                    TurnAction::Close
+                join_result = &mut agent.join_handle => {
+                    let message_id = agent.message_id.clone();
+                    agent.stream_forward_handle.abort();
+                    helpers::finalize_turn(session, join_result, &message_id, outbound_tx);
+                    TurnAction::TurnFinished
                 }
-                WsAction::Continue => TurnAction::Continue,
             }
         }
-        join_result = &mut turn.join_handle => {
-            let message_id = turn.message_id.clone();
-            turn.stream_forward_handle.abort();
-            helpers::finalize_turn(session, join_result, &message_id, outbound_tx);
-            TurnAction::TurnFinished
+        ActiveTurn::Generation(gen) => {
+            tokio::select! {
+                biased;
+                msg_result = ws_rx.next() => {
+                    match classify_ws_frame(msg_result) {
+                        WsAction::Message(raw) => {
+                            handle_msg_during_turn(&raw, &gen.cancel_token, session, outbound_tx);
+                            TurnAction::Continue
+                        }
+                        WsAction::Close => {
+                            debug!(session_id = %session.session_id, "Client closed during generation");
+                            gen.cancel_token.cancel();
+                            TurnAction::Close
+                        }
+                        WsAction::Continue => TurnAction::Continue,
+                    }
+                }
+                _ = &mut gen.join_handle => {
+                    TurnAction::TurnFinished
+                }
+            }
         }
     }
 }
 
 fn handle_msg_during_turn(
     raw: &str,
-    turn: &ActiveTurn,
+    cancel_token: &CancellationToken,
     session: &Session,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     match serde_json::from_str::<InboundMessage>(raw) {
         Ok(InboundMessage::Cancel) => {
             info!(session_id = %session.session_id, "Cancelling active turn");
-            turn.cancel_token.cancel();
+            cancel_token.cancel();
         }
         Ok(_) => {
             let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
@@ -191,9 +220,27 @@ async fn dispatch_idle_message(
             IdleAction::Continue
         }
         Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx).await {
-            Some(turn) => IdleAction::StartTurn(turn),
+            Some(turn) => IdleAction::StartTurn(ActiveTurn::Agent(turn)),
             None => IdleAction::Continue,
         },
+        Ok(InboundMessage::GenerationRequest(req)) => {
+            match ctx.router_url {
+                Some(ref url) => {
+                    match generation::start_generation(session, req, outbound_tx, url) {
+                        Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
+                        None => IdleAction::Continue,
+                    }
+                }
+                None => {
+                    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                        code: "no_router_url".into(),
+                        message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
+                        recoverable: false,
+                    }));
+                    IdleAction::Continue
+                }
+            }
+        }
         Ok(InboundMessage::Cancel) => {
             debug!(session_id = %session.session_id, "Cancel received but no turn is active");
             IdleAction::Continue
@@ -234,13 +281,13 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
     }
 }
 
-/// Prepare and spawn a turn as a background task.
+/// Prepare and spawn an agent-loop turn as a background task.
 async fn start_turn(
     session: &mut Session,
     msg: UserMessage,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
-) -> Option<ActiveTurn> {
+) -> Option<AgentTurn> {
     if !session.initialized {
         let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "not_initialized".into(),
@@ -393,7 +440,7 @@ async fn start_turn(
     let stream_forward_handle =
         tokio::spawn(helpers::forward_events_to_ws(event_rx, outbound_for_stream));
 
-    Some(ActiveTurn {
+    Some(AgentTurn {
         cancel_token,
         join_handle,
         stream_forward_handle,

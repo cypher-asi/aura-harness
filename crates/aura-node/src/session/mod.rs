@@ -3,6 +3,7 @@
 //! Each WebSocket connection maps to a `Session` that maintains conversation
 //! state, tool configuration, and token accounting across turns.
 
+mod generation;
 mod helpers;
 mod ws_handler;
 
@@ -320,6 +321,8 @@ pub struct WsContext {
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
     /// Optional skill manager for per-agent skill injection into prompts.
     pub skill_manager: Option<Arc<RwLock<SkillManager>>>,
+    /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
+    pub router_url: Option<String>,
 }
 
 #[cfg(test)]

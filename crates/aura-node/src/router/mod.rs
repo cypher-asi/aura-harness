@@ -63,6 +63,8 @@ pub struct RouterState {
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
     /// Optional skill manager for skill CRUD API and prompt injection.
     pub skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
+    /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
+    pub router_url: Option<String>,
 }
 
 impl Clone for RouterState {
@@ -80,6 +82,7 @@ impl Clone for RouterState {
             failed_txs: self.failed_txs.clone(),
             memory_manager: self.memory_manager.clone(),
             skill_manager: self.skill_manager.clone(),
+            router_url: self.router_url.clone(),
         }
     }
 }
