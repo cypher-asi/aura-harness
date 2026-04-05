@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::compaction;
+use crate::constants::CHARS_PER_TOKEN;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::sanitize;
@@ -24,6 +25,7 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 /// Describes why an LLM call failed, allowing the main loop to break cleanly.
 pub(super) enum LlmCallError {
     InsufficientCredits(String),
+    PromptTooLong(String),
     Fatal(String),
 }
 
@@ -46,7 +48,7 @@ impl LlmCallError {
                     },
                 );
             }
-            Self::Fatal(msg) => {
+            Self::PromptTooLong(msg) | Self::Fatal(msg) => {
                 streaming::emit(
                     event_tx,
                     AgentLoopEvent::Error {
@@ -66,6 +68,7 @@ fn classify_reasoner_error(e: &aura_reasoner::ReasonerError) -> LlmCallError {
         aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
             LlmCallError::InsufficientCredits(msg.clone())
         }
+        other if other.is_context_overflow() => LlmCallError::PromptTooLong(other.to_string()),
         other => LlmCallError::Fatal(other.to_string()),
     }
 }
@@ -77,9 +80,31 @@ fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
     let msg = e.to_string();
     if msg.contains("402 Payment") || msg.contains("402 ") {
         LlmCallError::InsufficientCredits(msg)
+    } else if message_indicates_context_overflow(&msg) {
+        LlmCallError::PromptTooLong(msg)
     } else {
         LlmCallError::Fatal(msg)
     }
+}
+
+fn message_indicates_context_overflow(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    [
+        "prompt is too long",
+        "prompt too long",
+        "prompt too large",
+        "context length exceeded",
+        "context window exceeded",
+        "context window limit",
+        "exceeds context window",
+        "exceed the model context window",
+        "input length and max_tokens exceed context limit",
+        "requested tokens exceed the context window",
+        "request exceeds the context window",
+        "too many tokens",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
 }
 
 impl AgentLoop {
@@ -124,7 +149,12 @@ impl AgentLoop {
 pub(super) fn accumulate_response(state: &mut LoopState, response: &ModelResponse) {
     state.result.total_input_tokens += response.usage.input_tokens;
     state.result.total_output_tokens += response.usage.output_tokens;
-    state.last_input_tokens = Some(response.usage.input_tokens);
+    state.result.total_cache_creation_input_tokens += response
+        .usage
+        .cache_creation_input_tokens
+        .unwrap_or_default();
+    state.result.total_cache_read_input_tokens +=
+        response.usage.cache_read_input_tokens.unwrap_or_default();
 
     for block in &response.message.content {
         match block {
@@ -138,6 +168,24 @@ pub(super) fn accumulate_response(state: &mut LoopState, response: &ModelRespons
 
     state.messages.push(response.message.clone());
     summarize_write_inputs(&mut state.messages);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let message_tokens =
+        (compaction::estimate_message_chars(&state.messages) / CHARS_PER_TOKEN) as u64;
+    let provider_tokens = response
+        .usage
+        .input_tokens
+        .saturating_add(response.usage.output_tokens)
+        .saturating_add(
+            response
+                .usage
+                .cache_creation_input_tokens
+                .unwrap_or_default(),
+        )
+        .saturating_add(response.usage.cache_read_input_tokens.unwrap_or_default());
+    let estimated_context_tokens = provider_tokens.max(message_tokens);
+    state.last_context_tokens_estimate = Some(estimated_context_tokens);
+    state.result.estimated_context_tokens = estimated_context_tokens;
 }
 
 /// Replace large write-tool inputs with summaries to save context space.

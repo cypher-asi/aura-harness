@@ -253,8 +253,13 @@ pub struct AssistantMessageEnd {
 pub struct SessionUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub estimated_context_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
     pub cumulative_input_tokens: u64,
     pub cumulative_output_tokens: u64,
+    pub cumulative_cache_creation_input_tokens: u64,
+    pub cumulative_cache_read_input_tokens: u64,
     /// Fraction of the model's context window consumed (0.0–1.0).
     pub context_utilization: f32,
     /// Model identifier used for this turn.

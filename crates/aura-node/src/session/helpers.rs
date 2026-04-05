@@ -16,6 +16,30 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
+fn summarize_files_changed(loop_result: &AgentLoopResult) -> FilesChanged {
+    let mut files_changed = FilesChanged::default();
+    for change in &loop_result.file_changes {
+        match change.kind {
+            aura_agent::FileChangeKind::Create => files_changed.created.push(change.path.clone()),
+            aura_agent::FileChangeKind::Modify => files_changed.modified.push(change.path.clone()),
+            aura_agent::FileChangeKind::Delete => files_changed.deleted.push(change.path.clone()),
+        }
+    }
+    files_changed
+}
+
+fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
+    if let Some(ref project_path) = session.project_path {
+        return (project_path.clone(), true);
+    }
+
+    if session.workspace != session.workspace_base {
+        return (session.workspace.clone(), true);
+    }
+
+    (session.workspace.clone(), false)
+}
+
 pub(super) fn handle_session_init(
     session: &mut Session,
     init: SessionInit,
@@ -114,10 +138,7 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
 
     let router = executor_factory::build_executor_router(resolver);
 
-    let workspace = match session.project_path {
-        Some(ref pp) => pp.clone(),
-        None => session.workspace.join(session.agent_id.to_hex()),
-    };
+    let (workspace, _) = resolve_session_workspace(session);
     KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
@@ -153,13 +174,11 @@ pub(super) fn build_kernel_with_config(
 
     let router = executor_factory::build_executor_router(resolver);
 
-    let workspace = match session.project_path {
-        Some(ref pp) => pp.clone(),
-        None => session.workspace.join(session.agent_id.to_hex()),
-    };
+    let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
 
     let config = KernelConfig {
         workspace_base: workspace,
+        use_workspace_base_as_root,
         ..KernelConfig::default()
     };
 
@@ -275,11 +294,17 @@ pub(super) fn apply_turn_result(
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     session.messages.clone_from(&loop_result.messages);
+    let files_changed = summarize_files_changed(loop_result);
 
     let input_tokens = loop_result.total_input_tokens;
     let output_tokens = loop_result.total_output_tokens;
+    let estimated_context_tokens = loop_result.estimated_context_tokens;
+    let cache_creation_input_tokens = loop_result.total_cache_creation_input_tokens;
+    let cache_read_input_tokens = loop_result.total_cache_read_input_tokens;
     session.cumulative_input_tokens += input_tokens;
     session.cumulative_output_tokens += output_tokens;
+    session.cumulative_cache_creation_input_tokens += cache_creation_input_tokens;
+    session.cumulative_cache_read_input_tokens += cache_read_input_tokens;
 
     let stop_reason = if loop_result.timed_out {
         "cancelled"
@@ -293,7 +318,7 @@ pub(super) fn apply_turn_result(
 
     let context_utilization = if session.context_window_tokens > 0 {
         #[allow(clippy::cast_precision_loss)]
-        let ratio = input_tokens as f32 / session.context_window_tokens as f32;
+        let ratio = estimated_context_tokens as f32 / session.context_window_tokens as f32;
         ratio.min(1.0)
     } else {
         0.0
@@ -305,13 +330,18 @@ pub(super) fn apply_turn_result(
         usage: SessionUsage {
             input_tokens,
             output_tokens,
+            estimated_context_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
             cumulative_input_tokens: session.cumulative_input_tokens,
             cumulative_output_tokens: session.cumulative_output_tokens,
+            cumulative_cache_creation_input_tokens: session.cumulative_cache_creation_input_tokens,
+            cumulative_cache_read_input_tokens: session.cumulative_cache_read_input_tokens,
             context_utilization,
             model: session.model.clone(),
-            provider: String::new(),
+            provider: session.provider_name.clone(),
         },
-        files_changed: FilesChanged::default(),
+        files_changed,
     }));
 
     info!(
@@ -321,4 +351,68 @@ pub(super) fn apply_turn_result(
         history_len = session.messages.len(),
         "Turn complete"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_session_workspace, summarize_files_changed};
+    use crate::session::Session;
+    use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
+    use std::path::PathBuf;
+
+    #[test]
+    fn summarize_files_changed_groups_by_operation() {
+        let mut loop_result = AgentLoopResult::default();
+        loop_result.file_changes = vec![
+            FileChange {
+                path: "src/new.rs".into(),
+                kind: FileChangeKind::Create,
+            },
+            FileChange {
+                path: "src/lib.rs".into(),
+                kind: FileChangeKind::Modify,
+            },
+            FileChange {
+                path: "src/old.rs".into(),
+                kind: FileChangeKind::Delete,
+            },
+        ];
+
+        let summary = summarize_files_changed(&loop_result);
+        assert_eq!(summary.created, vec!["src/new.rs"]);
+        assert_eq!(summary.modified, vec!["src/lib.rs"]);
+        assert_eq!(summary.deleted, vec!["src/old.rs"]);
+    }
+
+    #[test]
+    fn resolve_session_workspace_uses_project_path_directly() {
+        let mut session = Session::new(PathBuf::from("/tmp/aura"));
+        session.project_path = Some(PathBuf::from("/tmp/project"));
+
+        let (workspace, use_workspace_base_as_root) = resolve_session_workspace(&session);
+
+        assert_eq!(workspace, PathBuf::from("/tmp/project"));
+        assert!(use_workspace_base_as_root);
+    }
+
+    #[test]
+    fn resolve_session_workspace_uses_explicit_workspace_directly() {
+        let mut session = Session::new(PathBuf::from("/tmp/aura"));
+        session.workspace = PathBuf::from("/tmp/aura/session-123");
+
+        let (workspace, use_workspace_base_as_root) = resolve_session_workspace(&session);
+
+        assert_eq!(workspace, PathBuf::from("/tmp/aura/session-123"));
+        assert!(use_workspace_base_as_root);
+    }
+
+    #[test]
+    fn resolve_session_workspace_keeps_base_for_default_workspace() {
+        let session = Session::new(PathBuf::from("/tmp/aura"));
+
+        let (workspace, use_workspace_base_as_root) = resolve_session_workspace(&session);
+
+        assert_eq!(workspace, PathBuf::from("/tmp/aura"));
+        assert!(!use_workspace_base_as_root);
+    }
 }

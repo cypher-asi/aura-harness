@@ -21,7 +21,7 @@ fn test_config_new() {
 fn test_convert_messages() {
     let messages = vec![Message::user("Hello"), Message::assistant("Hi there!")];
 
-    let api_msgs = convert_messages_to_api(&messages);
+    let api_msgs = convert_messages_to_api(&messages, true);
     assert_eq!(api_msgs.len(), 2);
     assert_eq!(api_msgs[0].role, "user");
     assert_eq!(api_msgs[1].role, "assistant");
@@ -40,7 +40,7 @@ fn test_convert_tools() {
         }),
     )];
 
-    let api_tools = convert_tools_to_api(&tools);
+    let api_tools = convert_tools_to_api(&tools, true);
     assert_eq!(api_tools.len(), 1);
     assert_eq!(api_tools[0].name, "fs.read");
 }
@@ -60,7 +60,7 @@ fn test_convert_tool_choice() {
 
 #[test]
 fn test_cache_control_on_system_block() {
-    let system = build_system_block("You are a helpful assistant.");
+    let system = build_system_block("You are a helpful assistant.", true);
     let arr = system.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     let block = &arr[0];
@@ -84,7 +84,7 @@ fn test_cache_control_on_last_tool() {
         ),
     ];
 
-    let api_tools = convert_tools_to_api(&tools);
+    let api_tools = convert_tools_to_api(&tools, true);
     assert_eq!(api_tools.len(), 2);
     assert!(api_tools[0].cache_control.is_none());
     let last_cc = api_tools[1].cache_control.as_ref().unwrap();
@@ -99,7 +99,7 @@ fn test_cache_control_on_last_user_message() {
         Message::user("How are you?"),
     ];
 
-    let api_msgs = convert_messages_to_api(&messages);
+    let api_msgs = convert_messages_to_api(&messages, true);
 
     let last_user = &api_msgs[2];
     assert_eq!(last_user.role, "user");
@@ -120,12 +120,46 @@ fn test_beta_header_present() {
     let config = AnthropicConfig::new("test-key", "test-model");
     let provider = AnthropicProvider::new(config).unwrap();
 
-    let system = build_system_block("test");
+    let system = build_system_block("test", true);
     let json = serde_json::to_string(&system).unwrap();
     assert!(json.contains("cache_control"));
     assert!(json.contains("ephemeral"));
 
     assert_eq!(provider.name(), "anthropic");
+}
+
+#[test]
+fn test_cache_control_omitted_when_prompt_caching_disabled() {
+    let system = build_system_block("test", false);
+    let json = serde_json::to_string(&system).unwrap();
+    assert!(!json.contains("cache_control"));
+
+    let messages = vec![
+        Message::user("Hello"),
+        Message::assistant("Hi!"),
+        Message::user("How are you?"),
+    ];
+    let api_msgs = convert_messages_to_api(&messages, false);
+    if let ApiContent::Text { cache_control, .. } = &api_msgs[2].content[0] {
+        assert!(cache_control.is_none());
+    } else {
+        panic!("Expected Text content");
+    }
+
+    let tools = vec![
+        ToolDefinition::new(
+            "fs.read",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        ),
+        ToolDefinition::new(
+            "fs.write",
+            "Write a file",
+            serde_json::json!({"type": "object"}),
+        ),
+    ];
+    let api_tools = convert_tools_to_api(&tools, false);
+    assert!(api_tools.iter().all(|tool| tool.cache_control.is_none()));
 }
 
 const TEST_DEFAULT_MODEL: &str = "claude-opus-4-6";
@@ -264,6 +298,7 @@ async fn test_proxy_mode_sends_caching_beta_header() {
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         routing_mode: RoutingMode::Proxy,
         fallback_model: None,
+        prompt_caching_enabled: true,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -317,6 +352,7 @@ async fn test_direct_mode_sends_caching_beta_header() {
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         routing_mode: RoutingMode::Direct,
         fallback_model: None,
+        prompt_caching_enabled: true,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -359,6 +395,7 @@ async fn test_complete_timeout() {
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         routing_mode: RoutingMode::Direct,
         fallback_model: None,
+        prompt_caching_enabled: true,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -372,5 +409,54 @@ async fn test_complete_timeout() {
     assert!(
         matches!(err, ReasonerError::Timeout),
         "expected Timeout, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_direct_mode_omits_caching_beta_header_when_disabled() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"test","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: "test-api-key".to_string(),
+        default_model: "test-model".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Direct,
+        fallback_model: None,
+        prompt_caching_enabled: false,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("test-model", "system")
+        .message(Message::user("test"))
+        .build();
+
+    let _ = provider.complete(request).await;
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains("anthropic-beta"),
+        "Direct request should omit anthropic-beta header when prompt caching is disabled.\nCaptured headers:\n{captured}"
     );
 }

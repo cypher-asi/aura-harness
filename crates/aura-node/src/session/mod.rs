@@ -35,6 +35,8 @@ pub struct Session {
     pub system_prompt: String,
     /// Model identifier.
     pub model: String,
+    /// Provider identifier for this session.
+    pub provider_name: String,
     /// Max tokens per response.
     pub max_tokens: u32,
     /// Sampling temperature.
@@ -49,6 +51,10 @@ pub struct Session {
     pub cumulative_input_tokens: u64,
     /// Cumulative output tokens across all turns.
     pub cumulative_output_tokens: u64,
+    /// Cumulative cache creation input tokens across all turns.
+    pub cumulative_cache_creation_input_tokens: u64,
+    /// Cumulative cache read input tokens across all turns.
+    pub cumulative_cache_read_input_tokens: u64,
     /// Workspace directory for this session (sandboxed fallback).
     pub workspace: PathBuf,
     /// Base directory that workspace must reside under.
@@ -86,6 +92,7 @@ impl Session {
             agent_id: AgentId::generate(),
             system_prompt: String::new(),
             model: aura_agent::DEFAULT_MODEL.to_string(),
+            provider_name: String::new(),
             max_tokens: 16384,
             temperature: None,
             max_turns: 25,
@@ -93,6 +100,8 @@ impl Session {
             messages: Vec::new(),
             cumulative_input_tokens: 0,
             cumulative_output_tokens: 0,
+            cumulative_cache_creation_input_tokens: 0,
+            cumulative_cache_read_input_tokens: 0,
             workspace: default_workspace.clone(),
             workspace_base: default_workspace,
             project_path: None,
@@ -167,10 +176,7 @@ impl Session {
                 let normalized = lexical_normalize(&candidate);
                 let normalized_base = lexical_normalize(base);
                 if !normalized.starts_with(&normalized_base) {
-                    return Err(format!(
-                        "project_path must be under {}",
-                        base.display()
-                    ));
+                    return Err(format!("project_path must be under {}", base.display()));
                 }
             }
             self.project_path = Some(candidate);
@@ -340,7 +346,10 @@ mod tests {
         let mut session = test_session(None);
         let init = init_with_project_path("/any/absolute/path");
         assert!(session.apply_init(init).is_ok());
-        assert_eq!(session.project_path.unwrap().to_str().unwrap(), "/any/absolute/path");
+        assert_eq!(
+            session.project_path.unwrap().to_str().unwrap(),
+            "/any/absolute/path"
+        );
     }
 
     #[test]

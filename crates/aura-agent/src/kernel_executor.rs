@@ -3,6 +3,7 @@
 //! Bridges between the `AgentToolExecutor` trait (agent-loop layer) and the
 //! executor infrastructure now owned by `aura-core` / `aura-kernel`.
 
+use crate::helpers;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
 use aura_core::{Action, AgentId, ToolCall};
@@ -78,6 +79,9 @@ impl KernelToolExecutor {
 
     /// Execute a single tool call with timeout, returning the result.
     async fn execute_one(&self, tool: &ToolCallInfo) -> ToolCallResult {
+        let inferred_file_changes =
+            helpers::infer_file_changes(&tool.name, &tool.input, Some(&self.workspace));
+
         if let Some(ref policy) = self.policy {
             if policy.check_tool_permission(&tool.name) == PermissionLevel::Deny {
                 warn!(
@@ -137,6 +141,11 @@ impl KernelToolExecutor {
                 content: decoded.content,
                 is_error: decoded.is_error,
                 stop_loop: false,
+                file_changes: if decoded.is_error {
+                    Vec::new()
+                } else {
+                    inferred_file_changes
+                },
             }
         } else {
             warn!(

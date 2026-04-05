@@ -5,7 +5,9 @@ use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
-use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway};
+use aura_agent::{
+    AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
+};
 use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
@@ -61,6 +63,7 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let mut session = Session::new(ctx.workspace_base.clone());
     session.auth_token = ctx.auth_token.clone();
     session.project_base = ctx.project_base.clone();
+    session.provider_name = ctx.provider.name().to_string();
     info!(session_id = %session.session_id, "WebSocket connection opened");
 
     let mut active_turn: Option<ActiveTurn> = None;

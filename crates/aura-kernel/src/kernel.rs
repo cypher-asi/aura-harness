@@ -45,6 +45,8 @@ pub struct KernelConfig {
     pub policy: PolicyConfig,
     /// Base workspace directory
     pub workspace_base: PathBuf,
+    /// When true, use `workspace_base` directly instead of appending `agent_id`.
+    pub use_workspace_base_as_root: bool,
     /// Whether we're in replay mode (skip reasoner/tools)
     pub replay_mode: bool,
     /// Timeout for reasoner proposals in milliseconds.
@@ -57,6 +59,7 @@ impl Default for KernelConfig {
             record_window_size: 50,
             policy: PolicyConfig::default(),
             workspace_base: PathBuf::from("./workspaces"),
+            use_workspace_base_as_root: false,
             replay_mode: false,
             proposal_timeout_ms: 120_000,
         }
@@ -127,7 +130,10 @@ impl ReasonStreamHandle {
     ///
     /// # Errors
     /// Returns error if serialization or store append fails.
-    pub fn record_completed(&self, response: &ModelResponse) -> Result<RecordEntry, crate::KernelError> {
+    pub fn record_completed(
+        &self,
+        response: &ModelResponse,
+    ) -> Result<RecordEntry, crate::KernelError> {
         let seq = self.next_seq();
 
         let reasoning_payload = serde_json::json!({
@@ -269,7 +275,11 @@ impl Kernel {
     }
 
     fn agent_workspace(&self) -> PathBuf {
-        self.config.workspace_base.join(self.agent_id.to_hex())
+        if self.config.use_workspace_base_as_root {
+            self.config.workspace_base.clone()
+        } else {
+            self.config.workspace_base.join(self.agent_id.to_hex())
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -371,8 +381,9 @@ impl Kernel {
         seq: u64,
         context_hash: [u8; 32],
     ) -> Result<ProcessResult, crate::KernelError> {
-        let proposal: ToolProposal = serde_json::from_slice(&tx.payload)
-            .map_err(|e| crate::KernelError::Serialization(format!("deserialize ToolProposal: {e}")))?;
+        let proposal: ToolProposal = serde_json::from_slice(&tx.payload).map_err(|e| {
+            crate::KernelError::Serialization(format!("deserialize ToolProposal: {e}"))
+        })?;
 
         let tool_use_id = proposal.tool_use_id.clone();
         let tool_name = proposal.tool.clone();
@@ -394,9 +405,9 @@ impl Kernel {
             );
 
             let workspace = self.agent_workspace();
-            tokio::fs::create_dir_all(&workspace).await.map_err(|e| {
-                crate::KernelError::Internal(format!("create workspace: {e}"))
-            })?;
+            tokio::fs::create_dir_all(&workspace)
+                .await
+                .map_err(|e| crate::KernelError::Internal(format!("create workspace: {e}")))?;
             let ctx = ExecuteContext::new(self.agent_id, action_id, workspace);
             let effect = self.executor.execute(&ctx, &action).await;
 
@@ -488,9 +499,9 @@ impl Kernel {
 
         // Prepare workspace
         let workspace = self.agent_workspace();
-        tokio::fs::create_dir_all(&workspace).await.map_err(|e| {
-            crate::KernelError::Internal(format!("create workspace: {e}"))
-        })?;
+        tokio::fs::create_dir_all(&workspace)
+            .await
+            .map_err(|e| crate::KernelError::Internal(format!("create workspace: {e}")))?;
 
         // Build actions and contexts for all approved tools
         let mut exec_contexts: Vec<ExecuteContext> = Vec::new();
@@ -537,7 +548,10 @@ impl Kernel {
             let tool_use_id = proposal.tool_use_id.clone();
 
             // Check if this proposal was approved (match order)
-            let was_approved = self.policy.check_tool(&proposal.tool, &proposal.args).allowed;
+            let was_approved = self
+                .policy
+                .check_tool(&proposal.tool, &proposal.args)
+                .allowed;
 
             if was_approved {
                 let (_, action) = &exec_actions[approved_idx];
@@ -625,10 +639,7 @@ impl Kernel {
     ///
     /// # Errors
     /// Returns error if the model call or storage fails.
-    pub async fn reason(
-        &self,
-        request: ModelRequest,
-    ) -> Result<ReasonResult, crate::KernelError> {
+    pub async fn reason(&self, request: ModelRequest) -> Result<ReasonResult, crate::KernelError> {
         let seq = self.next_seq();
 
         let response = self
@@ -739,7 +750,11 @@ pub mod legacy {
         }
 
         fn agent_workspace(&self, agent_id: &AgentId) -> PathBuf {
-            self.config.workspace_base.join(agent_id.to_hex())
+            if self.config.use_workspace_base_as_root {
+                self.config.workspace_base.clone()
+            } else {
+                self.config.workspace_base.join(agent_id.to_hex())
+            }
         }
 
         pub async fn process(
@@ -855,10 +870,7 @@ pub mod legacy {
             }
         }
 
-        fn apply_policy(
-            &self,
-            proposals: &ProposalSet,
-        ) -> (Vec<Action>, Decision) {
+        fn apply_policy(&self, proposals: &ProposalSet) -> (Vec<Action>, Decision) {
             let mut actions = Vec::new();
             let mut decision = Decision::new();
 
@@ -1081,6 +1093,34 @@ mod tests {
         let tx2 = Transaction::user_prompt(kernel.agent_id, "second");
         let r2 = kernel.process_direct(tx2).await.unwrap();
         assert_eq!(r2.entry.seq, 2);
+    }
+
+    #[test]
+    fn test_agent_workspace_defaults_to_agent_subdirectory() {
+        let (kernel, _db, ws_dir) = create_new_kernel();
+        assert_eq!(
+            kernel.agent_workspace(),
+            ws_dir.path().join(kernel.agent_id.to_hex())
+        );
+    }
+
+    #[test]
+    fn test_agent_workspace_can_use_workspace_base_directly() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let agent_id = AgentId::generate();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test response"));
+        let executor = ExecutorRouter::new();
+        let config = KernelConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            use_workspace_base_as_root: true,
+            ..KernelConfig::default()
+        };
+        let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
+
+        assert_eq!(kernel.agent_workspace(), ws_dir.path());
     }
 
     #[tokio::test]

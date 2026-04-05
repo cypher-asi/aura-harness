@@ -79,12 +79,14 @@ impl AnthropicProvider {
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(json_body);
+        let prompt_caching_enabled = self.config.prompt_caching_enabled;
 
         match self.config.routing_mode {
             RoutingMode::Direct => {
-                req_builder = req_builder
-                    .header("x-api-key", &self.config.api_key)
-                    .header("anthropic-beta", "prompt-caching-2024-07-31");
+                req_builder = req_builder.header("x-api-key", &self.config.api_key);
+                if prompt_caching_enabled {
+                    req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
+                }
             }
             RoutingMode::Proxy => {
                 let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
@@ -92,9 +94,10 @@ impl AnthropicProvider {
                         "Proxy mode requires a JWT auth token".into(),
                     ))
                 })?;
-                req_builder = req_builder
-                    .header("authorization", format!("Bearer {token}"))
-                    .header("anthropic-beta", "prompt-caching-2024-07-31");
+                req_builder = req_builder.header("authorization", format!("Bearer {token}"));
+                if prompt_caching_enabled {
+                    req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
+                }
                 if let Some(ref v) = request_ctx.aura_project_id {
                     req_builder = req_builder.header("X-Aura-Project-Id", v);
                 }
@@ -141,16 +144,17 @@ fn build_api_request(
     request: &ModelRequest,
     model: &str,
     system: &serde_json::Value,
+    prompt_caching_enabled: bool,
 ) -> ApiRequest {
     let thinking = resolve_thinking(request, model);
     ApiRequest {
         model: model.to_string(),
         system: system.clone(),
-        messages: convert_messages_to_api(&request.messages),
+        messages: convert_messages_to_api(&request.messages, prompt_caching_enabled),
         tools: if request.tools.is_empty() {
             None
         } else {
-            Some(convert_tools_to_api(&request.tools))
+            Some(convert_tools_to_api(&request.tools, prompt_caching_enabled))
         },
         tool_choice: convert_tool_choice(&request.tool_choice),
         max_tokens: request.max_tokens,
@@ -258,11 +262,12 @@ impl ModelProvider for AnthropicProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
         let start = Instant::now();
         let models = self.model_chain(&request.model);
-        let system = build_system_block(&request.system);
+        let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
-            let api_request = build_api_request(&request, model, &system);
+            let api_request =
+                build_api_request(&request, model, &system, self.config.prompt_caching_enabled);
 
             debug!(
                 model = %model,
@@ -332,7 +337,7 @@ impl ModelProvider for AnthropicProvider {
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
         let models = self.model_chain(&request.model);
-        let system = build_system_block(&request.system);
+        let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
@@ -340,11 +345,17 @@ impl ModelProvider for AnthropicProvider {
             let api_request = StreamingApiRequest {
                 model: model.clone(),
                 system: system.clone(),
-                messages: convert_messages_to_api(&request.messages),
+                messages: convert_messages_to_api(
+                    &request.messages,
+                    self.config.prompt_caching_enabled,
+                ),
                 tools: if request.tools.is_empty() {
                     None
                 } else {
-                    Some(convert_tools_to_api(&request.tools))
+                    Some(convert_tools_to_api(
+                        &request.tools,
+                        self.config.prompt_caching_enabled,
+                    ))
                 },
                 tool_choice: convert_tool_choice(&request.tool_choice),
                 max_tokens: request.max_tokens,

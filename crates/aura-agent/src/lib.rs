@@ -100,8 +100,8 @@ pub use runtime::{
     ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,
 };
 pub use types::{
-    AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo,
-    ToolCallResult, TurnObserver, TurnObservers,
+    AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, FileChange,
+    FileChangeKind, ToolCallInfo, ToolCallResult, TurnObserver, TurnObservers,
 };
 
 /// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).

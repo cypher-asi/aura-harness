@@ -3,6 +3,21 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// Normalized file mutation kind for turn-level reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileChangeKind {
+    Create,
+    Modify,
+    Delete,
+}
+
+/// A single file mutation observed during execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChange {
+    pub path: String,
+    pub kind: FileChangeKind,
+}
+
 /// Information about a tool call to be executed.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolCallInfo {
@@ -26,6 +41,8 @@ pub struct ToolCallResult {
     /// When true, the loop terminates after processing all results in this batch.
     /// Used by engine tools like `task_done` to signal task completion.
     pub stop_loop: bool,
+    /// File mutations performed by this tool call, if known.
+    pub file_changes: Vec<FileChange>,
 }
 
 impl ToolCallResult {
@@ -37,6 +54,7 @@ impl ToolCallResult {
             content: content.into(),
             is_error: false,
             stop_loop: false,
+            file_changes: Vec::new(),
         }
     }
 
@@ -48,7 +66,15 @@ impl ToolCallResult {
             content: content.into(),
             is_error: true,
             stop_loop: false,
+            file_changes: Vec::new(),
         }
+    }
+
+    /// Attach file-change metadata to a tool result.
+    #[must_use]
+    pub fn with_file_changes(mut self, file_changes: Vec<FileChange>) -> Self {
+        self.file_changes = file_changes;
+        self
     }
 }
 
@@ -202,10 +228,104 @@ pub struct AgentLoopResult {
     pub total_input_tokens: u64,
     /// Total output tokens used.
     pub total_output_tokens: u64,
+    /// Total cache creation input tokens used across all iterations.
+    pub total_cache_creation_input_tokens: u64,
+    /// Total cache read input tokens used across all iterations.
+    pub total_cache_read_input_tokens: u64,
+    /// Best-effort estimate of the current occupied context window in tokens.
+    pub estimated_context_tokens: u64,
+    /// Net file mutations observed across the turn.
+    pub file_changes: Vec<FileChange>,
     /// Number of iterations completed.
     pub iterations: usize,
     /// Final message history.
     pub messages: Vec<aura_reasoner::Message>,
+}
+
+impl AgentLoopResult {
+    /// Record a file change, collapsing multiple mutations on the same path
+    /// into a single net effect for turn-level reporting.
+    pub fn record_file_change(&mut self, change: FileChange) {
+        if let Some(existing) = self.file_changes.iter_mut().find(|c| c.path == change.path) {
+            match (existing.kind, change.kind) {
+                (FileChangeKind::Create, FileChangeKind::Modify) => {}
+                (FileChangeKind::Create, FileChangeKind::Delete) => {
+                    self.file_changes.retain(|c| c.path != change.path);
+                }
+                (FileChangeKind::Modify, FileChangeKind::Modify) => {}
+                (FileChangeKind::Modify, FileChangeKind::Delete) => {
+                    existing.kind = FileChangeKind::Delete;
+                }
+                (FileChangeKind::Delete, FileChangeKind::Create) => {
+                    existing.kind = FileChangeKind::Modify;
+                }
+                (FileChangeKind::Delete, FileChangeKind::Modify) => {
+                    existing.kind = FileChangeKind::Modify;
+                }
+                (_, next) => {
+                    existing.kind = next;
+                }
+            }
+            return;
+        }
+
+        self.file_changes.push(change);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentLoopResult, FileChange, FileChangeKind};
+
+    #[test]
+    fn file_change_summary_keeps_net_create() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(FileChange {
+            path: "src/new.rs".into(),
+            kind: FileChangeKind::Create,
+        });
+        result.record_file_change(FileChange {
+            path: "src/new.rs".into(),
+            kind: FileChangeKind::Modify,
+        });
+        assert_eq!(result.file_changes.len(), 1);
+        assert!(matches!(
+            result.file_changes[0].kind,
+            FileChangeKind::Create
+        ));
+    }
+
+    #[test]
+    fn file_change_summary_drops_create_then_delete() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(FileChange {
+            path: "src/temp.rs".into(),
+            kind: FileChangeKind::Create,
+        });
+        result.record_file_change(FileChange {
+            path: "src/temp.rs".into(),
+            kind: FileChangeKind::Delete,
+        });
+        assert!(result.file_changes.is_empty());
+    }
+
+    #[test]
+    fn file_change_summary_turns_delete_then_create_into_modify() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(FileChange {
+            path: "src/lib.rs".into(),
+            kind: FileChangeKind::Delete,
+        });
+        result.record_file_change(FileChange {
+            path: "src/lib.rs".into(),
+            kind: FileChangeKind::Create,
+        });
+        assert_eq!(result.file_changes.len(), 1);
+        assert!(matches!(
+            result.file_changes[0].kind,
+            FileChangeKind::Modify
+        ));
+    }
 }
 
 /// Observer notified after every completed agent turn.
