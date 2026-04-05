@@ -24,7 +24,7 @@ fn legacy_migrated_to_canonical() {
 }
 
 #[test]
-fn canonical_exists_ignores_legacy() {
+fn canonical_exists_removes_legacy() {
     let tmp = TempDir::new().unwrap();
     let canonical = tmp.path().join("db");
     let legacy = tmp.path().join("store");
@@ -33,7 +33,7 @@ fn canonical_exists_ignores_legacy() {
 
     let result = resolve_store_path(tmp.path());
     assert_eq!(result, canonical);
-    assert!(legacy.exists());
+    assert!(!legacy.exists(), "legacy directory should be auto-removed");
 }
 
 #[test]
@@ -47,13 +47,15 @@ fn canonical_already_exists_returns_canonical() {
 }
 
 #[test]
-fn both_exist_returns_canonical_with_warning() {
+fn both_exist_removes_legacy_with_contents() {
     let tmp = TempDir::new().unwrap();
     let canonical = tmp.path().join("db");
     let legacy = tmp.path().join("store");
     fs::create_dir(&canonical).unwrap();
     fs::create_dir(&legacy).unwrap();
+    fs::write(legacy.join("stale.txt"), "old data").unwrap();
 
     let result = resolve_store_path(tmp.path());
     assert_eq!(result, canonical);
+    assert!(!legacy.exists(), "legacy directory should be auto-removed even with contents");
 }

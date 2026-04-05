@@ -1,3 +1,4 @@
+use crate::extraction::ConversationTurn;
 use crate::refinement::{LlmRefiner, RefinerConfig};
 use crate::store::{MemoryStore, MemoryStoreApi};
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig};
@@ -153,4 +154,43 @@ async fn ingest_enforces_fact_capacity() {
         "Facts should be capped at max_facts_per_agent, got {}",
         facts.len()
     );
+}
+
+#[tokio::test]
+async fn ingest_writes_procedure_from_llm_response() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = test_store(dir.path());
+    let agent = AgentId::generate();
+
+    let provider: Arc<dyn ModelProvider> = Arc::new(
+        MockProvider::new().with_default_response(MockResponse::text(
+            "PROCEDURE name=\"save_research\" trigger=\"when creating research reports\" \
+             steps=\"Store in Research/ folder;Use YAML frontmatter\" \
+             skill=\"obsidian\" confidence=0.9 importance=0.8",
+        )),
+    );
+
+    let refiner = LlmRefiner::new(provider, RefinerConfig::default());
+    let pipeline = MemoryWritePipeline::new(Arc::clone(&store), refiner, WriteConfig::default());
+
+    let turn = ConversationTurn {
+        user_message: "Going forward, store research reports in the research folder in obsidian"
+            .to_string(),
+        assistant_text: "Got it!".to_string(),
+    };
+    let result = AgentLoopResult::default();
+
+    let report = pipeline
+        .ingest_with_context(agent, &result, Some(&turn), None, &["obsidian".into()])
+        .await
+        .unwrap();
+
+    assert_eq!(report.procedures_written, 1);
+
+    let procs = store.list_procedures(agent).unwrap();
+    assert_eq!(procs.len(), 1);
+    assert_eq!(procs[0].name, "save_research");
+    assert_eq!(procs[0].trigger, "when creating research reports");
+    assert_eq!(procs[0].steps.len(), 2);
+    assert_eq!(procs[0].skill_name.as_deref(), Some("obsidian"));
 }

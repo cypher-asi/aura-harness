@@ -13,6 +13,18 @@ use std::sync::{Arc, RwLock};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
+fn parse_agent_id(s: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
+    if let Ok(uuid) = uuid::Uuid::parse_str(s) {
+        return Ok(AgentId::from_uuid(uuid));
+    }
+    AgentId::from_hex(s).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("invalid agent_id: {e}") })),
+        )
+    })
+}
+
 fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
     let status = if e.is_not_found() {
         StatusCode::NOT_FOUND
@@ -20,15 +32,6 @@ fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>
         StatusCode::BAD_REQUEST
     };
     (status, Json(serde_json::json!({ "error": e.to_string() })))
-}
-
-fn parse_agent_id(hex: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
-    AgentId::from_hex(hex).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("invalid agent_id: {e}") })),
-        )
-    })
 }
 
 fn require_skills(
@@ -170,6 +173,10 @@ pub(super) struct InstallBody {
     pub name: String,
     #[serde(default)]
     pub source_url: Option<String>,
+    #[serde(default)]
+    pub approved_paths: Vec<String>,
+    #[serde(default)]
+    pub approved_commands: Vec<String>,
 }
 
 /// `GET /api/agents/:agent_id/skills` — list skills installed for an agent.
@@ -198,7 +205,13 @@ pub(super) async fn install_agent_skill(
         (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
     })?;
     let installation = guard
-        .install_for_agent(agent_id, &body.name, body.source_url)
+        .install_for_agent(
+            agent_id,
+            &body.name,
+            body.source_url,
+            body.approved_paths,
+            body.approved_commands,
+        )
         .map_err(skill_err)?;
     Ok((StatusCode::CREATED, Json(installation)))
 }

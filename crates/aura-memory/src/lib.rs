@@ -23,7 +23,7 @@ mod write_pipeline;
 pub use consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 pub use error::MemoryError;
 pub use manager::MemoryManager;
-pub use procedures::{ProcedureConfig, ProcedureExtractor, StepSequence};
+pub use procedures::{compute_skill_relevance, ProcedureConfig, ProcedureExtractor, StepSequence};
 pub use refinement::RefinerConfig;
 pub use retrieval::{MemoryRetriever, RetrievalConfig};
 pub use salience::{estimate_tokens, score_event, score_fact, score_procedure};

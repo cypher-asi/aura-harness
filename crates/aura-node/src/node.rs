@@ -9,6 +9,10 @@ use crate::scheduler::Scheduler;
 use anyhow::Context;
 use aura_automaton::AutomatonRuntime;
 use aura_kernel::Executor;
+use aura_memory::{
+    ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
+    WriteConfig,
+};
 use aura_store::RocksStore;
 use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_tools::automaton_tools::AutomatonController;
@@ -46,7 +50,8 @@ impl Node {
         info!("Starting Aura Node");
         info!(data_dir = ?self.config.data_dir, "Data directory");
 
-        tokio::fs::create_dir_all(self.config.db_path())
+        let db_path = self.config.db_path();
+        tokio::fs::create_dir_all(&db_path)
             .await
             .context("creating database directory")?;
         tokio::fs::create_dir_all(self.config.workspaces_path())
@@ -54,7 +59,7 @@ impl Node {
             .context("creating workspaces directory")?;
 
         let store = Arc::new(
-            RocksStore::open(self.config.db_path(), self.config.sync_writes)
+            RocksStore::open(&db_path, self.config.sync_writes)
                 .context("opening RocksDB store")?,
         );
         info!("Store opened");
@@ -89,12 +94,24 @@ impl Node {
 
         let provider = create_default_model_provider();
 
+        let memory_manager = Arc::new(MemoryManager::new(
+            store.db_handle().clone(),
+            provider.clone(),
+            RefinerConfig::default(),
+            WriteConfig::default(),
+            RetrievalConfig::default(),
+            ConsolidationConfig::default(),
+            ProcedureConfig::default(),
+        ));
+        info!("Memory manager ready");
+
         let scheduler = Arc::new(Scheduler::new(
             store.clone(),
             provider.clone(),
             executors,
             tools,
             self.config.workspaces_path(),
+            Some(Arc::clone(&memory_manager)),
         ));
         info!("Scheduler ready");
 
@@ -124,6 +141,8 @@ impl Node {
         let skill_manager = Arc::new(RwLock::new(skill_manager_inner));
         info!(skills = skill_count, "Skill manager ready");
 
+        let router_url = std::env::var("AURA_ROUTER_URL").ok();
+
         let state = RouterState {
             store,
             scheduler,
@@ -135,8 +154,9 @@ impl Node {
             automaton_controller,
             automaton_bridge,
             failed_txs: Arc::new(dashmap::DashMap::new()),
-            memory_manager: None,
+            memory_manager: Some(memory_manager),
             skill_manager: Some(skill_manager),
+            router_url,
         };
         let app = create_router(state);
 

@@ -39,12 +39,12 @@ pub const fn estimate_tokens(text: &str) -> usize {
 /// Estimate the token cost of a fact's prompt representation.
 #[must_use]
 pub fn estimate_fact_tokens(fact: &Fact) -> usize {
-    let val_len = match &fact.value {
-        serde_json::Value::String(s) => s.len(),
-        other => other.to_string().len(),
+    let val = match &fact.value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
     };
-    let overhead = 4 + fact.key.len() + 18;
-    (val_len + overhead).div_ceil(4)
+    let line = format!("- {}: {} (confidence: {:.2})", fact.key, val, fact.confidence);
+    estimate_tokens(&line)
 }
 
 /// Estimate the token cost of an event's prompt representation.
@@ -63,8 +63,13 @@ pub fn estimate_event_tokens(event: &AgentEvent) -> usize {
 #[must_use]
 pub fn estimate_procedure_tokens(proc: &Procedure) -> usize {
     let steps = proc.steps.join(" -> ");
+    let skill_tag = proc
+        .skill_name
+        .as_deref()
+        .map(|s| format!(" [skill: {s}]"))
+        .unwrap_or_default();
     let line = format!(
-        "- \"{}\": {} (success: {:.0}%)",
+        "- \"{}\": {} (success: {:.0}%){skill_tag}",
         proc.name,
         steps,
         proc.success_rate * 100.0
@@ -146,6 +151,8 @@ mod tests {
             last_used: now - Duration::hours(hours_ago),
             created_at: now,
             updated_at: now,
+            skill_name: None,
+            skill_relevance: None,
         }
     }
 

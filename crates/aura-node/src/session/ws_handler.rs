@@ -1,14 +1,13 @@
 //! WebSocket connection handler and turn management.
 
+use super::generation::{self, GenerationTurn};
 use super::helpers;
 use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
-use aura_agent::{
-    AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
-};
-use aura_reasoner::Message;
+use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway};
+use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -19,7 +18,12 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 /// State for a turn that is currently being processed in the background.
-struct ActiveTurn {
+enum ActiveTurn {
+    Agent(AgentTurn),
+    Generation(GenerationTurn),
+}
+
+struct AgentTurn {
     cancel_token: CancellationToken,
     join_handle: JoinHandle<anyhow::Result<AgentLoopResult>>,
     stream_forward_handle: JoinHandle<()>,
@@ -63,7 +67,6 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let mut session = Session::new(ctx.workspace_base.clone());
     session.auth_token = ctx.auth_token.clone();
     session.project_base = ctx.project_base.clone();
-    session.provider_name = ctx.provider.name().to_string();
     info!(session_id = %session.session_id, "WebSocket connection opened");
 
     let mut active_turn: Option<ActiveTurn> = None;
@@ -104,41 +107,67 @@ async fn run_active_turn_select(
     session: &mut Session,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) -> TurnAction {
-    tokio::select! {
-        biased;
-        msg_result = ws_rx.next() => {
-            match classify_ws_frame(msg_result) {
-                WsAction::Message(raw) => {
-                    handle_msg_during_turn(&raw, turn, session, outbound_tx);
-                    TurnAction::Continue
+    match turn {
+        ActiveTurn::Agent(agent) => {
+            tokio::select! {
+                biased;
+                msg_result = ws_rx.next() => {
+                    match classify_ws_frame(msg_result) {
+                        WsAction::Message(raw) => {
+                            handle_msg_during_turn(&raw, &agent.cancel_token, session, outbound_tx);
+                            TurnAction::Continue
+                        }
+                        WsAction::Close => {
+                            debug!(session_id = %session.session_id, "Client closed during active turn");
+                            agent.cancel_token.cancel();
+                            TurnAction::Close
+                        }
+                        WsAction::Continue => TurnAction::Continue,
+                    }
                 }
-                WsAction::Close => {
-                    debug!(session_id = %session.session_id, "Client closed during active turn");
-                    turn.cancel_token.cancel();
-                    TurnAction::Close
+                join_result = &mut agent.join_handle => {
+                    let message_id = agent.message_id.clone();
+                    agent.stream_forward_handle.abort();
+                    helpers::finalize_turn(session, join_result, &message_id, outbound_tx);
+                    TurnAction::TurnFinished
                 }
-                WsAction::Continue => TurnAction::Continue,
             }
         }
-        join_result = &mut turn.join_handle => {
-            let message_id = turn.message_id.clone();
-            turn.stream_forward_handle.abort();
-            helpers::finalize_turn(session, join_result, &message_id, outbound_tx);
-            TurnAction::TurnFinished
+        ActiveTurn::Generation(gen) => {
+            tokio::select! {
+                biased;
+                msg_result = ws_rx.next() => {
+                    match classify_ws_frame(msg_result) {
+                        WsAction::Message(raw) => {
+                            handle_msg_during_turn(&raw, &gen.cancel_token, session, outbound_tx);
+                            TurnAction::Continue
+                        }
+                        WsAction::Close => {
+                            debug!(session_id = %session.session_id, "Client closed during generation");
+                            gen.cancel_token.cancel();
+                            TurnAction::Close
+                        }
+                        WsAction::Continue => TurnAction::Continue,
+                    }
+                }
+                _ = &mut gen.join_handle => {
+                    TurnAction::TurnFinished
+                }
+            }
         }
     }
 }
 
 fn handle_msg_during_turn(
     raw: &str,
-    turn: &ActiveTurn,
+    cancel_token: &CancellationToken,
     session: &Session,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     match serde_json::from_str::<InboundMessage>(raw) {
         Ok(InboundMessage::Cancel) => {
             info!(session_id = %session.session_id, "Cancelling active turn");
-            turn.cancel_token.cancel();
+            cancel_token.cancel();
         }
         Ok(_) => {
             let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
@@ -191,9 +220,27 @@ async fn dispatch_idle_message(
             IdleAction::Continue
         }
         Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx).await {
-            Some(turn) => IdleAction::StartTurn(turn),
+            Some(turn) => IdleAction::StartTurn(ActiveTurn::Agent(turn)),
             None => IdleAction::Continue,
         },
+        Ok(InboundMessage::GenerationRequest(req)) => {
+            match ctx.router_url {
+                Some(ref url) => {
+                    match generation::start_generation(session, req, outbound_tx, url) {
+                        Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
+                        None => IdleAction::Continue,
+                    }
+                }
+                None => {
+                    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                        code: "no_router_url".into(),
+                        message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
+                        recoverable: false,
+                    }));
+                    IdleAction::Continue
+                }
+            }
+        }
         Ok(InboundMessage::Cancel) => {
             debug!(session_id = %session.session_id, "Cancel received but no turn is active");
             IdleAction::Continue
@@ -234,13 +281,13 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
     }
 }
 
-/// Prepare and spawn a turn as a background task.
+/// Prepare and spawn an agent-loop turn as a background task.
 async fn start_turn(
     session: &mut Session,
     msg: UserMessage,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
-) -> Option<ActiveTurn> {
+) -> Option<AgentTurn> {
     if !session.initialized {
         let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
             code: "not_initialized".into(),
@@ -257,9 +304,63 @@ async fn start_turn(
         },
     ));
 
-    session.messages.push(Message::user(&msg.content));
+    let user_msg = if let Some(ref attachments) = msg.attachments {
+        let image_atts: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.type_ == "image")
+            .collect();
+        if !image_atts.is_empty() {
+            let mut blocks: Vec<ContentBlock> = Vec::new();
+            if !msg.content.is_empty() {
+                blocks.push(ContentBlock::text(&msg.content));
+            }
+            for att in &image_atts {
+                blocks.push(ContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".into(),
+                        media_type: att.media_type.clone(),
+                        data: att.data.clone(),
+                    },
+                });
+            }
+            Message::new(Role::User, blocks)
+        } else {
+            Message::user(&msg.content)
+        }
+    } else {
+        Message::user(&msg.content)
+    };
+    session.messages.push(user_msg);
 
-    let kernel = match helpers::build_kernel(session, ctx) {
+    let mut tool_config = ctx.tool_config.clone();
+    let has_sm = ctx.skill_manager.is_some();
+    let has_aid = session.skill_agent_id.is_some();
+    info!(
+        session_id = %session.session_id,
+        has_skill_manager = has_sm,
+        has_skill_agent_id = has_aid,
+        skill_agent_id = ?session.skill_agent_id,
+        "Skill permission check starting"
+    );
+    if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
+        if let Ok(mgr) = sm.read() {
+            let perms = mgr.agent_permissions(agent_id);
+            info!(
+                session_id = %session.session_id,
+                extra_paths = ?perms.extra_paths,
+                extra_commands = ?perms.extra_commands,
+                "Skill permissions resolved"
+            );
+            if !perms.extra_paths.is_empty() {
+                tool_config.extra_allowed_paths.extend(perms.extra_paths);
+            }
+            if !perms.extra_commands.is_empty() && !tool_config.command_allowlist.is_empty() {
+                tool_config.command_allowlist.extend(perms.extra_commands);
+            }
+        }
+    }
+
+    let kernel = match helpers::build_kernel_with_config(session, ctx, &tool_config) {
         Ok(k) => k,
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Failed to build kernel");
@@ -277,21 +378,31 @@ async fn start_turn(
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
-    if let Some(ref mm) = ctx.memory_manager {
-        mm.prepare_context(session.agent_id, &mut config).await;
-        config.observers.push(mm.turn_observer(session.agent_id));
-    }
+
+    // Resolve active skill names before creating the memory observer so we can
+    // forward them for procedure extraction.
+    let mut active_skill_names: Vec<String> = Vec::new();
     if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
         if let Ok(mgr) = sm.read() {
             let injected = mgr.inject_agent_skills(agent_id, &mut config.system_prompt);
             if !injected.is_empty() {
+                active_skill_names = injected.iter().map(|s| s.name.clone()).collect();
                 debug!(
                     session_id = %session.session_id,
-                    skill_count = injected.len(),
+                    skill_count = active_skill_names.len(),
                     "Injected agent skills into prompt"
                 );
             }
         }
+    }
+    if let Some(ref mm) = ctx.memory_manager {
+        let mem_id = session.memory_agent_id();
+        mm.prepare_context(mem_id, &mut config).await;
+        config.observers.push(mm.turn_observer_with_skills(
+            mem_id,
+            session.auth_token.clone(),
+            active_skill_names,
+        ));
     }
     let agent_loop = AgentLoop::new(config);
 
@@ -329,7 +440,7 @@ async fn start_turn(
     let stream_forward_handle =
         tokio::spawn(helpers::forward_events_to_ws(event_rx, outbound_for_stream));
 
-    Some(ActiveTurn {
+    Some(AgentTurn {
         cancel_token,
         join_handle,
         stream_forward_handle,

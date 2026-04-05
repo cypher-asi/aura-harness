@@ -34,6 +34,7 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         failed_txs: Arc::new(DashMap::new()),
         memory_manager: None,
         skill_manager: None,
+        router_url: None,
     }
 }
 
@@ -369,6 +370,7 @@ fn test_router_state_with_managers() -> RouterState {
         failed_txs: Arc::new(DashMap::new()),
         memory_manager: Some(memory_manager),
         skill_manager: Some(skill_manager),
+        router_url: None,
     }
 }
 

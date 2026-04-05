@@ -25,7 +25,7 @@ pub struct RefinerConfig {
 impl Default for RefinerConfig {
     fn default() -> Self {
         Self {
-            model: "claude-3-5-haiku-latest".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             auth_token: None,
         }
     }
@@ -48,17 +48,30 @@ impl LlmRefiner {
         &self,
         candidates: Vec<MemoryCandidate>,
         turn: Option<&ConversationTurn>,
+        auth_token_override: Option<String>,
+    ) -> Result<Vec<RefinedCandidate>, MemoryError> {
+        self.extract_and_refine_with_skills(candidates, turn, auth_token_override, &[])
+            .await
+    }
+
+    pub async fn extract_and_refine_with_skills(
+        &self,
+        candidates: Vec<MemoryCandidate>,
+        turn: Option<&ConversationTurn>,
+        auth_token_override: Option<String>,
+        active_skills: &[String],
     ) -> Result<Vec<RefinedCandidate>, MemoryError> {
         if candidates.is_empty() && turn.is_none() {
             return Ok(Vec::new());
         }
 
-        let prompt = Self::build_extraction_prompt(&candidates, turn);
+        let prompt = Self::build_extraction_prompt(&candidates, turn, active_skills);
 
+        let effective_token = auth_token_override.or_else(|| self.config.auth_token.clone());
         let request = ModelRequest::builder(&self.config.model, EXTRACTOR_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
             .max_tokens(1024)
-            .auth_token(self.config.auth_token.clone())
+            .auth_token(effective_token)
             .build();
 
         let response = self
@@ -77,12 +90,13 @@ impl LlmRefiner {
         &self,
         candidates: Vec<MemoryCandidate>,
     ) -> Result<Vec<RefinedCandidate>, MemoryError> {
-        self.extract_and_refine(candidates, None).await
+        self.extract_and_refine(candidates, None, None).await
     }
 
     fn build_extraction_prompt(
         candidates: &[MemoryCandidate],
         turn: Option<&ConversationTurn>,
+        active_skills: &[String],
     ) -> String {
         let mut prompt = String::new();
 
@@ -95,6 +109,14 @@ impl LlmRefiner {
             let assistant_msg = truncate(&turn.assistant_text, MAX_TURN_TEXT_LEN);
             prompt.push_str(&assistant_msg);
             prompt.push_str("\n\n");
+        }
+
+        if !active_skills.is_empty() {
+            prompt.push_str("## Active skills\n\n");
+            for skill in active_skills {
+                let _ = writeln!(prompt, "- {skill}");
+            }
+            prompt.push('\n');
         }
 
         if !candidates.is_empty() {
@@ -134,7 +156,12 @@ impl LlmRefiner {
             "If the conversation contains facts worth remembering long-term, \
              output additional lines:\n\
              FACT key=\"snake_case_key\" value=\"the fact\" confidence=0.X importance=0.X\n\n\
-             If there are no new facts to extract, output nothing extra.",
+             If the user states a standing instruction, workflow preference, or \
+             \"always do X when Y\" rule, output:\n\
+             PROCEDURE name=\"snake_case_name\" trigger=\"when this happens\" \
+             steps=\"step1;step2\" skill=\"skill_name_or_none\" \
+             confidence=0.X importance=0.X\n\n\
+             If there are no new facts or procedures to extract, output nothing extra.",
         );
 
         prompt
@@ -150,7 +177,13 @@ impl LlmRefiner {
                 continue;
             }
 
-            // Try parsing as a FACT line (new extraction)
+            if line.starts_with("PROCEDURE ") {
+                if let Some(candidate) = parse_procedure_line(line) {
+                    refined.push(candidate);
+                    continue;
+                }
+            }
+
             if line.starts_with("FACT ") {
                 if let Some(candidate) = parse_fact_line(line) {
                     refined.push(candidate);
@@ -187,6 +220,9 @@ impl LlmRefiner {
                 confidence,
                 importance,
                 keep,
+                trigger: None,
+                steps: None,
+                skill_name: None,
             });
         }
 
@@ -201,6 +237,9 @@ impl LlmRefiner {
                     confidence: c.preliminary_confidence,
                     importance: c.preliminary_importance,
                     keep: true,
+                    trigger: None,
+                    steps: None,
+                    skill_name: None,
                 });
             }
         }
@@ -223,6 +262,43 @@ fn parse_fact_line(line: &str) -> Option<RefinedCandidate> {
         confidence,
         importance,
         keep: true,
+        trigger: None,
+        steps: None,
+        skill_name: None,
+    })
+}
+
+fn parse_procedure_line(line: &str) -> Option<RefinedCandidate> {
+    let name = extract_quoted(line, "name=")?;
+    let trigger = extract_quoted(line, "trigger=")?;
+    let steps_raw = extract_quoted(line, "steps=").unwrap_or_default();
+    let skill = extract_quoted(line, "skill=").unwrap_or_else(|| "none".to_string());
+    let confidence = extract_float(line, "confidence=").unwrap_or(0.8);
+    let importance = extract_float(line, "importance=").unwrap_or(0.7);
+
+    let steps: Vec<String> = steps_raw
+        .split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let skill_name = if skill.eq_ignore_ascii_case("none") || skill.is_empty() {
+        None
+    } else {
+        Some(skill)
+    };
+
+    Some(RefinedCandidate {
+        candidate_type: CandidateType::Procedure,
+        key: name,
+        value: serde_json::json!({ "trigger": trigger, "steps": steps }),
+        summary: Some(trigger.clone()),
+        confidence,
+        importance,
+        keep: true,
+        trigger: Some(trigger),
+        steps: Some(steps),
+        skill_name,
     })
 }
 
@@ -258,14 +334,20 @@ fn truncate(s: &str, max_len: usize) -> String {
 
 const EXTRACTOR_SYSTEM_PROMPT: &str = "\
 You are a memory system for an AI agent. After each conversation turn you \
-extract facts worth remembering long-term and refine any pre-extracted candidates.
+extract facts and procedures worth remembering long-term and refine any \
+pre-extracted candidates.
 
-What to extract:
+What to extract as FACT:
 - Explicit user preferences (favorite tools, languages, pets, etc.)
 - Personal facts the user shares (name, role, company, location)
 - Technical decisions and project details
 - Constraints or requirements stated by the user
-- Recurring patterns or conventions
+
+What to extract as PROCEDURE:
+- Standing instructions (\"always do X\", \"going forward, do Y\")
+- Workflow preferences (where to store files, how to format things)
+- Skill-specific conventions (\"use obsidian for notes\", etc.)
+- Repeated patterns the user wants followed every time
 
 What NOT to extract:
 - Transient requests ('fix this bug', 'run the tests')
@@ -275,8 +357,12 @@ What NOT to extract:
 Output format — one line per item:
 - For pre-extracted candidates: N. KEEP|DROP key=\"refined_key\" confidence=0.X importance=0.X
 - For newly extracted facts: FACT key=\"snake_case_key\" value=\"concise fact\" confidence=0.X importance=0.X
+- For procedures: PROCEDURE name=\"snake_case_name\" trigger=\"when condition\" steps=\"step1;step2\" skill=\"skill_name_or_none\" confidence=0.X importance=0.X
 
-Be selective. Only extract facts that would be useful across future sessions.";
+For PROCEDURE: set skill= to the relevant active skill name if one applies, \
+otherwise use \"none\". Steps are semicolon-separated.
+
+Be selective. Only extract items that would be useful across future sessions.";
 
 #[cfg(test)]
 mod tests {
@@ -389,7 +475,7 @@ mod tests {
             user_message: "My favorite dog is a Belgian Malanois".to_string(),
             assistant_text: "Great choice!".to_string(),
         };
-        let prompt = LlmRefiner::build_extraction_prompt(&[], Some(&turn));
+        let prompt = LlmRefiner::build_extraction_prompt(&[], Some(&turn), &[]);
         assert!(prompt.contains("Belgian Malanois"));
         assert!(prompt.contains("Great choice!"));
         assert!(prompt.contains("FACT"));
@@ -398,8 +484,69 @@ mod tests {
     #[test]
     fn build_extraction_prompt_without_turn() {
         let candidates = vec![make_candidate("test_key")];
-        let prompt = LlmRefiner::build_extraction_prompt(&candidates, None);
+        let prompt = LlmRefiner::build_extraction_prompt(&candidates, None, &[]);
         assert!(prompt.contains("test_key"));
         assert!(prompt.contains("KEEP|DROP"));
+    }
+
+    #[test]
+    fn build_extraction_prompt_with_skills() {
+        let turn = ConversationTurn {
+            user_message: "Store notes in obsidian".to_string(),
+            assistant_text: "Got it!".to_string(),
+        };
+        let skills = vec!["obsidian".to_string(), "git".to_string()];
+        let prompt = LlmRefiner::build_extraction_prompt(&[], Some(&turn), &skills);
+        assert!(prompt.contains("## Active skills"));
+        assert!(prompt.contains("- obsidian"));
+        assert!(prompt.contains("- git"));
+    }
+
+    #[test]
+    fn parse_procedure_line_valid() {
+        let line = "PROCEDURE name=\"save_research\" trigger=\"when creating research reports\" steps=\"Store in Research/ folder;Use YAML frontmatter\" skill=\"obsidian\" confidence=0.9 importance=0.8";
+        let result = parse_procedure_line(line).unwrap();
+        assert_eq!(result.key, "save_research");
+        assert!(matches!(result.candidate_type, CandidateType::Procedure));
+        assert_eq!(result.trigger.as_deref(), Some("when creating research reports"));
+        assert_eq!(result.steps.as_ref().unwrap().len(), 2);
+        assert_eq!(result.skill_name.as_deref(), Some("obsidian"));
+        assert!((result.confidence - 0.9).abs() < 1e-3);
+        assert!(result.keep);
+    }
+
+    #[test]
+    fn parse_procedure_line_no_skill() {
+        let line = "PROCEDURE name=\"format_code\" trigger=\"when writing code\" steps=\"Use 4-space indent\" skill=\"none\" confidence=0.85 importance=0.6";
+        let result = parse_procedure_line(line).unwrap();
+        assert_eq!(result.key, "format_code");
+        assert!(result.skill_name.is_none());
+    }
+
+    #[test]
+    fn parse_procedure_line_missing_name() {
+        let line = "PROCEDURE trigger=\"when\" steps=\"do stuff\" skill=\"none\" confidence=0.8 importance=0.5";
+        assert!(parse_procedure_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_response_with_procedure() {
+        let candidates = vec![make_candidate("a")];
+        let response = "1. KEEP key=\"a\" confidence=0.9 importance=0.8\nPROCEDURE name=\"save_notes\" trigger=\"when saving notes\" steps=\"Use obsidian\" skill=\"obsidian\" confidence=0.85 importance=0.7";
+        let refined = LlmRefiner::parse_response(response, &candidates);
+        assert_eq!(refined.len(), 2);
+        assert_eq!(refined[0].key, "a");
+        assert_eq!(refined[1].key, "save_notes");
+        assert!(matches!(refined[1].candidate_type, CandidateType::Procedure));
+        assert_eq!(refined[1].skill_name.as_deref(), Some("obsidian"));
+    }
+
+    #[test]
+    fn parse_response_mixed_facts_and_procedures() {
+        let response = "FACT key=\"dog_name\" value=\"Kaya\" confidence=0.95 importance=0.6\nPROCEDURE name=\"research_reports\" trigger=\"when creating research reports\" steps=\"Store in Research/ folder\" skill=\"obsidian\" confidence=0.9 importance=0.8";
+        let refined = LlmRefiner::parse_response(response, &[]);
+        assert_eq!(refined.len(), 2);
+        assert!(matches!(refined[0].candidate_type, CandidateType::Fact));
+        assert!(matches!(refined[1].candidate_type, CandidateType::Procedure));
     }
 }

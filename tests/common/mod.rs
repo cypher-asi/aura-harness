@@ -159,6 +159,7 @@ impl TestServer {
             failed_txs: Arc::new(dashmap::DashMap::new()),
             memory_manager: None,
             skill_manager: None,
+            router_url: None,
         };
         let app = create_router(state);
 

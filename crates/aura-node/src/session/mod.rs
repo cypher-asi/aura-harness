@@ -3,6 +3,7 @@
 //! Each WebSocket connection maps to a `Session` that maintains conversation
 //! state, tool configuration, and token accounting across turns.
 
+mod generation;
 mod helpers;
 mod ws_handler;
 
@@ -226,6 +227,20 @@ impl Session {
         Ok(())
     }
 
+    /// Return a deterministic `AgentId` for memory keying.
+    ///
+    /// When the session carries an `aura_agent_id` (the aura-os UUID),
+    /// derive the `AgentId` from it so memory queries from the UI use the
+    /// same key. Falls back to the random session `agent_id`.
+    pub(super) fn memory_agent_id(&self) -> AgentId {
+        if let Some(ref uuid_str) = self.aura_agent_id {
+            if let Ok(uuid) = uuid::Uuid::parse_str(uuid_str) {
+                return AgentId::from_uuid(uuid);
+            }
+        }
+        self.agent_id
+    }
+
     /// Build an `AgentLoopConfig` from session state.
     pub(super) fn agent_loop_config(&self) -> AgentLoopConfig {
         let base_prompt = if self.system_prompt.is_empty() {
@@ -251,6 +266,7 @@ impl Session {
             system_prompt,
             max_tokens: self.max_tokens,
             max_context_tokens: Some(self.context_window_tokens),
+            stream_timeout: std::time::Duration::from_secs(180),
             auth_token: self.auth_token.clone(),
             aura_project_id: self.project_id.clone(),
             aura_agent_id: self.aura_agent_id.clone(),
@@ -305,6 +321,8 @@ pub struct WsContext {
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
     /// Optional skill manager for per-agent skill injection into prompts.
     pub skill_manager: Option<Arc<RwLock<SkillManager>>>,
+    /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
+    pub router_url: Option<String>,
 }
 
 #[cfg(test)]

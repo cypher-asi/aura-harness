@@ -6,7 +6,8 @@ use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
     self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
-    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolInfo, ToolResultMsg, ToolUseStart,
+    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg,
+    ToolUseStart,
 };
 use crate::provider_factory::create_provider_from_session_config;
 #[allow(deprecated)]
@@ -161,9 +162,10 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
     KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
-pub(super) fn build_kernel(
+pub(super) fn build_kernel_with_config(
     session: &Session,
     ctx: &WsContext,
+    tool_config: &aura_tools::ToolConfig,
 ) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
@@ -175,7 +177,7 @@ pub(super) fn build_kernel(
     });
 
     let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec);
+        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec);
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
@@ -247,8 +249,11 @@ pub(super) async fn forward_events_to_ws(
                 message,
                 recoverable,
             }),
-            AgentLoopEvent::ToolInputSnapshot { .. }
-            | AgentLoopEvent::ToolComplete { .. }
+            AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
+                let parsed = serde_json::from_str(&input).unwrap_or(serde_json::json!({}));
+                OutboundMessage::ToolCallSnapshot(ToolCallSnapshot { id, name, input: parsed })
+            }
+            AgentLoopEvent::ToolComplete { .. }
             | AgentLoopEvent::IterationComplete { .. }
             | AgentLoopEvent::ThinkingComplete
             | AgentLoopEvent::StepComplete

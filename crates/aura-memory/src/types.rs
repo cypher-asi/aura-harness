@@ -64,6 +64,12 @@ pub struct Procedure {
     pub last_used: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Skill that was active when this procedure was learned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
+    /// How relevant this procedure is to the associated skill (0.0–1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_relevance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -117,9 +123,14 @@ impl MemoryPacket {
             out.push_str("<procedures>\n");
             for proc in &self.procedures {
                 let steps = proc.steps.join(" -> ");
+                let skill_tag = proc
+                    .skill_name
+                    .as_deref()
+                    .map(|s| format!(" [skill: {s}]"))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     out,
-                    "- \"{}\": {} (success: {:.0}%)",
+                    "- \"{}\": {} (success: {:.0}%){skill_tag}",
                     proc.name,
                     steps,
                     proc.success_rate * 100.0
@@ -160,6 +171,12 @@ pub struct RefinedCandidate {
     pub confidence: f32,
     pub importance: f32,
     pub keep: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
 }
 
 #[cfg(test)]
@@ -214,6 +231,8 @@ mod tests {
             last_used: now,
             created_at: now,
             updated_at: now,
+            skill_name: None,
+            skill_relevance: None,
         }
     }
 

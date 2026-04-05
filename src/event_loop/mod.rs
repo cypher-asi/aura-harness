@@ -69,7 +69,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         agent_loop
             .config_mut()
             .observers
-            .push(mm.turn_observer(agent_id));
+            .push(mm.turn_observer(agent_id, None));
     }
 
     let mut state = LoopState {

@@ -47,8 +47,10 @@ use tracing::debug;
 /// Sandbox for validating and normalizing paths.
 #[derive(Debug, Clone)]
 pub struct Sandbox {
-    /// The root directory all paths must be under
+    /// The primary root directory (workspace).
     root: PathBuf,
+    /// Additional allowed roots granted by skill permissions.
+    extra_roots: Vec<PathBuf>,
 }
 
 impl Sandbox {
@@ -59,7 +61,6 @@ impl Sandbox {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, ToolError> {
         let root = root.as_ref();
 
-        // Create root if it doesn't exist
         if !root.exists() {
             std::fs::create_dir_all(root).map_err(|e| {
                 ToolError::Io(std::io::Error::new(
@@ -69,15 +70,49 @@ impl Sandbox {
             })?;
         }
 
-        let root = root.canonicalize().map_err(|e| {
+        let root = strip_unc_prefix(&root.canonicalize().map_err(|e| {
             ToolError::Io(std::io::Error::new(
                 e.kind(),
                 format!("canonicalize({}): {e}", root.display()),
             ))
-        })?;
+        })?);
         debug!(?root, "Sandbox initialized");
 
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            extra_roots: Vec::new(),
+        })
+    }
+
+    /// Create a sandbox with extra allowed roots (from skill permissions).
+    ///
+    /// Each extra root is canonicalized. Roots that don't exist or can't
+    /// be canonicalized are silently skipped (logged as warnings).
+    ///
+    /// # Errors
+    /// Returns error if the primary root cannot be canonicalized.
+    pub fn with_extra_roots(
+        root: impl AsRef<Path>,
+        extra: &[PathBuf],
+    ) -> Result<Self, ToolError> {
+        let mut sandbox = Self::new(root)?;
+        for path in extra {
+            if !path.exists() {
+                debug!(?path, "Extra sandbox root does not exist, skipping");
+                continue;
+            }
+            match path.canonicalize() {
+                Ok(canonical) => {
+                    let canonical = strip_unc_prefix(&canonical);
+                    debug!(?canonical, "Added extra sandbox root");
+                    sandbox.extra_roots.push(canonical);
+                }
+                Err(e) => {
+                    debug!(?path, error = %e, "Failed to canonicalize extra root, skipping");
+                }
+            }
+        }
+        Ok(sandbox)
     }
 
     /// Get the sandbox root.
@@ -112,8 +147,7 @@ impl Sandbox {
         // Normalize the path (handle .., ., etc.)
         let normalized = normalize_path(&joined);
 
-        // Check if the normalized path starts with our root
-        if !normalized.starts_with(&self.root) {
+        if !self.is_within_allowed(&normalized) {
             return Err(ToolError::SandboxViolation {
                 path: path.display().to_string(),
             });
@@ -134,22 +168,31 @@ impl Sandbox {
             return Err(ToolError::PathNotFound(path.as_ref().display().to_string()));
         }
 
-        // Re-canonicalize to resolve symlinks
-        let canonical = resolved.canonicalize().map_err(|e| {
+        let canonical = strip_unc_prefix(&resolved.canonicalize().map_err(|e| {
             ToolError::Io(std::io::Error::new(
                 e.kind(),
                 format!("canonicalize({}): {e}", resolved.display()),
             ))
-        })?;
+        })?);
 
-        // Check again after following symlinks
-        if !canonical.starts_with(&self.root) {
+        if !self.is_within_allowed(&canonical) {
             return Err(ToolError::SandboxViolation {
                 path: path.as_ref().display().to_string(),
             });
         }
 
         Ok(canonical)
+    }
+
+    /// Check whether a path falls under the primary root or any extra root.
+    fn is_within_allowed(&self, path: &Path) -> bool {
+        let normalized = strip_unc_prefix(path);
+        if normalized.starts_with(&self.root) {
+            return true;
+        }
+        self.extra_roots
+            .iter()
+            .any(|r| normalized.starts_with(r))
     }
 
     /// Resolve a path for a new file (doesn't need to exist).
@@ -188,6 +231,17 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 
     components.iter().collect()
+}
+
+/// Strip the `\\?\` verbatim prefix that Windows `canonicalize()` adds.
+/// On non-Windows this is a no-op.
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if s.starts_with(r"\\?\") {
+        PathBuf::from(&s[4..])
+    } else {
+        path.to_path_buf()
+    }
 }
 
 fn is_workspace_root_alias(path: &Path) -> bool {
@@ -275,9 +329,9 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello").unwrap();
 
-        // Should resolve
         let resolved = sandbox.resolve_existing("test.txt").unwrap();
-        assert_eq!(resolved, file_path.canonicalize().unwrap());
+        let expected = strip_unc_prefix(&file_path.canonicalize().unwrap());
+        assert_eq!(resolved, expected);
     }
 
     #[test]
@@ -379,5 +433,53 @@ mod tests {
         let (sandbox, _dir) = create_sandbox();
         let cloned = sandbox.clone();
         assert_eq!(sandbox.root(), cloned.root());
+    }
+
+    #[test]
+    fn test_extra_roots_allow_access() {
+        let main_dir = TempDir::new().unwrap();
+        let extra_dir = TempDir::new().unwrap();
+        std::fs::write(extra_dir.path().join("note.md"), "hello").unwrap();
+
+        let sandbox = Sandbox::with_extra_roots(
+            main_dir.path(),
+            &[extra_dir.path().to_path_buf()],
+        )
+        .unwrap();
+
+        let resolved = sandbox.resolve_existing(extra_dir.path().join("note.md"));
+        assert!(resolved.is_ok(), "should be able to access file in extra root");
+    }
+
+    #[test]
+    fn test_extra_roots_still_block_outside() {
+        let main_dir = TempDir::new().unwrap();
+        let extra_dir = TempDir::new().unwrap();
+        let outside_dir = TempDir::new().unwrap();
+        std::fs::write(outside_dir.path().join("secret.txt"), "secret").unwrap();
+
+        let sandbox = Sandbox::with_extra_roots(
+            main_dir.path(),
+            &[extra_dir.path().to_path_buf()],
+        )
+        .unwrap();
+
+        let result = sandbox.resolve(outside_dir.path().join("secret.txt"));
+        assert!(
+            matches!(result, Err(ToolError::SandboxViolation { .. })),
+            "paths outside both roots should still be blocked"
+        );
+    }
+
+    #[test]
+    fn test_extra_roots_nonexistent_skipped() {
+        let main_dir = TempDir::new().unwrap();
+        let sandbox = Sandbox::with_extra_roots(
+            main_dir.path(),
+            &[PathBuf::from("/nonexistent/path/that/does/not/exist")],
+        )
+        .unwrap();
+
+        assert_eq!(sandbox.extra_roots.len(), 0);
     }
 }

@@ -390,6 +390,27 @@ fn test_command_allowlist_no_metachar_check_without_allowlist() {
 }
 
 #[test]
+fn test_command_allowlist_prefix_entry_allows_matching_command() {
+    let allowlist = vec!["start obsidian://".to_string()];
+    assert!(check_command_allowlist("start obsidian://new?vault=test", &allowlist).is_ok());
+    assert!(check_command_allowlist("start obsidian://open?vault=test", &allowlist).is_ok());
+}
+
+#[test]
+fn test_command_allowlist_prefix_entry_blocks_different_args() {
+    let allowlist = vec!["start obsidian://".to_string()];
+    let result = check_command_allowlist("start notepad.exe", &allowlist);
+    assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+}
+
+#[test]
+fn test_command_allowlist_prefix_entry_blocks_different_program() {
+    let allowlist = vec!["start obsidian://".to_string()];
+    let result = check_command_allowlist("cmd /c del *", &allowlist);
+    assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
+}
+
+#[test]
 fn test_output_to_tool_result_exit_code_metadata() {
     #[cfg(windows)]
     let status = {

@@ -71,6 +71,7 @@ impl Scheduler {
         executors: Vec<Arc<dyn Executor>>,
         tools: Vec<ToolDefinition>,
         workspace_base: PathBuf,
+        memory_manager: Option<Arc<aura_memory::MemoryManager>>,
     ) -> Self {
         let kernel_config = KernelConfig {
             workspace_base,
@@ -84,14 +85,8 @@ impl Scheduler {
             tools,
             agent_locks: DashMap::new(),
             kernel_config,
-            memory_manager: None,
+            memory_manager,
         }
-    }
-
-    /// Attach a memory manager so worker-processed turns get memory ingestion.
-    pub fn with_memory_manager(mut self, mm: Arc<aura_memory::MemoryManager>) -> Self {
-        self.memory_manager = Some(mm);
-        self
     }
 
     /// Get or create lock for an agent.
@@ -143,7 +138,7 @@ impl Scheduler {
 
         let mut config = self.agent_loop_config.clone();
         if let Some(ref mm) = self.memory_manager {
-            config.observers.push(mm.turn_observer(agent_id));
+            config.observers.push(mm.turn_observer(agent_id, None));
         }
         let agent_loop = AgentLoop::new(config);
 
@@ -186,7 +181,7 @@ mod tests {
             Arc::new(MockProvider::simple_response("test"));
         let ws_dir = dir.path().join("workspaces");
         std::fs::create_dir_all(&ws_dir).unwrap();
-        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir);
+        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir, None);
         (scheduler, dir)
     }
 
@@ -218,7 +213,7 @@ mod tests {
             .set_agent_status(agent_id, AgentStatus::Paused)
             .unwrap();
 
-        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir);
+        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir, None);
         let result = scheduler.schedule_agent(agent_id).await.unwrap();
         assert_eq!(result, 0, "Paused agents should be skipped");
     }
@@ -236,7 +231,7 @@ mod tests {
         let agent_id = AgentId::generate();
         store.set_agent_status(agent_id, AgentStatus::Dead).unwrap();
 
-        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir);
+        let scheduler = Scheduler::new(store, provider, vec![], vec![], ws_dir, None);
         let result = scheduler.schedule_agent(agent_id).await.unwrap();
         assert_eq!(result, 0, "Dead agents should be skipped");
     }

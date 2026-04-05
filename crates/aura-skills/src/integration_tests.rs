@@ -326,7 +326,7 @@ fn manager_install_for_agent() {
 
     let agent1 = test_agent_id("agent-1");
     let inst = mgr
-        .install_for_agent(agent1, "deploy", Some("https://example.com".to_string()))
+        .install_for_agent(agent1, "deploy", Some("https://example.com".to_string()), vec![], vec![])
         .unwrap();
 
     assert_eq!(inst.agent_id, agent1);
@@ -345,8 +345,8 @@ fn manager_list_agent_skills() {
     let mgr = SkillManager::with_install_store(loader, store);
 
     let agent1 = test_agent_id("agent-1");
-    mgr.install_for_agent(agent1, "deploy", None).unwrap();
-    mgr.install_for_agent(agent1, "test-runner", None)
+    mgr.install_for_agent(agent1, "deploy", None, vec![], vec![]).unwrap();
+    mgr.install_for_agent(agent1, "test-runner", None, vec![], vec![])
         .unwrap();
 
     let skills = mgr.list_agent_skills(agent1).unwrap();
@@ -364,7 +364,7 @@ fn manager_uninstall_from_agent() {
     let mgr = SkillManager::with_install_store(loader, store);
 
     let agent1 = test_agent_id("agent-1");
-    mgr.install_for_agent(agent1, "deploy", None).unwrap();
+    mgr.install_for_agent(agent1, "deploy", None, vec![], vec![]).unwrap();
     assert_eq!(mgr.list_agent_skills(agent1).unwrap().len(), 1);
 
     mgr.uninstall_from_agent(agent1, "deploy").unwrap();
@@ -378,7 +378,7 @@ fn manager_without_install_store_returns_error() {
 
     let agent1 = test_agent_id("agent-1");
 
-    let err = mgr.install_for_agent(agent1, "x", None).unwrap_err();
+    let err = mgr.install_for_agent(agent1, "x", None, vec![], vec![]).unwrap_err();
     assert!(matches!(err, SkillError::Activation(_)));
 
     let err = mgr.list_agent_skills(agent1).unwrap_err();
@@ -542,8 +542,8 @@ fn inject_agent_skills_only_includes_installed() {
 
     let agent_id = test_agent_id("inject-test");
     let agent_hex = agent_id.to_hex();
-    mgr.install_for_agent(agent_id, "deploy", None).unwrap();
-    mgr.install_for_agent(agent_id, "lint", None).unwrap();
+    mgr.install_for_agent(agent_id, "deploy", None, vec![], vec![]).unwrap();
+    mgr.install_for_agent(agent_id, "lint", None, vec![], vec![]).unwrap();
 
     let mut prompt = "You are an assistant.".to_string();
     let injected = mgr.inject_agent_skills(&agent_hex, &mut prompt);
@@ -598,8 +598,8 @@ fn agent_skill_meta_returns_only_installed_and_model_invocable() {
 
     let agent_id = test_agent_id("meta-test");
     let agent_hex = agent_id.to_hex();
-    mgr.install_for_agent(agent_id, "deploy", None).unwrap();
-    mgr.install_for_agent(agent_id, "hidden", None).unwrap();
+    mgr.install_for_agent(agent_id, "deploy", None, vec![], vec![]).unwrap();
+    mgr.install_for_agent(agent_id, "hidden", None, vec![], vec![]).unwrap();
 
     let meta = mgr.agent_skill_meta(&agent_hex);
     assert_eq!(meta.len(), 1);

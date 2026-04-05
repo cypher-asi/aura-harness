@@ -115,8 +115,35 @@ impl MemoryManager {
         agent_id: AgentId,
         result: &AgentLoopResult,
     ) -> Result<WriteReport, MemoryError> {
+        self.process_result_with_token(agent_id, result, None).await
+    }
+
+    /// Like [`process_result`](Self::process_result) but with an explicit
+    /// auth token for proxy-mode LLM calls.
+    pub async fn process_result_with_token(
+        &self,
+        agent_id: AgentId,
+        result: &AgentLoopResult,
+        auth_token: Option<String>,
+    ) -> Result<WriteReport, MemoryError> {
+        self.process_result_with_context(agent_id, result, auth_token, &[])
+            .await
+    }
+
+    /// Like [`process_result_with_token`](Self::process_result_with_token) but
+    /// also forwards active skill names so the refiner can associate extracted
+    /// procedures with their relevant skill.
+    pub async fn process_result_with_context(
+        &self,
+        agent_id: AgentId,
+        result: &AgentLoopResult,
+        auth_token: Option<String>,
+        active_skills: &[String],
+    ) -> Result<WriteReport, MemoryError> {
         let turn = ConversationTurn::from_messages(&result.messages, &result.total_text);
-        self.pipeline.ingest(agent_id, result, turn.as_ref()).await
+        self.pipeline
+            .ingest_with_context(agent_id, result, turn.as_ref(), auth_token, active_skills)
+            .await
     }
 
     /// Run post-session consolidation (forget, compress, evolve) for an agent.
@@ -189,15 +216,32 @@ impl MemoryManager {
 
     /// Create a `TurnObserver` that feeds completed turns into this manager.
     ///
+    /// The `auth_token` is the session JWT needed for proxy-mode LLM calls
+    /// (used by the Haiku extraction model). `active_skills` are the skill
+    /// names injected into the session so the refiner can tag extracted
+    /// procedures with the relevant skill.
+    ///
     /// Attach the returned observer to `AgentLoopConfig::observers` so memory
     /// ingestion fires automatically inside the agent loop.
     pub fn turn_observer(
         self: &Arc<Self>,
         agent_id: AgentId,
+        auth_token: Option<String>,
+    ) -> Arc<dyn aura_agent::TurnObserver> {
+        self.turn_observer_with_skills(agent_id, auth_token, Vec::new())
+    }
+
+    pub fn turn_observer_with_skills(
+        self: &Arc<Self>,
+        agent_id: AgentId,
+        auth_token: Option<String>,
+        active_skills: Vec<String>,
     ) -> Arc<dyn aura_agent::TurnObserver> {
         Arc::new(MemoryTurnObserver {
             manager: Arc::clone(self),
             agent_id,
+            auth_token,
+            active_skills,
         })
     }
 }
@@ -207,12 +251,23 @@ impl MemoryManager {
 struct MemoryTurnObserver {
     manager: Arc<MemoryManager>,
     agent_id: AgentId,
+    auth_token: Option<String>,
+    active_skills: Vec<String>,
 }
 
 #[async_trait]
 impl aura_agent::TurnObserver for MemoryTurnObserver {
     async fn on_turn_complete(&self, result: &AgentLoopResult) {
-        if let Err(e) = self.manager.process_result(self.agent_id, result).await {
+        if let Err(e) = self
+            .manager
+            .process_result_with_context(
+                self.agent_id,
+                result,
+                self.auth_token.clone(),
+                &self.active_skills,
+            )
+            .await
+        {
             tracing::warn!(error = %e, "Memory ingestion failed after turn");
         }
     }

@@ -18,6 +18,7 @@ tokio = { workspace = true }
 dirs = { workspace = true }
 rocksdb = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

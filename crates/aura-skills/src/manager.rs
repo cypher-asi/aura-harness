@@ -13,6 +13,14 @@ use chrono::Utc;
 use std::sync::Arc;
 use tracing::info;
 
+/// Parse an agent ID string as UUID (blake3-derived) or 64-char hex.
+fn parse_agent_id(s: &str) -> Option<AgentId> {
+    if let Ok(uuid) = uuid::Uuid::parse_str(s) {
+        return Some(AgentId::from_uuid(uuid));
+    }
+    AgentId::from_hex(s).ok()
+}
+
 /// Top-level entry point for the skill system.
 ///
 /// Owns a [`SkillLoader`] and [`SkillRegistry`], and exposes methods for
@@ -72,15 +80,15 @@ impl SkillManager {
     /// the instructions directly. Returns the metadata for the skills that
     /// were injected (useful for surfacing in `SessionReady`).
     ///
-    /// Accepts the agent ID as a hex string (64-char BLAKE3 hash) and converts
+    /// Accepts the agent ID as a UUID or 64-char hex string and converts
     /// it to `AgentId`. Returns an empty vec if the ID is invalid, the install
     /// store is not configured, or the agent has no installed skills.
     pub fn inject_agent_skills(
         &self,
-        agent_id_hex: &str,
+        agent_id_str: &str,
         system_prompt: &mut String,
     ) -> Vec<SkillMeta> {
-        let skills = self.agent_skills_full(agent_id_hex);
+        let skills = self.agent_skills_full(agent_id_str);
         if skills.is_empty() {
             return Vec::new();
         }
@@ -103,9 +111,9 @@ impl SkillManager {
     /// Return model-invocable [`SkillMeta`] for only the skills installed for
     /// `agent_id`, without modifying a prompt.
     ///
-    /// Accepts the agent ID as a hex string (64-char BLAKE3 hash).
-    pub fn agent_skill_meta(&self, agent_id_hex: &str) -> Vec<SkillMeta> {
-        self.agent_skills_full(agent_id_hex)
+    /// Accepts the agent ID as a UUID or 64-char hex string.
+    pub fn agent_skill_meta(&self, agent_id_str: &str) -> Vec<SkillMeta> {
+        self.agent_skills_full(agent_id_str)
             .iter()
             .map(|s| crate::registry::skill_to_meta(s))
             .collect()
@@ -113,11 +121,11 @@ impl SkillManager {
 
     /// Return full [`Skill`] objects (with body) for skills installed for
     /// `agent_id` that are also model-invocable.
-    fn agent_skills_full(&self, agent_id_hex: &str) -> Vec<Skill> {
-        let agent_id = match AgentId::from_hex(agent_id_hex) {
-            Ok(id) => id,
-            Err(_) => {
-                tracing::warn!(agent_id_hex, "invalid agent ID hex for skill lookup");
+    fn agent_skills_full(&self, agent_id_str: &str) -> Vec<Skill> {
+        let agent_id = match parse_agent_id(agent_id_str) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(agent_id_str, "invalid agent ID for skill lookup");
                 return Vec::new();
             }
         };
@@ -257,6 +265,8 @@ impl SkillManager {
         agent_id: AgentId,
         skill_name: &str,
         source_url: Option<String>,
+        approved_paths: Vec<String>,
+        approved_commands: Vec<String>,
     ) -> Result<SkillInstallation, SkillError> {
         let store = self.require_install_store()?;
         let installation = SkillInstallation {
@@ -265,6 +275,8 @@ impl SkillManager {
             source_url,
             installed_at: Utc::now(),
             version: None,
+            approved_paths,
+            approved_commands,
         };
         store.install(&installation)?;
         info!(%agent_id, skill_name, "skill installed for agent");
@@ -301,4 +313,81 @@ impl SkillManager {
         let store = self.require_install_store()?;
         store.list_for_agent(agent_id)
     }
+
+    /// Collect all approved permissions from skills installed for an agent.
+    ///
+    /// Returns paths with `~` expanded to the user's home directory, and
+    /// deduplicated command names.
+    pub fn agent_permissions(&self, agent_id_str: &str) -> AgentSkillPermissions {
+        let agent_id = match parse_agent_id(agent_id_str) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(agent_id_str, "agent_permissions: invalid agent ID");
+                return AgentSkillPermissions::default();
+            }
+        };
+        let store = match self.install_store.as_deref() {
+            Some(s) => s,
+            None => return AgentSkillPermissions::default(),
+        };
+        let installed = match store.list_for_agent(agent_id) {
+            Ok(list) => list,
+            Err(_) => return AgentSkillPermissions::default(),
+        };
+
+        let home = dirs::home_dir();
+        let mut paths = Vec::new();
+        let mut commands = Vec::new();
+        let mut seen_paths = std::collections::HashSet::new();
+        let mut seen_cmds = std::collections::HashSet::new();
+
+        for inst in &installed {
+            let (inst_paths, inst_cmds) = if inst.approved_paths.is_empty()
+                && inst.approved_commands.is_empty()
+            {
+                // Fall back to the skill's frontmatter declarations when the
+                // installation record has no explicit approvals (pre-permission
+                // installs or UI that hasn't implemented the approval prompt yet).
+                match self.registry.get(&inst.skill_name) {
+                    Ok(skill) => (
+                        skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
+                        skill.frontmatter.allowed_commands.clone().unwrap_or_default(),
+                    ),
+                    Err(_) => (Vec::new(), Vec::new()),
+                }
+            } else {
+                (inst.approved_paths.clone(), inst.approved_commands.clone())
+            };
+
+            for p in &inst_paths {
+                let expanded = if let Some(ref h) = home {
+                    p.replace('~', &h.display().to_string())
+                } else {
+                    p.clone()
+                };
+                if seen_paths.insert(expanded.clone()) {
+                    paths.push(std::path::PathBuf::from(expanded));
+                }
+            }
+            for c in &inst_cmds {
+                if seen_cmds.insert(c.clone()) {
+                    commands.push(c.clone());
+                }
+            }
+        }
+
+        AgentSkillPermissions {
+            extra_paths: paths,
+            extra_commands: commands,
+        }
+    }
+}
+
+/// Aggregated permissions from all skills installed for an agent.
+#[derive(Debug, Default)]
+pub struct AgentSkillPermissions {
+    /// Filesystem paths the agent is allowed to access (expanded, absolute).
+    pub extra_paths: Vec<std::path::PathBuf>,
+    /// Shell commands the agent is allowed to run.
+    pub extra_commands: Vec<String>,
 }
