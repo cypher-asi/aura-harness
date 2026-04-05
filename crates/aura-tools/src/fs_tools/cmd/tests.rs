@@ -142,6 +142,47 @@ fn test_cmd_run_with_args() {
     assert!(output.contains("content"));
 }
 
+#[test]
+fn test_cmd_run_preserves_quoted_arguments() {
+    let (sandbox, _dir) = create_test_sandbox();
+
+    #[cfg(windows)]
+    {
+        let result = cmd_run(
+            &sandbox,
+            r#"cmd /c echo "hello world""#,
+            &[],
+            None,
+            5000,
+        )
+        .unwrap();
+        assert!(result.ok);
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            output.contains("hello world"),
+            "quoted argument should be preserved, got: {output}"
+        );
+    }
+
+    #[cfg(not(windows))]
+    {
+        let result = cmd_run(
+            &sandbox,
+            r#"echo "hello world""#,
+            &[],
+            None,
+            5000,
+        )
+        .unwrap();
+        assert!(result.ok);
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            output.contains("hello world"),
+            "quoted argument should be preserved, got: {output}"
+        );
+    }
+}
+
 // ========================================================================
 // wait_with_threshold Tests
 // ========================================================================

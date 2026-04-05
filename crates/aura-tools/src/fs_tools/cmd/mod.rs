@@ -77,8 +77,9 @@ pub fn cmd_spawn(
 
     #[cfg(windows)]
     let mut cmd = {
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("cmd.exe");
-        c.args(["/C", &full_command]);
+        c.raw_arg(format!("/C {full_command}"));
         c
     };
 

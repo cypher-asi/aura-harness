@@ -98,9 +98,10 @@ fn spawn_build_child(
     let child = if needs_shell(build_command) {
         #[cfg(target_os = "windows")]
         {
-            Command::new("cmd")
-                .args(["/C", build_command])
-                .current_dir(project_dir)
+            use std::os::windows::process::CommandExt;
+            let mut c = Command::new("cmd");
+            c.as_std_mut().raw_arg(format!("/C {build_command}"));
+            c.current_dir(project_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
