@@ -147,6 +147,20 @@ pub struct UserMessage {
     /// first iteration to explicitly direct the model toward these tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_hints: Option<Vec<String>>,
+    /// Optional message attachments such as inline images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<MessageAttachment>>,
+}
+
+/// Optional user message attachment payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct MessageAttachment {
+    pub r#type: String,
+    pub media_type: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Payload for `approval_response`.
@@ -176,6 +190,8 @@ pub enum OutboundMessage {
     ThinkingDelta(ThinkingDelta),
     /// A tool use has started.
     ToolUseStart(ToolUseStart),
+    /// Incremental snapshot of a tool call's input.
+    ToolCallSnapshot(ToolCallSnapshot),
     /// Result of a tool execution.
     ToolResult(ToolResultMsg),
     /// End of an assistant message (turn complete).
@@ -238,6 +254,15 @@ pub struct ThinkingDelta {
 pub struct ToolUseStart {
     pub id: String,
     pub name: String,
+}
+
+/// Payload for `tool_call_snapshot`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ToolCallSnapshot {
+    pub id: String,
+    pub name: String,
+    pub input: serde_json::Value,
 }
 
 /// Payload for `tool_result`.
