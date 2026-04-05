@@ -154,12 +154,6 @@ pub fn detect_all_blocked(
         }
     }
 
-    if let Some(result) = detect_shell_read_workaround(tool) {
-        if result.blocked {
-            return result;
-        }
-    }
-
     BlockCheckResult::allowed()
 }
 
@@ -326,48 +320,6 @@ fn detect_write_cooldowns(tool: &ToolCallInfo, ctx: &BlockingContext) -> Option<
         }
     }
     Some(BlockCheckResult::allowed())
-}
-
-/// Detector 7: Block shell commands that are just reading files.
-fn detect_shell_read_workaround(tool: &ToolCallInfo) -> Option<BlockCheckResult> {
-    if !COMMAND_TOOLS.contains(&tool.name.as_str()) {
-        return None;
-    }
-    let command = tool
-        .input
-        .get("command")
-        .or_else(|| tool.input.get("args"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    if is_shell_read_cmd(command) {
-        Some(BlockCheckResult::blocked(
-            "Using shell commands to read files is not allowed. \
-             Use `read_file` instead.",
-        ))
-    } else {
-        Some(BlockCheckResult::allowed())
-    }
-}
-
-/// Check if a shell command is just reading a file.
-///
-/// Only inspects the *primary* command (the first segment before any pipe).
-/// Piping output through `head`/`tail` for truncation is legitimate when the
-/// primary command is something like `tvly search` or `python script.py`.
-pub fn is_shell_read_cmd(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    let primary = lower.split('|').next().unwrap_or(&lower).trim();
-    let read_cmds = [
-        "cat ",
-        "type ",
-        "get-content ",
-        "head ",
-        "tail ",
-        "less ",
-        "more ",
-    ];
-    read_cmds.iter().any(|cmd| primary.starts_with(cmd))
 }
 
 #[cfg(test)]
