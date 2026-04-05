@@ -351,8 +351,13 @@ fn detect_shell_read_workaround(tool: &ToolCallInfo) -> Option<BlockCheckResult>
 }
 
 /// Check if a shell command is just reading a file.
+///
+/// Only inspects the *primary* command (the first segment before any pipe).
+/// Piping output through `head`/`tail` for truncation is legitimate when the
+/// primary command is something like `tvly search` or `python script.py`.
 pub fn is_shell_read_cmd(command: &str) -> bool {
     let lower = command.to_lowercase();
+    let primary = lower.split('|').next().unwrap_or(&lower).trim();
     let read_cmds = [
         "cat ",
         "type ",
@@ -362,9 +367,7 @@ pub fn is_shell_read_cmd(command: &str) -> bool {
         "less ",
         "more ",
     ];
-    read_cmds
-        .iter()
-        .any(|cmd| lower.starts_with(cmd) || lower.contains(&format!("| {cmd}")))
+    read_cmds.iter().any(|cmd| primary.starts_with(cmd))
 }
 
 #[cfg(test)]

@@ -120,6 +120,15 @@ fn test_is_shell_read_cmd_allows_normal_commands() {
 }
 
 #[test]
+fn test_is_shell_read_cmd_allows_pipe_to_head_when_primary_is_not_read() {
+    assert!(!is_shell_read_cmd("tvly search query | head -3000"));
+    assert!(!is_shell_read_cmd("python script.py | tail -20"));
+    assert!(!is_shell_read_cmd("cargo test 2>&1 | head -100"));
+    // Primary command IS a read → still blocked
+    assert!(is_shell_read_cmd("cat foo.txt | head -5"));
+}
+
+#[test]
 fn test_detect_missing_args_blocks_write_file_without_path() {
     let tool = make_tool("write_file", serde_json::json!({}));
     let result = detect_missing_required_args(&tool).unwrap();
