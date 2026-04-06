@@ -20,6 +20,7 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         vec![],
         vec![],
         std::path::PathBuf::from("/tmp/workspaces"),
+        None,
     ));
     RouterState {
         store,
@@ -339,6 +340,7 @@ fn test_router_state_with_managers() -> RouterState {
         vec![],
         vec![],
         std::path::PathBuf::from("/tmp/workspaces"),
+        None,
     ));
 
     let memory_manager = Arc::new(MemoryManager::new(
