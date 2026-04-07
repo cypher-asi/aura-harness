@@ -38,6 +38,7 @@ mod node;
 pub(crate) mod protocol;
 pub(crate) mod provider_factory;
 pub(crate) mod router;
+pub(crate) mod runtime_capabilities;
 pub(crate) mod scheduler;
 pub(crate) mod session;
 pub(crate) mod terminal;

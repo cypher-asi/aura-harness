@@ -43,6 +43,8 @@ pub enum TransactionType {
 pub enum SystemKind {
     /// Automaton start, stop, pause, resume
     AutomatonLifecycle,
+    /// Runtime capability installation snapshot for a session/automaton
+    CapabilityInstall,
     /// Domain API mutations: `create_spec`, `delete_spec`, `transition_task`, `save_message`
     DomainMutation,
     /// Login, logout

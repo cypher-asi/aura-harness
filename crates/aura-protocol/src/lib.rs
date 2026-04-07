@@ -63,6 +63,9 @@ pub struct SessionInit {
     /// Installed tools to register for this session.
     #[serde(default)]
     pub installed_tools: Option<Vec<InstalledTool>>,
+    /// Installed integrations authorized for this session.
+    #[serde(default)]
+    pub installed_integrations: Option<Vec<InstalledIntegration>>,
     /// Workspace directory path (must be under the server's workspace base).
     #[serde(default)]
     pub workspace: Option<String>,
@@ -456,6 +459,17 @@ pub enum ToolAuth {
 ///
 /// Wire-compatible with `aura_core::InstalledToolDefinition` but
 /// self-contained so this crate has no dependency on `aura-core`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledToolIntegrationRequirement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct InstalledTool {
@@ -469,6 +483,20 @@ pub struct InstalledTool {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_integration: Option<InstalledToolIntegrationRequirement>,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Definition for an installed integration, sent over the wire in `session_init`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledIntegration {
+    pub integration_id: String,
+    pub name: String,
+    pub provider: String,
+    pub kind: String,
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }

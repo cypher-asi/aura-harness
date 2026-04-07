@@ -188,6 +188,53 @@ fn test_check_tool_denied_in_restrictive() {
 }
 
 #[test]
+fn test_check_tool_denies_missing_required_integration() {
+    let mut config = PolicyConfig::default();
+    config.add_allowed_tool("brave_search_web");
+    config.set_tool_integration_requirements([(
+        "brave_search_web".to_string(),
+        aura_core::InstalledToolIntegrationRequirement {
+            integration_id: None,
+            provider: Some("brave_search".to_string()),
+            kind: Some("workspace_integration".to_string()),
+        },
+    )]);
+    let policy = Policy::new(config);
+
+    let result = policy.check_tool("brave_search_web", &serde_json::json!({}));
+    assert!(!result.allowed);
+    assert!(result
+        .reason
+        .unwrap()
+        .contains("requires an installed integration"));
+}
+
+#[test]
+fn test_check_tool_allows_installed_required_integration() {
+    let mut config = PolicyConfig::default();
+    config.add_allowed_tool("brave_search_web");
+    config.set_installed_integrations([aura_core::InstalledIntegrationDefinition {
+        integration_id: "integration-brave-1".to_string(),
+        name: "Brave Search".to_string(),
+        provider: "brave_search".to_string(),
+        kind: "workspace_integration".to_string(),
+        metadata: std::collections::HashMap::new(),
+    }]);
+    config.set_tool_integration_requirements([(
+        "brave_search_web".to_string(),
+        aura_core::InstalledToolIntegrationRequirement {
+            integration_id: None,
+            provider: Some("brave_search".to_string()),
+            kind: Some("workspace_integration".to_string()),
+        },
+    )]);
+    let policy = Policy::new(config);
+
+    let result = policy.check_tool("brave_search_web", &serde_json::json!({}));
+    assert!(result.allowed);
+}
+
+#[test]
 fn test_check_tool_ask_once_not_approved() {
     let config =
         PolicyConfig::default().with_tool_permission("guarded_tool", PermissionLevel::AskOnce);

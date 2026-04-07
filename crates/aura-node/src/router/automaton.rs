@@ -1,4 +1,5 @@
 use super::*;
+use aura_protocol::{InstalledIntegration, InstalledTool};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AutomatonStartRequest {
@@ -15,6 +16,10 @@ pub(super) struct AutomatonStartRequest {
     git_repo_url: Option<String>,
     #[serde(default)]
     git_branch: Option<String>,
+    #[serde(default)]
+    installed_tools: Option<Vec<InstalledTool>>,
+    #[serde(default)]
+    installed_integrations: Option<Vec<InstalledIntegration>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +57,7 @@ pub(super) async fn automaton_start_handler(
 
     let automaton_id = if let Some(task_id) = req.task_id {
         bridge
-            .run_task(
+            .run_task_with_capabilities(
                 &req.project_id,
                 &task_id,
                 workspace_root,
@@ -60,17 +65,21 @@ pub(super) async fn automaton_start_handler(
                 req.model,
                 req.git_repo_url,
                 req.git_branch,
+                req.installed_tools,
+                req.installed_integrations,
             )
             .await
     } else {
         bridge
-            .start_dev_loop(
+            .start_dev_loop_with_capabilities(
                 &req.project_id,
                 workspace_root,
                 auth_token,
                 req.model,
                 req.git_repo_url,
                 req.git_branch,
+                req.installed_tools,
+                req.installed_integrations,
             )
             .await
     }

@@ -1,6 +1,8 @@
 use super::*;
-use aura_core::{ActionId, AgentId};
+use aura_core::{ActionId, AgentId, InstalledToolDefinition, ToolAuth};
 use aura_kernel::ExecuteContext;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use tempfile::TempDir;
 
 fn make_catalog_and_resolver() -> (Arc<ToolCatalog>, ToolResolver) {
@@ -17,6 +19,40 @@ fn test_context() -> (ExecuteContext, TempDir) {
         dir.path().to_path_buf(),
     );
     (ctx, dir)
+}
+
+fn spawn_single_response_server(
+    expected_auth: Option<&str>,
+    response_status: &str,
+    response_body: &str,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_auth = expected_auth.map(ToOwned::to_owned);
+    let response_status = response_status.to_string();
+    let response_body = response_body.to_string();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]);
+        assert!(request.starts_with("POST "), "request was: {request}");
+        assert!(request.contains("content-type: application/json") || request.contains("Content-Type: application/json"));
+        if let Some(expected) = expected_auth {
+            assert!(
+                request.contains(&format!("Authorization: {expected}"))
+                    || request.contains(&format!("authorization: {expected}")),
+                "missing auth header in request: {request}"
+            );
+        }
+        let response = format!(
+            "HTTP/1.1 {response_status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+    format!("http://{addr}")
 }
 
 #[test]
@@ -79,6 +115,65 @@ async fn domain_tool_without_executor_falls_through_to_unknown() {
         err_msg.contains("unknown tool"),
         "domain tool without executor should now be 'unknown tool', got: {err_msg}",
     );
+}
+
+#[tokio::test]
+async fn installed_tool_executes_via_http_callback() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_single_response_server(
+        Some("Bearer test-token"),
+        "200 OK",
+        r#"{"ok":true,"title":"Aura OS"}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "brave_search_web".into(),
+        description: "Search the web".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint,
+        auth: ToolAuth::Bearer {
+            token: "test-token".into(),
+        },
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        metadata: std::collections::HashMap::new(),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new("brave_search_web", serde_json::json!({"query":"aura os","count":1}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    assert!(result.ok, "installed tool should succeed");
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"Aura OS\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
+async fn installed_tool_http_failure_returns_failed_effect() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_single_response_server(None, "404 Not Found", r#"{"error":"missing"}"#);
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "brave_search_web".into(),
+        description: "Search the web".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint,
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        metadata: std::collections::HashMap::new(),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new("brave_search_web", serde_json::json!({"query":"aura os"}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Failed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    let stderr = std::str::from_utf8(&result.stderr).unwrap();
+    assert!(stderr.contains("returned status 404"), "stderr was: {stderr}");
 }
 
 mod stub_domain {

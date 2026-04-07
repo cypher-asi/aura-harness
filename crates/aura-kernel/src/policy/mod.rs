@@ -8,7 +8,10 @@
 //! - `AlwaysAsk`: Requires approval for each use
 //! - `Deny`: Never allowed
 
-use aura_core::{ActionKind, Proposal, ToolCall};
+use aura_core::{
+    ActionKind, InstalledIntegrationDefinition, InstalledToolIntegrationRequirement, Proposal,
+    ToolCall,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use tracing::{debug, warn};
@@ -38,8 +41,8 @@ pub enum PermissionLevel {
 #[must_use]
 pub fn default_tool_permission(tool: &str) -> PermissionLevel {
     match tool {
-        "list_files" | "read_file" | "stat_file" | "search_code" | "run_command"
-        | "write_file" | "edit_file" | "delete_file" => PermissionLevel::AlwaysAllow,
+        "list_files" | "read_file" | "stat_file" | "search_code" | "run_command" | "write_file"
+        | "edit_file" | "delete_file" => PermissionLevel::AlwaysAllow,
         _ => PermissionLevel::Deny,
     }
 }
@@ -59,6 +62,10 @@ pub struct PolicyConfig {
     pub max_proposals: usize,
     /// Custom permission overrides for specific tools
     pub tool_permissions: HashMap<String, PermissionLevel>,
+    /// Installed integrations currently authorized for this runtime.
+    pub installed_integrations: Vec<InstalledIntegrationDefinition>,
+    /// Declared integration requirements for tools.
+    pub tool_integration_requirements: HashMap<String, InstalledToolIntegrationRequirement>,
     /// When true, tools not in `allowed_tools` or `tool_permissions` get
     /// `AlwaysAllow` instead of `Deny`. The kernel is the sole gateway, so
     /// the default is open; use [`PolicyConfig::restrictive`] to lock down.
@@ -87,6 +94,8 @@ impl Default for PolicyConfig {
             allowed_tools,
             max_proposals: 8,
             tool_permissions: HashMap::new(),
+            installed_integrations: Vec::new(),
+            tool_integration_requirements: HashMap::new(),
             allow_unlisted: true,
         }
     }
@@ -136,6 +145,22 @@ impl PolicyConfig {
         for name in names {
             self.add_allowed_tool(name);
         }
+    }
+
+    /// Replace the installed integrations set for this runtime.
+    pub fn set_installed_integrations(
+        &mut self,
+        integrations: impl IntoIterator<Item = InstalledIntegrationDefinition>,
+    ) {
+        self.installed_integrations = integrations.into_iter().collect();
+    }
+
+    /// Replace the tool-to-integration requirement map for this runtime.
+    pub fn set_tool_integration_requirements(
+        &mut self,
+        requirements: impl IntoIterator<Item = (String, InstalledToolIntegrationRequirement)>,
+    ) {
+        self.tool_integration_requirements = requirements.into_iter().collect();
     }
 }
 
@@ -271,41 +296,9 @@ impl Policy {
 
         if proposal.action_kind == ActionKind::Delegate {
             if let Ok(tool_call) = serde_json::from_slice::<ToolCall>(&proposal.payload) {
-                let permission = self.check_tool_permission(&tool_call.tool);
-
-                match permission {
-                    PermissionLevel::Deny => {
-                        warn!(tool = %tool_call.tool, "Tool denied by policy");
-                        return PolicyResult {
-                            allowed: false,
-                            reason: Some(format!("Tool '{}' not allowed", tool_call.tool)),
-                        };
-                    }
-                    PermissionLevel::AlwaysAsk => {
-                        warn!(tool = %tool_call.tool, "Tool requires per-use approval");
-                        return PolicyResult {
-                            allowed: false,
-                            reason: Some(format!(
-                                "Tool '{}' requires approval for each use",
-                                tool_call.tool
-                            )),
-                        };
-                    }
-                    PermissionLevel::AskOnce => {
-                        if !self.is_session_approved(&tool_call.tool) {
-                            warn!(tool = %tool_call.tool, "Tool requires session approval");
-                            return PolicyResult {
-                                allowed: false,
-                                reason: Some(format!(
-                                    "Tool '{}' requires approval",
-                                    tool_call.tool
-                                )),
-                            };
-                        }
-                    }
-                    PermissionLevel::AlwaysAllow => {
-                        debug!(tool = %tool_call.tool, "Tool always allowed");
-                    }
+                let result = self.check_tool(&tool_call.tool, &tool_call.args);
+                if !result.allowed {
+                    return result;
                 }
             } else {
                 warn!("Malformed delegate payload");
@@ -326,6 +319,7 @@ impl Policy {
     /// Check if a tool call is allowed (includes session approval check).
     #[must_use]
     pub fn check_tool(&self, tool: &str, _input: &serde_json::Value) -> PolicyResult {
+        let integration_gate = self.integration_requirement_satisfied(tool);
         let permission = self.check_tool_permission(tool);
 
         match permission {
@@ -334,14 +328,14 @@ impl Policy {
                 reason: Some(format!("Tool '{tool}' is not allowed")),
             },
             PermissionLevel::AlwaysAllow => PolicyResult {
-                allowed: true,
-                reason: None,
+                allowed: integration_gate.is_none(),
+                reason: integration_gate,
             },
             PermissionLevel::AskOnce => {
                 if self.is_session_approved(tool) {
                     PolicyResult {
-                        allowed: true,
-                        reason: None,
+                        allowed: integration_gate.is_none(),
+                        reason: integration_gate,
                     }
                 } else {
                     PolicyResult {
@@ -366,6 +360,57 @@ impl Policy {
     /// Add installed tool names to the policy's allowed set with `AlwaysAllow`.
     pub fn add_allowed_tools(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
         self.config.add_allowed_tools(names);
+    }
+
+    fn integration_requirement_satisfied(&self, tool: &str) -> Option<String> {
+        let Some(required_integration) = self.config.tool_integration_requirements.get(tool) else {
+            return None;
+        };
+
+        let installed = self
+            .config
+            .installed_integrations
+            .iter()
+            .any(|integration| {
+                required_integration
+                    .integration_id
+                    .as_deref()
+                    .map(|expected| integration.integration_id == expected)
+                    .unwrap_or(true)
+                    && required_integration
+                        .provider
+                        .as_deref()
+                        .map(|expected| integration.provider == expected)
+                        .unwrap_or(true)
+                    && required_integration
+                        .kind
+                        .as_deref()
+                        .map(|expected| integration.kind == expected)
+                        .unwrap_or(true)
+            });
+
+        if installed {
+            None
+        } else {
+            Some(format!(
+                "Tool '{tool}' requires an installed integration{}{}{}",
+                required_integration
+                    .provider
+                    .as_deref()
+                    .map(|provider| format!(" with provider '{provider}'"))
+                    .unwrap_or_default(),
+                required_integration
+                    .kind
+                    .as_deref()
+                    .map(|kind| format!(" and kind '{kind}'"))
+                    .unwrap_or_default(),
+                required_integration
+                    .integration_id
+                    .as_deref()
+                    .map(|id| format!(" (integration_id '{id}')"))
+                    .unwrap_or_default(),
+            ))
+        }
     }
 }
 

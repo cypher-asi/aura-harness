@@ -5,7 +5,7 @@
 
 pub use aura_protocol::*;
 
-use aura_core::InstalledToolDefinition;
+use aura_core::{InstalledIntegrationDefinition, InstalledToolDefinition};
 use aura_reasoner::ToolDefinition;
 
 /// Convert a reasoner [`ToolDefinition`] into a protocol [`ToolInfo`].
@@ -31,7 +31,27 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
         },
         timeout_ms: t.timeout_ms,
         namespace: t.namespace,
+        required_integration: t.required_integration.map(|requirement| {
+            aura_core::InstalledToolIntegrationRequirement {
+                integration_id: requirement.integration_id,
+                provider: requirement.provider,
+                kind: requirement.kind,
+            }
+        }),
         metadata: t.metadata,
+    }
+}
+
+/// Convert a protocol [`InstalledIntegration`] into a core [`InstalledIntegrationDefinition`].
+pub fn installed_integration_to_core(
+    integration: InstalledIntegration,
+) -> InstalledIntegrationDefinition {
+    InstalledIntegrationDefinition {
+        integration_id: integration.integration_id,
+        name: integration.name,
+        provider: integration.provider,
+        kind: integration.kind,
+        metadata: integration.metadata,
     }
 }
 
@@ -85,6 +105,7 @@ mod tests {
                 assert!(init.temperature.is_none());
                 assert!(init.max_turns.is_none());
                 assert!(init.installed_tools.is_none());
+                assert!(init.installed_integrations.is_none());
                 assert!(init.workspace.is_none());
                 assert!(init.token.is_none());
             }

@@ -144,6 +144,7 @@ impl TestServer {
             executors,
             tools,
             workspaces_path,
+            None,
         ));
 
         let state = RouterState {
@@ -340,6 +341,9 @@ impl WsClient {
         if let Some(tools) = opts.installed_tools {
             init["installed_tools"] = json!(tools);
         }
+        if let Some(integrations) = opts.installed_integrations {
+            init["installed_integrations"] = json!(integrations);
+        }
         if let Some(msgs) = opts.conversation_messages {
             init["conversation_messages"] = json!(msgs);
         }
@@ -421,6 +425,7 @@ pub struct SessionInitOpts<'a> {
     pub project_id: Option<&'a str>,
     pub project_path: Option<&'a str>,
     pub installed_tools: Option<Vec<Value>>,
+    pub installed_integrations: Option<Vec<Value>>,
     pub conversation_messages: Option<Vec<Value>>,
 }
 
