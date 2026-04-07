@@ -6,7 +6,9 @@ use super::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
-use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway};
+use aura_agent::{
+    AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
+};
 use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
@@ -16,6 +18,49 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use uuid::Uuid;
+
+fn required_integration_metadata(
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> Option<(Option<&str>, Option<&str>, Option<&str>)> {
+    let integration_id = metadata
+        .get("required_integration_id")
+        .and_then(serde_json::Value::as_str);
+    let provider = metadata
+        .get("required_integration_provider")
+        .and_then(serde_json::Value::as_str);
+    let kind = metadata
+        .get("required_integration_kind")
+        .and_then(serde_json::Value::as_str);
+
+    if integration_id.is_none() && provider.is_none() && kind.is_none() {
+        None
+    } else {
+        Some((integration_id, provider, kind))
+    }
+}
+
+fn tool_has_required_integration(
+    session: &Session,
+    metadata: &std::collections::HashMap<String, serde_json::Value>,
+) -> bool {
+    let Some((required_integration_id, required_provider, required_kind)) =
+        required_integration_metadata(metadata)
+    else {
+        return true;
+    };
+
+    session.installed_integrations.iter().any(|integration| {
+        required_integration_id
+            .map(|expected| integration.integration_id == expected)
+            .unwrap_or(true)
+            && required_provider
+                .map(|expected| integration.provider == expected)
+                .unwrap_or(true)
+            && required_kind
+                .map(|expected| integration.kind == expected)
+                .unwrap_or(true)
+    })
+}
 
 /// State for a turn that is currently being processed in the background.
 enum ActiveTurn {
@@ -93,6 +138,110 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     info!(session_id = %session.session_id, "WebSocket connection closed");
     drop(outbound_tx);
     let _ = send_task.await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_core::{InstalledIntegrationDefinition, InstalledToolDefinition, ToolAuth};
+    use aura_reasoner::MockProvider;
+    use aura_store::RocksStore;
+    use aura_tools::{ToolCatalog, ToolConfig};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn test_context() -> WsContext {
+        let workspace = tempfile::tempdir().expect("temp workspace");
+        let db_dir = tempfile::tempdir().expect("temp db");
+        let store = RocksStore::open(db_dir.path(), false).expect("open rocks store");
+        let workspace_base = workspace.path().to_path_buf();
+        std::mem::forget(workspace);
+        std::mem::forget(db_dir);
+
+        WsContext {
+            workspace_base,
+            provider: Arc::new(MockProvider::simple_response("ok")),
+            store: Arc::new(store),
+            tool_config: ToolConfig::default(),
+            auth_token: None,
+            catalog: Arc::new(ToolCatalog::default()),
+            domain_api: None,
+            automaton_controller: None,
+            project_base: None,
+            memory_manager: None,
+            skill_manager: None,
+            router_url: None,
+        }
+    }
+
+    fn gated_tool() -> InstalledToolDefinition {
+        InstalledToolDefinition {
+            name: "brave_search_web".to_string(),
+            description: "Search the web with Brave".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "query": { "type": "string" } },
+                "required": ["query"]
+            }),
+            endpoint: "https://example.com/tool".to_string(),
+            auth: ToolAuth::None,
+            timeout_ms: None,
+            namespace: None,
+            metadata: HashMap::from([
+                (
+                    "required_integration_provider".to_string(),
+                    serde_json::Value::String("brave_search".to_string()),
+                ),
+                (
+                    "required_integration_kind".to_string(),
+                    serde_json::Value::String("workspace_integration".to_string()),
+                ),
+            ]),
+        }
+    }
+
+    fn brave_integration() -> InstalledIntegrationDefinition {
+        InstalledIntegrationDefinition {
+            integration_id: "integration-brave-1".to_string(),
+            name: "Brave Search".to_string(),
+            provider: "brave_search".to_string(),
+            kind: "workspace_integration".to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn populate_tool_definitions_hides_integration_backed_tool_without_install() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.installed_tools.push(gated_tool());
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert!(
+            !session
+                .tool_definitions
+                .iter()
+                .any(|tool| tool.name == "brave_search_web")
+        );
+    }
+
+    #[test]
+    fn populate_tool_definitions_keeps_integration_backed_tool_with_install() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.installed_tools.push(gated_tool());
+        session.installed_integrations.push(brave_integration());
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert!(
+            session
+                .tool_definitions
+                .iter()
+                .any(|tool| tool.name == "brave_search_web")
+        );
+    }
 }
 
 enum TurnAction {
@@ -219,28 +368,26 @@ async fn dispatch_idle_message(
             helpers::handle_session_init(session, *init, outbound_tx, ctx);
             IdleAction::Continue
         }
-        Ok(InboundMessage::UserMessage(msg)) => match start_turn(session, msg, outbound_tx, ctx).await {
-            Some(turn) => IdleAction::StartTurn(ActiveTurn::Agent(turn)),
-            None => IdleAction::Continue,
-        },
-        Ok(InboundMessage::GenerationRequest(req)) => {
-            match ctx.router_url {
-                Some(ref url) => {
-                    match generation::start_generation(session, req, outbound_tx, url) {
-                        Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
-                        None => IdleAction::Continue,
-                    }
-                }
-                None => {
-                    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
-                        code: "no_router_url".into(),
-                        message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
-                        recoverable: false,
-                    }));
-                    IdleAction::Continue
-                }
+        Ok(InboundMessage::UserMessage(msg)) => {
+            match start_turn(session, msg, outbound_tx, ctx).await {
+                Some(turn) => IdleAction::StartTurn(ActiveTurn::Agent(turn)),
+                None => IdleAction::Continue,
             }
         }
+        Ok(InboundMessage::GenerationRequest(req)) => match ctx.router_url {
+            Some(ref url) => match generation::start_generation(session, req, outbound_tx, url) {
+                Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
+                None => IdleAction::Continue,
+            },
+            None => {
+                let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                    code: "no_router_url".into(),
+                    message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
+                    recoverable: false,
+                }));
+                IdleAction::Continue
+            }
+        },
         Ok(InboundMessage::Cancel) => {
             debug!(session_id = %session.session_id, "Cancel received but no turn is active");
             IdleAction::Continue
@@ -271,6 +418,14 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
         .visible_tools(ToolProfile::Agent, &ctx.tool_config);
 
     for tool in &session.installed_tools {
+        if !tool_has_required_integration(session, &tool.metadata) {
+            debug!(
+                session_id = %session.session_id,
+                tool_name = %tool.name,
+                "Skipping installed tool because its required integration is not authorized for this session"
+            );
+            continue;
+        }
         session
             .tool_definitions
             .push(aura_reasoner::ToolDefinition::new(
@@ -305,10 +460,7 @@ async fn start_turn(
     ));
 
     let user_msg = if let Some(ref attachments) = msg.attachments {
-        let image_atts: Vec<_> = attachments
-            .iter()
-            .filter(|a| a.type_ == "image")
-            .collect();
+        let image_atts: Vec<_> = attachments.iter().filter(|a| a.type_ == "image").collect();
         if !image_atts.is_empty() {
             let mut blocks: Vec<ContentBlock> = Vec::new();
             if !msg.content.is_empty() {

@@ -120,6 +120,20 @@ pub struct InstalledToolDefinition {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+/// Definition for an installed integration available to a runtime session.
+///
+/// Integrations are distinct from tools: an integration represents an
+/// authorized external capability, while tools may depend on one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledIntegrationDefinition {
+    pub integration_id: String,
+    pub name: String,
+    pub provider: String,
+    pub kind: String,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
 /// Context passed alongside tool calls to installed tool endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallContext {

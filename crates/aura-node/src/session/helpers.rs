@@ -118,6 +118,7 @@ pub(super) fn handle_session_init(
         session_id = %session.session_id,
         model = %session.model,
         tool_count = tools.len(),
+        integration_count = session.installed_integrations.len(),
         skill_count = skills.len(),
         "Session initialized"
     );
@@ -251,7 +252,11 @@ pub(super) async fn forward_events_to_ws(
             }),
             AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
                 let parsed = serde_json::from_str(&input).unwrap_or(serde_json::json!({}));
-                OutboundMessage::ToolCallSnapshot(ToolCallSnapshot { id, name, input: parsed })
+                OutboundMessage::ToolCallSnapshot(ToolCallSnapshot {
+                    id,
+                    name,
+                    input: parsed,
+                })
             }
             AgentLoopEvent::ToolComplete { .. }
             | AgentLoopEvent::IterationComplete { .. }

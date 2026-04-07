@@ -63,6 +63,9 @@ pub struct SessionInit {
     /// Installed tools to register for this session.
     #[serde(default)]
     pub installed_tools: Option<Vec<InstalledTool>>,
+    /// Installed integrations authorized for this session.
+    #[serde(default)]
+    pub installed_integrations: Option<Vec<InstalledIntegration>>,
     /// Workspace directory path (must be under the server's workspace base).
     #[serde(default)]
     pub workspace: Option<String>,
@@ -469,6 +472,18 @@ pub struct InstalledTool {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub namespace: Option<String>,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Definition for an installed integration, sent over the wire in `session_init`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledIntegration {
+    pub integration_id: String,
+    pub name: String,
+    pub provider: String,
+    pub kind: String,
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }

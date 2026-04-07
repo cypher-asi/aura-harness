@@ -609,6 +609,78 @@ async fn ws_cfg_installed_tools_appear_in_session_ready() {
 }
 
 #[tokio::test]
+async fn ws_cfg_integration_backed_tools_require_installed_integration() {
+    let server = start_mock_server().await;
+    let ws_path = server.workspaces_path().join("cfg-integration-gated-tools");
+    std::fs::create_dir_all(&ws_path).unwrap();
+
+    let gated_tool = json!({
+        "name": "brave_search_web",
+        "description": "Search the web using Brave",
+        "input_schema": {
+            "type": "object",
+            "properties": { "query": { "type": "string" } },
+            "required": ["query"]
+        },
+        "endpoint": "https://example.com/tool",
+        "metadata": {
+            "required_integration_provider": "brave_search",
+            "required_integration_kind": "workspace_integration"
+        }
+    });
+
+    let mut ws = WsClient::connect(&server.ws_url()).await;
+    ws.send_session_init_extended(
+        &ws_path,
+        SessionInitOpts {
+            installed_tools: Some(vec![gated_tool.clone()]),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let ready = ws.expect_session_ready().await;
+    let names: Vec<&str> = ready["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        !names.contains(&"brave_search_web"),
+        "integration-backed tool should be hidden until its integration is installed: {names:?}"
+    );
+
+    let mut ws = WsClient::connect(&server.ws_url()).await;
+    ws.send_session_init_extended(
+        &ws_path,
+        SessionInitOpts {
+            installed_tools: Some(vec![gated_tool]),
+            installed_integrations: Some(vec![json!({
+                "integration_id": "integration-brave-1",
+                "name": "Brave Search",
+                "provider": "brave_search",
+                "kind": "workspace_integration"
+            })]),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let ready = ws.expect_session_ready().await;
+    let names: Vec<&str> = ready["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"brave_search_web"),
+        "integration-backed tool should appear once its integration is installed: {names:?}"
+    );
+}
+
+#[tokio::test]
 async fn ws_cfg_conversation_messages_accepted() {
     let server = start_mock_server().await;
     let ws_path = server.workspaces_path().join("cfg-conv-msgs");

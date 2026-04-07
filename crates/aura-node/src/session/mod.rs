@@ -11,11 +11,11 @@ pub use ws_handler::handle_ws_connection;
 
 use crate::protocol::{self, SessionInit};
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
-use aura_core::{AgentId, InstalledToolDefinition};
+use aura_core::{AgentId, InstalledIntegrationDefinition, InstalledToolDefinition};
 use aura_protocol::SessionProviderConfig;
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
-use aura_store::Store;
 use aura_skills::SkillManager;
+use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
@@ -51,6 +51,8 @@ pub struct Session {
     pub max_turns: u32,
     /// Installed tools registered for this session.
     pub installed_tools: Vec<InstalledToolDefinition>,
+    /// Installed integrations authorized for this session.
+    pub installed_integrations: Vec<InstalledIntegrationDefinition>,
     /// Conversation history (accumulated across turns).
     pub messages: Vec<Message>,
     /// Cumulative input tokens across all turns.
@@ -105,6 +107,7 @@ impl Session {
             temperature: None,
             max_turns: 25,
             installed_tools: Vec::new(),
+            installed_integrations: Vec::new(),
             messages: Vec::new(),
             cumulative_input_tokens: 0,
             cumulative_output_tokens: 0,
@@ -147,6 +150,12 @@ impl Session {
             self.installed_tools = tools
                 .into_iter()
                 .map(protocol::installed_tool_to_core)
+                .collect();
+        }
+        if let Some(integrations) = init.installed_integrations {
+            self.installed_integrations = integrations
+                .into_iter()
+                .map(protocol::installed_integration_to_core)
                 .collect();
         }
         if let Some(workspace) = init.workspace {
@@ -346,6 +355,7 @@ mod tests {
             temperature: None,
             max_turns: None,
             installed_tools: None,
+            installed_integrations: None,
             workspace: None,
             project_path: Some(path.into()),
             token: None,
