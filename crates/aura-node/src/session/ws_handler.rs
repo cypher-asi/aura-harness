@@ -19,44 +19,28 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-fn required_integration_metadata(
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
-) -> Option<(Option<&str>, Option<&str>, Option<&str>)> {
-    let integration_id = metadata
-        .get("required_integration_id")
-        .and_then(serde_json::Value::as_str);
-    let provider = metadata
-        .get("required_integration_provider")
-        .and_then(serde_json::Value::as_str);
-    let kind = metadata
-        .get("required_integration_kind")
-        .and_then(serde_json::Value::as_str);
-
-    if integration_id.is_none() && provider.is_none() && kind.is_none() {
-        None
-    } else {
-        Some((integration_id, provider, kind))
-    }
-}
-
 fn tool_has_required_integration(
     session: &Session,
-    metadata: &std::collections::HashMap<String, serde_json::Value>,
+    required_integration: Option<&aura_core::InstalledToolIntegrationRequirement>,
 ) -> bool {
-    let Some((required_integration_id, required_provider, required_kind)) =
-        required_integration_metadata(metadata)
-    else {
+    let Some(required_integration) = required_integration else {
         return true;
     };
 
     session.installed_integrations.iter().any(|integration| {
-        required_integration_id
+        required_integration
+            .integration_id
+            .as_deref()
             .map(|expected| integration.integration_id == expected)
             .unwrap_or(true)
-            && required_provider
+            && required_integration
+                .provider
+                .as_deref()
                 .map(|expected| integration.provider == expected)
                 .unwrap_or(true)
-            && required_kind
+            && required_integration
+                .kind
+                .as_deref()
                 .map(|expected| integration.kind == expected)
                 .unwrap_or(true)
     })
@@ -143,7 +127,10 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{InstalledIntegrationDefinition, InstalledToolDefinition, ToolAuth};
+    use aura_core::{
+        InstalledIntegrationDefinition, InstalledToolDefinition,
+        InstalledToolIntegrationRequirement, ToolAuth,
+    };
     use aura_reasoner::MockProvider;
     use aura_store::RocksStore;
     use aura_tools::{ToolCatalog, ToolConfig};
@@ -187,16 +174,12 @@ mod tests {
             auth: ToolAuth::None,
             timeout_ms: None,
             namespace: None,
-            metadata: HashMap::from([
-                (
-                    "required_integration_provider".to_string(),
-                    serde_json::Value::String("brave_search".to_string()),
-                ),
-                (
-                    "required_integration_kind".to_string(),
-                    serde_json::Value::String("workspace_integration".to_string()),
-                ),
-            ]),
+            required_integration: Some(InstalledToolIntegrationRequirement {
+                integration_id: None,
+                provider: Some("brave_search".to_string()),
+                kind: Some("workspace_integration".to_string()),
+            }),
+            metadata: HashMap::new(),
         }
     }
 
@@ -418,7 +401,7 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
         .visible_tools(ToolProfile::Agent, &ctx.tool_config);
 
     for tool in &session.installed_tools {
-        if !tool_has_required_integration(session, &tool.metadata) {
+        if !tool_has_required_integration(session, tool.required_integration.as_ref()) {
             debug!(
                 session_id = %session.session_id,
                 tool_name = %tool.name,

@@ -459,6 +459,17 @@ pub enum ToolAuth {
 ///
 /// Wire-compatible with `aura_core::InstalledToolDefinition` but
 /// self-contained so this crate has no dependency on `aura-core`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledToolIntegrationRequirement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct InstalledTool {
@@ -472,6 +483,8 @@ pub struct InstalledTool {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_integration: Option<InstalledToolIntegrationRequirement>,
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }

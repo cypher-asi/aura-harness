@@ -104,6 +104,16 @@ pub enum ToolAuth {
 ///
 /// Installed tools are dispatched via HTTP POST to an endpoint.
 /// They can come from `tools.toml`, the HTTP install API, or `session_init`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledToolIntegrationRequirement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledToolDefinition {
     pub name: String,
@@ -116,6 +126,8 @@ pub struct InstalledToolDefinition {
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_integration: Option<InstalledToolIntegrationRequirement>,
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }

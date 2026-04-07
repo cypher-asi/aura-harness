@@ -31,6 +31,13 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
         },
         timeout_ms: t.timeout_ms,
         namespace: t.namespace,
+        required_integration: t.required_integration.map(|requirement| {
+            aura_core::InstalledToolIntegrationRequirement {
+                integration_id: requirement.integration_id,
+                provider: requirement.provider,
+                kind: requirement.kind,
+            }
+        }),
         metadata: t.metadata,
     }
 }

@@ -623,9 +623,9 @@ async fn ws_cfg_integration_backed_tools_require_installed_integration() {
             "required": ["query"]
         },
         "endpoint": "https://example.com/tool",
-        "metadata": {
-            "required_integration_provider": "brave_search",
-            "required_integration_kind": "workspace_integration"
+        "required_integration": {
+            "provider": "brave_search",
+            "kind": "workspace_integration"
         }
     });
 

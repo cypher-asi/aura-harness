@@ -82,6 +82,11 @@ fn installed_tool_roundtrip_core_to_protocol() {
         },
         timeout_ms: Some(5000),
         namespace: Some("ns".into()),
+        required_integration: Some(aura_core::InstalledToolIntegrationRequirement {
+            integration_id: None,
+            provider: Some("brave_search".into()),
+            kind: Some("workspace_integration".into()),
+        }),
         metadata: {
             let mut m = HashMap::new();
             m.insert("key".into(), serde_json::json!("value"));
@@ -98,6 +103,13 @@ fn installed_tool_roundtrip_core_to_protocol() {
     assert_eq!(core_tool.endpoint, proto_tool.endpoint);
     assert_eq!(core_tool.timeout_ms, proto_tool.timeout_ms);
     assert_eq!(core_tool.namespace, proto_tool.namespace);
+    assert_eq!(
+        core_tool.required_integration.as_ref().and_then(|req| req.provider.as_deref()),
+        proto_tool
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.provider.as_deref())
+    );
 
     let back_json =
         serde_json::to_string(&proto_tool).expect("re-serialize protocol InstalledTool");
@@ -110,6 +122,13 @@ fn installed_tool_roundtrip_core_to_protocol() {
     assert_eq!(core_tool.auth, roundtrip.auth);
     assert_eq!(core_tool.timeout_ms, roundtrip.timeout_ms);
     assert_eq!(core_tool.namespace, roundtrip.namespace);
+    assert_eq!(
+        core_tool.required_integration.as_ref().and_then(|req| req.kind.as_deref()),
+        roundtrip
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.kind.as_deref())
+    );
 }
 
 #[test]
@@ -125,6 +144,11 @@ fn installed_tool_roundtrip_protocol_to_core() {
         },
         timeout_ms: None,
         namespace: None,
+        required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
+            integration_id: None,
+            provider: Some("github".into()),
+            kind: Some("workspace_integration".into()),
+        }),
         metadata: HashMap::new(),
     };
 
@@ -135,6 +159,16 @@ fn installed_tool_roundtrip_protocol_to_core() {
     assert_eq!(proto_tool.name, core_tool.name);
     assert_eq!(proto_tool.description, core_tool.description);
     assert_eq!(proto_tool.endpoint, core_tool.endpoint);
+    assert_eq!(
+        proto_tool
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.provider.as_deref()),
+        core_tool
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.provider.as_deref())
+    );
 
     let back_json =
         serde_json::to_string(&core_tool).expect("re-serialize core InstalledToolDefinition");
@@ -143,4 +177,14 @@ fn installed_tool_roundtrip_protocol_to_core() {
 
     assert_eq!(proto_tool.name, roundtrip.name);
     assert_eq!(proto_tool.endpoint, roundtrip.endpoint);
+    assert_eq!(
+        proto_tool
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.kind.as_deref()),
+        roundtrip
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.kind.as_deref())
+    );
 }
