@@ -141,8 +141,8 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
         ))
     });
 
-    let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec);
+    let mut resolver = executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec)
+        .with_installed_tools(session.installed_tools.clone());
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
@@ -177,8 +177,8 @@ pub(super) fn build_kernel_with_config(
         ))
     });
 
-    let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec);
+    let mut resolver = executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec)
+        .with_installed_tools(session.installed_tools.clone());
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();

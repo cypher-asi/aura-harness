@@ -13,9 +13,15 @@ use crate::ToolConfig;
 use crate::ToolExecutor;
 use async_trait::async_trait;
 use aura_core::ToolDefinition;
-use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
+use aura_core::{
+    Action, ActionKind, Effect, EffectKind, EffectStatus, InstalledToolDefinition, ToolAuth,
+    ToolCall, ToolResult,
+};
 use aura_kernel::{ExecuteContext, Executor, ExecutorError};
 use bytes::Bytes;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Client;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, instrument};
 
@@ -30,6 +36,8 @@ pub struct ToolResolver {
     catalog: Arc<ToolCatalog>,
     inner: ToolExecutor,
     domain_executor: Option<Arc<DomainToolExecutor>>,
+    installed_tools: HashMap<String, InstalledToolDefinition>,
+    http_client: Client,
 }
 
 impl ToolResolver {
@@ -40,6 +48,8 @@ impl ToolResolver {
             catalog,
             inner: ToolExecutor::new(config),
             domain_executor: None,
+            installed_tools: HashMap::new(),
+            http_client: Client::new(),
         }
     }
 
@@ -47,6 +57,16 @@ impl ToolResolver {
     #[must_use]
     pub fn with_domain_executor(mut self, exec: Arc<DomainToolExecutor>) -> Self {
         self.domain_executor = Some(exec);
+        self
+    }
+
+    /// Attach installed tools that should execute via HTTP callbacks.
+    #[must_use]
+    pub fn with_installed_tools(mut self, tools: Vec<InstalledToolDefinition>) -> Self {
+        self.installed_tools = tools
+            .into_iter()
+            .map(|tool| (tool.name.clone(), tool))
+            .collect();
         self
     }
 
@@ -72,6 +92,10 @@ impl ToolResolver {
     ) -> Result<ToolResult, ToolError> {
         let tool_name = &tool_call.tool;
 
+        if let Some(tool) = self.installed_tools.get(tool_name) {
+            return self.execute_installed_tool(ctx, tool, &tool_call.args).await;
+        }
+
         // Domain tools (specs, tasks, project) — pure HTTP calls that
         // never touch the filesystem, so they must be dispatched before
         // Sandbox::new to avoid failing when the workspace dir is
@@ -94,6 +118,91 @@ impl ToolResolver {
         // Built-in tools — delegates permission checks, sandbox, and dispatch
         // to ToolExecutor so the logic is not duplicated.
         self.inner.execute_tool(ctx, tool_call).await
+    }
+
+    async fn execute_installed_tool(
+        &self,
+        ctx: &ExecuteContext,
+        tool: &InstalledToolDefinition,
+        args: &serde_json::Value,
+    ) -> Result<ToolResult, ToolError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        match &tool.auth {
+            ToolAuth::None => {}
+            ToolAuth::Bearer { token } => {
+                let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+                    ToolError::ExternalToolError(format!("invalid bearer auth header: {e}"))
+                })?;
+                headers.insert(AUTHORIZATION, value);
+            }
+            ToolAuth::ApiKey { header, key } => {
+                let name = HeaderName::from_bytes(header.as_bytes()).map_err(|e| {
+                    ToolError::ExternalToolError(format!("invalid auth header name: {e}"))
+                })?;
+                let value = HeaderValue::from_str(key).map_err(|e| {
+                    ToolError::ExternalToolError(format!("invalid api key header value: {e}"))
+                })?;
+                headers.insert(name, value);
+            }
+            ToolAuth::Headers { headers: extra } => {
+                for (name, value) in extra {
+                    let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
+                        ToolError::ExternalToolError(format!(
+                            "invalid auth header name `{name}`: {e}"
+                        ))
+                    })?;
+                    let header_value = HeaderValue::from_str(value).map_err(|e| {
+                        ToolError::ExternalToolError(format!(
+                            "invalid auth header value for `{name}`: {e}"
+                        ))
+                    })?;
+                    headers.insert(header_name, header_value);
+                }
+            }
+        }
+
+        headers.insert(
+            HeaderName::from_static("x-aura-agent-id"),
+            HeaderValue::from_str(&ctx.agent_id.to_string())
+                .map_err(|e| {
+                    ToolError::ExternalToolError(format!("invalid x-aura-agent-id header: {e}"))
+                })?,
+        );
+
+        let request = self
+            .http_client
+            .post(&tool.endpoint)
+            .headers(headers)
+            .json(args)
+            .timeout(std::time::Duration::from_millis(
+                tool.timeout_ms.unwrap_or(30_000),
+            ));
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ToolError::ExternalToolCallbackUnreachable {
+                url: tool.endpoint.clone(),
+                reason: e.to_string(),
+            })?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ToolError::ExternalToolError(format!(
+                "reading installed tool response failed: {e}"
+            )))?;
+
+        if status.is_success() {
+            Ok(ToolResult::success(&tool.name, body))
+        } else {
+            Err(ToolError::ExternalToolCallbackFailed {
+                url: tool.endpoint.clone(),
+                status: status.as_u16(),
+                body,
+            })
+        }
     }
 }
 
