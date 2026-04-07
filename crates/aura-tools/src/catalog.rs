@@ -8,7 +8,7 @@
 use crate::definitions;
 use crate::tool::builtin_tools;
 use crate::ToolConfig;
-use aura_core::ToolDefinition;
+use aura_core::{InstalledToolDefinition, ToolDefinition};
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -127,6 +127,44 @@ impl ToolCatalog {
             .collect()
     }
 
+    /// Return a cloned catalog extended with installed tool definitions for the
+    /// given profile. Existing tool names win to avoid shadowing built-ins.
+    #[must_use]
+    pub fn with_installed_tools(
+        &self,
+        profile: ToolProfile,
+        installed_tools: &[InstalledToolDefinition],
+    ) -> Self {
+        if installed_tools.is_empty() {
+            return Self {
+                entries: self.entries.clone(),
+            };
+        }
+
+        let mut entries = self.entries.clone();
+        let mut seen = entries
+            .iter()
+            .map(|entry| entry.definition.name.clone())
+            .collect::<HashSet<_>>();
+
+        for tool in installed_tools {
+            if !seen.insert(tool.name.clone()) {
+                continue;
+            }
+            entries.push(CatalogEntry {
+                definition: ToolDefinition::new(
+                    tool.name.clone(),
+                    tool.description.clone(),
+                    tool.input_schema.clone(),
+                ),
+                owner: ToolOwner::Internal,
+                profiles: vec![profile],
+            });
+        }
+
+        Self { entries }
+    }
+
     /// Get visible tools for a profile, filtered by `ToolConfig` permissions.
     #[must_use]
     pub fn visible_tools(&self, profile: ToolProfile, config: &ToolConfig) -> Vec<ToolDefinition> {
@@ -230,6 +268,7 @@ fn add_project_id_param(mut td: ToolDefinition) -> ToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_core::{InstalledToolDefinition, ToolAuth};
 
     #[test]
     fn catalog_has_entries() {
@@ -343,5 +382,32 @@ mod tests {
                 tool.name()
             );
         }
+    }
+
+    #[test]
+    fn with_installed_tools_adds_model_visible_tools_for_profile() {
+        let cat = ToolCatalog::new();
+        let extended = cat.with_installed_tools(
+            ToolProfile::Engine,
+            &[InstalledToolDefinition {
+                name: "brave_search_web".to_string(),
+                description: "Search the web using Brave".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                }),
+                endpoint: "https://example.com/tool".to_string(),
+                auth: ToolAuth::None,
+                timeout_ms: None,
+                namespace: None,
+                required_integration: None,
+                metadata: Default::default(),
+            }],
+        );
+
+        let tools = extended.tools_for_profile(ToolProfile::Engine);
+        let names: HashSet<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert!(names.contains("brave_search_web"));
     }
 }

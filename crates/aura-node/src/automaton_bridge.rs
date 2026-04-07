@@ -20,7 +20,10 @@ use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_automaton::{
     AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton,
 };
-use aura_core::{AgentId, SystemKind, Transaction, TransactionType};
+use aura_core::{
+    AgentId, InstalledIntegrationDefinition, InstalledToolDefinition, SystemKind, Transaction,
+    TransactionType,
+};
 use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
@@ -31,6 +34,7 @@ use aura_tools::ToolConfig;
 
 use crate::executor_factory;
 use crate::jwt_domain::JwtDomainApi;
+use crate::protocol::{installed_integration_to_core, installed_tool_to_core};
 
 const EVENT_BROADCAST_CAPACITY: usize = 512;
 
@@ -89,6 +93,56 @@ impl AutomatonBridge {
         }
     }
 
+    fn tool_has_required_integration(
+        required_integration: Option<&aura_core::InstalledToolIntegrationRequirement>,
+        installed_integrations: &[InstalledIntegrationDefinition],
+    ) -> bool {
+        let Some(required_integration) = required_integration else {
+            return true;
+        };
+
+        installed_integrations.iter().any(|integration| {
+            required_integration
+                .integration_id
+                .as_deref()
+                .map(|expected| integration.integration_id == expected)
+                .unwrap_or(true)
+                && required_integration
+                    .provider
+                    .as_deref()
+                    .map(|expected| integration.provider == expected)
+                    .unwrap_or(true)
+                && required_integration
+                    .kind
+                    .as_deref()
+                    .map(|expected| integration.kind == expected)
+                    .unwrap_or(true)
+        })
+    }
+
+    fn prepare_installed_tools(
+        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+    ) -> Vec<InstalledToolDefinition> {
+        let installed_integrations = installed_integrations
+            .unwrap_or_default()
+            .into_iter()
+            .map(installed_integration_to_core)
+            .collect::<Vec<_>>();
+
+        installed_tools
+            .unwrap_or_default()
+            .into_iter()
+            .map(installed_tool_to_core)
+            .filter(|tool| {
+                Self::tool_has_required_integration(
+                    tool.required_integration.as_ref(),
+                    &installed_integrations,
+                )
+            })
+            .collect()
+    }
+
     /// Build a per-agent [`Kernel`] backed by the shared store.
     ///
     /// The returned kernel owns an `ExecutorRouter` wired to the domain API
@@ -101,6 +155,7 @@ impl AutomatonBridge {
         project_id: Option<&str>,
         workspace: &std::path::Path,
         use_workspace_base_as_root: bool,
+        installed_tools: Vec<InstalledToolDefinition>,
     ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -111,7 +166,8 @@ impl AutomatonBridge {
             &self.catalog,
             &self.tool_config,
             Some(domain_exec),
-        );
+        )
+        .with_installed_tools(installed_tools.clone());
         let router = executor_factory::build_executor_router(resolver);
         let agent_id = AgentId::generate();
         let config = KernelConfig {
@@ -131,7 +187,8 @@ impl AutomatonBridge {
             Err(e) => {
                 warn!(error = %e, "Kernel::new failed, falling back to fresh agent id");
                 let fallback_router = executor_factory::build_executor_router(
-                    executor_factory::build_tool_resolver(&self.catalog, &self.tool_config, None),
+                    executor_factory::build_tool_resolver(&self.catalog, &self.tool_config, None)
+                        .with_installed_tools(installed_tools),
                 );
                 Arc::new(
                     Kernel::new(
@@ -149,6 +206,143 @@ impl AutomatonBridge {
                 )
             }
         }
+    }
+
+    pub(crate) async fn start_dev_loop_with_capabilities(
+        &self,
+        project_id: &str,
+        workspace_root: Option<PathBuf>,
+        auth_token: Option<String>,
+        model: Option<String>,
+        git_repo_url: Option<String>,
+        git_branch: Option<String>,
+        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+    ) -> Result<String, String> {
+        if let Some(entry) = self.project_handles.get(project_id) {
+            let (ref id, ref handle) = *entry;
+            if !handle.is_finished() {
+                return Err(format!(
+                    "A dev loop is already running for project {project_id} (automaton_id: {id})"
+                ));
+            }
+            drop(entry);
+            self.project_handles.remove(project_id);
+        }
+
+        let domain = self.domain_with_jwt(auth_token.as_deref());
+        let effective_workspace = workspace_root.clone();
+        let ws_path = effective_workspace
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let installed_tools =
+            Self::prepare_installed_tools(installed_tools, installed_integrations);
+
+        let kernel = self.build_kernel(
+            domain.clone(),
+            auth_token.as_deref(),
+            Some(project_id),
+            ws_path,
+            effective_workspace.is_some(),
+            installed_tools.clone(),
+        );
+        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
+        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
+            Arc::new(KernelToolGateway::new(kernel.clone()));
+
+        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
+        let catalog = Arc::new(
+            self.catalog
+                .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
+        );
+
+        let automaton = DevLoopAutomaton::new(domain, model_gw, runner_config, catalog)
+            .with_tool_executor(tool_gw);
+
+        let config = serde_json::json!({
+            "project_id": project_id,
+            "git_repo_url": git_repo_url,
+            "git_branch": git_branch,
+            "auth_token": auth_token.as_deref(),
+        });
+
+        let (handle, event_rx) = self
+            .runtime
+            .install(Box::new(automaton), config, effective_workspace)
+            .await
+            .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
+
+        let automaton_id = handle.id().as_str().to_string();
+        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_dev_loop");
+        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
+
+        info!(project_id, automaton_id = %automaton_id, "Dev loop started");
+        self.project_handles
+            .insert(project_id.to_string(), (automaton_id.clone(), handle));
+        Ok(automaton_id)
+    }
+
+    pub(crate) async fn run_task_with_capabilities(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        workspace_root: Option<PathBuf>,
+        auth_token: Option<String>,
+        model: Option<String>,
+        git_repo_url: Option<String>,
+        git_branch: Option<String>,
+        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+    ) -> Result<String, String> {
+        let domain = self.domain_with_jwt(auth_token.as_deref());
+        let effective_workspace = workspace_root.clone();
+        let ws_path = effective_workspace
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let installed_tools =
+            Self::prepare_installed_tools(installed_tools, installed_integrations);
+
+        let kernel = self.build_kernel(
+            domain.clone(),
+            auth_token.as_deref(),
+            Some(project_id),
+            ws_path,
+            effective_workspace.is_some(),
+            installed_tools.clone(),
+        );
+        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
+        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
+            Arc::new(KernelToolGateway::new(kernel.clone()));
+
+        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
+        let catalog = Arc::new(
+            self.catalog
+                .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
+        );
+
+        let automaton = TaskRunAutomaton::new(domain, model_gw, runner_config, catalog)
+            .with_tool_executor(tool_gw);
+
+        let config = serde_json::json!({
+            "project_id": project_id,
+            "task_id": task_id,
+            "git_repo_url": git_repo_url,
+            "git_branch": git_branch,
+            "auth_token": auth_token.as_deref(),
+        });
+
+        let (handle, event_rx) = self
+            .runtime
+            .install(Box::new(automaton), config, effective_workspace)
+            .await
+            .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
+
+        let automaton_id = handle.id().as_str().to_string();
+        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_task_run");
+        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
+
+        info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
+        Ok(automaton_id)
     }
 
     /// Record an automaton lifecycle event as a System transaction.
@@ -271,61 +465,17 @@ impl AutomatonController for AutomatonBridge {
         git_repo_url: Option<String>,
         git_branch: Option<String>,
     ) -> Result<String, String> {
-        if let Some(entry) = self.project_handles.get(project_id) {
-            let (ref id, ref handle) = *entry;
-            if !handle.is_finished() {
-                return Err(format!(
-                    "A dev loop is already running for project {project_id} (automaton_id: {id})"
-                ));
-            }
-            drop(entry);
-            self.project_handles.remove(project_id);
-        }
-
-        let domain = self.domain_with_jwt(auth_token.as_deref());
-        let effective_workspace = workspace_root.clone();
-        let ws_path = effective_workspace
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new("."));
-
-        let kernel = self.build_kernel(
-            domain.clone(),
-            auth_token.as_deref(),
-            Some(project_id),
-            ws_path,
-            effective_workspace.is_some(),
-        );
-        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
-        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
-            Arc::new(KernelToolGateway::new(kernel.clone()));
-
-        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
-
-        let automaton =
-            DevLoopAutomaton::new(domain, model_gw, runner_config, self.catalog.clone())
-                .with_tool_executor(tool_gw);
-
-        let config = serde_json::json!({
-            "project_id": project_id,
-            "git_repo_url": git_repo_url,
-            "git_branch": git_branch,
-            "auth_token": auth_token.as_deref(),
-        });
-
-        let (handle, event_rx) = self
-            .runtime
-            .install(Box::new(automaton), config, effective_workspace)
-            .await
-            .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
-
-        let automaton_id = handle.id().as_str().to_string();
-        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_dev_loop");
-        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
-
-        info!(project_id, automaton_id = %automaton_id, "Dev loop started");
-        self.project_handles
-            .insert(project_id.to_string(), (automaton_id.clone(), handle));
-        Ok(automaton_id)
+        self.start_dev_loop_with_capabilities(
+            project_id,
+            workspace_root,
+            auth_token,
+            model,
+            git_repo_url,
+            git_branch,
+            None,
+            None,
+        )
+        .await
     }
 
     async fn pause_dev_loop(&self, project_id: &str) -> Result<(), String> {
@@ -371,48 +521,104 @@ impl AutomatonController for AutomatonBridge {
         git_repo_url: Option<String>,
         git_branch: Option<String>,
     ) -> Result<String, String> {
-        let domain = self.domain_with_jwt(auth_token.as_deref());
-        let effective_workspace = workspace_root.clone();
-        let ws_path = effective_workspace
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new("."));
+        self.run_task_with_capabilities(
+            project_id,
+            task_id,
+            workspace_root,
+            auth_token,
+            model,
+            git_repo_url,
+            git_branch,
+            None,
+            None,
+        )
+        .await
+    }
+}
 
-        let kernel = self.build_kernel(
-            domain.clone(),
-            auth_token.as_deref(),
-            Some(project_id),
-            ws_path,
-            effective_workspace.is_some(),
+#[cfg(test)]
+mod tests {
+    use super::AutomatonBridge;
+
+    #[test]
+    fn prepare_installed_tools_filters_by_required_integration() {
+        let tools = AutomatonBridge::prepare_installed_tools(
+            Some(vec![
+                aura_protocol::InstalledTool {
+                    name: "brave_search_web".to_string(),
+                    description: "Search the web using Brave".to_string(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    }),
+                    endpoint: "https://example.com/brave".to_string(),
+                    auth: aura_protocol::ToolAuth::None,
+                    timeout_ms: None,
+                    namespace: None,
+                    required_integration: Some(
+                        aura_protocol::InstalledToolIntegrationRequirement {
+                            integration_id: None,
+                            provider: Some("brave_search".to_string()),
+                            kind: Some("workspace_integration".to_string()),
+                        },
+                    ),
+                    metadata: Default::default(),
+                },
+                aura_protocol::InstalledTool {
+                    name: "list_org_integrations".to_string(),
+                    description: "List org integrations".to_string(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {},
+                    }),
+                    endpoint: "https://example.com/list".to_string(),
+                    auth: aura_protocol::ToolAuth::None,
+                    timeout_ms: None,
+                    namespace: None,
+                    required_integration: None,
+                    metadata: Default::default(),
+                },
+            ]),
+            Some(vec![aura_protocol::InstalledIntegration {
+                integration_id: "brave-1".to_string(),
+                name: "Brave Search".to_string(),
+                provider: "brave_search".to_string(),
+                kind: "workspace_integration".to_string(),
+                metadata: Default::default(),
+            }]),
         );
-        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
-        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
-            Arc::new(KernelToolGateway::new(kernel.clone()));
 
-        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
+        let names = tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"brave_search_web"));
+        assert!(names.contains(&"list_org_integrations"));
 
-        let automaton =
-            TaskRunAutomaton::new(domain, model_gw, runner_config, self.catalog.clone())
-                .with_tool_executor(tool_gw);
+        let filtered = AutomatonBridge::prepare_installed_tools(
+            Some(vec![aura_protocol::InstalledTool {
+                name: "brave_search_web".to_string(),
+                description: "Search the web using Brave".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                }),
+                endpoint: "https://example.com/brave".to_string(),
+                auth: aura_protocol::ToolAuth::None,
+                timeout_ms: None,
+                namespace: None,
+                required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
+                    integration_id: None,
+                    provider: Some("brave_search".to_string()),
+                    kind: Some("workspace_integration".to_string()),
+                }),
+                metadata: Default::default(),
+            }]),
+            None,
+        );
 
-        let config = serde_json::json!({
-            "project_id": project_id,
-            "task_id": task_id,
-            "git_repo_url": git_repo_url,
-            "git_branch": git_branch,
-            "auth_token": auth_token.as_deref(),
-        });
-
-        let (handle, event_rx) = self
-            .runtime
-            .install(Box::new(automaton), config, effective_workspace)
-            .await
-            .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
-
-        let automaton_id = handle.id().as_str().to_string();
-        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_task_run");
-        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
-
-        info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
-        Ok(automaton_id)
+        assert!(filtered.is_empty());
     }
 }
