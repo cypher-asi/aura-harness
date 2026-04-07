@@ -40,7 +40,7 @@ use crate::error::StoreError;
 use crate::keys::{AgentMetaKey, InboxKey, KeyCodec, RecordKey};
 use crate::store::Store;
 use aura_core::AgentStatus;
-use aura_core::{AgentId, RecordEntry, Transaction};
+use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, Transaction};
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,
     Options, WriteBatch, WriteOptions,
@@ -78,6 +78,7 @@ impl RocksStore {
             cf::MEMORY_PROCEDURES,
             cf::MEMORY_EVENT_INDEX,
             cf::AGENT_SKILLS,
+            cf::RUNTIME_CAPABILITIES,
         ];
         let cf_descriptors: Vec<_> = cf_names
             .iter()
@@ -132,6 +133,115 @@ impl RocksStore {
             }
             None => Ok(0), // Default to 0 if not set
         }
+    }
+
+    fn runtime_capability_key(agent_id: AgentId) -> [u8; 32] {
+        *agent_id.as_bytes()
+    }
+
+    fn append_entry_direct_internal(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        let cf_record = self.cf(cf::RECORD)?;
+        let cf_meta = self.cf(cf::AGENT_META)?;
+        let cf_runtime_capabilities = self.cf(cf::RUNTIME_CAPABILITIES)?;
+
+        let current_head = self.get_head_seq(agent_id)?;
+        if next_seq != current_head + 1 {
+            return Err(StoreError::SequenceMismatch {
+                expected: current_head + 1,
+                actual: next_seq,
+            });
+        }
+
+        let entry_bytes = serde_json::to_vec(entry)?;
+        let record_key = RecordKey::new(agent_id, next_seq);
+        let head_seq_key = AgentMetaKey::head_seq(agent_id);
+        let capability_key = Self::runtime_capability_key(agent_id);
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
+        batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
+
+        if clear_runtime_capabilities {
+            batch.delete_cf(&cf_runtime_capabilities, capability_key);
+        }
+
+        if let Some(runtime_capabilities) = runtime_capabilities {
+            let capability_bytes = serde_json::to_vec(runtime_capabilities)?;
+            batch.put_cf(
+                &cf_runtime_capabilities,
+                Self::runtime_capability_key(agent_id),
+                capability_bytes,
+            );
+        }
+
+        self.db.write_opt(batch, &self.write_opts())?;
+        debug!("Record entry committed (direct)");
+        Ok(())
+    }
+
+    fn append_entry_atomic_internal(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        dequeued_inbox_seq: u64,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        let cf_record = self.cf(cf::RECORD)?;
+        let cf_meta = self.cf(cf::AGENT_META)?;
+        let cf_inbox = self.cf(cf::INBOX)?;
+        let cf_runtime_capabilities = self.cf(cf::RUNTIME_CAPABILITIES)?;
+
+        let current_head = self.get_head_seq(agent_id)?;
+        if next_seq != current_head + 1 {
+            return Err(StoreError::SequenceMismatch {
+                expected: current_head + 1,
+                actual: next_seq,
+            });
+        }
+
+        let entry_bytes = serde_json::to_vec(entry)?;
+        let record_key = RecordKey::new(agent_id, next_seq);
+        let head_seq_key = AgentMetaKey::head_seq(agent_id);
+        let inbox_key = InboxKey::new(agent_id, dequeued_inbox_seq);
+        let inbox_head_key = AgentMetaKey::inbox_head(agent_id);
+        let capability_key = Self::runtime_capability_key(agent_id);
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
+        batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
+        batch.delete_cf(&cf_inbox, inbox_key.encode());
+        batch.put_cf(
+            &cf_meta,
+            inbox_head_key.encode(),
+            (dequeued_inbox_seq + 1).to_be_bytes(),
+        );
+
+        if clear_runtime_capabilities {
+            batch.delete_cf(&cf_runtime_capabilities, capability_key);
+        }
+
+        if let Some(runtime_capabilities) = runtime_capabilities {
+            let capability_bytes = serde_json::to_vec(runtime_capabilities)?;
+            batch.put_cf(
+                &cf_runtime_capabilities,
+                Self::runtime_capability_key(agent_id),
+                capability_bytes,
+            );
+        }
+
+        self.db.write_opt(batch, &self.write_opts())?;
+
+        debug!("Record entry committed atomically");
+        Ok(())
     }
 }
 
@@ -210,44 +320,27 @@ impl Store for RocksStore {
         entry: &RecordEntry,
         dequeued_inbox_seq: u64,
     ) -> Result<(), StoreError> {
-        let cf_record = self.cf(cf::RECORD)?;
-        let cf_meta = self.cf(cf::AGENT_META)?;
-        let cf_inbox = self.cf(cf::INBOX)?;
+        self.append_entry_atomic_internal(agent_id, next_seq, entry, dequeued_inbox_seq, None, false)
+    }
 
-        // Verify sequence
-        let current_head = self.get_head_seq(agent_id)?;
-        if next_seq != current_head + 1 {
-            return Err(StoreError::SequenceMismatch {
-                expected: current_head + 1,
-                actual: next_seq,
-            });
-        }
-
-        // Serialize entry
-        let entry_bytes = serde_json::to_vec(entry)?;
-
-        // Create keys
-        let record_key = RecordKey::new(agent_id, next_seq);
-        let head_seq_key = AgentMetaKey::head_seq(agent_id);
-        let inbox_key = InboxKey::new(agent_id, dequeued_inbox_seq);
-        let inbox_head_key = AgentMetaKey::inbox_head(agent_id);
-
-        // Atomic batch write
-        let mut batch = WriteBatch::default();
-
-        batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
-        batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
-        batch.delete_cf(&cf_inbox, inbox_key.encode());
-        batch.put_cf(
-            &cf_meta,
-            inbox_head_key.encode(),
-            (dequeued_inbox_seq + 1).to_be_bytes(),
-        );
-
-        self.db.write_opt(batch, &self.write_opts())?;
-
-        debug!("Record entry committed atomically");
-        Ok(())
+    #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_dequeued_with_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        token: crate::store::DequeueToken,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        self.append_entry_atomic_internal(
+            agent_id,
+            next_seq,
+            entry,
+            token.inbox_seq(),
+            runtime_capabilities,
+            clear_runtime_capabilities,
+        )
     }
 
     #[instrument(skip(self, entry), fields(agent_id = %agent_id, seq = next_seq))]
@@ -257,29 +350,25 @@ impl Store for RocksStore {
         next_seq: u64,
         entry: &RecordEntry,
     ) -> Result<(), StoreError> {
-        let cf_record = self.cf(cf::RECORD)?;
-        let cf_meta = self.cf(cf::AGENT_META)?;
+        self.append_entry_direct_internal(agent_id, next_seq, entry, None, false)
+    }
 
-        let current_head = self.get_head_seq(agent_id)?;
-        if next_seq != current_head + 1 {
-            return Err(StoreError::SequenceMismatch {
-                expected: current_head + 1,
-                actual: next_seq,
-            });
-        }
-
-        let entry_bytes = serde_json::to_vec(entry)?;
-        let record_key = RecordKey::new(agent_id, next_seq);
-        let head_seq_key = AgentMetaKey::head_seq(agent_id);
-
-        let mut batch = WriteBatch::default();
-        batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
-        batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
-
-        self.db.write_opt(batch, &self.write_opts())?;
-
-        debug!("Record entry committed (direct)");
-        Ok(())
+    #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_direct_with_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        self.append_entry_direct_internal(
+            agent_id,
+            next_seq,
+            entry,
+            runtime_capabilities,
+            clear_runtime_capabilities,
+        )
     }
 
     #[instrument(skip(self, entries), fields(agent_id = %agent_id, base_seq, count = entries.len()))]
@@ -398,6 +487,24 @@ impl Store for RocksStore {
                     .ok_or_else(|| StoreError::Deserialization("invalid agent status".to_string()))
             }
             None => Ok(AgentStatus::default()),
+        }
+    }
+
+    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    fn get_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<Option<RuntimeCapabilityInstall>, StoreError> {
+        let cf = self.cf(cf::RUNTIME_CAPABILITIES)?;
+        let key = Self::runtime_capability_key(agent_id);
+
+        match self.db.get_cf(&cf, key)? {
+            Some(bytes) => {
+                let capability_state = serde_json::from_slice(&bytes)
+                    .map_err(|e| StoreError::Deserialization(e.to_string()))?;
+                Ok(Some(capability_state))
+            }
+            None => Ok(None),
         }
     }
 

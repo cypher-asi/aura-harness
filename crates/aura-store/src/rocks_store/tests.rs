@@ -1,6 +1,11 @@
 use super::*;
-use aura_core::{Decision, Hash, ProposalSet, TransactionType};
+use aura_core::{
+    Decision, Hash, InstalledIntegrationDefinition, InstalledToolCapability,
+    InstalledToolIntegrationRequirement, ProposalSet, RuntimeCapabilityInstall, SystemKind,
+    TransactionType,
+};
 use bytes::Bytes;
+use std::collections::HashMap;
 use tempfile::TempDir;
 
 fn create_test_store() -> (RocksStore, TempDir) {
@@ -590,4 +595,115 @@ fn test_append_entry_dequeued() {
 
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
     assert!(!store.has_pending_tx(agent_id).unwrap());
+}
+
+#[test]
+fn test_append_entry_dequeued_with_runtime_capabilities() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+    let tx = create_test_tx(agent_id);
+    store.enqueue_tx(&tx).unwrap();
+
+    let (token, dequeued_tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let entry = RecordEntry::builder(1, dequeued_tx).build();
+    let runtime_capabilities = RuntimeCapabilityInstall {
+        system_kind: SystemKind::CapabilityInstall,
+        scope: "session".to_string(),
+        session_id: Some("session-1".to_string()),
+        installed_integrations: vec![],
+        installed_tools: vec![InstalledToolCapability {
+            name: "brave_search_web".to_string(),
+            required_integration: None,
+        }],
+    };
+
+    store
+        .append_entry_dequeued_with_runtime_capabilities(
+            agent_id,
+            1,
+            &entry,
+            token,
+            Some(&runtime_capabilities),
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(store.get_runtime_capabilities(agent_id).unwrap(), Some(runtime_capabilities));
+    assert!(!store.has_pending_tx(agent_id).unwrap());
+}
+
+#[test]
+fn test_runtime_capabilities_round_trip() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+    let tx = create_test_tx(agent_id);
+    let entry = RecordEntry::builder(1, tx).build();
+    let runtime_capabilities = RuntimeCapabilityInstall {
+        system_kind: SystemKind::CapabilityInstall,
+        scope: "session".to_string(),
+        session_id: Some("session-1".to_string()),
+        installed_integrations: vec![InstalledIntegrationDefinition {
+            integration_id: "integration-brave-1".to_string(),
+            name: "Brave Search".to_string(),
+            provider: "brave_search".to_string(),
+            kind: "workspace_integration".to_string(),
+            metadata: HashMap::new(),
+        }],
+        installed_tools: vec![InstalledToolCapability {
+            name: "brave_search_web".to_string(),
+            required_integration: Some(InstalledToolIntegrationRequirement {
+                integration_id: None,
+                provider: Some("brave_search".to_string()),
+                kind: Some("workspace_integration".to_string()),
+            }),
+        }],
+    };
+
+    store
+        .append_entry_direct_with_runtime_capabilities(
+            agent_id,
+            1,
+            &entry,
+            Some(&runtime_capabilities),
+            false,
+        )
+        .unwrap();
+
+    let persisted = store.get_runtime_capabilities(agent_id).unwrap();
+    assert_eq!(persisted, Some(runtime_capabilities));
+}
+
+#[test]
+fn test_runtime_capabilities_can_be_cleared_atomically() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    let entry1 = RecordEntry::builder(1, create_test_tx(agent_id)).build();
+    let runtime_capabilities = RuntimeCapabilityInstall {
+        system_kind: SystemKind::CapabilityInstall,
+        scope: "session".to_string(),
+        session_id: Some("session-1".to_string()),
+        installed_integrations: vec![],
+        installed_tools: vec![InstalledToolCapability {
+            name: "brave_search_web".to_string(),
+            required_integration: None,
+        }],
+    };
+    store
+        .append_entry_direct_with_runtime_capabilities(
+            agent_id,
+            1,
+            &entry1,
+            Some(&runtime_capabilities),
+            false,
+        )
+        .unwrap();
+    assert!(store.get_runtime_capabilities(agent_id).unwrap().is_some());
+
+    let entry2 = RecordEntry::builder(2, create_test_tx(agent_id)).build();
+    store
+        .append_entry_direct_with_runtime_capabilities(agent_id, 2, &entry2, None, true)
+        .unwrap();
+
+    assert_eq!(store.get_runtime_capabilities(agent_id).unwrap(), None);
 }

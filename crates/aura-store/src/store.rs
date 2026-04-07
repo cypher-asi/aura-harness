@@ -1,7 +1,7 @@
 //! Store trait definition.
 
 use crate::error::StoreError;
-use aura_core::{AgentId, AgentStatus, RecordEntry, Transaction};
+use aura_core::{AgentId, AgentStatus, RecordEntry, RuntimeCapabilityInstall, Transaction};
 
 /// Opaque token produced by [`Store::dequeue_tx`] and consumed exactly once
 /// by [`Store::append_entry_atomic`] or [`Store::append_entry_dequeued`].
@@ -89,6 +89,18 @@ pub trait Store: Send + Sync {
         self.append_entry_atomic(agent_id, next_seq, entry, token.inbox_seq)
     }
 
+    /// Append a record entry coupled with an inbox dequeue while atomically
+    /// updating the persisted runtime capability ledger.
+    fn append_entry_dequeued_with_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        token: DequeueToken,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError>;
+
     /// Append a record entry without touching the inbox (direct / non-inbox callers).
     ///
     /// Commits in a single `WriteBatch`:
@@ -102,6 +114,21 @@ pub trait Store: Send + Sync {
         agent_id: AgentId,
         next_seq: u64,
         entry: &RecordEntry,
+    ) -> Result<(), StoreError>;
+
+    /// Append a record entry without touching the inbox, while atomically
+    /// updating the persisted runtime capability ledger.
+    ///
+    /// When `clear_runtime_capabilities` is true, any prior ledger snapshot is
+    /// removed in the same write. When `runtime_capabilities` is present, it is
+    /// written as the new authoritative snapshot.
+    fn append_entry_direct_with_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
     ) -> Result<(), StoreError>;
 
     /// Atomically append multiple record entries in a single `WriteBatch`.
@@ -144,6 +171,15 @@ pub trait Store: Send + Sync {
     /// # Errors
     /// Returns error if the read fails.
     fn get_agent_status(&self, agent_id: AgentId) -> Result<AgentStatus, StoreError>;
+
+    /// Get the current persisted runtime capability snapshot for an agent.
+    ///
+    /// Returns `None` if no snapshot has been recorded or if the current
+    /// session boundary cleared the ledger.
+    fn get_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<Option<RuntimeCapabilityInstall>, StoreError>;
 
     /// Set agent status.
     ///

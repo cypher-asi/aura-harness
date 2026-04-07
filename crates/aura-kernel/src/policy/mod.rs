@@ -10,7 +10,7 @@
 
 use aura_core::{
     ActionKind, InstalledIntegrationDefinition, InstalledToolIntegrationRequirement, Proposal,
-    ToolCall,
+    RuntimeCapabilityInstall, ToolCall,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -279,6 +279,17 @@ impl Policy {
     /// Check if a proposal is allowed.
     #[must_use]
     pub fn check(&self, proposal: &Proposal) -> PolicyResult {
+        self.check_with_runtime_capabilities(proposal, None)
+    }
+
+    /// Check if a proposal is allowed against an optional persisted runtime
+    /// capability snapshot.
+    #[must_use]
+    pub fn check_with_runtime_capabilities(
+        &self,
+        proposal: &Proposal,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+    ) -> PolicyResult {
         if !self
             .config
             .allowed_action_kinds
@@ -296,7 +307,11 @@ impl Policy {
 
         if proposal.action_kind == ActionKind::Delegate {
             if let Ok(tool_call) = serde_json::from_slice::<ToolCall>(&proposal.payload) {
-                let result = self.check_tool(&tool_call.tool, &tool_call.args);
+                let result = self.check_tool_with_runtime_capabilities(
+                    &tool_call.tool,
+                    &tool_call.args,
+                    runtime_capabilities,
+                );
                 if !result.allowed {
                     return result;
                 }
@@ -319,7 +334,20 @@ impl Policy {
     /// Check if a tool call is allowed (includes session approval check).
     #[must_use]
     pub fn check_tool(&self, tool: &str, _input: &serde_json::Value) -> PolicyResult {
-        let integration_gate = self.integration_requirement_satisfied(tool);
+        self.check_tool_with_runtime_capabilities(tool, _input, None)
+    }
+
+    /// Check if a tool call is allowed against an optional persisted runtime
+    /// capability snapshot.
+    #[must_use]
+    pub fn check_tool_with_runtime_capabilities(
+        &self,
+        tool: &str,
+        _input: &serde_json::Value,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+    ) -> PolicyResult {
+        let integration_gate =
+            self.integration_requirement_satisfied(tool, runtime_capabilities);
         let permission = self.check_tool_permission(tool);
 
         match permission {
@@ -362,31 +390,53 @@ impl Policy {
         self.config.add_allowed_tools(names);
     }
 
-    fn integration_requirement_satisfied(&self, tool: &str) -> Option<String> {
-        let Some(required_integration) = self.config.tool_integration_requirements.get(tool) else {
+    fn integration_requirement_satisfied(
+        &self,
+        tool: &str,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+    ) -> Option<String> {
+        let required_integration = if let Some(runtime_capabilities) = runtime_capabilities {
+            match runtime_capabilities.tool_capability(tool) {
+                Some(tool_capability) => tool_capability.required_integration.as_ref(),
+                None if self.config.tool_integration_requirements.contains_key(tool) => {
+                    return Some(format!(
+                        "Tool '{tool}' is not installed in the kernel runtime capability ledger"
+                    ));
+                }
+                None => self.config.tool_integration_requirements.get(tool),
+            }
+        } else {
+            self.config.tool_integration_requirements.get(tool)
+        };
+        let Some(required_integration) = required_integration else {
             return None;
         };
 
-        let installed = self
-            .config
-            .installed_integrations
-            .iter()
-            .any(|integration| {
-                required_integration
-                    .integration_id
-                    .as_deref()
-                    .map(|expected| integration.integration_id == expected)
-                    .unwrap_or(true)
-                    && required_integration
-                        .provider
-                        .as_deref()
-                        .map(|expected| integration.provider == expected)
-                        .unwrap_or(true)
-                    && required_integration
-                        .kind
-                        .as_deref()
-                        .map(|expected| integration.kind == expected)
-                        .unwrap_or(true)
+        let installed = runtime_capabilities
+            .map(|runtime_capabilities| {
+                runtime_capabilities.integration_requirement_satisfied(required_integration)
+            })
+            .unwrap_or_else(|| {
+                self.config
+                    .installed_integrations
+                    .iter()
+                    .any(|integration| {
+                        required_integration
+                            .integration_id
+                            .as_deref()
+                            .map(|expected| integration.integration_id == expected)
+                            .unwrap_or(true)
+                            && required_integration
+                                .provider
+                                .as_deref()
+                                .map(|expected| integration.provider == expected)
+                                .unwrap_or(true)
+                            && required_integration
+                                .kind
+                                .as_deref()
+                                .map(|expected| integration.kind == expected)
+                                .unwrap_or(true)
+                    })
             });
 
         if installed {

@@ -178,6 +178,37 @@ pub struct RuntimeCapabilityInstall {
     pub installed_tools: Vec<InstalledToolCapability>,
 }
 
+impl RuntimeCapabilityInstall {
+    #[must_use]
+    pub fn tool_capability(&self, tool: &str) -> Option<&InstalledToolCapability> {
+        self.installed_tools.iter().find(|installed| installed.name == tool)
+    }
+
+    #[must_use]
+    pub fn integration_requirement_satisfied(
+        &self,
+        requirement: &InstalledToolIntegrationRequirement,
+    ) -> bool {
+        self.installed_integrations.iter().any(|integration| {
+            requirement
+                .integration_id
+                .as_deref()
+                .map(|expected| integration.integration_id == expected)
+                .unwrap_or(true)
+                && requirement
+                    .provider
+                    .as_deref()
+                    .map(|expected| integration.provider == expected)
+                    .unwrap_or(true)
+                && requirement
+                    .kind
+                    .as_deref()
+                    .map(|expected| integration.kind == expected)
+                    .unwrap_or(true)
+        })
+    }
+}
+
 /// Context passed alongside tool calls to installed tool endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallContext {

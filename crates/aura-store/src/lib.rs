@@ -39,4 +39,6 @@ pub mod cf {
     pub const MEMORY_EVENT_INDEX: &str = "memory_event_index";
     /// Skill installations per agent
     pub const AGENT_SKILLS: &str = "agent_skills";
+    /// Persisted runtime capability ledger per agent
+    pub const RUNTIME_CAPABILITIES: &str = "runtime_capabilities";
 }

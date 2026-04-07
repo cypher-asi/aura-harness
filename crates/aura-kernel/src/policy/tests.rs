@@ -1,5 +1,10 @@
 use super::*;
+use aura_core::{
+    InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolIntegrationRequirement,
+    RuntimeCapabilityInstall, SystemKind,
+};
 use bytes::Bytes;
+use std::collections::HashMap;
 
 #[test]
 fn test_default_permissions() {
@@ -231,6 +236,88 @@ fn test_check_tool_allows_installed_required_integration() {
     let policy = Policy::new(config);
 
     let result = policy.check_tool("brave_search_web", &serde_json::json!({}));
+    assert!(result.allowed);
+}
+
+#[test]
+fn test_check_tool_uses_runtime_capability_ledger_as_source_of_truth() {
+    let mut config = PolicyConfig::default();
+    config.add_allowed_tool("brave_search_web");
+    config.set_installed_integrations([InstalledIntegrationDefinition {
+        integration_id: "integration-brave-1".to_string(),
+        name: "Brave Search".to_string(),
+        provider: "brave_search".to_string(),
+        kind: "workspace_integration".to_string(),
+        metadata: HashMap::new(),
+    }]);
+    config.set_tool_integration_requirements([(
+        "brave_search_web".to_string(),
+        InstalledToolIntegrationRequirement {
+            integration_id: None,
+            provider: Some("brave_search".to_string()),
+            kind: Some("workspace_integration".to_string()),
+        },
+    )]);
+    let policy = Policy::new(config);
+    let runtime_capabilities = RuntimeCapabilityInstall {
+        system_kind: SystemKind::CapabilityInstall,
+        scope: "session".to_string(),
+        session_id: Some("session-1".to_string()),
+        installed_integrations: vec![],
+        installed_tools: vec![],
+    };
+
+    let result = policy.check_tool_with_runtime_capabilities(
+        "brave_search_web",
+        &serde_json::json!({}),
+        Some(&runtime_capabilities),
+    );
+    assert!(!result.allowed);
+    assert!(result
+        .reason
+        .unwrap()
+        .contains("kernel runtime capability ledger"));
+}
+
+#[test]
+fn test_check_tool_allows_when_runtime_capability_ledger_has_matching_install() {
+    let mut config = PolicyConfig::default();
+    config.add_allowed_tool("brave_search_web");
+    config.set_tool_integration_requirements([(
+        "brave_search_web".to_string(),
+        InstalledToolIntegrationRequirement {
+            integration_id: None,
+            provider: Some("brave_search".to_string()),
+            kind: Some("workspace_integration".to_string()),
+        },
+    )]);
+    let policy = Policy::new(config);
+    let runtime_capabilities = RuntimeCapabilityInstall {
+        system_kind: SystemKind::CapabilityInstall,
+        scope: "session".to_string(),
+        session_id: Some("session-1".to_string()),
+        installed_integrations: vec![InstalledIntegrationDefinition {
+            integration_id: "integration-brave-1".to_string(),
+            name: "Brave Search".to_string(),
+            provider: "brave_search".to_string(),
+            kind: "workspace_integration".to_string(),
+            metadata: HashMap::new(),
+        }],
+        installed_tools: vec![InstalledToolCapability {
+            name: "brave_search_web".to_string(),
+            required_integration: Some(InstalledToolIntegrationRequirement {
+                integration_id: None,
+                provider: Some("brave_search".to_string()),
+                kind: Some("workspace_integration".to_string()),
+            }),
+        }],
+    };
+
+    let result = policy.check_tool_with_runtime_capabilities(
+        "brave_search_web",
+        &serde_json::json!({}),
+        Some(&runtime_capabilities),
+    );
     assert!(result.allowed);
 }
 

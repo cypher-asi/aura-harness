@@ -21,7 +21,7 @@ use crate::policy::{Policy, PolicyConfig};
 use crate::ExecutorRouter;
 use aura_core::{
     Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectStatus, Proposal, ProposalSet,
-    RecordEntry, ToolCall, ToolProposal, Transaction, TransactionType,
+    RecordEntry, RuntimeCapabilityInstall, ToolCall, ToolProposal, Transaction, TransactionType,
 };
 use aura_reasoner::{ModelProvider, ModelRequest, ModelResponse, StreamEventStream};
 use aura_store::{DequeueToken, Store};
@@ -90,6 +90,10 @@ pub struct ProcessResult {
     pub tool_output: Option<ToolOutput>,
     /// Whether any actions failed
     pub had_failures: bool,
+    /// Persisted runtime capability snapshot written by this transaction.
+    pub runtime_capability_update: Option<RuntimeCapabilityInstall>,
+    /// Whether the persisted runtime capability ledger should be cleared.
+    pub clear_runtime_capabilities: bool,
 }
 
 /// Result of a reasoning call.
@@ -307,6 +311,14 @@ impl Kernel {
             .map_err(|e| crate::KernelError::Store(format!("scan_record: {e}")))
     }
 
+    fn load_runtime_capabilities(
+        &self,
+    ) -> Result<Option<RuntimeCapabilityInstall>, crate::KernelError> {
+        self.store
+            .get_runtime_capabilities(self.agent_id)
+            .map_err(|e| crate::KernelError::Store(format!("get_runtime_capabilities: {e}")))
+    }
+
     // -----------------------------------------------------------------------
     // Public processing methods
     // -----------------------------------------------------------------------
@@ -322,8 +334,18 @@ impl Kernel {
         let seq = self.next_seq();
         let result = self.process_tx(&tx, seq).await?;
         self.store
-            .append_entry_direct(self.agent_id, seq, &result.entry)
-            .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+            .append_entry_direct_with_runtime_capabilities(
+                self.agent_id,
+                seq,
+                &result.entry,
+                result.runtime_capability_update.as_ref(),
+                result.clear_runtime_capabilities,
+            )
+            .map_err(|e| {
+                crate::KernelError::Store(format!(
+                    "append_entry_direct_with_runtime_capabilities: {e}"
+                ))
+            })?;
         Ok(result)
     }
 
@@ -339,8 +361,19 @@ impl Kernel {
         let seq = self.next_seq();
         let result = self.process_tx(&tx, seq).await?;
         self.store
-            .append_entry_dequeued(self.agent_id, seq, &result.entry, token)
-            .map_err(|e| crate::KernelError::Store(format!("append_entry_dequeued: {e}")))?;
+            .append_entry_dequeued_with_runtime_capabilities(
+                self.agent_id,
+                seq,
+                &result.entry,
+                token,
+                result.runtime_capability_update.as_ref(),
+                result.clear_runtime_capabilities,
+            )
+            .map_err(|e| {
+                crate::KernelError::Store(format!(
+                    "append_entry_dequeued_with_runtime_capabilities: {e}"
+                ))
+            })?;
         Ok(result)
     }
 
@@ -369,6 +402,26 @@ impl Kernel {
                     entry,
                     tool_output: None,
                     had_failures: false,
+                    runtime_capability_update: None,
+                    clear_runtime_capabilities: true,
+                })
+            }
+            TransactionType::System => {
+                let runtime_capability_update =
+                    Self::runtime_capability_update_from_tx(tx).map_err(|e| {
+                        crate::KernelError::Serialization(format!(
+                            "deserialize capability install: {e}"
+                        ))
+                    })?;
+                let entry = RecordEntry::builder(seq, tx.clone())
+                    .context_hash(context_hash)
+                    .build();
+                Ok(ProcessResult {
+                    entry,
+                    tool_output: None,
+                    had_failures: false,
+                    runtime_capability_update,
+                    clear_runtime_capabilities: false,
                 })
             }
             _ => {
@@ -379,8 +432,33 @@ impl Kernel {
                     entry,
                     tool_output: None,
                     had_failures: false,
+                    runtime_capability_update: None,
+                    clear_runtime_capabilities: false,
                 })
             }
+        }
+    }
+
+    fn runtime_capability_update_from_tx(
+        tx: &Transaction,
+    ) -> Result<Option<RuntimeCapabilityInstall>, serde_json::Error> {
+        if tx.tx_type != TransactionType::System {
+            return Ok(None);
+        }
+
+        let payload = match serde_json::from_slice::<serde_json::Value>(&tx.payload) {
+            Ok(payload) => payload,
+            Err(_) => return Ok(None),
+        };
+        let is_capability_install = payload
+            .get("system_kind")
+            .and_then(serde_json::Value::as_str)
+            == Some("capability_install");
+
+        if is_capability_install {
+            serde_json::from_value(payload).map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -408,7 +486,12 @@ impl Kernel {
                 .map_err(|e| crate::KernelError::Serialization(e.to_string()))?,
         );
 
-        let policy_result = self.policy.check_tool(&tool_name, &proposal.args);
+        let runtime_capabilities = self.load_runtime_capabilities()?;
+        let policy_result = self.policy.check_tool_with_runtime_capabilities(
+            &tool_name,
+            &proposal.args,
+            runtime_capabilities.as_ref(),
+        );
 
         if policy_result.allowed {
             let action_id = ActionId::generate();
@@ -450,6 +533,8 @@ impl Kernel {
                     is_error: had_failures,
                 }),
                 had_failures,
+                runtime_capability_update: None,
+                clear_runtime_capabilities: false,
             })
         } else {
             let mut decision = Decision::new();
@@ -477,6 +562,8 @@ impl Kernel {
                     is_error: true,
                 }),
                 had_failures: false,
+                runtime_capability_update: None,
+                clear_runtime_capabilities: false,
             })
         }
     }
@@ -501,9 +588,14 @@ impl Kernel {
         // Classify each proposal
         let mut approved = Vec::new();
         let mut denied = Vec::new();
+        let runtime_capabilities = self.load_runtime_capabilities()?;
 
         for proposal in &tool_proposals {
-            let result = self.policy.check_tool(&proposal.tool, &proposal.args);
+            let result = self.policy.check_tool_with_runtime_capabilities(
+                &proposal.tool,
+                &proposal.args,
+                runtime_capabilities.as_ref(),
+            );
             if result.allowed {
                 approved.push(proposal);
             } else {
@@ -564,7 +656,11 @@ impl Kernel {
             // Check if this proposal was approved (match order)
             let was_approved = self
                 .policy
-                .check_tool(&proposal.tool, &proposal.args)
+                .check_tool_with_runtime_capabilities(
+                    &proposal.tool,
+                    &proposal.args,
+                    runtime_capabilities.as_ref(),
+                )
                 .allowed;
 
             if was_approved {
@@ -599,6 +695,8 @@ impl Kernel {
                         is_error: had_failures,
                     }),
                     had_failures,
+                    runtime_capability_update: None,
+                    clear_runtime_capabilities: false,
                 });
             } else {
                 let (_, policy_result) = &denied[denied_idx];
@@ -633,6 +731,8 @@ impl Kernel {
                         is_error: true,
                     }),
                     had_failures: false,
+                    runtime_capability_update: None,
+                    clear_runtime_capabilities: false,
                 });
             }
         }
@@ -849,6 +949,8 @@ pub mod legacy {
                 entry,
                 tool_output: None,
                 had_failures,
+                runtime_capability_update: None,
+                clear_runtime_capabilities: false,
             })
         }
 
@@ -1067,9 +1169,13 @@ mod legacy_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::InstalledToolIntegrationRequirement;
+    use aura_core::{
+        InstalledIntegrationDefinition, InstalledToolCapability,
+        InstalledToolIntegrationRequirement, RuntimeCapabilityInstall, SystemKind,
+    };
     use aura_reasoner::MockProvider;
     use aura_store::RocksStore;
+    use std::collections::HashMap;
     use tempfile::TempDir;
 
     fn create_new_kernel() -> (Kernel, TempDir, TempDir) {
@@ -1242,6 +1348,152 @@ mod tests {
             .tool_output
             .as_ref()
             .and_then(|output| Some(output.content.contains("installed integration")))
+            .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_capability_install_persists_runtime_capability_ledger() {
+        let (kernel, _db, _ws) = create_new_kernel();
+        let runtime_capabilities = RuntimeCapabilityInstall {
+            system_kind: SystemKind::CapabilityInstall,
+            scope: "session".to_string(),
+            session_id: Some("session-1".to_string()),
+            installed_integrations: vec![InstalledIntegrationDefinition {
+                integration_id: "integration-brave-1".to_string(),
+                name: "Brave Search".to_string(),
+                provider: "brave_search".to_string(),
+                kind: "workspace_integration".to_string(),
+                metadata: HashMap::new(),
+            }],
+            installed_tools: vec![InstalledToolCapability {
+                name: "brave_search_web".to_string(),
+                required_integration: Some(InstalledToolIntegrationRequirement {
+                    integration_id: None,
+                    provider: Some("brave_search".to_string()),
+                    kind: Some("workspace_integration".to_string()),
+                }),
+            }],
+        };
+        let tx = Transaction::new_chained(
+            kernel.agent_id,
+            TransactionType::System,
+            serde_json::to_vec(&runtime_capabilities).unwrap(),
+            None,
+        );
+
+        kernel.process_direct(tx).await.unwrap();
+
+        let persisted = kernel
+            .store()
+            .get_runtime_capabilities(kernel.agent_id)
+            .unwrap();
+        assert_eq!(persisted, Some(runtime_capabilities));
+    }
+
+    #[tokio::test]
+    async fn test_session_start_clears_persisted_runtime_capability_ledger() {
+        let (kernel, _db, _ws) = create_new_kernel();
+        let runtime_capabilities = RuntimeCapabilityInstall {
+            system_kind: SystemKind::CapabilityInstall,
+            scope: "session".to_string(),
+            session_id: Some("session-1".to_string()),
+            installed_integrations: vec![],
+            installed_tools: vec![InstalledToolCapability {
+                name: "brave_search_web".to_string(),
+                required_integration: None,
+            }],
+        };
+        let capability_tx = Transaction::new_chained(
+            kernel.agent_id,
+            TransactionType::System,
+            serde_json::to_vec(&runtime_capabilities).unwrap(),
+            None,
+        );
+        kernel.process_direct(capability_tx).await.unwrap();
+        assert!(kernel
+            .store()
+            .get_runtime_capabilities(kernel.agent_id)
+            .unwrap()
+            .is_some());
+
+        kernel
+            .process_direct(Transaction::session_start(kernel.agent_id))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            kernel
+                .store()
+                .get_runtime_capabilities(kernel.agent_id)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_proposal_uses_persisted_runtime_capability_ledger() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let agent_id = AgentId::generate();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test response"));
+        let executor = ExecutorRouter::new();
+        let mut policy = PolicyConfig::default();
+        policy.add_allowed_tool("brave_search_web");
+        policy.set_installed_integrations([InstalledIntegrationDefinition {
+            integration_id: "integration-brave-1".to_string(),
+            name: "Brave Search".to_string(),
+            provider: "brave_search".to_string(),
+            kind: "workspace_integration".to_string(),
+            metadata: HashMap::new(),
+        }]);
+        policy.set_tool_integration_requirements([(
+            "brave_search_web".to_string(),
+            InstalledToolIntegrationRequirement {
+                integration_id: None,
+                provider: Some("brave_search".to_string()),
+                kind: Some("workspace_integration".to_string()),
+            },
+        )]);
+        let config = KernelConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            policy,
+            ..KernelConfig::default()
+        };
+        let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
+
+        let empty_runtime_capabilities = RuntimeCapabilityInstall {
+            system_kind: SystemKind::CapabilityInstall,
+            scope: "session".to_string(),
+            session_id: Some("session-1".to_string()),
+            installed_integrations: vec![],
+            installed_tools: vec![],
+        };
+        let capability_tx = Transaction::new_chained(
+            kernel.agent_id,
+            TransactionType::System,
+            serde_json::to_vec(&empty_runtime_capabilities).unwrap(),
+            None,
+        );
+        kernel.process_direct(capability_tx).await.unwrap();
+
+        let proposal = ToolProposal::new(
+            "tool-use-1",
+            "brave_search_web",
+            serde_json::json!({ "query": "aura os" }),
+        );
+        let tx = Transaction::tool_proposal(agent_id, &proposal).unwrap();
+        let result = kernel.process_direct(tx).await.unwrap();
+
+        assert!(result
+            .tool_output
+            .as_ref()
+            .is_some_and(|output| output.is_error));
+        assert!(result
+            .tool_output
+            .as_ref()
+            .map(|output| output.content.contains("kernel runtime capability ledger"))
             .unwrap_or(false));
     }
 }
