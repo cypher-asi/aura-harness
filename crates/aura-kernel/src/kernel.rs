@@ -356,17 +356,31 @@ impl Kernel {
         let window = self.load_window(seq)?;
         let context_hash = Self::compute_context_hash(tx, &window)?;
 
-        if tx.tx_type == TransactionType::ToolProposal {
-            self.process_tool_proposal(tx, seq, context_hash).await
-        } else {
-            let entry = RecordEntry::builder(seq, tx.clone())
-                .context_hash(context_hash)
-                .build();
-            Ok(ProcessResult {
-                entry,
-                tool_output: None,
-                had_failures: false,
-            })
+        match tx.tx_type {
+            TransactionType::ToolProposal => {
+                self.process_tool_proposal(tx, seq, context_hash).await
+            }
+            TransactionType::SessionStart => {
+                self.policy.clear_session_approvals();
+                let entry = RecordEntry::builder(seq, tx.clone())
+                    .context_hash(context_hash)
+                    .build();
+                Ok(ProcessResult {
+                    entry,
+                    tool_output: None,
+                    had_failures: false,
+                })
+            }
+            _ => {
+                let entry = RecordEntry::builder(seq, tx.clone())
+                    .context_hash(context_hash)
+                    .build();
+                Ok(ProcessResult {
+                    entry,
+                    tool_output: None,
+                    had_failures: false,
+                })
+            }
         }
     }
 
@@ -1053,6 +1067,7 @@ mod legacy_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_core::InstalledToolIntegrationRequirement;
     use aura_reasoner::MockProvider;
     use aura_store::RocksStore;
     use tempfile::TempDir;
@@ -1156,5 +1171,77 @@ mod tests {
         );
         let r3 = kernel.process_direct(tx2).await.unwrap();
         assert_eq!(r3.entry.seq, 3);
+    }
+
+    #[tokio::test]
+    async fn test_session_start_clears_policy_session_approvals() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let agent_id = AgentId::generate();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test response"));
+        let executor = ExecutorRouter::new();
+        let config = KernelConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            policy: PolicyConfig::default()
+                .with_tool_permission("guarded_tool", crate::policy::PermissionLevel::AskOnce),
+            ..KernelConfig::default()
+        };
+        let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
+        kernel.policy.approve_for_session("guarded_tool");
+        assert!(kernel.policy.is_session_approved("guarded_tool"));
+
+        kernel
+            .process_direct(Transaction::session_start(agent_id))
+            .await
+            .unwrap();
+
+        assert!(!kernel.policy.is_session_approved("guarded_tool"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_proposal_denied_without_required_integration() {
+        let db_dir = TempDir::new().unwrap();
+        let ws_dir = TempDir::new().unwrap();
+        let agent_id = AgentId::generate();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("test response"));
+        let executor = ExecutorRouter::new();
+        let mut policy = PolicyConfig::default();
+        policy.add_allowed_tool("brave_search_web");
+        policy.set_tool_integration_requirements([(
+            "brave_search_web".to_string(),
+            InstalledToolIntegrationRequirement {
+                integration_id: None,
+                provider: Some("brave_search".to_string()),
+                kind: Some("workspace_integration".to_string()),
+            },
+        )]);
+        let config = KernelConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            policy,
+            ..KernelConfig::default()
+        };
+        let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
+        let proposal = ToolProposal::new(
+            "tool-use-1",
+            "brave_search_web",
+            serde_json::json!({ "query": "aura os" }),
+        );
+        let tx = Transaction::tool_proposal(agent_id, &proposal).unwrap();
+
+        let result = kernel.process_direct(tx).await.unwrap();
+
+        assert!(result
+            .tool_output
+            .as_ref()
+            .is_some_and(|output| output.is_error));
+        assert!(result
+            .tool_output
+            .as_ref()
+            .and_then(|output| Some(output.content.contains("installed integration")))
+            .unwrap_or(false));
     }
 }

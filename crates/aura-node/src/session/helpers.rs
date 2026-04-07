@@ -10,6 +10,7 @@ use crate::protocol::{
     ToolUseStart,
 };
 use crate::provider_factory::create_provider_from_session_config;
+use crate::runtime_capabilities;
 #[allow(deprecated)]
 use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
 use aura_kernel::{Kernel, KernelConfig};
@@ -41,7 +42,7 @@ fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
     (session.workspace.clone(), false)
 }
 
-pub(super) fn handle_session_init(
+pub(super) async fn handle_session_init(
     session: &mut Session,
     init: SessionInit,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
@@ -90,6 +91,33 @@ pub(super) fn handle_session_init(
     }
 
     populate_tool_definitions(session, ctx);
+
+    match build_kernel_with_config(session, ctx, &ctx.tool_config) {
+        Ok(kernel) => {
+            if let Err(e) = runtime_capabilities::record_runtime_capabilities(
+                &kernel,
+                "session",
+                Some(&session.session_id),
+                &session.installed_tools,
+                &session.installed_integrations,
+            )
+            .await
+            {
+                error!(
+                    session_id = %session.session_id,
+                    error = %e,
+                    "Failed to record runtime capability install through kernel during session init"
+                );
+            }
+        }
+        Err(e) => {
+            error!(
+                session_id = %session.session_id,
+                error = %e,
+                "Failed to build kernel for session capability recording"
+            );
+        }
+    }
 
     let tools: Vec<ToolInfo> = session
         .tool_definitions
@@ -141,8 +169,9 @@ pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> Kerne
         ))
     });
 
-    let mut resolver = executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec)
-        .with_installed_tools(session.installed_tools.clone());
+    let mut resolver =
+        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec)
+            .with_installed_tools(session.installed_tools.clone());
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
@@ -177,8 +206,9 @@ pub(super) fn build_kernel_with_config(
         ))
     });
 
-    let mut resolver = executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec)
-        .with_installed_tools(session.installed_tools.clone());
+    let mut resolver =
+        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec)
+            .with_installed_tools(session.installed_tools.clone());
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
@@ -196,10 +226,15 @@ pub(super) fn build_kernel_with_config(
     let router = executor_factory::build_executor_router(resolver);
 
     let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
+    let policy = runtime_capabilities::build_policy_config(
+        &session.installed_tools,
+        &session.installed_integrations,
+    );
 
     let config = KernelConfig {
         workspace_base: workspace,
         use_workspace_base_as_root,
+        policy,
         ..KernelConfig::default()
     };
 

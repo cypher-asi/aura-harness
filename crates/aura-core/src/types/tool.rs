@@ -1,5 +1,6 @@
 //! Tool-related types: proposals, executions, definitions, calls, and results.
 
+use super::transaction::SystemKind;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -136,7 +137,7 @@ pub struct InstalledToolDefinition {
 ///
 /// Integrations are distinct from tools: an integration represents an
 /// authorized external capability, while tools may depend on one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledIntegrationDefinition {
     pub integration_id: String,
     pub name: String,
@@ -144,6 +145,37 @@ pub struct InstalledIntegrationDefinition {
     pub kind: String,
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Sanitized runtime-visible installed tool metadata for capability recording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledToolCapability {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_integration: Option<InstalledToolIntegrationRequirement>,
+}
+
+impl From<&InstalledToolDefinition> for InstalledToolCapability {
+    fn from(value: &InstalledToolDefinition) -> Self {
+        Self {
+            name: value.name.clone(),
+            required_integration: value.required_integration.clone(),
+        }
+    }
+}
+
+/// Runtime capability install snapshot recorded through the kernel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeCapabilityInstall {
+    pub system_kind: SystemKind,
+    /// Scope that installed these capabilities (for example `session` or `automaton`).
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub installed_integrations: Vec<InstalledIntegrationDefinition>,
+    #[serde(default)]
+    pub installed_tools: Vec<InstalledToolCapability>,
 }
 
 /// Context passed alongside tool calls to installed tool endpoints.

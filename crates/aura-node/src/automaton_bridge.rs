@@ -35,6 +35,7 @@ use aura_tools::ToolConfig;
 use crate::executor_factory;
 use crate::jwt_domain::JwtDomainApi;
 use crate::protocol::{installed_integration_to_core, installed_tool_to_core};
+use crate::runtime_capabilities;
 
 const EVENT_BROADCAST_CAPACITY: usize = 512;
 
@@ -122,14 +123,8 @@ impl AutomatonBridge {
 
     fn prepare_installed_tools(
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        installed_integrations: &[InstalledIntegrationDefinition],
     ) -> Vec<InstalledToolDefinition> {
-        let installed_integrations = installed_integrations
-            .unwrap_or_default()
-            .into_iter()
-            .map(installed_integration_to_core)
-            .collect::<Vec<_>>();
-
         installed_tools
             .unwrap_or_default()
             .into_iter()
@@ -156,6 +151,7 @@ impl AutomatonBridge {
         workspace: &std::path::Path,
         use_workspace_base_as_root: bool,
         installed_tools: Vec<InstalledToolDefinition>,
+        installed_integrations: Vec<InstalledIntegrationDefinition>,
     ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -173,6 +169,10 @@ impl AutomatonBridge {
         let config = KernelConfig {
             workspace_base: workspace.to_path_buf(),
             use_workspace_base_as_root,
+            policy: runtime_capabilities::build_policy_config(
+                &installed_tools,
+                &installed_integrations,
+            ),
             ..KernelConfig::default()
         };
 
@@ -188,7 +188,7 @@ impl AutomatonBridge {
                 warn!(error = %e, "Kernel::new failed, falling back to fresh agent id");
                 let fallback_router = executor_factory::build_executor_router(
                     executor_factory::build_tool_resolver(&self.catalog, &self.tool_config, None)
-                        .with_installed_tools(installed_tools),
+                        .with_installed_tools(installed_tools.clone()),
                 );
                 Arc::new(
                     Kernel::new(
@@ -198,6 +198,10 @@ impl AutomatonBridge {
                         KernelConfig {
                             workspace_base: workspace.to_path_buf(),
                             use_workspace_base_as_root,
+                            policy: runtime_capabilities::build_policy_config(
+                                &installed_tools,
+                                &installed_integrations,
+                            ),
                             ..KernelConfig::default()
                         },
                         AgentId::generate(),
@@ -235,8 +239,13 @@ impl AutomatonBridge {
         let ws_path = effective_workspace
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new("."));
+        let installed_integrations = installed_integrations
+            .unwrap_or_default()
+            .into_iter()
+            .map(installed_integration_to_core)
+            .collect::<Vec<_>>();
         let installed_tools =
-            Self::prepare_installed_tools(installed_tools, installed_integrations);
+            Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
         let kernel = self.build_kernel(
             domain.clone(),
@@ -245,7 +254,21 @@ impl AutomatonBridge {
             ws_path,
             effective_workspace.is_some(),
             installed_tools.clone(),
+            installed_integrations.clone(),
         );
+        if let Err(e) = runtime_capabilities::record_runtime_capabilities(
+            &kernel,
+            "automaton",
+            None,
+            &installed_tools,
+            &installed_integrations,
+        )
+        .await
+        {
+            return Err(format!(
+                "failed to record dev loop runtime capabilities: {e}"
+            ));
+        }
         let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
@@ -299,8 +322,13 @@ impl AutomatonBridge {
         let ws_path = effective_workspace
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new("."));
+        let installed_integrations = installed_integrations
+            .unwrap_or_default()
+            .into_iter()
+            .map(installed_integration_to_core)
+            .collect::<Vec<_>>();
         let installed_tools =
-            Self::prepare_installed_tools(installed_tools, installed_integrations);
+            Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
         let kernel = self.build_kernel(
             domain.clone(),
@@ -309,7 +337,19 @@ impl AutomatonBridge {
             ws_path,
             effective_workspace.is_some(),
             installed_tools.clone(),
+            installed_integrations.clone(),
         );
+        if let Err(e) = runtime_capabilities::record_runtime_capabilities(
+            &kernel,
+            "automaton",
+            None,
+            &installed_tools,
+            &installed_integrations,
+        )
+        .await
+        {
+            return Err(format!("failed to record task runtime capabilities: {e}"));
+        }
         let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
@@ -539,6 +579,7 @@ impl AutomatonController for AutomatonBridge {
 #[cfg(test)]
 mod tests {
     use super::AutomatonBridge;
+    use aura_core::InstalledIntegrationDefinition;
 
     #[test]
     fn prepare_installed_tools_filters_by_required_integration() {
@@ -580,13 +621,13 @@ mod tests {
                     metadata: Default::default(),
                 },
             ]),
-            Some(vec![aura_protocol::InstalledIntegration {
+            &[InstalledIntegrationDefinition {
                 integration_id: "brave-1".to_string(),
                 name: "Brave Search".to_string(),
                 provider: "brave_search".to_string(),
                 kind: "workspace_integration".to_string(),
                 metadata: Default::default(),
-            }]),
+            }],
         );
 
         let names = tools
@@ -616,7 +657,7 @@ mod tests {
                 }),
                 metadata: Default::default(),
             }]),
-            None,
+            &[],
         );
 
         assert!(filtered.is_empty());

@@ -22,9 +22,9 @@ pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
 pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 pub use status::AgentStatus;
 pub use tool::{
-    InstalledIntegrationDefinition, InstalledToolDefinition,
-    InstalledToolIntegrationRequirement, ToolAuth, ToolCall, ToolCallContext, ToolDecision,
-    ToolExecution, ToolProposal, ToolResult,
+    InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
+    InstalledToolIntegrationRequirement, RuntimeCapabilityInstall, ToolAuth, ToolCall,
+    ToolCallContext, ToolDecision, ToolExecution, ToolProposal, ToolResult,
 };
 pub use transaction::{SystemKind, Transaction, TransactionType};
 

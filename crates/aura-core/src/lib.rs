@@ -24,9 +24,9 @@ pub use error::{AuraError, Result};
 pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId, TxId};
 pub use types::{
     Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,
-    EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition, InstalledToolDefinition,
-    InstalledToolIntegrationRequirement, ProcessPending, Proposal, ProposalSet, RecordEntry,
-    RejectedProposal, SystemKind, ToolAuth, ToolCall, ToolCallContext, ToolDecision,
-    ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent, Trace,
-    Transaction, TransactionType,
+    EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition, InstalledToolCapability,
+    InstalledToolDefinition, InstalledToolIntegrationRequirement, ProcessPending, Proposal,
+    ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth,
+    ToolCall, ToolCallContext, ToolDecision, ToolDefinition, ToolExecution, ToolProposal,
+    ToolResult, ToolResultContent, Trace, Transaction, TransactionType,
 };

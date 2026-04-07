@@ -201,12 +201,10 @@ mod tests {
 
         populate_tool_definitions(&mut session, &ctx);
 
-        assert!(
-            !session
-                .tool_definitions
-                .iter()
-                .any(|tool| tool.name == "brave_search_web")
-        );
+        assert!(!session
+            .tool_definitions
+            .iter()
+            .any(|tool| tool.name == "brave_search_web"));
     }
 
     #[test]
@@ -218,12 +216,10 @@ mod tests {
 
         populate_tool_definitions(&mut session, &ctx);
 
-        assert!(
-            session
-                .tool_definitions
-                .iter()
-                .any(|tool| tool.name == "brave_search_web")
-        );
+        assert!(session
+            .tool_definitions
+            .iter()
+            .any(|tool| tool.name == "brave_search_web"));
     }
 }
 
@@ -348,7 +344,7 @@ async fn dispatch_idle_message(
 ) -> IdleAction {
     match serde_json::from_str::<InboundMessage>(raw) {
         Ok(InboundMessage::SessionInit(init)) => {
-            helpers::handle_session_init(session, *init, outbound_tx, ctx);
+            helpers::handle_session_init(session, *init, outbound_tx, ctx).await;
             IdleAction::Continue
         }
         Ok(InboundMessage::UserMessage(msg)) => {
