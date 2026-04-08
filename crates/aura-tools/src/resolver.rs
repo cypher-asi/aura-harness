@@ -15,9 +15,8 @@ use async_trait::async_trait;
 use aura_core::ToolDefinition;
 use aura_core::{
     Action, ActionKind, Effect, EffectKind, EffectStatus, InstalledToolDefinition,
-    InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
-    InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, ToolAuth, ToolCall,
-    ToolResult,
+    InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
+    InstalledToolRuntimeProviderExecution, ToolAuth, ToolCall, ToolResult,
 };
 use aura_kernel::{ExecuteContext, Executor, ExecutorError};
 use bytes::Bytes;
@@ -98,7 +97,9 @@ impl ToolResolver {
         let tool_name = &tool_call.tool;
 
         if let Some(tool) = self.installed_tools.get(tool_name) {
-            return self.execute_installed_tool(ctx, tool, &tool_call.args).await;
+            return self
+                .execute_installed_tool(ctx, tool, &tool_call.args)
+                .await;
         }
 
         // Domain tools (specs, tasks, project) — pure HTTP calls that
@@ -175,10 +176,9 @@ impl ToolResolver {
 
         headers.insert(
             HeaderName::from_static("x-aura-agent-id"),
-            HeaderValue::from_str(&ctx.agent_id.to_string())
-                .map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid x-aura-agent-id header: {e}"))
-                })?,
+            HeaderValue::from_str(&ctx.agent_id.to_string()).map_err(|e| {
+                ToolError::ExternalToolError(format!("invalid x-aura-agent-id header: {e}"))
+            })?,
         );
 
         let request = self
@@ -190,20 +190,18 @@ impl ToolResolver {
                 tool.timeout_ms.unwrap_or(30_000),
             ));
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ToolError::ExternalToolCallbackUnreachable {
-                url: tool.endpoint.clone(),
-                reason: e.to_string(),
-            })?;
+        let response =
+            request
+                .send()
+                .await
+                .map_err(|e| ToolError::ExternalToolCallbackUnreachable {
+                    url: tool.endpoint.clone(),
+                    reason: e.to_string(),
+                })?;
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|e| ToolError::ExternalToolError(format!(
-                "reading installed tool response failed: {e}"
-            )))?;
+        let body = response.text().await.map_err(|e| {
+            ToolError::ExternalToolError(format!("reading installed tool response failed: {e}"))
+        })?;
 
         if status.is_success() {
             Ok(ToolResult::success(&tool.name, body))
@@ -225,7 +223,8 @@ impl ToolResolver {
     ) -> Result<ToolResult, ToolError> {
         let result = match execution {
             InstalledToolRuntimeExecution::AppProvider(provider) => {
-                self.execute_runtime_app_provider(tool, args, provider).await?
+                self.execute_runtime_app_provider(tool, args, provider)
+                    .await?
             }
         };
         Ok(ToolResult::success(&tool.name, result.to_string()))
@@ -243,6 +242,8 @@ impl ToolResolver {
             "github_create_issue" => self.github_create_issue(provider, integration, args).await,
             "linear_list_teams" => self.linear_list_teams(provider, integration).await,
             "linear_create_issue" => self.linear_create_issue(provider, integration, args).await,
+            "slack_list_channels" => self.slack_list_channels(provider, integration).await,
+            "slack_post_message" => self.slack_post_message(provider, integration, args).await,
             "brave_search_web" => self.brave_search(provider, integration, args, "web").await,
             "brave_search_news" => self.brave_search(provider, integration, args, "news").await,
             "resend_list_domains" => self.resend_list_domains(provider, integration).await,
@@ -345,7 +346,12 @@ impl ToolResolver {
         let title = required_string(args, &["title"])?;
         let description = optional_string(
             args,
-            &["description", "body", "markdown_contents", "markdownContents"],
+            &[
+                "description",
+                "body",
+                "markdown_contents",
+                "markdownContents",
+            ],
         );
         let response = self
             .linear_graphql(
@@ -425,6 +431,65 @@ impl ToolResolver {
             "query": query,
             "results": items,
             "more_results_available": response.pointer("/query/more_results_available").and_then(Value::as_bool).unwrap_or(false),
+        }))
+    }
+
+    async fn slack_list_channels(
+        &self,
+        provider: &InstalledToolRuntimeProviderExecution,
+        integration: &InstalledToolRuntimeIntegration,
+    ) -> Result<Value, ToolError> {
+        let url = format!(
+            "{}/conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=100",
+            provider.base_url
+        );
+        let response = self
+            .provider_json_request(Method::GET, &url, provider, integration, None)
+            .await?;
+        ensure_slack_ok(&response)?;
+        let channels = response
+            .get("channels")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|channel| {
+                json!({
+                    "id": channel.get("id").and_then(Value::as_str).unwrap_or_default(),
+                    "name": channel.get("name").and_then(Value::as_str).unwrap_or_default(),
+                    "is_private": channel.get("is_private").and_then(Value::as_bool).unwrap_or(false),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({ "channels": channels }))
+    }
+
+    async fn slack_post_message(
+        &self,
+        provider: &InstalledToolRuntimeProviderExecution,
+        integration: &InstalledToolRuntimeIntegration,
+        args: &Value,
+    ) -> Result<Value, ToolError> {
+        let channel_id = required_string(args, &["channel_id", "channelId"])?;
+        let text = required_string(args, &["text", "message"])?;
+        let response = self
+            .provider_json_request(
+                Method::POST,
+                &format!("{}/chat.postMessage", provider.base_url),
+                provider,
+                integration,
+                Some(json!({
+                    "channel": channel_id,
+                    "text": text,
+                })),
+            )
+            .await?;
+        ensure_slack_ok(&response)?;
+        Ok(json!({
+            "message": {
+                "channel": response.get("channel").and_then(Value::as_str).unwrap_or_default(),
+                "ts": response.get("ts").and_then(Value::as_str).unwrap_or_default(),
+            }
         }))
     }
 
@@ -568,24 +633,23 @@ impl ToolResolver {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request.send().await.map_err(|e| {
-            ToolError::ExternalToolError(format!("provider request failed: {e}"))
-        })?;
-        let status = response.status();
-        let text = response
-            .text()
+        let response = request
+            .send()
             .await
-            .map_err(|e| ToolError::ExternalToolError(format!(
-                "reading provider response failed: {e}"
-            )))?;
+            .map_err(|e| ToolError::ExternalToolError(format!("provider request failed: {e}")))?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            ToolError::ExternalToolError(format!("reading provider response failed: {e}"))
+        })?;
         if !status.is_success() {
             return Err(ToolError::ExternalToolError(format!(
                 "provider request failed with {}: {}",
                 status, text
             )));
         }
-        serde_json::from_str(&text)
-            .map_err(|e| ToolError::ExternalToolError(format!("provider returned invalid JSON: {e}")))
+        serde_json::from_str(&text).map_err(|e| {
+            ToolError::ExternalToolError(format!("provider returned invalid JSON: {e}"))
+        })
     }
 }
 
@@ -622,9 +686,7 @@ fn apply_runtime_headers(
             ToolError::ExternalToolError(format!("invalid runtime header name `{name}`: {e}"))
         })?;
         let header_value = HeaderValue::from_str(value).map_err(|e| {
-            ToolError::ExternalToolError(format!(
-                "invalid runtime header value for `{name}`: {e}"
-            ))
+            ToolError::ExternalToolError(format!("invalid runtime header value for `{name}`: {e}"))
         })?;
         request = request.header(header_name, header_value);
     }
@@ -720,6 +782,19 @@ fn optional_string_list(args: &Value, keys: &[&str]) -> Option<Vec<String>> {
 fn optional_positive_number(args: &Value, keys: &[&str]) -> Option<u64> {
     keys.iter()
         .find_map(|key| args.get(*key).and_then(Value::as_u64))
+}
+
+fn ensure_slack_ok(response: &Value) -> Result<(), ToolError> {
+    if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(());
+    }
+    let error = response
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown slack error");
+    Err(ToolError::ExternalToolError(format!(
+        "slack api error: {error}"
+    )))
 }
 
 // ---------------------------------------------------------------------------
