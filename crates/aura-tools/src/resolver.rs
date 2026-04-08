@@ -24,10 +24,125 @@ use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT,
 };
 use reqwest::{Client, Method, RequestBuilder, Url};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, instrument};
+
+const TRUSTED_INTEGRATION_RUNTIME_METADATA_KEY: &str = "trusted_integration_runtime";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TrustedIntegrationHttpMethod {
+    Get,
+    Post,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TrustedIntegrationArgValueType {
+    String,
+    StringList,
+    PositiveNumber,
+    Json,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrustedIntegrationArgBinding {
+    arg_names: Vec<String>,
+    target: String,
+    value_type: TrustedIntegrationArgValueType,
+    #[serde(default)]
+    required: bool,
+    #[serde(default)]
+    default_value: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TrustedIntegrationSuccessGuard {
+    None,
+    SlackOk,
+    GraphqlErrors,
+}
+
+impl Default for TrustedIntegrationSuccessGuard {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrustedIntegrationResultField {
+    output: String,
+    pointer: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrustedIntegrationResultExtraField {
+    output: String,
+    pointer: String,
+    #[serde(default)]
+    default_value: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TrustedIntegrationResultTransform {
+    WrapPointer {
+        key: String,
+        pointer: String,
+    },
+    ProjectArray {
+        key: String,
+        #[serde(default)]
+        pointer: Option<String>,
+        fields: Vec<TrustedIntegrationResultField>,
+        #[serde(default)]
+        extras: Vec<TrustedIntegrationResultExtraField>,
+    },
+    ProjectObject {
+        key: String,
+        #[serde(default)]
+        pointer: Option<String>,
+        fields: Vec<TrustedIntegrationResultField>,
+    },
+    BraveSearch {
+        vertical: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TrustedIntegrationRuntimeSpec {
+    RestJson {
+        method: TrustedIntegrationHttpMethod,
+        path: String,
+        #[serde(default)]
+        query: Vec<TrustedIntegrationArgBinding>,
+        #[serde(default)]
+        body: Vec<TrustedIntegrationArgBinding>,
+        #[serde(default)]
+        success_guard: TrustedIntegrationSuccessGuard,
+        result: TrustedIntegrationResultTransform,
+    },
+    Graphql {
+        query: String,
+        #[serde(default)]
+        variables: Vec<TrustedIntegrationArgBinding>,
+        #[serde(default)]
+        success_guard: TrustedIntegrationSuccessGuard,
+        result: TrustedIntegrationResultTransform,
+    },
+    BraveSearch {
+        vertical: String,
+    },
+    ResendSendEmail,
+}
 
 /// Unified tool resolver providing both visibility and execution dispatch.
 ///
@@ -223,11 +338,80 @@ impl ToolResolver {
     ) -> Result<ToolResult, ToolError> {
         let result = match execution {
             InstalledToolRuntimeExecution::AppProvider(provider) => {
-                self.execute_runtime_app_provider(tool, args, provider)
-                    .await?
+                if let Some(spec) = trusted_runtime_spec(tool)? {
+                    let integration = select_runtime_integration(provider, args)?;
+                    self.execute_trusted_runtime_app_provider(provider, integration, args, &spec)
+                        .await?
+                } else {
+                    self.execute_runtime_app_provider(tool, args, provider)
+                        .await?
+                }
             }
         };
         Ok(ToolResult::success(&tool.name, result.to_string()))
+    }
+
+    async fn execute_trusted_runtime_app_provider(
+        &self,
+        provider: &InstalledToolRuntimeProviderExecution,
+        integration: &InstalledToolRuntimeIntegration,
+        args: &Value,
+        spec: &TrustedIntegrationRuntimeSpec,
+    ) -> Result<Value, ToolError> {
+        match spec {
+            TrustedIntegrationRuntimeSpec::RestJson {
+                method,
+                path,
+                query,
+                body,
+                success_guard,
+                result,
+            } => {
+                let url = build_runtime_url(provider, integration, path, query, args)?;
+                let body = build_object_from_bindings(body, args)?;
+                let response = self
+                    .provider_json_request(
+                        trusted_http_method(method),
+                        &url,
+                        provider,
+                        integration,
+                        body,
+                    )
+                    .await?;
+                apply_success_guard(&response, success_guard)?;
+                apply_result_transform(&response, result, args)
+            }
+            TrustedIntegrationRuntimeSpec::Graphql {
+                query,
+                variables,
+                success_guard,
+                result,
+            } => {
+                let variables =
+                    build_object_from_bindings(variables, args)?.unwrap_or_else(|| json!({}));
+                let response = self
+                    .provider_json_request(
+                        Method::POST,
+                        &provider.base_url,
+                        provider,
+                        integration,
+                        Some(json!({
+                            "query": query,
+                            "variables": variables,
+                        })),
+                    )
+                    .await?;
+                apply_success_guard(&response, success_guard)?;
+                apply_result_transform(&response, result, args)
+            }
+            TrustedIntegrationRuntimeSpec::BraveSearch { vertical } => {
+                self.brave_search(provider, integration, args, vertical)
+                    .await
+            }
+            TrustedIntegrationRuntimeSpec::ResendSendEmail => {
+                self.resend_send_email(provider, integration, args).await
+            }
+        }
     }
 
     async fn execute_runtime_app_provider(
@@ -653,6 +837,309 @@ impl ToolResolver {
     }
 }
 
+fn trusted_runtime_spec(
+    tool: &InstalledToolDefinition,
+) -> Result<Option<TrustedIntegrationRuntimeSpec>, ToolError> {
+    let Some(raw) = tool.metadata.get(TRUSTED_INTEGRATION_RUNTIME_METADATA_KEY) else {
+        return Ok(None);
+    };
+    serde_json::from_value(raw.clone()).map(Some).map_err(|e| {
+        ToolError::ExternalToolError(format!(
+            "invalid trusted integration runtime metadata for `{}`: {e}",
+            tool.name
+        ))
+    })
+}
+
+fn trusted_http_method(method: &TrustedIntegrationHttpMethod) -> Method {
+    match method {
+        TrustedIntegrationHttpMethod::Get => Method::GET,
+        TrustedIntegrationHttpMethod::Post => Method::POST,
+    }
+}
+
+fn build_runtime_url(
+    provider: &InstalledToolRuntimeProviderExecution,
+    integration: &InstalledToolRuntimeIntegration,
+    path: &str,
+    query_bindings: &[TrustedIntegrationArgBinding],
+    args: &Value,
+) -> Result<String, ToolError> {
+    let expanded_path = expand_path_template(path, args)?;
+    let base = format!(
+        "{}{}",
+        provider.base_url.trim_end_matches('/'),
+        expanded_path
+    );
+    let mut url = Url::parse(&runtime_url_with_auth(&base, integration)?)
+        .map_err(|e| ToolError::ExternalToolError(format!("invalid trusted runtime url: {e}")))?;
+    for binding in query_bindings {
+        if let Some(value) = resolve_binding_value(args, binding)? {
+            append_query_value(&mut url, &binding.target, value);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn expand_path_template(path: &str, args: &Value) -> Result<String, ToolError> {
+    let mut expanded = String::new();
+    let mut chars = path.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            let mut key = String::new();
+            while let Some(next) = chars.next() {
+                if next == '}' {
+                    break;
+                }
+                key.push(next);
+            }
+            let value = required_string(args, &[key.as_str()])?;
+            expanded.push_str(&value);
+        } else {
+            expanded.push(ch);
+        }
+    }
+    Ok(expanded)
+}
+
+fn append_query_value(url: &mut Url, key: &str, value: Value) {
+    let mut pairs = url.query_pairs_mut();
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(value) = item.as_str() {
+                    pairs.append_pair(key, value);
+                } else {
+                    pairs.append_pair(key, &item.to_string());
+                }
+            }
+        }
+        Value::String(value) => {
+            pairs.append_pair(key, &value);
+        }
+        other => {
+            pairs.append_pair(key, &other.to_string());
+        }
+    }
+}
+
+fn build_object_from_bindings(
+    bindings: &[TrustedIntegrationArgBinding],
+    args: &Value,
+) -> Result<Option<Value>, ToolError> {
+    if bindings.is_empty() {
+        return Ok(None);
+    }
+
+    let mut body = json!({});
+    let mut inserted = false;
+    for binding in bindings {
+        if let Some(value) = resolve_binding_value(args, binding)? {
+            insert_json_path(&mut body, &binding.target, value)?;
+            inserted = true;
+        }
+    }
+    Ok(inserted.then_some(body))
+}
+
+fn resolve_binding_value(
+    args: &Value,
+    binding: &TrustedIntegrationArgBinding,
+) -> Result<Option<Value>, ToolError> {
+    if binding.arg_names.is_empty() {
+        return Ok(binding.default_value.clone());
+    }
+
+    let resolved = match binding.value_type {
+        TrustedIntegrationArgValueType::String => {
+            optional_string_from_names(args, &binding.arg_names).map(Value::String)
+        }
+        TrustedIntegrationArgValueType::StringList => {
+            optional_string_list_from_names(args, &binding.arg_names).map(|items| json!(items))
+        }
+        TrustedIntegrationArgValueType::PositiveNumber => {
+            optional_positive_number_from_names(args, &binding.arg_names).map(|value| json!(value))
+        }
+        TrustedIntegrationArgValueType::Json => optional_json_from_names(args, &binding.arg_names),
+    };
+
+    if let Some(value) = resolved {
+        return Ok(Some(value));
+    }
+    if let Some(default) = &binding.default_value {
+        return Ok(Some(default.clone()));
+    }
+    if binding.required {
+        return Err(ToolError::ExternalToolError(format!(
+            "missing required field `{}`",
+            binding.arg_names.first().map_or("", String::as_str)
+        )));
+    }
+    Ok(None)
+}
+
+fn insert_json_path(target: &mut Value, path: &str, value: Value) -> Result<(), ToolError> {
+    let parts = path
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err(ToolError::ExternalToolError(
+            "trusted integration metadata declared an empty target path".into(),
+        ));
+    }
+
+    let mut current = target;
+    for part in &parts[..parts.len() - 1] {
+        if !current.is_object() {
+            *current = json!({});
+        }
+        current = current
+            .as_object_mut()
+            .expect("object ensured above")
+            .entry((*part).to_string())
+            .or_insert_with(|| json!({}));
+    }
+
+    current
+        .as_object_mut()
+        .ok_or_else(|| {
+            ToolError::ExternalToolError(format!(
+                "trusted integration target path `{path}` does not resolve to an object"
+            ))
+        })?
+        .insert(parts[parts.len() - 1].to_string(), value);
+    Ok(())
+}
+
+fn apply_success_guard(
+    response: &Value,
+    guard: &TrustedIntegrationSuccessGuard,
+) -> Result<(), ToolError> {
+    match guard {
+        TrustedIntegrationSuccessGuard::None => Ok(()),
+        TrustedIntegrationSuccessGuard::SlackOk => ensure_slack_ok(response),
+        TrustedIntegrationSuccessGuard::GraphqlErrors => {
+            if let Some(errors) = response.get("errors").and_then(Value::as_array) {
+                if !errors.is_empty() {
+                    let message = errors
+                        .iter()
+                        .filter_map(|error| error.get("message").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    return Err(ToolError::ExternalToolError(format!(
+                        "graphql error: {message}"
+                    )));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn apply_result_transform(
+    response: &Value,
+    transform: &TrustedIntegrationResultTransform,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    match transform {
+        TrustedIntegrationResultTransform::WrapPointer { key, pointer } => Ok(object_with_entry(
+            key,
+            response
+                .pointer(pointer)
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        )),
+        TrustedIntegrationResultTransform::ProjectArray {
+            key,
+            pointer,
+            fields,
+            extras,
+        } => {
+            let source = pointer
+                .as_deref()
+                .map_or(Some(response), |path| response.pointer(path));
+            let items = source
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| project_fields(&item, fields))
+                .collect::<Vec<_>>();
+            let mut result = object_with_entry(key, Value::Array(items));
+            for extra in extras {
+                let value = response
+                    .pointer(&extra.pointer)
+                    .cloned()
+                    .or_else(|| extra.default_value.clone())
+                    .unwrap_or(Value::Null);
+                result[&extra.output] = value;
+            }
+            Ok(result)
+        }
+        TrustedIntegrationResultTransform::ProjectObject {
+            key,
+            pointer,
+            fields,
+        } => {
+            let source = pointer
+                .as_deref()
+                .map_or(Some(response), |path| response.pointer(path))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            Ok(object_with_entry(key, project_fields(&source, fields)))
+        }
+        TrustedIntegrationResultTransform::BraveSearch { vertical } => {
+            let query = required_string(args, &["query", "q"])?;
+            let items = response
+                .pointer(&format!("/{vertical}/results"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| {
+                    json!({
+                        "title": item.get("title").and_then(Value::as_str).unwrap_or_default(),
+                        "url": item
+                            .get("url")
+                            .or_else(|| item.get("profile"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                        "description": item
+                            .get("description")
+                            .or_else(|| item.get("snippet"))
+                            .and_then(Value::as_str),
+                        "age": item.get("age").and_then(Value::as_str),
+                        "source": item.get("source").and_then(Value::as_str),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "query": query,
+                "results": items,
+                "more_results_available": response.pointer("/query/more_results_available").and_then(Value::as_bool).unwrap_or(false),
+            }))
+        }
+    }
+}
+
+fn object_with_entry(key: &str, value: Value) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert(key.to_string(), value);
+    Value::Object(map)
+}
+
+fn project_fields(source: &Value, fields: &[TrustedIntegrationResultField]) -> Value {
+    let mut result = json!({});
+    for field in fields {
+        result[&field.output] = source
+            .pointer(&field.pointer)
+            .cloned()
+            .unwrap_or(Value::Null);
+    }
+    result
+}
+
 fn select_runtime_integration<'a>(
     provider: &'a InstalledToolRuntimeProviderExecution,
     args: &Value,
@@ -739,8 +1226,18 @@ fn required_string(args: &Value, keys: &[&str]) -> Result<String, ToolError> {
 }
 
 fn optional_string(args: &Value, keys: &[&str]) -> Option<String> {
+    optional_string_from_names(
+        args,
+        &keys
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn optional_string_from_names(args: &Value, keys: &[String]) -> Option<String> {
     keys.iter().find_map(|key| {
-        args.get(*key)
+        args.get(key.as_str())
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -755,8 +1252,18 @@ fn required_string_list(args: &Value, keys: &[&str]) -> Result<Vec<String>, Tool
 }
 
 fn optional_string_list(args: &Value, keys: &[&str]) -> Option<Vec<String>> {
+    optional_string_list_from_names(
+        args,
+        &keys
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn optional_string_list_from_names(args: &Value, keys: &[String]) -> Option<Vec<String>> {
     keys.iter().find_map(|key| {
-        let value = args.get(*key)?;
+        let value = args.get(key.as_str())?;
         if let Some(single) = value
             .as_str()
             .map(str::trim)
@@ -780,8 +1287,22 @@ fn optional_string_list(args: &Value, keys: &[&str]) -> Option<Vec<String>> {
 }
 
 fn optional_positive_number(args: &Value, keys: &[&str]) -> Option<u64> {
+    optional_positive_number_from_names(
+        args,
+        &keys
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn optional_positive_number_from_names(args: &Value, keys: &[String]) -> Option<u64> {
     keys.iter()
-        .find_map(|key| args.get(*key).and_then(Value::as_u64))
+        .find_map(|key| args.get(key.as_str()).and_then(Value::as_u64))
+}
+
+fn optional_json_from_names(args: &Value, keys: &[String]) -> Option<Value> {
+    keys.iter().find_map(|key| args.get(key.as_str()).cloned())
 }
 
 fn ensure_slack_ok(response: &Value) -> Result<(), ToolError> {
