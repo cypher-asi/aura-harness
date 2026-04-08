@@ -25,8 +25,10 @@ pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, Proces
 pub use types::{
     Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,
     EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition, InstalledToolCapability,
-    InstalledToolDefinition, InstalledToolIntegrationRequirement, ProcessPending, Proposal,
-    ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth,
-    ToolCall, ToolCallContext, ToolDecision, ToolDefinition, ToolExecution, ToolProposal,
-    ToolResult, ToolResultContent, Trace, Transaction, TransactionType,
+    InstalledToolDefinition, InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth,
+    InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
+    InstalledToolRuntimeProviderExecution, ProcessPending, Proposal, ProposalSet, RecordEntry,
+    RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth, ToolCall, ToolCallContext,
+    ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent,
+    Trace, Transaction, TransactionType,
 };

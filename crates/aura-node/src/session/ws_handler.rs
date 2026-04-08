@@ -179,6 +179,7 @@ mod tests {
                 provider: Some("brave_search".to_string()),
                 kind: Some("workspace_integration".to_string()),
             }),
+            runtime_execution: None,
             metadata: HashMap::new(),
         }
     }

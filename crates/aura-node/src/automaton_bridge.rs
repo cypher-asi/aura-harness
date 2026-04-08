@@ -604,6 +604,7 @@ mod tests {
                             kind: Some("workspace_integration".to_string()),
                         },
                     ),
+                    runtime_execution: None,
                     metadata: Default::default(),
                 },
                 aura_protocol::InstalledTool {
@@ -618,6 +619,7 @@ mod tests {
                     timeout_ms: None,
                     namespace: None,
                     required_integration: None,
+                    runtime_execution: None,
                     metadata: Default::default(),
                 },
             ]),
@@ -655,6 +657,7 @@ mod tests {
                     provider: Some("brave_search".to_string()),
                     kind: Some("workspace_integration".to_string()),
                 }),
+                runtime_execution: None,
                 metadata: Default::default(),
             }]),
             &[],

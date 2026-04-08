@@ -402,6 +402,7 @@ mod tests {
                 timeout_ms: None,
                 namespace: None,
                 required_integration: None,
+                runtime_execution: None,
                 metadata: Default::default(),
             }],
         );

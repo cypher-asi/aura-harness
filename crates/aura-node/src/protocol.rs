@@ -38,6 +38,58 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
                 kind: requirement.kind,
             }
         }),
+        runtime_execution: t.runtime_execution.map(|execution| match execution {
+            InstalledToolRuntimeExecution::AppProvider(provider) => {
+                aura_core::InstalledToolRuntimeExecution::AppProvider(
+                    aura_core::InstalledToolRuntimeProviderExecution {
+                        provider: provider.provider,
+                        base_url: provider.base_url,
+                        static_headers: provider.static_headers,
+                        integrations: provider
+                            .integrations
+                            .into_iter()
+                            .map(|integration| aura_core::InstalledToolRuntimeIntegration {
+                                integration_id: integration.integration_id,
+                                auth: match integration.auth {
+                                    InstalledToolRuntimeAuth::None => {
+                                        aura_core::InstalledToolRuntimeAuth::None
+                                    }
+                                    InstalledToolRuntimeAuth::AuthorizationBearer { token } => {
+                                        aura_core::InstalledToolRuntimeAuth::AuthorizationBearer {
+                                            token,
+                                        }
+                                    }
+                                    InstalledToolRuntimeAuth::AuthorizationRaw { value } => {
+                                        aura_core::InstalledToolRuntimeAuth::AuthorizationRaw {
+                                            value,
+                                        }
+                                    }
+                                    InstalledToolRuntimeAuth::Header { name, value } => {
+                                        aura_core::InstalledToolRuntimeAuth::Header {
+                                            name,
+                                            value,
+                                        }
+                                    }
+                                    InstalledToolRuntimeAuth::QueryParam { name, value } => {
+                                        aura_core::InstalledToolRuntimeAuth::QueryParam {
+                                            name,
+                                            value,
+                                        }
+                                    }
+                                    InstalledToolRuntimeAuth::Basic { username, password } => {
+                                        aura_core::InstalledToolRuntimeAuth::Basic {
+                                            username,
+                                            password,
+                                        }
+                                    }
+                                },
+                                provider_config: integration.provider_config,
+                            })
+                            .collect(),
+                    },
+                )
+            }
+        }),
         metadata: t.metadata,
     }
 }

@@ -1,5 +1,9 @@
 use super::*;
-use aura_core::{ActionId, AgentId, InstalledToolDefinition, ToolAuth};
+use aura_core::{
+    ActionId, AgentId, InstalledToolDefinition, InstalledToolRuntimeAuth,
+    InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
+    InstalledToolRuntimeProviderExecution, ToolAuth,
+};
 use aura_kernel::ExecuteContext;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -36,13 +40,57 @@ fn spawn_single_response_server(
         let mut buf = [0_u8; 8192];
         let n = stream.read(&mut buf).unwrap();
         let request = String::from_utf8_lossy(&buf[..n]);
-        assert!(request.starts_with("POST "), "request was: {request}");
+        assert!(
+            request.starts_with("POST ") || request.starts_with("GET "),
+            "request was: {request}"
+        );
         assert!(request.contains("content-type: application/json") || request.contains("Content-Type: application/json"));
         if let Some(expected) = expected_auth {
             assert!(
                 request.contains(&format!("Authorization: {expected}"))
                     || request.contains(&format!("authorization: {expected}")),
                 "missing auth header in request: {request}"
+            );
+        }
+        let response = format!(
+            "HTTP/1.1 {response_status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+    format!("http://{addr}")
+}
+
+fn spawn_asserting_response_server(
+    expected_method: &str,
+    expected_headers: &[(&str, &str)],
+    response_status: &str,
+    response_body: &str,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_method = expected_method.to_string();
+    let expected_headers = expected_headers
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect::<Vec<_>>();
+    let response_status = response_status.to_string();
+    let response_body = response_body.to_string();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            request.starts_with(&format!("{expected_method} ")),
+            "request was: {request}"
+        );
+        for (name, value) in expected_headers {
+            assert!(
+                request.contains(&format!("{name}: {value}"))
+                    || request.contains(&format!("{}: {}", name.to_ascii_lowercase(), value)),
+                "missing header `{name}: {value}` in request: {request}"
             );
         }
         let response = format!(
@@ -136,6 +184,7 @@ async fn installed_tool_executes_via_http_callback() {
         timeout_ms: Some(5_000),
         namespace: Some("aura_org_tools".into()),
         required_integration: None,
+        runtime_execution: None,
         metadata: std::collections::HashMap::new(),
     }]);
     let (ctx, _dir) = test_context();
@@ -163,6 +212,7 @@ async fn installed_tool_http_failure_returns_failed_effect() {
         timeout_ms: Some(5_000),
         namespace: Some("aura_org_tools".into()),
         required_integration: None,
+        runtime_execution: None,
         metadata: std::collections::HashMap::new(),
     }]);
     let (ctx, _dir) = test_context();
@@ -174,6 +224,184 @@ async fn installed_tool_http_failure_returns_failed_effect() {
     let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
     let stderr = std::str::from_utf8(&result.stderr).unwrap();
     assert!(stderr.contains("returned status 404"), "stderr was: {stderr}");
+}
+
+#[tokio::test]
+async fn installed_tool_executes_via_runtime_provider_path() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_single_response_server(
+        Some("Bearer gh-test"),
+        "200 OK",
+        r#"[{"name":"aura","full_name":"cypher-asi/aura","private":false,"html_url":"https://github.com/cypher-asi/aura","default_branch":"main","description":"Aura"}]"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "github_list_repos".into(),
+        description: "List GitHub repos".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "github".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "github-default".into(),
+                    auth: InstalledToolRuntimeAuth::AuthorizationBearer {
+                        token: "gh-test".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: std::collections::HashMap::new(),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new("github_list_repos", serde_json::json!({}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    assert!(result.ok, "runtime-installed tool should succeed");
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"cypher-asi/aura\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
+async fn installed_tool_executes_linear_via_runtime_provider_path() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_response_server(
+        "POST",
+        &[("Authorization", "lin-secret")],
+        "200 OK",
+        r#"{"data":{"teams":{"nodes":[{"id":"t1","name":"Zero","key":"ZER"}]}}}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "linear_list_teams".into(),
+        description: "List Linear teams".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "linear".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "linear-default".into(),
+                    auth: InstalledToolRuntimeAuth::AuthorizationRaw {
+                        value: "lin-secret".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: std::collections::HashMap::new(),
+    }]);
+    let (ctx, _dir) = test_context();
+    let tc = ToolCall::new("linear_list_teams", serde_json::json!({}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"ZER\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
+async fn installed_tool_executes_brave_via_runtime_provider_path() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_response_server(
+        "GET",
+        &[("X-Subscription-Token", "brave-secret")],
+        "200 OK",
+        r#"{"web":{"results":[{"title":"Aura","url":"https://zero.tech","description":"desc"}]},"query":{"more_results_available":false}}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "brave_search_web".into(),
+        description: "Search the web".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "brave_search".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "brave-default".into(),
+                    auth: InstalledToolRuntimeAuth::Header {
+                        name: "X-Subscription-Token".into(),
+                        value: "brave-secret".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: std::collections::HashMap::new(),
+    }]);
+    let (ctx, _dir) = test_context();
+    let tc = ToolCall::new("brave_search_web", serde_json::json!({"query":"aura","count":1}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"Aura\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
+async fn installed_tool_executes_resend_via_runtime_provider_path() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_response_server(
+        "GET",
+        &[("Authorization", "Bearer resend-secret")],
+        "200 OK",
+        r#"{"data":[{"id":"dom_1","name":"example.com","status":"verified"}],"has_more":false}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "resend_list_domains".into(),
+        description: "List resend domains".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "resend".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "resend-default".into(),
+                    auth: InstalledToolRuntimeAuth::AuthorizationBearer {
+                        token: "resend-secret".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: std::collections::HashMap::new(),
+    }]);
+    let (ctx, _dir) = test_context();
+    let tc = ToolCall::new("resend_list_domains", serde_json::json!({}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"example.com\""), "stdout was: {stdout}");
 }
 
 mod stub_domain {

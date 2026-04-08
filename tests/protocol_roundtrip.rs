@@ -87,6 +87,21 @@ fn installed_tool_roundtrip_core_to_protocol() {
             provider: Some("brave_search".into()),
             kind: Some("workspace_integration".into()),
         }),
+        runtime_execution: Some(aura_core::InstalledToolRuntimeExecution::AppProvider(
+            aura_core::InstalledToolRuntimeProviderExecution {
+                provider: "brave_search".into(),
+                base_url: "https://api.search.brave.com".into(),
+                static_headers: HashMap::new(),
+                integrations: vec![aura_core::InstalledToolRuntimeIntegration {
+                    integration_id: "int-1".into(),
+                    auth: aura_core::InstalledToolRuntimeAuth::Header {
+                        name: "X-Subscription-Token".into(),
+                        value: "secret".into(),
+                    },
+                    provider_config: HashMap::new(),
+                }],
+            },
+        )),
         metadata: {
             let mut m = HashMap::new();
             m.insert("key".into(), serde_json::json!("value"));
@@ -103,6 +118,7 @@ fn installed_tool_roundtrip_core_to_protocol() {
     assert_eq!(core_tool.endpoint, proto_tool.endpoint);
     assert_eq!(core_tool.timeout_ms, proto_tool.timeout_ms);
     assert_eq!(core_tool.namespace, proto_tool.namespace);
+    assert!(proto_tool.runtime_execution.is_some());
     assert_eq!(
         core_tool.required_integration.as_ref().and_then(|req| req.provider.as_deref()),
         proto_tool
@@ -122,6 +138,7 @@ fn installed_tool_roundtrip_core_to_protocol() {
     assert_eq!(core_tool.auth, roundtrip.auth);
     assert_eq!(core_tool.timeout_ms, roundtrip.timeout_ms);
     assert_eq!(core_tool.namespace, roundtrip.namespace);
+    assert!(roundtrip.runtime_execution.is_some());
     assert_eq!(
         core_tool.required_integration.as_ref().and_then(|req| req.kind.as_deref()),
         roundtrip
@@ -149,6 +166,20 @@ fn installed_tool_roundtrip_protocol_to_core() {
             provider: Some("github".into()),
             kind: Some("workspace_integration".into()),
         }),
+        runtime_execution: Some(aura_protocol::InstalledToolRuntimeExecution::AppProvider(
+            aura_protocol::InstalledToolRuntimeProviderExecution {
+                provider: "github".into(),
+                base_url: "https://api.github.com".into(),
+                static_headers: HashMap::new(),
+                integrations: vec![aura_protocol::InstalledToolRuntimeIntegration {
+                    integration_id: "int-2".into(),
+                    auth: aura_protocol::InstalledToolRuntimeAuth::AuthorizationBearer {
+                        token: "secret".into(),
+                    },
+                    provider_config: HashMap::new(),
+                }],
+            },
+        )),
         metadata: HashMap::new(),
     };
 
@@ -159,6 +190,7 @@ fn installed_tool_roundtrip_protocol_to_core() {
     assert_eq!(proto_tool.name, core_tool.name);
     assert_eq!(proto_tool.description, core_tool.description);
     assert_eq!(proto_tool.endpoint, core_tool.endpoint);
+    assert!(core_tool.runtime_execution.is_some());
     assert_eq!(
         proto_tool
             .required_integration
@@ -177,6 +209,7 @@ fn installed_tool_roundtrip_protocol_to_core() {
 
     assert_eq!(proto_tool.name, roundtrip.name);
     assert_eq!(proto_tool.endpoint, roundtrip.endpoint);
+    assert!(roundtrip.runtime_execution.is_some());
     assert_eq!(
         proto_tool
             .required_integration

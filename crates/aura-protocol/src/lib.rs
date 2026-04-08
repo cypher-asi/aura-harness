@@ -455,6 +455,47 @@ pub enum ToolAuth {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InstalledToolRuntimeAuth {
+    #[default]
+    None,
+    AuthorizationBearer { token: String },
+    AuthorizationRaw { value: String },
+    Header { name: String, value: String },
+    QueryParam { name: String, value: String },
+    Basic { username: String, password: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledToolRuntimeIntegration {
+    pub integration_id: String,
+    #[serde(default)]
+    pub auth: InstalledToolRuntimeAuth,
+    #[serde(default)]
+    pub provider_config: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct InstalledToolRuntimeProviderExecution {
+    pub provider: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub static_headers: HashMap<String, String>,
+    #[serde(default)]
+    pub integrations: Vec<InstalledToolRuntimeIntegration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InstalledToolRuntimeExecution {
+    AppProvider(InstalledToolRuntimeProviderExecution),
+}
+
 /// Definition for an installed tool, sent over the wire in `session_init`.
 ///
 /// Wire-compatible with `aura_core::InstalledToolDefinition` but
@@ -485,6 +526,8 @@ pub struct InstalledTool {
     pub namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_integration: Option<InstalledToolIntegrationRequirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_execution: Option<InstalledToolRuntimeExecution>,
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }
