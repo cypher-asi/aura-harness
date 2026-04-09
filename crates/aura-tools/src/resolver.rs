@@ -48,11 +48,21 @@ enum TrustedIntegrationArgValueType {
     Json,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum TrustedIntegrationArgSource {
+    #[default]
+    InputArgs,
+    ProviderConfig,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TrustedIntegrationArgBinding {
     arg_names: Vec<String>,
     target: String,
+    #[serde(default)]
+    source: TrustedIntegrationArgSource,
     value_type: TrustedIntegrationArgValueType,
     #[serde(default)]
     required: bool,
@@ -379,7 +389,7 @@ impl ToolResolver {
                 result,
             } => {
                 let url = build_runtime_url(provider, integration, path, query, args)?;
-                let body = build_object_from_bindings(body, args)?;
+                let body = build_object_from_bindings(body, args, &integration.provider_config)?;
                 let response = self
                     .provider_json_request(
                         trusted_http_method(method),
@@ -399,7 +409,8 @@ impl ToolResolver {
                 result,
             } => {
                 let variables =
-                    build_object_from_bindings(variables, args)?.unwrap_or_else(|| json!({}));
+                    build_object_from_bindings(variables, args, &integration.provider_config)?
+                        .unwrap_or_else(|| json!({}));
                 let response = self
                     .provider_json_request(
                         Method::POST,
@@ -424,7 +435,8 @@ impl ToolResolver {
                 result,
             } => {
                 let url = build_runtime_url(provider, integration, path, query, args)?;
-                let body = build_form_fields_from_bindings(body, args)?;
+                let body =
+                    build_form_fields_from_bindings(body, args, &integration.provider_config)?;
                 let response = self
                     .provider_form_request(
                         trusted_http_method(method),
@@ -925,7 +937,7 @@ fn trusted_http_method(method: &TrustedIntegrationHttpMethod) -> Method {
 
 fn build_runtime_url(
     provider: &InstalledToolRuntimeProviderExecution,
-    _integration: &InstalledToolRuntimeIntegration,
+    integration: &InstalledToolRuntimeIntegration,
     path: &str,
     query_bindings: &[TrustedIntegrationArgBinding],
     args: &Value,
@@ -939,7 +951,7 @@ fn build_runtime_url(
     let mut url = Url::parse(&base)
         .map_err(|e| ToolError::ExternalToolError(format!("invalid trusted runtime url: {e}")))?;
     for binding in query_bindings {
-        if let Some(value) = resolve_binding_value(args, binding)? {
+        if let Some(value) = resolve_binding_value(args, &integration.provider_config, binding)? {
             append_query_value(&mut url, &binding.target, value);
         }
     }
@@ -991,6 +1003,7 @@ fn append_query_value(url: &mut Url, key: &str, value: Value) {
 fn build_object_from_bindings(
     bindings: &[TrustedIntegrationArgBinding],
     args: &Value,
+    provider_config: &HashMap<String, Value>,
 ) -> Result<Option<Value>, ToolError> {
     if bindings.is_empty() {
         return Ok(None);
@@ -999,7 +1012,7 @@ fn build_object_from_bindings(
     let mut body = json!({});
     let mut inserted = false;
     for binding in bindings {
-        if let Some(value) = resolve_binding_value(args, binding)? {
+        if let Some(value) = resolve_binding_value(args, provider_config, binding)? {
             insert_json_path(&mut body, &binding.target, value)?;
             inserted = true;
         }
@@ -1010,10 +1023,11 @@ fn build_object_from_bindings(
 fn build_form_fields_from_bindings(
     bindings: &[TrustedIntegrationArgBinding],
     args: &Value,
+    provider_config: &HashMap<String, Value>,
 ) -> Result<Vec<(String, String)>, ToolError> {
     let mut fields = Vec::new();
     for binding in bindings {
-        if let Some(value) = resolve_binding_value(args, binding)? {
+        if let Some(value) = resolve_binding_value(args, provider_config, binding)? {
             match value {
                 Value::Array(items) => {
                     for item in items {
@@ -1036,23 +1050,46 @@ fn form_field_value(value: Value) -> String {
 
 fn resolve_binding_value(
     args: &Value,
+    provider_config: &HashMap<String, Value>,
     binding: &TrustedIntegrationArgBinding,
 ) -> Result<Option<Value>, ToolError> {
     if binding.arg_names.is_empty() {
         return Ok(binding.default_value.clone());
     }
 
-    let resolved = match binding.value_type {
-        TrustedIntegrationArgValueType::String => {
-            optional_string_from_names(args, &binding.arg_names).map(Value::String)
-        }
-        TrustedIntegrationArgValueType::StringList => {
-            optional_string_list_from_names(args, &binding.arg_names).map(|items| json!(items))
-        }
-        TrustedIntegrationArgValueType::PositiveNumber => {
-            optional_positive_number_from_names(args, &binding.arg_names).map(|value| json!(value))
-        }
-        TrustedIntegrationArgValueType::Json => optional_json_from_names(args, &binding.arg_names),
+    let resolved = match binding.source {
+        TrustedIntegrationArgSource::InputArgs => match binding.value_type {
+            TrustedIntegrationArgValueType::String => {
+                optional_string_from_names(args, &binding.arg_names).map(Value::String)
+            }
+            TrustedIntegrationArgValueType::StringList => {
+                optional_string_list_from_names(args, &binding.arg_names).map(|items| json!(items))
+            }
+            TrustedIntegrationArgValueType::PositiveNumber => {
+                optional_positive_number_from_names(args, &binding.arg_names)
+                    .map(|value| json!(value))
+            }
+            TrustedIntegrationArgValueType::Json => {
+                optional_json_from_names(args, &binding.arg_names)
+            }
+        },
+        TrustedIntegrationArgSource::ProviderConfig => match binding.value_type {
+            TrustedIntegrationArgValueType::String => {
+                optional_string_from_names_map(provider_config, &binding.arg_names)
+                    .map(Value::String)
+            }
+            TrustedIntegrationArgValueType::StringList => {
+                optional_string_list_from_names_map(provider_config, &binding.arg_names)
+                    .map(|items| json!(items))
+            }
+            TrustedIntegrationArgValueType::PositiveNumber => {
+                optional_positive_number_from_names_map(provider_config, &binding.arg_names)
+                    .map(|value| json!(value))
+            }
+            TrustedIntegrationArgValueType::Json => {
+                optional_json_from_names_map(provider_config, &binding.arg_names)
+            }
+        },
     };
 
     if let Some(value) = resolved {
@@ -1337,6 +1374,20 @@ fn optional_string_from_names(args: &Value, keys: &[String]) -> Option<String> {
     })
 }
 
+fn optional_string_from_names_map(
+    values: &HashMap<String, Value>,
+    keys: &[String],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        values
+            .get(key.as_str())
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
 fn required_string_list(args: &Value, keys: &[&str]) -> Result<Vec<String>, ToolError> {
     optional_string_list(args, keys).ok_or_else(|| {
         ToolError::ExternalToolError(format!("missing required field `{}`", keys[0]))
@@ -1378,6 +1429,34 @@ fn optional_string_list_from_names(args: &Value, keys: &[String]) -> Option<Vec<
     })
 }
 
+fn optional_string_list_from_names_map(
+    values: &HashMap<String, Value>,
+    keys: &[String],
+) -> Option<Vec<String>> {
+    keys.iter().find_map(|key| {
+        let value = values.get(key.as_str())?;
+        if let Some(single) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(vec![single.to_string()]);
+        }
+        value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|items| !items.is_empty())
+    })
+}
+
 fn optional_positive_number(args: &Value, keys: &[&str]) -> Option<u64> {
     optional_positive_number_from_names(
         args,
@@ -1393,8 +1472,21 @@ fn optional_positive_number_from_names(args: &Value, keys: &[String]) -> Option<
         .find_map(|key| args.get(key.as_str()).and_then(Value::as_u64))
 }
 
+fn optional_positive_number_from_names_map(
+    values: &HashMap<String, Value>,
+    keys: &[String],
+) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| values.get(key.as_str()).and_then(Value::as_u64))
+}
+
 fn optional_json_from_names(args: &Value, keys: &[String]) -> Option<Value> {
     keys.iter().find_map(|key| args.get(key.as_str()).cloned())
+}
+
+fn optional_json_from_names_map(values: &HashMap<String, Value>, keys: &[String]) -> Option<Value> {
+    keys.iter()
+        .find_map(|key| values.get(key.as_str()).cloned())
 }
 
 fn ensure_slack_ok(response: &Value) -> Result<(), ToolError> {

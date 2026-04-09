@@ -628,6 +628,76 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_buffer_query_and_f
 }
 
 #[tokio::test]
+async fn installed_tool_executes_via_trusted_runtime_metadata_metricool_provider_config_path() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_request_server(
+        "GET",
+        &[
+            "GET /admin/simpleProfiles?userId=user-123&blogId=blog-456 ",
+            "x-mc-auth: metricool-secret",
+        ],
+        "200 OK",
+        r#"[{"id":654321,"userId":123456,"label":"Aura Brand"}]"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "metricool_list_brands".into(),
+        description: "List Metricool brands".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "metricool".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "metricool-default".into(),
+                    auth: InstalledToolRuntimeAuth::Header {
+                        name: "X-Mc-Auth".into(),
+                        value: "metricool-secret".into(),
+                    },
+                    provider_config: std::collections::HashMap::from([
+                        ("userId".into(), serde_json::json!("user-123")),
+                        ("blogId".into(), serde_json::json!("blog-456")),
+                    ]),
+                }],
+            },
+        )),
+        metadata: trusted_runtime_metadata(serde_json::json!({
+            "type":"rest_json",
+            "method":"get",
+            "path":"/admin/simpleProfiles",
+            "query":[
+                {"argNames":["userId"],"target":"userId","source":"provider_config","valueType":"string","required":true},
+                {"argNames":["blogId"],"target":"blogId","source":"provider_config","valueType":"string","required":true}
+            ],
+            "result":{
+                "type":"project_array",
+                "key":"brands",
+                "fields":[
+                    {"output":"id","pointer":"/id"},
+                    {"output":"user_id","pointer":"/userId"},
+                    {"output":"label","pointer":"/label"}
+                ]
+            }
+        })),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new("metricool_list_brands", serde_json::json!({}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    assert!(result.ok, "trusted runtime metricool tool should succeed");
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"Aura Brand\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
 async fn installed_tool_executes_linear_via_runtime_provider_path() {
     let (_cat, resolver) = make_catalog_and_resolver();
     let endpoint = spawn_asserting_response_server(
