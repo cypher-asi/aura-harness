@@ -114,6 +114,46 @@ fn spawn_asserting_response_server(
     format!("http://{addr}")
 }
 
+fn spawn_asserting_request_server(
+    expected_method: &str,
+    expected_request_parts: &[&str],
+    response_status: &str,
+    response_body: &str,
+) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let expected_method = expected_method.to_string();
+    let expected_request_parts = expected_request_parts
+        .iter()
+        .map(|part| (*part).to_string())
+        .collect::<Vec<_>>();
+    let response_status = response_status.to_string();
+    let response_body = response_body.to_string();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            request.starts_with(&format!("{expected_method} ")),
+            "request was: {request}"
+        );
+        for expected in expected_request_parts {
+            assert!(
+                request.contains(&expected),
+                "missing request part `{expected}` in request: {request}"
+            );
+        }
+        let response = format!(
+            "HTTP/1.1 {response_status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+            response_body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    });
+    format!("http://{addr}")
+}
+
 #[test]
 fn resolver_has_builtin_tools() {
     let (_cat, resolver) = make_catalog_and_resolver();
@@ -507,6 +547,84 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_resend_send_email(
     let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
     let stdout = std::str::from_utf8(&result.stdout).unwrap();
     assert!(stdout.contains("\"email_123\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
+async fn installed_tool_executes_via_trusted_runtime_metadata_buffer_query_and_form_path() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_request_server(
+        "POST",
+        &[
+            "POST /updates/create.json?access_token=buffer-secret ",
+            "content-type: application/x-www-form-urlencoded",
+            "text=Ship+it",
+            "profile_ids%5B%5D=profile-1",
+        ],
+        "200 OK",
+        r#"{"success":true,"updates":[{"id":"update-1","status":"buffer","text":"Ship it","service":"twitter"}]}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "buffer_create_update".into(),
+        description: "Create a Buffer update".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "buffer".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "buffer-default".into(),
+                    auth: InstalledToolRuntimeAuth::QueryParam {
+                        name: "access_token".into(),
+                        value: "buffer-secret".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: trusted_runtime_metadata(serde_json::json!({
+            "type":"rest_form",
+            "method":"post",
+            "path":"/updates/create.json",
+            "body":[
+                {"argNames":["text"],"target":"text","valueType":"string","required":true},
+                {"argNames":["profile_id","profileId"],"target":"profile_ids[]","valueType":"string","required":true}
+            ],
+            "result":{
+                "type":"project_array",
+                "key":"updates",
+                "pointer":"/updates",
+                "fields":[
+                    {"output":"id","pointer":"/id"},
+                    {"output":"status","pointer":"/status"},
+                    {"output":"text","pointer":"/text"},
+                    {"output":"service","pointer":"/service"}
+                ],
+                "extras":[
+                    {"output":"success","pointer":"/success","defaultValue":false}
+                ]
+            }
+        })),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new(
+        "buffer_create_update",
+        serde_json::json!({"profile_id":"profile-1","text":"Ship it"}),
+    );
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    assert!(result.ok, "trusted runtime buffer tool should succeed");
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"update-1\""), "stdout was: {stdout}");
+    assert!(stdout.contains("\"success\":true"), "stdout was: {stdout}");
 }
 
 #[tokio::test]

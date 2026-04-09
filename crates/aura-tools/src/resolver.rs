@@ -130,6 +130,17 @@ enum TrustedIntegrationRuntimeSpec {
         success_guard: TrustedIntegrationSuccessGuard,
         result: TrustedIntegrationResultTransform,
     },
+    RestForm {
+        method: TrustedIntegrationHttpMethod,
+        path: String,
+        #[serde(default)]
+        query: Vec<TrustedIntegrationArgBinding>,
+        #[serde(default)]
+        body: Vec<TrustedIntegrationArgBinding>,
+        #[serde(default)]
+        success_guard: TrustedIntegrationSuccessGuard,
+        result: TrustedIntegrationResultTransform,
+    },
     Graphql {
         query: String,
         #[serde(default)]
@@ -399,6 +410,28 @@ impl ToolResolver {
                             "query": query,
                             "variables": variables,
                         })),
+                    )
+                    .await?;
+                apply_success_guard(&response, success_guard)?;
+                apply_result_transform(&response, result, args)
+            }
+            TrustedIntegrationRuntimeSpec::RestForm {
+                method,
+                path,
+                query,
+                body,
+                success_guard,
+                result,
+            } => {
+                let url = build_runtime_url(provider, integration, path, query, args)?;
+                let body = build_form_fields_from_bindings(body, args)?;
+                let response = self
+                    .provider_form_request(
+                        trusted_http_method(method),
+                        &url,
+                        provider,
+                        integration,
+                        body,
                     )
                     .await?;
                 apply_success_guard(&response, success_guard)?;
@@ -835,6 +868,38 @@ impl ToolResolver {
             ToolError::ExternalToolError(format!("provider returned invalid JSON: {e}"))
         })
     }
+
+    async fn provider_form_request(
+        &self,
+        method: Method,
+        url: &str,
+        provider: &InstalledToolRuntimeProviderExecution,
+        integration: &InstalledToolRuntimeIntegration,
+        body: Vec<(String, String)>,
+    ) -> Result<Value, ToolError> {
+        let final_url = runtime_url_with_auth(url, integration)?;
+        let mut request = self.http_client.request(method, final_url);
+        request = apply_runtime_headers(request, &provider.static_headers)?;
+        request = apply_runtime_auth(request, integration)?;
+        request = request.form(&body);
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ToolError::ExternalToolError(format!("provider request failed: {e}")))?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            ToolError::ExternalToolError(format!("reading provider response failed: {e}"))
+        })?;
+        if !status.is_success() {
+            return Err(ToolError::ExternalToolError(format!(
+                "provider request failed with {}: {}",
+                status, text
+            )));
+        }
+        serde_json::from_str(&text).map_err(|e| {
+            ToolError::ExternalToolError(format!("provider returned invalid JSON: {e}"))
+        })
+    }
 }
 
 fn trusted_runtime_spec(
@@ -860,7 +925,7 @@ fn trusted_http_method(method: &TrustedIntegrationHttpMethod) -> Method {
 
 fn build_runtime_url(
     provider: &InstalledToolRuntimeProviderExecution,
-    integration: &InstalledToolRuntimeIntegration,
+    _integration: &InstalledToolRuntimeIntegration,
     path: &str,
     query_bindings: &[TrustedIntegrationArgBinding],
     args: &Value,
@@ -871,7 +936,7 @@ fn build_runtime_url(
         provider.base_url.trim_end_matches('/'),
         expanded_path
     );
-    let mut url = Url::parse(&runtime_url_with_auth(&base, integration)?)
+    let mut url = Url::parse(&base)
         .map_err(|e| ToolError::ExternalToolError(format!("invalid trusted runtime url: {e}")))?;
     for binding in query_bindings {
         if let Some(value) = resolve_binding_value(args, binding)? {
@@ -940,6 +1005,33 @@ fn build_object_from_bindings(
         }
     }
     Ok(inserted.then_some(body))
+}
+
+fn build_form_fields_from_bindings(
+    bindings: &[TrustedIntegrationArgBinding],
+    args: &Value,
+) -> Result<Vec<(String, String)>, ToolError> {
+    let mut fields = Vec::new();
+    for binding in bindings {
+        if let Some(value) = resolve_binding_value(args, binding)? {
+            match value {
+                Value::Array(items) => {
+                    for item in items {
+                        fields.push((binding.target.clone(), form_field_value(item)));
+                    }
+                }
+                other => fields.push((binding.target.clone(), form_field_value(other))),
+            }
+        }
+    }
+    Ok(fields)
+}
+
+fn form_field_value(value: Value) -> String {
+    match value {
+        Value::String(value) => value,
+        other => other.to_string(),
+    }
 }
 
 fn resolve_binding_value(
