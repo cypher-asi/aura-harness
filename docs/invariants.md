@@ -17,6 +17,9 @@ No code outside the kernel may:
 
 All external interactions are mediated through `Kernel::process()` or `Kernel::reason()`.
 
+The harness is the runtime authorization and execution boundary, not the credential authority.
+Org-level credential persistence and canonical secret retrieval must remain outside the harness.
+
 ### Verification
 
 ```bash
@@ -133,6 +136,8 @@ Re-processing the same transaction against the same record window must produce t
 
 The AgentLoop's public API (`run`, `run_with_events`) accepts `&dyn ModelProvider` and `&dyn AgentToolExecutor`. It must never depend on the concrete gateway types.
 
+This boundary also means the harness executes tools from runtime metadata without becoming the system of record for integration credentials or catalog state.
+
 ---
 
 ## 9. AgentLoop Isolation
@@ -148,6 +153,8 @@ The AgentLoop must not:
 - Construct `Transaction` objects
 
 The AgentLoop owns: iteration logic, streaming, compaction, budget management, stall detection, message history.
+
+The harness as a whole may receive runtime-resolved capabilities or short-lived secrets through approved gateways, but it must not persist org credentials or become the catalog authority for integrations.
 
 ---
 
