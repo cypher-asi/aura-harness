@@ -307,6 +307,7 @@ async fn installed_tool_executes_via_runtime_provider_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "github-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "gh-test".into(),
                     },
@@ -356,6 +357,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_rest_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "github-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "gh-test".into(),
                     },
@@ -424,6 +426,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_graphql_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "linear-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationRaw {
                         value: "lin-secret".into(),
                     },
@@ -474,6 +477,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_brave_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "brave-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::Header {
                         name: "X-Subscription-Token".into(),
                         value: "brave-secret".into(),
@@ -525,6 +529,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_resend_send_email(
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "resend-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "resend-secret".into(),
                     },
@@ -579,6 +584,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_buffer_query_and_f
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "buffer-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::QueryParam {
                         name: "access_token".into(),
                         value: "buffer-secret".into(),
@@ -655,6 +661,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_metricool_provider
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "metricool-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::Header {
                         name: "X-Mc-Auth".into(),
                         value: "metricool-secret".into(),
@@ -726,6 +733,7 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_apify_root_json_bo
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "apify-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "apify-secret".into(),
                     },
@@ -769,6 +777,69 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_apify_root_json_bo
 }
 
 #[tokio::test]
+async fn installed_tool_executes_via_trusted_runtime_metadata_mailchimp_base_url_override() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_request_server(
+        "GET",
+        &["GET /lists "],
+        "200 OK",
+        r#"{"lists":[{"id":"list-1","name":"Players","stats":{"member_count":128}}]}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "mailchimp_list_audiences".into(),
+        description: "List Mailchimp audiences".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "mailchimp".into(),
+                base_url: String::new(),
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "mailchimp-default".into(),
+                    base_url: Some(endpoint),
+                    auth: InstalledToolRuntimeAuth::Basic {
+                        username: "anystring".into(),
+                        password: "mailchimp-secret-us19".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: trusted_runtime_metadata(serde_json::json!({
+            "type":"rest_json",
+            "method":"get",
+            "path":"/lists",
+            "result":{
+                "type":"project_array",
+                "key":"audiences",
+                "pointer":"/lists",
+                "fields":[
+                    {"output":"id","pointer":"/id"},
+                    {"output":"name","pointer":"/name"},
+                    {"output":"member_count","pointer":"/stats/member_count"}
+                ]
+            }
+        })),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new("mailchimp_list_audiences", serde_json::json!({}));
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    assert!(result.ok, "trusted runtime mailchimp tool should succeed");
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"list-1\""), "stdout was: {stdout}");
+    assert!(stdout.contains("\"Players\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
 async fn installed_tool_executes_linear_via_runtime_provider_path() {
     let (_cat, resolver) = make_catalog_and_resolver();
     let endpoint = spawn_asserting_response_server(
@@ -793,6 +864,7 @@ async fn installed_tool_executes_linear_via_runtime_provider_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "linear-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationRaw {
                         value: "lin-secret".into(),
                     },
@@ -837,6 +909,7 @@ async fn installed_tool_executes_brave_via_runtime_provider_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "brave-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::Header {
                         name: "X-Subscription-Token".into(),
                         value: "brave-secret".into(),
@@ -885,6 +958,7 @@ async fn installed_tool_executes_slack_post_message_via_runtime_provider_path() 
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "slack-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "slack-secret".into(),
                     },
@@ -935,6 +1009,7 @@ async fn installed_tool_surfaces_slack_api_errors_via_runtime_provider_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "slack-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "slack-secret".into(),
                     },
@@ -982,6 +1057,7 @@ async fn installed_tool_executes_resend_via_runtime_provider_path() {
                 static_headers: std::collections::HashMap::new(),
                 integrations: vec![InstalledToolRuntimeIntegration {
                     integration_id: "resend-default".into(),
+                    base_url: None,
                     auth: InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "resend-secret".into(),
                     },

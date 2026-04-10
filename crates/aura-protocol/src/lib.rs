@@ -461,17 +461,32 @@ pub enum ToolAuth {
 pub enum InstalledToolRuntimeAuth {
     #[default]
     None,
-    AuthorizationBearer { token: String },
-    AuthorizationRaw { value: String },
-    Header { name: String, value: String },
-    QueryParam { name: String, value: String },
-    Basic { username: String, password: String },
+    AuthorizationBearer {
+        token: String,
+    },
+    AuthorizationRaw {
+        value: String,
+    },
+    Header {
+        name: String,
+        value: String,
+    },
+    QueryParam {
+        name: String,
+        value: String,
+    },
+    Basic {
+        username: String,
+        password: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct InstalledToolRuntimeIntegration {
     pub integration_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     #[serde(default)]
     pub auth: InstalledToolRuntimeAuth,
     #[serde(default)]

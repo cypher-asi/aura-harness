@@ -943,9 +943,13 @@ fn build_runtime_url(
     args: &Value,
 ) -> Result<String, ToolError> {
     let expanded_path = expand_path_template(path, args)?;
+    let resolved_base_url = integration
+        .base_url
+        .as_deref()
+        .unwrap_or(&provider.base_url);
     let base = format!(
         "{}{}",
-        provider.base_url.trim_end_matches('/'),
+        resolved_base_url.trim_end_matches('/'),
         expanded_path
     );
     let mut url = Url::parse(&base)

@@ -107,16 +107,31 @@ pub enum ToolAuth {
 pub enum InstalledToolRuntimeAuth {
     #[default]
     None,
-    AuthorizationBearer { token: String },
-    AuthorizationRaw { value: String },
-    Header { name: String, value: String },
-    QueryParam { name: String, value: String },
-    Basic { username: String, password: String },
+    AuthorizationBearer {
+        token: String,
+    },
+    AuthorizationRaw {
+        value: String,
+    },
+    Header {
+        name: String,
+        value: String,
+    },
+    QueryParam {
+        name: String,
+        value: String,
+    },
+    Basic {
+        username: String,
+        password: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledToolRuntimeIntegration {
     pub integration_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     #[serde(default)]
     pub auth: InstalledToolRuntimeAuth,
     #[serde(default)]
@@ -221,7 +236,9 @@ pub struct RuntimeCapabilityInstall {
 impl RuntimeCapabilityInstall {
     #[must_use]
     pub fn tool_capability(&self, tool: &str) -> Option<&InstalledToolCapability> {
-        self.installed_tools.iter().find(|installed| installed.name == tool)
+        self.installed_tools
+            .iter()
+            .find(|installed| installed.name == tool)
     }
 
     #[must_use]

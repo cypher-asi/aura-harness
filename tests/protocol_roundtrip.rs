@@ -94,6 +94,7 @@ fn installed_tool_roundtrip_core_to_protocol() {
                 static_headers: HashMap::new(),
                 integrations: vec![aura_core::InstalledToolRuntimeIntegration {
                     integration_id: "int-1".into(),
+                    base_url: None,
                     auth: aura_core::InstalledToolRuntimeAuth::Header {
                         name: "X-Subscription-Token".into(),
                         value: "secret".into(),
@@ -120,7 +121,10 @@ fn installed_tool_roundtrip_core_to_protocol() {
     assert_eq!(core_tool.namespace, proto_tool.namespace);
     assert!(proto_tool.runtime_execution.is_some());
     assert_eq!(
-        core_tool.required_integration.as_ref().and_then(|req| req.provider.as_deref()),
+        core_tool
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.provider.as_deref()),
         proto_tool
             .required_integration
             .as_ref()
@@ -140,7 +144,10 @@ fn installed_tool_roundtrip_core_to_protocol() {
     assert_eq!(core_tool.namespace, roundtrip.namespace);
     assert!(roundtrip.runtime_execution.is_some());
     assert_eq!(
-        core_tool.required_integration.as_ref().and_then(|req| req.kind.as_deref()),
+        core_tool
+            .required_integration
+            .as_ref()
+            .and_then(|req| req.kind.as_deref()),
         roundtrip
             .required_integration
             .as_ref()
@@ -173,6 +180,7 @@ fn installed_tool_roundtrip_protocol_to_core() {
                 static_headers: HashMap::new(),
                 integrations: vec![aura_protocol::InstalledToolRuntimeIntegration {
                     integration_id: "int-2".into(),
+                    base_url: None,
                     auth: aura_protocol::InstalledToolRuntimeAuth::AuthorizationBearer {
                         token: "secret".into(),
                     },

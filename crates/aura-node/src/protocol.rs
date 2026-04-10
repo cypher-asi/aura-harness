@@ -50,6 +50,7 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
                             .into_iter()
                             .map(|integration| aura_core::InstalledToolRuntimeIntegration {
                                 integration_id: integration.integration_id,
+                                base_url: integration.base_url,
                                 auth: match integration.auth {
                                     InstalledToolRuntimeAuth::None => {
                                         aura_core::InstalledToolRuntimeAuth::None
@@ -65,10 +66,7 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
                                         }
                                     }
                                     InstalledToolRuntimeAuth::Header { name, value } => {
-                                        aura_core::InstalledToolRuntimeAuth::Header {
-                                            name,
-                                            value,
-                                        }
+                                        aura_core::InstalledToolRuntimeAuth::Header { name, value }
                                     }
                                     InstalledToolRuntimeAuth::QueryParam { name, value } => {
                                         aura_core::InstalledToolRuntimeAuth::QueryParam {
