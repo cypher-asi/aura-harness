@@ -1009,9 +1009,19 @@ fn build_object_from_bindings(
         return Ok(None);
     }
 
+    if bindings.len() == 1 && bindings[0].target == "$" {
+        return resolve_binding_value(args, provider_config, &bindings[0]);
+    }
+
     let mut body = json!({});
     let mut inserted = false;
     for binding in bindings {
+        if binding.target == "$" {
+            return Err(ToolError::ExternalToolError(
+                "trusted integration metadata cannot mix root body bindings with object bindings"
+                    .into(),
+            ));
+        }
         if let Some(value) = resolve_binding_value(args, provider_config, binding)? {
             insert_json_path(&mut body, &binding.target, value)?;
             inserted = true;

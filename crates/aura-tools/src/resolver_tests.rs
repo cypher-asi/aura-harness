@@ -698,6 +698,77 @@ async fn installed_tool_executes_via_trusted_runtime_metadata_metricool_provider
 }
 
 #[tokio::test]
+async fn installed_tool_executes_via_trusted_runtime_metadata_apify_root_json_body() {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let endpoint = spawn_asserting_request_server(
+        "POST",
+        &[
+            "POST /acts/my-actor/runs ",
+            "authorization: Bearer apify-secret",
+            "{\"query\":\"aura\"}",
+        ],
+        "200 OK",
+        r#"{"data":{"id":"run-1","status":"READY","actId":"actor-1"}}"#,
+    );
+    let resolver = resolver.with_installed_tools(vec![InstalledToolDefinition {
+        name: "apify_run_actor".into(),
+        description: "Run an Apify actor".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(InstalledToolRuntimeExecution::AppProvider(
+            InstalledToolRuntimeProviderExecution {
+                provider: "apify".into(),
+                base_url: endpoint,
+                static_headers: std::collections::HashMap::new(),
+                integrations: vec![InstalledToolRuntimeIntegration {
+                    integration_id: "apify-default".into(),
+                    auth: InstalledToolRuntimeAuth::AuthorizationBearer {
+                        token: "apify-secret".into(),
+                    },
+                    provider_config: std::collections::HashMap::new(),
+                }],
+            },
+        )),
+        metadata: trusted_runtime_metadata(serde_json::json!({
+            "type":"rest_json",
+            "method":"post",
+            "path":"/acts/{actor_id}/runs",
+            "body":[
+                {"argNames":["input"],"target":"$","valueType":"json","defaultValue":{}}
+            ],
+            "result":{
+                "type":"project_object",
+                "key":"run",
+                "pointer":"/data",
+                "fields":[
+                    {"output":"id","pointer":"/id"},
+                    {"output":"status","pointer":"/status"},
+                    {"output":"act_id","pointer":"/actId"}
+                ]
+            }
+        })),
+    }]);
+    let (ctx, _dir) = test_context();
+
+    let tc = ToolCall::new(
+        "apify_run_actor",
+        serde_json::json!({"actor_id":"my-actor","input":{"query":"aura"}}),
+    );
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
+    assert!(result.ok, "trusted runtime apify tool should succeed");
+    let stdout = std::str::from_utf8(&result.stdout).unwrap();
+    assert!(stdout.contains("\"run-1\""), "stdout was: {stdout}");
+    assert!(stdout.contains("\"READY\""), "stdout was: {stdout}");
+}
+
+#[tokio::test]
 async fn installed_tool_executes_linear_via_runtime_provider_path() {
     let (_cat, resolver) = make_catalog_and_resolver();
     let endpoint = spawn_asserting_response_server(
