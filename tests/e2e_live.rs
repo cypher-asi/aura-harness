@@ -26,6 +26,19 @@ use common::{
 };
 use serde_json::{json, Value};
 
+macro_rules! require_llm {
+    () => {{
+        let enabled = std::env::var("AURA_RUN_LIVE_E2E")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        if !enabled {
+            eprintln!("skipping live LLM test: set AURA_RUN_LIVE_E2E=1 to enable it");
+            return;
+        }
+        $crate::require_llm!()
+    }};
+}
+
 // ============================================================================
 // Suite 1: Health and REST API
 // ============================================================================

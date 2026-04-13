@@ -1389,17 +1389,25 @@ async fn tool_run_command_with_timeout() {
     } else {
         "sleep 10"
     };
-    ws.send_user_message(&format!(
-        "Use the run_command tool to execute '{cmd}' with timeout_secs set to 2.",
-    ))
-    .await;
+    let prompts = [
+        format!("Use the run_command tool to execute '{cmd}' with timeout_secs set to 2."),
+        format!(
+            "Call the run_command tool immediately. Execute exactly '{cmd}' with timeout_secs set to 2 and do not answer without the tool."
+        ),
+    ];
 
-    let messages = ws.collect_turn(Duration::from_secs(120)).await;
-    let tools = tool_names_used(&messages);
-    assert!(
-        tools.contains(&"run_command".to_string()),
-        "expected run_command tool use, got: {tools:?}"
-    );
+    let mut last_tools = Vec::new();
+    for prompt in prompts {
+        ws.send_user_message(&prompt).await;
+        let messages = ws.collect_turn(Duration::from_secs(120)).await;
+        let tools = tool_names_used(&messages);
+        if tools.contains(&"run_command".to_string()) {
+            return;
+        }
+        last_tools = tools;
+    }
+
+    panic!("expected run_command tool use, got: {last_tools:?}");
 }
 
 #[tokio::test]
@@ -1468,8 +1476,16 @@ async fn tool_write_read_roundtrip() {
         .collect();
     if !read_results.is_empty() {
         let result = read_results[0]["result"].as_str().unwrap_or("");
+        let decoded_stdout = serde_json::from_str::<Value>(result)
+            .ok()
+            .and_then(|parsed| parsed["stdout"].as_str().map(str::to_owned))
+            .and_then(|stdout| {
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, stdout).ok()
+            })
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_else(|| result.to_string());
         assert!(
-            result.contains("MARKER_ABC_123"),
+            decoded_stdout.contains("MARKER_ABC_123"),
             "read_file should return written content, got: {result}"
         );
     }

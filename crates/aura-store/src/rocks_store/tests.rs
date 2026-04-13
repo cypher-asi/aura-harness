@@ -493,9 +493,7 @@ fn test_append_entries_batch_empty() {
     let (store, _dir) = create_test_store();
     let agent_id = AgentId::generate();
 
-    store
-        .append_entries_batch(agent_id, 1, &[])
-        .unwrap();
+    store.append_entries_batch(agent_id, 1, &[]).unwrap();
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 0);
 }
 

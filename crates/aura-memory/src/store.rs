@@ -43,15 +43,36 @@ pub trait MemoryStoreApi: Send + Sync {
 
     fn put_event(&self, event: &AgentEvent) -> Result<(), MemoryError>;
     fn list_events(&self, agent_id: AgentId, limit: usize) -> Result<Vec<AgentEvent>, MemoryError>;
-    fn list_events_since(&self, agent_id: AgentId, since: DateTime<Utc>) -> Result<Vec<AgentEvent>, MemoryError>;
-    fn delete_event_direct(&self, agent_id: AgentId, timestamp: DateTime<Utc>, event_id: AgentEventId) -> Result<(), MemoryError>;
+    fn list_events_since(
+        &self,
+        agent_id: AgentId,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<AgentEvent>, MemoryError>;
+    fn delete_event_direct(
+        &self,
+        agent_id: AgentId,
+        timestamp: DateTime<Utc>,
+        event_id: AgentEventId,
+    ) -> Result<(), MemoryError>;
     fn delete_event(&self, agent_id: AgentId, event_id: AgentEventId) -> Result<(), MemoryError>;
-    fn delete_events_before(&self, agent_id: AgentId, before: DateTime<Utc>) -> Result<usize, MemoryError>;
+    fn delete_events_before(
+        &self,
+        agent_id: AgentId,
+        before: DateTime<Utc>,
+    ) -> Result<usize, MemoryError>;
 
     fn put_procedure(&self, proc: &Procedure) -> Result<(), MemoryError>;
-    fn get_procedure(&self, agent_id: AgentId, procedure_id: ProcedureId) -> Result<Procedure, MemoryError>;
+    fn get_procedure(
+        &self,
+        agent_id: AgentId,
+        procedure_id: ProcedureId,
+    ) -> Result<Procedure, MemoryError>;
     fn list_procedures(&self, agent_id: AgentId) -> Result<Vec<Procedure>, MemoryError>;
-    fn delete_procedure(&self, agent_id: AgentId, procedure_id: ProcedureId) -> Result<(), MemoryError>;
+    fn delete_procedure(
+        &self,
+        agent_id: AgentId,
+        procedure_id: ProcedureId,
+    ) -> Result<(), MemoryError>;
 
     fn delete_all(&self, agent_id: AgentId) -> Result<(), MemoryError>;
     fn stats(&self, agent_id: AgentId) -> Result<MemoryStats, MemoryError>;
@@ -74,10 +95,7 @@ impl MemoryStore {
         &self.db
     }
 
-    fn cf_handle(
-        &self,
-        name: &str,
-    ) -> Result<Arc<rocksdb::BoundColumnFamily<'_>>, MemoryError> {
+    fn cf_handle(&self, name: &str) -> Result<Arc<rocksdb::BoundColumnFamily<'_>>, MemoryError> {
         self.db
             .cf_handle(name)
             .ok_or_else(|| MemoryError::ColumnFamilyNotFound(name.to_string()))
@@ -143,10 +161,7 @@ impl MemoryStore {
         end: &[u8],
         batch: &mut WriteBatch,
     ) -> Result<(), MemoryError> {
-        let iter = db.iterator_cf(
-            cf,
-            IteratorMode::From(prefix, rocksdb::Direction::Forward),
-        );
+        let iter = db.iterator_cf(cf, IteratorMode::From(prefix, rocksdb::Direction::Forward));
         for item in iter {
             let (k, _) = item?;
             if k.as_ref() >= end {
@@ -157,11 +172,7 @@ impl MemoryStore {
         Ok(())
     }
 
-    fn count_for_agent(
-        &self,
-        cf_name: &str,
-        agent_id: AgentId,
-    ) -> Result<usize, MemoryError> {
+    fn count_for_agent(&self, cf_name: &str, agent_id: AgentId) -> Result<usize, MemoryError> {
         let cf = self.cf_handle(cf_name)?;
         let prefix = Self::agent_prefix(agent_id);
         let end = Self::agent_prefix_end(agent_id);
@@ -204,11 +215,7 @@ impl MemoryStoreApi for MemoryStore {
         }
     }
 
-    fn get_fact_by_key(
-        &self,
-        agent_id: AgentId,
-        key: &str,
-    ) -> Result<Option<Fact>, MemoryError> {
+    fn get_fact_by_key(&self, agent_id: AgentId, key: &str) -> Result<Option<Fact>, MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_FACTS)?;
         let prefix = Self::agent_prefix(agent_id);
         let end = Self::agent_prefix_end(agent_id);
@@ -275,22 +282,20 @@ impl MemoryStoreApi for MemoryStore {
 
         let idx_cf = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
         let idx_key = Self::event_index_key(event.agent_id, event.event_id);
-        self.db
-            .put_cf(&idx_cf, idx_key, event.timestamp.timestamp_millis().to_be_bytes())?;
+        self.db.put_cf(
+            &idx_cf,
+            idx_key,
+            event.timestamp.timestamp_millis().to_be_bytes(),
+        )?;
         Ok(())
     }
 
-    fn list_events(
-        &self,
-        agent_id: AgentId,
-        limit: usize,
-    ) -> Result<Vec<AgentEvent>, MemoryError> {
+    fn list_events(&self, agent_id: AgentId, limit: usize) -> Result<Vec<AgentEvent>, MemoryError> {
         let cf = self.cf_handle(cf::MEMORY_EVENTS)?;
         let end = Self::agent_prefix_end(agent_id);
-        let iter = self.db.iterator_cf(
-            &cf,
-            IteratorMode::From(&end, rocksdb::Direction::Reverse),
-        );
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&end, rocksdb::Direction::Reverse));
         let prefix = Self::agent_prefix(agent_id);
 
         let mut events = Vec::new();
@@ -322,10 +327,9 @@ impl MemoryStoreApi for MemoryStore {
             k
         };
         let end = Self::agent_prefix_end(agent_id);
-        let iter = self.db.iterator_cf(
-            &cf,
-            IteratorMode::From(&start, rocksdb::Direction::Forward),
-        );
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&start, rocksdb::Direction::Forward));
 
         let mut events = Vec::new();
         for item in iter {
@@ -356,19 +360,15 @@ impl MemoryStoreApi for MemoryStore {
         Ok(())
     }
 
-    fn delete_event(
-        &self,
-        agent_id: AgentId,
-        event_id: AgentEventId,
-    ) -> Result<(), MemoryError> {
+    fn delete_event(&self, agent_id: AgentId, event_id: AgentEventId) -> Result<(), MemoryError> {
         let idx_cf = self.cf_handle(cf::MEMORY_EVENT_INDEX)?;
         let idx_key = Self::event_index_key(agent_id, event_id);
 
         match self.db.get_cf(&idx_cf, &idx_key)? {
             Some(ts_bytes) => {
-                let ts_arr: [u8; 8] = <[u8; 8]>::try_from(&ts_bytes[..]).map_err(
-                    |_| MemoryError::Deserialization("invalid timestamp in event index".into()),
-                )?;
+                let ts_arr: [u8; 8] = <[u8; 8]>::try_from(&ts_bytes[..]).map_err(|_| {
+                    MemoryError::Deserialization("invalid timestamp in event index".into())
+                })?;
                 let ts_millis = i64::from_be_bytes(ts_arr);
                 let timestamp =
                     chrono::DateTime::from_timestamp_millis(ts_millis).ok_or_else(|| {

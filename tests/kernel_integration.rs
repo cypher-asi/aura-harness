@@ -14,8 +14,7 @@ fn create_test_kernel(
     provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync>,
 ) -> (Arc<Kernel>, Arc<dyn Store>, TempDir) {
     let dir = TempDir::new().unwrap();
-    let store: Arc<dyn Store> =
-        Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
     let agent_id = AgentId::generate();
     let ws_dir = dir.path().join("workspaces");
     std::fs::create_dir_all(&ws_dir).unwrap();
@@ -25,9 +24,8 @@ fn create_test_kernel(
         ..KernelConfig::default()
     };
     let executor = ExecutorRouter::new();
-    let kernel = Arc::new(
-        Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap(),
-    );
+    let kernel =
+        Arc::new(Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap());
     (kernel, store, dir)
 }
 
@@ -70,11 +68,7 @@ async fn test_full_kernel_mediated_flow() {
     assert_eq!(entries.len(), 3, "Should have 3 entries");
 
     for (i, entry) in entries.iter().enumerate() {
-        assert_eq!(
-            entry.seq,
-            (i + 1) as u64,
-            "Sequence should be monotonic"
-        );
+        assert_eq!(entry.seq, (i + 1) as u64, "Sequence should be monotonic");
     }
 
     // Verify context hashes are non-zero and unique
@@ -114,10 +108,7 @@ async fn test_sequence_continuity() {
     // Mix process_direct and reason calls
     for i in 0..5 {
         if i % 2 == 0 {
-            let tx = aura_core::Transaction::user_prompt(
-                kernel.agent_id,
-                format!("msg {i}"),
-            );
+            let tx = aura_core::Transaction::user_prompt(kernel.agent_id, format!("msg {i}"));
             kernel.process_direct(tx).await.unwrap();
         } else {
             let request = ModelRequest::builder("test-model", "system")

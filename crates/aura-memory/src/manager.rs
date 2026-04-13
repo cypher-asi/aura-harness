@@ -9,11 +9,11 @@ use crate::retrieval::{MemoryRetriever, RetrievalConfig};
 use crate::store::{MemoryStore, MemoryStoreApi};
 use crate::types::{MemoryPacket, Procedure};
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
+use async_trait::async_trait;
 use aura_agent::AgentLoopResult;
 use aura_core::AgentId;
 use aura_core::ProcedureId;
 use aura_reasoner::ModelProvider;
-use async_trait::async_trait;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 
@@ -42,8 +42,7 @@ impl MemoryManager {
         let retriever = MemoryRetriever::new(Arc::clone(&store), retrieval_config);
         let refiner = LlmRefiner::new(Arc::clone(&provider), refiner_config);
         let pipeline = MemoryWritePipeline::new(Arc::clone(&store), refiner, write_config);
-        let procedure_extractor =
-            ProcedureExtractor::new(Arc::clone(&store), procedure_config);
+        let procedure_extractor = ProcedureExtractor::new(Arc::clone(&store), procedure_config);
         let consolidator =
             MemoryConsolidator::new(Arc::clone(&store), provider, consolidation_config);
 
@@ -150,10 +149,7 @@ impl MemoryManager {
     ///
     /// # Errors
     /// Returns error on store I/O or model provider failure.
-    pub async fn consolidate(
-        &self,
-        agent_id: AgentId,
-    ) -> Result<ConsolidationReport, MemoryError> {
+    pub async fn consolidate(&self, agent_id: AgentId) -> Result<ConsolidationReport, MemoryError> {
         self.consolidator.consolidate(agent_id).await
     }
 

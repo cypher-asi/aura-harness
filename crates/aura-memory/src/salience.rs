@@ -43,7 +43,10 @@ pub fn estimate_fact_tokens(fact: &Fact) -> usize {
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    let line = format!("- {}: {} (confidence: {:.2})", fact.key, val, fact.confidence);
+    let line = format!(
+        "- {}: {} (confidence: {:.2})",
+        fact.key, val, fact.confidence
+    );
     estimate_tokens(&line)
 }
 

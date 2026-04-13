@@ -118,7 +118,10 @@ async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction
     if let Ok(Some((token, tx))) = store.dequeue_tx(state.agent_id) {
         match state.kernel.process_dequeued(tx.clone(), token).await {
             Ok(result) => {
-                debug!(seq = result.entry.seq, "Completion record persisted via kernel");
+                debug!(
+                    seq = result.entry.seq,
+                    "Completion record persisted via kernel"
+                );
                 send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
                 let _ = state
                     .commands
@@ -194,12 +197,19 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
             return;
         }
     };
-    send_record_to_ui(state.commands, prompt_result.entry.seq, &tx, &prompt_result.entry).await;
+    send_record_to_ui(
+        state.commands,
+        prompt_result.entry.seq,
+        &tx,
+        &prompt_result.entry,
+    )
+    .await;
 
     state.messages.push(Message::user(text));
 
     if let Some(ref mm) = state.memory_manager {
-        mm.prepare_context(state.agent_id, state.agent_loop.config_mut()).await;
+        mm.prepare_context(state.agent_id, state.agent_loop.config_mut())
+            .await;
     }
 
     let (process_result, streamed_text) = handlers::run_agent_turn(state).await;

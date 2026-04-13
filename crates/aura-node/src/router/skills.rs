@@ -2,7 +2,9 @@
 
 use super::RouterState;
 use aura_core::AgentId;
-use aura_skills::{SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource};
+use aura_skills::{
+    SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -78,12 +80,13 @@ impl From<SkillActivation> for ActivationResponse {
 }
 
 /// `GET /api/skills` — list all skills (metadata only).
-pub(super) async fn list_skills(
-    State(state): State<RouterState>,
-) -> ApiResult<Vec<SkillMeta>> {
+pub(super) async fn list_skills(State(state): State<RouterState>) -> ApiResult<Vec<SkillMeta>> {
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
     Ok(Json(guard.list_all()))
 }
@@ -95,7 +98,10 @@ pub(super) async fn get_skill(
 ) -> ApiResult<SkillDetail> {
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
     let skill = guard.get(&name).map_err(skill_err)?;
     Ok(Json(SkillDetail {
@@ -122,7 +128,10 @@ pub(super) async fn activate_skill(
 ) -> ApiResult<ActivationResponse> {
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
     let activation = guard.activate(&name, &body.arguments).map_err(skill_err)?;
     Ok(Json(activation.into()))
@@ -148,10 +157,18 @@ pub(super) async fn create_skill(
 ) -> Result<(StatusCode, Json<SkillDetail>), (StatusCode, Json<serde_json::Value>)> {
     let mgr = require_skills(&state)?;
     let mut guard = mgr.write().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
     let skill = guard
-        .create(&body.name, &body.description, &body.body, body.user_invocable)
+        .create(
+            &body.name,
+            &body.description,
+            &body.body,
+            body.user_invocable,
+        )
         .map_err(skill_err)?;
     Ok((
         StatusCode::CREATED,
@@ -187,7 +204,10 @@ pub(super) async fn list_agent_skills(
     let agent_id = parse_agent_id(&agent_hex)?;
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
     let installations = guard.list_agent_skills(agent_id).map_err(skill_err)?;
     Ok(Json(installations))
@@ -202,7 +222,10 @@ pub(super) async fn install_agent_skill(
     let agent_id = parse_agent_id(&agent_hex)?;
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
     let installation = guard
         .install_for_agent(
@@ -224,9 +247,13 @@ pub(super) async fn uninstall_agent_skill(
     let agent_id = parse_agent_id(&agent_hex)?;
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "lock poisoned" })))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "lock poisoned" })),
+        )
     })?;
-    guard.uninstall_from_agent(agent_id, &name)
+    guard
+        .uninstall_from_agent(agent_id, &name)
         .map_err(skill_err)?;
     Ok(StatusCode::NO_CONTENT)
 }

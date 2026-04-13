@@ -12,7 +12,9 @@ mod session_helpers;
 
 use cli::{Cli, Commands, RunArgs, UiMode};
 
-use aura_agent::{AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager, ProcessManagerConfig};
+use aura_agent::{
+    AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager, ProcessManagerConfig,
+};
 use aura_core::{Identity, Transaction};
 use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;

@@ -152,10 +152,8 @@ impl SkillManager {
         if installed.is_empty() {
             return Vec::new();
         }
-        let installed_names: std::collections::HashSet<&str> = installed
-            .iter()
-            .map(|i| i.skill_name.as_str())
-            .collect();
+        let installed_names: std::collections::HashSet<&str> =
+            installed.iter().map(|i| i.skill_name.as_str()).collect();
         self.registry
             .all_skills()
             .into_iter()
@@ -221,17 +219,12 @@ impl SkillManager {
     ) -> Result<Skill, SkillError> {
         validate_name(name)?;
 
-        let target_dir = self
-            .loader
-            .config()
-            .personal_dir
-            .clone()
-            .ok_or_else(|| {
-                SkillError::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "personal skills directory not configured",
-                ))
-            })?;
+        let target_dir = self.loader.config().personal_dir.clone().ok_or_else(|| {
+            SkillError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "personal skills directory not configured",
+            ))
+        })?;
 
         let skill_dir = target_dir.join(name);
         std::fs::create_dir_all(&skill_dir)?;
@@ -355,22 +348,25 @@ impl SkillManager {
         let mut seen_cmds = std::collections::HashSet::new();
 
         for inst in &installed {
-            let (inst_paths, inst_cmds) = if inst.approved_paths.is_empty()
-                && inst.approved_commands.is_empty()
-            {
-                // Fall back to the skill's frontmatter declarations when the
-                // installation record has no explicit approvals (pre-permission
-                // installs or UI that hasn't implemented the approval prompt yet).
-                match self.registry.get(&inst.skill_name) {
-                    Ok(skill) => (
-                        skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
-                        skill.frontmatter.allowed_commands.clone().unwrap_or_default(),
-                    ),
-                    Err(_) => (Vec::new(), Vec::new()),
-                }
-            } else {
-                (inst.approved_paths.clone(), inst.approved_commands.clone())
-            };
+            let (inst_paths, inst_cmds) =
+                if inst.approved_paths.is_empty() && inst.approved_commands.is_empty() {
+                    // Fall back to the skill's frontmatter declarations when the
+                    // installation record has no explicit approvals (pre-permission
+                    // installs or UI that hasn't implemented the approval prompt yet).
+                    match self.registry.get(&inst.skill_name) {
+                        Ok(skill) => (
+                            skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
+                            skill
+                                .frontmatter
+                                .allowed_commands
+                                .clone()
+                                .unwrap_or_default(),
+                        ),
+                        Err(_) => (Vec::new(), Vec::new()),
+                    }
+                } else {
+                    (inst.approved_paths.clone(), inst.approved_commands.clone())
+                };
 
             for p in &inst_paths {
                 let expanded = if let Some(ref h) = home {

@@ -148,14 +148,7 @@ fn test_cmd_run_preserves_quoted_arguments() {
 
     #[cfg(windows)]
     {
-        let result = cmd_run(
-            &sandbox,
-            r#"cmd /c echo "hello world""#,
-            &[],
-            None,
-            5000,
-        )
-        .unwrap();
+        let result = cmd_run(&sandbox, r#"cmd /c echo "hello world""#, &[], None, 5000).unwrap();
         assert!(result.ok);
         let output = String::from_utf8_lossy(&result.stdout);
         assert!(
@@ -166,14 +159,7 @@ fn test_cmd_run_preserves_quoted_arguments() {
 
     #[cfg(not(windows))]
     {
-        let result = cmd_run(
-            &sandbox,
-            r#"echo "hello world""#,
-            &[],
-            None,
-            5000,
-        )
-        .unwrap();
+        let result = cmd_run(&sandbox, r#"echo "hello world""#, &[], None, 5000).unwrap();
         assert!(result.ok);
         let output = String::from_utf8_lossy(&result.stdout);
         assert!(

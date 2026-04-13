@@ -339,15 +339,28 @@ mod tests {
     use super::*;
     use aura_protocol::SessionInit;
 
-    fn test_session(project_base: Option<&str>) -> Session {
+    fn absolute_path(parts: &[&str]) -> PathBuf {
+        #[cfg(windows)]
+        let mut path = PathBuf::from(r"C:\");
+        #[cfg(not(windows))]
+        let mut path = PathBuf::from("/");
+
+        for part in parts {
+            path.push(part);
+        }
+
+        path
+    }
+
+    fn test_session(project_base: Option<PathBuf>) -> Session {
         let tmp = std::env::temp_dir().join("aura-test-session");
         let _ = std::fs::create_dir_all(&tmp);
         let mut s = Session::new(tmp);
-        s.project_base = project_base.map(PathBuf::from);
+        s.project_base = project_base;
         s
     }
 
-    fn init_with_project_path(path: &str) -> SessionInit {
+    fn init_with_project_path(path: &std::path::Path) -> SessionInit {
         SessionInit {
             system_prompt: None,
             model: None,
@@ -357,7 +370,7 @@ mod tests {
             installed_tools: None,
             installed_integrations: None,
             workspace: None,
-            project_path: Some(path.into()),
+            project_path: Some(path.display().to_string()),
             token: None,
             project_id: None,
             conversation_messages: None,
@@ -371,26 +384,28 @@ mod tests {
 
     #[test]
     fn project_path_allowed_when_no_base() {
+        let project_path = absolute_path(&["any", "absolute", "path"]);
         let mut session = test_session(None);
-        let init = init_with_project_path("/any/absolute/path");
+        let init = init_with_project_path(&project_path);
         assert!(session.apply_init(init).is_ok());
-        assert_eq!(
-            session.project_path.unwrap().to_str().unwrap(),
-            "/any/absolute/path"
-        );
+        assert_eq!(session.project_path.unwrap(), project_path);
     }
 
     #[test]
     fn project_path_allowed_under_base() {
-        let mut session = test_session(Some("/home/aura"));
-        let init = init_with_project_path("/home/aura/myproject");
+        let project_base = absolute_path(&["home", "aura"]);
+        let project_path = project_base.join("myproject");
+        let mut session = test_session(Some(project_base));
+        let init = init_with_project_path(&project_path);
         assert!(session.apply_init(init).is_ok());
     }
 
     #[test]
     fn project_path_blocked_outside_base() {
-        let mut session = test_session(Some("/home/aura"));
-        let init = init_with_project_path("/etc/passwd");
+        let project_base = absolute_path(&["home", "aura"]);
+        let project_path = absolute_path(&["etc", "passwd"]);
+        let mut session = test_session(Some(project_base));
+        let init = init_with_project_path(&project_path);
         let result = session.apply_init(init);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must be under"));
@@ -398,8 +413,10 @@ mod tests {
 
     #[test]
     fn project_path_blocked_with_traversal() {
-        let mut session = test_session(Some("/home/aura"));
-        let init = init_with_project_path("/home/aura/../etc/passwd");
+        let project_base = absolute_path(&["home", "aura"]);
+        let project_path = project_base.join("..").join("etc").join("passwd");
+        let mut session = test_session(Some(project_base));
+        let init = init_with_project_path(&project_path);
         let result = session.apply_init(init);
         assert!(result.is_err());
     }
@@ -407,7 +424,7 @@ mod tests {
     #[test]
     fn project_path_rejects_relative() {
         let mut session = test_session(None);
-        let init = init_with_project_path("relative/path");
+        let init = init_with_project_path(std::path::Path::new("relative/path"));
         let result = session.apply_init(init);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("absolute"));

@@ -2,11 +2,11 @@
 //! harness session to aura-router, translating router SSE events into typed
 //! `OutboundMessage::Generation*` variants.
 
+use super::Session;
 use crate::protocol::{
     ErrorMsg, GenerationCompleted, GenerationErrorMsg, GenerationPartialImage,
     GenerationProgressMsg, GenerationRequest, GenerationStart, OutboundMessage,
 };
-use super::Session;
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -250,10 +250,7 @@ fn translate_router_event(event_type: &str, data: &str, mode: &str) -> Option<Ou
         }
         "submitted" => {
             let parsed: serde_json::Value = serde_json::from_str(data).unwrap_or_default();
-            let task_id = parsed
-                .get("taskId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let task_id = parsed.get("taskId").and_then(|v| v.as_str()).unwrap_or("");
             Some(OutboundMessage::GenerationProgress(GenerationProgressMsg {
                 percent: 5.0,
                 message: format!("Task submitted: {task_id}"),

@@ -100,7 +100,11 @@ impl MemoryPacket {
                     serde_json::Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                let _ = writeln!(out, "- {}: {} (confidence: {:.2})", fact.key, val, fact.confidence);
+                let _ = writeln!(
+                    out,
+                    "- {}: {} (confidence: {:.2})",
+                    fact.key, val, fact.confidence
+                );
             }
             out.push_str("</facts>\n");
         }

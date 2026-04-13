@@ -118,11 +118,7 @@ impl ProcedureExtractor {
                 let trigger_words: Vec<&str> = tokenize_words(&proc.trigger);
                 let overlap = task_words
                     .iter()
-                    .filter(|tw| {
-                        trigger_words
-                            .iter()
-                            .any(|pw| pw.eq_ignore_ascii_case(tw))
-                    })
+                    .filter(|tw| trigger_words.iter().any(|pw| pw.eq_ignore_ascii_case(tw)))
                     .count();
 
                 if overlap > 0 {
@@ -134,10 +130,7 @@ impl ProcedureExtractor {
             })
             .collect();
 
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(scored.into_iter().map(|(p, _)| p).collect())
     }
 
@@ -382,11 +375,7 @@ pub fn compute_skill_relevance(
 
     let overlap = proc_words
         .iter()
-        .filter(|pw| {
-            skill_words
-                .iter()
-                .any(|sw| sw.eq_ignore_ascii_case(pw))
-        })
+        .filter(|pw| skill_words.iter().any(|sw| sw.eq_ignore_ascii_case(pw)))
         .count();
 
     let score = overlap as f32 / proc_words.len().max(1) as f32;
@@ -407,7 +396,12 @@ mod tests {
     #[test]
     fn sequences_match_above_threshold() {
         let a: Vec<String> = vec!["read".into(), "write".into(), "build".into(), "test".into()];
-        let b: Vec<String> = vec!["read".into(), "write".into(), "build".into(), "deploy".into()];
+        let b: Vec<String> = vec![
+            "read".into(),
+            "write".into(),
+            "build".into(),
+            "deploy".into(),
+        ];
         assert!(sequences_match(&a, &b));
     }
 
@@ -531,12 +525,7 @@ mod tests {
 
     #[test]
     fn skill_relevance_empty_description() {
-        let score = compute_skill_relevance(
-            "deploy flow",
-            "deploy",
-            &["build".into()],
-            "",
-        );
+        let score = compute_skill_relevance("deploy flow", "deploy", &["build".into()], "");
         assert!((score - 0.5).abs() < f32::EPSILON);
     }
 }

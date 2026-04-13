@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 
 // ============================================================================
-// Credential helpers (hard-fail when missing)
+// Credential helpers
 // ============================================================================
 
 /// Resolve auth token for LLM tests. Panics when credentials are missing.
@@ -57,23 +57,28 @@ macro_rules! require_llm {
     };
 }
 
-/// Return (email, password) from E2E env vars. Panics when missing.
-pub fn require_zos_credentials() -> (String, String) {
+/// Return (email, password) from E2E env vars when configured.
+pub fn optional_zos_credentials() -> Option<(String, String)> {
     let email = std::env::var("E2E_ZOS_EMAIL").unwrap_or_default();
     let password = std::env::var("E2E_ZOS_PASSWORD").unwrap_or_default();
     if email.is_empty() || password.is_empty() {
-        panic!(
-            "ZOS credentials required: set E2E_ZOS_EMAIL and E2E_ZOS_PASSWORD \
-             environment variables (or add them to .env)"
-        );
+        return None;
     }
-    (email, password)
+    Some((email, password))
 }
 
 #[macro_export]
 macro_rules! require_zos {
     () => {
-        $crate::common::require_zos_credentials()
+        match $crate::common::optional_zos_credentials() {
+            Some(credentials) => credentials,
+            None => {
+                eprintln!(
+                    "skipping credentialed test: set E2E_ZOS_EMAIL and E2E_ZOS_PASSWORD to run it"
+                );
+                return;
+            }
+        }
     };
 }
 

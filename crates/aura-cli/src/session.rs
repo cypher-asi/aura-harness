@@ -112,8 +112,7 @@ impl Session {
         debug!(?store_path, "Opened store");
 
         let workspace = config.workspace_root.join(identity.agent_id.to_hex());
-        let (executor_router, tools) =
-            crate::session_helpers::build_executor_router();
+        let (executor_router, tools) = crate::session_helpers::build_executor_router();
 
         let selection = crate::session_helpers::select_provider(&config.provider);
         let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::from(selection.provider);

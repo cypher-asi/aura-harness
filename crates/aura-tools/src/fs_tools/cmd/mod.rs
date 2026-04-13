@@ -320,9 +320,8 @@ fn refresh_system_path() -> Option<String> {
             .map(|p| expand_env_vars(&p))
     }
 
-    let machine_reg = read_reg_path(
-        r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-    );
+    let machine_reg =
+        read_reg_path(r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment");
     let user_reg = read_reg_path(r"HKCU\Environment");
 
     let process_path = std::env::var("PATH").unwrap_or_default();
@@ -336,7 +335,10 @@ fn refresh_system_path() -> Option<String> {
         segments.extend(u.split(';').filter(|s| !s.is_empty()));
     }
     for entry in process_path.split(';').filter(|s| !s.is_empty()) {
-        if !segments.iter().any(|existing| existing.eq_ignore_ascii_case(entry)) {
+        if !segments
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(entry))
+        {
             segments.push(entry);
         }
     }

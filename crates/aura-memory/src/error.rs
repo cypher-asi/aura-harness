@@ -62,9 +62,7 @@ impl MemoryError {
     pub const fn is_not_found(&self) -> bool {
         matches!(
             self,
-            Self::FactNotFound { .. }
-                | Self::EventNotFound { .. }
-                | Self::ProcedureNotFound { .. }
+            Self::FactNotFound { .. } | Self::EventNotFound { .. } | Self::ProcedureNotFound { .. }
         )
     }
 }

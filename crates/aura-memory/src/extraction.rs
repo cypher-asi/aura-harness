@@ -73,11 +73,7 @@ impl HeuristicExtractor {
         candidates
     }
 
-    fn extract_from_text(
-        &self,
-        result: &AgentLoopResult,
-        candidates: &mut Vec<MemoryCandidate>,
-    ) {
+    fn extract_from_text(&self, result: &AgentLoopResult, candidates: &mut Vec<MemoryCandidate>) {
         let text = &result.total_text;
         if text.is_empty() {
             return;

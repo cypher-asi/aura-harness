@@ -182,7 +182,11 @@ mod tests {
             ..SkillLoaderConfig::default()
         });
 
-        let skills: Vec<_> = loader.load_all().into_iter().collect::<Result<_, _>>().unwrap();
+        let skills: Vec<_> = loader
+            .load_all()
+            .into_iter()
+            .collect::<Result<_, _>>()
+            .unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].frontmatter.name, "deploy");
         assert_eq!(skills[0].source, SkillSource::Workspace);

@@ -57,5 +57,8 @@ fn both_exist_removes_legacy_with_contents() {
 
     let result = resolve_store_path(tmp.path());
     assert_eq!(result, canonical);
-    assert!(!legacy.exists(), "legacy directory should be auto-removed even with contents");
+    assert!(
+        !legacy.exists(),
+        "legacy directory should be auto-removed even with contents"
+    );
 }

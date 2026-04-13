@@ -91,10 +91,7 @@ impl Sandbox {
     ///
     /// # Errors
     /// Returns error if the primary root cannot be canonicalized.
-    pub fn with_extra_roots(
-        root: impl AsRef<Path>,
-        extra: &[PathBuf],
-    ) -> Result<Self, ToolError> {
+    pub fn with_extra_roots(root: impl AsRef<Path>, extra: &[PathBuf]) -> Result<Self, ToolError> {
         let mut sandbox = Self::new(root)?;
         for path in extra {
             if !path.exists() {
@@ -190,9 +187,7 @@ impl Sandbox {
         if normalized.starts_with(&self.root) {
             return true;
         }
-        self.extra_roots
-            .iter()
-            .any(|r| normalized.starts_with(r))
+        self.extra_roots.iter().any(|r| normalized.starts_with(r))
     }
 
     /// Resolve a path for a new file (doesn't need to exist).
@@ -441,14 +436,14 @@ mod tests {
         let extra_dir = TempDir::new().unwrap();
         std::fs::write(extra_dir.path().join("note.md"), "hello").unwrap();
 
-        let sandbox = Sandbox::with_extra_roots(
-            main_dir.path(),
-            &[extra_dir.path().to_path_buf()],
-        )
-        .unwrap();
+        let sandbox =
+            Sandbox::with_extra_roots(main_dir.path(), &[extra_dir.path().to_path_buf()]).unwrap();
 
         let resolved = sandbox.resolve_existing(extra_dir.path().join("note.md"));
-        assert!(resolved.is_ok(), "should be able to access file in extra root");
+        assert!(
+            resolved.is_ok(),
+            "should be able to access file in extra root"
+        );
     }
 
     #[test]
@@ -458,11 +453,8 @@ mod tests {
         let outside_dir = TempDir::new().unwrap();
         std::fs::write(outside_dir.path().join("secret.txt"), "secret").unwrap();
 
-        let sandbox = Sandbox::with_extra_roots(
-            main_dir.path(),
-            &[extra_dir.path().to_path_buf()],
-        )
-        .unwrap();
+        let sandbox =
+            Sandbox::with_extra_roots(main_dir.path(), &[extra_dir.path().to_path_buf()]).unwrap();
 
         let result = sandbox.resolve(outside_dir.path().join("secret.txt"));
         assert!(

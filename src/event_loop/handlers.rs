@@ -97,8 +97,17 @@ async fn persist_response_via_kernel(state: &mut LoopState<'_>, total_text: &str
 
     match state.kernel.process_direct(response_tx.clone()).await {
         Ok(result) => {
-            debug!(seq = result.entry.seq, "Response record persisted via kernel");
-            send_record_to_ui(state.commands, result.entry.seq, &response_tx, &result.entry).await;
+            debug!(
+                seq = result.entry.seq,
+                "Response record persisted via kernel"
+            );
+            send_record_to_ui(
+                state.commands,
+                result.entry.seq,
+                &response_tx,
+                &result.entry,
+            )
+            .await;
         }
         Err(e) => {
             error!(error = %e, "Failed to persist response record via kernel");
@@ -139,7 +148,10 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
     } else if let Ok(Some((token, tx))) = store.dequeue_tx(state.agent_id) {
         match state.kernel.process_dequeued(tx.clone(), token).await {
             Ok(result) => {
-                debug!(seq = result.entry.seq, "Session start record persisted via kernel");
+                debug!(
+                    seq = result.entry.seq,
+                    "Session start record persisted via kernel"
+                );
                 send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
             }
             Err(e) => {

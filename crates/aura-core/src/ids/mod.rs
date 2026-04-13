@@ -132,7 +132,10 @@ impl AgentId {
 define_id!(
     #[deprecated(note = "use Hash — TxId is a legacy alias")]
     /// Transaction identifier - 32 bytes, typically a hash of tx content.
-    TxId, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
+    TxId,
+    32,
+    "crate::serde_helpers::hex_bytes_32",
+    truncate = 16
 );
 
 #[allow(deprecated)]

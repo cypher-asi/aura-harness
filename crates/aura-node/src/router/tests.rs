@@ -355,9 +355,10 @@ fn test_router_state_with_managers() -> RouterState {
 
     let skill_store = Arc::new(SkillInstallStore::new(db));
     let loader = SkillLoader::with_defaults(None, None);
-    let skill_manager = Arc::new(std::sync::RwLock::new(
-        SkillManager::with_install_store(loader, skill_store),
-    ));
+    let skill_manager = Arc::new(std::sync::RwLock::new(SkillManager::with_install_store(
+        loader,
+        skill_store,
+    )));
 
     RouterState {
         store,
@@ -471,11 +472,7 @@ async fn test_memory_delete_fact() {
 
     let req = Request::builder()
         .method("DELETE")
-        .uri(format!(
-            "/memory/{}/facts/{}",
-            agent_id.to_hex(),
-            fact_id
-        ))
+        .uri(format!("/memory/{}/facts/{}", agent_id.to_hex(), fact_id))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();

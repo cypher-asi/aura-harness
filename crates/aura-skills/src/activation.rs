@@ -110,11 +110,7 @@ pub fn activate(skill: &Skill, arguments: &str) -> Result<SkillActivation, Skill
     Ok(SkillActivation {
         skill_name: skill.frontmatter.name.clone(),
         rendered_content: content,
-        allowed_tools: skill
-            .frontmatter
-            .allowed_tools
-            .clone()
-            .unwrap_or_default(),
+        allowed_tools: skill.frontmatter.allowed_tools.clone().unwrap_or_default(),
         fork_context,
         agent_type: skill.frontmatter.agent.clone(),
     })
@@ -164,7 +160,9 @@ mod tests {
     fn substitutes_skill_dir() {
         let skill = test_skill("Read ${SKILL_DIR}/config.yaml");
         let act = activate(&skill, "").unwrap();
-        assert!(act.rendered_content.contains("/skills/test-skill/config.yaml"));
+        assert!(act
+            .rendered_content
+            .contains("/skills/test-skill/config.yaml"));
     }
 
     #[test]

@@ -41,10 +41,7 @@ impl SkillRegistry {
                             );
                             continue;
                         }
-                        debug!(
-                            "overriding {name}: {} -> {}",
-                            existing.source, skill.source
-                        );
+                        debug!("overriding {name}: {} -> {}", existing.source, skill.source);
                     }
 
                     self.skills.insert(name, skill);
@@ -141,14 +138,18 @@ pub fn skill_to_meta(skill: &Skill) -> SkillMeta {
         model_invocable: !skill.frontmatter.disable_model_invocation.unwrap_or(false),
         user_invocable: skill.frontmatter.user_invocable.unwrap_or(false),
         requested_paths: skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
-        requested_commands: skill.frontmatter.allowed_commands.clone().unwrap_or_default(),
+        requested_commands: skill
+            .frontmatter
+            .allowed_commands
+            .clone()
+            .unwrap_or_default(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loader::{SkillLoaderConfig};
+    use crate::loader::SkillLoaderConfig;
     use tempfile::TempDir;
 
     fn make_skill_dir(base: &std::path::Path, name: &str, desc: &str) {
@@ -199,14 +200,16 @@ mod tests {
         std::fs::write(
             dir.join("SKILL.md"),
             "---\nname: visible\ndescription: shown\n---\nBody.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let dir2 = ws.join("hidden");
         std::fs::create_dir_all(&dir2).unwrap();
         std::fs::write(
             dir2.join("SKILL.md"),
             "---\nname: hidden\ndescription: not shown\ndisable-model-invocation: true\n---\nBody.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let loader = SkillLoader::new(SkillLoaderConfig {
             workspace_root: Some(tmp.path().join("ws")),
@@ -230,14 +233,16 @@ mod tests {
         std::fs::write(
             dir.join("SKILL.md"),
             "---\nname: user-skill\ndescription: user can invoke\nuser-invocable: true\n---\nBody.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let dir2 = ws.join("model-only");
         std::fs::create_dir_all(&dir2).unwrap();
         std::fs::write(
             dir2.join("SKILL.md"),
             "---\nname: model-only\ndescription: not user invocable\n---\nBody.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let loader = SkillLoader::new(SkillLoaderConfig {
             workspace_root: Some(tmp.path().join("ws")),
@@ -267,7 +272,8 @@ mod tests {
         std::fs::write(
             dir.join("SKILL.md"),
             "---\nname: path-skill\ndescription: test\npaths:\n  - src/components\n---\nBody.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let loader = SkillLoader::new(SkillLoaderConfig {
             workspace_root: Some(tmp.path().join("ws")),

@@ -112,10 +112,7 @@ impl MemoryConsolidator {
     ///
     /// # Errors
     /// Returns error on store I/O or model provider failure.
-    pub async fn consolidate(
-        &self,
-        agent_id: AgentId,
-    ) -> Result<ConsolidationReport, MemoryError> {
+    pub async fn consolidate(&self, agent_id: AgentId) -> Result<ConsolidationReport, MemoryError> {
         let mut report = ConsolidationReport::default();
 
         self.forget(agent_id, &mut report).await?;
@@ -353,11 +350,10 @@ impl MemoryConsolidator {
 
         // Write phase — blocking (apply_evolution logic inlined)
         let s = Arc::clone(&store);
-        let (merged, evolved, insights) = tokio::task::spawn_blocking(move || {
-            apply_evolution(&*s, &text, agent_id, &facts)
-        })
-        .await
-        .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??;
+        let (merged, evolved, insights) =
+            tokio::task::spawn_blocking(move || apply_evolution(&*s, &text, agent_id, &facts))
+                .await
+                .map_err(|e| MemoryError::BlockingTaskFailed(e.to_string()))??;
 
         report.facts_merged = merged;
         report.facts_evolved = evolved;
@@ -544,9 +540,7 @@ fn extract_quoted_value(text: &str, prefix: &str) -> Option<String> {
         let end = stripped.find('"')?;
         Some(stripped[..end].to_string())
     } else {
-        let end = rest
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(rest.len());
+        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
         Some(rest[..end].to_string())
     }
 }

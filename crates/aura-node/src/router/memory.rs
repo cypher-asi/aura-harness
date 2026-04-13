@@ -200,9 +200,7 @@ pub(super) async fn delete_fact(
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
     let fact_id = parse_fact_id(&fact_hex)?;
-    store
-        .delete_fact(agent_id, fact_id)
-        .map_err(store_err)?;
+    store.delete_fact(agent_id, fact_id).map_err(store_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -262,9 +260,7 @@ pub(super) async fn delete_event(
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
     let event_id = parse_event_id(&event_hex)?;
-    store
-        .delete_event(agent_id, event_id)
-        .map_err(store_err)?;
+    store.delete_event(agent_id, event_id).map_err(store_err)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -389,9 +385,7 @@ pub(super) async fn update_procedure(
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
     let proc_id = parse_procedure_id(&proc_hex)?;
-    let mut proc = store
-        .get_procedure(agent_id, proc_id)
-        .map_err(store_err)?;
+    let mut proc = store.get_procedure(agent_id, proc_id).map_err(store_err)?;
     proc.name = body.name;
     proc.trigger = body.trigger;
     proc.steps = body.steps;

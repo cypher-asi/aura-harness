@@ -49,14 +49,16 @@ pub fn parse_skill_md(content: &str) -> Result<(SkillFrontmatter, String), Skill
     }
 
     let after_first = &trimmed[3..];
-    let closing = after_first.find("\n---").ok_or_else(|| {
-        SkillError::Parse("missing closing --- frontmatter delimiter".into())
-    })?;
+    let closing = after_first
+        .find("\n---")
+        .ok_or_else(|| SkillError::Parse("missing closing --- frontmatter delimiter".into()))?;
 
     let yaml_block = &after_first[..closing];
     let body_start = closing + 4; // skip the "\n---"
     let body = if body_start < after_first.len() {
-        after_first[body_start..].trim_start_matches('\n').to_string()
+        after_first[body_start..]
+            .trim_start_matches('\n')
+            .to_string()
     } else {
         String::new()
     };

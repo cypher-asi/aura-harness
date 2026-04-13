@@ -41,7 +41,10 @@ pub trait Store: Send + Sync {
     ///
     /// # Errors
     /// Returns error if the read fails.
-    fn dequeue_tx(&self, agent_id: AgentId) -> Result<Option<(DequeueToken, Transaction)>, StoreError>;
+    fn dequeue_tx(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<Option<(DequeueToken, Transaction)>, StoreError>;
 
     /// Get the current head sequence number for an agent.
     ///

@@ -273,7 +273,10 @@ impl Store for RocksStore {
     }
 
     #[instrument(skip(self), fields(agent_id = %agent_id))]
-    fn dequeue_tx(&self, agent_id: AgentId) -> Result<Option<(crate::store::DequeueToken, Transaction)>, StoreError> {
+    fn dequeue_tx(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<Option<(crate::store::DequeueToken, Transaction)>, StoreError> {
         let cf_inbox = self.cf(cf::INBOX)?;
 
         // Get current inbox head and tail

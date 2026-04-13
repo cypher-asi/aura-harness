@@ -317,9 +317,7 @@ fn extract_quoted(text: &str, prefix: &str) -> Option<String> {
         let end = stripped.find('"')?;
         Some(stripped[..end].to_string())
     } else {
-        let end = rest
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(rest.len());
+        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
         Some(rest[..end].to_string())
     }
 }
@@ -383,7 +381,9 @@ mod tests {
 
     #[test]
     fn extract_float_present() {
-        assert!((extract_float("confidence=0.85 rest", "confidence=").unwrap() - 0.85).abs() < 1e-3);
+        assert!(
+            (extract_float("confidence=0.85 rest", "confidence=").unwrap() - 0.85).abs() < 1e-3
+        );
     }
 
     #[test]
@@ -452,10 +452,14 @@ mod tests {
 
     #[test]
     fn parse_fact_line_valid() {
-        let line = "FACT key=\"favorite_dog\" value=\"Belgian Malanois\" confidence=0.95 importance=0.6";
+        let line =
+            "FACT key=\"favorite_dog\" value=\"Belgian Malanois\" confidence=0.95 importance=0.6";
         let result = parse_fact_line(line).unwrap();
         assert_eq!(result.key, "favorite_dog");
-        assert_eq!(result.value, serde_json::Value::String("Belgian Malanois".into()));
+        assert_eq!(
+            result.value,
+            serde_json::Value::String("Belgian Malanois".into())
+        );
         assert!((result.confidence - 0.95).abs() < 1e-3);
         assert!(result.keep);
     }
@@ -508,7 +512,10 @@ mod tests {
         let result = parse_procedure_line(line).unwrap();
         assert_eq!(result.key, "save_research");
         assert!(matches!(result.candidate_type, CandidateType::Procedure));
-        assert_eq!(result.trigger.as_deref(), Some("when creating research reports"));
+        assert_eq!(
+            result.trigger.as_deref(),
+            Some("when creating research reports")
+        );
         assert_eq!(result.steps.as_ref().unwrap().len(), 2);
         assert_eq!(result.skill_name.as_deref(), Some("obsidian"));
         assert!((result.confidence - 0.9).abs() < 1e-3);
@@ -537,7 +544,10 @@ mod tests {
         assert_eq!(refined.len(), 2);
         assert_eq!(refined[0].key, "a");
         assert_eq!(refined[1].key, "save_notes");
-        assert!(matches!(refined[1].candidate_type, CandidateType::Procedure));
+        assert!(matches!(
+            refined[1].candidate_type,
+            CandidateType::Procedure
+        ));
         assert_eq!(refined[1].skill_name.as_deref(), Some("obsidian"));
     }
 
@@ -547,6 +557,9 @@ mod tests {
         let refined = LlmRefiner::parse_response(response, &[]);
         assert_eq!(refined.len(), 2);
         assert!(matches!(refined[0].candidate_type, CandidateType::Fact));
-        assert!(matches!(refined[1].candidate_type, CandidateType::Procedure));
+        assert!(matches!(
+            refined[1].candidate_type,
+            CandidateType::Procedure
+        ));
     }
 }

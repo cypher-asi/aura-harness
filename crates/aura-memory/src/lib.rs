@@ -22,12 +22,12 @@ mod write_pipeline;
 
 pub use consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 pub use error::MemoryError;
+pub use extraction::ConversationTurn;
 pub use manager::MemoryManager;
 pub use procedures::{compute_skill_relevance, ProcedureConfig, ProcedureExtractor, StepSequence};
 pub use refinement::RefinerConfig;
 pub use retrieval::{MemoryRetriever, RetrievalConfig};
 pub use salience::{estimate_tokens, score_event, score_fact, score_procedure};
-pub use extraction::ConversationTurn;
 pub use store::{MemoryStats, MemoryStore, MemoryStoreApi};
 pub use types::{AgentEvent, Fact, FactSource, MemoryCandidate, MemoryPacket, Procedure};
 pub use write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
