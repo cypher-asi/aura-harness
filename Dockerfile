@@ -15,12 +15,14 @@ COPY crates/aura-tools        crates/aura-tools/
 COPY crates/aura-reasoner     crates/aura-reasoner/
 COPY crates/aura-kernel       crates/aura-kernel/
 COPY crates/aura-node         crates/aura-node/
+COPY crates/aura-memory       crates/aura-memory/
 COPY crates/aura-protocol    crates/aura-protocol/
 COPY crates/aura-terminal     crates/aura-terminal/
 COPY crates/aura-cli          crates/aura-cli/
 COPY crates/aura-agent        crates/aura-agent/
 COPY crates/aura-auth         crates/aura-auth/
 COPY crates/aura-automaton    crates/aura-automaton/
+COPY crates/aura-skills       crates/aura-skills/
 
 RUN cargo build --release --bin aura \
     && strip target/release/aura
