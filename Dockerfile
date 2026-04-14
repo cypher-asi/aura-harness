@@ -7,22 +7,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
-COPY src              src/
-COPY crates/aura-core         crates/aura-core/
-COPY crates/aura-store        crates/aura-store/
-COPY crates/aura-tools        crates/aura-tools/
-COPY crates/aura-reasoner     crates/aura-reasoner/
-COPY crates/aura-kernel       crates/aura-kernel/
-COPY crates/aura-node         crates/aura-node/
-COPY crates/aura-memory       crates/aura-memory/
-COPY crates/aura-protocol    crates/aura-protocol/
-COPY crates/aura-terminal     crates/aura-terminal/
-COPY crates/aura-cli          crates/aura-cli/
-COPY crates/aura-agent        crates/aura-agent/
-COPY crates/aura-auth         crates/aura-auth/
-COPY crates/aura-automaton    crates/aura-automaton/
-COPY crates/aura-skills       crates/aura-skills/
+# Build from the parent workspace so local path dependencies in ../aura-os
+# resolve inside the container the same way they do on the host.
+COPY aura-harness/Cargo.toml aura-harness/Cargo.lock aura-harness/rust-toolchain.toml ./
+COPY aura-harness/src              src/
+COPY aura-harness/crates/aura-core         crates/aura-core/
+COPY aura-harness/crates/aura-store        crates/aura-store/
+COPY aura-harness/crates/aura-tools        crates/aura-tools/
+COPY aura-harness/crates/aura-reasoner     crates/aura-reasoner/
+COPY aura-harness/crates/aura-kernel       crates/aura-kernel/
+COPY aura-harness/crates/aura-node         crates/aura-node/
+COPY aura-harness/crates/aura-memory       crates/aura-memory/
+COPY aura-harness/crates/aura-terminal     crates/aura-terminal/
+COPY aura-harness/crates/aura-cli          crates/aura-cli/
+COPY aura-harness/crates/aura-agent        crates/aura-agent/
+COPY aura-harness/crates/aura-auth         crates/aura-auth/
+COPY aura-harness/crates/aura-automaton    crates/aura-automaton/
+COPY aura-harness/crates/aura-skills       crates/aura-skills/
+COPY aura-os/crates/aura-protocol          /aura-os/crates/aura-protocol/
 
 RUN cargo build --release --bin aura \
     && strip target/release/aura
