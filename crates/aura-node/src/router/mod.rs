@@ -184,6 +184,10 @@ pub fn create_router(state: RouterState) -> Router {
             axum::routing::delete(memory::delete_event),
         )
         .route(
+            "/api/agents/:agent_id/memory/events/bulk-delete",
+            post(memory::bulk_delete_events),
+        )
+        .route(
             "/api/agents/:agent_id/memory/procedures",
             get(memory::list_procedures).post(memory::create_procedure),
         )
@@ -212,6 +216,15 @@ pub fn create_router(state: RouterState) -> Router {
         )
         .route(
             "/api/agents/:agent_id/skills/:name",
+            axum::routing::delete(skills::uninstall_agent_skill),
+        )
+        // Legacy compatibility aliases for older harness callers.
+        .route(
+            "/api/harness/agents/:agent_id/skills",
+            get(skills::list_agent_skills).post(skills::install_agent_skill),
+        )
+        .route(
+            "/api/harness/agents/:agent_id/skills/:name",
             axum::routing::delete(skills::uninstall_agent_skill),
         )
         .with_state(state)

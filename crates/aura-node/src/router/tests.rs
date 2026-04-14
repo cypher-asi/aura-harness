@@ -527,6 +527,56 @@ async fn test_memory_create_and_list_events() {
     assert_eq!(events[0]["event_type"], "task_run");
 }
 
+#[tokio::test]
+async fn test_memory_bulk_delete_events_alias() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({
+        "event_type": "task_run",
+        "summary": "completed build"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/memory/{}/events", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let _ = app.clone().oneshot(req).await.unwrap();
+
+    let bulk_delete_body = serde_json::json!({
+        "before": chrono::Utc::now().to_rfc3339()
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!(
+            "/api/agents/{}/memory/events/bulk-delete",
+            agent_id.to_hex()
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&bulk_delete_body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(result["deleted"], 1);
+
+    let req = Request::builder()
+        .uri(format!("/memory/{}/events", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let events: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert!(events.is_empty());
+}
+
 // ============================================================================
 // Memory Procedures
 // ============================================================================
@@ -777,6 +827,58 @@ async fn test_skills_agent_uninstall() {
         .method("DELETE")
         .uri(format!(
             "/api/agents/{}/skills/removable",
+            agent_id.to_hex()
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let req = Request::builder()
+        .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let installs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert!(installs.is_empty());
+}
+
+#[tokio::test]
+async fn test_skills_legacy_harness_aliases() {
+    let state = test_router_state_with_managers();
+    let agent_id = AgentId::generate();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "name": "legacy-skill" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/harness/agents/{}/skills", agent_id.to_hex()))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req = Request::builder()
+        .uri(format!("/api/harness/agents/{}/skills", agent_id.to_hex()))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let installs: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0]["skill_name"], "legacy-skill");
+
+    let req = Request::builder()
+        .method("DELETE")
+        .uri(format!(
+            "/api/harness/agents/{}/skills/legacy-skill",
             agent_id.to_hex()
         ))
         .body(Body::empty())
