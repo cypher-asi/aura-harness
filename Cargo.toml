@@ -55,6 +55,12 @@ members = [
     "crates/aura-skills",
 ]
 
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
