@@ -20,6 +20,7 @@ fn tool(name: &str, description: &str, schema: serde_json::Value) -> ToolDefinit
         description: description.into(),
         input_schema: schema,
         cache_control: None,
+        eager_input_streaming: eager_input_streaming_for(name),
     }
 }
 
@@ -32,6 +33,19 @@ fn compact_tool(name: &str, description: &str, schema: serde_json::Value) -> Too
         description: description.into(),
         input_schema: strip_property_descriptions(schema),
         cache_control: None,
+        eager_input_streaming: eager_input_streaming_for(name),
+    }
+}
+
+/// Tools whose arguments the UI wants to stream live into its preview card
+/// (markdown spec body, file contents, diff text). Opting them into
+/// Anthropic's fine-grained tool streaming makes `input_json_delta` events
+/// arrive as raw partial string bytes while the model writes, instead of
+/// being buffered until the full JSON validates at `content_block_stop`.
+fn eager_input_streaming_for(name: &str) -> Option<bool> {
+    match name {
+        "create_spec" | "update_spec" | "write_file" | "edit_file" => Some(true),
+        _ => None,
     }
 }
 
@@ -410,6 +424,42 @@ mod tests {
         let props = stripped.get("properties").unwrap();
         assert!(props.get("name").unwrap().get("description").is_none());
         assert!(props.get("age").unwrap().get("description").is_none());
+    }
+
+    #[test]
+    fn streaming_tools_opt_into_eager_input_streaming() {
+        let fs_tools = file_io_tools();
+        let spec_tools = spec_tool_definitions();
+
+        for name in ["write_file", "edit_file"] {
+            let t = fs_tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("missing {name} in file_io_tools"));
+            assert_eq!(
+                t.eager_input_streaming,
+                Some(true),
+                "{name} must opt into fine-grained tool streaming"
+            );
+        }
+
+        for name in ["create_spec", "update_spec"] {
+            let t = spec_tools
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap_or_else(|| panic!("missing {name} in spec_tool_definitions"));
+            assert_eq!(
+                t.eager_input_streaming,
+                Some(true),
+                "{name} must opt into fine-grained tool streaming"
+            );
+        }
+
+        let read = fs_tools.iter().find(|t| t.name == "read_file").unwrap();
+        assert_eq!(
+            read.eager_input_streaming, None,
+            "read_file has nothing large to stream; should not set the flag"
+        );
     }
 
     #[test]

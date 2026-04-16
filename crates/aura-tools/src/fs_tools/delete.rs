@@ -55,6 +55,7 @@ impl Tool for FsDeleteTool {
                 "required": ["path"]
             }),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 

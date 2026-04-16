@@ -146,6 +146,10 @@ impl Tool for FsWriteTool {
                 "required": ["path", "content"]
             }),
             cache_control: None,
+            // Stream the `content` string live as the model writes it so the
+            // UI's file preview fills in character-by-character instead of
+            // waiting for the full tool-use block to close.
+            eager_input_streaming: Some(true),
         }
     }
 

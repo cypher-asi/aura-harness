@@ -153,6 +153,7 @@ pub(super) fn convert_tools_to_api(
                 .cache_control
                 .as_ref()
                 .map(|cc| serde_json::json!({"type": cc.cache_type})),
+            eager_input_streaming: tool.eager_input_streaming,
         })
         .collect();
 

@@ -101,6 +101,7 @@ impl Tool for StartDevLoopTool {
                 "required": []
             }),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 
@@ -162,6 +163,7 @@ impl Tool for PauseDevLoopTool {
             description: "Pause the currently running dev loop.".into(),
             input_schema: serde_json::json!({"type":"object","properties":{},"required":[]}),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 
@@ -207,6 +209,7 @@ impl Tool for StopDevLoopTool {
             description: "Stop the currently running dev loop.".into(),
             input_schema: serde_json::json!({"type":"object","properties":{},"required":[]}),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 
@@ -268,6 +271,7 @@ impl Tool for RunTaskTool {
                 "required": ["task_id"]
             }),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 

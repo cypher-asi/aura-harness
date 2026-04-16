@@ -240,6 +240,10 @@ impl Tool for FsEditTool {
                 "required": ["path", "old_text", "new_text"]
             }),
             cache_control: None,
+            // Stream the `old_text` / `new_text` strings live as the model
+            // writes them so the UI's diff preview fills in character-by-
+            // character instead of waiting for the full tool-use block.
+            eager_input_streaming: Some(true),
         }
     }
 

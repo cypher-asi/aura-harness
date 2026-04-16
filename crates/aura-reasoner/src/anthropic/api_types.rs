@@ -75,6 +75,10 @@ pub(super) struct ApiTool {
     pub input_schema: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<serde_json::Value>,
+    /// Fine-grained tool streaming flag (Anthropic API).
+    /// See <https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/fine-grained-tool-streaming>.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eager_input_streaming: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

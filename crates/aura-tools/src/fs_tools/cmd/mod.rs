@@ -470,6 +470,7 @@ impl Tool for CmdRunTool {
                 }
             }),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 

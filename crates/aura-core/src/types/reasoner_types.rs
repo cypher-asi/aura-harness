@@ -40,6 +40,13 @@ pub struct ToolDefinition {
     /// Optional prompt-caching directive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControl>,
+    /// Opt the tool into Anthropic's fine-grained tool streaming, so
+    /// `input_json_delta` events arrive as raw partial string bytes during
+    /// streaming instead of being buffered until the full tool-use JSON
+    /// parses. Needed for live `markdown_contents` / file-content previews
+    /// in the UI while a spec or file-write tool is still generating.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eager_input_streaming: Option<bool>,
 }
 
 impl ToolDefinition {
@@ -55,6 +62,7 @@ impl ToolDefinition {
             description: description.into(),
             input_schema,
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 }

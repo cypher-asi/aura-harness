@@ -116,6 +116,7 @@ impl Tool for FsReadTool {
                 "required": ["path"]
             }),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 

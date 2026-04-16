@@ -103,6 +103,7 @@ impl Tool for FsLsTool {
                 "required": ["path"]
             }),
             cache_control: None,
+            eager_input_streaming: None,
         }
     }
 
