@@ -8,7 +8,8 @@ use super::{AnthropicProvider, ApiError};
 
 use crate::error::ReasonerError;
 use crate::{
-    ModelProvider, ModelRequest, ModelResponse, ProviderTrace, StopReason, StreamEventStream, Usage,
+    stream_from_response, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, StopReason,
+    StreamEventStream, Usage,
 };
 use async_trait::async_trait;
 use serde::Serialize;
@@ -16,6 +17,11 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 impl AnthropicProvider {
+    fn should_buffer_proxy_streaming(model: &str) -> bool {
+        let model = model.trim().to_ascii_lowercase();
+        !(model.starts_with("claude") || model.starts_with("aura-claude"))
+    }
+
     async fn check_base_url_reachable(&self) -> bool {
         let ping_url = format!("{}/", self.config.base_url.trim_end_matches('/'));
         let result = self
@@ -336,6 +342,17 @@ impl ModelProvider for AnthropicProvider {
         &self,
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
+        if self.config.routing_mode == super::RoutingMode::Proxy
+            && Self::should_buffer_proxy_streaming(&request.model)
+        {
+            debug!(
+                model = %request.model,
+                "Proxy-backed model does not support Anthropic SSE; buffering completion"
+            );
+            let response = self.complete(request).await?;
+            return Ok(stream_from_response(response));
+        }
+
         let models = self.model_chain(&request.model);
         let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;

@@ -5,8 +5,10 @@ use super::convert::{
 };
 use super::{AnthropicConfig, AnthropicProvider, ApiError, RoutingMode};
 use crate::{
-    Message, ModelProvider, ModelRequest, ReasonerError, ThinkingConfig, ToolChoice, ToolDefinition,
+    Message, ModelProvider, ModelRequest, ReasonerError, StopReason, StreamEvent, ThinkingConfig,
+    ToolChoice, ToolDefinition,
 };
+use futures_util::StreamExt;
 use std::time::Duration;
 
 #[test]
@@ -459,4 +461,75 @@ async fn test_direct_mode_omits_caching_beta_header_when_disabled() {
         !captured.contains("anthropic-beta"),
         "Direct request should omit anthropic-beta header when prompt caching is disabled.\nCaptured headers:\n{captured}"
     );
+}
+
+#[tokio::test]
+async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"proxy ok"}],"model":"aura-gpt-4.1","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "aura-gpt-4.1".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-gpt-4.1", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .build();
+
+    let stream = provider.complete_streaming(request).await.unwrap();
+    let events = stream.collect::<Vec<_>>().await;
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains(r#""stream":true"#),
+        "Buffered fallback should avoid Anthropic SSE requests.\nCaptured request:\n{captured}"
+    );
+
+    assert!(matches!(
+        events.first().unwrap().as_ref().unwrap(),
+        StreamEvent::MessageStart { model, .. } if model == "aura-gpt-4.1"
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event.as_ref().unwrap(),
+        StreamEvent::TextDelta { text } if text == "proxy ok"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event.as_ref().unwrap(),
+        StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::EndTurn),
+            output_tokens: 5,
+        }
+    )));
+    assert!(matches!(
+        events.last().unwrap().as_ref().unwrap(),
+        StreamEvent::MessageStop
+    ));
 }
