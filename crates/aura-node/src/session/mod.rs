@@ -5,6 +5,7 @@
 
 mod generation;
 mod helpers;
+mod partial_json;
 mod ws_handler;
 
 pub use ws_handler::handle_ws_connection;

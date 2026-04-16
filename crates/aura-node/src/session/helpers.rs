@@ -286,7 +286,14 @@ pub(super) async fn forward_events_to_ws(
                 recoverable,
             }),
             AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
-                let parsed = serde_json::from_str(&input).unwrap_or(serde_json::json!({}));
+                // While streaming with `eager_input_streaming`, `input` is
+                // partial JSON like `{"title":"Hi","markdown_contents":"# H`.
+                // A strict `serde_json::from_str` would fail and yield `{}`,
+                // making every mid-stream snapshot useless to the UI. Use a
+                // tool-aware partial-JSON extractor that pulls out the
+                // best-effort value of well-known string fields the preview
+                // cards consume (markdown_contents, content, old_text, etc.).
+                let parsed = super::partial_json::parse_partial_tool_input(&name, &input);
                 OutboundMessage::ToolCallSnapshot(ToolCallSnapshot {
                     id,
                     name,
