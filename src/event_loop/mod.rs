@@ -156,6 +156,7 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
         }
         UiEvent::ShowStatus | UiEvent::ShowHelp | UiEvent::ShowHistory(_) => {}
         UiEvent::Clear => {
+            handlers::handle_new_session(state).await;
             let _ = state.commands.send(UiCommand::ClearConversation).await;
         }
         UiEvent::NewSession => handlers::handle_new_session(state).await,

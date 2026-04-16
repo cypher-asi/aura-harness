@@ -31,6 +31,9 @@ impl App {
                 self.scroll_offset = 0;
                 self.thinking_content.clear();
                 self.is_thinking = false;
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::Clear);
+                }
             }
             "status" | "s" => {
                 if let Some(tx) = &self.event_tx {

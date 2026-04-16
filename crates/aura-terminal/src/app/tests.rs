@@ -1,6 +1,8 @@
 use super::*;
 use crate::components::{Message, MessageRole};
+use crate::events::UiEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tokio::sync::mpsc;
 
 #[test]
 fn test_app_creation() {
@@ -161,6 +163,16 @@ fn test_add_many_messages_respects_limit() {
 fn test_default_status_is_ready() {
     let app = App::new();
     assert_eq!(app.status(), "Ready");
+}
+
+#[test]
+fn test_clear_command_emits_clear_event() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/clear");
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Clear)));
 }
 
 // ========================================================================
