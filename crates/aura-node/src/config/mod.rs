@@ -36,7 +36,7 @@ pub struct NodeConfig {
 impl Default for NodeConfig {
     fn default() -> Self {
         Self {
-            data_dir: PathBuf::from("./aura_data"),
+            data_dir: default_data_dir(),
             project_base: None,
             bind_addr: "127.0.0.1:8080".to_string(),
             sync_writes: false,
@@ -49,6 +49,12 @@ impl Default for NodeConfig {
             aura_network_url: "https://aura-network.onrender.com".to_string(),
         }
     }
+}
+
+fn default_data_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .map(|path| path.join("aura").join("node"))
+        .unwrap_or_else(|| PathBuf::from("./aura_data"))
 }
 
 impl NodeConfig {

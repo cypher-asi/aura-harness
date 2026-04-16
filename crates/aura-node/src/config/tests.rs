@@ -23,8 +23,9 @@ fn clear_node_env_vars() {
 #[test]
 fn test_default_config() {
     let config = NodeConfig::default();
+    let default_data_dir = super::default_data_dir();
 
-    assert_eq!(config.data_dir, PathBuf::from("./aura_data"));
+    assert_eq!(config.data_dir, default_data_dir);
     assert_eq!(config.bind_addr, "127.0.0.1:8080");
     assert!(!config.sync_writes);
     assert_eq!(config.record_window_size, 50);
@@ -40,16 +41,13 @@ fn test_default_config() {
 #[test]
 fn test_db_path() {
     let config = NodeConfig::default();
-    assert_eq!(config.db_path(), PathBuf::from("./aura_data/db"));
+    assert_eq!(config.db_path(), super::default_data_dir().join("db"));
 }
 
 #[test]
 fn test_workspaces_path() {
     let config = NodeConfig::default();
-    assert_eq!(
-        config.workspaces_path(),
-        PathBuf::from("./aura_data/workspaces")
-    );
+    assert_eq!(config.workspaces_path(), super::default_data_dir().join("workspaces"));
 }
 
 #[test]

@@ -222,7 +222,7 @@ Environment variables (see [`.env.example`](.env.example)):
 | `AURA_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic API base URL override |
 | `AURA_ANTHROPIC_MODEL` | `claude-opus-4-6` | Model identifier |
 | `AURA_MODEL_TIMEOUT_MS` | `60000` | LLM request timeout |
-| `AURA_DATA_DIR` | `./aura_data` | Data directory for RocksDB and workspaces |
+| `AURA_DATA_DIR` | OS local app data `aura/node` directory | Data directory for RocksDB and workspaces. Set this explicitly to share state with another Aura process or to keep repo-local data. |
 | `AURA_LISTEN_ADDR` | `127.0.0.1:8080` | HTTP server bind address (also accepts `BIND_ADDR`) |
 
 ### Gateway (optional)
