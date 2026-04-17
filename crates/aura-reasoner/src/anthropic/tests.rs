@@ -265,6 +265,16 @@ fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
 }
 
 #[test]
+fn test_resolve_thinking_auto_for_haiku_uses_enabled_budget() {
+    let request = ModelRequest::builder("aura-claude-haiku-4-5", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-claude-haiku-4-5").unwrap();
+    assert_eq!(thinking.thinking_type, "enabled");
+    assert_eq!(thinking.budget_tokens, Some(4096));
+}
+
+#[test]
 fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
     let request = ModelRequest::builder("claude-3-7-sonnet", "system")
         .max_tokens(8192)
@@ -278,6 +288,15 @@ fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
 }
 
 #[test]
+fn test_resolve_thinking_auto_for_non_claude_model_is_none() {
+    let request = ModelRequest::builder("aura-gpt-5-4", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-gpt-5-4");
+    assert!(thinking.is_none());
+}
+
+#[test]
 fn test_resolve_thinking_none_for_small_budget() {
     let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
         .max_tokens(1024)
@@ -287,12 +306,13 @@ fn test_resolve_thinking_none_for_small_budget() {
 }
 
 #[test]
-fn test_resolve_thinking_none_for_unsupported_model() {
+fn test_resolve_thinking_enabled_for_older_claude_haiku() {
     let request = ModelRequest::builder("claude-3-haiku", "system")
         .max_tokens(8192)
         .build();
-    let thinking = resolve_thinking(&request, "claude-3-haiku");
-    assert!(thinking.is_none());
+    let thinking = resolve_thinking(&request, "claude-3-haiku").unwrap();
+    assert_eq!(thinking.thinking_type, "enabled");
+    assert_eq!(thinking.budget_tokens, Some(4096));
 }
 
 #[tokio::test]

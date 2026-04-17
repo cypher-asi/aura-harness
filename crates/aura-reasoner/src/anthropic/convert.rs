@@ -11,49 +11,57 @@ use crate::{
 ///
 /// Uses the caller-supplied config when present; otherwise auto-enables
 /// thinking for capable models when the token budget is large enough.
-fn supports_adaptive_thinking(model: &str) -> bool {
-    let model = model.trim().to_ascii_lowercase();
-    model.starts_with("claude-opus-4-6")
-        || model.starts_with("aura-claude-opus-4-6")
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThinkingMode {
+    Adaptive,
+    Enabled,
+}
+
+fn normalize_anthropic_model(model: &str) -> String {
+    model.trim().to_ascii_lowercase().trim_start_matches("aura-").to_string()
+}
+
+fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
+    let model = normalize_anthropic_model(model);
+    if !model.starts_with("claude") {
+        return None;
+    }
+
+    if model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-opus-4-7")
-        || model.starts_with("aura-claude-opus-4-7")
         || model.starts_with("claude-sonnet-4-6")
-        || model.starts_with("aura-claude-sonnet-4-6")
+    {
+        Some(ThinkingMode::Adaptive)
+    } else {
+        Some(ThinkingMode::Enabled)
+    }
 }
 
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
-    let adaptive = supports_adaptive_thinking(model);
+    let thinking_mode = thinking_mode_for_model(model)?;
 
     if let Some(ref cfg) = request.thinking {
         return Some(ApiThinkingConfig {
-            thinking_type: if adaptive {
-                "adaptive".to_string()
-            } else {
-                "enabled".to_string()
+            thinking_type: match thinking_mode {
+                ThinkingMode::Adaptive => "adaptive".to_string(),
+                ThinkingMode::Enabled => "enabled".to_string(),
             },
-            budget_tokens: if adaptive {
-                None
-            } else {
-                Some(cfg.budget_tokens)
+            budget_tokens: match thinking_mode {
+                ThinkingMode::Adaptive => None,
+                ThinkingMode::Enabled => Some(cfg.budget_tokens),
             },
         });
     }
 
-    let supports_thinking = model.contains("claude-3-7")
-        || model.contains("claude-opus-4")
-        || model.contains("claude-sonnet-4");
-
-    if supports_thinking && request.max_tokens > 2048 {
+    if request.max_tokens > 2048 {
         Some(ApiThinkingConfig {
-            thinking_type: if adaptive {
-                "adaptive".to_string()
-            } else {
-                "enabled".to_string()
+            thinking_type: match thinking_mode {
+                ThinkingMode::Adaptive => "adaptive".to_string(),
+                ThinkingMode::Enabled => "enabled".to_string(),
             },
-            budget_tokens: if adaptive {
-                None
-            } else {
-                Some((request.max_tokens / 2).clamp(1024, 16000))
+            budget_tokens: match thinking_mode {
+                ThinkingMode::Adaptive => None,
+                ThinkingMode::Enabled => Some((request.max_tokens / 2).clamp(1024, 16000)),
             },
         })
     } else {
