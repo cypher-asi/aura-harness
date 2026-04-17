@@ -407,8 +407,8 @@ impl Kernel {
                 })
             }
             TransactionType::System => {
-                let runtime_capability_update =
-                    Self::runtime_capability_update_from_tx(tx).map_err(|e| {
+                let runtime_capability_update = Self::runtime_capability_update_from_tx(tx)
+                    .map_err(|e| {
                         crate::KernelError::Serialization(format!(
                             "deserialize capability install: {e}"
                         ))

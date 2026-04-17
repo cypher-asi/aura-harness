@@ -294,6 +294,24 @@ pub(super) async fn forward_events_to_ws(
                 // best-effort value of well-known string fields the preview
                 // cards consume (markdown_contents, content, old_text, etc.).
                 let parsed = super::partial_json::parse_partial_tool_input(&name, &input);
+                let md_len = parsed
+                    .get("markdown_contents")
+                    .and_then(|v| v.as_str())
+                    .map(str::len)
+                    .unwrap_or(0);
+                let content_len = parsed
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(str::len)
+                    .unwrap_or(0);
+                tracing::info!(
+                    tool = %name,
+                    raw_input_bytes = input.len(),
+                    parsed_keys = parsed.as_object().map(|o| o.len()).unwrap_or(0),
+                    markdown_len = md_len,
+                    content_len,
+                    "forwarding tool_call_snapshot"
+                );
                 OutboundMessage::ToolCallSnapshot(ToolCallSnapshot {
                     id,
                     name,

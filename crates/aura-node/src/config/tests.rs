@@ -47,7 +47,10 @@ fn test_db_path() {
 #[test]
 fn test_workspaces_path() {
     let config = NodeConfig::default();
-    assert_eq!(config.workspaces_path(), super::default_data_dir().join("workspaces"));
+    assert_eq!(
+        config.workspaces_path(),
+        super::default_data_dir().join("workspaces")
+    );
 }
 
 #[test]

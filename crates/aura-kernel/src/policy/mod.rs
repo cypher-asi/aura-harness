@@ -346,8 +346,7 @@ impl Policy {
         _input: &serde_json::Value,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> PolicyResult {
-        let integration_gate =
-            self.integration_requirement_satisfied(tool, runtime_capabilities);
+        let integration_gate = self.integration_requirement_satisfied(tool, runtime_capabilities);
         let permission = self.check_tool_permission(tool);
 
         match permission {

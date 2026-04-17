@@ -323,7 +323,14 @@ impl Store for RocksStore {
         entry: &RecordEntry,
         dequeued_inbox_seq: u64,
     ) -> Result<(), StoreError> {
-        self.append_entry_atomic_internal(agent_id, next_seq, entry, dequeued_inbox_seq, None, false)
+        self.append_entry_atomic_internal(
+            agent_id,
+            next_seq,
+            entry,
+            dequeued_inbox_seq,
+            None,
+            false,
+        )
     }
 
     #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]

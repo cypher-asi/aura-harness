@@ -626,7 +626,10 @@ fn test_append_entry_dequeued_with_runtime_capabilities() {
         )
         .unwrap();
 
-    assert_eq!(store.get_runtime_capabilities(agent_id).unwrap(), Some(runtime_capabilities));
+    assert_eq!(
+        store.get_runtime_capabilities(agent_id).unwrap(),
+        Some(runtime_capabilities)
+    );
     assert!(!store.has_pending_tx(agent_id).unwrap());
 }
 
