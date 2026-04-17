@@ -45,6 +45,8 @@ pub struct ModelRequest {
     pub thinking: Option<ThinkingConfig>,
     /// Optional JWT auth token for proxy routing.
     pub auth_token: Option<String>,
+    /// Optional upstream provider family hint for managed proxy routing.
+    pub upstream_provider_family: Option<String>,
     /// Project ID for X-Aura-Project-Id billing header.
     pub aura_project_id: Option<String>,
     /// Project-agent UUID for X-Aura-Agent-Id billing header.
@@ -74,6 +76,7 @@ pub struct ModelRequestBuilder {
     temperature: Option<f32>,
     thinking: Option<ThinkingConfig>,
     auth_token: Option<String>,
+    upstream_provider_family: Option<String>,
     aura_project_id: Option<String>,
     aura_agent_id: Option<String>,
     aura_session_id: Option<String>,
@@ -94,6 +97,7 @@ impl ModelRequestBuilder {
             temperature: None,
             thinking: None,
             auth_token: None,
+            upstream_provider_family: None,
             aura_project_id: None,
             aura_agent_id: None,
             aura_session_id: None,
@@ -157,6 +161,13 @@ impl ModelRequestBuilder {
         self
     }
 
+    /// Set the upstream provider family hint for managed proxy routing.
+    #[must_use]
+    pub fn upstream_provider_family(mut self, family: Option<String>) -> Self {
+        self.upstream_provider_family = family;
+        self
+    }
+
     #[must_use]
     pub fn aura_project_id(mut self, id: Option<String>) -> Self {
         self.aura_project_id = id;
@@ -194,6 +205,7 @@ impl ModelRequestBuilder {
             temperature: self.temperature,
             thinking: self.thinking,
             auth_token: self.auth_token,
+            upstream_provider_family: self.upstream_provider_family,
             aura_project_id: self.aura_project_id,
             aura_agent_id: self.aura_agent_id,
             aura_session_id: self.aura_session_id,

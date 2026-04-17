@@ -587,3 +587,118 @@ async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
         "Proxy OpenAI requests should omit Anthropic cache_control fields.\nCaptured request:\n{captured}"
     );
 }
+
+#[tokio::test]
+async fn test_proxy_hint_prefers_anthropic_family_over_model_heuristics() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"aura-gpt-4.1","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "aura-gpt-4.1".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-gpt-4.1", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("anthropic".to_string()))
+        .build();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        captured.contains("anthropic-beta"),
+        "Explicit Anthropic family hints should enable Anthropic proxy headers even for non-Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        captured.contains("cache_control"),
+        "Explicit Anthropic family hints should enable Anthropic cache_control fields even for non-Claude model names.\nCaptured request:\n{captured}"
+    );
+}
+
+#[tokio::test]
+async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_streaming() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"proxy ok"}],"model":"claude-opus-4-6","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "claude-opus-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-opus-4-6", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("openai".to_string()))
+        .build();
+
+    let stream = provider.complete_streaming(request).await.unwrap();
+    let events = stream.collect::<Vec<_>>().await;
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains(r#""stream":true"#),
+        "Explicit non-Anthropic family hints should force buffered proxy streaming even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("anthropic-beta"),
+        "Explicit non-Anthropic family hints should suppress Anthropic proxy headers even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(matches!(
+        events.first().unwrap().as_ref().unwrap(),
+        StreamEvent::MessageStart { model, .. } if model == "claude-opus-4-6"
+    ));
+}

@@ -278,6 +278,10 @@ impl Session {
             max_context_tokens: Some(self.context_window_tokens),
             stream_timeout: std::time::Duration::from_secs(180),
             auth_token: self.auth_token.clone(),
+            upstream_provider_family: self
+                .provider_config
+                .as_ref()
+                .and_then(|config| config.upstream_provider_family.clone()),
             aura_project_id: self.project_id.clone(),
             aura_agent_id: self.aura_agent_id.clone(),
             aura_session_id: self.aura_session_id.clone(),
