@@ -45,6 +45,13 @@ impl AnthropicProvider {
             }
     }
 
+    fn anthropic_request_features_enabled(&self, request: &ModelRequest, model: &str) -> bool {
+        match self.config.routing_mode {
+            super::RoutingMode::Proxy => Self::supports_anthropic_proxy_features(request, model),
+            super::RoutingMode::Direct => Self::model_looks_like_anthropic(model),
+        }
+    }
+
     fn should_buffer_proxy_streaming(request: &ModelRequest) -> bool {
         !Self::supports_anthropic_proxy_features(request, &request.model)
     }
@@ -180,9 +187,14 @@ fn build_api_request(
     model: &str,
     system: &serde_json::Value,
     prompt_caching_enabled: bool,
+    anthropic_features_enabled: bool,
 ) -> ApiRequest {
-    let thinking = resolve_thinking(request, model);
-    let output_config = resolve_output_config(request, model);
+    let thinking = anthropic_features_enabled
+        .then(|| resolve_thinking(request, model))
+        .flatten();
+    let output_config = anthropic_features_enabled
+        .then(|| resolve_output_config(request, model))
+        .flatten();
     ApiRequest {
         model: model.to_string(),
         system: system.clone(),
@@ -303,8 +315,16 @@ impl ModelProvider for AnthropicProvider {
 
         for (model_idx, model) in models.iter().enumerate() {
             let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
+            let anthropic_features_enabled =
+                self.anthropic_request_features_enabled(&request, model);
             let system = build_system_block(&request.system, prompt_caching_enabled);
-            let api_request = build_api_request(&request, model, &system, prompt_caching_enabled);
+            let api_request = build_api_request(
+                &request,
+                model,
+                &system,
+                prompt_caching_enabled,
+                anthropic_features_enabled,
+            );
 
             debug!(
                 model = %model,
@@ -389,9 +409,15 @@ impl ModelProvider for AnthropicProvider {
 
         for (model_idx, model) in models.iter().enumerate() {
             let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
+            let anthropic_features_enabled =
+                self.anthropic_request_features_enabled(&request, model);
             let system = build_system_block(&request.system, prompt_caching_enabled);
-            let thinking = resolve_thinking(&request, model);
-            let output_config = resolve_output_config(&request, model);
+            let thinking = anthropic_features_enabled
+                .then(|| resolve_thinking(&request, model))
+                .flatten();
+            let output_config = anthropic_features_enabled
+                .then(|| resolve_output_config(&request, model))
+                .flatten();
             let api_request = StreamingApiRequest {
                 model: model.clone(),
                 system: system.clone(),

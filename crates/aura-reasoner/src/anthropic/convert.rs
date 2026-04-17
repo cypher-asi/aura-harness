@@ -18,22 +18,21 @@ enum ThinkingMode {
 }
 
 fn normalize_anthropic_model(model: &str) -> String {
-    model.trim().to_ascii_lowercase().trim_start_matches("aura-").to_string()
+    model
+        .trim()
+        .to_ascii_lowercase()
+        .trim_start_matches("aura-")
+        .to_string()
 }
 
 fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
     let model = normalize_anthropic_model(model);
-    if !model.starts_with("claude") {
-        return None;
-    }
-
-    if model.starts_with("claude-opus-4-6")
-        || model.starts_with("claude-opus-4-7")
-        || model.starts_with("claude-sonnet-4-6")
-    {
+    if model.starts_with("claude-opus-4") || model.starts_with("claude-sonnet-4") {
         Some(ThinkingMode::Adaptive)
-    } else {
+    } else if model.starts_with("claude-3-7-sonnet") {
         Some(ThinkingMode::Enabled)
+    } else {
+        None
     }
 }
 

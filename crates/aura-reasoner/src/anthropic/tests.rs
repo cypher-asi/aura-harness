@@ -1,7 +1,7 @@
 use super::api_types::{ApiContent, ApiToolChoice};
 use super::convert::{
     build_system_block, convert_messages_to_api, convert_tool_choice, convert_tools_to_api,
-    resolve_thinking,
+    resolve_output_config, resolve_thinking,
 };
 use super::{AnthropicConfig, AnthropicProvider, ApiError, RoutingMode};
 use crate::{
@@ -265,16 +265,6 @@ fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
 }
 
 #[test]
-fn test_resolve_thinking_auto_for_haiku_uses_enabled_budget() {
-    let request = ModelRequest::builder("aura-claude-haiku-4-5", "system")
-        .max_tokens(8192)
-        .build();
-    let thinking = resolve_thinking(&request, "aura-claude-haiku-4-5").unwrap();
-    assert_eq!(thinking.thinking_type, "enabled");
-    assert_eq!(thinking.budget_tokens, Some(4096));
-}
-
-#[test]
 fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
     let request = ModelRequest::builder("claude-3-7-sonnet", "system")
         .max_tokens(8192)
@@ -285,6 +275,15 @@ fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
     let thinking = resolve_thinking(&request, "claude-3-7-sonnet").unwrap();
     assert_eq!(thinking.thinking_type, "enabled");
     assert_eq!(thinking.budget_tokens, Some(4000));
+}
+
+#[test]
+fn test_resolve_thinking_none_for_unsupported_haiku_variants() {
+    let request = ModelRequest::builder("aura-claude-haiku-4-5", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-claude-haiku-4-5");
+    assert!(thinking.is_none());
 }
 
 #[test]
@@ -306,13 +305,24 @@ fn test_resolve_thinking_none_for_small_budget() {
 }
 
 #[test]
-fn test_resolve_thinking_enabled_for_older_claude_haiku() {
+fn test_resolve_thinking_none_for_unsupported_claude_3_variants() {
     let request = ModelRequest::builder("claude-3-haiku", "system")
         .max_tokens(8192)
         .build();
-    let thinking = resolve_thinking(&request, "claude-3-haiku").unwrap();
-    assert_eq!(thinking.thinking_type, "enabled");
-    assert_eq!(thinking.budget_tokens, Some(4096));
+    let thinking = resolve_thinking(&request, "claude-3-haiku");
+    assert!(thinking.is_none());
+}
+
+#[test]
+fn test_resolve_output_config_only_for_claude_4_thinking_models() {
+    let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
+        .max_tokens(8192)
+        .build();
+    let output = resolve_output_config(&request, TEST_DEFAULT_MODEL).unwrap();
+    assert_eq!(output.effort, "high");
+
+    let sonnet_37_output = resolve_output_config(&request, "claude-3-7-sonnet");
+    assert!(sonnet_37_output.is_none());
 }
 
 #[tokio::test]
@@ -744,8 +754,72 @@ async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_
         !captured.contains("anthropic-beta"),
         "Explicit non-Anthropic family hints should suppress Anthropic proxy headers even for Claude model names.\nCaptured request:\n{captured}"
     );
+    assert!(
+        !captured.contains(r#""thinking":"#),
+        "Explicit non-Anthropic family hints should suppress Anthropic thinking config even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("output_config"),
+        "Explicit non-Anthropic family hints should suppress Anthropic output config even for Claude model names.\nCaptured request:\n{captured}"
+    );
     assert!(matches!(
         events.first().unwrap().as_ref().unwrap(),
         StreamEvent::MessageStart { model, .. } if model == "claude-opus-4-6"
     ));
+}
+
+#[tokio::test]
+async fn test_proxy_non_anthropic_family_omits_thinking_and_output_config_for_complete() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-opus-4-6","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "claude-opus-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-opus-4-6", "system")
+        .message(Message::user("test"))
+        .max_tokens(8192)
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("openai".to_string()))
+        .build();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains(r#""thinking":"#),
+        "Explicit non-Anthropic family hints should suppress Anthropic thinking config for complete requests.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("output_config"),
+        "Explicit non-Anthropic family hints should suppress Anthropic output config for complete requests.\nCaptured request:\n{captured}"
+    );
 }
