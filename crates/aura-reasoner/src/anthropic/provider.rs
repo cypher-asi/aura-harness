@@ -17,9 +17,13 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 impl AnthropicProvider {
-    fn should_buffer_proxy_streaming(model: &str) -> bool {
+    fn supports_anthropic_proxy_features(model: &str) -> bool {
         let model = model.trim().to_ascii_lowercase();
-        !(model.starts_with("claude") || model.starts_with("aura-claude"))
+        model.starts_with("claude") || model.starts_with("aura-claude")
+    }
+
+    fn should_buffer_proxy_streaming(model: &str) -> bool {
+        !Self::supports_anthropic_proxy_features(model)
     }
 
     async fn check_base_url_reachable(&self) -> bool {
@@ -86,6 +90,8 @@ impl AnthropicProvider {
             .header("content-type", "application/json")
             .json(json_body);
         let prompt_caching_enabled = self.config.prompt_caching_enabled;
+        let proxy_prompt_caching_enabled =
+            prompt_caching_enabled && Self::supports_anthropic_proxy_features(&request_ctx.model);
 
         match self.config.routing_mode {
             RoutingMode::Direct => {
@@ -101,7 +107,7 @@ impl AnthropicProvider {
                     ))
                 })?;
                 req_builder = req_builder.header("authorization", format!("Bearer {token}"));
-                if prompt_caching_enabled {
+                if proxy_prompt_caching_enabled {
                     req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
                 }
                 if let Some(ref v) = request_ctx.aura_project_id {
@@ -268,12 +274,13 @@ impl ModelProvider for AnthropicProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
         let start = Instant::now();
         let models = self.model_chain(&request.model);
-        let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
-            let api_request =
-                build_api_request(&request, model, &system, self.config.prompt_caching_enabled);
+            let prompt_caching_enabled =
+                self.config.prompt_caching_enabled && Self::supports_anthropic_proxy_features(model);
+            let system = build_system_block(&request.system, prompt_caching_enabled);
+            let api_request = build_api_request(&request, model, &system, prompt_caching_enabled);
 
             debug!(
                 model = %model,
@@ -354,25 +361,21 @@ impl ModelProvider for AnthropicProvider {
         }
 
         let models = self.model_chain(&request.model);
-        let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
+            let prompt_caching_enabled =
+                self.config.prompt_caching_enabled && Self::supports_anthropic_proxy_features(model);
+            let system = build_system_block(&request.system, prompt_caching_enabled);
             let thinking = resolve_thinking(&request, model);
             let api_request = StreamingApiRequest {
                 model: model.clone(),
                 system: system.clone(),
-                messages: convert_messages_to_api(
-                    &request.messages,
-                    self.config.prompt_caching_enabled,
-                ),
+                messages: convert_messages_to_api(&request.messages, prompt_caching_enabled),
                 tools: if request.tools.is_empty() {
                     None
                 } else {
-                    Some(convert_tools_to_api(
-                        &request.tools,
-                        self.config.prompt_caching_enabled,
-                    ))
+                    Some(convert_tools_to_api(&request.tools, prompt_caching_enabled))
                 },
                 tool_choice: convert_tool_choice(&request.tool_choice),
                 max_tokens: request.max_tokens,

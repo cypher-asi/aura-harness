@@ -294,7 +294,7 @@ async fn test_proxy_mode_sends_caching_beta_header() {
 
     let config = AnthropicConfig {
         api_key: String::new(),
-        default_model: "test-model".to_string(),
+        default_model: "aura-claude-sonnet-4-6".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
@@ -304,7 +304,7 @@ async fn test_proxy_mode_sends_caching_beta_header() {
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
-    let request = ModelRequest::builder("test-model", "system")
+    let request = ModelRequest::builder("aura-claude-sonnet-4-6", "system")
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
         .build();
@@ -532,4 +532,58 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
         events.last().unwrap().as_ref().unwrap(),
         StreamEvent::MessageStop
     ));
+}
+
+#[tokio::test]
+async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"aura-gpt-4.1","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "aura-gpt-4.1".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-gpt-4.1", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .build();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains("anthropic-beta"),
+        "Proxy OpenAI requests should omit anthropic-beta prompt caching headers.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("cache_control"),
+        "Proxy OpenAI requests should omit Anthropic cache_control fields.\nCaptured request:\n{captured}"
+    );
 }
