@@ -237,7 +237,9 @@ fn test_resolve_thinking_explicit_config() {
         .build();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_some());
-    assert_eq!(thinking.unwrap().budget_tokens, 4000);
+    let thinking = thinking.unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
 }
 
 #[test]
@@ -247,7 +249,22 @@ fn test_resolve_thinking_auto_for_capable_model() {
         .build();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_some());
-    assert_eq!(thinking.unwrap().budget_tokens, 4096);
+    let thinking = thinking.unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
+}
+
+#[test]
+fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
+    let request = ModelRequest::builder("claude-3-7-sonnet", "system")
+        .max_tokens(8192)
+        .thinking(ThinkingConfig {
+            budget_tokens: 4000,
+        })
+        .build();
+    let thinking = resolve_thinking(&request, "claude-3-7-sonnet").unwrap();
+    assert_eq!(thinking.thinking_type, "enabled");
+    assert_eq!(thinking.budget_tokens, Some(4000));
 }
 
 #[test]

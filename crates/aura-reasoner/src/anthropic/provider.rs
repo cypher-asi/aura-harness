@@ -1,7 +1,7 @@
 use super::api_types::{ApiRequest, ApiResponse, StreamingApiRequest};
 use super::convert::{
     build_system_block, convert_messages_to_api, convert_response_to_aura, convert_tool_choice,
-    convert_tools_to_api, resolve_thinking,
+    convert_tools_to_api, resolve_output_config, resolve_thinking,
 };
 use super::sse::SseStream;
 use super::{AnthropicProvider, ApiError};
@@ -182,6 +182,7 @@ fn build_api_request(
     prompt_caching_enabled: bool,
 ) -> ApiRequest {
     let thinking = resolve_thinking(request, model);
+    let output_config = resolve_output_config(request, model);
     ApiRequest {
         model: model.to_string(),
         system: system.clone(),
@@ -199,6 +200,7 @@ fn build_api_request(
             request.temperature
         },
         thinking,
+        output_config,
     }
 }
 
@@ -389,6 +391,7 @@ impl ModelProvider for AnthropicProvider {
             let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
             let system = build_system_block(&request.system, prompt_caching_enabled);
             let thinking = resolve_thinking(&request, model);
+            let output_config = resolve_output_config(&request, model);
             let api_request = StreamingApiRequest {
                 model: model.clone(),
                 system: system.clone(),
@@ -407,6 +410,7 @@ impl ModelProvider for AnthropicProvider {
                 },
                 stream: true,
                 thinking,
+                output_config,
             };
 
             debug!(

@@ -1,5 +1,6 @@
 use super::api_types::{
-    ApiContent, ApiImageSource, ApiMessage, ApiThinkingConfig, ApiTool, ApiToolChoice,
+    ApiContent, ApiImageSource, ApiMessage, ApiOutputConfig, ApiThinkingConfig, ApiTool,
+    ApiToolChoice,
 };
 use crate::{
     ContentBlock, ImageSource, Message, ModelRequest, Role, ToolChoice, ToolDefinition,
@@ -10,11 +11,28 @@ use crate::{
 ///
 /// Uses the caller-supplied config when present; otherwise auto-enables
 /// thinking for capable models when the token budget is large enough.
+fn supports_adaptive_thinking(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("claude-opus-4-6")
+        || model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-sonnet-4-6")
+}
+
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
+    let adaptive = supports_adaptive_thinking(model);
+
     if let Some(ref cfg) = request.thinking {
         return Some(ApiThinkingConfig {
-            thinking_type: "enabled".to_string(),
-            budget_tokens: cfg.budget_tokens,
+            thinking_type: if adaptive {
+                "adaptive".to_string()
+            } else {
+                "enabled".to_string()
+            },
+            budget_tokens: if adaptive {
+                None
+            } else {
+                Some(cfg.budget_tokens)
+            },
         });
     }
 
@@ -23,10 +41,31 @@ pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<Ap
         || model.contains("claude-sonnet-4");
 
     if supports_thinking && request.max_tokens > 2048 {
-        let budget = (request.max_tokens / 2).clamp(1024, 16000);
         Some(ApiThinkingConfig {
-            thinking_type: "enabled".to_string(),
-            budget_tokens: budget,
+            thinking_type: if adaptive {
+                "adaptive".to_string()
+            } else {
+                "enabled".to_string()
+            },
+            budget_tokens: if adaptive {
+                None
+            } else {
+                Some((request.max_tokens / 2).clamp(1024, 16000))
+            },
+        })
+    } else {
+        None
+    }
+}
+
+pub(super) fn resolve_output_config(
+    request: &ModelRequest,
+    model: &str,
+) -> Option<ApiOutputConfig> {
+    let thinking = resolve_thinking(request, model)?;
+    if thinking.thinking_type == "adaptive" {
+        Some(ApiOutputConfig {
+            effort: "high".to_string(),
         })
     } else {
         None
