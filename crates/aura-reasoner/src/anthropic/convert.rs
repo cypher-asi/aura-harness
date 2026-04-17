@@ -14,8 +14,11 @@ use crate::{
 fn supports_adaptive_thinking(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
     model.starts_with("claude-opus-4-6")
+        || model.starts_with("aura-claude-opus-4-6")
         || model.starts_with("claude-opus-4-7")
+        || model.starts_with("aura-claude-opus-4-7")
         || model.starts_with("claude-sonnet-4-6")
+        || model.starts_with("aura-claude-sonnet-4-6")
 }
 
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {

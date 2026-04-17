@@ -255,6 +255,16 @@ fn test_resolve_thinking_auto_for_capable_model() {
 }
 
 #[test]
+fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
+    let request = ModelRequest::builder("aura-claude-opus-4-7", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-claude-opus-4-7").unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
+}
+
+#[test]
 fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
     let request = ModelRequest::builder("claude-3-7-sonnet", "system")
         .max_tokens(8192)
