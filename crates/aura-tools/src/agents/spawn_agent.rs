@@ -1,8 +1,5 @@
 //! `spawn_agent` — phase 5 cross-agent tool.
 //!
-//! This is the most complex of the phase-5 cross-agent tools and the template
-//! for the rest (see `TODO(phase5-part-2)` in [`crate::agents`]).
-//!
 //! ## Semantics
 //!
 //! - The caller must hold [`Capability::SpawnAgent`].
@@ -12,23 +9,20 @@
 //!   [`crate::ToolContext::parent_chain`], the call is rejected (cycle
 //!   prevention). There is **no depth cap** — strict-subset plus the
 //!   caller's budget are the natural bounds.
-//! - On success the tool returns a [`ToolResult`] whose stdout JSON encodes a
-//!   [`SpawnAgentOutcome`]. The outcome carries enough data for the kernel
-//!   to emit a `Delegate` transaction with `parent_agent_id` /
-//!   `originating_user_id` populated from the caller's context.
-//!
-//! ## What is NOT done in this commit
-//!
-//! This tool does not persist a new kernel agent record. The persistence hook
-//! is deferred — see `TODO(phase5-part-2)` below. The tool returns the new
-//! child's id + permissions in `SpawnAgentOutcome`; phase-5-part-2 will add a
-//! `SpawnHook` trait that the aura-node wiring implements to actually create
-//! the `Identity` + record log + scheduler slot.
+//! - On success the tool invokes [`aura_kernel::SpawnHook`] when one is
+//!   attached to the [`ToolContext`] so a production kernel writer can
+//!   create the new `Identity`, seed the child's record log, and append
+//!   the `Delegate` transaction on the caller's log. The tool's stdout
+//!   carries a [`SpawnAgentOutcome`] with the final child id and parent
+//!   chain metadata.
+//! - Without a hook the tool still runs the permission gate and returns a
+//!   synthetic outcome — useful for unit tests and "dry-run" contexts.
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core::{AgentId, AgentPermissions, ToolDefinition, ToolResult};
+use aura_kernel::{ChildAgentSpec, NoopSpawnHook};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +40,9 @@ pub struct SpawnAgentInput {
     /// ancestor chain for cycles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Optional system-prompt override for the child agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
 }
 
 /// Structured outcome of a successful `spawn_agent` call. Embedded in the
@@ -156,6 +153,10 @@ impl Tool for SpawnAgentTool {
         Self::definition()
     }
 
+    fn required_capabilities(&self) -> Vec<aura_core::Capability> {
+        vec![aura_core::Capability::SpawnAgent]
+    }
+
     async fn execute(
         &self,
         ctx: &ToolContext,
@@ -164,28 +165,106 @@ impl Tool for SpawnAgentTool {
         let input: SpawnAgentInput = serde_json::from_value(args)
             .map_err(|e| ToolError::InvalidArguments(format!("spawn_agent: {e}")))?;
 
-        match Self::evaluate(ctx, &input) {
-            Ok(outcome) => {
-                let body = serde_json::to_vec(&outcome).map_err(|e| {
-                    ToolError::Serialization(format!("spawn_agent outcome: {e}"))
-                })?;
-                Ok(ToolResult::success(SPAWN_AGENT_TOOL_NAME, body)
-                    .with_metadata("child_agent_id", outcome.child_agent_id))
+        let mut outcome = match Self::evaluate(ctx, &input) {
+            Ok(o) => o,
+            Err(err) => {
+                return Ok(ToolResult::failure(
+                    SPAWN_AGENT_TOOL_NAME,
+                    Bytes::from(err.to_string().into_bytes()),
+                ))
             }
-            Err(err) => Ok(ToolResult::failure(
-                SPAWN_AGENT_TOOL_NAME,
-                Bytes::from(err.to_string().into_bytes()),
-            )),
+        };
+
+        // Route through the kernel spawn hook when wired. The permission
+        // checks have already passed in `evaluate`; the hook's job is pure
+        // persistence.
+        let hook = ctx
+            .spawn_hook
+            .clone()
+            .unwrap_or_else(|| std::sync::Arc::new(NoopSpawnHook));
+        let parent = ctx.caller_agent_id.unwrap_or_else(AgentId::generate);
+
+        let preassigned = input
+            .agent_id
+            .as_deref()
+            .and_then(|s| AgentId::from_hex(s).ok())
+            .or_else(|| AgentId::from_hex(&outcome.child_agent_id).ok());
+
+        let spec = ChildAgentSpec {
+            name: input.name.clone(),
+            role: input.role.clone(),
+            permissions: input.permissions.clone(),
+            system_prompt_override: input.system_prompt.clone(),
+            preassigned_agent_id: preassigned,
+        };
+
+        match hook
+            .spawn_child(&parent, ctx.originating_user_id.as_deref(), spec)
+            .await
+        {
+            Ok(hook_outcome) => {
+                outcome.child_agent_id = hook_outcome.child_agent_id.to_string();
+            }
+            Err(err) => {
+                return Ok(ToolResult::failure(
+                    SPAWN_AGENT_TOOL_NAME,
+                    Bytes::from(format!("spawn_agent hook: {err}").into_bytes()),
+                ));
+            }
         }
+
+        let body = serde_json::to_vec(&outcome)
+            .map_err(|e| ToolError::Serialization(format!("spawn_agent outcome: {e}")))?;
+        Ok(ToolResult::success(SPAWN_AGENT_TOOL_NAME, body)
+            .with_metadata("child_agent_id", outcome.child_agent_id.clone()))
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
-    use aura_core::{AgentScope, Capability};
+    use aura_core::{AgentScope, Capability, Hash};
+    use aura_kernel::{SpawnError, SpawnHook, SpawnOutcome};
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex};
+
+    /// Test-only spawn hook that records each invocation so assertions can
+    /// inspect the parent id + originating user id that the tool forwarded.
+    #[derive(Default)]
+    pub(crate) struct MockSpawnHook {
+        pub calls: Mutex<
+            Vec<(
+                AgentId,
+                Option<String>,
+                aura_kernel::ChildAgentSpec,
+            )>,
+        >,
+    }
+
+    #[async_trait]
+    impl SpawnHook for MockSpawnHook {
+        async fn spawn_child(
+            &self,
+            parent_agent_id: &AgentId,
+            originating_user_id: Option<&str>,
+            child: aura_kernel::ChildAgentSpec,
+        ) -> Result<SpawnOutcome, SpawnError> {
+            let child_agent_id = child
+                .preassigned_agent_id
+                .unwrap_or_else(AgentId::generate);
+            self.calls.lock().unwrap().push((
+                *parent_agent_id,
+                originating_user_id.map(ToString::to_string),
+                child,
+            ));
+            Ok(SpawnOutcome {
+                child_agent_id,
+                delegate_tx_hash: Hash::default(),
+            })
+        }
+    }
 
     fn ctx_with(
         caller: AgentPermissions,
@@ -198,6 +277,16 @@ mod tests {
         ctx.caller_agent_id = caller_agent_id;
         ctx.parent_chain = parent_chain;
         ctx.originating_user_id = Some("user-root".into());
+        ctx
+    }
+
+    pub(crate) fn ctx_with_hook(
+        caller: AgentPermissions,
+        caller_agent_id: Option<AgentId>,
+        hook: Arc<MockSpawnHook>,
+    ) -> ToolContext {
+        let mut ctx = ctx_with(caller, caller_agent_id, vec![]);
+        ctx.spawn_hook = Some(hook);
         ctx
     }
 
@@ -227,6 +316,7 @@ mod tests {
                 capabilities: vec![Capability::SpawnAgent],
             },
             agent_id: None,
+            system_prompt: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -249,6 +339,7 @@ mod tests {
                 capabilities: vec![Capability::SpawnAgent, Capability::ManageBilling],
             },
             agent_id: None,
+            system_prompt: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -265,6 +356,7 @@ mod tests {
             role: "worker".into(),
             permissions: AgentPermissions::empty(),
             agent_id: Some(ancestor.to_string()),
+            system_prompt: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -284,6 +376,7 @@ mod tests {
                 capabilities: vec![Capability::SpawnAgent],
             },
             agent_id: None,
+            system_prompt: None,
         };
 
         let outcome = SpawnAgentTool::evaluate(&ctx, &input).unwrap();
@@ -303,6 +396,7 @@ mod tests {
             role: "x".into(),
             permissions: AgentPermissions::empty(),
             agent_id: None,
+            system_prompt: None,
         };
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
         assert!(
@@ -324,5 +418,28 @@ mod tests {
         assert!(result.ok);
         let outcome: SpawnAgentOutcome = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(outcome.parent_agent_id, Some(caller_id.to_string()));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_invokes_hook_with_parent_and_user_id() {
+        let caller_id = AgentId::generate();
+        let hook = Arc::new(MockSpawnHook::default());
+        let ctx = ctx_with_hook(ceo(), Some(caller_id), Arc::clone(&hook));
+
+        let args = serde_json::json!({
+            "name": "child",
+            "role": "worker",
+            "permissions": AgentPermissions::empty(),
+        });
+        let result = SpawnAgentTool.execute(&ctx, args).await.unwrap();
+        assert!(result.ok, "stderr={}", String::from_utf8_lossy(&result.stderr));
+
+        let calls = hook.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (parent, user, spec) = &calls[0];
+        assert_eq!(*parent, caller_id);
+        assert_eq!(user.as_deref(), Some("user-root"));
+        assert_eq!(spec.name, "child");
+        assert_eq!(spec.role, "worker");
     }
 }

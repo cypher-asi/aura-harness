@@ -1,20 +1,71 @@
 //! Phase 5 cross-agent tools.
 //!
-//! Only `spawn_agent` is implemented in this commit. The other four
-//! (`send_to_agent`, `agent_lifecycle`, `get_agent_state`, `delegate_task`)
-//! are intentionally deferred — see `TODO(phase5-part-2)` markers below.
+//! All five tools (`spawn_agent`, `send_to_agent`, `agent_lifecycle`,
+//! `get_agent_state`, `delegate_task`) are always compiled. Their
+//! registration in `ToolCatalog` is unconditional; what gates them at the
+//! surface is [`crate::ToolCatalog::visible_tools_with_permissions`] — a
+//! caller that lacks the matching `Capability` never sees the tool names
+//! in its prompt, which keeps low-privilege agents bit-compatible with
+//! today's behavior.
 //!
-//! All tools in this module are gated behind the `agent_permissions` Cargo
-//! feature on `aura-tools`, which in turn forwards to the matching feature
-//! on `aura-kernel`. With the feature off (the phase-5 rollout default) the
-//! module is still compiled so its types remain usable, but the tools are
-//! **not** registered in the default `ToolCatalog`.
+//! The `agent_permissions` Cargo feature on `aura-kernel` additionally
+//! enforces the capability at proposal time via
+//! [`aura_kernel::PolicyConfig::tool_capability_requirements`]. With that
+//! feature off the visibility filter is the sole gate (see
+//! `tool::catalog::entry_visible`).
+//!
+//! Production side-effects for `send_to_agent` / `agent_lifecycle` /
+//! `delegate_task` flow through [`crate::AgentControlHook`]; production
+//! reads for `get_agent_state` flow through [`crate::AgentReadHook`]. When
+//! the hooks are absent the tools still run the permission gate and emit a
+//! descriptive outcome payload so the runtime effect can be filled in later
+//! without changing the gate contract.
 
+pub mod agent_lifecycle;
+pub mod delegate_task;
+pub mod get_agent_state;
+pub mod send_to_agent;
 pub mod spawn_agent;
 
+pub use agent_lifecycle::{AgentLifecycleInput, AgentLifecycleTool};
+pub use delegate_task::{DelegateTaskInput, DelegateTaskTool};
+pub use get_agent_state::{GetAgentStateInput, GetAgentStateTool};
+pub use send_to_agent::{SendToAgentInput, SendToAgentTool};
 pub use spawn_agent::{SpawnAgentInput, SpawnAgentOutcome, SpawnAgentTool};
 
-// TODO(phase5-part-2): `send_to_agent` — ControlAgent-gated message delivery.
-// TODO(phase5-part-2): `agent_lifecycle` — hibernate/stop/restart/wake/start.
-// TODO(phase5-part-2): `get_agent_state` — ReadAgent-gated state inspection.
-// TODO(phase5-part-2): `delegate_task` — ControlAgent + ActionKind::Delegate.
+use crate::tool::Tool;
+use aura_core::{Capability, ToolDefinition};
+
+/// Static catalog metadata for the five cross-agent tools. Consumed by
+/// [`crate::ToolCatalog::new`] to register every cross-agent tool
+/// unconditionally with its declared `required_capabilities`.
+#[must_use]
+pub fn cross_agent_catalog_entries() -> Vec<(Box<dyn Tool>, ToolDefinition, Vec<Capability>)> {
+    vec![
+        (
+            Box::new(SpawnAgentTool) as Box<dyn Tool>,
+            SpawnAgentTool::definition(),
+            vec![Capability::SpawnAgent],
+        ),
+        (
+            Box::new(SendToAgentTool),
+            SendToAgentTool::definition(),
+            vec![Capability::ControlAgent],
+        ),
+        (
+            Box::new(AgentLifecycleTool),
+            AgentLifecycleTool::definition(),
+            vec![Capability::ControlAgent],
+        ),
+        (
+            Box::new(GetAgentStateTool),
+            GetAgentStateTool::definition(),
+            vec![Capability::ReadAgent],
+        ),
+        (
+            Box::new(DelegateTaskTool),
+            DelegateTaskTool::definition(),
+            vec![Capability::ControlAgent],
+        ),
+    ]
+}

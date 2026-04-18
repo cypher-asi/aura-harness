@@ -2,22 +2,37 @@
 
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
-use crate::tool::{builtin_tools, Tool, ToolContext};
+use crate::tool::{builtin_tools, AgentControlHook, AgentReadHook, Tool, ToolContext};
 use crate::ToolConfig;
 use async_trait::async_trait;
-use aura_core::{Action, ActionKind, Effect, EffectKind, EffectStatus, ToolCall, ToolResult};
-use aura_kernel::{ExecuteContext, Executor, ExecutorError};
+use aura_core::{
+    Action, ActionKind, AgentId, AgentPermissions, Effect, EffectKind, EffectStatus, ToolCall,
+    ToolResult,
+};
+use aura_kernel::{ExecuteContext, Executor, ExecutorError, SpawnHook};
 use bytes::Bytes;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::{debug, error, instrument};
 
 /// Tool executor for filesystem and command operations.
 ///
 /// Holds a `HashMap<String, Box<dyn Tool>>` for trait-based dispatch
 /// instead of a hardcoded match block.
+///
+/// Phase 5: optional `spawn_hook` / `agent_control_hook` / `agent_read_hook`
+/// are injected into every [`ToolContext`] this executor creates so
+/// cross-agent tools can actually perform their runtime side-effects. Each
+/// hook defaults to `None`, preserving pre-phase-5 behavior.
 pub struct ToolExecutor {
     config: ToolConfig,
     tools: HashMap<String, Box<dyn Tool>>,
+    spawn_hook: Option<Arc<dyn SpawnHook>>,
+    agent_control_hook: Option<Arc<dyn AgentControlHook>>,
+    agent_read_hook: Option<Arc<dyn AgentReadHook>>,
+    caller_permissions: Option<AgentPermissions>,
+    parent_chain: Vec<AgentId>,
+    originating_user_id: Option<String>,
 }
 
 impl ToolExecutor {
@@ -28,7 +43,63 @@ impl ToolExecutor {
         for tool in builtin_tools() {
             tools.insert(tool.name().to_string(), tool);
         }
-        Self { config, tools }
+        Self {
+            config,
+            tools,
+            spawn_hook: None,
+            agent_control_hook: None,
+            agent_read_hook: None,
+            caller_permissions: None,
+            parent_chain: Vec::new(),
+            originating_user_id: None,
+        }
+    }
+
+    /// Phase 5: attach a [`SpawnHook`] that the `spawn_agent` tool will use
+    /// to persist new child agents.
+    #[must_use]
+    pub fn with_spawn_hook(mut self, hook: Arc<dyn SpawnHook>) -> Self {
+        self.spawn_hook = Some(hook);
+        self
+    }
+
+    /// Phase 5: attach an [`AgentControlHook`] for `send_to_agent` /
+    /// `agent_lifecycle` / `delegate_task`.
+    #[must_use]
+    pub fn with_agent_control_hook(mut self, hook: Arc<dyn AgentControlHook>) -> Self {
+        self.agent_control_hook = Some(hook);
+        self
+    }
+
+    /// Phase 5: attach an [`AgentReadHook`] for `get_agent_state`.
+    #[must_use]
+    pub fn with_agent_read_hook(mut self, hook: Arc<dyn AgentReadHook>) -> Self {
+        self.agent_read_hook = Some(hook);
+        self
+    }
+
+    /// Phase 5: set the caller's permissions (scope + capabilities). Used
+    /// by cross-agent tools to enforce strict-subset and scope checks.
+    #[must_use]
+    pub fn with_caller_permissions(mut self, permissions: AgentPermissions) -> Self {
+        self.caller_permissions = Some(permissions);
+        self
+    }
+
+    /// Phase 5: set the caller's ancestor chain for cycle prevention in
+    /// `spawn_agent`.
+    #[must_use]
+    pub fn with_parent_chain(mut self, chain: Vec<AgentId>) -> Self {
+        self.parent_chain = chain;
+        self
+    }
+
+    /// Phase 5: set the originating end-user id that started this delegate
+    /// chain. Propagated onto every `Delegate`-tagged transaction.
+    #[must_use]
+    pub fn with_originating_user_id(mut self, user: impl Into<String>) -> Self {
+        self.originating_user_id = Some(user.into());
+        self
     }
 
     /// Create a tool executor with default config.
@@ -94,7 +165,14 @@ impl ToolExecutor {
         })
         .await
         .map_err(|e| ToolError::CommandFailed(format!("sandbox init task panicked: {e}")))??;
-        let tool_ctx = ToolContext::new(sandbox, self.config.clone());
+        let mut tool_ctx = ToolContext::new(sandbox, self.config.clone());
+        tool_ctx.caller_agent_id = Some(ctx.agent_id);
+        tool_ctx.caller_permissions = self.caller_permissions.clone();
+        tool_ctx.parent_chain = self.parent_chain.clone();
+        tool_ctx.originating_user_id = self.originating_user_id.clone();
+        tool_ctx.spawn_hook = self.spawn_hook.clone();
+        tool_ctx.agent_control_hook = self.agent_control_hook.clone();
+        tool_ctx.agent_read_hook = self.agent_read_hook.clone();
 
         match self.tools.get(tool_name.as_str()) {
             Some(tool) => tool.execute(&tool_ctx, tool_call.args.clone()).await,

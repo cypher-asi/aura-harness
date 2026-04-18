@@ -8,7 +8,9 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
-use aura_core::{AgentId, AgentPermissions, ToolDefinition, ToolResult};
+use aura_core::{AgentId, AgentPermissions, Capability, ToolDefinition, ToolResult};
+use aura_kernel::SpawnHook;
+use std::sync::Arc;
 
 /// Context provided to tools during execution.
 pub struct ToolContext {
@@ -29,6 +31,66 @@ pub struct ToolContext {
     /// Phase 5: originating end-user id that began this delegate chain.
     /// Propagated onto every Delegate transaction for billing attribution.
     pub originating_user_id: Option<String>,
+    /// Phase 5 part 2: optional spawn hook used by the `spawn_agent` tool to
+    /// actually persist a new child agent. `None` means "no hook wired" — the
+    /// tool returns a pure outcome payload without touching a store.
+    pub spawn_hook: Option<Arc<dyn SpawnHook>>,
+    /// Phase 5 part 2: optional cross-agent control hook used by
+    /// `send_to_agent`, `agent_lifecycle`, and `delegate_task` to deliver
+    /// effects to the target agent's record log. `None` means the tool
+    /// short-circuits into a permission-checked outcome with no runtime
+    /// side-effect (the production wiring is a `TODO(phase5-runtime)`).
+    pub agent_control_hook: Option<Arc<dyn AgentControlHook>>,
+    /// Phase 5 part 2: optional read hook used by `get_agent_state` to
+    /// fetch a snapshot of a target agent's record log.
+    pub agent_read_hook: Option<Arc<dyn AgentReadHook>>,
+}
+
+/// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
+/// tools to actually affect the target agent. Kept as a trait so the
+/// permission gate can be tested without wiring a real kernel writer.
+///
+/// Production wiring of this hook is deferred — see
+/// `TODO(phase5-runtime)` in `agents/` for the runtime effects.
+#[async_trait]
+pub trait AgentControlHook: Send + Sync {
+    /// Deliver a user-message-shaped payload to `target`.
+    async fn deliver_message(
+        &self,
+        target: &AgentId,
+        parent: &AgentId,
+        originating_user_id: Option<&str>,
+        content: &str,
+        attachments: Option<serde_json::Value>,
+    ) -> Result<(), String>;
+
+    /// Apply a lifecycle transition to `target`.
+    async fn lifecycle(
+        &self,
+        target: &AgentId,
+        parent: &AgentId,
+        originating_user_id: Option<&str>,
+        action: &str,
+    ) -> Result<(), String>;
+
+    /// Emit a Delegate-tagged task to `target`.
+    async fn delegate_task(
+        &self,
+        target: &AgentId,
+        parent: &AgentId,
+        originating_user_id: Option<&str>,
+        task: &str,
+        context: Option<&serde_json::Value>,
+    ) -> Result<(), String>;
+}
+
+/// Hook used by `get_agent_state` to fetch a read-only snapshot of a
+/// target agent. Kept as a trait so the gate is testable without a kernel.
+#[async_trait]
+pub trait AgentReadHook: Send + Sync {
+    /// Return the latest `session_ready` / `assistant_message_end`
+    /// snapshot for `target`, plus the agent's `Identity` + `permissions`.
+    async fn snapshot(&self, target: &AgentId) -> Result<serde_json::Value, String>;
 }
 
 impl ToolContext {
@@ -43,6 +105,9 @@ impl ToolContext {
             caller_permissions: None,
             parent_chain: Vec::new(),
             originating_user_id: None,
+            spawn_hook: None,
+            agent_control_hook: None,
+            agent_read_hook: None,
         }
     }
 }
@@ -66,6 +131,17 @@ pub trait Tool: Send + Sync {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError>;
+
+    /// Phase 5: capabilities required on the caller's `AgentPermissions` for
+    /// this tool to be visible + callable. Default is empty (tool is
+    /// universally visible, matching pre-phase-5 behavior).
+    ///
+    /// `ToolCatalog::visible_tools` filters the catalog against this set;
+    /// the kernel `Policy` layer additionally enforces it at proposal time
+    /// via `PolicyConfig::tool_capability_requirements`.
+    fn required_capabilities(&self) -> Vec<Capability> {
+        Vec::new()
+    }
 }
 
 /// Returns all built-in tool instances.

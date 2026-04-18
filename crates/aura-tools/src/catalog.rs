@@ -8,7 +8,7 @@
 use crate::definitions;
 use crate::tool::builtin_tools;
 use crate::ToolConfig;
-use aura_core::{InstalledToolDefinition, ToolDefinition};
+use aura_core::{AgentPermissions, Capability, InstalledToolDefinition, ToolDefinition};
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -44,6 +44,10 @@ pub struct CatalogEntry {
     pub owner: ToolOwner,
     /// Profiles that include this tool.
     pub profiles: Vec<ToolProfile>,
+    /// Phase 5: capabilities the caller must hold for this tool to be
+    /// visible + callable. Empty means universally visible (no capability
+    /// gate).
+    pub required_capabilities: Vec<Capability>,
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +78,7 @@ impl ToolCatalog {
                 definition: def,
                 owner: ToolOwner::Internal,
                 profiles: all_profiles.clone(),
+                required_capabilities: Vec::new(),
             });
         }
 
@@ -85,25 +90,27 @@ impl ToolCatalog {
                     definition: tool.definition(),
                     owner: ToolOwner::Internal,
                     profiles: all_profiles.clone(),
+                    required_capabilities: tool.required_capabilities(),
                 });
             }
         }
 
-        // Phase 5: cross-agent tools. Registered in the catalog only when the
-        // `agent_permissions` Cargo feature is enabled so legacy builds never
-        // see the new surface.
-        //
-        // TODO(phase5-part-2): filter these out of `visible_tools` for callers
-        // that lack the matching Capability (currently the kernel policy is
-        // the only gate — see `PolicyConfig::tool_capability_requirements`).
-        #[cfg(feature = "agent_permissions")]
-        {
-            let def = crate::agents::SpawnAgentTool::definition();
-            if seen.insert(def.name.clone()) {
+        // Phase 5: cross-agent tools. Always compiled + registered, but
+        // `visible_tools` drops them for callers that don't hold the matching
+        // capabilities. With `agent_permissions` Cargo feature OFF the kernel
+        // policy gate is a no-op, so the visibility filter is the sole
+        // enforcement point — matching today's behavior where low-privilege
+        // agents never see these tool names in their prompt.
+        for (tool, definition, required) in crate::agents::cross_agent_catalog_entries() {
+            if seen.insert(definition.name.clone()) {
+                // Suppress unused warning when the tool impl itself isn't
+                // otherwise referenced in this function.
+                let _ = tool;
                 entries.push(CatalogEntry {
-                    definition: def,
+                    definition,
                     owner: ToolOwner::Internal,
                     profiles: vec![ToolProfile::Agent],
+                    required_capabilities: required,
                 });
             }
         }
@@ -115,6 +122,7 @@ impl ToolCatalog {
                 definition: def,
                 owner: ToolOwner::Internal,
                 profiles: vec![ToolProfile::Agent],
+                required_capabilities: Vec::new(),
             });
         }
 
@@ -125,6 +133,7 @@ impl ToolCatalog {
                 definition: def,
                 owner: ToolOwner::Internal,
                 profiles: vec![ToolProfile::Engine],
+                required_capabilities: Vec::new(),
             });
         }
 
@@ -142,6 +151,25 @@ impl ToolCatalog {
         self.entries
             .iter()
             .filter(|e| e.profiles.contains(&profile))
+            .filter(|e| e.required_capabilities.is_empty())
+            .map(|e| e.definition.clone())
+            .collect()
+    }
+
+    /// Phase 5: like [`Self::tools_for_profile`] but additionally includes
+    /// capability-gated tools when `permissions` holds every required
+    /// capability. When `permissions` is `None` the result matches
+    /// [`Self::tools_for_profile`] exactly (capability-gated tools hidden).
+    #[must_use]
+    pub fn tools_for_profile_with_permissions(
+        &self,
+        profile: ToolProfile,
+        permissions: Option<&AgentPermissions>,
+    ) -> Vec<ToolDefinition> {
+        self.entries
+            .iter()
+            .filter(|e| e.profiles.contains(&profile))
+            .filter(|e| entry_visible(e, permissions))
             .map(|e| e.definition.clone())
             .collect()
     }
@@ -178,6 +206,7 @@ impl ToolCatalog {
                 ),
                 owner: ToolOwner::Internal,
                 profiles: vec![profile],
+                required_capabilities: Vec::new(),
             });
         }
 
@@ -185,9 +214,26 @@ impl ToolCatalog {
     }
 
     /// Get visible tools for a profile, filtered by `ToolConfig` permissions.
+    ///
+    /// Equivalent to [`Self::visible_tools_with_permissions`] with
+    /// `permissions == None`: capability-gated tools (like `spawn_agent`) are
+    /// hidden. Callers that can supply the caller's [`AgentPermissions`]
+    /// should prefer the `_with_permissions` variant.
     #[must_use]
     pub fn visible_tools(&self, profile: ToolProfile, config: &ToolConfig) -> Vec<ToolDefinition> {
-        let mut tools = self.tools_for_profile(profile);
+        self.visible_tools_with_permissions(profile, config, None)
+    }
+
+    /// Phase 5: visible tools for a profile, filtered by `ToolConfig`
+    /// permissions and the caller's capability grants.
+    #[must_use]
+    pub fn visible_tools_with_permissions(
+        &self,
+        profile: ToolProfile,
+        config: &ToolConfig,
+        permissions: Option<&AgentPermissions>,
+    ) -> Vec<ToolDefinition> {
+        let mut tools = self.tools_for_profile_with_permissions(profile, permissions);
         apply_config_filter(&mut tools, config);
         tools
     }
@@ -234,6 +280,23 @@ impl std::fmt::Debug for ToolCatalog {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Phase 5: decide whether a catalog entry is visible to a caller with the
+/// given optional [`AgentPermissions`]. Entries with no
+/// `required_capabilities` are always visible; otherwise the caller must
+/// hold every required capability.
+fn entry_visible(entry: &CatalogEntry, permissions: Option<&AgentPermissions>) -> bool {
+    if entry.required_capabilities.is_empty() {
+        return true;
+    }
+    let Some(permissions) = permissions else {
+        return false;
+    };
+    entry
+        .required_capabilities
+        .iter()
+        .all(|c| permissions.capabilities.contains(c))
+}
 
 /// Apply `ToolConfig` permission filters in-place.
 fn apply_config_filter(tools: &mut Vec<ToolDefinition>, config: &ToolConfig) {
@@ -401,6 +464,61 @@ mod tests {
                 tool.name()
             );
         }
+    }
+
+    #[test]
+    fn cross_agent_tools_hidden_without_permissions() {
+        let cat = ToolCatalog::new();
+        let tools = cat.visible_tools_with_permissions(
+            ToolProfile::Agent,
+            &ToolConfig::default(),
+            None,
+        );
+        let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains("spawn_agent"));
+        assert!(!names.contains("send_to_agent"));
+        assert!(!names.contains("agent_lifecycle"));
+        assert!(!names.contains("get_agent_state"));
+        assert!(!names.contains("delegate_task"));
+    }
+
+    #[test]
+    fn cross_agent_tools_hidden_when_capability_missing() {
+        let cat = ToolCatalog::new();
+        let perms = aura_core::AgentPermissions {
+            scope: aura_core::AgentScope::default(),
+            capabilities: vec![aura_core::Capability::ReadAgent],
+        };
+        let tools = cat.visible_tools_with_permissions(
+            ToolProfile::Agent,
+            &ToolConfig::default(),
+            Some(&perms),
+        );
+        let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        // ReadAgent is held → get_agent_state visible.
+        assert!(names.contains("get_agent_state"));
+        // ControlAgent / SpawnAgent not held → hidden.
+        assert!(!names.contains("spawn_agent"));
+        assert!(!names.contains("send_to_agent"));
+        assert!(!names.contains("agent_lifecycle"));
+        assert!(!names.contains("delegate_task"));
+    }
+
+    #[test]
+    fn cross_agent_tools_visible_to_ceo_preset() {
+        let cat = ToolCatalog::new();
+        let perms = aura_core::AgentPermissions::ceo_preset();
+        let tools = cat.visible_tools_with_permissions(
+            ToolProfile::Agent,
+            &ToolConfig::default(),
+            Some(&perms),
+        );
+        let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains("spawn_agent"));
+        assert!(names.contains("send_to_agent"));
+        assert!(names.contains("agent_lifecycle"));
+        assert!(names.contains("get_agent_state"));
+        assert!(names.contains("delegate_task"));
     }
 
     #[test]

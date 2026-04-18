@@ -24,7 +24,6 @@
     clippy::doc_markdown
 )]
 
-#[cfg(feature = "agent_permissions")]
 pub mod agents;
 pub mod automaton_tools;
 pub mod catalog;
@@ -51,7 +50,7 @@ pub use registry::{DefaultToolRegistry, ToolRegistry};
 pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};
-pub use tool::{Tool, ToolContext};
+pub use tool::{AgentControlHook, AgentReadHook, Tool, ToolContext};
 
 /// Tool configuration.
 #[derive(Debug, Clone)]
