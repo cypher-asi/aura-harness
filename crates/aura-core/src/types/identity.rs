@@ -1,6 +1,7 @@
 //! Agent identity types.
 
 use crate::ids::AgentId;
+use crate::permissions::AgentPermissions;
 use serde::{Deserialize, Serialize};
 
 /// Agent identity information.
@@ -15,6 +16,13 @@ pub struct Identity {
     /// Fingerprint of the identity
     #[serde(with = "crate::serde_helpers::hex_bytes_32")]
     pub identity_hash: [u8; 32],
+    /// Phase 5: optional scope + capability bundle attached to this agent.
+    ///
+    /// `None` means "legacy record — no explicit grants". Phase 6's migrator
+    /// backfills existing super-agents with `AgentPermissions::legacy_default`
+    /// so today's behavior is preserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<AgentPermissions>,
 }
 
 impl Identity {
@@ -32,6 +40,14 @@ impl Identity {
             zns_id,
             name,
             identity_hash,
+            permissions: None,
         }
+    }
+
+    /// Attach explicit [`AgentPermissions`] to this identity.
+    #[must_use]
+    pub fn with_permissions(mut self, permissions: AgentPermissions) -> Self {
+        self.permissions = Some(permissions);
+        self
     }
 }

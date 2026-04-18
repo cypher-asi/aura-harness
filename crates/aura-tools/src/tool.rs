@@ -8,8 +8,7 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
-use aura_core::ToolDefinition;
-use aura_core::ToolResult;
+use aura_core::{AgentId, AgentPermissions, ToolDefinition, ToolResult};
 
 /// Context provided to tools during execution.
 pub struct ToolContext {
@@ -17,6 +16,35 @@ pub struct ToolContext {
     pub sandbox: Sandbox,
     /// Tool configuration (limits, permissions).
     pub config: ToolConfig,
+    /// Phase 5: agent id of the caller that issued this tool call, when
+    /// known. Cross-agent tools read this to populate parent-chain metadata
+    /// on the resulting transaction.
+    pub caller_agent_id: Option<AgentId>,
+    /// Phase 5: caller's scope + capability grants. Cross-agent tools (e.g.
+    /// `spawn_agent`) enforce strict-subset semantics against this bundle.
+    pub caller_permissions: Option<AgentPermissions>,
+    /// Phase 5: ancestor chain for the caller (immediate parent first, root
+    /// last). Used for cycle prevention in `spawn_agent`.
+    pub parent_chain: Vec<AgentId>,
+    /// Phase 5: originating end-user id that began this delegate chain.
+    /// Propagated onto every Delegate transaction for billing attribution.
+    pub originating_user_id: Option<String>,
+}
+
+impl ToolContext {
+    /// Construct a minimal context with only the fields required pre-phase-5.
+    /// All new cross-agent fields default to `None` / empty.
+    #[must_use]
+    pub fn new(sandbox: Sandbox, config: ToolConfig) -> Self {
+        Self {
+            sandbox,
+            config,
+            caller_agent_id: None,
+            caller_permissions: None,
+            parent_chain: Vec::new(),
+            originating_user_id: None,
+        }
+    }
 }
 
 /// Trait for extensible tool implementations.

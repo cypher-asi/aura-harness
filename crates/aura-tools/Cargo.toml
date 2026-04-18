@@ -27,5 +27,12 @@ walkdir = "2.5"
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[features]
+default = []
+# Phase 5: enable cross-agent tools (spawn_agent, etc.) and capability-gated
+# visibility. Forwards to `aura-kernel/agent_permissions` so policy checks
+# stay in sync with tool registration.
+agent_permissions = ["aura-kernel/agent_permissions"]
+
 [lints]
 workspace = true

@@ -24,6 +24,8 @@
     clippy::doc_markdown
 )]
 
+#[cfg(feature = "agent_permissions")]
+pub mod agents;
 pub mod automaton_tools;
 pub mod catalog;
 pub(crate) mod definitions;

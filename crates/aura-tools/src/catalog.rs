@@ -89,6 +89,25 @@ impl ToolCatalog {
             }
         }
 
+        // Phase 5: cross-agent tools. Registered in the catalog only when the
+        // `agent_permissions` Cargo feature is enabled so legacy builds never
+        // see the new surface.
+        //
+        // TODO(phase5-part-2): filter these out of `visible_tools` for callers
+        // that lack the matching Capability (currently the kernel policy is
+        // the only gate — see `PolicyConfig::tool_capability_requirements`).
+        #[cfg(feature = "agent_permissions")]
+        {
+            let def = crate::agents::SpawnAgentTool::definition();
+            if seen.insert(def.name.clone()) {
+                entries.push(CatalogEntry {
+                    definition: def,
+                    owner: ToolOwner::Internal,
+                    profiles: vec![ToolProfile::Agent],
+                });
+            }
+        }
+
         // Agent-only management tools (spec, task, project, dev-loop).
         for def in definitions::chat_management_tools() {
             seen.insert(def.name.clone());

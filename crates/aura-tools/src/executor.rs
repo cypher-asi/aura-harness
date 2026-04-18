@@ -94,10 +94,7 @@ impl ToolExecutor {
         })
         .await
         .map_err(|e| ToolError::CommandFailed(format!("sandbox init task panicked: {e}")))??;
-        let tool_ctx = ToolContext {
-            sandbox,
-            config: self.config.clone(),
-        };
+        let tool_ctx = ToolContext::new(sandbox, self.config.clone());
 
         match self.tools.get(tool_name.as_str()) {
             Some(tool) => tool.execute(&tool_ctx, tool_call.args.clone()).await,

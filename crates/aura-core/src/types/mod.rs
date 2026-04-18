@@ -264,6 +264,53 @@ mod tests {
     }
 
     #[test]
+    fn tool_execution_roundtrip_preserves_parent_chain_fields() {
+        let agent_id = AgentId::generate();
+        let execution = ToolExecution {
+            tool_use_id: "use-1".into(),
+            tool: "spawn_agent".into(),
+            args: serde_json::json!({"name":"child"}),
+            decision: ToolDecision::Approved,
+            reason: None,
+            result: Some("ok".into()),
+            is_error: false,
+            parent_agent_id: Some(agent_id),
+            originating_user_id: Some("user-42".into()),
+        };
+        let json = serde_json::to_string(&execution).unwrap();
+        assert!(json.contains("parent_agent_id"));
+        assert!(json.contains("originating_user_id"));
+        let parsed: ToolExecution = serde_json::from_str(&json).unwrap();
+        assert_eq!(execution, parsed);
+    }
+
+    #[test]
+    fn tool_execution_roundtrip_omits_empty_parent_chain_fields() {
+        let execution = ToolExecution {
+            tool_use_id: "use-2".into(),
+            tool: "read_file".into(),
+            args: serde_json::json!({"path":"a.txt"}),
+            decision: ToolDecision::Approved,
+            reason: None,
+            result: None,
+            is_error: false,
+            parent_agent_id: None,
+            originating_user_id: None,
+        };
+        let json = serde_json::to_string(&execution).unwrap();
+        assert!(
+            !json.contains("parent_agent_id"),
+            "empty parent_agent_id should be skipped, got: {json}"
+        );
+        assert!(
+            !json.contains("originating_user_id"),
+            "empty originating_user_id should be skipped, got: {json}"
+        );
+        let parsed: ToolExecution = serde_json::from_str(&json).unwrap();
+        assert_eq!(execution, parsed);
+    }
+
+    #[test]
     fn tool_result_roundtrip() {
         let result =
             ToolResult::success("read_file", b"file contents".to_vec()).with_metadata("size", "13");

@@ -466,10 +466,7 @@ mod tests {
 
     fn ctx() -> ToolContext {
         let dir = std::env::temp_dir();
-        ToolContext {
-            sandbox: Sandbox::new(&dir).unwrap(),
-            config: ToolConfig::default(),
-        }
+        ToolContext::new(Sandbox::new(&dir).unwrap(), ToolConfig::default())
     }
 
     fn dummy_agent() -> (AgentId, ActionId) {

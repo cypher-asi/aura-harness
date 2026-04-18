@@ -1,6 +1,7 @@
 //! Tool-related types: proposals, executions, definitions, calls, and results.
 
 use super::transaction::SystemKind;
+use crate::ids::AgentId;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -80,6 +81,16 @@ pub struct ToolExecution {
     /// Whether the execution failed (only relevant if approved)
     #[serde(default)]
     pub is_error: bool,
+    /// Phase 5: parent agent that initiated this delegate, when set by the
+    /// caller. Populated on cross-agent tool invocations so the record log
+    /// captures the full parent chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_agent_id: Option<AgentId>,
+    /// Phase 5: originating end-user id that ultimately triggered this
+    /// delegate chain. Preserved along the parent chain for billing
+    /// attribution and audit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originating_user_id: Option<String>,
 }
 
 /// Authentication configuration for installed tools.

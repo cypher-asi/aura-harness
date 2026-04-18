@@ -9,8 +9,8 @@
 //! - `Deny`: Never allowed
 
 use aura_core::{
-    ActionKind, InstalledIntegrationDefinition, InstalledToolIntegrationRequirement, Proposal,
-    RuntimeCapabilityInstall, ToolCall,
+    ActionKind, AgentPermissions, Capability, InstalledIntegrationDefinition,
+    InstalledToolIntegrationRequirement, Proposal, RuntimeCapabilityInstall, ToolCall,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -70,6 +70,17 @@ pub struct PolicyConfig {
     /// `AlwaysAllow` instead of `Deny`. The kernel is the sole gateway, so
     /// the default is open; use [`PolicyConfig::restrictive`] to lock down.
     pub allow_unlisted: bool,
+    /// Phase 5: optional scope + capability bundle for the agent this policy
+    /// governs. `None` preserves today's behavior exactly; `Some(_)` layers
+    /// an additional gate on top of the existing `allowed_action_kinds` /
+    /// `allowed_tools` checks. Only consulted when the `agent_permissions`
+    /// feature is enabled on `aura-kernel`.
+    pub agent_permissions: Option<AgentPermissions>,
+    /// Phase 5: mapping from tool name to the [`Capability`] required to use
+    /// it. Only consulted when `agent_permissions` is set **and** the
+    /// `agent_permissions` feature is enabled. Tools not listed here carry
+    /// no capability requirement.
+    pub tool_capability_requirements: HashMap<String, Capability>,
 }
 
 impl Default for PolicyConfig {
@@ -97,6 +108,8 @@ impl Default for PolicyConfig {
             installed_integrations: Vec::new(),
             tool_integration_requirements: HashMap::new(),
             allow_unlisted: true,
+            agent_permissions: None,
+            tool_capability_requirements: HashMap::new(),
         }
     }
 }
@@ -161,6 +174,20 @@ impl PolicyConfig {
         requirements: impl IntoIterator<Item = (String, InstalledToolIntegrationRequirement)>,
     ) {
         self.tool_integration_requirements = requirements.into_iter().collect();
+    }
+
+    /// Phase 5: attach an [`AgentPermissions`] bundle to this policy.
+    #[must_use]
+    pub fn with_agent_permissions(mut self, permissions: AgentPermissions) -> Self {
+        self.agent_permissions = Some(permissions);
+        self
+    }
+
+    /// Phase 5: declare the [`Capability`] required to invoke `tool`.
+    #[must_use]
+    pub fn with_tool_capability(mut self, tool: impl Into<String>, cap: Capability) -> Self {
+        self.tool_capability_requirements.insert(tool.into(), cap);
+        self
     }
 }
 
@@ -315,6 +342,12 @@ impl Policy {
                 if !result.allowed {
                     return result;
                 }
+
+                if let Some(result) = self.check_agent_permissions(&tool_call) {
+                    if !result.allowed {
+                        return result;
+                    }
+                }
             } else {
                 warn!("Malformed delegate payload");
                 return PolicyResult {
@@ -387,6 +420,46 @@ impl Policy {
     /// Add installed tool names to the policy's allowed set with `AlwaysAllow`.
     pub fn add_allowed_tools(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
         self.config.add_allowed_tools(names);
+    }
+
+    /// Phase 5: evaluate a [`ToolCall`] against the caller's
+    /// [`AgentPermissions`]. Returns `None` when the check is not enabled
+    /// (feature off, or no `agent_permissions` set on the config), or when
+    /// the call passes. Returns `Some(rejection)` when the call is denied.
+    #[cfg(feature = "agent_permissions")]
+    fn check_agent_permissions(&self, tool_call: &ToolCall) -> Option<PolicyResult> {
+        let Some(permissions) = self.config.agent_permissions.as_ref() else {
+            return None;
+        };
+
+        if let Some(required) = self.config.tool_capability_requirements.get(&tool_call.tool) {
+            if !permissions.capabilities.contains(required) {
+                return Some(PolicyResult {
+                    allowed: false,
+                    reason: Some(format!(
+                        "permissions: requires capability {required:?}"
+                    )),
+                });
+            }
+        }
+
+        if let Some(reason) = scope_violation(&permissions.scope, &tool_call.args) {
+            return Some(PolicyResult {
+                allowed: false,
+                reason: Some(reason),
+            });
+        }
+
+        None
+    }
+
+    /// No-op stub when the `agent_permissions` feature is disabled. Keeps the
+    /// call site in [`Self::check_with_runtime_capabilities`] unchanged and
+    /// guarantees the legacy default path is exactly today's behavior.
+    #[cfg(not(feature = "agent_permissions"))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    const fn check_agent_permissions(&self, _tool_call: &ToolCall) -> Option<PolicyResult> {
+        None
     }
 
     fn integration_requirement_satisfied(
@@ -463,5 +536,123 @@ impl Policy {
     }
 }
 
+/// Phase 5: inspect `args` for conventional `target_*` keys and verify they
+/// fall within `scope`. Absence of a target key means the tool is not
+/// targeting that axis and the check is skipped.
+#[cfg(feature = "agent_permissions")]
+fn scope_violation(
+    scope: &aura_core::AgentScope,
+    args: &serde_json::Value,
+) -> Option<String> {
+    if scope.is_universe() {
+        return None;
+    }
+    let obj = args.as_object()?;
+    if let Some(id) = obj.get("target_org_id").and_then(|v| v.as_str()) {
+        if !scope.orgs.is_empty() && !scope.orgs.iter().any(|o| o == id) {
+            return Some(format!("permissions: target out of scope (org '{id}')"));
+        }
+    }
+    if let Some(id) = obj.get("target_project_id").and_then(|v| v.as_str()) {
+        if !scope.projects.is_empty() && !scope.projects.iter().any(|p| p == id) {
+            return Some(format!(
+                "permissions: target out of scope (project '{id}')"
+            ));
+        }
+    }
+    if let Some(id) = obj.get("target_agent_id").and_then(|v| v.as_str()) {
+        if !scope.agent_ids.is_empty() && !scope.agent_ids.iter().any(|a| a == id) {
+            return Some(format!(
+                "permissions: target out of scope (agent '{id}')"
+            ));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "agent_permissions"))]
+mod permission_tests {
+    use super::*;
+    use aura_core::AgentScope;
+    use bytes::Bytes;
+
+    fn delegate_proposal(tool: &str, args: serde_json::Value) -> Proposal {
+        let call = ToolCall::new(tool, args);
+        let payload = serde_json::to_vec(&call).unwrap();
+        Proposal::new(ActionKind::Delegate, Bytes::from(payload))
+    }
+
+    #[test]
+    fn none_preserves_legacy_behavior() {
+        let policy = Policy::with_defaults();
+        let proposal = delegate_proposal("read_file", serde_json::json!({"path":"a.txt"}));
+        assert!(policy.check(&proposal).allowed);
+    }
+
+    #[test]
+    fn missing_capability_is_denied() {
+        let config = PolicyConfig::default()
+            .with_agent_permissions(AgentPermissions {
+                scope: AgentScope::default(),
+                capabilities: vec![],
+            })
+            .with_tool_capability("spawn_agent", Capability::SpawnAgent);
+        let policy = Policy::new(config);
+        let result = policy.check(&delegate_proposal("spawn_agent", serde_json::json!({})));
+        assert!(!result.allowed);
+        assert!(result.reason.unwrap().contains("capability"));
+    }
+
+    #[test]
+    fn present_capability_is_allowed() {
+        let config = PolicyConfig::default()
+            .with_agent_permissions(AgentPermissions {
+                scope: AgentScope::default(),
+                capabilities: vec![Capability::SpawnAgent],
+            })
+            .with_tool_capability("spawn_agent", Capability::SpawnAgent);
+        let policy = Policy::new(config);
+        assert!(policy
+            .check(&delegate_proposal("spawn_agent", serde_json::json!({})))
+            .allowed);
+    }
+
+    #[test]
+    fn out_of_scope_target_is_denied() {
+        let config = PolicyConfig::default().with_agent_permissions(AgentPermissions {
+            scope: AgentScope {
+                orgs: vec!["only".into()],
+                ..AgentScope::default()
+            },
+            capabilities: vec![],
+        });
+        let policy = Policy::new(config);
+        let result = policy.check(&delegate_proposal(
+            "any_tool",
+            serde_json::json!({"target_org_id":"other"}),
+        ));
+        assert!(!result.allowed);
+        assert!(result.reason.unwrap().contains("out of scope"));
+    }
+
+    #[test]
+    fn in_scope_target_is_allowed() {
+        let config = PolicyConfig::default().with_agent_permissions(AgentPermissions {
+            scope: AgentScope {
+                orgs: vec!["only".into()],
+                ..AgentScope::default()
+            },
+            capabilities: vec![],
+        });
+        let policy = Policy::new(config);
+        assert!(policy
+            .check(&delegate_proposal(
+                "any_tool",
+                serde_json::json!({"target_org_id":"only"})
+            ))
+            .allowed);
+    }
+}

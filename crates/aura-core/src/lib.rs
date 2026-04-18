@@ -15,6 +15,7 @@
 pub mod error;
 pub mod hash;
 pub mod ids;
+pub mod permissions;
 pub(crate) mod serde_helpers;
 pub mod time;
 pub mod types;
@@ -22,6 +23,7 @@ pub mod types;
 pub use error::{AuraError, Result};
 #[allow(deprecated)]
 pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId, TxId};
+pub use permissions::{AgentPermissions, AgentScope, Capability};
 pub use types::{
     Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, Decision, Effect,
     EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition, InstalledToolCapability,
