@@ -46,6 +46,23 @@ pub(super) async fn submit_tx_handler(
             )
         })?;
 
+    // Phase 5: reject mid-session `AgentPermissions` mutation.
+    //
+    // Per-session permissions are baked in at `SessionInit` time (see
+    // `Session::apply_init`) and applied to the kernel `PolicyConfig`
+    // during session bootstrap. Any attempt to ship a new permission
+    // bundle via `/tx` (regardless of transaction kind) is refused so a
+    // running session cannot escalate its own capabilities.
+    if matches!(tx_type, TransactionType::System)
+        && carries_agent_permissions_mutation(&payload)
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "permissions: AgentPermissions are frozen per session; send a new SessionInit instead"
+                .to_string(),
+        ));
+    }
+
     let tx = Transaction::new_chained(agent_id, tx_type, Bytes::from(payload), None);
 
     state.store.enqueue_tx(&tx).map_err(|e| {
@@ -74,6 +91,32 @@ pub(super) async fn submit_tx_handler(
             tx_id: tx.hash.to_hex(),
         }),
     ))
+}
+
+/// Phase 5: detect whether a `System`-kind transaction payload is
+/// attempting to mutate `AgentPermissions`. We accept two encodings:
+///
+/// - An explicit `{"kind": "agent_permissions", ...}` marker.
+/// - Any JSON object that contains a top-level `agent_permissions` key.
+///
+/// Non-JSON payloads and JSON payloads without either marker pass
+/// through untouched (these are the normal System-tx shapes used by the
+/// kernel for identity / delegate bookkeeping, which are written by the
+/// kernel itself rather than via `/tx`).
+fn carries_agent_permissions_mutation(payload: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+        return false;
+    };
+    let obj = match value {
+        serde_json::Value::Object(obj) => obj,
+        _ => return false,
+    };
+    if let Some(kind) = obj.get("kind").and_then(|v| v.as_str()) {
+        if kind == "agent_permissions" || kind == "set_agent_permissions" {
+            return true;
+        }
+    }
+    obj.contains_key("agent_permissions")
 }
 
 // === Tx Status ===

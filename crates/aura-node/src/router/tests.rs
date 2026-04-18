@@ -171,6 +171,73 @@ async fn test_submit_tx_invalid_base64() {
 }
 
 #[tokio::test]
+async fn test_submit_tx_rejects_mid_session_permissions_change() {
+    let store = create_test_store();
+    let state = test_router_state(store);
+    let app = create_router(state);
+
+    let agent_id = AgentId::generate();
+    let payload_json = serde_json::json!({
+        "kind": "agent_permissions",
+        "capabilities": [{"type": "spawnAgent"}]
+    });
+    let payload_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        serde_json::to_vec(&payload_json).unwrap(),
+    );
+    let body = serde_json::json!({
+        "agent_id": agent_id.to_hex(),
+        "kind": "system",
+        "payload": payload_b64,
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/tx")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&body).to_string();
+    assert!(text.contains("permissions:"), "got: {text}");
+    assert!(text.contains("frozen"), "got: {text}");
+}
+
+#[tokio::test]
+async fn test_submit_tx_allows_normal_system_payload() {
+    let store = create_test_store();
+    let state = test_router_state(store);
+    let app = create_router(state);
+
+    let agent_id = AgentId::generate();
+    let payload = serde_json::json!({"kind": "identity", "name": "agent-x"});
+    let payload_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        serde_json::to_vec(&payload).unwrap(),
+    );
+    let body = serde_json::json!({
+        "agent_id": agent_id.to_hex(),
+        "kind": "system",
+        "payload": payload_b64,
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/tx")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
 async fn test_get_head_new_agent() {
     let store = create_test_store();
     let state = test_router_state(store);

@@ -12,8 +12,13 @@ pub use ws_handler::handle_ws_connection;
 
 use crate::protocol::{self, SessionInit};
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
-use aura_core::{AgentId, InstalledIntegrationDefinition, InstalledToolDefinition};
-use aura_protocol::{IntentClassifierSpec, SessionProviderConfig};
+use aura_core::{
+    AgentId, AgentPermissions, AgentScope, Capability, InstalledIntegrationDefinition,
+    InstalledToolDefinition,
+};
+use aura_protocol::{
+    AgentPermissionsWire, CapabilityWire, IntentClassifierSpec, SessionProviderConfig,
+};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_skills::SkillManager;
 use aura_store::Store;
@@ -102,6 +107,11 @@ pub struct Session {
     ///
     /// [`intent_classifier`]: Self::intent_classifier
     pub intent_classifier_manifest: Vec<(String, String)>,
+    /// Phase 5: agent permissions derived from the `SessionInit`
+    /// (`agent_permissions` first, then `preset: "ceo"` + `aura_org_id`
+    /// fallback). `None` means no explicit grants — enforcement stays
+    /// off (matching pre-phase-5 behavior).
+    pub agent_permissions: Option<AgentPermissions>,
 }
 
 impl Session {
@@ -140,6 +150,7 @@ impl Session {
             skill_agent_id: None,
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
+            agent_permissions: None,
         }
     }
 
@@ -242,6 +253,25 @@ impl Session {
             self.intent_classifier = Some(Arc::new(classifier));
             self.intent_classifier_manifest = manifest;
         }
+
+        // Phase 5: resolve agent permissions with priority:
+        //   1. explicit `agent_permissions`
+        //   2. `preset == "ceo"` when `aura_org_id` is present
+        //   3. `None` — enforcement stays off (legacy behavior)
+        //
+        // Mid-session changes are rejected at the `/tx` layer, not here —
+        // `apply_init` is only called once per session (see
+        // `initialized` guard in `handle_session_init`).
+        self.agent_permissions = if let Some(perms) = init.agent_permissions {
+            Some(agent_permissions_from_wire(perms))
+        } else if let Some(preset) = init.preset.as_deref() {
+            match (preset, self.aura_org_id.as_deref()) {
+                ("ceo", Some(_)) => Some(AgentPermissions::ceo_preset()),
+                _ => None,
+            }
+        } else {
+            None
+        };
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
                 match msg.role.as_str() {
@@ -332,6 +362,37 @@ fn build_intent_classifier(
     // the classifier itself doesn't care about order.
     manifest.sort_by(|a, b| a.0.cmp(&b.0));
     (IntentClassifier::from_rules(tier1_domains, rules), manifest)
+}
+
+/// Phase 5: translate the wire `AgentPermissionsWire` into the harness-core
+/// `AgentPermissions` used by tools + the kernel policy. Kept here (rather
+/// than in `aura-protocol`) so the protocol crate stays decoupled from
+/// harness internals — see the module doc on `aura_protocol::SessionInit`.
+pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPermissions {
+    let capabilities = wire
+        .capabilities
+        .into_iter()
+        .map(|c| match c {
+            CapabilityWire::SpawnAgent => Capability::SpawnAgent,
+            CapabilityWire::ControlAgent => Capability::ControlAgent,
+            CapabilityWire::ReadAgent => Capability::ReadAgent,
+            CapabilityWire::ManageOrgMembers => Capability::ManageOrgMembers,
+            CapabilityWire::ManageBilling => Capability::ManageBilling,
+            CapabilityWire::InvokeProcess => Capability::InvokeProcess,
+            CapabilityWire::PostToFeed => Capability::PostToFeed,
+            CapabilityWire::GenerateMedia => Capability::GenerateMedia,
+            CapabilityWire::ReadProject { id } => Capability::ReadProject { id },
+            CapabilityWire::WriteProject { id } => Capability::WriteProject { id },
+        })
+        .collect();
+    AgentPermissions {
+        scope: AgentScope {
+            orgs: wire.scope.orgs,
+            projects: wire.scope.projects,
+            agent_ids: wire.scope.agent_ids,
+        },
+        capabilities,
+    }
 }
 
 fn lexical_normalize(path: &std::path::Path) -> PathBuf {
@@ -428,6 +489,8 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: None,
+            agent_permissions: None,
+            preset: None,
         }
     }
 
@@ -516,6 +579,8 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: Some(spec),
+            agent_permissions: None,
+            preset: None,
         };
 
         session.apply_init(init).unwrap();
@@ -562,6 +627,8 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: None,
+            agent_permissions: None,
+            preset: None,
         };
         session.apply_init(init).unwrap();
         assert!(session.intent_classifier.is_none());
@@ -570,5 +637,102 @@ mod tests {
         let cfg = session.agent_loop_config();
         assert!(cfg.intent_classifier.is_none());
         assert!(cfg.intent_classifier_manifest.is_empty());
+    }
+
+    fn blank_session_init() -> SessionInit {
+        SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            installed_integrations: None,
+            workspace: None,
+            project_path: None,
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+            agent_id: None,
+            provider_config: None,
+            intent_classifier: None,
+            agent_permissions: None,
+            preset: None,
+        }
+    }
+
+    #[test]
+    fn apply_init_leaves_permissions_none_by_default() {
+        let mut session = test_session(None);
+        session.apply_init(blank_session_init()).unwrap();
+        assert!(session.agent_permissions.is_none());
+    }
+
+    #[test]
+    fn apply_init_applies_explicit_agent_permissions() {
+        use aura_protocol::{AgentPermissionsWire, AgentScopeWire, CapabilityWire};
+        let mut session = test_session(None);
+        let mut init = blank_session_init();
+        init.agent_permissions = Some(AgentPermissionsWire {
+            scope: AgentScopeWire {
+                orgs: vec!["org-a".into()],
+                ..AgentScopeWire::default()
+            },
+            capabilities: vec![CapabilityWire::SpawnAgent, CapabilityWire::ReadAgent],
+        });
+        session.apply_init(init).unwrap();
+        let perms = session.agent_permissions.expect("perms set");
+        assert_eq!(perms.scope.orgs, vec!["org-a".to_string()]);
+        assert!(perms.capabilities.contains(&Capability::SpawnAgent));
+        assert!(perms.capabilities.contains(&Capability::ReadAgent));
+    }
+
+    #[test]
+    fn apply_init_preset_ceo_requires_org_id() {
+        let mut session = test_session(None);
+        let mut init = blank_session_init();
+        init.preset = Some("ceo".into());
+        session.apply_init(init).unwrap();
+        assert!(session.agent_permissions.is_none());
+    }
+
+    #[test]
+    fn apply_init_preset_ceo_with_org_id_yields_ceo_preset() {
+        let mut session = test_session(None);
+        let mut init = blank_session_init();
+        init.preset = Some("ceo".into());
+        init.aura_org_id = Some("org-uuid".into());
+        session.apply_init(init).unwrap();
+        let perms = session.agent_permissions.expect("ceo preset applied");
+        assert_eq!(perms, AgentPermissions::ceo_preset());
+    }
+
+    #[test]
+    fn apply_init_unknown_preset_is_ignored() {
+        let mut session = test_session(None);
+        let mut init = blank_session_init();
+        init.preset = Some("admin".into());
+        init.aura_org_id = Some("org-uuid".into());
+        session.apply_init(init).unwrap();
+        assert!(session.agent_permissions.is_none());
+    }
+
+    #[test]
+    fn apply_init_explicit_permissions_win_over_preset() {
+        use aura_protocol::{AgentPermissionsWire, CapabilityWire};
+        let mut session = test_session(None);
+        let mut init = blank_session_init();
+        init.aura_org_id = Some("org-uuid".into());
+        init.preset = Some("ceo".into());
+        init.agent_permissions = Some(AgentPermissionsWire {
+            scope: Default::default(),
+            capabilities: vec![CapabilityWire::ReadAgent],
+        });
+        session.apply_init(init).unwrap();
+        let perms = session.agent_permissions.expect("perms set");
+        assert_eq!(perms.capabilities, vec![Capability::ReadAgent]);
     }
 }
