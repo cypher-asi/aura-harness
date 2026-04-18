@@ -31,7 +31,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aura_reasoner::{Message, ModelProvider, ModelRequest, StopReason, ToolDefinition};
+use aura_reasoner::{Message, ModelProvider, ModelRequest, Role, StopReason, ToolDefinition};
+use aura_tools::IntentClassifier;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -97,6 +98,27 @@ pub struct AgentLoopConfig {
     /// Post-turn observers (e.g. memory ingestion).
     /// Called automatically at the end of every turn inside the loop.
     pub observers: Vec<Arc<dyn TurnObserver>>,
+    /// Optional keyword-driven intent classifier used to narrow the
+    /// per-turn visible tool set based on the latest user message.
+    ///
+    /// Ships with an accompanying [`intent_classifier_manifest`] that
+    /// maps tool names to their snake-case domain. Tools not present in
+    /// the manifest are passed through unchanged, so core filesystem /
+    /// shell tools stay visible regardless of classifier state.
+    ///
+    /// Populated via [`aura_protocol::SessionInit::intent_classifier`]
+    /// (see `aura-os-super-agent::harness_handoff`) to let the harness
+    /// reproduce the aura-os CEO super-agent's tier-1/tier-2 filtering
+    /// without baking the tool manifest into the harness binary.
+    ///
+    /// [`intent_classifier_manifest`]: Self::intent_classifier_manifest
+    pub intent_classifier: Option<Arc<IntentClassifier>>,
+    /// `(tool_name, domain)` pairs consumed by [`intent_classifier`].
+    ///
+    /// Empty when [`intent_classifier`] is `None`.
+    ///
+    /// [`intent_classifier`]: Self::intent_classifier
+    pub intent_classifier_manifest: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -134,6 +156,8 @@ impl Default for AgentLoopConfig {
             aura_session_id: None,
             aura_org_id: None,
             observers: Vec::new(),
+            intent_classifier: None,
+            intent_classifier_manifest: Vec::new(),
         }
     }
 }
@@ -411,15 +435,29 @@ impl LoopState {
         tools: &[ToolDefinition],
         iteration: usize,
     ) -> ModelRequest {
+        // Phase 3: narrow `tools` down to domain-relevant entries before the
+        // tool-hints logic runs. The classifier is keyed on the most recent
+        // pure-text user message, so scratchpad tool-result turns reuse the
+        // previous filter rather than widening the surface back to every tool.
+        let classifier_filtered: Vec<ToolDefinition> = match (
+            config.intent_classifier.as_deref(),
+            latest_user_text(&self.messages),
+        ) {
+            (Some(classifier), Some(text)) if !config.intent_classifier_manifest.is_empty() => {
+                classifier.filter_tools(text, &config.intent_classifier_manifest, tools)
+            }
+            _ => tools.to_vec(),
+        };
+
         let (effective_tools, tool_choice) = match (&config.tool_hints, iteration) {
             (Some(hints), 0) if !hints.is_empty() => {
-                let filtered: Vec<_> = tools
+                let filtered: Vec<_> = classifier_filtered
                     .iter()
                     .filter(|t| hints.iter().any(|h| h == &t.name))
                     .cloned()
                     .collect();
                 if filtered.is_empty() {
-                    (tools.to_vec(), aura_reasoner::ToolChoice::Auto)
+                    (classifier_filtered, aura_reasoner::ToolChoice::Auto)
                 } else if filtered.len() == 1 {
                     let name = filtered[0].name.clone();
                     (filtered, aura_reasoner::ToolChoice::Tool { name })
@@ -427,7 +465,7 @@ impl LoopState {
                     (filtered, aura_reasoner::ToolChoice::Required)
                 }
             }
-            _ => (tools.to_vec(), aura_reasoner::ToolChoice::Auto),
+            _ => (classifier_filtered, aura_reasoner::ToolChoice::Auto),
         };
 
         ModelRequest::builder(&config.model, &config.system_prompt)
@@ -463,4 +501,127 @@ fn post_iteration_checks(
 
 fn is_cancelled(token: Option<&CancellationToken>) -> bool {
     token.is_some_and(CancellationToken::is_cancelled)
+}
+
+/// Return the text of the most recent user-role message whose content is
+/// plain text (skipping tool-result turns, which carry tool output rather
+/// than a natural-language intent).
+///
+/// Used by [`LoopState::build_request`] to feed the intent classifier on
+/// every iteration — including scratchpad iterations that follow a tool
+/// call — so the tool filter stays keyed on the original user intent
+/// until the user speaks again.
+fn latest_user_text(messages: &[Message]) -> Option<&str> {
+    for msg in messages.iter().rev() {
+        if matches!(msg.role, Role::User)
+            && msg
+                .content
+                .iter()
+                .any(|b| matches!(b, aura_reasoner::ContentBlock::Text { .. }))
+        {
+            return msg
+                .content
+                .iter()
+                .find_map(|b| match b {
+                    aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                });
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod intent_classifier_tests {
+    use super::*;
+    use aura_reasoner::ToolDefinition;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn mk_tool(name: &str) -> ToolDefinition {
+        ToolDefinition::new(name, name, json!({}))
+    }
+
+    fn mk_config_with_classifier() -> AgentLoopConfig {
+        let classifier = IntentClassifier::from_rules(
+            vec!["project".to_string()],
+            vec![("billing".to_string(), vec!["credit".to_string()])],
+        );
+        AgentLoopConfig {
+            intent_classifier: Some(Arc::new(classifier)),
+            intent_classifier_manifest: vec![
+                ("create_project".to_string(), "project".to_string()),
+                ("list_credits".to_string(), "billing".to_string()),
+            ],
+            ..AgentLoopConfig::default()
+        }
+    }
+
+    #[test]
+    fn build_request_filters_tier2_tools_when_not_triggered() {
+        let config = mk_config_with_classifier();
+        let state = LoopState::new(&config, vec![Message::user("hello there")]);
+        let tools = vec![
+            mk_tool("create_project"),
+            mk_tool("list_credits"),
+            mk_tool("read_file"),
+        ];
+
+        let req = state.build_request(&config, &tools, 1);
+        let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+
+        assert!(names.contains(&"create_project"), "tier-1 tool kept");
+        assert!(names.contains(&"read_file"), "unmapped tool passes through");
+        assert!(
+            !names.contains(&"list_credits"),
+            "tier-2 billing tool hidden"
+        );
+    }
+
+    #[test]
+    fn build_request_admits_tier2_when_keyword_matches() {
+        let config = mk_config_with_classifier();
+        let state = LoopState::new(
+            &config,
+            vec![Message::user("check my credit balance please")],
+        );
+        let tools = vec![mk_tool("create_project"), mk_tool("list_credits")];
+
+        let req = state.build_request(&config, &tools, 1);
+        let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"list_credits"));
+        assert!(names.contains(&"create_project"));
+    }
+
+    #[test]
+    fn build_request_skips_tool_result_messages_when_picking_intent() {
+        let config = mk_config_with_classifier();
+        let msgs = vec![
+            Message::user("check my credit balance"),
+            Message::assistant("calling tool"),
+            Message::tool_results(vec![(
+                "tu_1".into(),
+                aura_reasoner::ToolResultContent::Text("100".into()),
+                false,
+            )]),
+        ];
+        let state = LoopState::new(&config, msgs);
+        let tools = vec![mk_tool("list_credits"), mk_tool("create_project")];
+
+        let req = state.build_request(&config, &tools, 2);
+        let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(
+            names.contains(&"list_credits"),
+            "classifier should still see original user message after a tool-result turn"
+        );
+    }
+
+    #[test]
+    fn build_request_passthrough_when_classifier_absent() {
+        let config = AgentLoopConfig::default();
+        let state = LoopState::new(&config, vec![Message::user("anything")]);
+        let tools = vec![mk_tool("anything_tool")];
+        let req = state.build_request(&config, &tools, 1);
+        assert_eq!(req.tools.len(), 1);
+    }
 }

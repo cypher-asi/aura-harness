@@ -13,13 +13,13 @@ pub use ws_handler::handle_ws_connection;
 use crate::protocol::{self, SessionInit};
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{AgentId, InstalledIntegrationDefinition, InstalledToolDefinition};
-use aura_protocol::SessionProviderConfig;
+use aura_protocol::{IntentClassifierSpec, SessionProviderConfig};
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_skills::SkillManager;
 use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
-use aura_tools::{ToolCatalog, ToolConfig};
+use aura_tools::{IntentClassifier, ToolCatalog, ToolConfig};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
@@ -91,6 +91,17 @@ pub struct Session {
     pub aura_org_id: Option<String>,
     /// Harness-level agent ID for per-agent skill lookup.
     pub skill_agent_id: Option<String>,
+    /// Optional keyword-driven intent classifier that narrows the visible
+    /// tool set per turn. Populated from
+    /// [`aura_protocol::SessionInit::intent_classifier`] so a
+    /// harness-hosted super-agent can reproduce the aura-os tier-1/tier-2
+    /// filtering behavior without the harness binary knowing the manifest.
+    pub intent_classifier: Option<Arc<IntentClassifier>>,
+    /// `(tool_name, domain)` pairs paired with [`intent_classifier`]. Empty
+    /// when the classifier is not configured.
+    ///
+    /// [`intent_classifier`]: Self::intent_classifier
+    pub intent_classifier_manifest: Vec<(String, String)>,
 }
 
 impl Session {
@@ -127,6 +138,8 @@ impl Session {
             aura_session_id: None,
             aura_org_id: None,
             skill_agent_id: None,
+            intent_classifier: None,
+            intent_classifier_manifest: Vec::new(),
         }
     }
 
@@ -224,6 +237,11 @@ impl Session {
         if let Some(provider_config) = init.provider_config {
             self.provider_config = Some(provider_config);
         }
+        if let Some(spec) = init.intent_classifier {
+            let (classifier, manifest) = build_intent_classifier(spec);
+            self.intent_classifier = Some(Arc::new(classifier));
+            self.intent_classifier_manifest = manifest;
+        }
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
                 match msg.role.as_str() {
@@ -282,9 +300,38 @@ impl Session {
             aura_agent_id: self.aura_agent_id.clone(),
             aura_session_id: self.aura_session_id.clone(),
             aura_org_id: self.aura_org_id.clone(),
+            intent_classifier: self.intent_classifier.clone(),
+            intent_classifier_manifest: self.intent_classifier_manifest.clone(),
             ..AgentLoopConfig::default()
         }
     }
+}
+
+/// Translate an [`IntentClassifierSpec`] from the wire protocol into the
+/// in-process [`IntentClassifier`] plus a `(tool_name, domain)` manifest
+/// the agent loop can consume.
+///
+/// Kept as a free function (rather than an `impl From`) so both sides of
+/// the conversion stay obvious at call sites — the spec flattens a
+/// `HashMap<String, String>` while the loop expects a stable `Vec` so
+/// filters are deterministic.
+fn build_intent_classifier(
+    spec: IntentClassifierSpec,
+) -> (IntentClassifier, Vec<(String, String)>) {
+    let IntentClassifierSpec {
+        tier1_domains,
+        classifier_rules,
+        tool_domains,
+    } = spec;
+    let rules: Vec<(String, Vec<String>)> = classifier_rules
+        .into_iter()
+        .map(|r| (r.domain, r.keywords))
+        .collect();
+    let mut manifest: Vec<(String, String)> = tool_domains.into_iter().collect();
+    // Stable ordering keeps `build_request` deterministic even though
+    // the classifier itself doesn't care about order.
+    manifest.sort_by(|a, b| a.0.cmp(&b.0));
+    (IntentClassifier::from_rules(tier1_domains, rules), manifest)
 }
 
 fn lexical_normalize(path: &std::path::Path) -> PathBuf {
@@ -380,6 +427,7 @@ mod tests {
             aura_org_id: None,
             agent_id: None,
             provider_config: None,
+            intent_classifier: None,
         }
     }
 
@@ -429,5 +477,98 @@ mod tests {
         let result = session.apply_init(init);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("absolute"));
+    }
+
+    #[test]
+    fn apply_init_builds_intent_classifier_when_spec_present() {
+        use aura_protocol::{IntentClassifierRule, IntentClassifierSpec};
+        use std::collections::HashMap;
+
+        let mut session = test_session(None);
+        let mut tool_domains = HashMap::new();
+        tool_domains.insert("list_credits".to_string(), "billing".to_string());
+        tool_domains.insert("create_project".to_string(), "project".to_string());
+
+        let spec = IntentClassifierSpec {
+            tier1_domains: vec!["project".to_string()],
+            classifier_rules: vec![IntentClassifierRule {
+                domain: "billing".to_string(),
+                keywords: vec!["credit".to_string()],
+            }],
+            tool_domains,
+        };
+        let init = SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            installed_integrations: None,
+            workspace: None,
+            project_path: None,
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+            agent_id: None,
+            provider_config: None,
+            intent_classifier: Some(spec),
+        };
+
+        session.apply_init(init).unwrap();
+
+        let classifier = session
+            .intent_classifier
+            .as_ref()
+            .expect("classifier populated");
+        let visible = classifier.visible_domains("please check my credit balance");
+        assert!(visible.contains(&"project".to_string()));
+        assert!(visible.contains(&"billing".to_string()));
+
+        let manifest = &session.intent_classifier_manifest;
+        assert_eq!(manifest.len(), 2);
+        // Manifest is sorted for determinism.
+        assert_eq!(manifest[0].0, "create_project");
+        assert_eq!(manifest[1].0, "list_credits");
+
+        // Carry through to AgentLoopConfig.
+        let cfg = session.agent_loop_config();
+        assert!(cfg.intent_classifier.is_some());
+        assert_eq!(cfg.intent_classifier_manifest.len(), 2);
+    }
+
+    #[test]
+    fn apply_init_leaves_intent_classifier_none_when_spec_absent() {
+        let mut session = test_session(None);
+        let init = SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            installed_integrations: None,
+            workspace: None,
+            project_path: None,
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+            agent_id: None,
+            provider_config: None,
+            intent_classifier: None,
+        };
+        session.apply_init(init).unwrap();
+        assert!(session.intent_classifier.is_none());
+        assert!(session.intent_classifier_manifest.is_empty());
+
+        let cfg = session.agent_loop_config();
+        assert!(cfg.intent_classifier.is_none());
+        assert!(cfg.intent_classifier_manifest.is_empty());
     }
 }
