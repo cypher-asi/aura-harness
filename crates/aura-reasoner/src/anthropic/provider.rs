@@ -52,10 +52,6 @@ impl AnthropicProvider {
         }
     }
 
-    fn should_buffer_proxy_streaming(request: &ModelRequest) -> bool {
-        !Self::supports_anthropic_proxy_features(request, &request.model)
-    }
-
     async fn check_base_url_reachable(&self) -> bool {
         let ping_url = format!("{}/", self.config.base_url.trim_end_matches('/'));
         let result = self
@@ -84,9 +80,10 @@ impl AnthropicProvider {
     pub(super) async fn send_checked<B: Serialize + Sync>(
         &self,
         request_ctx: &ModelRequest,
+        model: &str,
         json_body: &B,
     ) -> Result<reqwest::Response, ApiError> {
-        let req_builder = self.build_request(request_ctx, json_body)?;
+        let req_builder = self.build_request(request_ctx, model, json_body)?;
 
         let response = req_builder.send().await.map_err(|e| {
             error!(error = %e, "Anthropic API request failed");
@@ -109,6 +106,7 @@ impl AnthropicProvider {
     fn build_request<B: Serialize + Sync>(
         &self,
         request_ctx: &ModelRequest,
+        model: &str,
         json_body: &B,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
         use super::config::RoutingMode;
@@ -121,7 +119,7 @@ impl AnthropicProvider {
             .json(json_body);
         let prompt_caching_enabled = self.config.prompt_caching_enabled;
         let proxy_prompt_caching_enabled = prompt_caching_enabled
-            && Self::supports_anthropic_proxy_features(request_ctx, &request_ctx.model);
+            && Self::supports_anthropic_proxy_features(request_ctx, model);
 
         match self.config.routing_mode {
             RoutingMode::Direct => {
@@ -340,7 +338,7 @@ impl ModelProvider for AnthropicProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
 
-                match self.send_checked(&request, &api_request).await {
+                match self.send_checked(&request, model, &api_request).await {
                     Ok(response) => {
                         let latency_ms =
                             u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -393,21 +391,23 @@ impl ModelProvider for AnthropicProvider {
         &self,
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
-        if self.config.routing_mode == super::RoutingMode::Proxy
-            && Self::should_buffer_proxy_streaming(&request)
-        {
-            debug!(
-                model = %request.model,
-                "Proxy-backed model does not support Anthropic SSE; buffering completion"
-            );
-            let response = self.complete(request).await?;
-            return Ok(stream_from_response(response));
-        }
-
         let models = self.model_chain(&request.model);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
+            if self.config.routing_mode == super::RoutingMode::Proxy
+                && !Self::supports_anthropic_proxy_features(&request, model)
+            {
+                debug!(
+                    model = %model,
+                    "Proxy-backed fallback model does not support Anthropic SSE; buffering completion"
+                );
+                let mut buffered_request = request.clone();
+                buffered_request.model = model.clone();
+                let response = self.complete(buffered_request).await?;
+                return Ok(stream_from_response(response));
+            }
+
             let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
             let anthropic_features_enabled =
                 self.anthropic_request_features_enabled(&request, model);
@@ -453,7 +453,7 @@ impl ModelProvider for AnthropicProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
 
-                match self.send_checked(&request, &api_request).await {
+                match self.send_checked(&request, model, &api_request).await {
                     Ok(response) => {
                         if model_idx > 0 {
                             info!(

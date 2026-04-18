@@ -592,6 +592,84 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
 }
 
 #[tokio::test]
+async fn test_cross_family_proxy_fallback_buffers_streaming_and_omits_anthropic_headers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut first_socket, _) = listener.accept().await.unwrap();
+        let mut first_buf = vec![0u8; 8192];
+        let first_n = first_socket.read(&mut first_buf).await.unwrap();
+        let first_request = String::from_utf8_lossy(&first_buf[..first_n]).to_string();
+        let overloaded = "HTTP/1.1 529 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"type\":\"error\",\"error\":\"overloaded\"}";
+        first_socket.write_all(overloaded.as_bytes()).await.unwrap();
+
+        let (mut second_socket, _) = listener.accept().await.unwrap();
+        let mut second_buf = vec![0u8; 8192];
+        let second_n = second_socket.read(&mut second_buf).await.unwrap();
+        let second_request = String::from_utf8_lossy(&second_buf[..second_n]).to_string();
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"fallback ok"}],"model":"aura-gpt-5-4","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        second_socket.write_all(response.as_bytes()).await.unwrap();
+
+        (first_request, second_request)
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "claude-opus-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: Some("aura-gpt-5-4".to_string()),
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-opus-4-6", "system")
+        .message(Message::user("test"))
+        .max_tokens(8192)
+        .auth_token(Some("test-jwt-token".to_string()))
+        .build();
+
+    let stream = provider.complete_streaming(request).await.unwrap();
+    let events = stream.collect::<Vec<_>>().await;
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert!(
+        first_request.contains(r#""stream":true"#),
+        "Primary Anthropic request should still use SSE.\nCaptured request:\n{first_request}"
+    );
+    assert!(
+        !second_request.contains(r#""stream":true"#),
+        "Cross-family fallback should buffer instead of using Anthropic SSE.\nCaptured request:\n{second_request}"
+    );
+    assert!(
+        !second_request.contains("anthropic-beta"),
+        "Cross-family fallback should omit Anthropic beta headers.\nCaptured request:\n{second_request}"
+    );
+    assert!(
+        !second_request.contains(r#""thinking":"#),
+        "Cross-family fallback should omit Anthropic thinking config.\nCaptured request:\n{second_request}"
+    );
+    assert!(
+        !second_request.contains("output_config"),
+        "Cross-family fallback should omit Anthropic output config.\nCaptured request:\n{second_request}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event.as_ref().unwrap(),
+        StreamEvent::TextDelta { text } if text == "fallback ok"
+    )));
+}
+
+#[tokio::test]
 async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
