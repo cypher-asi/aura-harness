@@ -31,18 +31,22 @@ pub mod domain_tools;
 mod error;
 mod executor;
 pub(crate) mod fs_tools;
+pub mod http_tool;
 pub(crate) mod registry;
 pub mod resolver;
 mod sandbox;
+pub mod schema;
 pub(crate) mod tool;
 
 pub use catalog::ToolCatalog;
 pub use error::ToolError;
 pub use executor::ToolExecutor;
 pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
+pub use http_tool::{HttpAuthSource, HttpMethod, HttpToolDefinition, HttpToolDefinitionBuilder};
 pub use registry::{DefaultToolRegistry, ToolRegistry};
 pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
+pub use schema::{from_claude_json, to_claude_json, SchemaError};
 pub use tool::{Tool, ToolContext};
 
 /// Tool configuration.
