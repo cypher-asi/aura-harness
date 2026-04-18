@@ -24,11 +24,13 @@
 // TODO(Phase 8): GitExecutor for kernel-recorded git mutations
 // TODO(Phase 8): BuildVerifyExecutor for kernel-recorded build/test
 
+pub mod billing;
 mod context;
 pub mod executor;
 mod kernel;
 mod policy;
 pub mod router;
+pub mod spawn_hook;
 
 pub use context::{Context, ContextBuilder};
 pub use executor::{
@@ -39,6 +41,9 @@ pub use kernel::{
 };
 pub use policy::{default_tool_permission, PermissionLevel, Policy, PolicyConfig, PolicyResult};
 pub use router::ExecutorRouter;
+pub use spawn_hook::{
+    ChildAgentSpec, KernelSpawnHook, NoopSpawnHook, SpawnError, SpawnHook, SpawnOutcome,
+};
 
 /// Errors from the deterministic kernel (store, reasoner, serialization).
 #[derive(Debug, thiserror::Error)]
