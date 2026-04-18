@@ -70,16 +70,14 @@ pub struct PolicyConfig {
     /// `AlwaysAllow` instead of `Deny`. The kernel is the sole gateway, so
     /// the default is open; use [`PolicyConfig::restrictive`] to lock down.
     pub allow_unlisted: bool,
-    /// Phase 5: optional scope + capability bundle for the agent this policy
-    /// governs. `None` preserves today's behavior exactly; `Some(_)` layers
-    /// an additional gate on top of the existing `allowed_action_kinds` /
-    /// `allowed_tools` checks. Only consulted when the `agent_permissions`
-    /// feature is enabled on `aura-kernel`.
-    pub agent_permissions: Option<AgentPermissions>,
-    /// Phase 5: mapping from tool name to the [`Capability`] required to use
-    /// it. Only consulted when `agent_permissions` is set **and** the
-    /// `agent_permissions` feature is enabled. Tools not listed here carry
-    /// no capability requirement.
+    /// Scope + capability bundle for the agent this policy governs.
+    /// Always consulted on `Delegate` proposals — the check is
+    /// unconditional and cannot be disabled. [`AgentPermissions::empty`]
+    /// denies every capability-gated tool; [`AgentPermissions::ceo_preset`]
+    /// grants everything.
+    pub agent_permissions: AgentPermissions,
+    /// Mapping from tool name to the [`Capability`] required to use it.
+    /// Tools not listed here carry no capability requirement.
     pub tool_capability_requirements: HashMap<String, Capability>,
 }
 
@@ -108,7 +106,7 @@ impl Default for PolicyConfig {
             installed_integrations: Vec::new(),
             tool_integration_requirements: HashMap::new(),
             allow_unlisted: true,
-            agent_permissions: None,
+            agent_permissions: AgentPermissions::empty(),
             tool_capability_requirements: HashMap::new(),
         }
     }
@@ -176,14 +174,14 @@ impl PolicyConfig {
         self.tool_integration_requirements = requirements.into_iter().collect();
     }
 
-    /// Phase 5: attach an [`AgentPermissions`] bundle to this policy.
+    /// Attach an [`AgentPermissions`] bundle to this policy.
     #[must_use]
     pub fn with_agent_permissions(mut self, permissions: AgentPermissions) -> Self {
-        self.agent_permissions = Some(permissions);
+        self.agent_permissions = permissions;
         self
     }
 
-    /// Phase 5: declare the [`Capability`] required to invoke `tool`.
+    /// Declare the [`Capability`] required to invoke `tool`.
     #[must_use]
     pub fn with_tool_capability(mut self, tool: impl Into<String>, cap: Capability) -> Self {
         self.tool_capability_requirements.insert(tool.into(), cap);
@@ -422,15 +420,14 @@ impl Policy {
         self.config.add_allowed_tools(names);
     }
 
-    /// Phase 5: evaluate a [`ToolCall`] against the caller's
-    /// [`AgentPermissions`]. Returns `None` when the check is not enabled
-    /// (feature off, or no `agent_permissions` set on the config), or when
-    /// the call passes. Returns `Some(rejection)` when the call is denied.
-    #[cfg(feature = "agent_permissions")]
+    /// Evaluate a [`ToolCall`] against the caller's [`AgentPermissions`].
+    /// Returns `None` when the call passes, or `Some(rejection)` when the
+    /// call is denied because the caller lacks the required capability or
+    /// the args target an out-of-scope org / project / agent.
+    ///
+    /// Always on — there is no feature flag or opt-out.
     fn check_agent_permissions(&self, tool_call: &ToolCall) -> Option<PolicyResult> {
-        let Some(permissions) = self.config.agent_permissions.as_ref() else {
-            return None;
-        };
+        let permissions = &self.config.agent_permissions;
 
         if let Some(required) = self.config.tool_capability_requirements.get(&tool_call.tool) {
             if !permissions.capabilities.contains(required) {
@@ -450,15 +447,6 @@ impl Policy {
             });
         }
 
-        None
-    }
-
-    /// No-op stub when the `agent_permissions` feature is disabled. Keeps the
-    /// call site in [`Self::check_with_runtime_capabilities`] unchanged and
-    /// guarantees the legacy default path is exactly today's behavior.
-    #[cfg(not(feature = "agent_permissions"))]
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    const fn check_agent_permissions(&self, _tool_call: &ToolCall) -> Option<PolicyResult> {
         None
     }
 
@@ -536,10 +524,9 @@ impl Policy {
     }
 }
 
-/// Phase 5: inspect `args` for conventional `target_*` keys and verify they
-/// fall within `scope`. Absence of a target key means the tool is not
+/// Inspect `args` for conventional `target_*` keys and verify they fall
+/// within `scope`. Absence of a target key means the tool is not
 /// targeting that axis and the check is skipped.
-#[cfg(feature = "agent_permissions")]
 fn scope_violation(
     scope: &aura_core::AgentScope,
     args: &serde_json::Value,
@@ -573,7 +560,7 @@ fn scope_violation(
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, feature = "agent_permissions"))]
+#[cfg(test)]
 mod permission_tests {
     use super::*;
     use aura_core::AgentScope;
@@ -586,7 +573,9 @@ mod permission_tests {
     }
 
     #[test]
-    fn none_preserves_legacy_behavior() {
+    fn default_empty_permissions_allow_unrestricted_tools() {
+        // A tool that carries no capability requirement and no scope
+        // target keys passes against the default `AgentPermissions::empty()`.
         let policy = Policy::with_defaults();
         let proposal = delegate_proposal("read_file", serde_json::json!({"path":"a.txt"}));
         assert!(policy.check(&proposal).allowed);

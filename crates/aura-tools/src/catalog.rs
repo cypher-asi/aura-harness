@@ -95,12 +95,11 @@ impl ToolCatalog {
             }
         }
 
-        // Phase 5: cross-agent tools. Always compiled + registered, but
+        // Cross-agent tools. Always compiled + registered, but
         // `visible_tools` drops them for callers that don't hold the matching
-        // capabilities. With `agent_permissions` Cargo feature OFF the kernel
-        // policy gate is a no-op, so the visibility filter is the sole
-        // enforcement point — matching today's behavior where low-privilege
-        // agents never see these tool names in their prompt.
+        // capabilities, so low-privilege agents never see these tool names in
+        // their prompt. The kernel's policy gate is always on and enforces
+        // the same capabilities at proposal time regardless of visibility.
         for (tool, definition, required) in crate::agents::cross_agent_catalog_entries() {
             if seen.insert(definition.name.clone()) {
                 // Suppress unused warning when the tool impl itself isn't

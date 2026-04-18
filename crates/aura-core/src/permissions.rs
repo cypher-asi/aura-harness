@@ -1,14 +1,30 @@
-//! Agent permission primitives.
+//! Agent permission primitives — the single source of truth for what an
+//! agent can do.
 //!
-//! Introduced by phase 5 of the super-agent / harness unification plan.
-//! `AgentPermissions` bundles an [`AgentScope`] (which orgs / projects / agent
-//! ids this caller may touch) with a set of [`Capability`] grants. The types
-//! live in `aura-core` so both the kernel (policy gate) and the tools crate
-//! (capability-gated tool registration) can reference them without pulling in
-//! a larger dependency.
+//! # Core model
 //!
-//! `None` permissions on an agent record means "legacy — no explicit grants",
-//! which phase 6's migrator will backfill with [`AgentPermissions::legacy_default`].
+//! A single `Agent` type exists across the system. Its `role` field is a
+//! free-text display label (e.g. `"CEO"`, `"Developer"`) with **no system
+//! meaning**. What an agent can actually do is determined **entirely** by
+//! its [`AgentPermissions`]:
+//!
+//! - [`AgentPermissions::capabilities`] — the set of [`Capability`] grants
+//!   controlling which operations (spawn, control, manage billing, etc.)
+//!   the agent may perform.
+//! - [`AgentPermissions::scope`] — an [`AgentScope`] narrowing which orgs,
+//!   projects, and agents the caller may touch.
+//! - [`AgentPermissions::ceo_preset`] grants every capability plus universe
+//!   scope (the bootstrap super-agent).
+//! - [`AgentPermissions::empty`] grants nothing (regular agents).
+//! - Spawned children must receive a **strict subset** of their parent's
+//!   permissions — enforced via [`AgentPermissions::contains`].
+//!
+//! Enforcement is unconditional. There is no Cargo feature toggle, no
+//! `Option<AgentPermissions>` anywhere in persisted state, and no
+//! role-based fallback. Every agent record carries a required
+//! `AgentPermissions` value; every session opens with a required
+//! permissions bundle on `SessionInit`; every `Delegate` proposal runs
+//! through the policy gate.
 
 use serde::{Deserialize, Serialize};
 

@@ -226,10 +226,13 @@ pub(super) fn build_kernel_with_config(
     let router = executor_factory::build_executor_router(resolver);
 
     let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
-    let policy = runtime_capabilities::build_policy_config(
+    let mut policy = runtime_capabilities::build_policy_config(
         &session.installed_tools,
         &session.installed_integrations,
     );
+    // Permissions are mandatory on every session; wire them into the
+    // kernel policy unconditionally so the Delegate gate enforces them.
+    policy.agent_permissions = session.agent_permissions.clone();
 
     let config = KernelConfig {
         workspace_base: workspace,
@@ -372,6 +375,7 @@ fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id: &str
         stop_reason: "error".into(),
         usage: SessionUsage::default(),
         files_changed: FilesChanged::default(),
+        originating_user_id: None,
     }));
 }
 
@@ -430,6 +434,7 @@ pub(super) fn apply_turn_result(
             provider: session.provider_name.clone(),
         },
         files_changed,
+        originating_user_id: None,
     }));
 
     info!(

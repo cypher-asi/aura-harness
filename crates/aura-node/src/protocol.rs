@@ -125,7 +125,8 @@ mod tests {
             "max_turns": 10,
             "workspace": "/tmp/ws",
             "token": "jwt-abc",
-            "project_id": "proj-123"
+            "project_id": "proj-123",
+            "agent_permissions": {}
         });
         let msg: InboundMessage = serde_json::from_value(json).unwrap();
         match msg {
@@ -145,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_inbound_session_init_minimal() {
-        let json = serde_json::json!({"type": "session_init"});
+        let json = serde_json::json!({"type": "session_init", "agent_permissions": {}});
         let msg: InboundMessage = serde_json::from_value(json).unwrap();
         match msg {
             InboundMessage::SessionInit(init) => {
@@ -348,6 +349,7 @@ mod tests {
                 modified: vec!["old.txt".to_string()],
                 deleted: vec![],
             },
+            originating_user_id: None,
         });
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "assistant_message_end");
@@ -496,6 +498,7 @@ mod tests {
                 stop_reason: "s".into(),
                 usage: SessionUsage::default(),
                 files_changed: FilesChanged::default(),
+                originating_user_id: None,
             }),
             OutboundMessage::Error(ErrorMsg {
                 code: "c".into(),

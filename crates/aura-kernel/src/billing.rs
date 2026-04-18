@@ -62,9 +62,7 @@ fn latest_parent(agent_id: &AgentId, store: &dyn Store) -> Option<AgentId> {
 fn parent_from_entry(entry: &RecordEntry) -> Option<AgentId> {
     for effect in &entry.effects {
         if let Ok(exec) = serde_json::from_slice::<ToolExecution>(&effect.payload) {
-            if let Some(parent) = exec.parent_agent_id {
-                return Some(parent);
-            }
+            return Some(exec.parent_agent_id);
         }
     }
     None
@@ -231,8 +229,8 @@ mod tests {
             reason: None,
             result: None,
             is_error: false,
-            parent_agent_id: Some(parent),
-            originating_user_id: Some("user-root".into()),
+            parent_agent_id: parent,
+            originating_user_id: "user-root".into(),
         };
         let effect_payload = serde_json::to_vec(&exec).unwrap();
         let effect = Effect::new(

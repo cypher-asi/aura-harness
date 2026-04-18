@@ -1,18 +1,15 @@
-//! Phase 5 cross-agent tools.
+//! Cross-agent tools.
 //!
 //! All five tools (`spawn_agent`, `send_to_agent`, `agent_lifecycle`,
 //! `get_agent_state`, `delegate_task`) are always compiled. Their
 //! registration in `ToolCatalog` is unconditional; what gates them at the
 //! surface is [`crate::ToolCatalog::visible_tools_with_permissions`] — a
 //! caller that lacks the matching `Capability` never sees the tool names
-//! in its prompt, which keeps low-privilege agents bit-compatible with
-//! today's behavior.
+//! in its prompt.
 //!
-//! The `agent_permissions` Cargo feature on `aura-kernel` additionally
-//! enforces the capability at proposal time via
-//! [`aura_kernel::PolicyConfig::tool_capability_requirements`]. With that
-//! feature off the visibility filter is the sole gate (see
-//! `tool::catalog::entry_visible`).
+//! The kernel additionally enforces the capability at proposal time via
+//! [`aura_kernel::PolicyConfig::tool_capability_requirements`]. The
+//! policy gate is always on; there is no feature flag or opt-out.
 //!
 //! Production side-effects for `send_to_agent` / `agent_lifecycle` /
 //! `delegate_task` flow through [`crate::AgentControlHook`]; production

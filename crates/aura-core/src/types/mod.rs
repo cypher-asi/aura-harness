@@ -274,8 +274,8 @@ mod tests {
             reason: None,
             result: Some("ok".into()),
             is_error: false,
-            parent_agent_id: Some(agent_id),
-            originating_user_id: Some("user-42".into()),
+            parent_agent_id: agent_id,
+            originating_user_id: "user-42".into(),
         };
         let json = serde_json::to_string(&execution).unwrap();
         assert!(json.contains("parent_agent_id"));
@@ -285,7 +285,8 @@ mod tests {
     }
 
     #[test]
-    fn tool_execution_roundtrip_omits_empty_parent_chain_fields() {
+    fn tool_execution_roundtrip_requires_parent_chain_fields() {
+        let agent_id = AgentId::generate();
         let execution = ToolExecution {
             tool_use_id: "use-2".into(),
             tool: "read_file".into(),
@@ -294,18 +295,12 @@ mod tests {
             reason: None,
             result: None,
             is_error: false,
-            parent_agent_id: None,
-            originating_user_id: None,
+            parent_agent_id: agent_id,
+            originating_user_id: "user-0".into(),
         };
         let json = serde_json::to_string(&execution).unwrap();
-        assert!(
-            !json.contains("parent_agent_id"),
-            "empty parent_agent_id should be skipped, got: {json}"
-        );
-        assert!(
-            !json.contains("originating_user_id"),
-            "empty originating_user_id should be skipped, got: {json}"
-        );
+        assert!(json.contains("parent_agent_id"));
+        assert!(json.contains("originating_user_id"));
         let parsed: ToolExecution = serde_json::from_str(&json).unwrap();
         assert_eq!(execution, parsed);
     }

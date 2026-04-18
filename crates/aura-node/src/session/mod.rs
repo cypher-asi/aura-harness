@@ -107,11 +107,11 @@ pub struct Session {
     ///
     /// [`intent_classifier`]: Self::intent_classifier
     pub intent_classifier_manifest: Vec<(String, String)>,
-    /// Phase 5: agent permissions derived from the `SessionInit`
-    /// (`agent_permissions` first, then `preset: "ceo"` + `aura_org_id`
-    /// fallback). `None` means no explicit grants — enforcement stays
-    /// off (matching pre-phase-5 behavior).
-    pub agent_permissions: Option<AgentPermissions>,
+    /// Agent permissions for this session, derived directly from the
+    /// required `SessionInit.agent_permissions` field. Always applied to
+    /// the kernel [`aura_kernel::PolicyConfig`] on kernel construction;
+    /// enforcement is unconditional.
+    pub agent_permissions: AgentPermissions,
 }
 
 impl Session {
@@ -150,7 +150,7 @@ impl Session {
             skill_agent_id: None,
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
-            agent_permissions: None,
+            agent_permissions: AgentPermissions::empty(),
         }
     }
 
@@ -254,24 +254,13 @@ impl Session {
             self.intent_classifier_manifest = manifest;
         }
 
-        // Phase 5: resolve agent permissions with priority:
-        //   1. explicit `agent_permissions`
-        //   2. `preset == "ceo"` when `aura_org_id` is present
-        //   3. `None` — enforcement stays off (legacy behavior)
-        //
-        // Mid-session changes are rejected at the `/tx` layer, not here —
-        // `apply_init` is only called once per session (see
-        // `initialized` guard in `handle_session_init`).
-        self.agent_permissions = if let Some(perms) = init.agent_permissions {
-            Some(agent_permissions_from_wire(perms))
-        } else if let Some(preset) = init.preset.as_deref() {
-            match (preset, self.aura_org_id.as_deref()) {
-                ("ceo", Some(_)) => Some(AgentPermissions::ceo_preset()),
-                _ => None,
-            }
-        } else {
-            None
-        };
+        // Agent permissions are a required field on `SessionInit` and are
+        // applied verbatim to the session — there is no role-based
+        // fallback, no named preset, and no legacy off-switch. Mid-session
+        // changes are rejected at the `/tx` layer; `apply_init` is only
+        // called once per session (see `initialized` guard in
+        // `handle_session_init`).
+        self.agent_permissions = agent_permissions_from_wire(init.agent_permissions);
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
                 match msg.role.as_str() {
@@ -489,8 +478,7 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: None,
-            agent_permissions: None,
-            preset: None,
+            agent_permissions: AgentPermissionsWire::default(),
         }
     }
 
@@ -579,8 +567,7 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: Some(spec),
-            agent_permissions: None,
-            preset: None,
+            agent_permissions: AgentPermissionsWire::default(),
         };
 
         session.apply_init(init).unwrap();
@@ -627,8 +614,7 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: None,
-            agent_permissions: None,
-            preset: None,
+            agent_permissions: AgentPermissionsWire::default(),
         };
         session.apply_init(init).unwrap();
         assert!(session.intent_classifier.is_none());
@@ -659,16 +645,15 @@ mod tests {
             agent_id: None,
             provider_config: None,
             intent_classifier: None,
-            agent_permissions: None,
-            preset: None,
+            agent_permissions: AgentPermissionsWire::default(),
         }
     }
 
     #[test]
-    fn apply_init_leaves_permissions_none_by_default() {
+    fn apply_init_applies_empty_permissions_by_default() {
         let mut session = test_session(None);
         session.apply_init(blank_session_init()).unwrap();
-        assert!(session.agent_permissions.is_none());
+        assert_eq!(session.agent_permissions, AgentPermissions::empty());
     }
 
     #[test]
@@ -676,63 +661,40 @@ mod tests {
         use aura_protocol::{AgentPermissionsWire, AgentScopeWire, CapabilityWire};
         let mut session = test_session(None);
         let mut init = blank_session_init();
-        init.agent_permissions = Some(AgentPermissionsWire {
+        init.agent_permissions = AgentPermissionsWire {
             scope: AgentScopeWire {
                 orgs: vec!["org-a".into()],
                 ..AgentScopeWire::default()
             },
             capabilities: vec![CapabilityWire::SpawnAgent, CapabilityWire::ReadAgent],
-        });
+        };
         session.apply_init(init).unwrap();
-        let perms = session.agent_permissions.expect("perms set");
+        let perms = &session.agent_permissions;
         assert_eq!(perms.scope.orgs, vec!["org-a".to_string()]);
         assert!(perms.capabilities.contains(&Capability::SpawnAgent));
         assert!(perms.capabilities.contains(&Capability::ReadAgent));
     }
 
     #[test]
-    fn apply_init_preset_ceo_requires_org_id() {
-        let mut session = test_session(None);
-        let mut init = blank_session_init();
-        init.preset = Some("ceo".into());
-        session.apply_init(init).unwrap();
-        assert!(session.agent_permissions.is_none());
-    }
-
-    #[test]
-    fn apply_init_preset_ceo_with_org_id_yields_ceo_preset() {
-        let mut session = test_session(None);
-        let mut init = blank_session_init();
-        init.preset = Some("ceo".into());
-        init.aura_org_id = Some("org-uuid".into());
-        session.apply_init(init).unwrap();
-        let perms = session.agent_permissions.expect("ceo preset applied");
-        assert_eq!(perms, AgentPermissions::ceo_preset());
-    }
-
-    #[test]
-    fn apply_init_unknown_preset_is_ignored() {
-        let mut session = test_session(None);
-        let mut init = blank_session_init();
-        init.preset = Some("admin".into());
-        init.aura_org_id = Some("org-uuid".into());
-        session.apply_init(init).unwrap();
-        assert!(session.agent_permissions.is_none());
-    }
-
-    #[test]
-    fn apply_init_explicit_permissions_win_over_preset() {
+    fn apply_init_applies_ceo_preset_when_wired_explicitly() {
         use aura_protocol::{AgentPermissionsWire, CapabilityWire};
         let mut session = test_session(None);
         let mut init = blank_session_init();
         init.aura_org_id = Some("org-uuid".into());
-        init.preset = Some("ceo".into());
-        init.agent_permissions = Some(AgentPermissionsWire {
+        init.agent_permissions = AgentPermissionsWire {
             scope: Default::default(),
-            capabilities: vec![CapabilityWire::ReadAgent],
-        });
+            capabilities: vec![
+                CapabilityWire::SpawnAgent,
+                CapabilityWire::ControlAgent,
+                CapabilityWire::ReadAgent,
+                CapabilityWire::ManageOrgMembers,
+                CapabilityWire::ManageBilling,
+                CapabilityWire::InvokeProcess,
+                CapabilityWire::PostToFeed,
+                CapabilityWire::GenerateMedia,
+            ],
+        };
         session.apply_init(init).unwrap();
-        let perms = session.agent_permissions.expect("perms set");
-        assert_eq!(perms.capabilities, vec![Capability::ReadAgent]);
+        assert_eq!(session.agent_permissions, AgentPermissions::ceo_preset());
     }
 }

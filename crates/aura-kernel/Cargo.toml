@@ -24,11 +24,5 @@ futures-util = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 
-[features]
-default = []
-# Phase 5: consult AgentPermissions on Delegate proposals. Off by default so
-# existing deployments preserve today's behavior exactly; phase 6 flips it on.
-agent_permissions = []
-
 [lints]
 workspace = true
