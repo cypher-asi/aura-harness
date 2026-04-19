@@ -386,6 +386,14 @@ pub(super) fn apply_turn_result(
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
     session.messages.clone_from(&loop_result.messages);
+    // Defense-in-depth: cap any tool_use input / tool_result content
+    // that exceeds `SESSION_TOOL_BLOB_MAX_BYTES`. Utilization-based
+    // compaction in `aura_agent` kicks in at 15%+ of the context
+    // window; a single oversized blob (e.g. a verbose `list_agents`
+    // result on a cold start) can still bloat the wire payload well
+    // below that floor. This per-blob cap keeps those blobs from
+    // riding along with every subsequent turn's prompt.
+    super::truncate_messages_for_storage(&mut session.messages);
     let files_changed = summarize_files_changed(loop_result);
 
     let input_tokens = loop_result.total_input_tokens;

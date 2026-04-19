@@ -326,6 +326,80 @@ impl Session {
     }
 }
 
+/// Hard upper bound on bytes-per-tool-blob kept in `Session.messages`
+/// between turns. Large tool results (e.g. a verbose `list_agents`
+/// dump) used to ride along with every subsequent turn because the
+/// session's message log is append-only, which could push the next
+/// cold-start prompt past the model's context window well before the
+/// existing compaction tier ever fires (`select_tier` keys off the
+/// *total* token estimate; a single 60KB blob can live happily under
+/// that floor and still blow up the wire payload).
+///
+/// `truncate_messages_for_storage` walks the message log after every
+/// completed turn and replaces any `ToolUse` input / `ToolResult`
+/// content that exceeds this cap with a "... [truncated N bytes]"
+/// marker. This runs in addition to — not instead of — the
+/// utilization-based compaction in `aura_agent::compaction`; the two
+/// are complementary (this bounds per-blob size, compaction bounds
+/// total size).
+const SESSION_TOOL_BLOB_MAX_BYTES: usize = 8 * 1024;
+
+/// Cap each `ToolUse` input / `ToolResult` content in `messages` at
+/// [`SESSION_TOOL_BLOB_MAX_BYTES`]. Mutates in place and is cheap when
+/// nothing exceeds the cap (no allocation). Run this after a turn
+/// completes so the next turn doesn't re-ship the full blob.
+pub(super) fn truncate_messages_for_storage(messages: &mut [Message]) {
+    use aura_reasoner::{ContentBlock, ToolResultContent};
+
+    fn truncate_str(s: &str, max: usize) -> Option<String> {
+        if s.len() <= max {
+            return None;
+        }
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        Some(format!(
+            "{}... [truncated {} bytes]",
+            &s[..end],
+            s.len()
+        ))
+    }
+
+    for msg in messages.iter_mut() {
+        for block in msg.content.iter_mut() {
+            match block {
+                ContentBlock::ToolUse { input, .. } => {
+                    if let Ok(serialized) = serde_json::to_string(input) {
+                        if let Some(truncated) =
+                            truncate_str(&serialized, SESSION_TOOL_BLOB_MAX_BYTES)
+                        {
+                            *input = serde_json::Value::String(truncated);
+                        }
+                    }
+                }
+                ContentBlock::ToolResult { content, .. } => match content {
+                    ToolResultContent::Text(t) => {
+                        if let Some(truncated) = truncate_str(t, SESSION_TOOL_BLOB_MAX_BYTES) {
+                            *t = truncated;
+                        }
+                    }
+                    ToolResultContent::Json(v) => {
+                        if let Ok(serialized) = serde_json::to_string(v) {
+                            if let Some(truncated) =
+                                truncate_str(&serialized, SESSION_TOOL_BLOB_MAX_BYTES)
+                            {
+                                *content = ToolResultContent::Text(truncated);
+                            }
+                        }
+                    }
+                },
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Translate an [`IntentClassifierSpec`] from the wire protocol into the
 /// in-process [`IntentClassifier`] plus a `(tool_name, domain)` manifest
 /// the agent loop can consume.
@@ -696,5 +770,82 @@ mod tests {
         };
         session.apply_init(init).unwrap();
         assert_eq!(session.agent_permissions, AgentPermissions::ceo_preset());
+    }
+
+    #[test]
+    fn truncate_messages_for_storage_caps_oversized_tool_result_text() {
+        use aura_reasoner::{ContentBlock, Role, ToolResultContent};
+        let big = "Z".repeat(SESSION_TOOL_BLOB_MAX_BYTES + 1_000);
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tu_1".into(),
+                content: ToolResultContent::Text(big.clone()),
+                is_error: false,
+            }],
+        }];
+        truncate_messages_for_storage(&mut messages);
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content, .. } => match content {
+                ToolResultContent::Text(t) => {
+                    assert!(t.len() < SESSION_TOOL_BLOB_MAX_BYTES + 200);
+                    assert!(t.contains("[truncated"));
+                }
+                other => panic!("expected Text, got {other:?}"),
+            },
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_messages_for_storage_is_noop_for_small_blobs() {
+        use aura_reasoner::{ContentBlock, Role, ToolResultContent};
+        let small = "ok".to_string();
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tu_1".into(),
+                content: ToolResultContent::Text(small.clone()),
+                is_error: false,
+            }],
+        }];
+        truncate_messages_for_storage(&mut messages);
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content, .. } => match content {
+                ToolResultContent::Text(t) => assert_eq!(t, &small),
+                other => panic!("expected Text, got {other:?}"),
+            },
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncate_messages_for_storage_caps_oversized_tool_result_json() {
+        use aura_reasoner::{ContentBlock, Role, ToolResultContent};
+        let items: Vec<serde_json::Value> = (0..500)
+            .map(|i| serde_json::json!({ "id": format!("agent-{i}"), "pad": "X".repeat(200) }))
+            .collect();
+        let big = serde_json::Value::Array(items);
+        let mut messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tu_list_agents".into(),
+                content: ToolResultContent::Json(big.clone()),
+                is_error: false,
+            }],
+        }];
+        truncate_messages_for_storage(&mut messages);
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content, .. } => match content {
+                ToolResultContent::Text(t) => {
+                    assert!(t.len() < SESSION_TOOL_BLOB_MAX_BYTES + 200);
+                    assert!(t.contains("[truncated"));
+                }
+                other => panic!(
+                    "oversized Json should be collapsed to truncated Text, got {other:?}"
+                ),
+            },
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
     }
 }
