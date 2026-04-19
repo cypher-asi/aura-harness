@@ -4,6 +4,13 @@ use aura_protocol::SessionProviderConfig;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider, RoutingMode};
 use tracing::{info, warn};
 
+fn proxy_base_url() -> String {
+    std::env::var("AURA_ROUTER_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "https://aura-router.onrender.com".to_string())
+}
+
 pub(crate) fn create_default_model_provider() -> Arc<dyn ModelProvider + Send + Sync> {
     match AnthropicConfig::from_env() {
         Ok(config) => create_provider_from_anthropic_config(config),
@@ -37,7 +44,7 @@ pub(crate) fn create_provider_from_session_config(
                     .clone()
                     .unwrap_or_else(|| match routing_mode {
                         RoutingMode::Direct => "https://api.anthropic.com".to_string(),
-                        RoutingMode::Proxy => "https://aura-router.onrender.com".to_string(),
+                        RoutingMode::Proxy => proxy_base_url(),
                     }),
                 routing_mode,
                 fallback_model: config.fallback_model.clone(),
@@ -55,6 +62,31 @@ pub(crate) fn create_provider_from_session_config(
                 .map_err(|e| anyhow::anyhow!("creating anthropic session provider: {e}"))
         }
         other => anyhow::bail!("unsupported session provider `{other}`"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_provider_from_session_config;
+    use aura_protocol::SessionProviderConfig;
+
+    #[test]
+    fn proxy_session_provider_uses_env_router_url_when_base_url_missing() {
+        std::env::set_var("AURA_ROUTER_URL", "http://127.0.0.1:3999");
+
+        let config = SessionProviderConfig {
+            provider: "anthropic".to_string(),
+            routing_mode: Some("proxy".to_string()),
+            upstream_provider_family: None,
+            api_key: None,
+            base_url: None,
+            default_model: Some("aura-claude-sonnet-4-6".to_string()),
+            fallback_model: None,
+            prompt_caching_enabled: Some(true),
+        };
+
+        let provider = create_provider_from_session_config(&config).expect("provider should build");
+        assert_eq!(provider.name(), "anthropic");
     }
 }
 

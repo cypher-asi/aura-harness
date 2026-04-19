@@ -1,14 +1,15 @@
 use super::api_types::{ApiRequest, ApiResponse, StreamingApiRequest};
 use super::convert::{
     build_system_block, convert_messages_to_api, convert_response_to_aura, convert_tool_choice,
-    convert_tools_to_api, resolve_thinking,
+    convert_tools_to_api, resolve_output_config, resolve_thinking,
 };
 use super::sse::SseStream;
 use super::{AnthropicProvider, ApiError};
 
 use crate::error::ReasonerError;
 use crate::{
-    ModelProvider, ModelRequest, ModelResponse, ProviderTrace, StopReason, StreamEventStream, Usage,
+    stream_from_response, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, StopReason,
+    StreamEventStream, Usage,
 };
 use async_trait::async_trait;
 use serde::Serialize;
@@ -16,6 +17,41 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 impl AnthropicProvider {
+    fn model_looks_like_anthropic(model: &str) -> bool {
+        let model = model.trim().to_ascii_lowercase();
+        model.starts_with("claude") || model.starts_with("aura-claude")
+    }
+
+    fn supports_anthropic_proxy_features(request: &ModelRequest, model: &str) -> bool {
+        if let Some(family) = request
+            .upstream_provider_family
+            .as_deref()
+            .map(str::trim)
+            .filter(|family| !family.is_empty())
+        {
+            return family.eq_ignore_ascii_case("anthropic");
+        }
+
+        Self::model_looks_like_anthropic(model)
+    }
+
+    fn prompt_caching_enabled_for_model(&self, request: &ModelRequest, model: &str) -> bool {
+        self.config.prompt_caching_enabled
+            && match self.config.routing_mode {
+                super::RoutingMode::Proxy => {
+                    Self::supports_anthropic_proxy_features(request, model)
+                }
+                super::RoutingMode::Direct => Self::model_looks_like_anthropic(model),
+            }
+    }
+
+    fn anthropic_request_features_enabled(&self, request: &ModelRequest, model: &str) -> bool {
+        match self.config.routing_mode {
+            super::RoutingMode::Proxy => Self::supports_anthropic_proxy_features(request, model),
+            super::RoutingMode::Direct => Self::model_looks_like_anthropic(model),
+        }
+    }
+
     async fn check_base_url_reachable(&self) -> bool {
         let ping_url = format!("{}/", self.config.base_url.trim_end_matches('/'));
         let result = self
@@ -44,9 +80,10 @@ impl AnthropicProvider {
     pub(super) async fn send_checked<B: Serialize + Sync>(
         &self,
         request_ctx: &ModelRequest,
+        model: &str,
         json_body: &B,
     ) -> Result<reqwest::Response, ApiError> {
-        let req_builder = self.build_request(request_ctx, json_body)?;
+        let req_builder = self.build_request(request_ctx, model, json_body)?;
 
         let response = req_builder.send().await.map_err(|e| {
             error!(error = %e, "Anthropic API request failed");
@@ -69,6 +106,7 @@ impl AnthropicProvider {
     fn build_request<B: Serialize + Sync>(
         &self,
         request_ctx: &ModelRequest,
+        model: &str,
         json_body: &B,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
         use super::config::RoutingMode;
@@ -80,6 +118,8 @@ impl AnthropicProvider {
             .header("content-type", "application/json")
             .json(json_body);
         let prompt_caching_enabled = self.config.prompt_caching_enabled;
+        let proxy_prompt_caching_enabled = prompt_caching_enabled
+            && Self::supports_anthropic_proxy_features(request_ctx, model);
 
         match self.config.routing_mode {
             RoutingMode::Direct => {
@@ -95,7 +135,7 @@ impl AnthropicProvider {
                     ))
                 })?;
                 req_builder = req_builder.header("authorization", format!("Bearer {token}"));
-                if prompt_caching_enabled {
+                if proxy_prompt_caching_enabled {
                     req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
                 }
                 if let Some(ref v) = request_ctx.aura_project_id {
@@ -145,8 +185,14 @@ fn build_api_request(
     model: &str,
     system: &serde_json::Value,
     prompt_caching_enabled: bool,
+    anthropic_features_enabled: bool,
 ) -> ApiRequest {
-    let thinking = resolve_thinking(request, model);
+    let thinking = anthropic_features_enabled
+        .then(|| resolve_thinking(request, model))
+        .flatten();
+    let output_config = anthropic_features_enabled
+        .then(|| resolve_output_config(request, model))
+        .flatten();
     ApiRequest {
         model: model.to_string(),
         system: system.clone(),
@@ -164,6 +210,7 @@ fn build_api_request(
             request.temperature
         },
         thinking,
+        output_config,
     }
 }
 
@@ -262,12 +309,20 @@ impl ModelProvider for AnthropicProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
         let start = Instant::now();
         let models = self.model_chain(&request.model);
-        let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
-            let api_request =
-                build_api_request(&request, model, &system, self.config.prompt_caching_enabled);
+            let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
+            let anthropic_features_enabled =
+                self.anthropic_request_features_enabled(&request, model);
+            let system = build_system_block(&request.system, prompt_caching_enabled);
+            let api_request = build_api_request(
+                &request,
+                model,
+                &system,
+                prompt_caching_enabled,
+                anthropic_features_enabled,
+            );
 
             debug!(
                 model = %model,
@@ -283,7 +338,7 @@ impl ModelProvider for AnthropicProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
 
-                match self.send_checked(&request, &api_request).await {
+                match self.send_checked(&request, model, &api_request).await {
                     Ok(response) => {
                         let latency_ms =
                             u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -337,25 +392,40 @@ impl ModelProvider for AnthropicProvider {
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
         let models = self.model_chain(&request.model);
-        let system = build_system_block(&request.system, self.config.prompt_caching_enabled);
         let mut last_err: Option<ReasonerError> = None;
 
         for (model_idx, model) in models.iter().enumerate() {
-            let thinking = resolve_thinking(&request, model);
+            if self.config.routing_mode == super::RoutingMode::Proxy
+                && !Self::supports_anthropic_proxy_features(&request, model)
+            {
+                debug!(
+                    model = %model,
+                    "Proxy-backed fallback model does not support Anthropic SSE; buffering completion"
+                );
+                let mut buffered_request = request.clone();
+                buffered_request.model = model.clone();
+                let response = self.complete(buffered_request).await?;
+                return Ok(stream_from_response(response));
+            }
+
+            let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
+            let anthropic_features_enabled =
+                self.anthropic_request_features_enabled(&request, model);
+            let system = build_system_block(&request.system, prompt_caching_enabled);
+            let thinking = anthropic_features_enabled
+                .then(|| resolve_thinking(&request, model))
+                .flatten();
+            let output_config = anthropic_features_enabled
+                .then(|| resolve_output_config(&request, model))
+                .flatten();
             let api_request = StreamingApiRequest {
                 model: model.clone(),
                 system: system.clone(),
-                messages: convert_messages_to_api(
-                    &request.messages,
-                    self.config.prompt_caching_enabled,
-                ),
+                messages: convert_messages_to_api(&request.messages, prompt_caching_enabled),
                 tools: if request.tools.is_empty() {
                     None
                 } else {
-                    Some(convert_tools_to_api(
-                        &request.tools,
-                        self.config.prompt_caching_enabled,
-                    ))
+                    Some(convert_tools_to_api(&request.tools, prompt_caching_enabled))
                 },
                 tool_choice: convert_tool_choice(&request.tool_choice),
                 max_tokens: request.max_tokens,
@@ -366,6 +436,7 @@ impl ModelProvider for AnthropicProvider {
                 },
                 stream: true,
                 thinking,
+                output_config,
             };
 
             debug!(
@@ -382,7 +453,7 @@ impl ModelProvider for AnthropicProvider {
                     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
 
-                match self.send_checked(&request, &api_request).await {
+                match self.send_checked(&request, model, &api_request).await {
                     Ok(response) => {
                         if model_idx > 0 {
                             info!(

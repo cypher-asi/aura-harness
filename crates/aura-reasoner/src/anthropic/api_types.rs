@@ -18,6 +18,8 @@ pub(super) struct ApiRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ApiThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<ApiOutputConfig>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,6 +131,8 @@ pub(super) struct StreamingApiRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ApiThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<ApiOutputConfig>,
 }
 
 /// Internal API representation of the extended thinking configuration.
@@ -136,7 +140,13 @@ pub(super) struct StreamingApiRequest {
 pub(super) struct ApiThinkingConfig {
     #[serde(rename = "type")]
     pub thinking_type: String,
-    pub budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ApiOutputConfig {
+    pub effort: String,
 }
 
 // ============================================================================

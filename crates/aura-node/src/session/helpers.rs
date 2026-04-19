@@ -59,12 +59,9 @@ pub(super) async fn handle_session_init(
         return;
     }
 
-    if let Some(provider_config) = provider_config {
+    let resolved_provider_override = if let Some(provider_config) = provider_config {
         match create_provider_from_session_config(&provider_config) {
-            Ok(provider) => {
-                session.provider_name = provider.name().to_string();
-                session.provider_override = Some(provider);
-            }
+            Ok(provider) => Some(provider),
             Err(e) => {
                 let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                     code: "invalid_provider_config".into(),
@@ -74,7 +71,9 @@ pub(super) async fn handle_session_init(
                 return;
             }
         }
-    }
+    } else {
+        None
+    };
 
     if let Err(e) = session.apply_init(init) {
         let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
@@ -83,6 +82,11 @@ pub(super) async fn handle_session_init(
             recoverable: true,
         }));
         return;
+    }
+
+    if let Some(provider) = resolved_provider_override {
+        session.provider_name = provider.name().to_string();
+        session.provider_override = Some(provider);
     }
 
     if let (Some(ref base), Some(ref pp)) = (&ctx.project_base, &session.project_path) {
@@ -456,10 +460,41 @@ pub(super) fn apply_turn_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_session_workspace, summarize_files_changed};
-    use crate::session::Session;
+    use super::{handle_session_init, resolve_session_workspace, summarize_files_changed};
+    use crate::protocol::OutboundMessage;
+    use crate::session::{Session, WsContext};
     use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
+    use aura_protocol::{SessionInit, SessionProviderConfig};
+    use aura_reasoner::MockProvider;
+    use aura_store::RocksStore;
+    use aura_tools::{ToolCatalog, ToolConfig};
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    fn test_context() -> WsContext {
+        let workspace = tempfile::tempdir().expect("temp workspace");
+        let db_dir = tempfile::tempdir().expect("temp db");
+        let store = RocksStore::open(db_dir.path(), false).expect("open rocks store");
+        let workspace_base = workspace.path().to_path_buf();
+        std::mem::forget(workspace);
+        std::mem::forget(db_dir);
+
+        WsContext {
+            workspace_base,
+            provider: Arc::new(MockProvider::simple_response("ok")),
+            store: Arc::new(store),
+            tool_config: ToolConfig::default(),
+            auth_token: None,
+            catalog: Arc::new(ToolCatalog::default()),
+            domain_api: None,
+            automaton_controller: None,
+            project_base: None,
+            memory_manager: None,
+            skill_manager: None,
+            router_url: None,
+        }
+    }
 
     #[test]
     fn summarize_files_changed_groups_by_operation() {
@@ -515,5 +550,82 @@ mod tests {
 
         assert_eq!(workspace, PathBuf::from("/tmp/aura"));
         assert!(!use_workspace_base_as_root);
+    }
+
+    #[tokio::test]
+    async fn failed_init_does_not_leave_provider_override_state() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+
+        let invalid_workspace = tempfile::tempdir()
+            .expect("outside workspace")
+            .path()
+            .join("outside");
+        let invalid_init = SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            installed_integrations: None,
+            workspace: Some(invalid_workspace.display().to_string()),
+            project_path: None,
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+            agent_id: None,
+            provider_config: Some(SessionProviderConfig {
+                provider: "anthropic".to_string(),
+                routing_mode: Some("proxy".to_string()),
+                upstream_provider_family: None,
+                api_key: None,
+                base_url: Some("http://127.0.0.1:9999".to_string()),
+                default_model: Some("claude-opus-4-6".to_string()),
+                fallback_model: None,
+                prompt_caching_enabled: Some(true),
+            }),
+        };
+
+        handle_session_init(&mut session, invalid_init, &outbound_tx, &ctx).await;
+
+        assert!(!session.initialized);
+        assert!(session.provider_override.is_none());
+        assert!(session.provider_name.is_empty());
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::Error(err)) if err.code == "invalid_workspace"
+        ));
+
+        let retry_workspace = ctx.workspace_base.join("retry-session");
+        std::fs::create_dir_all(&retry_workspace).expect("retry workspace should exist");
+        let retry_init = SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            installed_integrations: None,
+            workspace: Some(retry_workspace.display().to_string()),
+            project_path: None,
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+            agent_id: None,
+            provider_config: None,
+        };
+
+        handle_session_init(&mut session, retry_init, &outbound_tx, &ctx).await;
+
+        assert!(session.initialized);
+        assert!(session.provider_override.is_none());
     }
 }

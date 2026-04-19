@@ -1,5 +1,6 @@
 use super::api_types::{
-    ApiContent, ApiImageSource, ApiMessage, ApiThinkingConfig, ApiTool, ApiToolChoice,
+    ApiContent, ApiImageSource, ApiMessage, ApiOutputConfig, ApiThinkingConfig, ApiTool,
+    ApiToolChoice,
 };
 use crate::{
     ContentBlock, ImageSource, Message, ModelRequest, Role, ToolChoice, ToolDefinition,
@@ -10,23 +11,71 @@ use crate::{
 ///
 /// Uses the caller-supplied config when present; otherwise auto-enables
 /// thinking for capable models when the token budget is large enough.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThinkingMode {
+    Adaptive,
+    Enabled,
+}
+
+fn normalize_anthropic_model(model: &str) -> String {
+    model
+        .trim()
+        .to_ascii_lowercase()
+        .trim_start_matches("aura-")
+        .to_string()
+}
+
+fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
+    let model = normalize_anthropic_model(model);
+    if model.starts_with("claude-opus-4") || model.starts_with("claude-sonnet-4") {
+        Some(ThinkingMode::Adaptive)
+    } else if model.starts_with("claude-3-7-sonnet") {
+        Some(ThinkingMode::Enabled)
+    } else {
+        None
+    }
+}
+
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
+    let thinking_mode = thinking_mode_for_model(model)?;
+
     if let Some(ref cfg) = request.thinking {
         return Some(ApiThinkingConfig {
-            thinking_type: "enabled".to_string(),
-            budget_tokens: cfg.budget_tokens,
+            thinking_type: match thinking_mode {
+                ThinkingMode::Adaptive => "adaptive".to_string(),
+                ThinkingMode::Enabled => "enabled".to_string(),
+            },
+            budget_tokens: match thinking_mode {
+                ThinkingMode::Adaptive => None,
+                ThinkingMode::Enabled => Some(cfg.budget_tokens),
+            },
         });
     }
 
-    let supports_thinking = model.contains("claude-3-7")
-        || model.contains("claude-opus-4")
-        || model.contains("claude-sonnet-4");
-
-    if supports_thinking && request.max_tokens > 2048 {
-        let budget = (request.max_tokens / 2).clamp(1024, 16000);
+    if request.max_tokens > 2048 {
         Some(ApiThinkingConfig {
-            thinking_type: "enabled".to_string(),
-            budget_tokens: budget,
+            thinking_type: match thinking_mode {
+                ThinkingMode::Adaptive => "adaptive".to_string(),
+                ThinkingMode::Enabled => "enabled".to_string(),
+            },
+            budget_tokens: match thinking_mode {
+                ThinkingMode::Adaptive => None,
+                ThinkingMode::Enabled => Some((request.max_tokens / 2).clamp(1024, 16000)),
+            },
+        })
+    } else {
+        None
+    }
+}
+
+pub(super) fn resolve_output_config(
+    request: &ModelRequest,
+    model: &str,
+) -> Option<ApiOutputConfig> {
+    let thinking = resolve_thinking(request, model)?;
+    if thinking.thinking_type == "adaptive" {
+        Some(ApiOutputConfig {
+            effort: "high".to_string(),
         })
     } else {
         None

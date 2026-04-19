@@ -1,12 +1,14 @@
 use super::api_types::{ApiContent, ApiToolChoice};
 use super::convert::{
     build_system_block, convert_messages_to_api, convert_tool_choice, convert_tools_to_api,
-    resolve_thinking,
+    resolve_output_config, resolve_thinking,
 };
 use super::{AnthropicConfig, AnthropicProvider, ApiError, RoutingMode};
 use crate::{
-    Message, ModelProvider, ModelRequest, ReasonerError, ThinkingConfig, ToolChoice, ToolDefinition,
+    Message, ModelProvider, ModelRequest, ReasonerError, StopReason, StreamEvent, ThinkingConfig,
+    ToolChoice, ToolDefinition,
 };
+use futures_util::StreamExt;
 use std::time::Duration;
 
 #[test]
@@ -235,7 +237,9 @@ fn test_resolve_thinking_explicit_config() {
         .build();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_some());
-    assert_eq!(thinking.unwrap().budget_tokens, 4000);
+    let thinking = thinking.unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
 }
 
 #[test]
@@ -245,7 +249,50 @@ fn test_resolve_thinking_auto_for_capable_model() {
         .build();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_some());
-    assert_eq!(thinking.unwrap().budget_tokens, 4096);
+    let thinking = thinking.unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
+}
+
+#[test]
+fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
+    let request = ModelRequest::builder("aura-claude-opus-4-7", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-claude-opus-4-7").unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
+}
+
+#[test]
+fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
+    let request = ModelRequest::builder("claude-3-7-sonnet", "system")
+        .max_tokens(8192)
+        .thinking(ThinkingConfig {
+            budget_tokens: 4000,
+        })
+        .build();
+    let thinking = resolve_thinking(&request, "claude-3-7-sonnet").unwrap();
+    assert_eq!(thinking.thinking_type, "enabled");
+    assert_eq!(thinking.budget_tokens, Some(4000));
+}
+
+#[test]
+fn test_resolve_thinking_none_for_unsupported_haiku_variants() {
+    let request = ModelRequest::builder("aura-claude-haiku-4-5", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-claude-haiku-4-5");
+    assert!(thinking.is_none());
+}
+
+#[test]
+fn test_resolve_thinking_auto_for_non_claude_model_is_none() {
+    let request = ModelRequest::builder("aura-gpt-5-4", "system")
+        .max_tokens(8192)
+        .build();
+    let thinking = resolve_thinking(&request, "aura-gpt-5-4");
+    assert!(thinking.is_none());
 }
 
 #[test]
@@ -258,12 +305,24 @@ fn test_resolve_thinking_none_for_small_budget() {
 }
 
 #[test]
-fn test_resolve_thinking_none_for_unsupported_model() {
+fn test_resolve_thinking_none_for_unsupported_claude_3_variants() {
     let request = ModelRequest::builder("claude-3-haiku", "system")
         .max_tokens(8192)
         .build();
     let thinking = resolve_thinking(&request, "claude-3-haiku");
     assert!(thinking.is_none());
+}
+
+#[test]
+fn test_resolve_output_config_only_for_claude_4_thinking_models() {
+    let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
+        .max_tokens(8192)
+        .build();
+    let output = resolve_output_config(&request, TEST_DEFAULT_MODEL).unwrap();
+    assert_eq!(output.effort, "high");
+
+    let sonnet_37_output = resolve_output_config(&request, "claude-3-7-sonnet");
+    assert!(sonnet_37_output.is_none());
 }
 
 #[tokio::test]
@@ -292,7 +351,7 @@ async fn test_proxy_mode_sends_caching_beta_header() {
 
     let config = AnthropicConfig {
         api_key: String::new(),
-        default_model: "test-model".to_string(),
+        default_model: "aura-claude-sonnet-4-6".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
@@ -302,7 +361,7 @@ async fn test_proxy_mode_sends_caching_beta_header() {
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
-    let request = ModelRequest::builder("test-model", "system")
+    let request = ModelRequest::builder("aura-claude-sonnet-4-6", "system")
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
         .build();
@@ -458,5 +517,387 @@ async fn test_direct_mode_omits_caching_beta_header_when_disabled() {
     assert!(
         !captured.contains("anthropic-beta"),
         "Direct request should omit anthropic-beta header when prompt caching is disabled.\nCaptured headers:\n{captured}"
+    );
+}
+
+#[tokio::test]
+async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"proxy ok"}],"model":"aura-gpt-4.1","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "aura-gpt-4.1".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-gpt-4.1", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .build();
+
+    let stream = provider.complete_streaming(request).await.unwrap();
+    let events = stream.collect::<Vec<_>>().await;
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains(r#""stream":true"#),
+        "Buffered fallback should avoid Anthropic SSE requests.\nCaptured request:\n{captured}"
+    );
+
+    assert!(matches!(
+        events.first().unwrap().as_ref().unwrap(),
+        StreamEvent::MessageStart { model, .. } if model == "aura-gpt-4.1"
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event.as_ref().unwrap(),
+        StreamEvent::TextDelta { text } if text == "proxy ok"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event.as_ref().unwrap(),
+        StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::EndTurn),
+            output_tokens: 5,
+        }
+    )));
+    assert!(matches!(
+        events.last().unwrap().as_ref().unwrap(),
+        StreamEvent::MessageStop
+    ));
+}
+
+#[tokio::test]
+async fn test_cross_family_proxy_fallback_buffers_streaming_and_omits_anthropic_headers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut first_socket, _) = listener.accept().await.unwrap();
+        let mut first_buf = vec![0u8; 8192];
+        let first_n = first_socket.read(&mut first_buf).await.unwrap();
+        let first_request = String::from_utf8_lossy(&first_buf[..first_n]).to_string();
+        let overloaded = "HTTP/1.1 529 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"type\":\"error\",\"error\":\"overloaded\"}";
+        first_socket.write_all(overloaded.as_bytes()).await.unwrap();
+
+        let (mut second_socket, _) = listener.accept().await.unwrap();
+        let mut second_buf = vec![0u8; 8192];
+        let second_n = second_socket.read(&mut second_buf).await.unwrap();
+        let second_request = String::from_utf8_lossy(&second_buf[..second_n]).to_string();
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"fallback ok"}],"model":"aura-gpt-5-4","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        second_socket.write_all(response.as_bytes()).await.unwrap();
+
+        (first_request, second_request)
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "claude-opus-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: Some("aura-gpt-5-4".to_string()),
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-opus-4-6", "system")
+        .message(Message::user("test"))
+        .max_tokens(8192)
+        .auth_token(Some("test-jwt-token".to_string()))
+        .build();
+
+    let stream = provider.complete_streaming(request).await.unwrap();
+    let events = stream.collect::<Vec<_>>().await;
+
+    let (first_request, second_request) = server.await.unwrap();
+    assert!(
+        first_request.contains(r#""stream":true"#),
+        "Primary Anthropic request should still use SSE.\nCaptured request:\n{first_request}"
+    );
+    assert!(
+        !second_request.contains(r#""stream":true"#),
+        "Cross-family fallback should buffer instead of using Anthropic SSE.\nCaptured request:\n{second_request}"
+    );
+    assert!(
+        !second_request.contains("anthropic-beta"),
+        "Cross-family fallback should omit Anthropic beta headers.\nCaptured request:\n{second_request}"
+    );
+    assert!(
+        !second_request.contains(r#""thinking":"#),
+        "Cross-family fallback should omit Anthropic thinking config.\nCaptured request:\n{second_request}"
+    );
+    assert!(
+        !second_request.contains("output_config"),
+        "Cross-family fallback should omit Anthropic output config.\nCaptured request:\n{second_request}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event.as_ref().unwrap(),
+        StreamEvent::TextDelta { text } if text == "fallback ok"
+    )));
+}
+
+#[tokio::test]
+async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"aura-gpt-4.1","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "aura-gpt-4.1".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-gpt-4.1", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .build();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains("anthropic-beta"),
+        "Proxy OpenAI requests should omit anthropic-beta prompt caching headers.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("cache_control"),
+        "Proxy OpenAI requests should omit Anthropic cache_control fields.\nCaptured request:\n{captured}"
+    );
+}
+
+#[tokio::test]
+async fn test_proxy_hint_prefers_anthropic_family_over_model_heuristics() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"aura-gpt-4.1","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "aura-gpt-4.1".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-gpt-4.1", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("anthropic".to_string()))
+        .build();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        captured.contains("anthropic-beta"),
+        "Explicit Anthropic family hints should enable Anthropic proxy headers even for non-Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        captured.contains("cache_control"),
+        "Explicit Anthropic family hints should enable Anthropic cache_control fields even for non-Claude model names.\nCaptured request:\n{captured}"
+    );
+}
+
+#[tokio::test]
+async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_streaming() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"proxy ok"}],"model":"claude-opus-4-6","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "claude-opus-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-opus-4-6", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("openai".to_string()))
+        .build();
+
+    let stream = provider.complete_streaming(request).await.unwrap();
+    let events = stream.collect::<Vec<_>>().await;
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains(r#""stream":true"#),
+        "Explicit non-Anthropic family hints should force buffered proxy streaming even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("anthropic-beta"),
+        "Explicit non-Anthropic family hints should suppress Anthropic proxy headers even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains(r#""thinking":"#),
+        "Explicit non-Anthropic family hints should suppress Anthropic thinking config even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("output_config"),
+        "Explicit non-Anthropic family hints should suppress Anthropic output config even for Claude model names.\nCaptured request:\n{captured}"
+    );
+    assert!(matches!(
+        events.first().unwrap().as_ref().unwrap(),
+        StreamEvent::MessageStart { model, .. } if model == "claude-opus-4-6"
+    ));
+}
+
+#[tokio::test]
+async fn test_proxy_non_anthropic_family_omits_thinking_and_output_config_for_complete() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-opus-4-6","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "claude-opus-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-opus-4-6", "system")
+        .message(Message::user("test"))
+        .max_tokens(8192)
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("openai".to_string()))
+        .build();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        !captured.contains(r#""thinking":"#),
+        "Explicit non-Anthropic family hints should suppress Anthropic thinking config for complete requests.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("output_config"),
+        "Explicit non-Anthropic family hints should suppress Anthropic output config for complete requests.\nCaptured request:\n{captured}"
     );
 }
