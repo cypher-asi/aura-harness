@@ -315,10 +315,6 @@ impl Session {
             max_context_tokens: Some(self.context_window_tokens),
             stream_timeout: std::time::Duration::from_secs(180),
             auth_token: self.auth_token.clone(),
-            upstream_provider_family: self
-                .provider_config
-                .as_ref()
-                .and_then(|config| config.upstream_provider_family.clone()),
             aura_project_id: self.project_id.clone(),
             aura_agent_id: self.aura_agent_id.clone(),
             aura_session_id: self.aura_session_id.clone(),
@@ -439,17 +435,22 @@ pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPe
     let capabilities = wire
         .capabilities
         .into_iter()
-        .map(|c| match c {
-            CapabilityWire::SpawnAgent => Capability::SpawnAgent,
-            CapabilityWire::ControlAgent => Capability::ControlAgent,
-            CapabilityWire::ReadAgent => Capability::ReadAgent,
-            CapabilityWire::ManageOrgMembers => Capability::ManageOrgMembers,
-            CapabilityWire::ManageBilling => Capability::ManageBilling,
-            CapabilityWire::InvokeProcess => Capability::InvokeProcess,
-            CapabilityWire::PostToFeed => Capability::PostToFeed,
-            CapabilityWire::GenerateMedia => Capability::GenerateMedia,
-            CapabilityWire::ReadProject { id } => Capability::ReadProject { id },
-            CapabilityWire::WriteProject { id } => Capability::WriteProject { id },
+        .filter_map(|c| match c {
+            CapabilityWire::SpawnAgent => Some(Capability::SpawnAgent),
+            CapabilityWire::ControlAgent => Some(Capability::ControlAgent),
+            CapabilityWire::ReadAgent => Some(Capability::ReadAgent),
+            CapabilityWire::ManageOrgMembers => Some(Capability::ManageOrgMembers),
+            CapabilityWire::ManageBilling => Some(Capability::ManageBilling),
+            CapabilityWire::InvokeProcess => Some(Capability::InvokeProcess),
+            CapabilityWire::PostToFeed => Some(Capability::PostToFeed),
+            CapabilityWire::GenerateMedia => Some(Capability::GenerateMedia),
+            CapabilityWire::ReadProject { id } => Some(Capability::ReadProject { id }),
+            CapabilityWire::WriteProject { id } => Some(Capability::WriteProject { id }),
+            // Forward-compat: a newer server can send capability variants
+            // this harness build doesn't know yet. Per the protocol doc,
+            // drop them silently rather than rejecting the session — the
+            // tools that depend on them simply won't be enforceable here.
+            CapabilityWire::Unknown => None,
         })
         .collect();
     AgentPermissions {
