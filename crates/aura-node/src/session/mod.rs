@@ -446,6 +446,8 @@ pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPe
             CapabilityWire::GenerateMedia => Some(Capability::GenerateMedia),
             CapabilityWire::ReadProject { id } => Some(Capability::ReadProject { id }),
             CapabilityWire::WriteProject { id } => Some(Capability::WriteProject { id }),
+            CapabilityWire::ReadAllProjects => Some(Capability::ReadAllProjects),
+            CapabilityWire::WriteAllProjects => Some(Capability::WriteAllProjects),
             // Forward-compat: a newer server can send capability variants
             // this harness build doesn't know yet. Per the protocol doc,
             // drop them silently rather than rejecting the session — the

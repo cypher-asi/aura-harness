@@ -67,6 +67,57 @@ pub enum Capability {
         /// Opaque project identifier.
         id: String,
     },
+    /// Wildcard read access over every project in the bundle's scope.
+    /// Satisfies any `ReadProject { id }` requirement without enumerating
+    /// ids. Held by the CEO preset so the unified tool-surface filter
+    /// can drop the legacy `is_ceo_preset()` short-circuit; regular
+    /// bundles can also carry it when the caller genuinely has
+    /// org-wide read access.
+    ReadAllProjects,
+    /// Wildcard write access over every project in the bundle's scope.
+    /// Strict superset of [`Capability::ReadAllProjects`]: satisfies any
+    /// `WriteProject { id }` requirement and (by write-implies-read)
+    /// any `ReadProject { id }` requirement too.
+    WriteAllProjects,
+}
+
+impl Capability {
+    /// True iff `self` satisfies the project-scoped requirement `required`.
+    ///
+    /// Wildcard lifting rules (mirrored from the authoritative
+    /// `aura-os-agent-tools` `permissions_satisfy_requirements`):
+    ///
+    /// * `ReadProject { id }` is satisfied by any of:
+    ///   - `ReadProject { id }` (exact match),
+    ///   - `WriteProject { id }` (write implies read),
+    ///   - [`Capability::ReadAllProjects`] (wildcard),
+    ///   - [`Capability::WriteAllProjects`] (wildcard write implies
+    ///     wildcard read).
+    /// * `WriteProject { id }` is satisfied by any of:
+    ///   - `WriteProject { id }` (exact match),
+    ///   - [`Capability::WriteAllProjects`] (wildcard).
+    /// * For any other `required` the rule degenerates to exact equality.
+    ///
+    /// This is the single helper every enforcement site in the harness
+    /// should route through to stay consistent with the server-side
+    /// policy.
+    #[must_use]
+    pub fn satisfies(&self, required: &Capability) -> bool {
+        match (self, required) {
+            // Exact match always works.
+            (held, req) if held == req => true,
+            // Project wildcards lift to project-scoped requirements.
+            (Capability::ReadAllProjects, Capability::ReadProject { .. }) => true,
+            (Capability::WriteAllProjects, Capability::ReadProject { .. }) => true,
+            (Capability::WriteAllProjects, Capability::WriteProject { .. }) => true,
+            // Write implies read for the same project id.
+            (
+                Capability::WriteProject { id: held_id },
+                Capability::ReadProject { id: req_id },
+            ) => held_id == req_id,
+            _ => false,
+        }
+    }
 }
 
 /// The universe of orgs / projects / agents an agent may touch.
@@ -142,6 +193,14 @@ impl AgentPermissions {
                 Capability::InvokeProcess,
                 Capability::PostToFeed,
                 Capability::GenerateMedia,
+                // Wildcard project caps replace the legacy
+                // `is_ceo_preset()` short-circuit: with these in hand
+                // the CEO satisfies any `ReadProject { id }` /
+                // `WriteProject { id }` requirement through the normal
+                // `Capability::satisfies` path, like any other bundle
+                // that happens to carry a wildcard.
+                Capability::ReadAllProjects,
+                Capability::WriteAllProjects,
             ],
         }
     }
@@ -160,9 +219,14 @@ impl AgentPermissions {
         Self::default()
     }
 
-    /// True iff every capability in `other` is present in `self` **and**
-    /// `other.scope` is contained in `self.scope`. Strict subset on the
-    /// permission axis; scope follows [`AgentScope::contains`] semantics.
+    /// True iff every capability in `other` is satisfied by `self` **and**
+    /// `other.scope` is contained in `self.scope`. Scope follows
+    /// [`AgentScope::contains`] semantics; capability containment uses
+    /// [`Capability::satisfies`] so wildcard project caps on the parent
+    /// cover exact-id project caps on the child. Without this lifting,
+    /// a CEO parent (holding [`Capability::WriteAllProjects`]) couldn't
+    /// spawn a child asking for `WriteProject { id: "x" }`, even though
+    /// the parent's bundle is strictly more permissive.
     #[must_use]
     pub fn contains(&self, other: &Self) -> bool {
         if !self.scope.contains(&other.scope) {
@@ -171,7 +235,7 @@ impl AgentPermissions {
         other
             .capabilities
             .iter()
-            .all(|c| self.capabilities.contains(c))
+            .all(|req| self.capabilities.iter().any(|held| held.satisfies(req)))
     }
 }
 
@@ -273,6 +337,54 @@ mod tests {
             capabilities: vec![Capability::SpawnAgent, Capability::ManageBilling],
         };
         assert!(!parent.contains(&child));
+    }
+
+    #[test]
+    fn write_project_satisfies_read_project_for_same_id() {
+        let held = Capability::WriteProject {
+            id: "proj-1".into(),
+        };
+        let req = Capability::ReadProject {
+            id: "proj-1".into(),
+        };
+        assert!(held.satisfies(&req));
+    }
+
+    #[test]
+    fn read_all_projects_satisfies_read_project() {
+        let req = Capability::ReadProject {
+            id: "any".into(),
+        };
+        assert!(Capability::ReadAllProjects.satisfies(&req));
+    }
+
+    #[test]
+    fn read_all_projects_does_not_satisfy_write_project() {
+        let req = Capability::WriteProject {
+            id: "p".into(),
+        };
+        assert!(!Capability::ReadAllProjects.satisfies(&req));
+    }
+
+    #[test]
+    fn write_all_projects_satisfies_both_read_and_write_project() {
+        let r = Capability::ReadProject { id: "p".into() };
+        let w = Capability::WriteProject { id: "p".into() };
+        assert!(Capability::WriteAllProjects.satisfies(&r));
+        assert!(Capability::WriteAllProjects.satisfies(&w));
+    }
+
+    #[test]
+    fn ceo_preset_contains_project_scoped_child() {
+        let parent = AgentPermissions::ceo_preset();
+        let child = AgentPermissions {
+            scope: AgentScope::default(),
+            capabilities: vec![
+                Capability::ReadProject { id: "p".into() },
+                Capability::WriteProject { id: "q".into() },
+            ],
+        };
+        assert!(parent.contains(&child));
     }
 
     #[test]

@@ -430,7 +430,16 @@ impl Policy {
         let permissions = &self.config.agent_permissions;
 
         if let Some(required) = self.config.tool_capability_requirements.get(&tool_call.tool) {
-            if !permissions.capabilities.contains(required) {
+            // Route through `Capability::satisfies` so project wildcards
+            // (`ReadAllProjects` / `WriteAllProjects`) on the bundle cover
+            // an exact-id `ReadProject { id }` / `WriteProject { id }`
+            // tool requirement. Keeps harness kernel enforcement aligned
+            // with `aura-os-agent-runtime::policy::holds_capability`.
+            let held = permissions
+                .capabilities
+                .iter()
+                .any(|held| held.satisfies(required));
+            if !held {
                 return Some(PolicyResult {
                     allowed: false,
                     reason: Some(format!(

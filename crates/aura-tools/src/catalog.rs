@@ -282,8 +282,16 @@ impl std::fmt::Debug for ToolCatalog {
 
 /// Phase 5: decide whether a catalog entry is visible to a caller with the
 /// given optional [`AgentPermissions`]. Entries with no
-/// `required_capabilities` are always visible; otherwise the caller must
-/// hold every required capability.
+/// `required_capabilities` are always visible; otherwise every required
+/// capability must be satisfied by some capability in the bundle.
+///
+/// "Satisfied" runs through [`Capability::satisfies`], so project wildcards
+/// ([`Capability::ReadAllProjects`] / [`Capability::WriteAllProjects`]) on
+/// the bundle cover any exact-id `ReadProject { id }` / `WriteProject { id }`
+/// requirement declared by a tool. This matches the server-side policy in
+/// `aura-os-agent-tools::permissions_satisfy_requirements` so a CEO bundle
+/// shipped over the wire doesn't silently lose project-scoped tools on the
+/// harness side.
 fn entry_visible(entry: &CatalogEntry, permissions: Option<&AgentPermissions>) -> bool {
     if entry.required_capabilities.is_empty() {
         return true;
@@ -291,10 +299,12 @@ fn entry_visible(entry: &CatalogEntry, permissions: Option<&AgentPermissions>) -
     let Some(permissions) = permissions else {
         return false;
     };
-    entry
-        .required_capabilities
-        .iter()
-        .all(|c| permissions.capabilities.contains(c))
+    entry.required_capabilities.iter().all(|req| {
+        permissions
+            .capabilities
+            .iter()
+            .any(|held| held.satisfies(req))
+    })
 }
 
 /// Apply `ToolConfig` permission filters in-place.
