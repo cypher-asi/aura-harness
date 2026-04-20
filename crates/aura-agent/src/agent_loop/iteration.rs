@@ -26,6 +26,12 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 pub(super) enum LlmCallError {
     InsufficientCredits(String),
     PromptTooLong(String),
+    /// 429/529 surfaced by the provider. The message already includes the
+    /// upstream `retry after N seconds` hint when one was reported so the
+    /// UI can show a meaningful wait time. Emitted as `code: "rate_limit"`
+    /// so clients can react (e.g. surface a retry affordance) rather than
+    /// treat it as a generic fatal LLM error.
+    RateLimited(String),
     Fatal(String),
 }
 
@@ -48,6 +54,21 @@ impl LlmCallError {
                     },
                 );
             }
+            Self::RateLimited(msg) => {
+                warn!(message = %msg, "LLM rate limited after retries, stopping loop");
+                streaming::emit(
+                    event_tx,
+                    AgentLoopEvent::Error {
+                        code: "rate_limit".to_string(),
+                        message: msg.clone(),
+                        // Retries already happened at the provider layer; the
+                        // loop cannot recover this turn, but the next user
+                        // turn (or a client-side retry) can succeed.
+                        recoverable: true,
+                    },
+                );
+                result.llm_error = Some(msg);
+            }
             Self::PromptTooLong(msg) | Self::Fatal(msg) => {
                 streaming::emit(
                     event_tx,
@@ -63,48 +84,43 @@ impl LlmCallError {
     }
 }
 
-fn classify_reasoner_error(e: &aura_reasoner::ReasonerError) -> LlmCallError {
-    match e {
-        aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
-            LlmCallError::InsufficientCredits(msg.clone())
+impl LlmCallError {
+    /// Convert a structured [`aura_reasoner::ReasonerError`] into an
+    /// [`LlmCallError`] with the same credit/context/fatal classification
+    /// the loop already applies to non-streaming errors. Kept as a
+    /// dedicated constructor so `streaming.rs` can surface errors without
+    /// going through `anyhow`.
+    pub(super) fn from_reasoner_error(e: &aura_reasoner::ReasonerError) -> Self {
+        match e {
+            aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
+                Self::InsufficientCredits(msg.clone())
+            }
+            aura_reasoner::ReasonerError::RateLimited(msg) => Self::RateLimited(msg.clone()),
+            // The kernel gateway stringifies errors into `ReasonerError::Internal`
+            // (see `kernel_gateway.rs::complete_streaming`), which loses the
+            // `RateLimited` variant. Recover the classification from the
+            // message text so the SSE error still carries the
+            // `rate_limit` code downstream.
+            other if looks_like_rate_limited(&other.to_string()) => {
+                Self::RateLimited(other.to_string())
+            }
+            other if other.is_context_overflow() => Self::PromptTooLong(other.to_string()),
+            other => Self::Fatal(other.to_string()),
         }
-        other if other.is_context_overflow() => LlmCallError::PromptTooLong(other.to_string()),
-        other => LlmCallError::Fatal(other.to_string()),
     }
 }
 
-fn classify_anyhow_error(e: &anyhow::Error) -> LlmCallError {
-    if let Some(re) = e.downcast_ref::<aura_reasoner::ReasonerError>() {
-        return classify_reasoner_error(re);
-    }
-    let msg = e.to_string();
-    if msg.contains("402 Payment") || msg.contains("402 ") {
-        LlmCallError::InsufficientCredits(msg)
-    } else if message_indicates_context_overflow(&msg) {
-        LlmCallError::PromptTooLong(msg)
-    } else {
-        LlmCallError::Fatal(msg)
-    }
+/// Detect a rate-limit error from free-form message text, used when a
+/// wrapped error has lost its original variant across a crate boundary.
+fn looks_like_rate_limited(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("rate limited")
+        || lower.contains("rate_limited")
+        || lower.contains("too many requests")
 }
 
-fn message_indicates_context_overflow(message: &str) -> bool {
-    let normalized = message.to_ascii_lowercase();
-    [
-        "prompt is too long",
-        "prompt too long",
-        "prompt too large",
-        "context length exceeded",
-        "context window exceeded",
-        "context window limit",
-        "exceeds context window",
-        "exceed the model context window",
-        "input length and max_tokens exceed context limit",
-        "requested tokens exceed the context window",
-        "request exceeds the context window",
-        "too many tokens",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
+fn classify_reasoner_error(e: &aura_reasoner::ReasonerError) -> LlmCallError {
+    LlmCallError::from_reasoner_error(e)
 }
 
 impl AgentLoop {
@@ -124,7 +140,6 @@ impl AgentLoop {
             if event_tx.is_some() {
                 self.complete_with_streaming(provider, request, event_tx, cancellation_token)
                     .await
-                    .map_err(|e| classify_anyhow_error(&e))
             } else {
                 provider
                     .complete(request)
@@ -262,4 +277,62 @@ fn extract_pending_tools(response: &ModelResponse) -> Vec<(String, String)> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn from_reasoner_error_maps_rate_limited_variant() {
+        let err = aura_reasoner::ReasonerError::RateLimited(
+            "429 too many requests (retry after 7 seconds)".to_string(),
+        );
+        match LlmCallError::from_reasoner_error(&err) {
+            LlmCallError::RateLimited(msg) => {
+                assert!(msg.contains("retry after 7 seconds"), "message: {msg}");
+            }
+            _ => panic!("expected RateLimited"),
+        }
+    }
+
+    #[test]
+    fn from_reasoner_error_recovers_rate_limited_across_kernel_boundary() {
+        // Matches what `KernelModelGateway::complete_streaming` produces
+        // when the kernel stringifies a rate-limit error:
+        //     ReasonerError::Internal("kernel reason_streaming error: reasoner error: Rate limited: ...")
+        let err = aura_reasoner::ReasonerError::Internal(
+            "kernel reason_streaming error: reasoner error: Rate limited: \
+             Anthropic API error: 429 Too Many Requests - \
+             {\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests. Retry after 7 seconds.\"}}"
+                .to_string(),
+        );
+        assert!(
+            matches!(
+                LlmCallError::from_reasoner_error(&err),
+                LlmCallError::RateLimited(_)
+            ),
+            "expected prose-based rate-limit recovery to kick in"
+        );
+    }
+
+    #[test]
+    fn from_reasoner_error_does_not_confuse_other_errors_with_rate_limited() {
+        let err = aura_reasoner::ReasonerError::Api {
+            status: 500,
+            message: "internal server error".to_string(),
+        };
+        assert!(matches!(
+            LlmCallError::from_reasoner_error(&err),
+            LlmCallError::Fatal(_)
+        ));
+    }
+
+    #[test]
+    fn looks_like_rate_limited_is_case_insensitive() {
+        assert!(looks_like_rate_limited("Rate Limited: boom"));
+        assert!(looks_like_rate_limited("Too Many Requests"));
+        assert!(looks_like_rate_limited("code: RATE_LIMITED"));
+        assert!(!looks_like_rate_limited("invalid api key"));
+    }
 }

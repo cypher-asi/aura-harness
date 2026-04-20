@@ -15,6 +15,7 @@ mod sse;
 pub use config::{AnthropicConfig, RoutingMode};
 
 use crate::error::ReasonerError;
+use std::time::Duration;
 
 // ============================================================================
 // Internal Error Classification (for retry logic)
@@ -23,7 +24,15 @@ use crate::error::ReasonerError;
 #[derive(Debug)]
 enum ApiError {
     /// 429 / 529 — retryable with backoff, then fallback.
-    Overloaded(String),
+    ///
+    /// `retry_after` captures any hint the upstream gave us (either the
+    /// HTTP `Retry-After` header or a parsed value from the body). When
+    /// present, the retry loop must sleep at least that long before the
+    /// next attempt so we do not land inside the rate-limit window again.
+    Overloaded {
+        message: String,
+        retry_after: Option<Duration>,
+    },
     /// 402 — stop immediately, no retry or fallback.
     InsufficientCredits(String),
     /// 403 / 503 with Cloudflare HTML — retryable (service cold-starting).
@@ -35,7 +44,10 @@ enum ApiError {
 impl From<ApiError> for ReasonerError {
     fn from(e: ApiError) -> Self {
         match e {
-            ApiError::Overloaded(msg) => Self::RateLimited(msg),
+            ApiError::Overloaded {
+                message,
+                retry_after,
+            } => Self::RateLimited(format_rate_limited_message(&message, retry_after)),
             ApiError::InsufficientCredits(msg) => Self::InsufficientCredits(msg),
             ApiError::CloudflareBlock(msg) => Self::Api {
                 status: 403,
@@ -43,6 +55,18 @@ impl From<ApiError> for ReasonerError {
             },
             ApiError::Other(e) => e,
         }
+    }
+}
+
+/// Format a rate-limited message that always surfaces a `retry after N seconds`
+/// hint when one was reported by the upstream. The proxy's own body message
+/// usually already contains this phrasing, so we avoid duplicating it.
+fn format_rate_limited_message(message: &str, retry_after: Option<Duration>) -> String {
+    match retry_after {
+        Some(delay) if !message.to_ascii_lowercase().contains("retry after") => {
+            format!("{message} (retry after {} seconds)", delay.as_secs().max(1))
+        }
+        _ => message.to_string(),
     }
 }
 
@@ -85,8 +109,7 @@ impl AnthropicProvider {
     ///
     /// Returns error if configuration or client creation fails.
     pub fn from_env() -> Result<Self, ReasonerError> {
-        let config = AnthropicConfig::from_env()
-            .map_err(|e| ReasonerError::Internal(format!("config error: {e}")))?;
+        let config = AnthropicConfig::from_env()?;
         Self::new(config)
     }
 

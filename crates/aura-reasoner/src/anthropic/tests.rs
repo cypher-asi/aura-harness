@@ -202,7 +202,11 @@ fn test_model_chain_deduplicates() {
 
 #[test]
 fn test_api_error_classification() {
-    let overloaded: ReasonerError = ApiError::Overloaded("529 overloaded".into()).into();
+    let overloaded: ReasonerError = ApiError::Overloaded {
+        message: "529 overloaded".into(),
+        retry_after: None,
+    }
+    .into();
     assert!(overloaded.to_string().contains("529"));
 
     let credits: ReasonerError = ApiError::InsufficientCredits("402 insufficient".into()).into();
@@ -214,6 +218,37 @@ fn test_api_error_classification() {
     let other: ReasonerError =
         ApiError::Other(ReasonerError::Request("network error".into())).into();
     assert!(other.to_string().contains("network error"));
+}
+
+#[test]
+fn test_overloaded_message_appends_retry_after_hint_when_absent() {
+    let err: ReasonerError = ApiError::Overloaded {
+        message: "Anthropic API error: 429 Too Many Requests - server busy".into(),
+        retry_after: Some(Duration::from_secs(7)),
+    }
+    .into();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("retry after 7 seconds"),
+        "message should include the retry-after hint when not already present: {msg}"
+    );
+}
+
+#[test]
+fn test_overloaded_message_leaves_existing_retry_after_phrase_alone() {
+    let err: ReasonerError = ApiError::Overloaded {
+        message: "Anthropic API error: 429 - \
+                  {\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests. Retry after 7 seconds.\"}}"
+            .into(),
+        retry_after: Some(Duration::from_secs(7)),
+    }
+    .into();
+    let msg = err.to_string();
+    let occurrences = msg.to_ascii_lowercase().matches("retry after").count();
+    assert_eq!(
+        occurrences, 1,
+        "should not double-append the retry-after phrase: {msg}"
+    );
 }
 
 #[test]

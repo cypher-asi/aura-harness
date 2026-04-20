@@ -41,7 +41,7 @@ impl AnthropicConfig {
     /// NOTE: This method embeds Aura-specific environment variable names
     /// (`AURA_ROUTER_URL`, `AURA_LLM_ROUTING`). Consider accepting these as
     /// parameters or moving deployment config to the caller.
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env() -> Result<Self, crate::ReasonerError> {
         let routing_mode = match std::env::var("AURA_LLM_ROUTING").as_deref() {
             Ok("direct") => RoutingMode::Direct,
             _ => RoutingMode::Proxy,
@@ -52,8 +52,9 @@ impl AnthropicConfig {
                 let key = std::env::var("AURA_ANTHROPIC_API_KEY")
                     .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
                     .map_err(|_| {
-                        anyhow::anyhow!(
+                        crate::ReasonerError::Internal(
                             "Direct mode requires AURA_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY"
+                                .into(),
                         )
                     })?;
                 let url = std::env::var("AURA_ANTHROPIC_BASE_URL")
@@ -87,7 +88,7 @@ impl AnthropicConfig {
             api_key,
             default_model,
             timeout_ms,
-            max_retries: 2,
+            max_retries: 3,
             base_url,
             routing_mode,
             fallback_model,
@@ -102,7 +103,7 @@ impl AnthropicConfig {
             api_key: api_key.into(),
             default_model: model.into(),
             timeout_ms: 300_000,
-            max_retries: 2,
+            max_retries: 3,
             base_url: "https://api.anthropic.com".to_string(),
             routing_mode: RoutingMode::Direct,
             fallback_model: None,
