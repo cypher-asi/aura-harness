@@ -1,5 +1,5 @@
 <p align="center">
-  <strong style="font-size: 2em;">AURA SWARM</strong>
+  <strong style="font-size: 2em;">AURA</strong>
 </p>
 
 ---
@@ -22,9 +22,11 @@
 
 ## Overview
 
-Aura Swarm is a system for running many deterministic agents concurrently. Every agent maintains an append-only record log, a deterministic kernel advances state by consuming transactions, and reasoning is delegated to a pluggable LLM provider (proxy-routed or direct Anthropic API). All side effects flow through authorized executors so the full history is replayable from the record alone.
+Aura is a deterministic multi-agent runtime for running many agents concurrently. Every agent maintains an append-only record log, a deterministic kernel advances state by consuming transactions, and reasoning is delegated to a pluggable LLM provider (proxy-routed or direct Anthropic API). All side effects flow through authorized executors so the full history is replayable from the record alone.
 
 The runtime supports interactive terminal sessions (TUI), headless server deployments, and long-running automaton workflows — all backed by the same kernel, storage, and reasoning stack.
+
+> This repository (`aura-harness`) is the Cargo workspace that builds the Aura runtime (`aura`, `aura-node`, `aura-cli`). It is distinct from the sibling `aura-swarm` repository, which is a Firecracker/Kubernetes platform for hosting Aura agents.
 
 Core ideas:
 
