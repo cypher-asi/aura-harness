@@ -25,6 +25,10 @@ COPY aura-harness/crates/aura-auth         crates/aura-auth/
 COPY aura-harness/crates/aura-automaton    crates/aura-automaton/
 COPY aura-harness/crates/aura-skills       crates/aura-skills/
 COPY aura-os/crates/aura-protocol          /aura-os/crates/aura-protocol/
+# aura-protocol inherits edition/rust-version/license/repository/lints from its
+# workspace root. Ship a minimal stub so cargo can resolve `.workspace = true`
+# without copying the entire aura-os workspace into the build.
+COPY aura-harness/docker/aura-os-workspace-stub.toml /aura-os/Cargo.toml
 
 RUN cargo build --release --bin aura \
     && strip target/release/aura
