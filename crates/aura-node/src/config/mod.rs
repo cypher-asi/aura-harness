@@ -1,6 +1,26 @@
 //! Node configuration.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Errors returned by [`NodeConfig::resolve_allowed_path`].
+///
+/// The variants map onto distinct HTTP statuses so the file handlers can
+/// signal `400`, `403`, and `404` separately instead of collapsing every
+/// refusal into a single opaque error (which is what the previous
+/// `bool`-returning `is_allowed_path` forced them to do).
+#[derive(Debug, thiserror::Error)]
+pub enum PathError {
+    /// The resolved path does not exist on disk.
+    #[error("path not found: {0}")]
+    NotFound(PathBuf),
+    /// The resolved path's canonical form escapes the workspace root.
+    #[error("path escapes workspace: {0}")]
+    Escapes(PathBuf),
+    /// The workspace root itself is unavailable, or canonicalization
+    /// failed for a reason other than `NotFound` (e.g. permission denied).
+    #[error("path not permitted: {0}")]
+    NotPermitted(String),
+}
 
 /// Node configuration.
 #[derive(Debug, Clone)]
@@ -151,14 +171,77 @@ impl NodeConfig {
 
     /// Check whether a path is allowed for file operations.
     ///
-    /// Accepts paths under `project_base` (remote) or `workspaces_path` (local).
+    /// Thin wrapper around [`Self::resolve_allowed_path`] retained for
+    /// callers that only care whether a path is legal and don't need the
+    /// canonical form. New code should prefer `resolve_allowed_path` so
+    /// traversal attempts can be distinguished from missing files.
     #[must_use]
-    pub fn is_allowed_path(&self, path: &std::path::Path) -> bool {
-        if let Some(ref base) = self.project_base {
-            path.starts_with(base)
+    pub fn is_allowed_path(&self, path: &Path) -> bool {
+        self.resolve_allowed_path(path).is_ok()
+    }
+
+    /// Resolve `input` to a canonical path inside the workspace root.
+    ///
+    /// Replaces the previous `Path::starts_with` check against the raw
+    /// input, which was bypassable with `../` sequences that only
+    /// normalised after canonicalisation. The new implementation:
+    ///
+    /// 1. Canonicalises the workspace root (so symlinks / junctions
+    ///    anywhere in the root's ancestry resolve to their real target).
+    /// 2. Joins relative `input`s onto the root before canonicalising.
+    /// 3. Canonicalises the candidate path, which follows symlinks to
+    ///    their real target.
+    /// 4. Verifies the canonical candidate lives under the canonical
+    ///    root via `starts_with`. Any traversal, symlink, or junction
+    ///    that lands outside fails here.
+    ///
+    /// Relative paths, absolute paths, `.`, and empty inputs are all
+    /// accepted — empty / `.` inputs resolve to the root itself.
+    ///
+    /// # Errors
+    ///
+    /// * [`PathError::NotFound`] — the candidate path does not exist.
+    /// * [`PathError::Escapes`] — the candidate's canonical form is not
+    ///   a descendant of the canonical workspace root.
+    /// * [`PathError::NotPermitted`] — the workspace root itself
+    ///   cannot be canonicalised (missing / permission denied), or the
+    ///   candidate's canonicalisation failed for a non-NotFound reason.
+    pub fn resolve_allowed_path(&self, input: &Path) -> Result<PathBuf, PathError> {
+        let root = self.file_root();
+        let canonical_root = std::fs::canonicalize(&root).map_err(|e| {
+            PathError::NotPermitted(format!(
+                "workspace root unavailable ({}): {e}",
+                root.display()
+            ))
+        })?;
+        let canonical_root = strip_unc_prefix(&canonical_root);
+
+        let candidate = if input.as_os_str().is_empty() || input == Path::new(".") {
+            root.clone()
+        } else if input.is_absolute() {
+            input.to_path_buf()
         } else {
-            path.starts_with(self.workspaces_path())
+            root.join(input)
+        };
+
+        let canonical_candidate = match std::fs::canonicalize(&candidate) {
+            Ok(p) => strip_unc_prefix(&p),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(PathError::NotFound(candidate));
+            }
+            Err(e) => {
+                return Err(PathError::NotPermitted(format!(
+                    "canonicalize({}): {e}",
+                    candidate.display()
+                )));
+            }
+        };
+
+        if !canonical_candidate.starts_with(&canonical_root) {
+            return Err(PathError::Escapes(canonical_candidate));
         }
+
+        Ok(canonical_candidate)
     }
 
     /// Return the root directory for file browsing (project_base or workspaces).
@@ -170,6 +253,14 @@ impl NodeConfig {
             self.workspaces_path()
         }
     }
+}
+
+/// Strip the `\\?\` verbatim prefix that Windows `canonicalize()` adds.
+/// On non-Windows this is a no-op.
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
 }
 
 fn slugify(name: &str) -> String {

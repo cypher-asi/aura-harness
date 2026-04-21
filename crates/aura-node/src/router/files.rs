@@ -1,4 +1,6 @@
 use super::*;
+use crate::config::PathError;
+use tokio::io::AsyncReadExt;
 use tracing::warn;
 
 const IGNORED_DIRS: &[&str] = &[
@@ -13,6 +15,15 @@ const IGNORED_DIRS: &[&str] = &[
     ".hg",
     "vendor",
 ];
+
+/// Maximum number of bytes the `read-file` handler will return.
+///
+/// Caps accidental `cat`s of huge files and, more importantly, denies an
+/// OOM vector where a symlink / junction pointed at a pseudo-file such as
+/// `/dev/zero` so `read_to_string` could never terminate. The cap is
+/// enforced with `AsyncReadExt::take` so bytes beyond the limit never
+/// hit our address space.
+const MAX_READ_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ListFilesQuery {
@@ -36,6 +47,38 @@ struct FileDirEntry {
     is_dir: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     children: Option<Vec<Self>>,
+}
+
+/// Map a [`PathError`] to an HTTP status + JSON body.
+///
+/// Keeping the mapping in one place means `/api/files` and
+/// `/api/read-file` report traversal attempts, missing files, and
+/// permission failures with the same status codes, and changes to that
+/// policy only need to land here.
+fn path_error_response(err: &PathError) -> (StatusCode, Json<serde_json::Value>) {
+    match err {
+        PathError::NotFound(p) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("path not found: {}", p.display()),
+            })),
+        ),
+        PathError::Escapes(_) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "path escapes workspace",
+            })),
+        ),
+        PathError::NotPermitted(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": msg,
+            })),
+        ),
+    }
 }
 
 async fn walk_directory(
@@ -146,35 +189,47 @@ pub(super) async fn list_files_handler(
     State(state): State<RouterState>,
     Query(query): Query<ListFilesQuery>,
 ) -> impl IntoResponse {
-    let root = state.config.file_root();
     let depth = query.depth.min(20);
 
-    let base = if query.path == "." || query.path.is_empty() {
-        root.clone()
-    } else {
-        let path = std::path::Path::new(&query.path);
-        let candidate = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            root.join(path)
-        };
-        if !state.config.is_allowed_path(&candidate) {
-            return Json(serde_json::json!({ "ok": false, "error": "path escapes workspace" }));
+    // Every path — including the default "." — goes through the
+    // canonicalizing resolver so a caller can't sneak past with e.g.
+    // "./../etc". When the resolved path isn't a directory we surface
+    // 400 rather than silently walking a single file.
+    let input = std::path::Path::new(&query.path);
+    let base = match state.config.resolve_allowed_path(input) {
+        Ok(p) => p,
+        Err(e) => {
+            let (status, body) = path_error_response(&e);
+            return (status, body).into_response();
         }
-        candidate
     };
 
     match tokio::fs::metadata(&base).await {
         Ok(m) if m.is_dir() => {}
-        _ => {
-            return Json(serde_json::json!({ "ok": false, "error": "path not found" }));
+        Ok(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": "path is not a directory" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "ok": false, "error": "path not found" })),
+            )
+                .into_response();
         }
     }
 
     let rel = std::path::PathBuf::from(".");
     let entries = walk_directory(&base, &rel, depth).await;
 
-    Json(serde_json::json!({ "ok": true, "entries": entries }))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "entries": entries })),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,28 +241,96 @@ pub(super) async fn read_file_handler(
     State(state): State<RouterState>,
     Query(query): Query<ReadFileQuery>,
 ) -> impl IntoResponse {
-    let path = std::path::Path::new(&query.path);
-    let resolved = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        state.config.file_root().join(path)
+    let input = std::path::Path::new(&query.path);
+    let resolved = match state.config.resolve_allowed_path(input) {
+        Ok(p) => p,
+        Err(e) => {
+            let (status, body) = path_error_response(&e);
+            return (status, body).into_response();
+        }
     };
 
-    if !state.config.is_allowed_path(&resolved) {
-        return Json(serde_json::json!({ "ok": false, "error": "path escapes workspace" }));
+    // Reject directories explicitly so we don't end up returning
+    // `read_to_end` of a directory (which is an OS-specific error on
+    // Linux / empty on Windows).
+    match tokio::fs::metadata(&resolved).await {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": "path is not a file" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "ok": false, "error": "path not found" })),
+            )
+                .into_response();
+        }
     }
 
-    match tokio::fs::read_to_string(&resolved).await {
-        Ok(content) => Json(serde_json::json!({
+    // Stream through `take(MAX_READ_BYTES + 1)` so we can tell "at the
+    // limit" from "over the limit" without ever buffering more than
+    // `MAX_READ_BYTES + 1` bytes. `read_to_string` would have allocated
+    // for the full file up front — the whole point of this handler is
+    // to deny that.
+    let file = match tokio::fs::File::open(&resolved).await {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": format!("failed to open {}: {e}", resolved.display()),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut buf: Vec<u8> = Vec::new();
+    let cap = MAX_READ_BYTES;
+    let mut limited = file.take(cap + 1);
+    if let Err(e) = limited.read_to_end(&mut buf).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("failed to read {}: {e}", resolved.display()),
+            })),
+        )
+            .into_response();
+    }
+
+    if buf.len() as u64 > cap {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("file exceeds {cap}-byte read cap"),
+                "max_bytes": cap,
+            })),
+        )
+            .into_response();
+    }
+
+    // Decode as UTF-8 for the JSON payload. Lossy conversion matches
+    // the previous `read_to_string` behaviour for clean text files and
+    // degrades gracefully on binary input instead of returning a 500.
+    let content = String::from_utf8_lossy(&buf).into_owned();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
             "ok": true,
             "content": content,
             "path": resolved.to_string_lossy(),
+            "bytes": buf.len(),
         })),
-        Err(e) => Json(serde_json::json!({
-            "ok": false,
-            "error": format!("failed to read {}: {e}", resolved.display()),
-        })),
-    }
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]

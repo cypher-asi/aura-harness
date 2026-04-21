@@ -185,6 +185,7 @@ reqwest = { workspace = true }
 futures-util = { workspace = true }
 base64 = { workspace = true }
 dashmap = { workspace = true }
+tower = { workspace = true }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

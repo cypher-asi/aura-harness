@@ -203,7 +203,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     record_loader::load_existing_records(&store, identity.agent_id, &cmd_tx);
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
-    api_server::start_api_server(cmd_tx.clone()).await;
+    api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
     let (executor_router, tools) = session_helpers::build_executor_router();
 

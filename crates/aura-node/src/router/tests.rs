@@ -1167,3 +1167,199 @@ async fn test_health_remains_anonymous() {
         "/health must remain reachable without a bearer token (liveness probe)"
     );
 }
+
+// ============================================================================
+// File handler security tests (security audit — phase 3)
+// ============================================================================
+//
+// These tests exercise `/api/read-file` and `/api/files` against a real
+// on-disk workspace under `TempDir`, asserting that:
+//   * canonicalized path traversal is rejected (403 Forbidden),
+//   * legitimate in-workspace reads succeed with the file contents,
+//   * oversize files trip the 5 MiB cap with 413 Payload Too Large.
+//
+// The previous `Path::starts_with` check on the unresolved input was
+// bypassable with `../` sequences — these tests pin the behaviour of
+// the canonicalizing `NodeConfig::resolve_allowed_path` replacement.
+
+/// Build a router state whose workspace root is a real temp directory.
+///
+/// `data_dir/workspaces` is created so `resolve_allowed_path` can
+/// canonicalize it. Returns the state and the `TempDir` so the caller
+/// can keep it alive for the duration of the test.
+fn test_router_state_with_workspace() -> (RouterState, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().unwrap();
+    let data_dir = tmp.path().to_path_buf();
+    std::fs::create_dir_all(data_dir.join("workspaces")).unwrap();
+
+    let store = create_test_store();
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("mock"));
+    let scheduler = Arc::new(Scheduler::new(
+        store.clone(),
+        provider.clone(),
+        vec![],
+        vec![],
+        data_dir.join("workspaces"),
+        None,
+    ));
+    let config = NodeConfig {
+        data_dir,
+        ..NodeConfig::default()
+    };
+    let state = RouterState::new(crate::router::RouterStateConfig {
+        store,
+        scheduler,
+        config,
+        provider,
+        tool_config: ToolConfig::default(),
+        catalog: Arc::new(ToolCatalog::new()),
+        domain_api: None,
+        automaton_controller: None,
+        automaton_bridge: None,
+        memory_manager: None,
+        skill_manager: None,
+        router_url: None,
+    });
+    (state, tmp)
+}
+
+#[tokio::test]
+async fn test_read_file_rejects_path_traversal() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let workspaces = tmp.path().join("workspaces");
+    // Drop a secret file *outside* the workspace root to serve as the
+    // target of the traversal attempt. The canonical resolver should
+    // refuse to expose it even though it's a real, readable file on
+    // disk under `data_dir/`.
+    let secret = tmp.path().join("secret.txt");
+    std::fs::write(&secret, "top-secret").unwrap();
+    // Also drop a decoy file inside `workspaces` so the traversal has
+    // a valid starting segment to anchor against.
+    std::fs::write(workspaces.join("decoy.txt"), "ok").unwrap();
+
+    let app = create_router(state);
+
+    // `workspaces/../secret.txt` canonicalises to `<tmp>/secret.txt`
+    // which is one level above the root — must be rejected.
+    let traversal = format!(
+        "{}/../secret.txt",
+        workspaces.to_string_lossy().replace('\\', "/")
+    );
+    let uri = format!(
+        "/api/read-file?path={}",
+        urlencode(&traversal)
+    );
+    let req = authed_request().uri(uri).body(Body::empty()).unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "traversal must be refused, not return the secret"
+    );
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        !text.contains("top-secret"),
+        "response must not leak file contents; got: {text}"
+    );
+}
+
+#[tokio::test]
+async fn test_read_file_returns_workspace_file() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let workspaces = tmp.path().join("workspaces");
+    let file_path = workspaces.join("hello.txt");
+    std::fs::write(&file_path, "hello, world").unwrap();
+
+    let app = create_router(state);
+
+    let uri = format!(
+        "/api/read-file?path={}",
+        urlencode(&file_path.to_string_lossy())
+    );
+    let req = authed_request().uri(uri).body(Body::empty()).unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["content"], "hello, world");
+}
+
+#[tokio::test]
+async fn test_read_file_caps_at_5mib() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let workspaces = tmp.path().join("workspaces");
+    // 5 MiB + 1 byte — one byte over the cap is the minimum signal
+    // that the cap is enforced and not off-by-one in our favour.
+    let oversize = workspaces.join("big.bin");
+    let payload = vec![b'A'; 5 * 1024 * 1024 + 1];
+    std::fs::write(&oversize, &payload).unwrap();
+
+    let app = create_router(state);
+
+    let uri = format!(
+        "/api/read-file?path={}",
+        urlencode(&oversize.to_string_lossy())
+    );
+    let req = authed_request().uri(uri).body(Body::empty()).unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "oversize reads must trip the 5 MiB cap, not OOM the process"
+    );
+}
+
+#[tokio::test]
+async fn test_list_files_rejects_path_traversal() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let workspaces = tmp.path().join("workspaces");
+    std::fs::write(workspaces.join("inside.txt"), "ok").unwrap();
+
+    let app = create_router(state);
+
+    let traversal = format!(
+        "{}/../..",
+        workspaces.to_string_lossy().replace('\\', "/")
+    );
+    let uri = format!("/api/files?path={}", urlencode(&traversal));
+    let req = authed_request().uri(uri).body(Body::empty()).unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "listing above the workspace root must be refused"
+    );
+}
+
+/// Tiny percent-encoder used only by the file-handler tests.
+///
+/// We can't drag in a full URL crate just for this: `reqwest::Url`
+/// isn't available in this test binary and `percent_encoding` isn't a
+/// workspace dep. So we hand-encode the bytes that matter for URL
+/// paths (space, `?`, `#`, `&`, `%`, `+`, non-ASCII) and leave the
+/// alphanumerics / safe punctuation alone.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        let safe = b.is_ascii_alphanumeric()
+            || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/' | b':' | b'\\');
+        if safe {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
+}
