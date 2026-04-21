@@ -18,6 +18,7 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_STORAGE_URL");
     std::env::remove_var("AURA_NETWORK_URL");
     std::env::remove_var("AURA_PROJECT_BASE");
+    std::env::remove_var("AURA_NODE_AUTH_TOKEN");
 }
 
 #[test]

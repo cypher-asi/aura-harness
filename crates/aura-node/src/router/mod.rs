@@ -29,9 +29,9 @@ use std::time::Duration;
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     timeout::TimeoutLayer,
-    trace::TraceLayer,
+    trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer},
 };
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument, warn, Level};
 
 mod auth;
 mod automaton;
@@ -298,7 +298,10 @@ pub fn create_router(state: RouterState) -> Router {
             "/api/harness/agents/:agent_id/skills/:name",
             axum::routing::delete(skills::uninstall_agent_skill),
         )
-        .route_layer(axum::middleware::from_fn(auth::require_bearer_mw));
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_bearer_mw,
+        ));
 
     Router::new()
         .merge(public)
@@ -318,7 +321,21 @@ pub fn create_router(state: RouterState) -> Router {
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         ))
-        .layer(TraceLayer::new_for_http())
+        // Phase 4 (security audit): explicit TraceLayer levels instead
+        // of `TraceLayer::new_for_http()`. `tower_http`'s default span
+        // already omits request headers — it only records method / uri
+        // / version — so the `Authorization` header never enters our
+        // log pipeline through this layer. The explicit level setters
+        // make that intent auditable: if a future contributor swaps in
+        // a custom `make_span_with`, they have to deliberately opt
+        // into header logging (and redact Authorization) instead of
+        // picking it up from the default.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
 }
 
 /// Build the CORS layer from the `AURA_ALLOWED_ORIGINS` environment variable.

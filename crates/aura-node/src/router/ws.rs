@@ -62,7 +62,7 @@ pub(super) async fn automaton_ws_handler(
     // this handler up to a fresh `Router` that doesn't inherit the
     // middleware layer. Cost is a single `HeaderMap::get` on an already
     // authenticated path.
-    if let Err(status) = super::auth::require_bearer(&headers) {
+    if let Err(status) = super::auth::require_bearer(&headers, &state.config.auth_token) {
         return status.into_response();
     }
 

@@ -47,7 +47,7 @@ impl Node {
     ///
     /// # Errors
     /// Returns error if the node fails to start.
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         info!("Starting Aura Node");
         info!(data_dir = ?self.config.data_dir, "Data directory");
 
@@ -58,6 +58,16 @@ impl Node {
         tokio::fs::create_dir_all(self.config.workspaces_path())
             .await
             .context("creating workspaces directory")?;
+
+        // Security audit — phase 4. Resolve the bearer secret BEFORE we
+        // build the router so every protected route sees the same
+        // token. `resolve_auth_token` prefers `AURA_NODE_AUTH_TOKEN`,
+        // then a persisted `$data_dir/auth_token` file, then mints a
+        // new one (and prints it to stderr exactly once). See
+        // `crate::config::resolve_auth_token` for the source-order
+        // spec. The token is deliberately *not* logged via `tracing`.
+        self.config.auth_token = crate::config::resolve_auth_token(&self.config.data_dir)
+            .context("resolving aura-node auth token")?;
 
         let store = Arc::new(
             RocksStore::open(&db_path, self.config.sync_writes).context("opening RocksDB store")?,

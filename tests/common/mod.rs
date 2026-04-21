@@ -137,6 +137,13 @@ impl TestServer {
         config.enable_fs_tools = true;
         config.enable_cmd_tools = true;
         config.allowed_commands = vec![];
+        // Phase 4 (security audit): the router's bearer middleware now
+        // does a constant-time compare against `config.auth_token`.
+        // Force the deterministic test value so `http_client()` and
+        // `WsClient::connect()` (both of which send `E2E_TEST_BEARER`)
+        // pass through, regardless of whether the ambient environment
+        // has `AURA_NODE_AUTH_TOKEN` set to something else.
+        config.auth_token = E2E_TEST_BEARER.to_string();
 
         let store: Arc<dyn aura_store::Store> =
             Arc::new(RocksStore::open(&db_path, false).expect("open rocks"));

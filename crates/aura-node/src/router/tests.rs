@@ -15,11 +15,14 @@ use tower::util::ServiceExt;
 
 /// Test bearer token injected by [`authed_request`].
 ///
-/// The router middleware added in the phase-1 security hardening only
-/// checks for the *presence* of a non-empty Bearer token — the value
-/// itself is not validated yet (phase 4 will introduce the shared secret).
-/// So every non-`/health` test route just needs a syntactically valid
-/// header and this constant provides one.
+/// Phase 4 of the security audit taught `require_bearer_mw` to do a
+/// constant-time compare against [`NodeConfig::auth_token`], so the
+/// value here is no longer cosmetic: it must match the configured
+/// secret. [`NodeConfig::default`] ships with the same literal
+/// (documented as a test-only placeholder) so every helper in this
+/// file keeps working with zero boilerplate. Tests that deliberately
+/// want the 401 path (e.g. [`test_requires_bearer_on_protected_routes`])
+/// either omit the header or send a non-matching value.
 const TEST_BEARER: &str = "test";
 
 /// Build a [`Request`] pre-populated with an `Authorization: Bearer test`
@@ -1144,6 +1147,82 @@ async fn test_rejects_malformed_bearer_header() {
     let req = Request::builder()
         .uri("/api/skills")
         .header("authorization", "Bearer   ")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Phase 4 (security audit): a syntactically-valid Bearer that does
+/// *not* match the configured secret must be rejected. This is the
+/// regression test for the pre-phase-4 behaviour where `Bearer x`
+/// was enough to reach any protected handler.
+#[tokio::test]
+async fn test_rejects_non_matching_bearer() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/api/skills")
+        .header("authorization", "Bearer not-the-configured-secret")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A server whose `auth_token` is empty (misconfiguration) must not
+/// accept *any* request — otherwise attackers who guess that the
+/// server "never loaded a secret" could send `Bearer ""` and win.
+#[tokio::test]
+async fn test_rejects_when_server_auth_token_empty() {
+    let dir = tempfile::tempdir().unwrap().keep();
+    let rocks = RocksStore::open(&dir, false).unwrap();
+    let store: Arc<dyn Store> = Arc::new(rocks);
+
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("mock"));
+    let scheduler = Arc::new(Scheduler::new(
+        store.clone(),
+        provider.clone(),
+        vec![],
+        vec![],
+        std::path::PathBuf::from("/tmp/workspaces"),
+        None,
+    ));
+    let config = NodeConfig {
+        auth_token: String::new(),
+        ..NodeConfig::default()
+    };
+    let state = RouterState::new(crate::router::RouterStateConfig {
+        store,
+        scheduler,
+        config,
+        provider,
+        tool_config: ToolConfig::default(),
+        catalog: Arc::new(ToolCatalog::new()),
+        domain_api: None,
+        automaton_controller: None,
+        automaton_bridge: None,
+        memory_manager: None,
+        skill_manager: None,
+        router_url: None,
+    });
+    let app = create_router(state);
+
+    // Even with the "correct" (empty) token the server must refuse.
+    let req = Request::builder()
+        .uri("/api/skills")
+        .header("authorization", "Bearer anything")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // And of course with an empty presented token too.
+    let req = Request::builder()
+        .uri("/api/skills")
+        .header("authorization", "Bearer ")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
