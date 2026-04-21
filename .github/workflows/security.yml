@@ -1,0 +1,78 @@
+name: security
+
+# Dedicated supply-chain workflow (Phase 8). Runs on every push to main,
+# every PR, and on a weekly schedule so long-lived branches still get
+# scanned as new RustSec advisories land. Overlaps intentionally with the
+# `deny` / `audit` jobs in ci.yml — those gate PRs with the locally
+# pinned cargo-deny version, while this workflow exercises the upstream
+# cargo-deny-action + rustsec/audit-check setup so we notice drift.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays 06:00 UTC — off the normal weekday push cadence so scheduled
+    # failures aren't drowned out by regular CI noise.
+    - cron: '0 6 * * 1'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # cargo-deny: license + advisory + ban + source policy
+  # ---------------------------------------------------------------------------
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # aura-harness has a dev-dependency on ../aura-os/crates/aura-protocol;
+      # cargo-deny has to resolve the workspace graph, so the sibling repo
+      # must be on disk at the expected relative path.
+      # TODO: set aura-os repo slug once published (match ci.yml).
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: aura-harness/Cargo.toml
+          command: check
+          arguments: --all-features
+
+  # ---------------------------------------------------------------------------
+  # cargo-audit: RustSec advisory scan (complementary to cargo-deny advisories)
+  # ---------------------------------------------------------------------------
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # TODO: set aura-os repo slug once published (match ci.yml).
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: aura-harness
