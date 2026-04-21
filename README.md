@@ -57,6 +57,8 @@ Core ideas:
 
 The path dependency is declared in [`Cargo.toml`](Cargo.toml) and [`crates/aura-node/Cargo.toml`](crates/aura-node/Cargo.toml) as `../aura-os/crates/aura-protocol`. RocksDB builds require LLVM/Clang; see [`docs/PROGRESS.md`](docs/PROGRESS.md) for platform notes.
 
+On Linux, the `keyring` crate's Secret Service backend links against `libdbus-1`, so the workspace also needs `libdbus-1-dev` and `pkg-config` at build time (e.g. `sudo apt install libdbus-1-dev pkg-config` on Debian/Ubuntu, `sudo dnf install dbus-devel pkgconf-pkg-config` on Fedora). macOS and Windows builds need no extra system packages for keyring.
+
 ## Quick Start
 
 ```sh
