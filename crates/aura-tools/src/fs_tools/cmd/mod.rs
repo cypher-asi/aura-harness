@@ -673,6 +673,21 @@ impl Tool for CmdRunTool {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
+        // Phase 5 hardening: even when a caller reaches `CmdRunTool`
+        // directly (bypassing `ToolExecutor`'s category-level gate),
+        // `enable_commands = false` must refuse the invocation. The
+        // downstream `check_binary_allowlist` short-circuits to `Ok`
+        // when commands are disabled (so it doesn't second-guess the
+        // dispatcher), leaving this check as the only thing between
+        // a disabled config and a spawned process.
+        if !ctx.config.enable_commands {
+            return Err(ToolError::Forbidden(
+                "command execution disabled; set ToolConfig::enable_commands=true \
+                 and populate binary_allowlist to opt in"
+                    .into(),
+            ));
+        }
+
         let cwd = args["cwd"]
             .as_str()
             .or_else(|| args["working_dir"].as_str())

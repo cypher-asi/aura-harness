@@ -103,6 +103,20 @@ impl ToolExecutor {
     }
 
     /// Create a tool executor with default config.
+    ///
+    /// **Phase 5 hardening note:** [`ToolConfig::default`] now yields a
+    /// fail-closed configuration — filesystem tools are enabled, but
+    /// `enable_commands` is `false`, `allow_shell` is `false`, and every
+    /// allow-list (`binary_allowlist`, `command_allowlist`,
+    /// `allowed_shell_scripts`) is empty. Any call to `run_command`
+    /// through an executor built with `with_defaults()` will therefore
+    /// be refused with `ToolError::ToolDisabled` at the category gate
+    /// and again with `ToolError::Forbidden` at [`CmdRunTool::execute`].
+    ///
+    /// Callers that genuinely need command execution must construct a
+    /// custom [`ToolConfig`] with `enable_commands: true` **and** a
+    /// populated `binary_allowlist`. There is no helper for this on
+    /// purpose — opt-in must be deliberate.
     #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(ToolConfig::default())

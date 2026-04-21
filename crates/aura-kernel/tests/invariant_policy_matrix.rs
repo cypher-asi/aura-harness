@@ -355,12 +355,27 @@ fn rows() -> Vec<(&'static str, PolicyConfig, Expected, Option<Pre>)> {
         Some(Pre::ApproveForSession(TARGET_TOOL)),
     ));
 
-    // Default `with_defaults` permissive preset: explicitly pin the
-    // production defaults that ship with the kernel.
+    // Phase 5 hardening pinned `allow_unlisted: false` into the
+    // kernel defaults. Preserve the original "unlisted tool is
+    // accepted when `allow_unlisted=true`" coverage by flipping the
+    // knob explicitly, and add a sibling row that proves the new
+    // fail-closed default denies the same request.
     out.push((
-        "defaults/some_tool_unlisted_allow_unlisted_true",
-        PolicyConfig::default(),
+        "defaults/some_tool_unlisted_allow_unlisted_true_explicit",
+        PolicyConfig {
+            allow_unlisted: true,
+            ..PolicyConfig::default()
+        },
         Accepted,
+        None,
+    ));
+
+    out.push((
+        "defaults/some_tool_unlisted_fail_closed",
+        PolicyConfig::default(),
+        Rejected {
+            substring: "not allowed",
+        },
         None,
     ));
 

@@ -64,8 +64,12 @@ pub struct PolicyConfig {
     /// Declared integration requirements for tools.
     pub tool_integration_requirements: HashMap<String, InstalledToolIntegrationRequirement>,
     /// When true, tools not in `allowed_tools` or `tool_permissions` get
-    /// `AlwaysAllow` instead of `Deny`. The kernel is the sole gateway, so
-    /// the default is open; use [`PolicyConfig::restrictive`] to lock down.
+    /// `AlwaysAllow` instead of `Deny`. **Defaults to `false`** (Phase 5
+    /// hardening — closes finding C5): unlisted tools fall through to
+    /// `Deny` so adding a tool to the runtime registry no longer
+    /// auto-grants it at policy-check time. Hosts that deliberately
+    /// want a wide-open policy (e.g. a controlled test harness) can
+    /// flip this back to `true` explicitly.
     pub allow_unlisted: bool,
     /// Scope + capability bundle for the agent this policy governs.
     /// Always consulted on `Delegate` proposals — the check is
@@ -79,6 +83,14 @@ pub struct PolicyConfig {
 }
 
 impl Default for PolicyConfig {
+    /// Fail-closed defaults (Phase 5 hardening — closes finding C5):
+    ///
+    /// * `allow_unlisted` is `false`, so anything not in `allowed_tools`
+    ///   and not explicitly named in `tool_permissions` is denied.
+    /// * `run_command` is **not** pre-populated in `allowed_tools`.
+    ///   `default_tool_permission("run_command")` still returns
+    ///   `AlwaysAsk`, so a host that opts in by inserting `run_command`
+    ///   continues to require per-invocation approval.
     fn default() -> Self {
         let mut allowed_action_kinds = HashSet::new();
         allowed_action_kinds.insert(ActionKind::Reason);
@@ -93,7 +105,6 @@ impl Default for PolicyConfig {
         allowed_tools.insert("search_code".to_string());
         allowed_tools.insert("write_file".to_string());
         allowed_tools.insert("edit_file".to_string());
-        allowed_tools.insert("run_command".to_string());
 
         Self {
             allowed_action_kinds,
@@ -102,7 +113,7 @@ impl Default for PolicyConfig {
             tool_permissions: HashMap::new(),
             installed_integrations: Vec::new(),
             tool_integration_requirements: HashMap::new(),
-            allow_unlisted: true,
+            allow_unlisted: false,
             agent_permissions: AgentPermissions::empty(),
             tool_capability_requirements: HashMap::new(),
         }
@@ -110,10 +121,17 @@ impl Default for PolicyConfig {
 }
 
 impl PolicyConfig {
-    /// Create a permissive config that allows all tools.
+    /// Create a permissive config that explicitly opens the policy:
+    /// `allow_unlisted = true` and `run_command` is added to
+    /// `allowed_tools`. Kept distinct from [`Self::default`] after the
+    /// Phase 5 fail-closed flip so callers who actually want the wide
+    /// gate still have a one-liner.
     #[must_use]
     pub fn permissive() -> Self {
-        Self::default()
+        let mut cfg = Self::default();
+        cfg.allowed_tools.insert("run_command".to_string());
+        cfg.allow_unlisted = true;
+        cfg
     }
 
     /// Create a restrictive config with only read-only tools.

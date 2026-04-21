@@ -444,6 +444,7 @@ async fn test_cmd_run_tool_rejects_injection_in_program() {
     // `program` field must be refused with InvalidArguments BEFORE any
     // process is spawned. This is the core Phase 2 regression test.
     let config = crate::ToolConfig {
+        enable_commands: true,
         binary_allowlist: vec!["ls".to_string()],
         ..crate::ToolConfig::default()
     };
@@ -479,6 +480,7 @@ async fn test_cmd_run_tool_accepts_echo_with_args() {
     // `binary_allowlist=["echo"]` must succeed via the no-shell path.
     // On Unix `echo` is guaranteed to be in PATH as an actual binary.
     let config = crate::ToolConfig {
+        enable_commands: true,
         binary_allowlist: vec!["echo".to_string()],
         ..crate::ToolConfig::default()
     };
@@ -507,6 +509,7 @@ async fn test_cmd_run_tool_accepts_program_with_args() {
     // proving the no-shell path works end-to-end when a program is
     // allow-listed and its arguments are non-empty.
     let config = crate::ToolConfig {
+        enable_commands: true,
         binary_allowlist: vec!["PING".to_string(), "ping".to_string()],
         ..crate::ToolConfig::default()
     };
@@ -529,10 +532,16 @@ async fn test_cmd_run_tool_accepts_program_with_args() {
 
 #[tokio::test]
 async fn test_cmd_run_tool_empty_binary_allowlist_fails_closed() {
-    // Default ToolConfig: enable_commands=true, binary_allowlist=[].
-    // Phase 2 contract: this is now a configuration error that must be
-    // rejected at pre-flight, regardless of which program was asked.
-    let (ctx, _dir) = tool_ctx(crate::ToolConfig::default());
+    // Phase 2 contract: when an operator has opted into command
+    // execution (`enable_commands=true`) but forgotten to populate the
+    // allow-list, pre-flight must refuse the call. We explicitly
+    // opt-in here because Phase 5 flipped `enable_commands` to `false`
+    // in the default config.
+    let config = crate::ToolConfig {
+        enable_commands: true,
+        ..crate::ToolConfig::default()
+    };
+    let (ctx, _dir) = tool_ctx(config);
     let tool = CmdRunTool;
 
     let err = tool
@@ -555,8 +564,38 @@ async fn test_cmd_run_tool_empty_binary_allowlist_fails_closed() {
 }
 
 #[tokio::test]
+async fn test_cmd_run_tool_refuses_when_commands_disabled() {
+    // Phase 5 hardening: the fresh `ToolConfig::default()` leaves
+    // `enable_commands=false`. `CmdRunTool::execute` must refuse with
+    // a clear "command execution disabled" error even when the caller
+    // bypasses `ToolExecutor`'s category gate and invokes the tool
+    // directly.
+    let (ctx, _dir) = tool_ctx(crate::ToolConfig::default());
+    let tool = CmdRunTool;
+
+    let err = tool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "echo", "args": ["hi"] }),
+        )
+        .await
+        .expect_err("default ToolConfig must refuse command execution");
+
+    match err {
+        ToolError::Forbidden(msg) => {
+            assert!(
+                msg.contains("command execution disabled"),
+                "unexpected message: {msg}"
+            );
+        }
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_cmd_run_tool_denies_binary_outside_allowlist() {
     let config = crate::ToolConfig {
+        enable_commands: true,
         binary_allowlist: vec!["git".to_string()],
         ..crate::ToolConfig::default()
     };
@@ -580,6 +619,7 @@ async fn test_cmd_run_tool_denies_binary_outside_allowlist() {
 #[tokio::test]
 async fn test_cmd_run_tool_shell_script_requires_allow_shell() {
     let config = crate::ToolConfig {
+        enable_commands: true,
         allowed_shell_scripts: vec!["echo hi".to_string()],
         binary_allowlist: vec!["echo".to_string()],
         ..crate::ToolConfig::default()
@@ -603,6 +643,7 @@ async fn test_cmd_run_tool_shell_script_requires_allow_shell() {
 #[tokio::test]
 async fn test_cmd_run_tool_shell_script_not_in_allowlist() {
     let config = crate::ToolConfig {
+        enable_commands: true,
         allow_shell: true,
         allowed_shell_scripts: vec!["echo approved".to_string()],
         binary_allowlist: vec!["echo".to_string()],
@@ -633,6 +674,7 @@ async fn test_cmd_run_tool_shell_script_not_in_allowlist() {
 #[tokio::test]
 async fn test_cmd_run_tool_shell_script_mutually_exclusive_with_program() {
     let config = crate::ToolConfig {
+        enable_commands: true,
         allow_shell: true,
         allowed_shell_scripts: vec!["echo hi".to_string()],
         binary_allowlist: vec!["echo".to_string()],
@@ -680,6 +722,7 @@ async fn test_cmd_run_tool_shell_script_runs_when_allowlisted() {
     let (script, allow_binaries) = ("echo shell_path_ok", vec!["echo".to_string()]);
 
     let config = crate::ToolConfig {
+        enable_commands: true,
         allow_shell: true,
         allowed_shell_scripts: vec![script.to_string()],
         binary_allowlist: allow_binaries,

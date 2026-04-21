@@ -61,6 +61,24 @@ pub fn open_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
     Ok(Arc::new(RocksStore::open(path, false)?))
 }
 
+/// Build the default executor router used by the terminal harness and
+/// embedded tooling.
+///
+/// **Phase 5 hardening note:** This wires in
+/// [`ToolExecutor::with_defaults()`], which — after the Phase 5 flip of
+/// [`aura_tools::ToolConfig::default`] — is a *no-shell, no-commands*
+/// tool router. Filesystem tools (`read_file`, `write_file`, `list_files`,
+/// …) are reachable, but `run_command` is blocked both at the category
+/// gate (`enable_commands = false`) and at `CmdRunTool::execute`
+/// (empty `binary_allowlist`).
+///
+/// Production callers that want command execution must *not* rely on
+/// this helper. They should construct a custom
+/// [`aura_tools::ToolConfig`] with `enable_commands: true` and a
+/// populated `binary_allowlist`, feed it into [`ToolExecutor::new`],
+/// and register that executor on their own `ExecutorRouter`. The opt-in
+/// is deliberately plumbed through user-supplied config rather than a
+/// convenience flag on this bootstrap.
 #[must_use]
 pub fn build_executor_router() -> (ExecutorRouter, Vec<ToolDefinition>) {
     let mut executor_router = ExecutorRouter::new();

@@ -105,10 +105,18 @@ pub struct ToolConfig {
 }
 
 impl Default for ToolConfig {
+    /// Fail-closed defaults: filesystem tools are on, but command
+    /// execution is off and every shell / script hook is empty. An
+    /// operator who wants `run_command` must set
+    /// `enable_commands: true` **and** populate `binary_allowlist`
+    /// with the specific binaries they trust. Leaving either field
+    /// at the default value keeps `run_command` completely inert,
+    /// even if a delegate proposal reaches [`CmdRunTool::execute`].
+    /// (Phase 5 hardening — closes finding M1.)
     fn default() -> Self {
         Self {
             enable_fs: true,
-            enable_commands: true,
+            enable_commands: false,
             command_allowlist: vec![],
             binary_allowlist: vec![],
             allow_shell: false,
@@ -118,5 +126,35 @@ impl Default for ToolConfig {
             max_async_timeout_ms: 600_000,
             extra_allowed_paths: vec![],
         }
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::ToolConfig;
+
+    #[test]
+    fn default_config_disables_commands() {
+        let cfg = ToolConfig::default();
+        assert!(
+            !cfg.enable_commands,
+            "fresh ToolConfig must start with commands disabled"
+        );
+        assert!(
+            cfg.binary_allowlist.is_empty(),
+            "fresh ToolConfig must have an empty binary_allowlist"
+        );
+        assert!(
+            cfg.command_allowlist.is_empty(),
+            "fresh ToolConfig must have an empty command_allowlist"
+        );
+        assert!(
+            !cfg.allow_shell,
+            "fresh ToolConfig must not allow shell scripts"
+        );
+        assert!(
+            cfg.allowed_shell_scripts.is_empty(),
+            "fresh ToolConfig must have an empty allowed_shell_scripts"
+        );
     }
 }

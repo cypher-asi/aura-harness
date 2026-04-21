@@ -404,12 +404,19 @@ mod permission_tests {
 
     #[test]
     fn missing_capability_is_denied() {
-        let config = PolicyConfig::default()
-            .with_agent_permissions(AgentPermissions {
-                scope: AgentScope::default(),
-                capabilities: vec![],
-            })
-            .with_tool_capability("spawn_agent", Capability::SpawnAgent);
+        // Phase 5 hardening: `allow_unlisted` defaults to `false`, so
+        // capability tests must opt into the permissive allow-list to
+        // reach the capability gate instead of getting short-circuited
+        // by the "tool not allowed" check.
+        let config = PolicyConfig {
+            allow_unlisted: true,
+            ..PolicyConfig::default()
+        }
+        .with_agent_permissions(AgentPermissions {
+            scope: AgentScope::default(),
+            capabilities: vec![],
+        })
+        .with_tool_capability("spawn_agent", Capability::SpawnAgent);
         let policy = Policy::new(config);
         let result = policy.check(&delegate_proposal("spawn_agent", serde_json::json!({})));
         assert!(!result.allowed);
@@ -418,12 +425,15 @@ mod permission_tests {
 
     #[test]
     fn present_capability_is_allowed() {
-        let config = PolicyConfig::default()
-            .with_agent_permissions(AgentPermissions {
-                scope: AgentScope::default(),
-                capabilities: vec![Capability::SpawnAgent],
-            })
-            .with_tool_capability("spawn_agent", Capability::SpawnAgent);
+        let config = PolicyConfig {
+            allow_unlisted: true,
+            ..PolicyConfig::default()
+        }
+        .with_agent_permissions(AgentPermissions {
+            scope: AgentScope::default(),
+            capabilities: vec![Capability::SpawnAgent],
+        })
+        .with_tool_capability("spawn_agent", Capability::SpawnAgent);
         let policy = Policy::new(config);
         assert!(
             policy
@@ -434,7 +444,11 @@ mod permission_tests {
 
     #[test]
     fn out_of_scope_target_is_denied() {
-        let config = PolicyConfig::default().with_agent_permissions(AgentPermissions {
+        let config = PolicyConfig {
+            allow_unlisted: true,
+            ..PolicyConfig::default()
+        }
+        .with_agent_permissions(AgentPermissions {
             scope: AgentScope {
                 orgs: vec!["only".into()],
                 ..AgentScope::default()
@@ -452,7 +466,11 @@ mod permission_tests {
 
     #[test]
     fn in_scope_target_is_allowed() {
-        let config = PolicyConfig::default().with_agent_permissions(AgentPermissions {
+        let config = PolicyConfig {
+            allow_unlisted: true,
+            ..PolicyConfig::default()
+        }
+        .with_agent_permissions(AgentPermissions {
             scope: AgentScope {
                 orgs: vec!["only".into()],
                 ..AgentScope::default()

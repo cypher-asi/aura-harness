@@ -47,14 +47,72 @@ fn test_policy_allows_fs_read() {
 }
 
 #[test]
-fn test_default_policy_allows_unlisted_tool() {
+fn test_default_policy_denies_unlisted_tool() {
+    // Phase 5 hardening: defaults are fail-closed. Unlisted tools
+    // fall through to `Deny` instead of `AlwaysAllow`.
     let policy = Policy::with_defaults();
     let tool_call = ToolCall::new("unknown.tool", serde_json::json!({}));
     let payload = serde_json::to_vec(&tool_call).unwrap();
     let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
 
     let result = policy.check(&proposal);
-    assert!(result.allowed);
+    assert!(!result.allowed);
+    assert!(result.reason.unwrap().contains("not allowed"));
+}
+
+#[test]
+fn test_explicit_allow_unlisted_allows_unknown_tool() {
+    // Opt-in: hosts that genuinely want the pre-phase-5 wide-open
+    // behavior must now set `allow_unlisted: true` explicitly.
+    let config = PolicyConfig {
+        allow_unlisted: true,
+        ..PolicyConfig::default()
+    };
+    let policy = Policy::new(config);
+    let tool_call = ToolCall::new("unknown.tool", serde_json::json!({}));
+    let payload = serde_json::to_vec(&tool_call).unwrap();
+    let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
+
+    assert!(policy.check(&proposal).allowed);
+}
+
+#[test]
+fn test_default_config_fail_closed_flags() {
+    // Phase 5 hardening: nail the exact shape of the default policy so
+    // anyone loosening these knobs is forced to update the tests too.
+    let cfg = PolicyConfig::default();
+    assert!(
+        !cfg.allow_unlisted,
+        "default PolicyConfig must have allow_unlisted=false"
+    );
+    assert!(
+        !cfg.allowed_tools.contains("run_command"),
+        "default allowed_tools must NOT contain run_command"
+    );
+    // Read-only / narrow filesystem tools stay in.
+    assert!(cfg.allowed_tools.contains("read_file"));
+    assert!(cfg.allowed_tools.contains("write_file"));
+    // `default_tool_permission` still classes run_command as AlwaysAsk
+    // so hosts that opt in get per-invocation approval.
+    assert_eq!(
+        default_tool_permission("run_command"),
+        PermissionLevel::AlwaysAsk
+    );
+}
+
+#[test]
+fn test_default_config_denies_run_command_delegate() {
+    // End-to-end: `run_command` is not in the default allow-list and
+    // `allow_unlisted` is false, so a Delegate proposal that targets
+    // `run_command` is rejected at policy check.
+    let policy = Policy::with_defaults();
+    let tool_call = ToolCall::new("run_command", serde_json::json!({"program": "ls"}));
+    let payload = serde_json::to_vec(&tool_call).unwrap();
+    let proposal = Proposal::new(ActionKind::Delegate, Bytes::from(payload));
+
+    let result = policy.check(&proposal);
+    assert!(!result.allowed);
+    assert!(result.reason.unwrap().contains("not allowed"));
 }
 
 #[test]
@@ -160,9 +218,12 @@ fn test_always_allow_does_not_require_approval() {
 }
 
 #[test]
-fn test_unlisted_tool_allowed_by_default() {
+fn test_unlisted_tool_requires_approval_by_default() {
+    // Phase 5 hardening: `allow_unlisted=false` means
+    // `check_tool_permission` returns `Deny`, which `requires_approval`
+    // translates to `true` (deny => caller must ask).
     let policy = Policy::with_defaults();
-    assert!(!policy.requires_approval("some_unknown_tool"));
+    assert!(policy.requires_approval("some_unknown_tool"));
 }
 
 #[test]
@@ -180,10 +241,12 @@ fn test_check_tool_always_allow() {
 }
 
 #[test]
-fn test_check_tool_unlisted_allowed_by_default() {
+fn test_check_tool_unlisted_denied_by_default() {
+    // Phase 5 hardening: defaults now deny unlisted tools.
     let policy = Policy::with_defaults();
     let result = policy.check_tool("evil_tool", &serde_json::json!({}));
-    assert!(result.allowed);
+    assert!(!result.allowed);
+    assert!(result.reason.unwrap().contains("not allowed"));
 }
 
 #[test]
