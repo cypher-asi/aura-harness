@@ -53,11 +53,11 @@ Build a Swarm that can run **many deterministic Agents** concurrently, where:
 * One RocksDB per Swarm
 * Column families for Record, Agent metadata, Inbox, etc.
 
-**aura-reasoner (Rust client) + aura-gateway-ts (TS process)**
+**aura-reasoner (Rust)**
 
-* `aura-gateway-ts` wraps Claude Code SDK
-* Exposes **propose-only** API
-* Rust Kernel calls gateway through `aura-reasoner`
+* Provider-agnostic `ModelProvider` trait with an Anthropic implementation that speaks directly to the Anthropic HTTP API (via `reqwest`) or to the `aura-router` proxy with a JWT.
+* Exposes a **propose-only** interface to the Kernel; it never executes tools itself.
+* A short-lived TypeScript sidecar (`aura-gateway-ts`) previously fronted this responsibility during v0.1.0 development and has since been removed.
 
 **aura-tools (Rust)**
 
@@ -76,8 +76,7 @@ aura/
 ├─ aura-node          // router, scheduler, worker runtime (tokio)
 ├─ aura-reasoner      // Rust client to TS gateway (http/grpc)
 ├─ aura-executor      // executor trait + orchestration
-├─ aura-tools         // ToolExecutor (fs + cmd) + sandbox
-└─ aura-gateway-ts    // TS Reasoner Gateway (Claude Code SDK)
+└─ aura-tools         // ToolExecutor (fs + cmd) + sandbox
 ```
 
 ---
@@ -497,54 +496,21 @@ If async:
 
 ---
 
-## 11) Reasoner integration: `aura-reasoner` + `aura-gateway-ts`
+## 11) Reasoner integration: `aura-reasoner`
 
-### What the TS gateway does
+> **Historical note:** v0.1.0 originally shipped a TypeScript sidecar (`aura-gateway-ts`) that wrapped the Claude Code SDK and exposed a `POST /propose` endpoint. That sidecar has been removed. `aura-reasoner` now speaks to the model provider directly (Anthropic HTTP via `reqwest`, or the `aura-router` proxy with JWT auth). The propose-only / determinism contract below still holds.
 
-* Wrap Claude Code SDK
-* Implements "propose-only"
-* Returns structured proposals for the Kernel to authorize
+### What `aura-reasoner` does
+
+* Provider-agnostic `ModelProvider` trait (Anthropic + mock today)
+* Implements "propose-only": returns structured proposals for the Kernel to authorize
 * Must not execute tools directly; it only suggests tool calls
-
-### Rust `aura-reasoner`
-
-* Client library to call TS gateway
-* Handles retries/timeouts
-* Returns `ProposalSet` to Kernel
-
-### API contract (HTTP JSON acceptable for MVP)
-
-`POST /propose`
-Request:
-
-```json
-{
-  "agent_id": "base64",
-  "tx": { "tx_id":"...", "kind":"UserPrompt", "payload":"..." },
-  "record_window": [ /* compact record summaries */ ],
-  "limits": { "max_proposals": 8 }
-}
-```
-
-Response:
-
-```json
-{
-  "proposals": [
-    {
-      "action_kind": "Delegate",
-      "payload": { "tool_call": { "tool":"fs.read", "args": { "path":"src/main.rs" } } },
-      "rationale": "Need to inspect file"
-    }
-  ],
-  "trace": { "model":"claude-code", "latency_ms": 900 }
-}
-```
+* Handles retries/timeouts and returns `ProposalSet` to the Kernel
 
 ### Determinism note
 
 * The kernel records the proposals it received.
-* Replay uses the recorded proposals/decisions; it does not call the gateway.
+* Replay uses the recorded proposals/decisions; it does not call the provider.
 
 ---
 
@@ -704,8 +670,7 @@ For each Agent:
 * `aura-store`: record + agent_meta + inbox CFs, keyspace, atomic WriteBatch
 * `aura-node`: router + scheduler + per-agent lock + workers
 * `aura-kernel`: context builder + policy + record entry builder + execution orchestration
-* `aura-reasoner`: client to TS gateway
-* `aura-gateway-ts`: propose-only Claude Code integration
+* `aura-reasoner`: provider-agnostic `ModelProvider` trait with propose-only Anthropic implementation
 * `aura-tools`: ToolExecutor with fs.ls/fs.read/fs.stat + sandboxing
 
 ### Nice to have (optional but easy)

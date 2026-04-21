@@ -1,0 +1,20 @@
+chore(harness): remove deprecated aura-gateway-ts sidecar
+
+The TypeScript Express sidecar at aura-gateway-ts/ has been superseded
+by aura-reasoner (Rust, direct Anthropic HTTP via reqwest) for some
+time. The specs (v0.1.0 spec-02..spec-05 and v0.1.1 R17) already
+marked it deprecated, no runtime path invoked it, and nothing outside
+the folder itself depended on it.
+
+- Delete aura-gateway-ts/ (Express server, package.json, lockfile, src)
+- Drop TypeScript gateway entries from .gitignore
+- Remove gateway sections from README.md (Optional: TypeScript Gateway,
+  external deps bullet, tree entry, Gateway (optional) env table)
+- Update docs/PROGRESS.md: Phase 8 marked REMOVED, Phase 16 completed,
+  tree entry dropped
+- Update v0.1.0 spec-01..spec-05 to remove gateway references or add
+  historical notes; rewrite spec-01 section 11 around aura-reasoner
+- Update v0.1.1 aura-harness-upgrade.md R17 from Recommendation to Done
+
+Verified: cargo build --workspace and cargo test --workspace
+--all-features both pass (244 unit tests, 0 failures).

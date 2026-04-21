@@ -165,20 +165,9 @@ HTTP router, scheduler, and worker management.
 
 ---
 
-### Phase 8: TypeScript Gateway (`aura-gateway-ts`)
-**Status:** 🟢 Complete
+### Phase 8: TypeScript Gateway (`aura-gateway-ts`) — REMOVED
 
-Claude Code SDK integration.
-
-- [x] Node.js project setup
-- [x] Express server
-- [x] `POST /propose` endpoint
-- [x] Claude SDK integration (Anthropic)
-- [x] Propose-only mode (no tool execution)
-- [x] Request/response validation (Zod)
-- [x] Error handling
-- [x] Health endpoint
-- [x] README with API documentation
+The TypeScript sidecar that originally wrapped the Claude Code SDK has been removed. `aura-reasoner` now calls Anthropic directly in Rust (`reqwest`), either against `api.anthropic.com` in direct mode or through `aura-router` in proxy mode. Prompt caching, tool schemas, and the propose-only contract are all implemented in-tree. See Phase 16 for the deprecation/removal record.
 
 ---
 
@@ -284,15 +273,15 @@ Interactive command-line interface.
 ---
 
 ### Phase 16: Gateway Deprecation
-**Status:** 🔴 Not Started
+**Status:** 🟢 Complete
 
-Remove TypeScript gateway dependency.
+TypeScript gateway dependency removed.
 
-- [ ] Add provider selection config
-- [ ] Test Rust provider end-to-end
-- [ ] Default to Rust provider
-- [ ] Mark `aura-gateway-ts` as deprecated
-- [ ] Update documentation
+- [x] Provider selection config (`AURA_LLM_ROUTING=proxy|direct`)
+- [x] Rust provider tested end-to-end (`AnthropicProvider` + mock)
+- [x] Rust provider is the only path (Node sidecar deleted)
+- [x] `aura-gateway-ts` directory removed from the workspace
+- [x] Documentation updated (README, PROGRESS, v0.1.0/v0.1.1 specs)
 
 ---
 
@@ -326,8 +315,7 @@ aura_os/
 ├── aura-reasoner/       # Model provider abstraction + Anthropic
 ├── aura-kernel/         # Deterministic kernel + Turn Processor
 ├── aura-node/           # HTTP router, scheduler
-├── aura-cli/            # Interactive CLI (planned)
-└── aura-gateway-ts/     # TypeScript gateway (deprecated)
+└── aura-cli/            # Interactive CLI (planned)
 ```
 
 ---

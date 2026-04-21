@@ -37,8 +37,7 @@ Build a "Claude Code–like" agent runtime on top of AURA's deterministic archit
   * provider-agnostic Reasoner interface (Anthropic now, others later)
   * tool abstraction independent of any provider tool schema
 * **Rust-only**:
-  * deprecate TypeScript gateway (`aura-gateway-ts`)
-  * use `anthropic-sdk-rust` for Anthropic provider integration
+  * use `anthropic-sdk-rust` for Anthropic provider integration (the earlier TypeScript `aura-gateway-ts` sidecar has been removed)
 
 ---
 
@@ -57,7 +56,6 @@ Build a "Claude Code–like" agent runtime on top of AURA's deterministic archit
 | Component | Spec-01 | Spec-02 |
 |-----------|---------|---------|
 | `aura-reasoner` | HTTP client to TS gateway | Provider-agnostic trait + Anthropic impl |
-| `aura-gateway-ts` | Claude SDK wrapper | **Deprecated** |
 | `aura-kernel` | Single-step processing | Policy, executor router, context (used by AgentLoop) |
 | New: `aura-cli` | N/A | Interactive CLI with approvals |
 
@@ -148,7 +146,6 @@ aura/
 │  ├─ main.rs
 │  ├─ session.rs
 │  └─ approval.rs
-├─ aura-gateway-ts/       # DEPRECATED (keep for reference)
 └─ src/main.rs            # Existing server entry point
 ```
 

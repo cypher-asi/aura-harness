@@ -93,15 +93,6 @@ docker run -p 8080:8080 aura
 
 The image runs `aura run --ui none` as a non-root user, exposes `:8080`, and defaults `AURA_DATA_DIR=/data`. See [`Dockerfile`](Dockerfile) for the full recipe.
 
-### Optional: TypeScript Gateway
-
-[`aura-gateway-ts/`](aura-gateway-ts/) is an optional Express service that exposes a `/propose` endpoint for local LLM routing:
-
-```sh
-cd aura-gateway-ts && npm install && npm run build
-ANTHROPIC_API_KEY=your-key npm start   # listens on :3000
-```
-
 ## Binaries
 
 This workspace ships two binaries:
@@ -161,7 +152,6 @@ All members are declared in [`Cargo.toml`](Cargo.toml) under `[workspace].member
 ### External dependencies
 
 - [`aura-protocol`](../aura-os/crates/aura-protocol) lives in the sibling `aura-os` workspace and defines the serde types for the `/stream` WebSocket API (session init, messages, events, approvals). The harness consumes it as a relative path dependency.
-- [`aura-gateway-ts/`](aura-gateway-ts/) is an optional TypeScript gateway for local `/propose` LLM routing.
 
 ### Project structure
 
@@ -191,7 +181,6 @@ aura-harness/
     aura-terminal/          # ratatui TUI library
     aura-automaton/         # automaton lifecycle and built-ins
     aura-node/              # HTTP server, scheduler, workers
-  aura-gateway-ts/          # optional TypeScript gateway (Express + /propose)
   tests/                    # integration, e2e, proptest, pipeline
   docs/                     # supplementary documentation
     architecture.md         #   full architecture reference
@@ -369,15 +358,6 @@ The node reads configuration from environment variables via `NodeConfig::from_en
 | `ORBIT_URL` | `https://orbit-sfvu.onrender.com` | Orbit service URL. |
 | `AURA_STORAGE_URL` | `https://aura-storage.onrender.com` | Aura Storage service URL. |
 | `AURA_NETWORK_URL` | `https://aura-network.onrender.com` | Aura Network service URL. |
-
-### Gateway (optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3000` | Gateway listen port. |
-| `ANTHROPIC_API_KEY` | — | Required API key. |
-| `CLAUDE_MODEL` | `claude-opus-4-6` | Model to use. |
-| `MAX_TOKENS` | `4096` | Max response tokens. |
 
 ## Development
 

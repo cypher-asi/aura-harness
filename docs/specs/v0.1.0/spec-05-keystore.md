@@ -65,8 +65,7 @@ aura/
 ├─ aura-stats             # Stats collection (unchanged)
 ├─ aura-keystore          # NEW: Secure key storage and management
 ├─ aura-terminal          # Terminal UI (unchanged)
-├─ aura-cli               # CLI (key management commands)
-└─ aura-gateway-ts        # DEPRECATED
+└─ aura-cli               # CLI (key management commands)
 ```
 
 ### 2.2 Component Diagram

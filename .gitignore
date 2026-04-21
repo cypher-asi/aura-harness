@@ -26,11 +26,6 @@ workspaces/
 check_output.txt
 clippy_output.txt
 
-# TypeScript gateway
-aura-gateway-ts/node_modules/
-aura-gateway-ts/dist/
-aura-gateway-ts/.env
-
 # Coverage
 lcov.info
 coverage/

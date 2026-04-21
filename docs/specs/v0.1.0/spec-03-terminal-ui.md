@@ -36,8 +36,7 @@ aura/
 ├─ aura-executor      # Executor trait + orchestration (unchanged)
 ├─ aura-tools         # ToolExecutor (fs + cmd) + sandbox (unchanged)
 ├─ aura-terminal      # NEW: Cyber-retro terminal UI library
-├─ aura-cli           # Interactive CLI (uses aura-terminal)
-└─ aura-gateway-ts    # DEPRECATED
+└─ aura-cli           # Interactive CLI (uses aura-terminal)
 ```
 
 ---

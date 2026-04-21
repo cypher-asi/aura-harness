@@ -41,8 +41,7 @@ aura/
 ├─ aura-tools             # ToolExecutor (emits tool stats)
 ├─ aura-stats             # NEW: Stats collection and aggregation
 ├─ aura-terminal          # Terminal UI (displays stats)
-├─ aura-cli               # CLI (stats commands)
-└─ aura-gateway-ts        # DEPRECATED
+└─ aura-cli               # CLI (stats commands)
 ```
 
 ### 2.2 Component Diagram

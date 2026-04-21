@@ -499,30 +499,17 @@ This means the multi-project agent chat flow becomes:
 
 ---
 
-### R17. Gateway Disposition `[MEDIUM]`
+### R17. Gateway Disposition `[DONE]`
 
-**Problem:** The runtime currently routes LLM calls through `aura-gateway-ts`, a separate Node.js process that wraps the Anthropic SDK. R3 requires per-session model config, which implies the runtime (or its gateway) must accept dynamic configuration. The relationship between the gateway and the runtime is not addressed.
+**Status:** Completed. `aura-gateway-ts` has been removed from the workspace. The runtime calls Anthropic directly from Rust via `aura-reasoner` (`AnthropicProvider` using `reqwest`), either against `api.anthropic.com` in direct mode or through `aura-router` in proxy mode. There is no longer a Node.js sidecar in the deployment.
 
-**Current architecture:** Runtime → `aura-gateway-ts` (HTTP POST `/propose`) → Anthropic API
+**Resulting architecture:** Runtime → `aura-reasoner::AnthropicProvider` → (`aura-router` proxy **or** Anthropic API).
 
-**Recommendation:** Eliminate `aura-gateway-ts` and have the runtime call Anthropic directly via `aura-reasoner/src/anthropic.rs`. This:
+**API key management:** The Anthropic API key is accepted via:
 
-- Removes a process dependency (no need to run a Node.js sidecar alongside the Rust binary)
-- Enables per-session model config (R3) without gateway coordination
-- Simplifies deployment for both local and cloud modes
-
-**API key management:** The Anthropic API key should be accepted via:
-
-1. Environment variable `ANTHROPIC_API_KEY` (default, for single-tenant deployment)
-2. `session_init` field `api_key` (optional, for multi-tenant where aura-app manages keys per org)
-
-If `api_key` is provided in `session_init`, it overrides the env var for that session. The runtime must not log or persist the key.
-
-**Files to modify in aura-harness:**
-
-- `aura-reasoner/src/anthropic.rs` — implement direct Anthropic API calls (the `@anthropic-ai/sdk` logic from the gateway, ported to Rust using `reqwest`)
-- `aura-reasoner/src/client.rs` — remove or deprecate `HttpReasoner` that proxies through the gateway
-- `aura-core/src/types.rs` — add optional `api_key` to `SessionInit`
+1. Environment variable `ANTHROPIC_API_KEY` / `AURA_ANTHROPIC_API_KEY` (default, for single-tenant direct mode).
+2. JWT auth through `aura-router` in proxy mode (no key required client-side).
+3. Per-session overrides when supplied via `session_init` (runtime does not log or persist the key).
 
 ---
 
