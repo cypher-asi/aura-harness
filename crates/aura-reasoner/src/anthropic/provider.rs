@@ -379,7 +379,12 @@ fn classify_retry_action(
     match err {
         ApiError::CloudflareBlock(msg) if attempt < max_retries => {
             let sleep = exp_backoff_with_jitter(attempt);
-            warn!(model = %model, attempt, backoff_ms = sleep.as_millis() as u64, "Cloudflare block, will retry");
+            // Backoffs are seconds-scale; u128→u64 narrowing cannot lose
+            // meaningful bits. TODO(W5): switch to u64::try_from when the
+            // helper itself is refactored to return u64.
+            #[allow(clippy::cast_possible_truncation)]
+            let backoff_ms = sleep.as_millis() as u64;
+            warn!(model = %model, attempt, backoff_ms, "Cloudflare block, will retry");
             *last_err = Some(ReasonerError::Api {
                 status: 403,
                 message: msg.clone(),
@@ -391,10 +396,15 @@ fn classify_retry_action(
             retry_after,
         } if attempt < max_retries => {
             let sleep = sleep_for_overloaded(attempt, *retry_after);
+            // Backoffs are seconds-scale; u128→u64 narrowing cannot lose
+            // meaningful bits. TODO(W5): switch to u64::try_from when the
+            // helper itself is refactored to return u64.
+            #[allow(clippy::cast_possible_truncation)]
+            let backoff_ms = sleep.as_millis() as u64;
             warn!(
                 model = %model,
                 attempt,
-                backoff_ms = sleep.as_millis() as u64,
+                backoff_ms,
                 retry_after_s = ?retry_after.map(|d| d.as_secs()),
                 "API overloaded, will retry"
             );
@@ -446,6 +456,9 @@ fn sleep_for_overloaded(attempt: u32, retry_after: Option<Duration>) -> Duration
 /// instant. Using `Instant` avoids pulling in a `rand` dependency for a
 /// harmless spread.
 fn jitter_ms(base_ms: u64) -> u64 {
+    // Low-amplitude jitter only; we intentionally discard the high 64
+    // bits of `as_nanos()` because we only need entropy, not precision.
+    #[allow(clippy::cast_possible_truncation)]
     let seed = Instant::now().elapsed().as_nanos() as u64;
     // Scale jitter to at most 25% of base, capped at 250ms.
     let max_jitter = (base_ms / 4).min(250);

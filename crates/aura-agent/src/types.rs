@@ -273,6 +273,51 @@ impl AgentLoopResult {
     }
 }
 
+/// Observer notified after every completed agent turn.
+///
+/// Implementations receive the full `AgentLoopResult` (including message
+/// history) so they can perform post-turn work such as memory ingestion.
+/// Observers are called **inside** `AgentLoop::run_with_events`, making
+/// them impossible to skip regardless of the calling entry point (WS,
+/// terminal, worker, etc.).
+#[async_trait]
+pub trait TurnObserver: Send + Sync {
+    async fn on_turn_complete(&self, result: &AgentLoopResult);
+}
+
+/// Convenience type for a shared collection of turn observers.
+pub type TurnObservers = Vec<Arc<dyn TurnObserver>>;
+
+/// Implementors execute tool calls and optionally provide build integration.
+///
+/// `aura-harness` provides a default implementation wrapping `ExecutorRouter`.
+/// `aura-app` can implement this with project-aware paths, domain tools
+/// (spec/task CRUD, dev loop, engine phase gating), and event forwarding.
+#[async_trait]
+pub trait AgentToolExecutor: Send + Sync {
+    /// Execute a batch of tool calls.
+    ///
+    /// Implementations may:
+    /// - Gate certain tools (e.g., writes before `submit_plan`)
+    /// - Dispatch domain tools to external services
+    /// - Track file operations for stub detection
+    /// - Signal loop termination via `stop_loop`
+    async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult>;
+
+    /// Run a lightweight build check (e.g., `cargo check --lib`).
+    ///
+    /// Returns `None` when build checking is not configured.
+    async fn auto_build_check(&self) -> Option<AutoBuildResult> {
+        None
+    }
+
+    /// Capture current build error state as a baseline for distinguishing
+    /// pre-existing errors from newly introduced ones.
+    async fn capture_build_baseline(&self) -> Option<BuildBaseline> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AgentLoopResult, FileChange, FileChangeKind};
@@ -325,50 +370,5 @@ mod tests {
             result.file_changes[0].kind,
             FileChangeKind::Modify
         ));
-    }
-}
-
-/// Observer notified after every completed agent turn.
-///
-/// Implementations receive the full `AgentLoopResult` (including message
-/// history) so they can perform post-turn work such as memory ingestion.
-/// Observers are called **inside** `AgentLoop::run_with_events`, making
-/// them impossible to skip regardless of the calling entry point (WS,
-/// terminal, worker, etc.).
-#[async_trait]
-pub trait TurnObserver: Send + Sync {
-    async fn on_turn_complete(&self, result: &AgentLoopResult);
-}
-
-/// Convenience type for a shared collection of turn observers.
-pub type TurnObservers = Vec<Arc<dyn TurnObserver>>;
-
-/// Implementors execute tool calls and optionally provide build integration.
-///
-/// `aura-harness` provides a default implementation wrapping `ExecutorRouter`.
-/// `aura-app` can implement this with project-aware paths, domain tools
-/// (spec/task CRUD, dev loop, engine phase gating), and event forwarding.
-#[async_trait]
-pub trait AgentToolExecutor: Send + Sync {
-    /// Execute a batch of tool calls.
-    ///
-    /// Implementations may:
-    /// - Gate certain tools (e.g., writes before `submit_plan`)
-    /// - Dispatch domain tools to external services
-    /// - Track file operations for stub detection
-    /// - Signal loop termination via `stop_loop`
-    async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult>;
-
-    /// Run a lightweight build check (e.g., `cargo check --lib`).
-    ///
-    /// Returns `None` when build checking is not configured.
-    async fn auto_build_check(&self) -> Option<AutoBuildResult> {
-        None
-    }
-
-    /// Capture current build error state as a baseline for distinguishing
-    /// pre-existing errors from newly introduced ones.
-    async fn capture_build_baseline(&self) -> Option<BuildBaseline> {
-        None
     }
 }

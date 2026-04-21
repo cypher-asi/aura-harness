@@ -19,7 +19,7 @@
 //! The turn processor and process manager now live under `aura-agent::runtime`.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 
 // TODO(Phase 8): GitExecutor for kernel-recorded git mutations
 // TODO(Phase 8): BuildVerifyExecutor for kernel-recorded build/test
@@ -32,7 +32,7 @@ mod policy;
 pub mod router;
 pub mod spawn_hook;
 
-pub use context::{Context, ContextBuilder};
+pub use context::{hash_tx_with_window, Context, ContextBuilder};
 pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
 };

@@ -140,7 +140,7 @@ mod tests {
         let request = ProposeRequest::new(agent_id, tx.clone());
 
         assert_eq!(request.agent_id, agent_id);
-        assert_eq!(request.tx.tx_id(), tx.tx_id());
+        assert_eq!(request.tx.hash, tx.hash);
         assert!(request.record_window.is_empty());
         assert_eq!(request.limits.max_proposals, 8);
     }

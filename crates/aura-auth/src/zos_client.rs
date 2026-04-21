@@ -21,6 +21,15 @@ use tracing::{debug, error};
 
 const ZOS_API_URL: &str = "https://zosapi.zero.tech";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Connect-phase timeout — fast-fail on DNS/TCP/TLS issues so the login
+/// CLI does not hang when zOS is unreachable. (Wave 5 / T2.7.)
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum length (chars) of zOS error messages propagated into logs and
+/// `AuthError::ZosApi`. Anything longer is truncated + marked redacted so
+/// a server-side stack trace cannot leak through our observability.
+/// (Wave 5 / T5.)
+const ZOS_ERROR_MESSAGE_MAX_CHARS: usize = 80;
 
 /// Response from the zOS login endpoint.
 #[derive(Debug, Deserialize)]
@@ -69,6 +78,7 @@ impl ZosClient {
     pub fn new() -> Result<Self, AuthError> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()?;
         Ok(Self { http })
     }
@@ -149,25 +159,52 @@ impl ZosClient {
 }
 
 /// Parse an error response from the zOS API.
+///
+/// Intentionally does **not** log the full response body or message — those
+/// can contain reflected input, internal traces, or other PII. We log only
+/// `status` + `code` + `message_len`, and propagate a truncated message
+/// (≤ 80 chars) to the caller for UX purposes. (Wave 5 / T5.)
 async fn parse_zos_error(res: reqwest::Response) -> AuthError {
     let status = res.status().as_u16();
     let body = res.text().await.unwrap_or_default();
 
-    let (code, message) = match serde_json::from_str::<ZosErrorBody>(&body) {
+    let (code, raw_message) = match serde_json::from_str::<ZosErrorBody>(&body) {
         Ok(parsed) => (
             parsed.code.unwrap_or_default(),
-            parsed.message.unwrap_or_else(|| body.clone()),
+            parsed.message.unwrap_or_default(),
         ),
-        Err(_) => (String::new(), body),
+        Err(_) => (String::new(), String::new()),
     };
 
-    error!(status, %code, %message, "zOS API error");
+    let (message, truncated) = truncate_error_message(&raw_message, ZOS_ERROR_MESSAGE_MAX_CHARS);
+
+    error!(
+        status,
+        %code,
+        body_len = body.len(),
+        message_len = raw_message.len(),
+        truncated,
+        "zOS API error"
+    );
 
     AuthError::ZosApi {
         status,
         code,
         message,
     }
+}
+
+/// Truncate an error message to `max_chars` characters (counting by
+/// `char`, not byte, so we never slice mid-codepoint). Appends a short
+/// `[redacted]` marker when truncation happens so the consumer can tell
+/// the difference between a short legitimate error and a capped one.
+fn truncate_error_message(raw: &str, max_chars: usize) -> (String, bool) {
+    let char_count = raw.chars().count();
+    if char_count <= max_chars {
+        return (raw.to_string(), false);
+    }
+    let short: String = raw.chars().take(max_chars).collect();
+    (format!("{short}… [redacted]"), true)
 }
 
 /// Build a display name from profile fields, falling back to zID or "User".
@@ -275,5 +312,30 @@ mod tests {
         let body: ZosErrorBody = serde_json::from_str(json).unwrap();
         assert!(body.code.is_none());
         assert_eq!(body.message.as_deref(), Some("Something went wrong"));
+    }
+
+    #[test]
+    fn test_truncate_error_message_short_passes_through() {
+        let (out, truncated) = truncate_error_message("short", 80);
+        assert_eq!(out, "short");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn test_truncate_error_message_long_is_redacted() {
+        let raw = "A".repeat(200);
+        let (out, truncated) = truncate_error_message(&raw, 80);
+        assert!(truncated);
+        assert!(out.starts_with(&"A".repeat(80)));
+        assert!(out.contains("[redacted]"));
+    }
+
+    #[test]
+    fn test_truncate_error_message_respects_codepoints() {
+        // A run of 4-byte chars — naive byte-slicing would panic on
+        // a non-codepoint boundary.
+        let raw: String = "𝔸".repeat(200);
+        let (_out, truncated) = truncate_error_message(&raw, 50);
+        assert!(truncated);
     }
 }

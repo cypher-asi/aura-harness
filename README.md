@@ -26,7 +26,7 @@ Aura is a deterministic multi-agent runtime for running many agents concurrently
 
 The runtime supports interactive terminal sessions (TUI), headless server deployments, and long-running automaton workflows — all backed by the same kernel, storage, and reasoning stack.
 
-> This repository (`aura-harness`) is the Cargo workspace that builds the Aura runtime (`aura`, `aura-node`, `aura-cli`). It is distinct from the sibling `aura-swarm` repository, which is a Firecracker/Kubernetes platform for hosting Aura agents.
+> This repository (`aura-harness`) is the Cargo workspace that builds the Aura runtime (`aura`, `aura-node`). It is distinct from the sibling `aura-swarm` repository, which is a Firecracker/Kubernetes platform for hosting Aura agents.
 
 Core ideas:
 
@@ -71,9 +71,6 @@ cargo run -- run --ui none
 
 # Run the standalone node server
 cargo run -p aura-node
-
-# Run the interactive REPL
-cargo run -p aura-cli
 ```
 
 Direct Anthropic access:
@@ -105,13 +102,16 @@ ANTHROPIC_API_KEY=your-key npm start   # listens on :3000
 
 ## Binaries
 
-This workspace ships three binaries:
+This workspace ships two binaries:
 
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
 | `aura` | [`src/main.rs`](src/main.rs) | Primary binary — TUI by default, headless node with `run --ui none`. |
 | `aura-node` | [`crates/aura-node/src/main.rs`](crates/aura-node/src/main.rs) | Standalone headless server (HTTP + WebSocket API). |
-| `aura-cli` | [`crates/aura-cli/src/main.rs`](crates/aura-cli/src/main.rs) | Interactive REPL with slash commands (`/status`, `/login`, …). |
+
+> The earlier `aura-cli` REPL crate was retired in Wave 4 of the refactor.
+> Its surface is covered by `aura` (TUI + `run --ui none`). See
+> `docs/architecture.md` for history.
 
 ## CLI Reference
 
@@ -153,7 +153,6 @@ All members are declared in [`Cargo.toml`](Cargo.toml) under `[workspace].member
 | [`aura-skills`](crates/aura-skills) | `SKILL.md`-compatible skill packages. Parser, multi-location loader, registry, activation, and per-agent install store. |
 | [`aura-auth`](crates/aura-auth) | zOS login client and JWT credential store (`~/.aura/credentials.json`) for proxy mode. |
 | [`aura-terminal`](crates/aura-terminal) | Ratatui-based terminal UI library: themes, components, input handling, layout. |
-| [`aura-cli`](crates/aura-cli) | Interactive REPL binary with slash commands, wired to session and agent handling. |
 | [`aura-automaton`](crates/aura-automaton) | Automaton lifecycle, scheduling, runtime, state, and built-in automatons (chat, dev loop, spec gen, task run). |
 | [`aura-node`](crates/aura-node) | HTTP router, WebSocket sessions, scheduler, and per-agent worker loops with single-writer guarantee. |
 
@@ -188,7 +187,6 @@ aura-harness/
     aura-skills/            # SKILL.md parser, loader, registry, install store
     aura-auth/              # zOS login, credential store
     aura-terminal/          # ratatui TUI library
-    aura-cli/               # interactive REPL (separate binary)
     aura-automaton/         # automaton lifecycle and built-ins
     aura-node/              # HTTP server, scheduler, workers
   aura-gateway-ts/          # optional TypeScript gateway (Express + /propose)
@@ -206,7 +204,7 @@ aura-harness/
                              ┌──────────────────────────────────┐
                              │           Entry Points           │
                              │  aura (TUI)  ·  aura --ui none  │
-                             │  aura-node   ·  aura-cli        │
+                             │  aura-node                       │
                              └──────────────┬───────────────────┘
                                             │
                              ┌──────────────▼───────────────────┐

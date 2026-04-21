@@ -1,5 +1,7 @@
 use super::*;
+use aura_agent::KernelModelGateway;
 use aura_core::AgentId;
+use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_memory::{
     ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
     WriteConfig,
@@ -9,7 +11,7 @@ use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_store::RocksStore;
 use axum::body::Body;
 use axum::http::Request;
-use tower_dev::util::ServiceExt;
+use tower::util::ServiceExt;
 
 fn test_router_state(store: Arc<dyn Store>) -> RouterState {
     let provider: Arc<dyn ModelProvider + Send + Sync> =
@@ -22,7 +24,7 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         std::path::PathBuf::from("/tmp/workspaces"),
         None,
     ));
-    RouterState {
+    RouterState::new(crate::router::RouterStateConfig {
         store,
         scheduler,
         config: NodeConfig::default(),
@@ -32,11 +34,10 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         domain_api: None,
         automaton_controller: None,
         automaton_bridge: None,
-        failed_txs: Arc::new(DashMap::new()),
         memory_manager: None,
         skill_manager: None,
         router_url: None,
-    }
+    })
 }
 
 fn create_test_store() -> Arc<dyn Store> {
@@ -410,9 +411,20 @@ fn test_router_state_with_managers() -> RouterState {
         None,
     ));
 
+    let memory_kernel = Arc::new(
+        Kernel::new(
+            store.clone(),
+            provider.clone(),
+            ExecutorRouter::new(),
+            KernelConfig::default(),
+            AgentId::generate(),
+        )
+        .unwrap(),
+    );
+    let memory_gateway = Arc::new(KernelModelGateway::new(memory_kernel));
     let memory_manager = Arc::new(MemoryManager::new(
         db.clone(),
-        provider.clone(),
+        memory_gateway,
         RefinerConfig::default(),
         WriteConfig::default(),
         RetrievalConfig::default(),
@@ -427,7 +439,7 @@ fn test_router_state_with_managers() -> RouterState {
         skill_store,
     )));
 
-    RouterState {
+    RouterState::new(crate::router::RouterStateConfig {
         store,
         scheduler,
         config: NodeConfig::default(),
@@ -437,11 +449,10 @@ fn test_router_state_with_managers() -> RouterState {
         domain_api: None,
         automaton_controller: None,
         automaton_bridge: None,
-        failed_txs: Arc::new(DashMap::new()),
         memory_manager: Some(memory_manager),
         skill_manager: Some(skill_manager),
         router_url: None,
-    }
+    })
 }
 
 // ============================================================================

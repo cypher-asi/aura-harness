@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::WriteStore;
 use aura_core::{Hash, TransactionType};
 use bytes::Bytes;
 use std::sync::Arc;
@@ -266,7 +267,10 @@ fn test_crash_recovery_record_entries_persist() {
         for (i, entry) in entries.iter().enumerate() {
             assert_eq!(entry.seq, u64::try_from(i + 1).expect("index fits in u64"));
             let expected = u8::try_from(i + 1).expect("index fits in u8");
-            assert_eq!(entry.context_hash, [expected; 32]);
+            assert_eq!(
+                entry.context_hash,
+                aura_core::ContextHash::from([expected; 32])
+            );
         }
     }
 }

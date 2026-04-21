@@ -142,7 +142,9 @@ Step 2: Push
 
     #[test]
     fn name_with_unicode() {
-        let content = "---\nname: dé­ploy\ndescription: test\n---\nbody";
+        // Embed the soft-hyphen via its explicit unicode escape so the file
+        // stays free of invisible control characters (clippy::invisible_characters).
+        let content = "---\nname: dé\u{AD}ploy\ndescription: test\n---\nbody";
         assert!(parse_skill_md(content).is_err());
     }
 

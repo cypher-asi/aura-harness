@@ -216,27 +216,30 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
         ProcessManagerConfig::default(),
     ));
 
-    let selection = session_helpers::select_provider(&args.provider);
+    let selection = match aura_reasoner::provider_from_name(&args.provider) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "unknown provider name, falling back to mock");
+            aura_reasoner::provider_from_name("mock").expect("mock provider is always available")
+        }
+    };
     if selection.name != "anthropic" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }
-    let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::from(selection.provider);
+    let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
 
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         ..KernelConfig::default()
     };
     let agent_id = identity.agent_id;
-    let kernel = Arc::new(
-        Kernel::new(
-            store.clone() as Arc<dyn aura_store::Store>,
-            provider,
-            executor_router,
-            kernel_config,
-            agent_id,
-        )
-        .expect("Failed to create kernel"),
-    );
+    let kernel = Arc::new(Kernel::new(
+        store.clone() as Arc<dyn aura_store::Store>,
+        provider,
+        executor_router,
+        kernel_config,
+        agent_id,
+    )?);
 
     let model_gateway = KernelModelGateway::new(kernel.clone());
     let tool_gateway = KernelToolGateway::new(kernel.clone());

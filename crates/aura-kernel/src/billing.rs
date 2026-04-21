@@ -7,7 +7,7 @@
 //! module is the harness-side primitive aura-os calls to walk the chain.
 
 use aura_core::{AgentId, RecordEntry, ToolExecution};
-use aura_store::Store;
+use aura_store::ReadStore;
 
 /// Walk the parent chain of `agent_id` in child → root order by scanning
 /// each agent's record log for the most recent `ToolExecution` carrying a
@@ -27,7 +27,7 @@ use aura_store::Store;
 /// // chain[0] == agent_id (the leaf)
 /// // chain.last() == root (the originating user's first agent)
 /// ```
-pub fn walk_parent_chain(agent_id: &AgentId, store: &dyn Store) -> Vec<AgentId> {
+pub fn walk_parent_chain(agent_id: &AgentId, store: &dyn ReadStore) -> Vec<AgentId> {
     let mut chain = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cursor = *agent_id;
@@ -44,7 +44,7 @@ pub fn walk_parent_chain(agent_id: &AgentId, store: &dyn Store) -> Vec<AgentId> 
     chain
 }
 
-fn latest_parent(agent_id: &AgentId, store: &dyn Store) -> Option<AgentId> {
+fn latest_parent(agent_id: &AgentId, store: &dyn ReadStore) -> Option<AgentId> {
     let head = store.get_head_seq(*agent_id).ok()?;
     if head == 0 {
         return None;
@@ -80,14 +80,24 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    /// Minimal in-memory store stub sufficient for `walk_parent_chain` tests.
+    /// Minimal in-memory stub that only implements [`ReadStore`] — the
+    /// sealed `WriteStore` surface is off-limits outside `aura-store`
+    /// (Wave 2 T3, Invariant §10). Tests seed records via the inherent
+    /// [`MemStore::insert`] helper rather than through the trait.
     #[derive(Default)]
     struct MemStore {
         heads: Mutex<HashMap<AgentId, u64>>,
         records: Mutex<HashMap<(AgentId, u64), RecordEntry>>,
     }
 
-    impl aura_store::Store for MemStore {
+    impl MemStore {
+        fn insert(&self, agent_id: AgentId, seq: u64, entry: RecordEntry) {
+            self.heads.lock().unwrap().insert(agent_id, seq);
+            self.records.lock().unwrap().insert((agent_id, seq), entry);
+        }
+    }
+
+    impl aura_store::ReadStore for MemStore {
         fn enqueue_tx(&self, _tx: &Transaction) -> Result<(), StoreError> {
             Ok(())
         }
@@ -105,60 +115,6 @@ mod tests {
                 .get(&agent_id)
                 .copied()
                 .unwrap_or(0))
-        }
-        fn append_entry_atomic(
-            &self,
-            _agent_id: AgentId,
-            _next_seq: u64,
-            _entry: &RecordEntry,
-            _dequeued_inbox_seq: u64,
-        ) -> Result<(), StoreError> {
-            Ok(())
-        }
-        fn append_entry_dequeued_with_runtime_capabilities(
-            &self,
-            _agent_id: AgentId,
-            _next_seq: u64,
-            _entry: &RecordEntry,
-            _token: DequeueToken,
-            _runtime_capabilities: Option<&RuntimeCapabilityInstall>,
-            _clear_runtime_capabilities: bool,
-        ) -> Result<(), StoreError> {
-            Ok(())
-        }
-        fn append_entry_direct(
-            &self,
-            agent_id: AgentId,
-            next_seq: u64,
-            entry: &RecordEntry,
-        ) -> Result<(), StoreError> {
-            self.heads.lock().unwrap().insert(agent_id, next_seq);
-            self.records
-                .lock()
-                .unwrap()
-                .insert((agent_id, next_seq), entry.clone());
-            Ok(())
-        }
-        fn append_entry_direct_with_runtime_capabilities(
-            &self,
-            agent_id: AgentId,
-            next_seq: u64,
-            entry: &RecordEntry,
-            _runtime_capabilities: Option<&RuntimeCapabilityInstall>,
-            _clear_runtime_capabilities: bool,
-        ) -> Result<(), StoreError> {
-            self.append_entry_direct(agent_id, next_seq, entry)
-        }
-        fn append_entries_batch(
-            &self,
-            agent_id: AgentId,
-            base_seq: u64,
-            entries: &[RecordEntry],
-        ) -> Result<(), StoreError> {
-            for (i, e) in entries.iter().enumerate() {
-                self.append_entry_direct(agent_id, base_seq + i as u64, e)?;
-            }
-            Ok(())
         }
         fn scan_record(
             &self,
@@ -178,11 +134,7 @@ mod tests {
             }
             Ok(out)
         }
-        fn get_record_entry(
-            &self,
-            agent_id: AgentId,
-            seq: u64,
-        ) -> Result<RecordEntry, StoreError> {
+        fn get_record_entry(&self, agent_id: AgentId, seq: u64) -> Result<RecordEntry, StoreError> {
             self.records
                 .lock()
                 .unwrap()
@@ -252,12 +204,8 @@ mod tests {
         let mid = AgentId::generate();
         let leaf = AgentId::generate();
 
-        store
-            .append_entry_direct(mid, 1, &parent_entry(1, mid, root))
-            .unwrap();
-        store
-            .append_entry_direct(leaf, 1, &parent_entry(1, leaf, mid))
-            .unwrap();
+        store.insert(mid, 1, parent_entry(1, mid, root));
+        store.insert(leaf, 1, parent_entry(1, leaf, mid));
 
         let chain = walk_parent_chain(&leaf, &store);
         assert_eq!(chain, vec![leaf, mid, root]);
@@ -278,12 +226,8 @@ mod tests {
         let store = MemStore::default();
         let a = AgentId::generate();
         let b = AgentId::generate();
-        store
-            .append_entry_direct(a, 1, &parent_entry(1, a, b))
-            .unwrap();
-        store
-            .append_entry_direct(b, 1, &parent_entry(1, b, a))
-            .unwrap();
+        store.insert(a, 1, parent_entry(1, a, b));
+        store.insert(b, 1, parent_entry(1, b, a));
         let chain = walk_parent_chain(&a, &store);
         assert_eq!(chain, vec![a, b]);
     }

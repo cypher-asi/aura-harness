@@ -3,6 +3,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+// INVARIANT: All patterns are compile-time constants; `lazy_regex_compiles`
+// below forces every `LazyLock` so a broken pattern surfaces at test time.
 static PASCAL_CASE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b([A-Z][a-zA-Z0-9]+)\b").expect("static regex"));
 static CRATE_NAME_RE: LazyLock<Regex> =
@@ -218,4 +220,16 @@ pub fn extract_type_names_from_text(text: &str) -> Vec<String> {
     }
 
     names
+}
+
+#[cfg(test)]
+mod lazy_regex_guard {
+    use super::{CRATE_NAME_RE, MODULE_NAME_RE, PASCAL_CASE_RE};
+
+    #[test]
+    fn lazy_regex_compiles() {
+        let _ = &*PASCAL_CASE_RE;
+        let _ = &*CRATE_NAME_RE;
+        let _ = &*MODULE_NAME_RE;
+    }
 }

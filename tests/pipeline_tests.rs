@@ -2,25 +2,45 @@
 //!
 //! Tests the full pipeline: transaction submission → agent processing → record entry creation.
 //! Also includes determinism and concurrency tests.
+//!
+//! These tests drive the modern [`KernelToolGateway`] as the [`AgentLoop`]'s
+//! tool executor, and they route record appends through [`Kernel::process_dequeued`]
+//! / [`Kernel::process_direct`] so the sealed `WriteStore` family
+//! (`append_entry_atomic` / `append_entry_direct` / `append_entries_batch`)
+//! stays confined to `aura-kernel` per Invariant §10.
 
-#[allow(deprecated)]
-use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolExecutor};
+use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolGateway};
 use aura_core::{AgentId, Transaction, TransactionType};
-use aura_kernel::ExecutorRouter;
-use aura_reasoner::{MockProvider, MockResponse, ToolDefinition};
+use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_reasoner::{MockProvider, MockResponse, ModelProvider, ToolDefinition};
 use aura_store::{RocksStore, Store};
 use bytes::Bytes;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-/// Create a test environment with store, provider, and executor.
-fn create_pipeline_env(
-    _provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync>,
-) -> (Arc<dyn Store>, TempDir, TempDir) {
+/// Create a test environment with a shared store + workspace root.
+fn create_pipeline_env() -> (Arc<dyn Store>, TempDir, TempDir) {
     let db_dir = TempDir::new().unwrap();
     let ws_dir = TempDir::new().unwrap();
     let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
     (store, db_dir, ws_dir)
+}
+
+/// Build a kernel bound to `agent_id` with an empty executor router and the
+/// given provider. Used everywhere a test needs to materialise record entries
+/// through the canonical kernel write path.
+fn build_kernel(
+    store: Arc<dyn Store>,
+    ws_dir: &TempDir,
+    agent_id: AgentId,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
+) -> Arc<Kernel> {
+    let router = ExecutorRouter::new();
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    Arc::new(Kernel::new(store, provider, router, config, agent_id).unwrap())
 }
 
 // ============================================================================
@@ -29,9 +49,9 @@ fn create_pipeline_env(
 
 #[tokio::test]
 async fn test_full_pipeline_enqueue_process_record() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("I completed the task."));
-    let (store, _db_dir, ws_dir) = create_pipeline_env(provider.clone());
+    let (store, _db_dir, ws_dir) = create_pipeline_env();
     let agent_id = AgentId::generate();
 
     let tx = Transaction::new_chained(
@@ -46,12 +66,11 @@ async fn test_full_pipeline_enqueue_process_record() {
     let (token, dequeued_tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
     assert_eq!(dequeued_tx.hash, tx.hash);
 
+    let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider.clone());
+    let executor = KernelToolGateway::new(kernel.clone());
+
     let config = AgentLoopConfig::default();
     let agent_loop = AgentLoop::new(config);
-    let router = ExecutorRouter::new();
-    let ws_path = ws_dir.path().join(agent_id.to_hex());
-    std::fs::create_dir_all(&ws_path).unwrap();
-    let executor = KernelToolExecutor::new(router, agent_id, ws_path);
 
     let prompt = String::from_utf8(dequeued_tx.payload.to_vec()).unwrap();
     let messages = vec![aura_reasoner::Message::user(prompt)];
@@ -63,13 +82,9 @@ async fn test_full_pipeline_enqueue_process_record() {
     assert_eq!(result.iterations, 1);
     assert!(result.total_text.contains("completed the task"));
 
-    let next_seq = store.get_head_seq(agent_id).unwrap() + 1;
-    let entry = aura_core::RecordEntry::builder(next_seq, dequeued_tx)
-        .context_hash([0u8; 32])
-        .build();
-    store
-        .append_entry_atomic(agent_id, next_seq, &entry, token.inbox_seq())
-        .unwrap();
+    // Finalise the user-prompt transaction through the kernel so the record
+    // append lands atomically with the inbox dequeue (Invariant §10).
+    kernel.process_dequeued(dequeued_tx, token).await.unwrap();
 
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
     assert!(!store.has_pending_tx(agent_id).unwrap());
@@ -81,13 +96,13 @@ async fn test_full_pipeline_enqueue_process_record() {
 
 #[tokio::test]
 async fn test_pipeline_multiple_transactions() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> = Arc::new(
+    let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(
         MockProvider::new()
             .with_response(MockResponse::text("Response 1"))
             .with_response(MockResponse::text("Response 2"))
             .with_response(MockResponse::text("Response 3")),
     );
-    let (store, _db_dir, ws_dir) = create_pipeline_env(provider.clone());
+    let (store, _db_dir, ws_dir) = create_pipeline_env();
     let agent_id = AgentId::generate();
 
     for i in 1..=3 {
@@ -100,19 +115,14 @@ async fn test_pipeline_multiple_transactions() {
         store.enqueue_tx(&tx).unwrap();
     }
 
-    let ws_path = ws_dir.path().join(agent_id.to_hex());
-    std::fs::create_dir_all(&ws_path).unwrap();
+    let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider.clone());
+    let executor = KernelToolGateway::new(kernel.clone());
 
     let config = AgentLoopConfig::default();
     let agent_loop = AgentLoop::new(config);
-    let router = ExecutorRouter::new();
-    let executor = KernelToolExecutor::new(router, agent_id, ws_path);
 
     let mut processed = 0u64;
     while let Some((token, tx)) = store.dequeue_tx(agent_id).unwrap() {
-        let head_seq = store.get_head_seq(agent_id).unwrap();
-        let next_seq = head_seq + 1;
-
         let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
         let messages = vec![aura_reasoner::Message::user(prompt)];
         let _result = agent_loop
@@ -120,12 +130,7 @@ async fn test_pipeline_multiple_transactions() {
             .await
             .unwrap();
 
-        let entry = aura_core::RecordEntry::builder(next_seq, tx)
-            .context_hash([next_seq as u8; 32])
-            .build();
-        store
-            .append_entry_atomic(agent_id, next_seq, &entry, token.inbox_seq())
-            .unwrap();
+        kernel.process_dequeued(tx, token).await.unwrap();
         processed += 1;
     }
 
@@ -145,7 +150,7 @@ async fn test_pipeline_multiple_transactions() {
 
 #[tokio::test]
 async fn test_deterministic_processing_same_input() {
-    let make_provider = || -> Arc<dyn aura_reasoner::ModelProvider + Send + Sync> {
+    let make_provider = || -> Arc<dyn ModelProvider + Send + Sync> {
         Arc::new(MockProvider::simple_response("Deterministic response."))
     };
 
@@ -153,7 +158,7 @@ async fn test_deterministic_processing_same_input() {
 
     for _ in 0..2 {
         let provider = make_provider();
-        let (store, _db_dir, ws_dir) = create_pipeline_env(provider.clone());
+        let (store, _db_dir, ws_dir) = create_pipeline_env();
         let agent_id = AgentId::generate();
 
         let tx = Transaction::new_chained(
@@ -164,12 +169,11 @@ async fn test_deterministic_processing_same_input() {
         );
         store.enqueue_tx(&tx).unwrap();
 
+        let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider.clone());
+        let executor = KernelToolGateway::new(kernel);
+
         let config = AgentLoopConfig::default();
         let agent_loop = AgentLoop::new(config);
-        let router = ExecutorRouter::new();
-        let ws_path = ws_dir.path().join(agent_id.to_hex());
-        std::fs::create_dir_all(&ws_path).unwrap();
-        let executor = KernelToolExecutor::new(router, agent_id, ws_path);
 
         let messages = vec![aura_reasoner::Message::user("determinism test")];
         let result = agent_loop
@@ -190,10 +194,11 @@ async fn test_deterministic_processing_same_input() {
 
 #[tokio::test]
 async fn test_deterministic_record_entry_seq() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("ok"));
-    let (store, _db_dir, _ws_dir) = create_pipeline_env(provider);
+    let (store, _db_dir, ws_dir) = create_pipeline_env();
     let agent_id = AgentId::generate();
+    let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider);
 
     for i in 1..=5 {
         let tx = Transaction::new_chained(
@@ -205,12 +210,7 @@ async fn test_deterministic_record_entry_seq() {
         store.enqueue_tx(&tx).unwrap();
 
         let (token, dequeued) = store.dequeue_tx(agent_id).unwrap().unwrap();
-        let entry = aura_core::RecordEntry::builder(i, dequeued)
-            .context_hash([i as u8; 32])
-            .build();
-        store
-            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
-            .unwrap();
+        kernel.process_dequeued(dequeued, token).await.unwrap();
     }
 
     let entries = store.scan_record(agent_id, 1, 10).unwrap();
@@ -245,16 +245,22 @@ async fn test_multi_agent_concurrent_processing() {
     let mut handles = Vec::new();
     for agent_id in agent_ids.clone() {
         let store = store.clone();
-        let ws_path = ws_dir.path().join(agent_id.to_hex());
-        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_base = ws_dir.path().to_path_buf();
 
         let handle = tokio::spawn(async move {
-            let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+            let provider: Arc<dyn ModelProvider + Send + Sync> =
                 Arc::new(MockProvider::simple_response("concurrent response"));
-            let config = AgentLoopConfig::default();
-            let agent_loop = AgentLoop::new(config);
             let router = ExecutorRouter::new();
-            let executor = KernelToolExecutor::new(router, agent_id, ws_path);
+            let config = KernelConfig {
+                workspace_base: ws_base,
+                ..KernelConfig::default()
+            };
+            let kernel = Arc::new(
+                Kernel::new(store.clone(), provider.clone(), router, config, agent_id).unwrap(),
+            );
+            let executor = KernelToolGateway::new(kernel.clone());
+
+            let agent_loop = AgentLoop::new(AgentLoopConfig::default());
 
             let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
             let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
@@ -264,12 +270,7 @@ async fn test_multi_agent_concurrent_processing() {
                 .await
                 .unwrap();
 
-            let entry = aura_core::RecordEntry::builder(1, tx)
-                .context_hash([1u8; 32])
-                .build();
-            store
-                .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
-                .unwrap();
+            kernel.process_dequeued(tx, token).await.unwrap();
 
             agent_id
         });
@@ -294,10 +295,16 @@ async fn test_multi_agent_concurrent_processing() {
 #[tokio::test]
 async fn test_agents_independent_state() {
     let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
     let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("ok"));
 
     let agent_a = AgentId::generate();
     let agent_b = AgentId::generate();
+    let kernel_a = build_kernel(store.clone(), &ws_dir, agent_a, provider.clone());
+    let kernel_b = build_kernel(store.clone(), &ws_dir, agent_b, provider);
 
     for i in 1..=3 {
         let tx = Transaction::new_chained(
@@ -317,25 +324,13 @@ async fn test_agents_independent_state() {
     );
     store.enqueue_tx(&tx_b).unwrap();
 
-    // Process agent_a's 3 messages
-    for seq in 1..=3 {
+    for _ in 1..=3 {
         let (token, tx) = store.dequeue_tx(agent_a).unwrap().unwrap();
-        let entry = aura_core::RecordEntry::builder(seq, tx)
-            .context_hash([seq as u8; 32])
-            .build();
-        store
-            .append_entry_atomic(agent_a, seq, &entry, token.inbox_seq())
-            .unwrap();
+        kernel_a.process_dequeued(tx, token).await.unwrap();
     }
 
-    // Process agent_b's 1 message
     let (token, tx) = store.dequeue_tx(agent_b).unwrap().unwrap();
-    let entry = aura_core::RecordEntry::builder(1, tx)
-        .context_hash([1u8; 32])
-        .build();
-    store
-        .append_entry_atomic(agent_b, 1, &entry, token.inbox_seq())
-        .unwrap();
+    kernel_b.process_dequeued(tx, token).await.unwrap();
 
     assert_eq!(store.get_head_seq(agent_a).unwrap(), 3);
     assert_eq!(store.get_head_seq(agent_b).unwrap(), 1);
@@ -349,7 +344,7 @@ async fn test_agents_independent_state() {
 
 #[tokio::test]
 async fn test_pipeline_with_tool_use() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> = Arc::new(
+    let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(
         MockProvider::new()
             .with_response(MockResponse::tool_use(
                 "t1",
@@ -358,7 +353,7 @@ async fn test_pipeline_with_tool_use() {
             ))
             .with_response(MockResponse::text("Read complete.")),
     );
-    let (store, _db_dir, ws_dir) = create_pipeline_env(provider.clone());
+    let (store, _db_dir, ws_dir) = create_pipeline_env();
     let agent_id = AgentId::generate();
 
     let ws_path = ws_dir.path().join(agent_id.to_hex());
@@ -375,12 +370,17 @@ async fn test_pipeline_with_tool_use() {
 
     let (token, dequeued) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
-    let config = AgentLoopConfig::default();
-    let agent_loop = AgentLoop::new(config);
-
     let mut router = ExecutorRouter::new();
     router.add_executor(Arc::new(aura_tools::ToolExecutor::with_defaults()));
-    let executor = KernelToolExecutor::new(router, agent_id, ws_path);
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel =
+        Arc::new(Kernel::new(store.clone(), provider.clone(), router, config, agent_id).unwrap());
+    let executor = KernelToolGateway::new(kernel.clone());
+
+    let agent_loop = AgentLoop::new(AgentLoopConfig::default());
 
     let tools = vec![ToolDefinition::new(
         "read_file",
@@ -398,13 +398,13 @@ async fn test_pipeline_with_tool_use() {
     assert_eq!(result.iterations, 2);
     assert!(result.total_text.contains("Read complete"));
 
-    let entry = aura_core::RecordEntry::builder(1, dequeued)
-        .context_hash([1u8; 32])
-        .build();
-    store
-        .append_entry_atomic(agent_id, 1, &entry, token.inbox_seq())
-        .unwrap();
-    assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
+    // Kernel::process_tools already appended a ToolProposal entry as part of
+    // the gateway roundtrip; finalise the UserPrompt entry now.
+    kernel.process_dequeued(dequeued, token).await.unwrap();
+
+    // head_seq should be at least 1 (UserPrompt) — tool proposals may have
+    // landed additional entries in between.
+    assert!(store.get_head_seq(agent_id).unwrap() >= 1);
 }
 
 #[tokio::test]

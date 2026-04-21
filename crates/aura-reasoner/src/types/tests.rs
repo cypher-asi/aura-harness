@@ -49,11 +49,11 @@ fn test_model_request_builder() {
         .temperature(0.7)
         .build();
 
-    assert_eq!(request.model, "claude-opus-4-6");
+    assert_eq!(request.model.as_str(), "claude-opus-4-6");
     assert_eq!(request.system, "You are helpful");
     assert_eq!(request.messages.len(), 1);
-    assert_eq!(request.max_tokens, 1000);
-    assert_eq!(request.temperature, Some(0.7));
+    assert_eq!(request.max_tokens.get(), 1000);
+    assert_eq!(request.temperature.map(f32::from), Some(0.7));
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn test_model_request_builder_with_tools() {
 fn test_model_request_builder_defaults() {
     let request = ModelRequest::builder("model", "system").build();
 
-    assert_eq!(request.max_tokens, 4096);
+    assert_eq!(request.max_tokens.get(), 4096);
     assert!(request.temperature.is_none());
     assert!(matches!(request.tool_choice, ToolChoice::Auto));
     assert!(request.messages.is_empty());

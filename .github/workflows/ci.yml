@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Format check
+  # ---------------------------------------------------------------------------
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # aura-harness depends on the sibling `aura-os` repo for the
+      # `aura-protocol` crate via a `../aura-os/crates/aura-protocol` path
+      # dependency. CI must check out that sibling at `../aura-os` relative to
+      # `aura-harness`.
+      # TODO: set aura-os repo slug once published (e.g. `aura/aura-os`).
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cargo fmt --check
+        working-directory: aura-harness
+        run: cargo fmt --all -- --check
+
+  # ---------------------------------------------------------------------------
+  # Lint
+  # ---------------------------------------------------------------------------
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # TODO: set aura-os repo slug.
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aura-harness
+
+      - name: cargo clippy
+        working-directory: aura-harness
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Tests
+  # ---------------------------------------------------------------------------
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # TODO: set aura-os repo slug.
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aura-harness
+
+      - name: cargo test
+        working-directory: aura-harness
+        run: cargo test --workspace --all-features
+
+  # ---------------------------------------------------------------------------
+  # License / dependency policy
+  # ---------------------------------------------------------------------------
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # TODO: set aura-os repo slug.
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aura-harness
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: cargo deny check
+        working-directory: aura-harness
+        run: cargo deny check
+
+  # ---------------------------------------------------------------------------
+  # Security advisories (informational — Wave 0 relaxes this so upstream
+  # advisories don't hard-block builds. Revisit when W5 lands.)
+  # ---------------------------------------------------------------------------
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      # TODO: set aura-os repo slug.
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: PLACEHOLDER_ORG/aura-os
+          path: aura-os
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aura-harness
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit
+        working-directory: aura-harness
+        run: cargo audit

@@ -208,7 +208,7 @@ impl ProcedureExtractor {
                 e.metadata
                     .get("tool_sequence")
                     .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-                    .map_or(false, |prev| sequences_match(&prev, &sequence.steps))
+                    .is_some_and(|prev| sequences_match(&prev, &sequence.steps))
             })
             .count();
 

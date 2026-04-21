@@ -100,10 +100,7 @@ mod tests {
         let def = from_claude_json(&v).unwrap();
         assert_eq!(def.name, "create_project");
         assert_eq!(def.description, "Create a new project in the org.");
-        assert_eq!(
-            def.input_schema["required"][0].as_str(),
-            Some("name")
-        );
+        assert_eq!(def.input_schema["required"][0].as_str(), Some("name"));
         assert_eq!(def.eager_input_streaming, None);
     }
 

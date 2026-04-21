@@ -46,7 +46,7 @@ impl ModelProvider for OverflowThenSuccessProvider {
         self.seen_max_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(request.max_tokens);
+            .push(request.max_tokens.get());
         let call = self.call_count.fetch_add(1, Ordering::SeqCst);
         if call < self.failures_before_success {
             return Err(ReasonerError::Api {

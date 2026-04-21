@@ -16,7 +16,7 @@
 //!    mode requests.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 
 mod credentials;
 mod error;

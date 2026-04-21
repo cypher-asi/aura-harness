@@ -306,8 +306,10 @@ mod tests {
     async fn test_cmd_disabled() {
         let (ctx, _dir) = create_test_context();
 
-        let mut config = ToolConfig::default();
-        config.enable_commands = false;
+        let config = ToolConfig {
+            enable_commands: false,
+            ..ToolConfig::default()
+        };
         let executor = ToolExecutor::new(config);
         let tool_call = ToolCall::new("run_command", serde_json::json!({"program": "ls"}));
         let action = Action::delegate_tool(&tool_call).unwrap();

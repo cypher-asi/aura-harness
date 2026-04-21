@@ -437,6 +437,149 @@ fn test_command_allowlist_prefix_entry_blocks_different_program() {
     assert!(matches!(result, Err(ToolError::CommandNotAllowed(_))));
 }
 
+// ========================================================================
+// check_binary_allowlist tests (Wave 5 / T3.2)
+// ========================================================================
+
+#[test]
+fn test_binary_allowlist_empty_passes() {
+    // Empty allow-list disables the check — backwards compatible.
+    assert!(check_binary_allowlist("rm", &[]).is_ok());
+}
+
+#[test]
+fn test_binary_allowlist_denies_unlisted() {
+    // `rm` is resolvable on every CI host; we just want the check to
+    // deny it when the allow-list omits it.
+    let allowlist = vec!["git".to_string(), "cargo".to_string()];
+    let result = check_binary_allowlist("rm", &allowlist);
+    match result {
+        Err(ToolError::Forbidden(_)) => {}
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_binary_allowlist_allows_listed_program_resolvable() {
+    // `cargo` must be present for the test suite to run at all, so we
+    // can rely on `which` finding it.
+    let allowlist = vec!["cargo".to_string()];
+    assert!(check_binary_allowlist("cargo", &allowlist).is_ok());
+}
+
+#[test]
+fn test_binary_allowlist_strips_windows_exe_suffix() {
+    // Pass an absolute path ending in `.exe` to exercise the suffix-stripping
+    // branch without touching the real PATH.
+    let allowlist = vec!["mytool".to_string()];
+    let fake = if cfg!(windows) {
+        Path::new("C:/fake/dir/mytool.exe")
+    } else {
+        Path::new("/fake/dir/mytool")
+    };
+    assert!(check_binary_allowlist(fake.to_str().unwrap(), &allowlist).is_ok());
+}
+
+// ========================================================================
+// CmdRunTool::execute gating (Wave 5 / T3.1 + T3.2)
+// ========================================================================
+
+/// Build a `ToolContext` pointing at a fresh tempdir. Helper used by the
+/// hardening gate tests.
+fn tool_ctx(config: crate::ToolConfig) -> (ToolContext, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let sandbox = Sandbox::new(dir.path()).unwrap();
+    (ToolContext::new(sandbox, config), dir)
+}
+
+#[tokio::test]
+async fn test_cmd_run_tool_rejects_command_field_without_allow_shell() {
+    let (ctx, _dir) = tool_ctx(crate::ToolConfig::default());
+    let tool = CmdRunTool;
+
+    let err = tool
+        .execute(&ctx, serde_json::json!({ "command": "echo hi" }))
+        .await
+        .expect_err("shell form must be gated behind allow_shell");
+
+    match err {
+        ToolError::InvalidArguments(msg) => {
+            assert!(msg.contains("allow_shell"), "unexpected message: {msg}");
+        }
+        other => panic!("expected InvalidArguments, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_cmd_run_tool_rejects_empty_args_without_allow_shell() {
+    let (ctx, _dir) = tool_ctx(crate::ToolConfig::default());
+    let tool = CmdRunTool;
+
+    // No `args` at all — would have been treated as a raw shell script
+    // under the old code path. After T3.1 this must error.
+    let err = tool
+        .execute(&ctx, serde_json::json!({ "program": "ls" }))
+        .await
+        .expect_err("empty args form must be gated behind allow_shell");
+
+    match err {
+        ToolError::InvalidArguments(msg) => {
+            assert!(msg.contains("empty 'args'"), "unexpected message: {msg}");
+        }
+        other => panic!("expected InvalidArguments, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_cmd_run_tool_denies_binary_outside_allowlist() {
+    // Restrict to `git` only; request `rm`.
+    let config = crate::ToolConfig {
+        binary_allowlist: vec!["git".to_string()],
+        ..crate::ToolConfig::default()
+    };
+    let (ctx, _dir) = tool_ctx(config);
+    let tool = CmdRunTool;
+
+    let err = tool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "rm", "args": ["-rf", "/tmp/x"] }),
+        )
+        .await
+        .expect_err("rm must be denied by binary_allowlist");
+
+    assert!(
+        matches!(err, ToolError::Forbidden(_)),
+        "expected Forbidden, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_cmd_run_tool_allows_listed_binary_with_args() {
+    // `cargo` is resolvable on any host that runs this test suite. We
+    // pass `--version` so the invocation terminates instantly and
+    // succeeds.
+    let config = crate::ToolConfig {
+        binary_allowlist: vec!["cargo".to_string()],
+        ..crate::ToolConfig::default()
+    };
+    let (ctx, _dir) = tool_ctx(config);
+    let tool = CmdRunTool;
+
+    let result = tool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "cargo", "args": ["--version"] }),
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "cargo --version with binary_allowlist=[cargo] must pass pre-flight; got {:?}",
+        result.err()
+    );
+}
+
 #[test]
 fn test_output_to_tool_result_exit_code_metadata() {
     #[cfg(windows)]

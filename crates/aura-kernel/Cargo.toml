@@ -10,19 +10,20 @@ license.workspace = true
 aura-core = { path = "../aura-core" }
 aura-store = { path = "../aura-store" }
 aura-reasoner = { path = "../aura-reasoner" }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-hex = "0.4"
+hex = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 futures-util = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }
 
 [lints]
 workspace = true

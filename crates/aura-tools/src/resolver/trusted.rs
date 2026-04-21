@@ -1,47 +1,46 @@
-//! Tool resolver — unified dispatch layer for tool execution.
+//! Trusted-integration runtime execution — GitHub, Linear, Slack,
+//! Brave Search, Resend, and the generic `TrustedIntegrationRuntimeSpec`
+//! interpreter.
 //!
-//! The resolver adds catalog-based visibility and domain tool dispatch on top
-//! of [`ToolExecutor`](crate::ToolExecutor), which owns the internal built-in
-//! tool implementations and permission checks.
+//! Split out of `resolver.rs` in Wave 6 / T4. The bespoke per-integration
+//! methods (`github_list_repos`, `linear_create_issue`, etc.) live here
+//! alongside the generic metadata-driven path so all "call a trusted
+//! provider" logic is in one file.
 
-use crate::catalog::ToolCatalog;
-use crate::catalog::ToolProfile;
-use crate::domain_tools::DomainToolExecutor;
+use super::json_paths::{
+    ensure_slack_ok, insert_json_path, optional_json_from_names, optional_json_from_names_map,
+    optional_positive_number, optional_positive_number_from_names,
+    optional_positive_number_from_names_map, optional_string, optional_string_from_names,
+    optional_string_from_names_map, optional_string_list, optional_string_list_from_names,
+    optional_string_list_from_names_map, required_string, required_string_list,
+};
+use super::runtime_headers::{apply_runtime_auth, apply_runtime_headers, runtime_url_with_auth};
+use super::{
+    ToolResolver, TRUSTED_INTEGRATION_RUNTIME_METADATA_KEY, TRUSTED_PROVIDER_REQUEST_TIMEOUT,
+};
 use crate::error::ToolError;
-use crate::tool::Tool;
-use crate::ToolConfig;
-use crate::ToolExecutor;
-use async_trait::async_trait;
-use aura_core::ToolDefinition;
 use aura_core::{
-    Action, ActionKind, Effect, EffectKind, EffectStatus, InstalledToolDefinition,
-    InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
-    InstalledToolRuntimeProviderExecution, ToolAuth, ToolCall, ToolResult,
+    InstalledToolDefinition, InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution,
 };
-use aura_kernel::{ExecuteContext, Executor, ExecutorError};
-use bytes::Bytes;
-use reqwest::header::{
-    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT,
-};
-use reqwest::{Client, Method, RequestBuilder, Url};
+use reqwest::{Method, Url};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tracing::{debug, error, instrument};
 
-const TRUSTED_INTEGRATION_RUNTIME_METADATA_KEY: &str = "trusted_integration_runtime";
+// ============================================================================
+// Trusted integration runtime metadata schema
+// ============================================================================
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum TrustedIntegrationHttpMethod {
+pub(super) enum TrustedIntegrationHttpMethod {
     Get,
     Post,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum TrustedIntegrationArgValueType {
+pub(super) enum TrustedIntegrationArgValueType {
     String,
     StringList,
     PositiveNumber,
@@ -50,7 +49,7 @@ enum TrustedIntegrationArgValueType {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-enum TrustedIntegrationArgSource {
+pub(super) enum TrustedIntegrationArgSource {
     #[default]
     InputArgs,
     ProviderConfig,
@@ -58,51 +57,46 @@ enum TrustedIntegrationArgSource {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TrustedIntegrationArgBinding {
-    arg_names: Vec<String>,
-    target: String,
+pub(super) struct TrustedIntegrationArgBinding {
+    pub(super) arg_names: Vec<String>,
+    pub(super) target: String,
     #[serde(default)]
-    source: TrustedIntegrationArgSource,
-    value_type: TrustedIntegrationArgValueType,
+    pub(super) source: TrustedIntegrationArgSource,
+    pub(super) value_type: TrustedIntegrationArgValueType,
     #[serde(default)]
-    required: bool,
+    pub(super) required: bool,
     #[serde(default)]
-    default_value: Option<Value>,
+    pub(super) default_value: Option<Value>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum TrustedIntegrationSuccessGuard {
+pub(super) enum TrustedIntegrationSuccessGuard {
+    #[default]
     None,
     SlackOk,
     GraphqlErrors,
 }
 
-impl Default for TrustedIntegrationSuccessGuard {
-    fn default() -> Self {
-        Self::None
-    }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TrustedIntegrationResultField {
+    pub(super) output: String,
+    pub(super) pointer: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TrustedIntegrationResultField {
-    output: String,
-    pointer: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TrustedIntegrationResultExtraField {
-    output: String,
-    pointer: String,
+pub(super) struct TrustedIntegrationResultExtraField {
+    pub(super) output: String,
+    pub(super) pointer: String,
     #[serde(default)]
-    default_value: Option<Value>,
+    pub(super) default_value: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TrustedIntegrationResultTransform {
+pub(super) enum TrustedIntegrationResultTransform {
     WrapPointer {
         key: String,
         pointer: String,
@@ -128,7 +122,7 @@ enum TrustedIntegrationResultTransform {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TrustedIntegrationRuntimeSpec {
+pub(super) enum TrustedIntegrationRuntimeSpec {
     RestJson {
         method: TrustedIntegrationHttpMethod,
         path: String,
@@ -165,214 +159,12 @@ enum TrustedIntegrationRuntimeSpec {
     ResendSendEmail,
 }
 
-/// Unified tool resolver providing both visibility and execution dispatch.
-///
-/// Composes [`ToolExecutor`](crate::ToolExecutor) for built-in tool execution
-/// and adds domain tool routing (specs, tasks, project) on top.
-///
-/// Implements [`Executor`] so it can be plugged into the kernel layer
-/// (scheduler, `ExecutorRouter`) as a drop-in replacement for `ToolExecutor`.
-pub struct ToolResolver {
-    catalog: Arc<ToolCatalog>,
-    inner: ToolExecutor,
-    domain_executor: Option<Arc<DomainToolExecutor>>,
-    installed_tools: HashMap<String, InstalledToolDefinition>,
-    http_client: Client,
-}
+// ============================================================================
+// Impl ToolResolver — trusted runtime dispatch
+// ============================================================================
 
 impl ToolResolver {
-    /// Create a resolver pre-loaded with all built-in tool handlers.
-    #[must_use]
-    pub fn new(catalog: Arc<ToolCatalog>, config: ToolConfig) -> Self {
-        Self {
-            catalog,
-            inner: ToolExecutor::new(config),
-            domain_executor: None,
-            installed_tools: HashMap::new(),
-            http_client: Client::new(),
-        }
-    }
-
-    /// Attach a domain tool executor for specs/tasks/project dispatch.
-    #[must_use]
-    pub fn with_domain_executor(mut self, exec: Arc<DomainToolExecutor>) -> Self {
-        self.domain_executor = Some(exec);
-        self
-    }
-
-    /// Attach installed tools that should execute via HTTP callbacks.
-    #[must_use]
-    pub fn with_installed_tools(mut self, tools: Vec<InstalledToolDefinition>) -> Self {
-        self.installed_tools = tools
-            .into_iter()
-            .map(|tool| (tool.name.clone(), tool))
-            .collect();
-        self
-    }
-
-    /// Visible tools for a profile (delegates to the catalog + config).
-    #[must_use]
-    pub fn visible_tools(&self, profile: ToolProfile) -> Vec<ToolDefinition> {
-        self.catalog.visible_tools(profile, self.inner.config())
-    }
-
-    /// Register an additional internal tool at runtime.
-    pub fn register(&mut self, tool: Box<dyn Tool>) {
-        self.inner.register(tool);
-    }
-
-    /// Execute a tool call:
-    /// 1. Domain executor when attached (pure HTTP — no sandbox needed).
-    /// 2. Delegate to the inner [`ToolExecutor`] for built-in tools.
-    #[instrument(skip(self, ctx), fields(tool = %tool_call.tool))]
-    async fn execute_tool(
-        &self,
-        ctx: &ExecuteContext,
-        tool_call: &ToolCall,
-    ) -> Result<ToolResult, ToolError> {
-        let tool_name = &tool_call.tool;
-
-        if let Some(tool) = self.installed_tools.get(tool_name) {
-            return self
-                .execute_installed_tool(ctx, tool, &tool_call.args)
-                .await;
-        }
-
-        // Domain tools (specs, tasks, project) — pure HTTP calls that
-        // never touch the filesystem, so they must be dispatched before
-        // Sandbox::new to avoid failing when the workspace dir is
-        // inaccessible (e.g. remote agent on a different OS).
-        if let Some(ref domain) = self.domain_executor {
-            if domain.handles(tool_name) {
-                let project_id = tool_call.args["project_id"].as_str().unwrap_or_default();
-                let result_json = domain.execute(tool_name, project_id, &tool_call.args).await;
-                let is_error = serde_json::from_str::<serde_json::Value>(&result_json)
-                    .ok()
-                    .and_then(|v| v.get("ok")?.as_bool())
-                    .is_some_and(|ok| !ok);
-                if is_error {
-                    return Ok(ToolResult::failure(tool_name, result_json));
-                }
-                return Ok(ToolResult::success(tool_name, result_json));
-            }
-        }
-
-        // Built-in tools — delegates permission checks, sandbox, and dispatch
-        // to ToolExecutor so the logic is not duplicated.
-        self.inner.execute_tool(ctx, tool_call).await
-    }
-
-    async fn execute_installed_tool(
-        &self,
-        ctx: &ExecuteContext,
-        tool: &InstalledToolDefinition,
-        args: &Value,
-    ) -> Result<ToolResult, ToolError> {
-        if let Some(runtime_execution) = &tool.runtime_execution {
-            return self
-                .execute_runtime_installed_tool(ctx, tool, args, runtime_execution)
-                .await;
-        }
-
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        match &tool.auth {
-            ToolAuth::None => {}
-            ToolAuth::Bearer { token } => {
-                let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid bearer auth header: {e}"))
-                })?;
-                headers.insert(AUTHORIZATION, value);
-            }
-            ToolAuth::ApiKey { header, key } => {
-                let name = HeaderName::from_bytes(header.as_bytes()).map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid auth header name: {e}"))
-                })?;
-                let value = HeaderValue::from_str(key).map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid api key header value: {e}"))
-                })?;
-                headers.insert(name, value);
-            }
-            ToolAuth::Headers { headers: extra } => {
-                for (name, value) in extra {
-                    let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
-                        ToolError::ExternalToolError(format!(
-                            "invalid auth header name `{name}`: {e}"
-                        ))
-                    })?;
-                    let header_value = HeaderValue::from_str(value).map_err(|e| {
-                        ToolError::ExternalToolError(format!(
-                            "invalid auth header value for `{name}`: {e}"
-                        ))
-                    })?;
-                    headers.insert(header_name, header_value);
-                }
-            }
-        }
-
-        headers.insert(
-            HeaderName::from_static("x-aura-agent-id"),
-            HeaderValue::from_str(&ctx.agent_id.to_string()).map_err(|e| {
-                ToolError::ExternalToolError(format!("invalid x-aura-agent-id header: {e}"))
-            })?,
-        );
-
-        let request = self
-            .http_client
-            .post(&tool.endpoint)
-            .headers(headers)
-            .json(args)
-            .timeout(std::time::Duration::from_millis(
-                tool.timeout_ms.unwrap_or(30_000),
-            ));
-
-        let response =
-            request
-                .send()
-                .await
-                .map_err(|e| ToolError::ExternalToolCallbackUnreachable {
-                    url: tool.endpoint.clone(),
-                    reason: e.to_string(),
-                })?;
-        let status = response.status();
-        let body = response.text().await.map_err(|e| {
-            ToolError::ExternalToolError(format!("reading installed tool response failed: {e}"))
-        })?;
-
-        if status.is_success() {
-            Ok(ToolResult::success(&tool.name, body))
-        } else {
-            Err(ToolError::ExternalToolCallbackFailed {
-                url: tool.endpoint.clone(),
-                status: status.as_u16(),
-                body,
-            })
-        }
-    }
-
-    async fn execute_runtime_installed_tool(
-        &self,
-        _ctx: &ExecuteContext,
-        tool: &InstalledToolDefinition,
-        args: &Value,
-        execution: &InstalledToolRuntimeExecution,
-    ) -> Result<ToolResult, ToolError> {
-        let result = match execution {
-            InstalledToolRuntimeExecution::AppProvider(provider) => {
-                if let Some(spec) = trusted_runtime_spec(tool)? {
-                    let integration = select_runtime_integration(provider, args)?;
-                    self.execute_trusted_runtime_app_provider(provider, integration, args, &spec)
-                        .await?
-                } else {
-                    self.execute_runtime_app_provider(tool, args, provider)
-                        .await?
-                }
-            }
-        };
-        Ok(ToolResult::success(&tool.name, result.to_string()))
-    }
-
-    async fn execute_trusted_runtime_app_provider(
+    pub(super) async fn execute_trusted_runtime_app_provider(
         &self,
         provider: &InstalledToolRuntimeProviderExecution,
         integration: &InstalledToolRuntimeIntegration,
@@ -459,7 +251,7 @@ impl ToolResolver {
         }
     }
 
-    async fn execute_runtime_app_provider(
+    pub(super) async fn execute_runtime_app_provider(
         &self,
         tool: &InstalledToolDefinition,
         args: &Value,
@@ -847,7 +639,7 @@ impl ToolResolver {
         Ok(response)
     }
 
-    async fn provider_json_request(
+    pub(super) async fn provider_json_request(
         &self,
         method: Method,
         url: &str,
@@ -856,9 +648,14 @@ impl ToolResolver {
         body: Option<Value>,
     ) -> Result<Value, ToolError> {
         let final_url = runtime_url_with_auth(url, integration)?;
-        let mut request = self.http_client.request(method, final_url);
+        let mut request = self
+            .http_client
+            .request(method, final_url)
+            // Per-request ceiling on trusted-provider calls so a slow
+            // integration can't stall the whole turn. (Wave 5 / T2.3.)
+            .timeout(TRUSTED_PROVIDER_REQUEST_TIMEOUT);
         request = apply_runtime_headers(request, &provider.static_headers)?;
-        request = apply_runtime_auth(request, integration)?;
+        request = apply_runtime_auth(request, integration);
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -890,9 +687,13 @@ impl ToolResolver {
         body: Vec<(String, String)>,
     ) -> Result<Value, ToolError> {
         let final_url = runtime_url_with_auth(url, integration)?;
-        let mut request = self.http_client.request(method, final_url);
+        let mut request = self
+            .http_client
+            .request(method, final_url)
+            // Per-request ceiling, same rationale as the JSON variant.
+            .timeout(TRUSTED_PROVIDER_REQUEST_TIMEOUT);
         request = apply_runtime_headers(request, &provider.static_headers)?;
-        request = apply_runtime_auth(request, integration)?;
+        request = apply_runtime_auth(request, integration);
         request = request.form(&body);
         let response = request
             .send()
@@ -914,7 +715,11 @@ impl ToolResolver {
     }
 }
 
-fn trusted_runtime_spec(
+// ============================================================================
+// Free helpers — runtime spec parsing, binding resolution, transforms
+// ============================================================================
+
+pub(super) fn trusted_runtime_spec(
     tool: &InstalledToolDefinition,
 ) -> Result<Option<TrustedIntegrationRuntimeSpec>, ToolError> {
     let Some(raw) = tool.metadata.get(TRUSTED_INTEGRATION_RUNTIME_METADATA_KEY) else {
@@ -968,7 +773,7 @@ fn expand_path_template(path: &str, args: &Value) -> Result<String, ToolError> {
     while let Some(ch) = chars.next() {
         if ch == '{' {
             let mut key = String::new();
-            while let Some(next) = chars.next() {
+            for next in chars.by_ref() {
                 if next == '}' {
                     break;
                 }
@@ -1121,40 +926,6 @@ fn resolve_binding_value(
     Ok(None)
 }
 
-fn insert_json_path(target: &mut Value, path: &str, value: Value) -> Result<(), ToolError> {
-    let parts = path
-        .split('.')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return Err(ToolError::ExternalToolError(
-            "trusted integration metadata declared an empty target path".into(),
-        ));
-    }
-
-    let mut current = target;
-    for part in &parts[..parts.len() - 1] {
-        if !current.is_object() {
-            *current = json!({});
-        }
-        current = current
-            .as_object_mut()
-            .expect("object ensured above")
-            .entry((*part).to_string())
-            .or_insert_with(|| json!({}));
-    }
-
-    current
-        .as_object_mut()
-        .ok_or_else(|| {
-            ToolError::ExternalToolError(format!(
-                "trusted integration target path `{path}` does not resolve to an object"
-            ))
-        })?
-        .insert(parts[parts.len() - 1].to_string(), value);
-    Ok(())
-}
-
 fn apply_success_guard(
     response: &Value,
     guard: &TrustedIntegrationSuccessGuard,
@@ -1283,7 +1054,7 @@ fn project_fields(source: &Value, fields: &[TrustedIntegrationResultField]) -> V
     result
 }
 
-fn select_runtime_integration<'a>(
+pub(super) fn select_runtime_integration<'a>(
     provider: &'a InstalledToolRuntimeProviderExecution,
     args: &Value,
 ) -> Result<&'a InstalledToolRuntimeIntegration, ToolError> {
@@ -1303,277 +1074,3 @@ fn select_runtime_integration<'a>(
         ToolError::ExternalToolError("no runtime integration credentials are available".into())
     })
 }
-
-fn apply_runtime_headers(
-    mut request: RequestBuilder,
-    headers: &HashMap<String, String>,
-) -> Result<RequestBuilder, ToolError> {
-    request = request.header(ACCEPT, "application/json");
-    request = request.header(CONTENT_TYPE, "application/json");
-    request = request.header(USER_AGENT, "aura-harness");
-    for (name, value) in headers {
-        let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
-            ToolError::ExternalToolError(format!("invalid runtime header name `{name}`: {e}"))
-        })?;
-        let header_value = HeaderValue::from_str(value).map_err(|e| {
-            ToolError::ExternalToolError(format!("invalid runtime header value for `{name}`: {e}"))
-        })?;
-        request = request.header(header_name, header_value);
-    }
-    Ok(request)
-}
-
-fn apply_runtime_auth(
-    mut request: RequestBuilder,
-    integration: &InstalledToolRuntimeIntegration,
-) -> Result<RequestBuilder, ToolError> {
-    match &integration.auth {
-        InstalledToolRuntimeAuth::None => {}
-        InstalledToolRuntimeAuth::AuthorizationBearer { token } => {
-            request = request.bearer_auth(token);
-        }
-        InstalledToolRuntimeAuth::AuthorizationRaw { value } => {
-            request = request.header(AUTHORIZATION, value);
-        }
-        InstalledToolRuntimeAuth::Header { name, value } => {
-            request = request.header(name, value);
-        }
-        InstalledToolRuntimeAuth::QueryParam { .. } => {}
-        InstalledToolRuntimeAuth::Basic { username, password } => {
-            request = request.basic_auth(username, Some(password));
-        }
-    }
-    Ok(request)
-}
-
-fn runtime_url_with_auth(
-    url: &str,
-    integration: &InstalledToolRuntimeIntegration,
-) -> Result<String, ToolError> {
-    match &integration.auth {
-        InstalledToolRuntimeAuth::QueryParam { name, value } => {
-            let mut parsed = Url::parse(url).map_err(|e| {
-                ToolError::ExternalToolError(format!("invalid runtime url for query auth: {e}"))
-            })?;
-            parsed.query_pairs_mut().append_pair(name, value);
-            Ok(parsed.to_string())
-        }
-        _ => Ok(url.to_string()),
-    }
-}
-
-fn required_string(args: &Value, keys: &[&str]) -> Result<String, ToolError> {
-    optional_string(args, keys).ok_or_else(|| {
-        ToolError::ExternalToolError(format!("missing required field `{}`", keys[0]))
-    })
-}
-
-fn optional_string(args: &Value, keys: &[&str]) -> Option<String> {
-    optional_string_from_names(
-        args,
-        &keys
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn optional_string_from_names(args: &Value, keys: &[String]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        args.get(key.as_str())
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    })
-}
-
-fn optional_string_from_names_map(
-    values: &HashMap<String, Value>,
-    keys: &[String],
-) -> Option<String> {
-    keys.iter().find_map(|key| {
-        values
-            .get(key.as_str())
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    })
-}
-
-fn required_string_list(args: &Value, keys: &[&str]) -> Result<Vec<String>, ToolError> {
-    optional_string_list(args, keys).ok_or_else(|| {
-        ToolError::ExternalToolError(format!("missing required field `{}`", keys[0]))
-    })
-}
-
-fn optional_string_list(args: &Value, keys: &[&str]) -> Option<Vec<String>> {
-    optional_string_list_from_names(
-        args,
-        &keys
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn optional_string_list_from_names(args: &Value, keys: &[String]) -> Option<Vec<String>> {
-    keys.iter().find_map(|key| {
-        let value = args.get(key.as_str())?;
-        if let Some(single) = value
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(vec![single.to_string()]);
-        }
-        value
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|items| !items.is_empty())
-    })
-}
-
-fn optional_string_list_from_names_map(
-    values: &HashMap<String, Value>,
-    keys: &[String],
-) -> Option<Vec<String>> {
-    keys.iter().find_map(|key| {
-        let value = values.get(key.as_str())?;
-        if let Some(single) = value
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Some(vec![single.to_string()]);
-        }
-        value
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|items| !items.is_empty())
-    })
-}
-
-fn optional_positive_number(args: &Value, keys: &[&str]) -> Option<u64> {
-    optional_positive_number_from_names(
-        args,
-        &keys
-            .iter()
-            .map(|key| (*key).to_string())
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn optional_positive_number_from_names(args: &Value, keys: &[String]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| args.get(key.as_str()).and_then(Value::as_u64))
-}
-
-fn optional_positive_number_from_names_map(
-    values: &HashMap<String, Value>,
-    keys: &[String],
-) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| values.get(key.as_str()).and_then(Value::as_u64))
-}
-
-fn optional_json_from_names(args: &Value, keys: &[String]) -> Option<Value> {
-    keys.iter().find_map(|key| args.get(key.as_str()).cloned())
-}
-
-fn optional_json_from_names_map(values: &HashMap<String, Value>, keys: &[String]) -> Option<Value> {
-    keys.iter()
-        .find_map(|key| values.get(key.as_str()).cloned())
-}
-
-fn ensure_slack_ok(response: &Value) -> Result<(), ToolError> {
-    if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-        return Ok(());
-    }
-    let error = response
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown slack error");
-    Err(ToolError::ExternalToolError(format!(
-        "slack api error: {error}"
-    )))
-}
-
-// ---------------------------------------------------------------------------
-// Executor trait impl  — allows the resolver to be used in ExecutorRouter
-// ---------------------------------------------------------------------------
-
-#[async_trait]
-impl Executor for ToolResolver {
-    #[instrument(skip(self, ctx, action), fields(action_id = %action.action_id))]
-    async fn execute(
-        &self,
-        ctx: &ExecuteContext,
-        action: &Action,
-    ) -> Result<Effect, ExecutorError> {
-        let tool_call: ToolCall = serde_json::from_slice(&action.payload).map_err(|e| {
-            ExecutorError::ExecutionFailed(format!("Failed to parse tool call: {e}"))
-        })?;
-
-        debug!(tool = %tool_call.tool, "Executing tool via resolver");
-
-        match self.execute_tool(ctx, &tool_call).await {
-            Ok(result) => {
-                let payload = serde_json::to_vec(&result).map_err(|e| {
-                    ExecutorError::ExecutionFailed(format!("Failed to serialize tool result: {e}"))
-                })?;
-                Ok(Effect::new(
-                    action.action_id,
-                    EffectKind::Agreement,
-                    EffectStatus::Committed,
-                    Bytes::from(payload),
-                ))
-            }
-            Err(e) => {
-                error!(error = %e, "Tool execution failed");
-                let result = ToolResult::failure(&tool_call.tool, e.to_string());
-                let payload = serde_json::to_vec(&result).map_err(|e| {
-                    ExecutorError::ExecutionFailed(format!("Failed to serialize error result: {e}"))
-                })?;
-                Ok(Effect::new(
-                    action.action_id,
-                    EffectKind::Agreement,
-                    EffectStatus::Failed,
-                    Bytes::from(payload),
-                ))
-            }
-        }
-    }
-
-    fn can_handle(&self, action: &Action) -> bool {
-        if action.kind != ActionKind::Delegate {
-            return false;
-        }
-        serde_json::from_slice::<ToolCall>(&action.payload).is_ok()
-    }
-
-    fn name(&self) -> &'static str {
-        "tool_resolver"
-    }
-}
-
-#[cfg(test)]
-#[path = "resolver_tests.rs"]
-mod tests;

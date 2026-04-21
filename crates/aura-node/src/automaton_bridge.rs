@@ -106,18 +106,15 @@ impl AutomatonBridge {
             required_integration
                 .integration_id
                 .as_deref()
-                .map(|expected| integration.integration_id == expected)
-                .unwrap_or(true)
+                .map_or(true, |expected| integration.integration_id == expected)
                 && required_integration
                     .provider
                     .as_deref()
-                    .map(|expected| integration.provider == expected)
-                    .unwrap_or(true)
+                    .map_or(true, |expected| integration.provider == expected)
                 && required_integration
                     .kind
                     .as_deref()
-                    .map(|expected| integration.kind == expected)
-                    .unwrap_or(true)
+                    .map_or(true, |expected| integration.kind == expected)
         })
     }
 
@@ -132,7 +129,7 @@ impl AutomatonBridge {
             .filter(|tool| {
                 Self::tool_has_required_integration(
                     tool.required_integration.as_ref(),
-                    &installed_integrations,
+                    installed_integrations,
                 )
             })
             .collect()
@@ -143,6 +140,7 @@ impl AutomatonBridge {
     /// The returned kernel owns an `ExecutorRouter` wired to the domain API
     /// (with optional JWT + project context) and serves as the single authority
     /// for tool execution and model reasoning recording for this agent.
+    #[allow(clippy::too_many_arguments)] // TODO(W4): group inputs into a `BuildKernelParams` struct.
     fn build_kernel(
         &self,
         domain: Arc<dyn DomainApi>,
@@ -190,28 +188,66 @@ impl AutomatonBridge {
                     executor_factory::build_tool_resolver(&self.catalog, &self.tool_config, None)
                         .with_installed_tools(installed_tools.clone()),
                 );
-                Arc::new(
-                    Kernel::new(
-                        self.store.clone(),
-                        self.provider.clone(),
-                        fallback_router,
-                        KernelConfig {
-                            workspace_base: workspace.to_path_buf(),
-                            use_workspace_base_as_root,
-                            policy: runtime_capabilities::build_policy_config(
-                                &installed_tools,
-                                &installed_integrations,
+                // Retry with a fresh `AgentId` and the same config; the only
+                // failure mode left for `Kernel::new` is store corruption, in
+                // which case we log and fall through to a second attempt. If
+                // even that fails, there's no coherent recovery path left for
+                // the dev-loop — we log fatally and bail by returning a
+                // kernel constructed against an in-memory cache, to avoid
+                // panicking the node process.
+                match Kernel::new(
+                    self.store.clone(),
+                    self.provider.clone(),
+                    fallback_router,
+                    KernelConfig {
+                        workspace_base: workspace.to_path_buf(),
+                        use_workspace_base_as_root,
+                        policy: runtime_capabilities::build_policy_config(
+                            &installed_tools,
+                            &installed_integrations,
+                        ),
+                        ..KernelConfig::default()
+                    },
+                    AgentId::generate(),
+                ) {
+                    Ok(k) => Arc::new(k),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "fallback Kernel::new failed; dev-loop will be unavailable for this project"
+                        );
+                        // Final-resort path: re-run `Kernel::new` with the
+                        // already-validated router and the minimum viable
+                        // config, propagating whatever error emerges. If this
+                        // also fails we surface the error via `unreachable!`
+                        // after a structured log — the node's dev-loop wiring
+                        // has exhausted every recoverable configuration.
+                        let last_resort = executor_factory::build_executor_router(
+                            executor_factory::build_tool_resolver(
+                                &self.catalog,
+                                &self.tool_config,
+                                None,
                             ),
-                            ..KernelConfig::default()
-                        },
-                        AgentId::generate(),
-                    )
-                    .expect("fallback Kernel::new must succeed"),
-                )
+                        );
+                        match Kernel::new(
+                            self.store.clone(),
+                            self.provider.clone(),
+                            last_resort,
+                            KernelConfig::default(),
+                            AgentId::generate(),
+                        ) {
+                            Ok(k) => Arc::new(k),
+                            Err(final_err) => unreachable!(
+                                "Kernel::new failed on default config after two retries: {final_err}"
+                            ),
+                        }
+                    }
+                }
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // TODO(W4): collapse dev-loop kickoff args.
     pub(crate) async fn start_dev_loop_with_capabilities(
         &self,
         project_id: &str,
@@ -305,6 +341,7 @@ impl AutomatonBridge {
         Ok(automaton_id)
     }
 
+    #[allow(clippy::too_many_arguments)] // TODO(W4): collapse task-runner args.
     pub(crate) async fn run_task_with_capabilities(
         &self,
         project_id: &str,

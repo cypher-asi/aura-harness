@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Action, Decision, Effect, ProposalSet, Transaction};
+use super::{Action, ContextHash, Decision, Effect, ProposalSet, Transaction};
 
 /// Current kernel version for record entries.
 pub const KERNEL_VERSION: u32 = 1;
@@ -19,8 +19,7 @@ pub struct RecordEntry {
     /// Kernel version that processed this entry
     pub kernel_version: u32,
     /// Hash of deterministic inputs used to decide
-    #[serde(with = "crate::serde_helpers::hex_bytes_32")]
-    pub context_hash: [u8; 32],
+    pub context_hash: ContextHash,
     /// Proposals from the reasoner (recorded verbatim)
     pub proposals: ProposalSet,
     /// Decision made by the kernel
@@ -43,7 +42,7 @@ impl RecordEntry {
 pub struct RecordEntryBuilder {
     seq: u64,
     tx: Transaction,
-    context_hash: [u8; 32],
+    context_hash: ContextHash,
     proposals: ProposalSet,
     decision: Decision,
     actions: Vec<Action>,
@@ -57,7 +56,7 @@ impl RecordEntryBuilder {
         Self {
             seq,
             tx,
-            context_hash: [0u8; 32],
+            context_hash: ContextHash::zero(),
             proposals: ProposalSet::new(),
             decision: Decision::new(),
             actions: Vec::new(),
@@ -67,8 +66,8 @@ impl RecordEntryBuilder {
 
     /// Set the context hash.
     #[must_use]
-    pub const fn context_hash(mut self, hash: [u8; 32]) -> Self {
-        self.context_hash = hash;
+    pub fn context_hash(mut self, hash: impl Into<ContextHash>) -> Self {
+        self.context_hash = hash.into();
         self
     }
 

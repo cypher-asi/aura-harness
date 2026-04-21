@@ -3,12 +3,13 @@
 use crate::automaton_bridge::AutomatonBridge;
 use crate::config::NodeConfig;
 use crate::domain::HttpDomainApi;
-use crate::provider_factory::create_default_model_provider;
 use crate::router::{create_router, RouterState};
 use crate::scheduler::Scheduler;
 use anyhow::Context;
+use aura_agent::KernelModelGateway;
 use aura_automaton::AutomatonRuntime;
-use aura_kernel::Executor;
+use aura_core::AgentId;
+use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
 use aura_memory::{
     ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
     WriteConfig,
@@ -77,7 +78,7 @@ impl Node {
             &self.config.aura_storage_url,
             &self.config.aura_network_url,
             &self.config.orbit_url,
-        ));
+        )?);
         info!(
             storage_url = %self.config.aura_storage_url,
             "Domain API ready (JWT auth)"
@@ -91,18 +92,37 @@ impl Node {
         let executors = vec![resolver];
         info!("Executors configured");
 
-        let provider = create_default_model_provider();
+        let provider = aura_reasoner::default_provider_from_env().provider;
 
+        // Invariant §3: LLM calls performed by the memory subsystem are
+        // recorded via a dedicated "memory service" kernel whose agent log
+        // is kept distinct from per-user / per-session agent logs.
+        let memory_agent_id = AgentId::generate();
+        let memory_store: Arc<dyn aura_store::Store> = store.clone();
+        let memory_kernel = Arc::new(
+            Kernel::new(
+                memory_store,
+                provider.clone(),
+                ExecutorRouter::new(),
+                KernelConfig::default(),
+                memory_agent_id,
+            )
+            .context("building memory-service kernel")?,
+        );
+        let memory_gateway = Arc::new(KernelModelGateway::new(memory_kernel));
         let memory_manager = Arc::new(MemoryManager::new(
             store.db_handle().clone(),
-            provider.clone(),
+            memory_gateway,
             RefinerConfig::default(),
             WriteConfig::default(),
             RetrievalConfig::default(),
             ConsolidationConfig::default(),
             ProcedureConfig::default(),
         ));
-        info!("Memory manager ready");
+        info!(
+            memory_agent_id = %memory_agent_id,
+            "Memory manager ready"
+        );
 
         let scheduler = Arc::new(Scheduler::new(
             store.clone(),
@@ -140,7 +160,7 @@ impl Node {
 
         let router_url = std::env::var("AURA_ROUTER_URL").ok();
 
-        let state = RouterState {
+        let state = RouterState::new(crate::router::RouterStateConfig {
             store,
             scheduler,
             config: self.config.clone(),
@@ -150,11 +170,10 @@ impl Node {
             domain_api: Some(domain_api),
             automaton_controller,
             automaton_bridge,
-            failed_txs: Arc::new(dashmap::DashMap::new()),
             memory_manager: Some(memory_manager),
             skill_manager: Some(skill_manager),
             router_url,
-        };
+        });
         let app = create_router(state);
 
         let addr: SocketAddr = self
@@ -227,6 +246,6 @@ mod tests {
 
     #[test]
     fn test_create_model_provider_returns_something() {
-        let _provider = create_default_model_provider();
+        let _provider = aura_reasoner::default_provider_from_env();
     }
 }

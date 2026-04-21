@@ -19,13 +19,20 @@
 //! - Testing with mock providers
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 
 mod anthropic;
 mod error;
+mod kernel_propose;
 mod mock;
-mod request;
+pub mod provider_factory;
 pub mod types;
+
+pub use provider_factory::{
+    default_from_env as default_provider_from_env, from_name as provider_from_name,
+    from_provider_config as provider_from_session_config, from_spec as provider_from_spec,
+    ProviderConfig, ProviderSelection, ProviderSpec,
+};
 
 pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
     if body.len() <= max_len {
@@ -41,12 +48,13 @@ pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
 
 pub use anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
 pub use error::ReasonerError;
+pub use kernel_propose::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use mock::{MockProvider, MockResponse};
-pub use request::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use types::{
-    AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, Message, ModelRequest,
-    ModelResponse, ProviderTrace, Role, StopReason, StreamAccumulator, StreamContentType,
-    StreamEvent, ThinkingConfig, ToolChoice, ToolDefinition, ToolResultContent, Usage,
+    AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, MaxTokens, Message, ModelName,
+    ModelRequest, ModelResponse, ProviderTrace, Role, StopReason, StreamAccumulator,
+    StreamContentType, StreamEvent, Temperature, ThinkingConfig, ToolChoice, ToolDefinition,
+    ToolResultContent, Usage,
 };
 
 use futures_util::Stream;
@@ -62,6 +70,11 @@ use async_trait::async_trait;
 pub type StreamEventStream =
     Pin<Box<dyn Stream<Item = Result<StreamEvent, ReasonerError>> + Send + 'static>>;
 
+// The body clones each field separately; passing by value matches the
+// call sites where `response` is their last use of the value. TODO(W5):
+// refactor callers to pass `&ModelResponse` once the streaming
+// adapter is split out per the Wave 6 plan.
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream {
     let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![Ok(StreamEvent::MessageStart {
         message_id: response.trace.request_id.clone().unwrap_or_default(),

@@ -31,4 +31,12 @@ pub enum AuthError {
     /// Could not determine the user's home directory for credential storage.
     #[error("unable to determine home directory for credential storage")]
     NoHomeDir,
+
+    /// Unexpected OS keyring failure while saving / loading credentials.
+    ///
+    /// "No storage" and "no entry" failures are handled transparently
+    /// by [`crate::CredentialStore`]; this variant carries only the
+    /// keyring errors we don't know how to recover from. (Wave 5 / T5.)
+    #[error("keyring error: {0}")]
+    CredentialKeyring(String),
 }

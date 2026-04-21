@@ -30,7 +30,7 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 
 pub mod animation;
 pub mod components;

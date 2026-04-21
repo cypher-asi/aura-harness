@@ -13,12 +13,28 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+static_assertions = "1.1"
+
+[features]
+# Expose fault-injection helpers for the Wave 7 invariant-atomicity
+# test suite (`crates/aura-store/tests/invariant_atomicity.rs`). The
+# helpers are never compiled in release builds unless this feature is
+# explicitly enabled.
+test-support = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
 proptest = { workspace = true }
 futures-util = { workspace = true }
+
+# The Wave 7 atomicity test needs the `test-support` fault-injection
+# helpers. Gate the integration test on that feature so plain
+# `cargo test -p aura-store` (without --all-features) still compiles,
+# while `cargo test --workspace --all-features` picks it up.
+[[test]]
+name = "invariant_atomicity"
+required-features = ["test-support"]
 
 [lints]
 workspace = true

@@ -1,21 +1,61 @@
 //! Context building for the kernel.
 
-use aura_core::{hash, RecordEntry, Transaction};
+use aura_core::{hash, ContextHash, RecordEntry, Transaction};
 use aura_reasoner::RecordSummary;
 use tracing::debug;
+
+/// Canonical context-hash function for every kernel processing path.
+///
+/// Implements Invariant §6 literally:
+///
+/// ```text
+/// context_hash = hash(serialize(tx)
+///                  || seq[0].context_hash
+///                  || seq[1].context_hash
+///                  || ...)
+/// ```
+///
+/// Note that only the per-entry `context_hash` participates — neither the
+/// entry's `seq`, tx type, nor payload is mixed in. The chain of prior
+/// `context_hash` values already encodes that history transitively, which
+/// keeps the hash stable under inconsequential representation changes
+/// while still diverging on any semantic change to the record.
+///
+/// # Errors
+/// Returns an error if the transaction cannot be serialized.
+///
+/// Exposed as `pub` so the invariant test suite in
+/// `crates/aura-kernel/tests/invariant_determinism.rs` (Phase 10 / Wave 7)
+/// can assert Invariant §6 directly against the canonical function without
+/// going through `ContextBuilder`. The function is pure — it has no side
+/// effects and no hidden state — so widening its visibility does not expand
+/// the kernel's production surface.
+pub fn hash_tx_with_window(
+    tx: &Transaction,
+    window: &[RecordEntry],
+) -> Result<ContextHash, crate::KernelError> {
+    let tx_bytes = serde_json::to_vec(tx)
+        .map_err(|e| crate::KernelError::Serialization(format!("serialize tx: {e}")))?;
+    let mut hasher = hash::Hasher::new();
+    hasher.update(&tx_bytes);
+    for entry in window {
+        hasher.update(entry.context_hash.as_ref());
+    }
+    Ok(ContextHash::from(hasher.finalize()))
+}
 
 /// Context for kernel processing.
 #[derive(Debug, Clone)]
 pub struct Context {
     /// Hash of the context inputs
-    pub context_hash: [u8; 32],
+    pub context_hash: ContextHash,
     /// Record window summaries for the reasoner
     pub record_summaries: Vec<RecordSummary>,
 }
 
 /// Builder for kernel context.
 pub struct ContextBuilder {
-    tx_bytes: Vec<u8>,
+    tx: Transaction,
     record_window: Vec<RecordEntry>,
 }
 
@@ -26,9 +66,10 @@ impl ContextBuilder {
     ///
     /// Returns an error if the transaction cannot be serialized.
     pub fn new(tx: &Transaction) -> Result<Self, serde_json::Error> {
-        let tx_bytes = serde_json::to_vec(tx)?;
+        // Pre-flight the serialization so the eventual `build()` cannot fail.
+        let _ = serde_json::to_vec(tx)?;
         Ok(Self {
-            tx_bytes,
+            tx: tx.clone(),
             record_window: Vec::new(),
         })
     }
@@ -43,17 +84,12 @@ impl ContextBuilder {
     /// Build the context.
     #[must_use]
     pub fn build(self) -> Context {
-        // Compute context hash
-        let mut hasher = hash::Hasher::new();
-        hasher.update(&self.tx_bytes);
-
-        // Include minimal deterministic data from record window
-        for entry in &self.record_window {
-            hasher.update(&entry.seq.to_be_bytes());
-            hasher.update(&entry.context_hash);
-        }
-
-        let context_hash = hasher.finalize();
+        // Delegate to the canonical `hash_tx_with_window` so every kernel
+        // path agrees on the formula from Invariant §6. `ContextBuilder::new`
+        // pre-validated serialization, so the error branch here cannot fire
+        // in practice — we fall back to an all-zero hash defensively.
+        let context_hash = hash_tx_with_window(&self.tx, &self.record_window)
+            .unwrap_or_else(|_| ContextHash::zero());
 
         // Build record summaries for reasoner
         let record_summaries: Vec<RecordSummary> = self
@@ -62,15 +98,13 @@ impl ContextBuilder {
             .map(|entry| {
                 let action_kinds: Vec<_> = entry.actions.iter().map(|a| a.kind).collect();
 
-                // Truncate payload for summary
-                let payload_summary = if entry.tx.payload.len() > 200 {
-                    Some(format!(
-                        "{}...",
-                        String::from_utf8_lossy(&entry.tx.payload[..200])
-                    ))
-                } else {
-                    Some(String::from_utf8_lossy(&entry.tx.payload).to_string())
-                };
+                // Opaque fingerprint of the payload: first 16 hex chars of the
+                // BLAKE3 digest. We keep the field name for log compatibility
+                // but no longer leak plaintext bytes (which could include
+                // secrets, PII, or raw prompts) into record summaries that
+                // fan out through the reasoner and tracing. (Wave 5 / T6.)
+                let digest = blake3::hash(&entry.tx.payload);
+                let payload_summary = Some(format!("blake3:{}", &digest.to_hex()[..16]));
 
                 RecordSummary {
                     seq: entry.seq,
@@ -82,7 +116,7 @@ impl ContextBuilder {
             .collect();
 
         debug!(
-            hash = hex::encode(&context_hash[..8]),
+            hash = hex::encode(&context_hash.as_ref()[..8]),
             window_size = record_summaries.len(),
             "Context built"
         );
@@ -95,6 +129,7 @@ impl ContextBuilder {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation)] // TODO(W5): seq<256 in fixtures; migrate to u8::try_from.
 mod tests {
     use super::*;
     use aura_core::{
@@ -221,11 +256,18 @@ mod tests {
         assert_eq!(ctx.record_summaries.len(), 1);
         assert_eq!(ctx.record_summaries[0].seq, 1);
         assert_eq!(ctx.record_summaries[0].tx_kind, "UserPrompt");
-        assert!(ctx.record_summaries[0]
+
+        // `payload_summary` is now an opaque `blake3:<16-hex>` fingerprint
+        // instead of raw plaintext (Wave 5 / T6). Verify the prefix and
+        // that the digest is deterministic for identical input.
+        let summary = ctx.record_summaries[0]
             .payload_summary
             .as_ref()
-            .unwrap()
-            .contains("hello world"));
+            .expect("payload_summary must be set");
+        assert!(summary.starts_with("blake3:"), "unexpected: {summary}");
+        assert_eq!(summary.len(), "blake3:".len() + 16);
+        let expected = format!("blake3:{}", &blake3::hash(b"hello world").to_hex()[..16]);
+        assert_eq!(*summary, expected);
     }
 
     #[test]
@@ -264,9 +306,21 @@ mod tests {
             .with_record_window(vec![entry])
             .build();
 
-        let summary = &ctx.record_summaries[0].payload_summary.as_ref().unwrap();
-        assert!(summary.len() < 250); // Should be truncated
-        assert!(summary.ends_with("..."));
+        // Payload summaries are now constant-size fingerprints
+        // (`blake3:<16-hex>`), not byte-truncated plaintext, so the
+        // old "truncated with trailing ..." check no longer applies.
+        // We instead assert the summary is the expected deterministic
+        // digest of the 500-byte payload. (Wave 5 / T6.)
+        let summary = ctx.record_summaries[0]
+            .payload_summary
+            .as_ref()
+            .expect("payload_summary must be set");
+        let expected = format!(
+            "blake3:{}",
+            &blake3::hash(long_payload.as_bytes()).to_hex()[..16]
+        );
+        assert_eq!(*summary, expected);
+        assert!(summary.len() < 250);
     }
 
     #[test]
@@ -304,7 +358,7 @@ mod tests {
 
         assert!(ctx.record_summaries.is_empty());
         // Context hash should still be valid
-        assert_ne!(ctx.context_hash, [0u8; 32]);
+        assert_ne!(ctx.context_hash, ContextHash::zero());
     }
 
     #[test]
@@ -461,5 +515,50 @@ mod tests {
 
         assert_eq!(ctx1.context_hash, ctx2.context_hash);
         assert_eq!(ctx1.record_summaries.len(), ctx2.record_summaries.len());
+    }
+
+    // ====================================================================
+    // hash_tx_with_window — canonical Invariant §6 function
+    // ====================================================================
+
+    #[test]
+    fn hash_tx_with_window_is_deterministic() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::user_prompt(agent_id, "determinism");
+        let window = vec![
+            create_test_entry(1, agent_id, TransactionType::UserPrompt, "alpha"),
+            create_test_entry(2, agent_id, TransactionType::AgentMsg, "beta"),
+            create_test_entry(3, agent_id, TransactionType::ToolExecution, "gamma"),
+        ];
+
+        let h1 = hash_tx_with_window(&tx, &window).unwrap();
+        let h2 = hash_tx_with_window(&tx, &window).unwrap();
+
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_tx_with_window_is_order_sensitive() {
+        let agent_id = AgentId::generate();
+        let tx = Transaction::user_prompt(agent_id, "order");
+
+        // Two entries with distinct context_hashes so swapping them must
+        // produce a different final hash.
+        let entry_a = create_test_entry(1, agent_id, TransactionType::UserPrompt, "a");
+        let entry_b = create_test_entry(2, agent_id, TransactionType::UserPrompt, "b");
+
+        let forward = hash_tx_with_window(&tx, &[entry_a.clone(), entry_b.clone()]).unwrap();
+        let swapped = hash_tx_with_window(&tx, &[entry_b, entry_a]).unwrap();
+
+        assert_ne!(forward, swapped);
+    }
+
+    #[test]
+    fn hash_tx_with_window_empty_window_is_serialized_tx_only() {
+        // With an empty window the hash should equal
+        // blake3(serialize(tx)) — in particular, non-zero and stable.
+        let tx = Transaction::user_prompt(AgentId::generate(), "empty-window");
+        let h = hash_tx_with_window(&tx, &[]).unwrap();
+        assert_ne!(h, ContextHash::zero());
     }
 }

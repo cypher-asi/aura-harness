@@ -1,4 +1,10 @@
+// Loop counters in these tests are deliberately small (<256); the `as u8`
+// narrowings are safe by construction. TODO(W5): migrate to `u8::try_from`
+// once the `cast_possible_truncation` lint is promoted workspace-wide.
+#![allow(clippy::cast_possible_truncation)]
+
 use super::*;
+use crate::store::WriteStore;
 use aura_core::{
     Decision, Hash, InstalledIntegrationDefinition, InstalledToolCapability,
     InstalledToolIntegrationRequirement, ProposalSet, RuntimeCapabilityInstall, SystemKind,
@@ -346,7 +352,10 @@ fn test_record_entry_with_complex_data() {
         .unwrap();
 
     let retrieved = store.get_record_entry(agent_id, 1).unwrap();
-    assert_eq!(retrieved.context_hash, [42u8; 32]);
+    assert_eq!(
+        retrieved.context_hash,
+        aura_core::ContextHash::from([42u8; 32])
+    );
     assert_eq!(retrieved.decision.accepted_action_ids.len(), 1);
     assert_eq!(retrieved.decision.rejected.len(), 1);
     assert_eq!(retrieved.decision.rejected[0].reason, "test rejection");
@@ -431,7 +440,10 @@ fn test_append_entry_direct() {
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
     let retrieved = store.get_record_entry(agent_id, 1).unwrap();
     assert_eq!(retrieved.seq, 1);
-    assert_eq!(retrieved.context_hash, [1u8; 32]);
+    assert_eq!(
+        retrieved.context_hash,
+        aura_core::ContextHash::from([1u8; 32])
+    );
 }
 
 #[test]
@@ -509,7 +521,10 @@ fn test_append_entries_batch_single() {
 
     assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
     let retrieved = store.get_record_entry(agent_id, 1).unwrap();
-    assert_eq!(retrieved.context_hash, [1u8; 32]);
+    assert_eq!(
+        retrieved.context_hash,
+        aura_core::ContextHash::from([1u8; 32])
+    );
 }
 
 #[test]
@@ -533,7 +548,10 @@ fn test_append_entries_batch_multiple() {
     assert_eq!(scanned.len(), 5);
     for (i, entry) in scanned.iter().enumerate() {
         assert_eq!(entry.seq, (i + 1) as u64);
-        assert_eq!(entry.context_hash, [(i + 1) as u8; 32]);
+        assert_eq!(
+            entry.context_hash,
+            aura_core::ContextHash::from([(i + 1) as u8; 32])
+        );
     }
 }
 

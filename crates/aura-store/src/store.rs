@@ -1,10 +1,36 @@
 //! Store trait definition.
+//!
+//! Invariant §10 (Append-Only Record) requires a narrow, audited set of
+//! write APIs. The trait hierarchy below splits the record-append family off
+//! into a sealed [`WriteStore`] trait so that only the kernel can produce
+//! new implementations of the write path:
+//!
+//! * [`ReadStore`] — public, contains every read-only operation plus the
+//!   inbox-level writes (`enqueue_tx`, `dequeue_tx`, `set_agent_status`)
+//!   that non-kernel callers (HTTP `/tx`, automaton bridge, schedulers) are
+//!   allowed to invoke.
+//! * [`WriteStore`] — public for call-site bindings, but sealed against new
+//!   implementations through [`sealed::Sealed`]. Covers the atomic commit
+//!   family (`append_entry_atomic`, `append_entry_direct`,
+//!   `append_entries_batch`, plus their `*_with_runtime_capabilities`
+//!   siblings). Only implementors declared inside `aura-store` can satisfy
+//!   the `Sealed` bound, and by convention only `aura-kernel` ever asks for
+//!   `Arc<dyn WriteStore>` — non-kernel crates must bind to
+//!   `Arc<dyn ReadStore>` instead.
+//! * [`Store`] — convenience combined trait, blanket-implemented for every
+//!   `ReadStore + WriteStore`. Existing call sites that say
+//!   `Arc<dyn Store>` continue to work; new non-kernel code should prefer
+//!   `Arc<dyn ReadStore>`.
+//!
+//! TODO(p10-determinism-tests): add a compile-fail test that enforces
+//! "only the `aura-kernel` crate may import and implement `WriteStore`"
+//! once the workspace has `trybuild` wired into CI.
 
 use crate::error::StoreError;
 use aura_core::{AgentId, AgentStatus, RecordEntry, RuntimeCapabilityInstall, Transaction};
 
-/// Opaque token produced by [`Store::dequeue_tx`] and consumed exactly once
-/// by [`Store::append_entry_atomic`] or [`Store::append_entry_dequeued`].
+/// Opaque token produced by [`ReadStore::dequeue_tx`] and consumed exactly once
+/// by [`WriteStore::append_entry_atomic`] or [`WriteStore::append_entry_dequeued`].
 ///
 /// Encapsulates the inbox sequence number so callers never manipulate it directly.
 #[derive(Debug, Clone)]
@@ -20,13 +46,25 @@ impl DequeueToken {
     }
 }
 
-/// Storage trait for the Aura system.
+pub(crate) mod sealed {
+    /// Marker bound that seals [`super::WriteStore`] against new
+    /// implementations outside of `aura-store`. Crates that only *use*
+    /// `WriteStore` (currently only `aura-kernel`) do not need to name this
+    /// trait; it is a pure implementation detail.
+    pub trait Sealed {}
+}
+
+/// Read side of the store, plus the inbox / agent-metadata writes that are
+/// explicitly **not** part of the sealed record-append family (Invariant §10).
 ///
-/// All implementations must provide atomic commit semantics.
-pub trait Store: Send + Sync {
+/// This is the trait that non-kernel crates should bind to (`Arc<dyn ReadStore>`).
+pub trait ReadStore: Send + Sync {
     /// Enqueue a transaction to an agent's inbox.
     ///
-    /// This is a durable write - the transaction is persisted before returning.
+    /// This is a durable write — the transaction is persisted before returning.
+    /// Explicitly allowed for non-kernel callers (HTTP `/tx` handler, scheduler,
+    /// automaton bridge) which enqueue externally-originated transactions that
+    /// the kernel will later dequeue and process.
     ///
     /// # Errors
     /// Returns error if the write fails.
@@ -36,8 +74,8 @@ pub trait Store: Send + Sync {
     ///
     /// Returns a [`DequeueToken`] and the transaction, or `None` if inbox is empty.
     /// Does NOT delete the transaction — that happens when the token is consumed
-    /// by [`append_entry_atomic`](Store::append_entry_atomic) or
-    /// [`append_entry_dequeued`](Store::append_entry_dequeued).
+    /// by [`WriteStore::append_entry_atomic`] or
+    /// [`WriteStore::append_entry_dequeued`].
     ///
     /// # Errors
     /// Returns error if the read fails.
@@ -54,6 +92,68 @@ pub trait Store: Send + Sync {
     /// Returns error if the read fails.
     fn get_head_seq(&self, agent_id: AgentId) -> Result<u64, StoreError>;
 
+    /// Scan record entries for an agent.
+    ///
+    /// Returns entries starting from `from_seq` up to `limit` entries.
+    ///
+    /// # Errors
+    /// Returns error if the scan fails.
+    fn scan_record(
+        &self,
+        agent_id: AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, StoreError>;
+
+    /// Get a single record entry.
+    ///
+    /// # Errors
+    /// Returns error if the entry is not found or read fails.
+    fn get_record_entry(&self, agent_id: AgentId, seq: u64) -> Result<RecordEntry, StoreError>;
+
+    /// Get agent status.
+    ///
+    /// Returns `Active` if not explicitly set.
+    ///
+    /// # Errors
+    /// Returns error if the read fails.
+    fn get_agent_status(&self, agent_id: AgentId) -> Result<AgentStatus, StoreError>;
+
+    /// Get the current persisted runtime capability snapshot for an agent.
+    ///
+    /// Returns `None` if no snapshot has been recorded or if the current
+    /// session boundary cleared the ledger.
+    fn get_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<Option<RuntimeCapabilityInstall>, StoreError>;
+
+    /// Set agent status.
+    ///
+    /// # Errors
+    /// Returns error if the write fails.
+    fn set_agent_status(&self, agent_id: AgentId, status: AgentStatus) -> Result<(), StoreError>;
+
+    /// Check if agent has pending transactions in inbox.
+    ///
+    /// # Errors
+    /// Returns error if the read fails.
+    fn has_pending_tx(&self, agent_id: AgentId) -> Result<bool, StoreError>;
+
+    /// Get inbox depth (number of pending transactions).
+    ///
+    /// # Errors
+    /// Returns error if the read fails.
+    fn get_inbox_depth(&self, agent_id: AgentId) -> Result<u64, StoreError>;
+}
+
+/// Sealed record-append family (Invariant §10).
+///
+/// Implementations of this trait are restricted to types declared inside
+/// `aura-store` via the `Sealed` marker bound. `aura-kernel` is the only
+/// caller that binds `Arc<dyn WriteStore>`; any new external bind site
+/// should be treated as a bug and rerouted through a kernel method.
+pub trait WriteStore: ReadStore + sealed::Sealed {
     /// Atomically append a record entry coupled with an inbox dequeue.
     ///
     /// This commits in a single `WriteBatch`:
@@ -62,7 +162,7 @@ pub trait Store: Send + Sync {
     /// 3. Delete inbox entry referenced by `dequeued_inbox_seq`
     /// 4. Update `inbox_head` cursor
     ///
-    /// Compatibility wrapper — prefer [`append_entry_dequeued`](Store::append_entry_dequeued)
+    /// Compatibility wrapper — prefer [`append_entry_dequeued`](Self::append_entry_dequeued)
     /// for new code using [`DequeueToken`].
     ///
     /// # Errors
@@ -77,7 +177,7 @@ pub trait Store: Send + Sync {
 
     /// Append a record entry coupled with an inbox dequeue, using a [`DequeueToken`].
     ///
-    /// Semantically identical to [`append_entry_atomic`](Store::append_entry_atomic)
+    /// Semantically identical to [`append_entry_atomic`](Self::append_entry_atomic)
     /// but accepts a typed token instead of a raw inbox sequence.
     ///
     /// # Errors
@@ -147,58 +247,10 @@ pub trait Store: Send + Sync {
         base_seq: u64,
         entries: &[RecordEntry],
     ) -> Result<(), StoreError>;
-
-    /// Scan record entries for an agent.
-    ///
-    /// Returns entries starting from `from_seq` up to `limit` entries.
-    ///
-    /// # Errors
-    /// Returns error if the scan fails.
-    fn scan_record(
-        &self,
-        agent_id: AgentId,
-        from_seq: u64,
-        limit: usize,
-    ) -> Result<Vec<RecordEntry>, StoreError>;
-
-    /// Get a single record entry.
-    ///
-    /// # Errors
-    /// Returns error if the entry is not found or read fails.
-    fn get_record_entry(&self, agent_id: AgentId, seq: u64) -> Result<RecordEntry, StoreError>;
-
-    /// Get agent status.
-    ///
-    /// Returns `Active` if not explicitly set.
-    ///
-    /// # Errors
-    /// Returns error if the read fails.
-    fn get_agent_status(&self, agent_id: AgentId) -> Result<AgentStatus, StoreError>;
-
-    /// Get the current persisted runtime capability snapshot for an agent.
-    ///
-    /// Returns `None` if no snapshot has been recorded or if the current
-    /// session boundary cleared the ledger.
-    fn get_runtime_capabilities(
-        &self,
-        agent_id: AgentId,
-    ) -> Result<Option<RuntimeCapabilityInstall>, StoreError>;
-
-    /// Set agent status.
-    ///
-    /// # Errors
-    /// Returns error if the write fails.
-    fn set_agent_status(&self, agent_id: AgentId, status: AgentStatus) -> Result<(), StoreError>;
-
-    /// Check if agent has pending transactions in inbox.
-    ///
-    /// # Errors
-    /// Returns error if the read fails.
-    fn has_pending_tx(&self, agent_id: AgentId) -> Result<bool, StoreError>;
-
-    /// Get inbox depth (number of pending transactions).
-    ///
-    /// # Errors
-    /// Returns error if the read fails.
-    fn get_inbox_depth(&self, agent_id: AgentId) -> Result<u64, StoreError>;
 }
+
+/// Convenience combined trait for storage implementations. Blanket-impl'd for
+/// every type satisfying both halves. External crates should bind to
+/// [`ReadStore`] unless they legitimately belong on the kernel write path.
+pub trait Store: ReadStore + WriteStore {}
+impl<T: ReadStore + WriteStore + ?Sized> Store for T {}

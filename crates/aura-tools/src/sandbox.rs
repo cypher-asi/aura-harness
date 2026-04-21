@@ -232,11 +232,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 /// On non-Windows this is a no-op.
 fn strip_unc_prefix(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
-    if s.starts_with(r"\\?\") {
-        PathBuf::from(&s[4..])
-    } else {
-        path.to_path_buf()
-    }
+    s.strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
 }
 
 fn is_workspace_root_alias(path: &Path) -> bool {

@@ -21,6 +21,11 @@ workspaces/
 # Logs
 *.log
 
+# Cargo scratch output captures
+*_output.txt
+check_output.txt
+clippy_output.txt
+
 # TypeScript gateway
 aura-gateway-ts/node_modules/
 aura-gateway-ts/dist/

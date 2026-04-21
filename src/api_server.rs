@@ -111,50 +111,99 @@ struct DirEntry {
     children: Option<Vec<Self>>,
 }
 
-fn dir_first_then_name(a: &std::fs::DirEntry, b: &std::fs::DirEntry) -> std::cmp::Ordering {
-    let a_dir = a.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-    let b_dir = b.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-    b_dir
-        .cmp(&a_dir)
-        .then_with(|| a.file_name().cmp(&b.file_name()))
-}
+async fn walk_directory(start: &std::path::Path, max_depth: usize) -> Vec<DirEntry> {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
 
-fn build_dir_entry(item: std::fs::DirEntry, depth: usize, max_depth: usize) -> Option<DirEntry> {
-    let name = item.file_name().to_string_lossy().into_owned();
-    if name.starts_with('.') {
-        return None;
-    }
-    let item_path = item.path();
-    let is_dir = item.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-    if is_dir && IGNORED_DIRS.contains(&name.as_str()) {
-        return None;
-    }
-    let children = if is_dir {
-        Some(walk_directory(&item_path, depth + 1, max_depth))
-    } else {
-        None
-    };
-    Some(DirEntry {
-        name,
-        path: item_path.to_string_lossy().into_owned(),
-        is_dir,
-        children,
-    })
-}
+    // Phase 1: async iterative walk driven by an explicit stack. For each
+    // directory we visit we record its ordered children (dirs before files,
+    // alphabetical within each group) into a flat map.
+    let mut contents: HashMap<PathBuf, Vec<(String, bool, PathBuf)>> = HashMap::new();
+    let mut stack: Vec<(PathBuf, usize)> = vec![(start.to_path_buf(), 0)];
 
-fn walk_directory(path: &std::path::Path, depth: usize, max_depth: usize) -> Vec<DirEntry> {
-    if depth >= max_depth {
-        return Vec::new();
+    while let Some((path, depth)) = stack.pop() {
+        if depth >= max_depth {
+            continue;
+        }
+        let mut read_dir = match tokio::fs::read_dir(&path).await {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+
+        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+        let mut files: Vec<(String, PathBuf)> = Vec::new();
+
+        loop {
+            match read_dir.next_entry().await {
+                Ok(Some(entry)) => {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    let entry_path = entry.path();
+                    let is_dir = match entry.file_type().await {
+                        Ok(ft) => ft.is_dir(),
+                        Err(_) => false,
+                    };
+                    if is_dir {
+                        if !IGNORED_DIRS.contains(&name.as_str()) {
+                            dirs.push((name, entry_path));
+                        }
+                    } else {
+                        files.push((name, entry_path));
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut rel_contents: Vec<(String, bool, PathBuf)> =
+            Vec::with_capacity(dirs.len() + files.len());
+        for (name, entry_path) in &dirs {
+            rel_contents.push((name.clone(), true, entry_path.clone()));
+        }
+        for (name, entry_path) in files {
+            rel_contents.push((name, false, entry_path));
+        }
+        contents.insert(path, rel_contents);
+
+        for (_, entry_path) in dirs {
+            stack.push((entry_path, depth + 1));
+        }
     }
-    let Ok(read_dir) = std::fs::read_dir(path) else {
-        return Vec::new();
-    };
-    let mut items: Vec<_> = read_dir.filter_map(std::result::Result::ok).collect();
-    items.sort_by(dir_first_then_name);
-    items
-        .into_iter()
-        .filter_map(|item| build_dir_entry(item, depth, max_depth))
-        .collect()
+
+    // Phase 2: pure in-memory tree assembly bounded by `max_depth` (<= 20),
+    // so sync recursion is safe and keeps the shape simple.
+    fn assemble(
+        path: &std::path::Path,
+        contents: &HashMap<PathBuf, Vec<(String, bool, PathBuf)>>,
+    ) -> Vec<DirEntry> {
+        let Some(children) = contents.get(path) else {
+            return Vec::new();
+        };
+        children
+            .iter()
+            .map(|(name, is_dir, entry_path)| {
+                let kids = if *is_dir {
+                    Some(assemble(entry_path, contents))
+                } else {
+                    None
+                };
+                DirEntry {
+                    name: name.clone(),
+                    path: entry_path.to_string_lossy().into_owned(),
+                    is_dir: *is_dir,
+                    children: kids,
+                }
+            })
+            .collect()
+    }
+
+    assemble(start, &contents)
 }
 
 /// `GET /api/files?path=...&depth=...`
@@ -173,10 +222,7 @@ async fn api_list_files_handler(Query(query): Query<ListFilesQuery>) -> Json<ser
     }
 
     let max_depth = query.depth.min(20);
-    let target_owned = target.to_path_buf();
-    let entries = tokio::task::spawn_blocking(move || walk_directory(&target_owned, 0, max_depth))
-        .await
-        .unwrap_or_default();
+    let entries = walk_directory(target, max_depth).await;
     Json(serde_json::json!({ "ok": true, "entries": entries }))
 }
 

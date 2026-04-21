@@ -345,7 +345,7 @@ mod tests {
         let content = "fn main() { if true {";
         let result = fs_write(&sandbox, "warn.txt", content, false).unwrap();
         assert!(result.ok);
-        assert!(result.metadata.get("warning").is_some());
+        assert!(result.metadata.contains_key("warning"));
     }
 
     #[test]
@@ -355,7 +355,7 @@ mod tests {
         let content = "fn main() { println!(); }";
         let result = fs_write(&sandbox, "ok.txt", content, false).unwrap();
         assert!(result.ok);
-        assert!(result.metadata.get("warning").is_none());
+        assert!(!result.metadata.contains_key("warning"));
     }
 
     #[test]

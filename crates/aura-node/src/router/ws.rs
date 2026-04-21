@@ -1,4 +1,15 @@
 use super::*;
+use axum::response::Response;
+
+/// Maximum size of a single WebSocket frame. Hardens against memory
+/// amplification from oversized binary frames. 64 KiB matches typical
+/// browser defaults. (Wave 5 / T1.3.)
+pub(super) const WS_MAX_FRAME_BYTES: usize = 64 * 1024;
+
+/// Maximum size of a reassembled WebSocket message (all frames combined).
+/// Caps pathological large-message attacks while staying well above the
+/// largest legitimate session payload we expect. (Wave 5 / T1.3.)
+pub(super) const WS_MAX_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// Upgrade an HTTP connection to a WebSocket for interactive agent sessions.
 pub(super) async fn ws_upgrade_handler(
@@ -26,27 +37,32 @@ pub(super) async fn ws_upgrade_handler(
         skill_manager: state.skill_manager.clone(),
         router_url: state.router_url.clone(),
     };
-    ws.on_upgrade(move |socket| handle_ws_connection(socket, ctx))
+    ws.max_frame_size(WS_MAX_FRAME_BYTES)
+        .max_message_size(WS_MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_ws_connection(socket, ctx))
 }
 
 /// WebSocket endpoint for streaming automaton events.
 ///
 /// Clients connect to `/stream/automaton/:automaton_id` to receive real-time
-/// events from a running automaton (dev loop, task run, etc.).
-/// Requires a Bearer token in the Authorization header (same as the chat WS).
+/// events from a running automaton (dev loop, task run, etc.). Requires a
+/// non-empty Bearer token in the Authorization header — the prior
+/// implementation parsed the token and then dropped it, which was
+/// effectively anonymous. (Wave 5 / T1.4.)
 pub(super) async fn automaton_ws_handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
     Path(automaton_id): Path<String>,
     State(state): State<RouterState>,
-) -> impl IntoResponse {
-    let _auth_token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(String::from);
+) -> Response {
+    if let Err(status) = super::auth::require_bearer(&headers) {
+        return status.into_response();
+    }
 
-    ws.on_upgrade(move |socket| handle_automaton_ws(socket, automaton_id, state.automaton_bridge))
+    ws.max_frame_size(WS_MAX_FRAME_BYTES)
+        .max_message_size(WS_MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_automaton_ws(socket, automaton_id, state.automaton_bridge))
+        .into_response()
 }
 
 async fn handle_automaton_ws(

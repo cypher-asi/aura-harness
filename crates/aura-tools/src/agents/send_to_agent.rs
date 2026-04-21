@@ -149,7 +149,7 @@ pub(crate) fn evaluate_control_gate(
     target_agent_id: &str,
     tool_name: &str,
 ) -> Result<(), ToolError> {
-    evaluate_gate(ctx, target_agent_id, tool_name, Capability::ControlAgent)
+    evaluate_gate(ctx, target_agent_id, tool_name, &Capability::ControlAgent)
 }
 
 pub(crate) fn evaluate_read_gate(
@@ -157,14 +157,14 @@ pub(crate) fn evaluate_read_gate(
     target_agent_id: &str,
     tool_name: &str,
 ) -> Result<(), ToolError> {
-    evaluate_gate(ctx, target_agent_id, tool_name, Capability::ReadAgent)
+    evaluate_gate(ctx, target_agent_id, tool_name, &Capability::ReadAgent)
 }
 
 fn evaluate_gate(
     ctx: &ToolContext,
     target_agent_id: &str,
     tool_name: &str,
-    required: Capability,
+    required: &Capability,
 ) -> Result<(), ToolError> {
     let caller_permissions = ctx.caller_permissions.as_ref().ok_or_else(|| {
         ToolError::InvalidArguments(format!(
@@ -172,16 +172,14 @@ fn evaluate_gate(
         ))
     })?;
 
-    if !caller_permissions.capabilities.contains(&required) {
+    if !caller_permissions.capabilities.contains(required) {
         return Err(ToolError::InvalidArguments(format!(
             "permissions: {tool_name} requires {required:?} capability"
         )));
     }
 
     let scope = &caller_permissions.scope;
-    if !scope.agent_ids.is_empty()
-        && !scope.agent_ids.iter().any(|id| id == target_agent_id)
-    {
+    if !scope.agent_ids.is_empty() && !scope.agent_ids.iter().any(|id| id == target_agent_id) {
         return Err(ToolError::InvalidArguments(format!(
             "permissions: target agent '{target_agent_id}' is not within the caller's AgentScope::agent_ids"
         )));
@@ -264,7 +262,10 @@ mod tests {
         let outcome = SendToAgentTool::evaluate(&ctx(caller), &input).unwrap();
         assert_eq!(outcome.target_agent_id, "target-id");
         assert_eq!(outcome.originating_user_id.as_deref(), Some("user-root"));
-        assert!(!outcome.delivered, "no hook wired — runtime side-effect skipped");
+        assert!(
+            !outcome.delivered,
+            "no hook wired — runtime side-effect skipped"
+        );
     }
 
     #[test]

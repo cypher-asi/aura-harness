@@ -444,7 +444,8 @@ async fn ws_sec_workspace_path_traversal_rejected() {
 
     ws.send_json(&json!({
         "type": "session_init",
-        "workspace": "../../../etc"
+        "workspace": "../../../etc",
+        "agent_permissions": common::default_agent_permissions_payload()
     }))
     .await;
 
@@ -469,7 +470,8 @@ async fn ws_sec_workspace_outside_base_rejected() {
     };
     ws.send_json(&json!({
         "type": "session_init",
-        "workspace": outside
+        "workspace": outside,
+        "agent_permissions": common::default_agent_permissions_payload()
     }))
     .await;
 
@@ -490,7 +492,8 @@ async fn ws_sec_project_path_relative_rejected() {
     ws.send_json(&json!({
         "type": "session_init",
         "workspace": ws_path.to_string_lossy(),
-        "project_path": "relative/path"
+        "project_path": "relative/path",
+        "agent_permissions": common::default_agent_permissions_payload()
     }))
     .await;
 
@@ -517,7 +520,8 @@ async fn ws_sec_project_path_with_dotdot_rejected() {
     ws.send_json(&json!({
         "type": "session_init",
         "workspace": ws_path.to_string_lossy(),
-        "project_path": evil
+        "project_path": evil,
+        "agent_permissions": common::default_agent_permissions_payload()
     }))
     .await;
 
@@ -774,6 +778,7 @@ async fn ws_cfg_minimal_session_init() {
     ws.send_json(&json!({
         "type": "session_init",
         "workspace": ws_path.to_string_lossy(),
+        "agent_permissions": common::default_agent_permissions_payload()
     }))
     .await;
 

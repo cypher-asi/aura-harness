@@ -10,10 +10,9 @@ use crate::store::{MemoryStore, MemoryStoreApi};
 use crate::types::{MemoryPacket, Procedure};
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
 use async_trait::async_trait;
-use aura_agent::AgentLoopResult;
+use aura_agent::{AgentLoopResult, KernelModelGateway};
 use aura_core::AgentId;
 use aura_core::ProcedureId;
-use aura_reasoner::ModelProvider;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 
@@ -29,9 +28,13 @@ pub struct MemoryManager {
 
 impl MemoryManager {
     /// Create a new `MemoryManager` backed by a shared `RocksDB` instance.
+    ///
+    /// `provider` must be a [`KernelModelGateway`] so LLM calls performed
+    /// during memory refinement and consolidation are recorded in the
+    /// kernel's append-only log (Invariant §3).
     pub fn new(
         db: Arc<DBWithThreadMode<MultiThreaded>>,
-        provider: Arc<dyn ModelProvider>,
+        provider: Arc<KernelModelGateway>,
         refiner_config: RefinerConfig,
         write_config: WriteConfig,
         retrieval_config: RetrievalConfig,

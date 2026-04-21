@@ -52,9 +52,10 @@ impl Default for NodeConfig {
 }
 
 fn default_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .map(|path| path.join("aura").join("node"))
-        .unwrap_or_else(|| PathBuf::from("./aura_data"))
+    dirs::data_local_dir().map_or_else(
+        || PathBuf::from("./aura_data"),
+        |path| path.join("aura").join("node"),
+    )
 }
 
 impl NodeConfig {

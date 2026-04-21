@@ -146,7 +146,15 @@ fn extract_partial_string_field(buf: &str, key: &str) -> Option<String> {
         }
         match std::str::from_utf8(&bytes[i..]) {
             Ok(_) => {
-                let ch = buf[i..].chars().next().expect("non-empty suffix");
+                // Invariant: the outer `while i < bytes.len()` guard and the
+                // valid-UTF-8 branch above guarantee `buf[i..]` holds at
+                // least one char. `debug_assert!` locks the invariant in
+                // tests; release builds fall back to returning the
+                // accumulated prefix rather than panicking.
+                let Some(ch) = buf[i..].chars().next() else {
+                    debug_assert!(false, "partial_json: empty suffix after UTF-8 validation");
+                    return Some(out);
+                };
                 out.push(ch);
                 i += ch.len_utf8();
             }
@@ -224,19 +232,13 @@ mod tests {
 
     #[test]
     fn drops_trailing_lone_backslash_at_boundary() {
-        let v = parse_partial_tool_input(
-            "create_spec",
-            "{\"markdown_contents\":\"ab\\",
-        );
+        let v = parse_partial_tool_input("create_spec", "{\"markdown_contents\":\"ab\\");
         assert_eq!(v["markdown_contents"], "ab");
     }
 
     #[test]
     fn drops_partial_unicode_escape_at_boundary() {
-        let v = parse_partial_tool_input(
-            "create_spec",
-            "{\"markdown_contents\":\"ab\\u00",
-        );
+        let v = parse_partial_tool_input("create_spec", "{\"markdown_contents\":\"ab\\u00");
         assert_eq!(v["markdown_contents"], "ab");
     }
 

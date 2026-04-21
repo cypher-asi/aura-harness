@@ -8,10 +8,21 @@ use crate::protocol::{
     GenerationProgressMsg, GenerationRequest, GenerationStart, OutboundMessage,
 };
 use futures_util::StreamExt;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
+
+/// Upstream connect timeout for the router generation endpoint.
+///
+/// Kept deliberately low — a slow router is worse than a fast failure so the
+/// WS session can surface a `GenerationError` and the client can retry.
+const GENERATION_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Overall per-request ceiling for the initial HTTP request. The streaming
+/// body that follows is governed by router backpressure + client cancel.
+const GENERATION_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) struct GenerationTurn {
     pub cancel_token: CancellationToken,
@@ -119,8 +130,45 @@ async fn run_generation_proxy(
     outbound: &mpsc::Sender<OutboundMessage>,
     cancel: CancellationToken,
 ) {
-    let client = reqwest::Client::new();
-    let resp = match client.post(url).bearer_auth(jwt).json(body).send().await {
+    // Declared-Exception surface (see `docs/invariants.md`): this proxy is a
+    // pure router-side SSE pipe, so we do not route through the kernel. We
+    // still apply bounded connect / handshake timeouts so a hung upstream
+    // cannot stall the WS session — the streaming body itself is NOT bounded
+    // by `reqwest` because real generations can legitimately run for minutes.
+    let client = match reqwest::Client::builder()
+        .connect_timeout(GENERATION_CONNECT_TIMEOUT)
+        .timeout(GENERATION_REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "Generation proxy: reqwest client build failed");
+            let _ = outbound.try_send(OutboundMessage::GenerationError(GenerationErrorMsg {
+                code: "UPSTREAM_ERROR".into(),
+                message: format!("failed to build http client: {e}"),
+            }));
+            return;
+        }
+    };
+    let send_fut = client.post(url).bearer_auth(jwt).json(body).send();
+    let resp = match tokio::time::timeout(GENERATION_REQUEST_TIMEOUT, send_fut).await {
+        Ok(inner) => inner,
+        Err(_) => {
+            error!(
+                timeout_secs = GENERATION_REQUEST_TIMEOUT.as_secs(),
+                "Generation proxy: upstream request timed out during handshake"
+            );
+            let _ = outbound.try_send(OutboundMessage::GenerationError(GenerationErrorMsg {
+                code: "UPSTREAM_TIMEOUT".into(),
+                message: format!(
+                    "upstream did not respond within {}s",
+                    GENERATION_REQUEST_TIMEOUT.as_secs()
+                ),
+            }));
+            return;
+        }
+    };
+    let resp = match resp {
         Ok(r) => r,
         Err(e) => {
             error!(error = %e, "Generation proxy: upstream request failed");
@@ -135,10 +183,19 @@ async fn run_generation_proxy(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        error!(%status, body = %text, "Generation proxy: upstream error");
+        // Intentionally do NOT log `text`: upstream error bodies may include
+        // provider secrets, unredacted prompts, or internal stack traces.
+        // We surface `status` + a short code + length for diagnosis and send
+        // the status-derived code to the client. (Wave 5 / T2.1.)
+        error!(
+            %status,
+            body_len = text.len(),
+            code = %format!("UPSTREAM_{}", status.as_u16()),
+            "Generation proxy: upstream error"
+        );
         let _ = outbound.try_send(OutboundMessage::GenerationError(GenerationErrorMsg {
             code: format!("UPSTREAM_{}", status.as_u16()),
-            message: format!("upstream returned {status}: {text}"),
+            message: format!("upstream returned {status}"),
         }));
         return;
     }

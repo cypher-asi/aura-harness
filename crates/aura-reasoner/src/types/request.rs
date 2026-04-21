@@ -1,6 +1,10 @@
 use super::message::Message;
 use super::tool::{ToolChoice, ToolDefinition};
-use serde::{Deserialize, Serialize};
+use crate::error::ReasonerError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+use std::num::NonZeroU32;
+use std::sync::Arc;
 
 // ============================================================================
 // Thinking Configuration
@@ -19,6 +23,165 @@ pub struct ThinkingConfig {
 }
 
 // ============================================================================
+// Strong-typed request primitives
+// ============================================================================
+
+/// Model identifier — never empty.
+///
+/// Wraps `Arc<str>` so cloning is cheap (the agent loop clones the model name
+/// into every request). Construct via `ModelName::try_new` (validating),
+/// `ModelName::from("…")` (panics on empty — intended for call sites that have
+/// already validated the input), or the explicit `From<String>` impl.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ModelName(Arc<str>);
+
+impl Serialize for ModelName {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelName {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Self(Arc::from(s)))
+    }
+}
+
+impl ModelName {
+    /// Construct a new `ModelName`, rejecting empty / whitespace-only input.
+    ///
+    /// # Errors
+    /// Returns [`ReasonerError::Internal`] if the model name is empty.
+    pub fn try_new(name: impl Into<String>) -> Result<Self, ReasonerError> {
+        let s = name.into();
+        if s.trim().is_empty() {
+            return Err(ReasonerError::Internal(
+                "model name must not be empty".into(),
+            ));
+        }
+        Ok(Self(Arc::from(s)))
+    }
+
+    /// Borrow the underlying string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for ModelName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ModelName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for ModelName {
+    /// Infallible conversion used by the builder. The builder re-validates on
+    /// `build()`; callers that construct a `ModelName` directly from a `&str`
+    /// must ensure the input is non-empty (kernel/agent code always does).
+    fn from(s: &str) -> Self {
+        Self(Arc::from(s))
+    }
+}
+
+impl From<String> for ModelName {
+    fn from(s: String) -> Self {
+        Self(Arc::from(s))
+    }
+}
+
+impl PartialEq<str> for ModelName {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for ModelName {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+/// Maximum output tokens — always > 0.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MaxTokens(NonZeroU32);
+
+impl MaxTokens {
+    /// Construct a validated `MaxTokens` value.
+    ///
+    /// # Errors
+    /// Returns [`ReasonerError::Internal`] when `value == 0`.
+    pub fn try_new(value: u32) -> Result<Self, ReasonerError> {
+        NonZeroU32::new(value)
+            .map(Self)
+            .ok_or_else(|| ReasonerError::Internal("max_tokens must be > 0".into()))
+    }
+
+    /// Return the raw `u32` for downstream API serialization.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl From<MaxTokens> for u32 {
+    fn from(v: MaxTokens) -> Self {
+        v.get()
+    }
+}
+
+/// Sampling temperature, constrained to the range supported by the major
+/// model providers (`0.0..=2.0`). Default: `1.0`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "f32", into = "f32")]
+pub struct Temperature(f32);
+
+impl Temperature {
+    /// Construct a validated temperature.
+    ///
+    /// # Errors
+    /// Returns [`ReasonerError::Internal`] when `value` is outside the
+    /// allowed range (`0.0..=2.0`) or non-finite.
+    pub fn try_new(value: f32) -> Result<Self, ReasonerError> {
+        if value.is_finite() && (0.0..=2.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(ReasonerError::Internal(format!(
+                "temperature {value} is outside the allowed range 0.0..=2.0"
+            )))
+        }
+    }
+}
+
+impl Default for Temperature {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+impl From<Temperature> for f32 {
+    fn from(v: Temperature) -> Self {
+        v.0
+    }
+}
+
+impl TryFrom<f32> for Temperature {
+    type Error = ReasonerError;
+
+    fn try_from(value: f32) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+// ============================================================================
 // Model Request
 // ============================================================================
 
@@ -26,7 +189,7 @@ pub struct ThinkingConfig {
 #[derive(Debug, Clone)]
 pub struct ModelRequest {
     /// Model identifier (e.g., "claude-opus-4-6")
-    pub model: String,
+    pub model: ModelName,
     /// System prompt
     pub system: String,
     /// Conversation messages
@@ -36,9 +199,9 @@ pub struct ModelRequest {
     /// Tool choice mode
     pub tool_choice: ToolChoice,
     /// Maximum tokens to generate
-    pub max_tokens: u32,
+    pub max_tokens: MaxTokens,
     /// Sampling temperature
-    pub temperature: Option<f32>,
+    pub temperature: Option<Temperature>,
     /// Extended thinking configuration. When `Some`, the provider enables
     /// thinking with the given budget. When `None`, provider-default behavior
     /// applies.
@@ -192,17 +355,24 @@ impl ModelRequestBuilder {
         self
     }
 
-    /// Build the request.
-    #[must_use]
-    pub fn build(self) -> ModelRequest {
-        ModelRequest {
-            model: self.model,
+    /// Build the request, validating newtypes at the edge.
+    ///
+    /// # Errors
+    /// Returns [`ReasonerError::Internal`] if any of the newtype invariants
+    /// fail: empty model name, `max_tokens == 0`, or temperature outside
+    /// `0.0..=2.0`.
+    pub fn try_build(self) -> Result<ModelRequest, ReasonerError> {
+        let model = ModelName::try_new(self.model)?;
+        let max_tokens = MaxTokens::try_new(self.max_tokens)?;
+        let temperature = self.temperature.map(Temperature::try_new).transpose()?;
+        Ok(ModelRequest {
+            model,
             system: self.system,
             messages: self.messages,
             tools: self.tools,
             tool_choice: self.tool_choice,
-            max_tokens: self.max_tokens,
-            temperature: self.temperature,
+            max_tokens,
+            temperature,
             thinking: self.thinking,
             auth_token: self.auth_token,
             upstream_provider_family: self.upstream_provider_family,
@@ -210,6 +380,84 @@ impl ModelRequestBuilder {
             aura_agent_id: self.aura_agent_id,
             aura_session_id: self.aura_session_id,
             aura_org_id: self.aura_org_id,
-        }
+        })
+    }
+
+    /// Build the request, panicking on validation failure. Preserved for
+    /// call sites that have already validated their inputs (the agent loop,
+    /// memory crate, tests). New code should prefer
+    /// [`Self::try_build`].
+    ///
+    /// # Panics
+    /// Panics if [`Self::try_build`] would have returned an error
+    /// (empty model name, zero max-tokens, or out-of-range temperature).
+    #[must_use]
+    pub fn build(self) -> ModelRequest {
+        self.try_build()
+            .expect("ModelRequestBuilder::build: newtype validation failed")
+    }
+}
+
+#[cfg(test)]
+mod newtype_tests {
+    use super::*;
+
+    #[test]
+    fn model_name_rejects_empty() {
+        assert!(ModelName::try_new("").is_err());
+        assert!(ModelName::try_new("   ").is_err());
+    }
+
+    #[test]
+    fn model_name_accepts_valid() {
+        let name = ModelName::try_new("claude-opus-4-7").unwrap();
+        assert_eq!(name.as_str(), "claude-opus-4-7");
+        assert_eq!(format!("{name}"), "claude-opus-4-7");
+    }
+
+    #[test]
+    fn max_tokens_rejects_zero() {
+        assert!(MaxTokens::try_new(0).is_err());
+    }
+
+    #[test]
+    fn max_tokens_round_trips() {
+        let v = MaxTokens::try_new(16_384).unwrap();
+        assert_eq!(v.get(), 16_384);
+        let raw: u32 = v.into();
+        assert_eq!(raw, 16_384);
+    }
+
+    #[test]
+    fn temperature_rejects_out_of_range() {
+        assert!(Temperature::try_new(-0.1).is_err());
+        assert!(Temperature::try_new(2.1).is_err());
+        assert!(Temperature::try_new(f32::NAN).is_err());
+        assert!(Temperature::try_new(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn temperature_accepts_bounds() {
+        assert!(Temperature::try_new(0.0).is_ok());
+        assert!(Temperature::try_new(2.0).is_ok());
+        assert_eq!(Temperature::default(), Temperature::try_new(1.0).unwrap());
+    }
+
+    #[test]
+    fn try_build_reports_invalid_inputs() {
+        let err = ModelRequest::builder("", "sys").try_build().unwrap_err();
+        assert!(matches!(err, ReasonerError::Internal(_)));
+
+        let err = ModelRequest::builder("model", "sys")
+            .max_tokens(0)
+            .try_build()
+            .unwrap_err();
+        assert!(matches!(err, ReasonerError::Internal(_)));
+
+        let err = ModelRequest::builder("model", "sys")
+            .temperature(3.0)
+            .try_build()
+            .unwrap_err();
+        assert!(matches!(err, ReasonerError::Internal(_)));
     }
 }

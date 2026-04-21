@@ -19,7 +19,6 @@ COPY aura-harness/crates/aura-kernel       crates/aura-kernel/
 COPY aura-harness/crates/aura-node         crates/aura-node/
 COPY aura-harness/crates/aura-memory       crates/aura-memory/
 COPY aura-harness/crates/aura-terminal     crates/aura-terminal/
-COPY aura-harness/crates/aura-cli          crates/aura-cli/
 COPY aura-harness/crates/aura-agent        crates/aura-agent/
 COPY aura-harness/crates/aura-auth         crates/aura-auth/
 COPY aura-harness/crates/aura-automaton    crates/aura-automaton/

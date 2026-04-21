@@ -6,6 +6,9 @@ use regex::Regex;
 
 use crate::file_ops::ErrorReferences;
 
+// INVARIANT: All patterns below are compile-time constants;
+// `lazy_regex_compiles` in this file's test module forces every `LazyLock`
+// so a broken pattern fails the test suite rather than at runtime.
 static TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"found for (?:struct|enum|trait|union) `(\w+)").expect("static regex")
 });
@@ -98,4 +101,20 @@ pub fn parse_error_references(stderr: &str) -> ErrorReferences {
     }
 
     refs
+}
+
+#[cfg(test)]
+mod lazy_regex_guard {
+    use super::{ARG_RE, FIELD_RE, INIT_TYPE_RE, LOC_RE, METHOD_RE, NO_FIELD_RE, TYPE_RE};
+
+    #[test]
+    fn lazy_regex_compiles() {
+        let _ = &*TYPE_RE;
+        let _ = &*INIT_TYPE_RE;
+        let _ = &*METHOD_RE;
+        let _ = &*FIELD_RE;
+        let _ = &*NO_FIELD_RE;
+        let _ = &*LOC_RE;
+        let _ = &*ARG_RE;
+    }
 }

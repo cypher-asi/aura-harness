@@ -1,0 +1,119 @@
+# cargo-deny configuration for aura-harness.
+#
+# Enforces a conservative license + advisory posture for the workspace. The
+# allow-list covers the permissive and weak-copyleft licenses that already
+# show up in the current dependency graph; GPL-family copyleft licenses are
+# explicitly denied. Advisories deny hard vulnerabilities but only warn on
+# unmaintained / yanked crates so upstream churn does not break the build.
+#
+# Duplicate-version noise is tracked as a `warn` so new duplicates get flagged
+# in review, and the `[bans.skip]` list holds the currently-known-duplicated
+# crates; every entry carries a TODO so they remain explicit cleanup work.
+
+[graph]
+# Restrict the check to the targets we actually ship. Keeps the report small
+# and avoids dragging in Windows-only dep trees when running on Linux CI.
+targets = [
+  { triple = "x86_64-unknown-linux-gnu" },
+  { triple = "x86_64-pc-windows-msvc" },
+  { triple = "x86_64-apple-darwin" },
+  { triple = "aarch64-apple-darwin" },
+]
+all-features = true
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Advisories
+# ---------------------------------------------------------------------------
+[advisories]
+version = 2
+yanked = "warn"
+# TODO(W1+): these advisories are on transitive deps we can't easily bump today.
+# Revisit once the upstream dep graph moves; each ignore is explicit.
+ignore = [
+  # `paste` is feature-complete and unmaintained; pulled in by ratatui.
+  "RUSTSEC-2024-0436",
+  # `rustls-pemfile` unmaintained; transitive via tonic/reqwest ecosystem.
+  "RUSTSEC-2025-0134",
+  # `serial` (transitive via portable-pty on Windows). No safe upgrade path.
+  "RUSTSEC-2017-0008",
+]
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+[licenses]
+version = 2
+confidence-threshold = 0.8
+# Internal workspace crates are unpublished private crates and are not
+# license-declared today. TODO(W1+): add explicit SPDX headers + license
+# fields, then drop this clause.
+private = { ignore = true }
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "CC0-1.0",
+  "Zlib",
+  "BSL-1.0",
+]
+# OpenSSL ring linkage requires these clarifications.
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+  { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+# ---------------------------------------------------------------------------
+# Bans
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"
+# Internal workspace path deps use `version = "*"` and the workspace crates are
+# unpublished (no `publish = false` today, so cargo-deny treats them as public).
+# Allow wildcards globally for W0; revisit when crates are formally marked
+# `publish = false` or when we start publishing any of them.
+# TODO(W1+): add `publish = false` to all workspace crate manifests and flip
+# this back to `wildcards = "deny"` + `allow-wildcard-paths = true`.
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+
+# Known duplicate crates that ship today. Each entry is a TODO: when the
+# underlying dep graph is reconciled (Wave 4+), the line should be removed so
+# cargo-deny flags regressions.
+skip = [
+  # TODO(W4): windows-sys is a notorious multi-version crate (one per indirect
+  # dep generation). Harmless today, but worth an occasional sweep.
+  { name = "windows-sys" },
+  { name = "windows-targets" },
+  { name = "windows_x86_64_gnu" },
+  { name = "windows_x86_64_msvc" },
+  # TODO(W4): base64 / hashbrown / bitflags commonly ship side-by-side
+  # during transitive upgrades; leave pinned while the ecosystem settles.
+  { name = "base64" },
+  { name = "hashbrown" },
+  { name = "bitflags" },
+  { name = "itertools" },
+  { name = "getrandom" },
+]
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

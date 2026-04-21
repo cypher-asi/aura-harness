@@ -28,17 +28,24 @@ pub struct HttpDomainApi {
 }
 
 impl HttpDomainApi {
-    pub fn new(storage_url: &str, network_url: &str, orbit_url: &str) -> Self {
-        Self {
-            http: Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("HTTP client build"),
+    /// Build a new HTTP-backed domain API.
+    ///
+    /// # Errors
+    /// Returns an error if `reqwest` fails to construct its HTTP client
+    /// (typically a TLS backend initialization failure in constrained
+    /// environments).
+    pub fn new(storage_url: &str, network_url: &str, orbit_url: &str) -> anyhow::Result<Self> {
+        let http = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .context("build HTTP client for HttpDomainApi")?;
+        Ok(Self {
+            http,
             storage_url: storage_url.trim_end_matches('/').to_string(),
             network_url: network_url.trim_end_matches('/').to_string(),
             orbit_url: orbit_url.trim_end_matches('/').to_string(),
-        }
+        })
     }
 
     // -------------------------------------------------------------------------

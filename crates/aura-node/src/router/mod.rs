@@ -12,8 +12,11 @@ use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
 use axum::{
-    extract::{ws::WebSocketUpgrade, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{ws::WebSocketUpgrade, DefaultBodyLimit, Path, Query, State},
+    http::{
+        header::{self, HeaderName},
+        HeaderMap, HeaderValue, Method, StatusCode,
+    },
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -22,9 +25,15 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
-use tower_http::trace::TraceLayer;
-use tracing::{error, info, instrument};
+use std::time::Duration;
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
+};
+use tracing::{error, info, instrument, warn};
 
+mod auth;
 mod automaton;
 mod files;
 mod memory;
@@ -41,30 +50,80 @@ use ws::*;
 mod tests;
 
 /// Shared state for the router.
+///
+/// Fields are `pub(crate)` — external callers (including the `test_support`
+/// feature and harness binaries) must go through [`RouterState::new`]. This
+/// keeps the wire-up in one place instead of scattering struct literals
+/// across test fixtures. (Wave 3 — T2.3.)
 pub struct RouterState {
+    pub(crate) store: Arc<dyn Store>,
+    pub(crate) scheduler: Arc<Scheduler>,
+    pub(crate) config: NodeConfig,
+    /// Model provider for WebSocket sessions (type-erased).
+    pub(crate) provider: Arc<dyn ModelProvider + Send + Sync>,
+    /// Tool configuration for WebSocket sessions.
+    pub(crate) tool_config: ToolConfig,
+    /// Canonical tool catalog (shared across sessions).
+    pub(crate) catalog: Arc<ToolCatalog>,
+    /// Domain API for specs/tasks/project/orbit/network (None if no internal token).
+    pub(crate) domain_api: Option<Arc<dyn DomainApi>>,
+    /// Automaton controller for dev-loop lifecycle (None when domain API unavailable).
+    pub(crate) automaton_controller: Option<Arc<dyn AutomatonController>>,
+    /// Concrete bridge for event subscription (same object as automaton_controller).
+    pub(crate) automaton_bridge: Option<Arc<AutomatonBridge>>,
+    /// tx_id (hex) -> error message for scheduling failures after 202 acceptance.
+    pub(crate) failed_txs: Arc<DashMap<String, String>>,
+    /// Optional memory manager for CRUD API and session injection.
+    pub(crate) memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    /// Optional skill manager for skill CRUD API and prompt injection.
+    pub(crate) skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
+    /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
+    pub(crate) router_url: Option<String>,
+}
+
+/// Input bundle for [`RouterState::new`].
+///
+/// Grouped into a single parameter struct so we don't have to thread 13
+/// positional arguments through every test and binary. Optional fields
+/// mirror the ones that default to `None` on the router state.
+pub struct RouterStateConfig {
     pub store: Arc<dyn Store>,
     pub scheduler: Arc<Scheduler>,
     pub config: NodeConfig,
-    /// Model provider for WebSocket sessions (type-erased).
     pub provider: Arc<dyn ModelProvider + Send + Sync>,
-    /// Tool configuration for WebSocket sessions.
     pub tool_config: ToolConfig,
-    /// Canonical tool catalog (shared across sessions).
     pub catalog: Arc<ToolCatalog>,
-    /// Domain API for specs/tasks/project/orbit/network (None if no internal token).
     pub domain_api: Option<Arc<dyn DomainApi>>,
-    /// Automaton controller for dev-loop lifecycle (None when domain API unavailable).
     pub automaton_controller: Option<Arc<dyn AutomatonController>>,
-    /// Concrete bridge for event subscription (same object as automaton_controller).
     pub automaton_bridge: Option<Arc<AutomatonBridge>>,
-    /// tx_id (hex) -> error message for scheduling failures after 202 acceptance.
-    pub failed_txs: Arc<DashMap<String, String>>,
-    /// Optional memory manager for CRUD API and session injection.
     pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
-    /// Optional skill manager for skill CRUD API and prompt injection.
     pub skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
-    /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
     pub router_url: Option<String>,
+}
+
+impl RouterState {
+    /// Build a router state from the given configuration.
+    ///
+    /// `failed_txs` is always initialized fresh — there is no legitimate
+    /// reason to share that map across `RouterState` instances.
+    #[must_use]
+    pub fn new(cfg: RouterStateConfig) -> Self {
+        Self {
+            store: cfg.store,
+            scheduler: cfg.scheduler,
+            config: cfg.config,
+            provider: cfg.provider,
+            tool_config: cfg.tool_config,
+            catalog: cfg.catalog,
+            domain_api: cfg.domain_api,
+            automaton_controller: cfg.automaton_controller,
+            automaton_bridge: cfg.automaton_bridge,
+            failed_txs: Arc::new(DashMap::new()),
+            memory_manager: cfg.memory_manager,
+            skill_manager: cfg.skill_manager,
+            router_url: cfg.router_url,
+        }
+    }
 }
 
 impl Clone for RouterState {
@@ -228,13 +287,93 @@ pub fn create_router(state: RouterState) -> Router {
             axum::routing::delete(skills::uninstall_agent_skill),
         )
         .with_state(state)
+        // Security + observability layers (Wave 5 / T1).
+        //
+        // Order matters: outermost first. DefaultBodyLimit caps request
+        // bodies BEFORE they reach handlers so malicious clients can't
+        // blow up memory via `/tx`. Anonymous routes (GET /health,
+        // GET /api/files, GET /workspace/resolve) stay anonymous — see
+        // per-handler comments — but they still inherit the body limit,
+        // CORS allow-list, request timeout, and trace span.
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MiB
+        .layer(build_cors_layer())
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ))
         .layer(TraceLayer::new_for_http())
+}
+
+/// Build the CORS layer from the `AURA_ALLOWED_ORIGINS` environment variable.
+///
+/// If set, parses a comma-separated list of exact origin values (e.g.
+/// `https://aura.example,https://console.aura.example`). If unset, defaults
+/// to a loopback predicate accepting `http://localhost:*` and
+/// `http://127.0.0.1:*`, which is the conservative choice for local dev.
+///
+/// Non-loopback origins are denied by default — operators must opt in via
+/// the env var.
+fn build_cors_layer() -> CorsLayer {
+    let allow_origin = match std::env::var("AURA_ALLOWED_ORIGINS") {
+        Ok(raw) if !raw.trim().is_empty() => {
+            let values: Vec<HeaderValue> = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter_map(|origin| match HeaderValue::from_str(origin) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        warn!(origin = %origin, error = %e, "ignoring invalid AURA_ALLOWED_ORIGINS entry");
+                        None
+                    }
+                })
+                .collect();
+            if values.is_empty() {
+                AllowOrigin::predicate(is_loopback_origin)
+            } else {
+                AllowOrigin::list(values)
+            }
+        }
+        _ => AllowOrigin::predicate(is_loopback_origin),
+    };
+
+    CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            HeaderName::from_static("x-requested-with"),
+        ])
+        .allow_origin(allow_origin)
+}
+
+/// Predicate that accepts only loopback origins (localhost / 127.0.0.1 / ::1)
+/// on any port, using `http` or `https` scheme. Used as the default when
+/// `AURA_ALLOWED_ORIGINS` is unset.
+fn is_loopback_origin(origin: &HeaderValue, _req_parts: &axum::http::request::Parts) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    // Strip the optional port segment so `localhost:3000` matches just as
+    // well as bare `localhost`.
+    let host = rest.split('/').next().unwrap_or(rest);
+    let host = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
 }
 
 // === Terminal WebSocket ===
 
 async fn terminal_ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(terminal::handle_terminal_ws)
+    ws.max_frame_size(ws::WS_MAX_FRAME_BYTES)
+        .max_message_size(ws::WS_MAX_MESSAGE_BYTES)
+        .on_upgrade(terminal::handle_terminal_ws)
 }
 
 // === Health ===

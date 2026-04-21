@@ -12,6 +12,7 @@ use tracing::debug;
 
 use crate::events::AgentLoopEvent;
 
+use super::iteration::LlmCallError;
 use super::AgentLoop;
 
 /// Send an event through the channel if present.
@@ -108,13 +109,13 @@ impl AgentLoop {
         request: ModelRequest,
         event_tx: Option<&Sender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
-    ) -> anyhow::Result<ModelResponse> {
+    ) -> Result<ModelResponse, LlmCallError> {
         let start = Instant::now();
 
         let mut stream = provider
             .complete_streaming(request.clone())
             .await
-            .map_err(anyhow::Error::from)?;
+            .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
 
         let mut accumulator = StreamAccumulator::new();
 
@@ -122,7 +123,7 @@ impl AgentLoop {
             let next = if let Some(token) = cancellation_token {
                 tokio::select! {
                     () = token.cancelled() => {
-                        return Err(anyhow::anyhow!("Cancelled"));
+                        return Err(LlmCallError::Fatal("Cancelled".to_string()));
                     }
                     item = stream.next() => item,
                 }
@@ -146,7 +147,7 @@ impl AgentLoop {
                     let response = provider
                         .complete(request)
                         .await
-                        .map_err(anyhow::Error::from)?;
+                        .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
                     for block in &response.message.content {
                         match block {
                             aura_reasoner::ContentBlock::Text { text } => {
@@ -165,6 +166,8 @@ impl AgentLoop {
         }
 
         let latency_ms = start.elapsed().as_millis() as u64;
-        accumulator.into_response(0, latency_ms).map_err(Into::into)
+        accumulator
+            .into_response(0, latency_ms)
+            .map_err(|e| LlmCallError::from_reasoner_error(&e))
     }
 }

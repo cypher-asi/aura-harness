@@ -26,6 +26,9 @@ pub enum ToolError {
     #[error("command not allowed: {0}")]
     CommandNotAllowed(String),
 
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
     #[error("command timeout after {timeout_ms}ms")]
     CommandTimeout { timeout_ms: u64 },
 
@@ -64,6 +67,7 @@ impl ToolError {
             Self::Io(_) => "io_error",
             Self::InvalidArguments(_) => "invalid_arguments",
             Self::CommandNotAllowed(_) => "command_not_allowed",
+            Self::Forbidden(_) => "forbidden",
             Self::CommandTimeout { .. } => "tool_timeout",
             Self::CommandFailed(_) => "command_failed",
             Self::SizeLimitExceeded { .. } => "size_limit_exceeded",
@@ -81,7 +85,8 @@ impl ToolError {
             Self::UnknownTool(_)
             | Self::ToolDisabled(_)
             | Self::SandboxViolation { .. }
-            | Self::CommandNotAllowed(_) => false,
+            | Self::CommandNotAllowed(_)
+            | Self::Forbidden(_) => false,
 
             Self::PathNotFound(_)
             | Self::Io(_)

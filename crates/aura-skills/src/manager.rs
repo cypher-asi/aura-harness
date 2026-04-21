@@ -111,10 +111,7 @@ impl SkillManager {
             })
             .collect();
         prompt::inject_full_skills(system_prompt, &entries);
-        skills
-            .iter()
-            .map(|s| crate::registry::skill_to_meta(s))
-            .collect()
+        skills.iter().map(crate::registry::skill_to_meta).collect()
     }
 
     /// Return model-invocable [`SkillMeta`] for only the skills installed for
@@ -124,23 +121,19 @@ impl SkillManager {
     pub fn agent_skill_meta(&self, agent_id_str: &str) -> Vec<SkillMeta> {
         self.agent_skills_full(agent_id_str)
             .iter()
-            .map(|s| crate::registry::skill_to_meta(s))
+            .map(crate::registry::skill_to_meta)
             .collect()
     }
 
     /// Return full [`Skill`] objects (with body) for skills installed for
     /// `agent_id` that are also model-invocable.
     fn agent_skills_full(&self, agent_id_str: &str) -> Vec<Skill> {
-        let agent_id = match parse_agent_id(agent_id_str) {
-            Some(id) => id,
-            None => {
-                tracing::warn!(agent_id_str, "invalid agent ID for skill lookup");
-                return Vec::new();
-            }
+        let Some(agent_id) = parse_agent_id(agent_id_str) else {
+            tracing::warn!(agent_id_str, "invalid agent ID for skill lookup");
+            return Vec::new();
         };
-        let store = match self.install_store.as_deref() {
-            Some(s) => s,
-            None => return Vec::new(),
+        let Some(store) = self.install_store.as_deref() else {
+            return Vec::new();
         };
         let installed = match store.list_for_agent(agent_id) {
             Ok(list) => list,
@@ -243,7 +236,7 @@ impl SkillManager {
 
         info!(name, "skill created on disk");
         self.reload();
-        self.registry.get(name).map(|s| s.clone())
+        self.registry.get(name).cloned()
     }
 
     /// Access the inner registry (e.g. for path-based matching).
@@ -325,20 +318,15 @@ impl SkillManager {
     /// Returns paths with `~` expanded to the user's home directory, and
     /// deduplicated command names.
     pub fn agent_permissions(&self, agent_id_str: &str) -> AgentSkillPermissions {
-        let agent_id = match parse_agent_id(agent_id_str) {
-            Some(id) => id,
-            None => {
-                tracing::warn!(agent_id_str, "agent_permissions: invalid agent ID");
-                return AgentSkillPermissions::default();
-            }
+        let Some(agent_id) = parse_agent_id(agent_id_str) else {
+            tracing::warn!(agent_id_str, "agent_permissions: invalid agent ID");
+            return AgentSkillPermissions::default();
         };
-        let store = match self.install_store.as_deref() {
-            Some(s) => s,
-            None => return AgentSkillPermissions::default(),
+        let Some(store) = self.install_store.as_deref() else {
+            return AgentSkillPermissions::default();
         };
-        let installed = match store.list_for_agent(agent_id) {
-            Ok(list) => list,
-            Err(_) => return AgentSkillPermissions::default(),
+        let Ok(installed) = store.list_for_agent(agent_id) else {
+            return AgentSkillPermissions::default();
         };
 
         let home = dirs::home_dir();

@@ -9,10 +9,8 @@ use crate::protocol::{
     SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg,
     ToolUseStart,
 };
-use crate::provider_factory::create_provider_from_session_config;
 use crate::runtime_capabilities;
-#[allow(deprecated)]
-use aura_agent::{AgentLoopEvent, AgentLoopResult, KernelToolExecutor};
+use aura_agent::{AgentLoopEvent, AgentLoopResult};
 use aura_kernel::{Kernel, KernelConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -60,8 +58,17 @@ pub(super) async fn handle_session_init(
     }
 
     let resolved_provider_override = if let Some(provider_config) = provider_config {
-        match create_provider_from_session_config(&provider_config) {
-            Ok(provider) => Some(provider),
+        let reasoner_cfg = aura_reasoner::ProviderConfig {
+            provider: provider_config.provider.clone(),
+            routing_mode: provider_config.routing_mode.clone(),
+            api_key: provider_config.api_key.clone(),
+            base_url: provider_config.base_url.clone(),
+            default_model: provider_config.default_model.clone(),
+            fallback_model: provider_config.fallback_model.clone(),
+            prompt_caching_enabled: provider_config.prompt_caching_enabled,
+        };
+        match aura_reasoner::provider_from_session_config(&reasoner_cfg) {
+            Ok(selection) => Some(selection.provider),
             Err(e) => {
                 let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                     code: "invalid_provider_config".into(),
@@ -98,6 +105,23 @@ pub(super) async fn handle_session_init(
 
     match build_kernel_with_config(session, ctx, &ctx.tool_config) {
         Ok(kernel) => {
+            // Invariant §2 (Every State Change Is a Transaction) +
+            // §11 (Session-Scoped Approvals): the session start is itself
+            // a state change that must be recorded and that resets the
+            // kernel's session-scoped approval cache. Emit the transaction
+            // before anything else on this kernel so the record reflects
+            // session boundaries for replay.
+            if let Err(e) = kernel
+                .process_direct(aura_core::Transaction::session_start(session.agent_id))
+                .await
+            {
+                error!(
+                    session_id = %session.session_id,
+                    error = %e,
+                    "Failed to record SessionStart transaction through kernel"
+                );
+            }
+
             if let Err(e) = runtime_capabilities::record_runtime_capabilities(
                 &kernel,
                 "session",
@@ -160,40 +184,6 @@ pub(super) async fn handle_session_init(
         tools,
         skills,
     }));
-}
-
-#[allow(dead_code, deprecated)]
-pub(super) fn build_kernel_executor(session: &Session, ctx: &WsContext) -> KernelToolExecutor {
-    let domain_exec = ctx.domain_api.as_ref().map(|api| {
-        use aura_tools::domain_tools::DomainToolExecutor;
-        Arc::new(DomainToolExecutor::with_session_context(
-            api.clone(),
-            session.auth_token.clone(),
-            session.project_id.clone(),
-        ))
-    });
-
-    let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, &ctx.tool_config, domain_exec)
-            .with_installed_tools(session.installed_tools.clone());
-
-    if let Some(ref controller) = ctx.automaton_controller {
-        let project_id = session.project_id.clone().unwrap_or_default();
-        let workspace_root = session.project_path.clone();
-        for tool in aura_tools::automaton_tools::devloop_control_tools(
-            controller.clone(),
-            project_id,
-            workspace_root,
-            session.auth_token.clone(),
-        ) {
-            resolver.register(tool);
-        }
-    }
-
-    let router = executor_factory::build_executor_router(resolver);
-
-    let (workspace, _) = resolve_session_workspace(session);
-    KernelToolExecutor::new(router, session.agent_id, workspace)
 }
 
 pub(super) fn build_kernel_with_config(
@@ -304,17 +294,15 @@ pub(super) async fn forward_events_to_ws(
                 let md_len = parsed
                     .get("markdown_contents")
                     .and_then(|v| v.as_str())
-                    .map(str::len)
-                    .unwrap_or(0);
+                    .map_or(0, str::len);
                 let content_len = parsed
                     .get("content")
                     .and_then(|v| v.as_str())
-                    .map(str::len)
-                    .unwrap_or(0);
+                    .map_or(0, str::len);
                 tracing::info!(
                     tool = %name,
                     raw_input_bytes = input.len(),
-                    parsed_keys = parsed.as_object().map(|o| o.len()).unwrap_or(0),
+                    parsed_keys = parsed.as_object().map_or(0, |o| o.len()),
                     markdown_len = md_len,
                     content_len,
                     "forwarding tool_call_snapshot"
@@ -464,7 +452,7 @@ mod tests {
     use crate::protocol::OutboundMessage;
     use crate::session::{Session, WsContext};
     use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
-    use aura_protocol::{SessionInit, SessionProviderConfig};
+    use aura_protocol::{AgentPermissionsWire, SessionInit, SessionProviderConfig};
     use aura_reasoner::MockProvider;
     use aura_store::RocksStore;
     use aura_tools::{ToolCatalog, ToolConfig};
@@ -498,21 +486,23 @@ mod tests {
 
     #[test]
     fn summarize_files_changed_groups_by_operation() {
-        let mut loop_result = AgentLoopResult::default();
-        loop_result.file_changes = vec![
-            FileChange {
-                path: "src/new.rs".into(),
-                kind: FileChangeKind::Create,
-            },
-            FileChange {
-                path: "src/lib.rs".into(),
-                kind: FileChangeKind::Modify,
-            },
-            FileChange {
-                path: "src/old.rs".into(),
-                kind: FileChangeKind::Delete,
-            },
-        ];
+        let loop_result = AgentLoopResult {
+            file_changes: vec![
+                FileChange {
+                    path: "src/new.rs".into(),
+                    kind: FileChangeKind::Create,
+                },
+                FileChange {
+                    path: "src/lib.rs".into(),
+                    kind: FileChangeKind::Modify,
+                },
+                FileChange {
+                    path: "src/old.rs".into(),
+                    kind: FileChangeKind::Delete,
+                },
+            ],
+            ..AgentLoopResult::default()
+        };
 
         let summary = summarize_files_changed(&loop_result);
         assert_eq!(summary.created, vec!["src/new.rs"]);
@@ -589,6 +579,8 @@ mod tests {
                 fallback_model: None,
                 prompt_caching_enabled: Some(true),
             }),
+            intent_classifier: None,
+            agent_permissions: AgentPermissionsWire::default(),
         };
 
         handle_session_init(&mut session, invalid_init, &outbound_tx, &ctx).await;
@@ -621,11 +613,105 @@ mod tests {
             aura_org_id: None,
             agent_id: None,
             provider_config: None,
+            intent_classifier: None,
+            agent_permissions: AgentPermissionsWire::default(),
         };
 
         handle_session_init(&mut session, retry_init, &outbound_tx, &ctx).await;
 
         assert!(session.initialized);
         assert!(session.provider_override.is_none());
+    }
+
+    /// Wave 2 T2 — Invariants §2 + §11:
+    ///
+    /// `handle_session_init` must submit a `Transaction::session_start(...)`
+    /// through the kernel so the record log reflects the session boundary
+    /// and the policy's session-scoped approvals are cleared.
+    ///
+    /// A follow-on kernel call (what `start_turn` now does) must append a
+    /// `UserPrompt` entry with the user message as payload.
+    #[tokio::test]
+    async fn session_init_emits_session_start_and_user_prompt_are_recorded() {
+        use aura_core::{Transaction, TransactionType};
+        use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
+
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+
+        let ws_path = ctx.workspace_base.join("record-test");
+        std::fs::create_dir_all(&ws_path).unwrap();
+
+        let init = SessionInit {
+            system_prompt: None,
+            model: None,
+            max_tokens: None,
+            temperature: None,
+            max_turns: None,
+            installed_tools: None,
+            installed_integrations: None,
+            workspace: Some(ws_path.display().to_string()),
+            project_path: None,
+            token: None,
+            project_id: None,
+            conversation_messages: None,
+            aura_agent_id: None,
+            aura_session_id: None,
+            aura_org_id: None,
+            agent_id: None,
+            provider_config: None,
+            intent_classifier: None,
+            agent_permissions: AgentPermissionsWire::default(),
+        };
+
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        handle_session_init(&mut session, init, &outbound_tx, &ctx).await;
+
+        assert!(session.initialized);
+        let agent_id = session.agent_id;
+
+        // Drain session_ready so the channel doesn't block downstream asserts.
+        let _ = outbound_rx.recv().await;
+
+        // SessionStart must be the first recorded transaction for this agent.
+        let entries = ctx.store.scan_record(agent_id, 1, 10).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.tx.tx_type == TransactionType::SessionStart),
+            "expected SessionStart entry in record, got: {:?}",
+            entries.iter().map(|e| e.tx.tx_type).collect::<Vec<_>>(),
+        );
+
+        // Simulate what `start_turn` now does before invoking the agent loop:
+        // build the same kernel and submit a `UserPrompt` via `process_direct`.
+        let kernel = Arc::new(
+            Kernel::new(
+                ctx.store.clone(),
+                ctx.provider.clone(),
+                ExecutorRouter::new(),
+                KernelConfig {
+                    workspace_base: ws_path.clone(),
+                    use_workspace_base_as_root: true,
+                    ..KernelConfig::default()
+                },
+                agent_id,
+            )
+            .unwrap(),
+        );
+        kernel
+            .process_direct(Transaction::user_prompt(agent_id, "hello kernel"))
+            .await
+            .unwrap();
+
+        let entries = ctx.store.scan_record(agent_id, 1, 10).unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.tx.tx_type == TransactionType::UserPrompt
+                    && e.tx.payload.as_ref() == b"hello kernel"),
+            "expected UserPrompt entry with payload 'hello kernel', got: {:?}",
+            entries.iter().map(|e| e.tx.tx_type).collect::<Vec<_>>(),
+        );
     }
 }

@@ -12,7 +12,9 @@ mod tool;
 
 pub use content::{ContentBlock, ImageSource, Role, ToolResultContent};
 pub use message::Message;
-pub use request::{ModelRequest, ModelRequestBuilder, ThinkingConfig};
+pub use request::{
+    MaxTokens, ModelName, ModelRequest, ModelRequestBuilder, Temperature, ThinkingConfig,
+};
 pub use response::{ModelResponse, ProviderTrace, StopReason, Usage};
 pub use streaming::{AccumulatedToolUse, StreamAccumulator, StreamContentType, StreamEvent};
 pub use tool::{CacheControl, ToolChoice, ToolDefinition};

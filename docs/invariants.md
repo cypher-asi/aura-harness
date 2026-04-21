@@ -2,6 +2,27 @@
 
 This document defines the invariants that the Aura system must uphold. Every code change should be validated against these rules. Violations are bugs.
 
+## Enforcement Map
+
+Each invariant below is guarded by one or more tests. The table below is
+the living index of which suite enforces which invariant; it is kept in
+sync with the `Enforcement:` lines under each section.
+
+| # | Invariant | Enforcement |
+|---|---|---|
+| §1 | Sole External Gateway | Architectural / `rg` grep bands documented in §1 Verification; no dedicated suite (see Untested Invariants). |
+| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`. |
+| §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`). |
+| §4 | Full Policy Enforcement | `crates/aura-kernel/tests/invariant_policy_matrix.rs` + `crates/aura-kernel/src/policy/tests.rs`. |
+| §5 | Complete Audit Trail | `crates/aura-kernel/src/kernel/tests.rs` + §4 matrix asserts `decision`/`actions`/`context_hash`. |
+| §6 | Deterministic Context | `crates/aura-kernel/tests/invariant_determinism.rs` (proptest). |
+| §7 | Monotonic Sequencing | `crates/aura-store/tests/invariant_atomicity.rs` + `crates/aura-store/src/rocks_store/tests.rs`. |
+| §8 | Gateway Transparency | `crates/aura-agent/src/agent_loop/parity_tests.rs`. |
+| §9 | AgentLoop Isolation | Architectural / `rg` grep bands (see Untested Invariants). |
+| §10 | Append-Only Record | `crates/aura-store/tests/invariant_atomicity.rs` (`static_assertions` sealed-trait check + atomic-commit fault injection). |
+| §11 | Session-Scoped Approvals | `crates/aura-kernel/src/policy/tests.rs` (`clear_session_approvals`) + §4 matrix's `AskOnce` rows. |
+| §12 | Single Writer Per Agent | `crates/aura-store/src/rocks_store/tests_concurrent.rs`. |
+
 ---
 
 ## 1. Sole External Gateway
@@ -11,7 +32,13 @@ This document defines the invariants that the Aura system must uphold. Every cod
 No code outside the kernel may:
 - Call a `ModelProvider` (`complete`, `complete_streaming`)
 - Execute an `Action` via `ExecutorRouter`
-- Write to the `Store` (`append_entry_atomic`, `enqueue_tx`, `set_agent_status`)
+- Append to the record log. The record-append family
+  (`append_entry_atomic`, `append_entry_dequeued`, `append_entry_direct`,
+  their `*_with_runtime_capabilities` variants, and `append_entries_batch`)
+  lives on the **sealed** `aura_store::WriteStore` trait — see §10. Non-kernel
+  callers bind to `Arc<dyn ReadStore>` and may still invoke the explicitly-
+  allowed inbox/metadata writes (`enqueue_tx`, `set_agent_status`) that live
+  on `ReadStore`.
 - Make HTTP calls to domain services (`DomainApi` mutating methods)
 - Spawn subprocesses for git mutations (`git push`, `git commit`)
 
@@ -61,6 +88,11 @@ The entry records:
 
 For streaming calls, recording occurs when the stream completes (accumulated by the kernel's stream wrapper).
 
+**Enforcement:** `crates/aura-agent/src/recording_stream.rs` —
+`streaming_natural_end_records_completed`, `streaming_error_records_failed`,
+`streaming_drop_records_failed` cover natural-end, mid-stream error, and
+early-drop termination paths for `TransactionType::Reasoning`.
+
 ---
 
 ## 4. Full Policy Enforcement
@@ -83,6 +115,20 @@ The policy pipeline for a `ToolProposal`:
 5. Only approved proposals become `Action`s and are executed
 
 **Corollary:** A `Deny`-only check is insufficient. The full `Policy::check()` must run.
+
+### 4.a Default permissions for high-privilege tools
+
+The shipped `Policy::with_defaults()` preset (`crates/aura-kernel/src/policy/mod.rs::default_tool_permission`) defaults **`run_command` to `PermissionLevel::AlwaysAsk`** (Wave 5 / T3). The kernel must never invoke arbitrary binaries without an explicit per-use approval. Read-only FS inspection (`list_files`, `read_file`, `stat_file`, `search_code`) and in-workspace FS writes (`write_file`, `edit_file`, `delete_file`) remain `AlwaysAllow` because they are sandboxed to the workspace root.
+
+Complementary enforcement in `aura-tools`:
+
+- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` field unless the caller passes `allow_shell: true`.
+- When `ToolConfig::binary_allowlist` is non-empty, `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
+
+**Enforcement:** `crates/aura-kernel/tests/invariant_policy_matrix.rs`
+drives every permission level × tool-listing × action-kind × runtime-
+capability combination through `Kernel::process_direct` and asserts the
+recorded `Decision` (accept vs. reject-with-reason) for each row.
 
 ---
 
@@ -111,6 +157,12 @@ context_hash = hash(serialize(tx) || seq[0].context_hash || seq[1].context_hash 
 
 Re-processing the same transaction against the same record window must produce the same context hash. This enables integrity verification of the record chain.
 
+**Enforcement:** `crates/aura-kernel/tests/invariant_determinism.rs`
+uses `proptest` to assert that `hash_tx_with_window` is deterministic,
+order-sensitive (swapping adjacent window entries changes the hash),
+insertion-sensitive (adding a no-op entry changes the hash), and
+transaction-sensitive (mutating the transaction body changes the hash).
+
 ---
 
 ## 7. Monotonic Sequencing
@@ -121,6 +173,11 @@ Re-processing the same transaction against the same record window must produce t
 - No gaps: if entries exist at seq 1 and seq 3, there must be an entry at seq 2
 - No duplicates: `append_entry_atomic` rejects sequence mismatches
 - Atomicity: inbox dequeue and record append happen in a single `WriteBatch`
+
+**Enforcement:** `crates/aura-store/tests/invariant_atomicity.rs` (fault
+injection across the `WriteBatch` boundary asserts no partial state, and
+the sequence-mismatch row asserts strict monotonicity). Additional
+coverage in `crates/aura-store/src/rocks_store/tests.rs`.
 
 ---
 
@@ -162,9 +219,22 @@ The harness as a whole may receive runtime-resolved capabilities or short-lived 
 
 **The record log is immutable. Entries are never modified or deleted.**
 
-- `Store::append_entry_atomic` is the only write path for record entries
-- No `update_entry`, `delete_entry`, or `truncate_record` operations exist
-- Compaction (in the AgentLoop) operates on in-memory message history, not on the persisted record
+- The record-append surface (`append_entry_atomic`, `append_entry_dequeued`,
+  `append_entry_direct`, and their `*_with_runtime_capabilities` variants,
+  plus `append_entries_batch`) lives on the **sealed** `aura_store::WriteStore`
+  trait. Non-kernel crates depend only on `aura_store::ReadStore`; the
+  kernel's `Arc<dyn WriteStore>` is the only path that can commit a record
+  entry. New storage backends cannot be written outside `aura-store`
+  because the sealing marker (`aura_store::store::sealed::Sealed`) is
+  crate-private.
+- No `update_entry`, `delete_entry`, or `truncate_record` operations exist.
+- Compaction (in the AgentLoop) operates on in-memory message history, not
+  on the persisted record.
+
+**Enforcement:** `crates/aura-store/tests/invariant_atomicity.rs` —
+a `static_assertions::assert_impl_all!(RocksStore: WriteStore, Store)`
+check pins the sealed-trait surface at compile time, and the fault-
+injection rows prove the append path is all-or-nothing.
 
 ---
 
@@ -202,5 +272,6 @@ The following operations intentionally do NOT route through the kernel:
 | Tool sandbox setup (`sandbox.rs` directory creation) | Infrastructure for the kernel-managed tool pipeline. |
 | Read-only git operations (`git diff`, `git status`, `git log`) | No external side effect. Only mutating git ops (push, commit) require kernel mediation. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
+| Generation proxy (`session/generation.rs`) for image/3D requests | Pure SSE proxy to `aura-router`; the session does not mutate local state or consume LLM credits. All remote calls use bounded `reqwest` connect/read timeouts. When this surface starts spending credits or persisting artifacts locally it **must** move behind a `KernelGenerationGateway`. |
 
 Any addition to this list requires explicit justification and documentation.

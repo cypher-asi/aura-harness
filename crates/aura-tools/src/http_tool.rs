@@ -30,15 +30,48 @@
 //! per test.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_core::{ToolDefinition, ToolResult};
+use futures_util::StreamExt;
+use once_cell::sync::Lazy;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
+
+/// Default request-total timeout for HTTP tool calls (Wave 5 / T2.4).
+const HTTP_TOOL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default connect-phase timeout for HTTP tool calls.
+const HTTP_TOOL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default cap on the response body we will hold in memory (Wave 5 / T2.5).
+/// Requests exceeding this return [`ToolError::SizeLimitExceeded`] instead
+/// of being silently truncated. 5 MiB covers all aura-os domain payloads
+/// we know about today; callers with pathological needs can swap in a
+/// custom client + read path in the future.
+const HTTP_TOOL_MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Shared default client — built once, lazily, with the request/connect
+/// timeouts above. Using `Client::default()` previously meant every http
+/// tool had an unbounded request horizon, which is how slow endpoints
+/// could hang an entire agent turn.
+static DEFAULT_HTTP_TOOL_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    // `reqwest::Client::builder().build()` only fails on catastrophic
+    // runtime failures (TLS backend init, etc.); if we can't build a
+    // client at all, nothing else in the agent will work either, and
+    // silently returning an un-timed `Client::new()` here would defeat
+    // the exact security guarantee this module promises. (Wave 5 / T2.4.)
+    reqwest::Client::builder()
+        .timeout(HTTP_TOOL_REQUEST_TIMEOUT)
+        .connect_timeout(HTTP_TOOL_CONNECT_TIMEOUT)
+        .build()
+        .expect("failed to build default HTTP tool client with timeouts")
+});
 
 /// HTTP methods supported by [`HttpToolDefinition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,9 +223,7 @@ impl HttpToolDefinition {
             let end = start + rel_end;
             let key = out[start + 1..end].to_string();
             let raw = args.get(&key).ok_or_else(|| {
-                ToolError::InvalidArguments(format!(
-                    "missing argument for placeholder {{{key}}}"
-                ))
+                ToolError::InvalidArguments(format!("missing argument for placeholder {{{key}}}"))
             })?;
             let value = match raw {
                 Value::String(s) => s.clone(),
@@ -262,7 +293,11 @@ impl HttpToolDefinitionBuilder {
             method: self.method,
             auth: self.auth,
             static_headers: self.static_headers,
-            client: self.client.unwrap_or_default(),
+            // Prefer a caller-supplied client; otherwise share the process-wide
+            // default that carries sane timeouts. (Wave 5 / T2.4.)
+            client: self
+                .client
+                .unwrap_or_else(|| DEFAULT_HTTP_TOOL_CLIENT.clone()),
         }
     }
 }
@@ -274,19 +309,18 @@ impl Tool for HttpToolDefinition {
     }
 
     fn definition(&self) -> ToolDefinition {
-        let mut def =
-            ToolDefinition::new(self.name.clone(), self.description.clone(), self.input_schema.clone());
+        let mut def = ToolDefinition::new(
+            self.name.clone(),
+            self.description.clone(),
+            self.input_schema.clone(),
+        );
         if self.eager_input_streaming {
             def.eager_input_streaming = Some(true);
         }
         def
     }
 
-    async fn execute(
-        &self,
-        _ctx: &ToolContext,
-        args: Value,
-    ) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
         let (url, consumed) = self.build_url(&args)?;
 
         // Remove placeholder-consumed keys from the body.
@@ -340,10 +374,7 @@ impl Tool for HttpToolDefinition {
             .await
             .map_err(|e| ToolError::CommandFailed(format!("http request failed: {e}")))?;
         let status = resp.status();
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| ToolError::CommandFailed(format!("read response body: {e}")))?;
+        let body = read_bounded_body(resp, HTTP_TOOL_MAX_RESPONSE_BYTES).await?;
 
         if status.is_success() {
             Ok(ToolResult::success(self.name.clone(), body))
@@ -355,6 +386,33 @@ impl Tool for HttpToolDefinition {
             Ok(fail)
         }
     }
+}
+
+/// Stream a response body into memory, enforcing a byte cap.
+///
+/// Using `bytes_stream()` instead of `resp.bytes()` means we stop reading
+/// as soon as we cross the limit — a remote peer cannot blow up our
+/// memory simply by returning a multi-GiB payload. Returns
+/// [`ToolError::SizeLimitExceeded`] when the running total crosses `limit`.
+/// (Wave 5 / T2.5.)
+async fn read_bounded_body(
+    resp: reqwest::Response,
+    limit: usize,
+) -> Result<bytes::Bytes, ToolError> {
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| ToolError::CommandFailed(format!("read response body: {e}")))?;
+        if buf.len().saturating_add(chunk.len()) > limit {
+            return Err(ToolError::SizeLimitExceeded {
+                actual: buf.len() + chunk.len(),
+                limit,
+            });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(bytes::Bytes::from(buf))
 }
 
 fn ensure_leading_slash(s: &str) -> String {
@@ -415,7 +473,11 @@ mod tests {
     async fn start_mock(
         status: u16,
         response_body: &'static str,
-    ) -> (SocketAddr, StdArc<Mutex<Captured>>, tokio::task::JoinHandle<()>) {
+    ) -> (
+        SocketAddr,
+        StdArc<Mutex<Captured>>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let captured: StdArc<Mutex<Captured>> = StdArc::new(Mutex::new(Captured::default()));
@@ -565,7 +627,9 @@ mod tests {
 
         let captured = cap.lock().await;
         assert_eq!(captured.method, "GET");
-        assert!(captured.path_and_query.starts_with("/api/orgs/o-1/projects?"));
+        assert!(captured
+            .path_and_query
+            .starts_with("/api/orgs/o-1/projects?"));
         assert!(captured.path_and_query.contains("archived=false"));
         assert!(captured.path_and_query.contains("limit=10"));
     }

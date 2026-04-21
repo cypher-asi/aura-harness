@@ -1,12 +1,9 @@
-#[allow(deprecated)]
-use crate::KernelToolExecutor;
 use aura_kernel::ExecutorRouter;
-use aura_reasoner::{AnthropicProvider, MockProvider, ModelProvider, ToolDefinition};
+use aura_reasoner::ToolDefinition;
 use aura_store::RocksStore;
 use aura_tools::{DefaultToolRegistry, ToolExecutor, ToolRegistry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::warn;
 
 /// Resolve the canonical store path, migrating from legacy `store/` if needed.
 ///
@@ -76,55 +73,14 @@ pub fn build_executor_router() -> (ExecutorRouter, Vec<ToolDefinition>) {
 }
 
 #[must_use]
-#[allow(deprecated)]
-pub fn build_tool_executor(
-    agent_id: aura_core::AgentId,
-    workspace: PathBuf,
-) -> (KernelToolExecutor, Vec<ToolDefinition>) {
-    let (executor_router, tools) = build_executor_router();
-    let kernel_executor = KernelToolExecutor::new(executor_router, agent_id, workspace);
-    (kernel_executor, tools)
-}
-
-#[must_use]
 pub fn load_auth_token() -> Option<String> {
     std::env::var("AURA_ROUTER_JWT")
         .ok()
         .or_else(aura_auth::CredentialStore::load_token)
 }
 
-pub struct ProviderSelection {
-    pub provider: Box<dyn ModelProvider + Send + Sync>,
-    pub name: String,
-}
-
-#[must_use]
-pub fn select_provider(name: &str) -> ProviderSelection {
-    match name {
-        "mock" => {
-            let p = MockProvider::simple_response(
-                "Mock mode: Set AURA_LLM_ROUTING and required credentials to enable real AI responses.",
-            );
-            ProviderSelection {
-                provider: Box::new(p),
-                name: "mock".to_string(),
-            }
-        }
-        _ => match AnthropicProvider::from_env() {
-            Ok(p) => ProviderSelection {
-                provider: Box::new(p),
-                name: "anthropic".to_string(),
-            },
-            Err(e) => {
-                warn!(error = %e, "LLM provider not configured, using mock");
-                let p = MockProvider::simple_response(
-                    "Mock mode: Set AURA_LLM_ROUTING and required credentials to enable real AI responses.",
-                );
-                ProviderSelection {
-                    provider: Box::new(p),
-                    name: "mock (fallback)".to_string(),
-                }
-            }
-        },
-    }
-}
+// `ProviderSelection` / `select_provider` were removed in Wave 4. The
+// canonical factory now lives in
+// [`aura_reasoner::provider_factory`]. Callers use
+// `aura_reasoner::provider_from_name` / `provider_from_session_config` /
+// `default_provider_from_env`.

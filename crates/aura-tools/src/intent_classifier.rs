@@ -79,10 +79,7 @@ impl IntentClassifier {
     /// `(domain, keywords)` tuples where any keyword match adds the
     /// domain.
     #[must_use]
-    pub fn from_rules(
-        tier1: Vec<String>,
-        rules: Vec<(String, Vec<String>)>,
-    ) -> Self {
+    pub fn from_rules(tier1: Vec<String>, rules: Vec<(String, Vec<String>)>) -> Self {
         Self { tier1, rules }
     }
 

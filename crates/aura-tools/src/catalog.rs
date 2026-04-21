@@ -8,7 +8,9 @@
 use crate::definitions;
 use crate::tool::builtin_tools;
 use crate::ToolConfig;
-use aura_core::{AgentPermissions, Capability, InstalledToolDefinition, ToolDefinition};
+use aura_core::{
+    AgentPermissions, Capability, InstalledToolDefinition, Registry, RegistryError, ToolDefinition,
+};
 use std::collections::HashSet;
 use tracing::debug;
 
@@ -268,6 +270,56 @@ impl Default for ToolCatalog {
     }
 }
 
+/// `Registry` trait impl (Wave 4 unification).
+///
+/// `ToolCatalog` is an immutable, compile-time–constructed store: entries
+/// are populated once by [`ToolCatalog::new`] from the bundled definitions
+/// and there is no runtime-mutable insert path. The `register` /
+/// `remove` methods therefore return [`RegistryError::Unsupported`] /
+/// `None` respectively. `get` / `iter` / `len` expose the read-only
+/// name → [`CatalogEntry`] view shared with `SkillRegistry`,
+/// `DefaultToolRegistry`, and `AutomatonRuntime`.
+///
+/// Callers that need profile- or capability-filtered views should
+/// continue to use the inherent [`ToolCatalog::visible_tools`] and
+/// friends — the trait impl deliberately exposes the raw catalog shape.
+impl Registry for ToolCatalog {
+    type Id = String;
+    type Item = CatalogEntry;
+
+    fn register(&mut self, _id: Self::Id, _item: Self::Item) -> Result<(), RegistryError> {
+        Err(RegistryError::Unsupported(
+            "ToolCatalog is immutable; construct via ToolCatalog::new or with_installed_tools",
+        ))
+    }
+
+    fn get(&self, id: &Self::Id) -> Option<Self::Item> {
+        self.entries
+            .iter()
+            .find(|entry| &entry.definition.name == id)
+            .cloned()
+    }
+
+    fn iter(&self) -> Vec<(Self::Id, Self::Item)> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.definition.name.clone(), entry.clone()))
+            .collect()
+    }
+
+    fn remove(&mut self, _id: &Self::Id) -> Option<Self::Item> {
+        None
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 impl std::fmt::Debug for ToolCatalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolCatalog")
@@ -413,9 +465,11 @@ mod tests {
     #[test]
     fn visible_tools_filters_by_config() {
         let cat = ToolCatalog::new();
-        let mut config = ToolConfig::default();
-        config.enable_commands = false;
-        config.enable_fs = false;
+        let config = ToolConfig {
+            enable_commands: false,
+            enable_fs: false,
+            ..ToolConfig::default()
+        };
 
         let tools = cat.visible_tools(ToolProfile::Core, &config);
         let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -478,11 +532,8 @@ mod tests {
     #[test]
     fn cross_agent_tools_hidden_without_permissions() {
         let cat = ToolCatalog::new();
-        let tools = cat.visible_tools_with_permissions(
-            ToolProfile::Agent,
-            &ToolConfig::default(),
-            None,
-        );
+        let tools =
+            cat.visible_tools_with_permissions(ToolProfile::Agent, &ToolConfig::default(), None);
         let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains("spawn_agent"));
         assert!(!names.contains("send_to_agent"));
@@ -528,6 +579,33 @@ mod tests {
         assert!(names.contains("agent_lifecycle"));
         assert!(names.contains("get_agent_state"));
         assert!(names.contains("delegate_task"));
+    }
+
+    #[test]
+    fn registry_trait_read_only_view() {
+        let mut cat = ToolCatalog::new();
+
+        // Snapshot length matches inherent count.
+        let len_via_trait = <ToolCatalog as Registry>::len(&cat);
+        assert_eq!(len_via_trait, cat.static_count());
+        assert!(!Registry::is_empty(&cat));
+
+        // get() via trait returns a CatalogEntry whose definition matches the name.
+        let name = "read_file".to_string();
+        let entry =
+            <ToolCatalog as Registry>::get(&cat, &name).expect("read_file must be in catalog");
+        assert_eq!(entry.definition.name, name);
+
+        // iter() yields all entries keyed by definition name.
+        let pairs = <ToolCatalog as Registry>::iter(&cat);
+        assert_eq!(pairs.len(), cat.static_count());
+        assert!(pairs.iter().any(|(k, _)| k == "read_file"));
+
+        // register/remove are intentionally unsupported.
+        let err = Registry::register(&mut cat, "demo".to_string(), entry.clone())
+            .expect_err("register must be unsupported");
+        assert!(matches!(err, RegistryError::Unsupported(_)));
+        assert!(Registry::remove(&mut cat, &name).is_none());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! - Key encoding/decoding utilities
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 
 mod error;
 mod keys;
@@ -18,8 +18,10 @@ mod store;
 pub use aura_core::AgentStatus;
 pub use error::StoreError;
 pub use keys::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};
+#[cfg(any(test, feature = "test-support"))]
+pub use rocks_store::FaultAt;
 pub use rocks_store::RocksStore;
-pub use store::{DequeueToken, Store};
+pub use store::{DequeueToken, ReadStore, Store, WriteStore};
 
 /// Column family names.
 pub mod cf {

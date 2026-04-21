@@ -4,6 +4,7 @@ use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core::ToolDefinition;
 use aura_core::ToolResult;
+use std::path::Path;
 use tracing::{debug, instrument};
 
 /// Quote a single argument for safe inclusion in a shell command string.
@@ -373,6 +374,54 @@ fn expand_env_vars(input: &str) -> String {
     result
 }
 
+/// Resolve `program` through `which` and check its file name against
+/// `allowlist`.
+///
+/// Distinct from [`check_command_allowlist`], which matches the raw user
+/// string: binary allow-listing defeats PATH-shadowing attacks because we
+/// compare the **resolved executable file name** rather than whatever the
+/// caller typed. Called *before* [`cmd_spawn`] in `run_command`.
+///
+/// An empty allow-list disables the check (backwards-compatible default).
+/// (Wave 5 / T3.2.)
+fn check_binary_allowlist(program: &str, allowlist: &[String]) -> Result<(), ToolError> {
+    if allowlist.is_empty() {
+        return Ok(());
+    }
+
+    // When the caller already passes an absolute/relative path, honor it;
+    // otherwise resolve via PATH. `which` handles the Windows `.exe`
+    // extension normalization for us.
+    let resolved = if Path::new(program).components().count() > 1 {
+        Path::new(program).to_path_buf()
+    } else {
+        which::which(program).map_err(|e| {
+            ToolError::Forbidden(format!("could not resolve program '{program}': {e}"))
+        })?
+    };
+
+    let file_name = resolved
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| {
+            // On Windows strip the `.exe` suffix so allow-list entries can
+            // be platform-agnostic (`"git"` matches both `git` and `git.exe`).
+            s.strip_suffix(".exe")
+                .or_else(|| s.strip_suffix(".EXE"))
+                .unwrap_or(s)
+                .to_string()
+        })
+        .ok_or_else(|| {
+            ToolError::Forbidden(format!("program '{program}' resolved to a non-UTF-8 path"))
+        })?;
+
+    if allowlist.iter().any(|a| a == &file_name) {
+        Ok(())
+    } else {
+        Err(ToolError::Forbidden(file_name))
+    }
+}
+
 /// Validate a command string against the allowlist.
 ///
 /// When the allowlist is non-empty, the command must match at least one entry.
@@ -492,8 +541,28 @@ impl Tool for CmdRunTool {
                 .unwrap_or(ctx.config.sync_threshold_ms)
         };
 
+        // Per-call override for the legacy shell form. If the caller
+        // explicitly opts in (`allow_shell: true`) we honor it even when
+        // the global config has it disabled — this preserves the escape
+        // hatch for trusted internal callers while keeping the default
+        // deny-by-default. (Wave 5 / T3.1.)
+        let allow_shell = args["allow_shell"]
+            .as_bool()
+            .unwrap_or(ctx.config.allow_shell);
+
         if let Some(command) = args["command"].as_str() {
+            if !allow_shell {
+                return Err(ToolError::InvalidArguments(
+                    "'command' shell form is disabled; pass the binary as `program` and arguments as `args`, or set `allow_shell: true`".into(),
+                ));
+            }
             check_command_allowlist(command, &ctx.config.command_allowlist)?;
+            // Best-effort binary allow-list for the shell form: only the
+            // first whitespace token is checked. Callers that need tight
+            // enforcement should switch to program/args.
+            if let Some(first) = command.split_whitespace().next() {
+                check_binary_allowlist(first, &ctx.config.binary_allowlist)?;
+            }
             let command = command.to_string();
             let sandbox = ctx.sandbox.clone();
             return super::spawn_blocking_tool(move || {
@@ -509,8 +578,6 @@ impl Tool for CmdRunTool {
             })?
             .to_string();
 
-        check_command_allowlist(&program, &ctx.config.command_allowlist)?;
-
         let cmd_args: Vec<String> = args["args"]
             .as_array()
             .map(|arr| {
@@ -519,6 +586,18 @@ impl Tool for CmdRunTool {
                     .collect()
             })
             .unwrap_or_default();
+
+        // `program` with empty `args` is the exact shell-injection surface
+        // `cmd_spawn` treats as a raw shell script. Reject unless the
+        // caller has explicitly opted into the shell form. (Wave 5 / T3.1.)
+        if cmd_args.is_empty() && !allow_shell {
+            return Err(ToolError::InvalidArguments(
+                "empty 'args' is not allowed by default; pass explicit arguments or set `allow_shell: true`".into(),
+            ));
+        }
+
+        check_command_allowlist(&program, &ctx.config.command_allowlist)?;
+        check_binary_allowlist(&program, &ctx.config.binary_allowlist)?;
 
         let sandbox = ctx.sandbox.clone();
         super::spawn_blocking_tool(move || {

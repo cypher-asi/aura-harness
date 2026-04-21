@@ -1,5 +1,11 @@
 //! Parity tests verifying parallel execution, timeouts, and policy enforcement
-//! in the `KernelToolExecutor` ↔ `AgentLoop` stack.
+//! exercised through the [`KernelToolGateway`] ↔ [`AgentLoop`] stack.
+//!
+//! These tests used to drive the deprecated `KernelToolExecutor` directly so
+//! they could twiddle per-executor knobs (`.with_parallel()`, `.with_timeout(...)`,
+//! `.with_policy(...)`). Wave 2 T5 re-routes them through the kernel so the
+//! properties they cover — parallel batch execution, per-tool timeout, and
+//! policy denial — are validated on the real gateway surface.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,18 +13,21 @@ use std::time::Duration;
 use async_trait::async_trait;
 use aura_core::{Action, ActionKind, AgentId, Effect, ToolCall, ToolResult};
 use aura_kernel::{
-    ExecuteContext, Executor, ExecutorError, ExecutorRouter, PermissionLevel, Policy, PolicyConfig,
+    ExecuteContext, Executor, ExecutorError, ExecutorRouter, Kernel, KernelConfig, PermissionLevel,
+    PolicyConfig,
 };
 use aura_reasoner::{
-    ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition, Usage,
+    ContentBlock, Message, MockProvider, MockResponse, ModelProvider, StopReason, ToolDefinition,
+    Usage,
 };
+use aura_store::{RocksStore, Store};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
-use crate::kernel_executor::KernelToolExecutor;
+use crate::kernel_gateway::KernelToolGateway;
 use crate::types::{AgentToolExecutor, ToolCallInfo};
 
 // ---------------------------------------------------------------------------
-// Stub kernel-level executor
+// Stub kernel-level executors
 // ---------------------------------------------------------------------------
 
 /// Returns a canned `ToolResult::success` for every delegate action.
@@ -82,6 +91,29 @@ impl Executor for SlowExecutor {
 // Helpers
 // ---------------------------------------------------------------------------
 
+struct KernelHarness {
+    kernel: Arc<Kernel>,
+    _db_dir: tempfile::TempDir,
+    _ws_dir: tempfile::TempDir,
+}
+
+fn build_kernel(router: ExecutorRouter, config: KernelConfig) -> KernelHarness {
+    let db_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("parity-test"));
+    let mut config = config;
+    config.workspace_base = ws_dir.path().to_path_buf();
+    let kernel =
+        Arc::new(Kernel::new(store, provider, router, config, AgentId::generate()).unwrap());
+    KernelHarness {
+        kernel,
+        _db_dir: db_dir,
+        _ws_dir: ws_dir,
+    }
+}
+
 fn stub_router() -> ExecutorRouter {
     ExecutorRouter::with_executors(vec![Arc::new(StubExecutor)])
 }
@@ -111,11 +143,11 @@ fn two_tool_use_response() -> MockResponse {
 
 #[tokio::test]
 async fn parallel_read_tools_execute_concurrently() {
-    let agent_id = AgentId::generate();
-    let tmp = tempfile::tempdir().unwrap();
-    let workspace = tmp.path().to_path_buf();
-
-    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_parallel();
+    // Kernel `process_tools` runs every proposal in a batch via `join_all`,
+    // so the parallel behaviour previously opted into via
+    // `KernelToolExecutor::with_parallel` is now the default path.
+    let harness = build_kernel(stub_router(), KernelConfig::default());
+    let executor = KernelToolGateway::new(harness.kernel);
 
     let provider = MockProvider::new()
         .with_response(two_tool_use_response())
@@ -144,11 +176,8 @@ async fn parallel_read_tools_execute_concurrently() {
 
 #[tokio::test]
 async fn parallel_tools_preserve_result_order() {
-    let agent_id = AgentId::generate();
-    let tmp = tempfile::tempdir().unwrap();
-    let workspace = tmp.path().to_path_buf();
-
-    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_parallel();
+    let harness = build_kernel(stub_router(), KernelConfig::default());
+    let executor = KernelToolGateway::new(harness.kernel);
 
     let calls = vec![
         make_tool_call_info("t1", "read_file"),
@@ -168,16 +197,19 @@ async fn parallel_tools_preserve_result_order() {
 
 #[tokio::test]
 async fn tool_timeout_returns_error() {
-    let agent_id = AgentId::generate();
-    let tmp = tempfile::tempdir().unwrap();
-    let workspace = tmp.path().to_path_buf();
-
-    let router = ExecutorRouter::with_executors(vec![Arc::new(SlowExecutor {
+    let slow_router = ExecutorRouter::with_executors(vec![Arc::new(SlowExecutor {
         delay: Duration::from_secs(5),
     })]);
-
-    let executor = KernelToolExecutor::new(router, agent_id, workspace)
-        .with_timeout(Duration::from_millis(50));
+    // `KernelConfig::tool_timeout_ms` replaces the old
+    // `KernelToolExecutor::with_timeout` knob.
+    let harness = build_kernel(
+        slow_router,
+        KernelConfig {
+            tool_timeout_ms: 50,
+            ..KernelConfig::default()
+        },
+    );
+    let executor = KernelToolGateway::new(harness.kernel);
 
     let calls = vec![make_tool_call_info("t1", "read_file")];
     let results = executor.execute(&calls).await;
@@ -193,15 +225,16 @@ async fn tool_timeout_returns_error() {
 
 #[tokio::test]
 async fn policy_deny_returns_error_result() {
-    let agent_id = AgentId::generate();
-    let tmp = tempfile::tempdir().unwrap();
-    let workspace = tmp.path().to_path_buf();
-
     let policy_config =
         PolicyConfig::default().with_tool_permission("delete_file", PermissionLevel::Deny);
-    let policy = Policy::new(policy_config);
-
-    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_policy(policy);
+    let harness = build_kernel(
+        stub_router(),
+        KernelConfig {
+            policy: policy_config,
+            ..KernelConfig::default()
+        },
+    );
+    let executor = KernelToolGateway::new(harness.kernel);
 
     let calls = vec![make_tool_call_info("t1", "delete_file")];
     let results = executor.execute(&calls).await;
@@ -209,7 +242,7 @@ async fn policy_deny_returns_error_result() {
     assert_eq!(results.len(), 1);
     assert!(results[0].is_error);
     assert!(
-        results[0].content.contains("not allowed by policy"),
+        results[0].content.contains("not allowed"),
         "expected policy denial, got: {}",
         results[0].content,
     );
@@ -217,15 +250,16 @@ async fn policy_deny_returns_error_result() {
 
 #[tokio::test]
 async fn policy_deny_does_not_block_allowed_tools() {
-    let agent_id = AgentId::generate();
-    let tmp = tempfile::tempdir().unwrap();
-    let workspace = tmp.path().to_path_buf();
-
     let policy_config =
         PolicyConfig::default().with_tool_permission("delete_file", PermissionLevel::Deny);
-    let policy = Policy::new(policy_config);
-
-    let executor = KernelToolExecutor::new(stub_router(), agent_id, workspace).with_policy(policy);
+    let harness = build_kernel(
+        stub_router(),
+        KernelConfig {
+            policy: policy_config,
+            ..KernelConfig::default()
+        },
+    );
+    let executor = KernelToolGateway::new(harness.kernel);
 
     let calls = vec![make_tool_call_info("t1", "read_file")];
     let results = executor.execute(&calls).await;

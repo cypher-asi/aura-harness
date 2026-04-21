@@ -3,7 +3,7 @@
 //! Provides tool definitions and schemas for the model to use.
 
 use crate::tool::{builtin_tools, read_only_builtin_tools};
-use aura_core::ToolDefinition;
+use aura_core::{Registry, RegistryError, ToolDefinition};
 use std::collections::HashMap;
 use tracing::{debug, instrument};
 
@@ -110,6 +110,46 @@ impl ToolRegistry for DefaultToolRegistry {
     }
 }
 
+/// Generic `Registry` impl (Wave 4 unification). The inherent
+/// `register`/`unregister` methods are retained for ergonomic call
+/// sites; this impl gives consumers the shared
+/// [`aura_core::Registry`] abstraction.
+impl Registry for DefaultToolRegistry {
+    type Id = String;
+    type Item = ToolDefinition;
+
+    fn register(&mut self, id: Self::Id, item: Self::Item) -> Result<(), RegistryError> {
+        if self.tools.contains_key(&id) {
+            return Err(RegistryError::Duplicate(id));
+        }
+        self.tools.insert(id, item);
+        Ok(())
+    }
+
+    fn get(&self, id: &Self::Id) -> Option<Self::Item> {
+        self.tools.get(id).cloned()
+    }
+
+    fn iter(&self) -> Vec<(Self::Id, Self::Item)> {
+        self.tools
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn remove(&mut self, id: &Self::Id) -> Option<Self::Item> {
+        self.tools.remove(id)
+    }
+
+    fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,7 +181,7 @@ mod tests {
     #[test]
     fn test_get_tool() {
         let registry = DefaultToolRegistry::new();
-        let tool = registry.get("read_file").unwrap();
+        let tool = ToolRegistry::get(&registry, "read_file").unwrap();
 
         assert_eq!(tool.name, "read_file");
         assert!(!tool.description.is_empty());
@@ -168,6 +208,38 @@ mod tests {
 
         registry.unregister("run_command");
         assert!(!registry.has("run_command"));
+    }
+
+    #[test]
+    fn registry_trait_basic_ops() {
+        use aura_core::Registry;
+
+        let mut reg = DefaultToolRegistry::empty();
+        assert!(Registry::is_empty(&reg));
+
+        let def = ToolDefinition::new(
+            "custom.tool",
+            "A custom tool",
+            serde_json::json!({ "type": "object" }),
+        );
+        Registry::register(&mut reg, "custom.tool".to_string(), def.clone())
+            .expect("insert should succeed");
+        assert_eq!(Registry::len(&reg), 1);
+
+        let got = Registry::get(&reg, &"custom.tool".to_string()).expect("lookup");
+        assert_eq!(got.name, "custom.tool");
+
+        let err = Registry::register(&mut reg, "custom.tool".to_string(), def)
+            .expect_err("duplicate must error");
+        assert!(matches!(err, aura_core::RegistryError::Duplicate(ref id) if id == "custom.tool"));
+
+        let snapshot: Vec<_> = Registry::iter(&reg).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(snapshot, vec!["custom.tool".to_string()]);
+
+        let removed =
+            Registry::remove(&mut reg, &"custom.tool".to_string()).expect("remove existing");
+        assert_eq!(removed.name, "custom.tool");
+        assert!(Registry::is_empty(&reg));
     }
 
     #[test]

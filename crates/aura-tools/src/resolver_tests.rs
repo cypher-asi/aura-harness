@@ -5,6 +5,7 @@ use aura_core::{
     InstalledToolRuntimeProviderExecution, ToolAuth,
 };
 use aura_kernel::ExecuteContext;
+use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use tempfile::TempDir;
@@ -1330,8 +1331,10 @@ async fn get_project_succeeds_with_inaccessible_workspace() {
 #[tokio::test]
 async fn fs_disabled_returns_failed() {
     let cat = Arc::new(ToolCatalog::new());
-    let mut config = ToolConfig::default();
-    config.enable_fs = false;
+    let config = ToolConfig {
+        enable_fs: false,
+        ..ToolConfig::default()
+    };
     let resolver = ToolResolver::new(cat, config);
     let (ctx, _dir) = test_context();
 

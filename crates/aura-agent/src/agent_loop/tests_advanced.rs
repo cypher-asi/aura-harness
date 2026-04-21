@@ -233,11 +233,12 @@ async fn test_exploration_compact_at_two_thirds() {
 
     let has_truncation = result.messages.iter().any(|msg| {
         msg.content.iter().any(|block| {
-            if let ContentBlock::ToolResult { content, .. } = block {
-                match content {
-                    ToolResultContent::Text(t) => t.contains("content truncated"),
-                    _ => false,
-                }
+            if let ContentBlock::ToolResult {
+                content: ToolResultContent::Text(t),
+                ..
+            } = block
+            {
+                t.contains("content truncated")
             } else {
                 false
             }
@@ -290,11 +291,12 @@ async fn test_no_exploration_compact_when_low() {
 
     let has_truncation = result.messages.iter().any(|msg| {
         msg.content.iter().any(|block| {
-            if let ContentBlock::ToolResult { content, .. } = block {
-                match content {
-                    ToolResultContent::Text(t) => t.contains("content truncated"),
-                    _ => false,
-                }
+            if let ContentBlock::ToolResult {
+                content: ToolResultContent::Text(t),
+                ..
+            } = block
+            {
+                t.contains("content truncated")
             } else {
                 false
             }

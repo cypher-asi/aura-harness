@@ -8,6 +8,7 @@
 use crate::error::MemoryError;
 use crate::store::MemoryStoreApi;
 use crate::types::{AgentEvent, Fact, FactSource};
+use aura_agent::KernelModelGateway;
 use aura_core::{AgentEventId, AgentId, FactId};
 use aura_reasoner::{Message, ModelProvider, ModelRequest};
 use chrono::Utc;
@@ -84,18 +85,22 @@ pub struct ConsolidationReport {
 // ============================================================================
 
 /// Post-session consolidator that prunes, compresses, and evolves agent memories.
+///
+/// LLM calls for compression and fact evolution route through a
+/// [`KernelModelGateway`] so they are recorded in the kernel's append-only
+/// log (Invariant §3).
 pub struct MemoryConsolidator {
     store: Arc<dyn MemoryStoreApi>,
-    provider: Arc<dyn ModelProvider>,
+    provider: Arc<KernelModelGateway>,
     config: ConsolidationConfig,
 }
 
 impl MemoryConsolidator {
-    /// Create a new consolidator backed by the given store and model provider.
+    /// Create a new consolidator backed by the given store and kernel gateway.
     #[must_use]
     pub fn new(
         store: Arc<dyn MemoryStoreApi>,
-        provider: Arc<dyn ModelProvider>,
+        provider: Arc<KernelModelGateway>,
         config: ConsolidationConfig,
     ) -> Self {
         Self {

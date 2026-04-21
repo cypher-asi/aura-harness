@@ -6,14 +6,20 @@
 use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, RefinedCandidate};
+use aura_agent::KernelModelGateway;
 use aura_reasoner::{Message, ModelProvider, ModelRequest};
 use std::fmt::Write;
 use std::sync::Arc;
 
 const MAX_TURN_TEXT_LEN: usize = 3000;
 
+/// LLM-assisted memory refiner.
+///
+/// Routes completions through the kernel gateway (Invariant §3) so every
+/// memory extraction / refinement LLM call is recorded in the kernel's
+/// append-only log.
 pub struct LlmRefiner {
-    provider: Arc<dyn ModelProvider>,
+    provider: Arc<KernelModelGateway>,
     config: RefinerConfig,
 }
 
@@ -32,7 +38,7 @@ impl Default for RefinerConfig {
 }
 
 impl LlmRefiner {
-    pub fn new(provider: Arc<dyn ModelProvider>, config: RefinerConfig) -> Self {
+    pub fn new(provider: Arc<KernelModelGateway>, config: RefinerConfig) -> Self {
         Self { provider, config }
     }
 

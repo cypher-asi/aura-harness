@@ -8,7 +8,7 @@
 //! - Per-agent worker loop with single-writer guarantee
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 #![allow(
     clippy::doc_markdown,
     clippy::must_use_candidate,
@@ -36,7 +36,6 @@ pub(crate) mod executor_factory;
 pub(crate) mod jwt_domain;
 mod node;
 pub(crate) mod protocol;
-pub(crate) mod provider_factory;
 pub(crate) mod router;
 pub(crate) mod runtime_capabilities;
 pub(crate) mod scheduler;
@@ -56,7 +55,7 @@ pub use aura_protocol::{
 
 #[cfg(feature = "test-support")]
 pub mod test_support {
-    pub use crate::router::{create_router, RouterState};
+    pub use crate::router::{create_router, RouterState, RouterStateConfig};
     pub use crate::scheduler::Scheduler;
 }
 

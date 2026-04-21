@@ -3,6 +3,7 @@
 use crate::error::SkillError;
 use crate::loader::SkillLoader;
 use crate::types::{Skill, SkillMeta};
+use aura_core::{Registry, RegistryError};
 use std::collections::HashMap;
 use tracing::{debug, warn};
 
@@ -125,6 +126,47 @@ impl SkillRegistry {
     /// Whether the registry is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
+        self.skills.is_empty()
+    }
+}
+
+/// `Registry` trait impl (Wave 4 unification). The concrete inherent
+/// methods above are retained for ergonomic / borrow-based access; this
+/// impl exposes a single clone-based `Id -> Item` abstraction so call
+/// sites can work across skill, tool, and automaton registries
+/// generically.
+impl Registry for SkillRegistry {
+    type Id = String;
+    type Item = Skill;
+
+    fn register(&mut self, id: Self::Id, item: Self::Item) -> Result<(), RegistryError> {
+        if self.skills.contains_key(&id) {
+            return Err(RegistryError::Duplicate(id));
+        }
+        self.skills.insert(id, item);
+        Ok(())
+    }
+
+    fn get(&self, id: &Self::Id) -> Option<Self::Item> {
+        self.skills.get(id).cloned()
+    }
+
+    fn iter(&self) -> Vec<(Self::Id, Self::Item)> {
+        self.skills
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn remove(&mut self, id: &Self::Id) -> Option<Self::Item> {
+        self.skills.remove(id)
+    }
+
+    fn len(&self) -> usize {
+        self.skills.len()
+    }
+
+    fn is_empty(&self) -> bool {
         self.skills.is_empty()
     }
 }
@@ -261,6 +303,44 @@ mod tests {
         let reg = SkillRegistry::new();
         let result = reg.skills_for_paths(&[]);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn registry_trait_basic_ops() {
+        use crate::types::SkillSource;
+        use aura_core::Registry;
+
+        let mut reg = SkillRegistry::new();
+        assert!(Registry::is_empty(&reg));
+        assert_eq!(Registry::len(&reg), 0);
+
+        let skill = Skill {
+            frontmatter: crate::types::SkillFrontmatter {
+                name: "demo".to_string(),
+                description: "demo skill".to_string(),
+                ..Default::default()
+            },
+            body: "body".to_string(),
+            source: SkillSource::Workspace,
+            dir_path: std::path::PathBuf::from("."),
+        };
+
+        Registry::register(&mut reg, "demo".to_string(), skill.clone())
+            .expect("register should succeed");
+        assert_eq!(Registry::len(&reg), 1);
+        let got = Registry::get(&reg, &"demo".to_string()).expect("lookup by id");
+        assert_eq!(got.frontmatter.name, "demo");
+
+        let err = Registry::register(&mut reg, "demo".to_string(), skill)
+            .expect_err("duplicate insert must error");
+        assert!(matches!(err, aura_core::RegistryError::Duplicate(ref id) if id == "demo"));
+
+        let ids: Vec<_> = Registry::iter(&reg).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(ids, vec!["demo".to_string()]);
+
+        let removed = Registry::remove(&mut reg, &"demo".to_string()).expect("remove existing");
+        assert_eq!(removed.frontmatter.name, "demo");
+        assert!(Registry::is_empty(&reg));
     }
 
     #[test]

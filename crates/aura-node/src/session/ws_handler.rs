@@ -31,18 +31,15 @@ fn tool_has_required_integration(
         required_integration
             .integration_id
             .as_deref()
-            .map(|expected| integration.integration_id == expected)
-            .unwrap_or(true)
+            .map_or(true, |expected| integration.integration_id == expected)
             && required_integration
                 .provider
                 .as_deref()
-                .map(|expected| integration.provider == expected)
-                .unwrap_or(true)
+                .map_or(true, |expected| integration.provider == expected)
             && required_integration
                 .kind
                 .as_deref()
-                .map(|expected| integration.kind == expected)
-                .unwrap_or(true)
+                .map_or(true, |expected| integration.kind == expected)
     })
 }
 
@@ -122,106 +119,6 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     info!(session_id = %session.session_id, "WebSocket connection closed");
     drop(outbound_tx);
     let _ = send_task.await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use aura_core::{
-        InstalledIntegrationDefinition, InstalledToolDefinition,
-        InstalledToolIntegrationRequirement, ToolAuth,
-    };
-    use aura_reasoner::MockProvider;
-    use aura_store::RocksStore;
-    use aura_tools::{ToolCatalog, ToolConfig};
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    fn test_context() -> WsContext {
-        let workspace = tempfile::tempdir().expect("temp workspace");
-        let db_dir = tempfile::tempdir().expect("temp db");
-        let store = RocksStore::open(db_dir.path(), false).expect("open rocks store");
-        let workspace_base = workspace.path().to_path_buf();
-        std::mem::forget(workspace);
-        std::mem::forget(db_dir);
-
-        WsContext {
-            workspace_base,
-            provider: Arc::new(MockProvider::simple_response("ok")),
-            store: Arc::new(store),
-            tool_config: ToolConfig::default(),
-            auth_token: None,
-            catalog: Arc::new(ToolCatalog::default()),
-            domain_api: None,
-            automaton_controller: None,
-            project_base: None,
-            memory_manager: None,
-            skill_manager: None,
-            router_url: None,
-        }
-    }
-
-    fn gated_tool() -> InstalledToolDefinition {
-        InstalledToolDefinition {
-            name: "brave_search_web".to_string(),
-            description: "Search the web with Brave".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": { "query": { "type": "string" } },
-                "required": ["query"]
-            }),
-            endpoint: "https://example.com/tool".to_string(),
-            auth: ToolAuth::None,
-            timeout_ms: None,
-            namespace: None,
-            required_integration: Some(InstalledToolIntegrationRequirement {
-                integration_id: None,
-                provider: Some("brave_search".to_string()),
-                kind: Some("workspace_integration".to_string()),
-            }),
-            runtime_execution: None,
-            metadata: HashMap::new(),
-        }
-    }
-
-    fn brave_integration() -> InstalledIntegrationDefinition {
-        InstalledIntegrationDefinition {
-            integration_id: "integration-brave-1".to_string(),
-            name: "Brave Search".to_string(),
-            provider: "brave_search".to_string(),
-            kind: "workspace_integration".to_string(),
-            metadata: HashMap::new(),
-        }
-    }
-
-    #[test]
-    fn populate_tool_definitions_hides_integration_backed_tool_without_install() {
-        let ctx = test_context();
-        let mut session = Session::new(ctx.workspace_base.clone());
-        session.installed_tools.push(gated_tool());
-
-        populate_tool_definitions(&mut session, &ctx);
-
-        assert!(!session
-            .tool_definitions
-            .iter()
-            .any(|tool| tool.name == "brave_search_web"));
-    }
-
-    #[test]
-    fn populate_tool_definitions_keeps_integration_backed_tool_with_install() {
-        let ctx = test_context();
-        let mut session = Session::new(ctx.workspace_base.clone());
-        session.installed_tools.push(gated_tool());
-        session.installed_integrations.push(brave_integration());
-
-        populate_tool_definitions(&mut session, &ctx);
-
-        assert!(session
-            .tool_definitions
-            .iter()
-            .any(|tool| tool.name == "brave_search_web"));
-    }
 }
 
 enum TurnAction {
@@ -441,7 +338,9 @@ async fn start_turn(
 
     let user_msg = if let Some(ref attachments) = msg.attachments {
         let image_atts: Vec<_> = attachments.iter().filter(|a| a.type_ == "image").collect();
-        if !image_atts.is_empty() {
+        if image_atts.is_empty() {
+            Message::user(&msg.content)
+        } else {
             let mut blocks: Vec<ContentBlock> = Vec::new();
             if !msg.content.is_empty() {
                 blocks.push(ContentBlock::text(&msg.content));
@@ -456,8 +355,6 @@ async fn start_turn(
                 });
             }
             Message::new(Role::User, blocks)
-        } else {
-            Message::user(&msg.content)
         }
     } else {
         Message::user(&msg.content)
@@ -504,6 +401,30 @@ async fn start_turn(
             return None;
         }
     };
+
+    // Invariant §2: every user-visible state change must be a transaction
+    // committed through the kernel. Record the UserPrompt before the agent
+    // loop runs so the record log reflects the turn boundary even if the
+    // loop aborts mid-stream.
+    if let Err(e) = kernel
+        .process_direct(aura_core::Transaction::user_prompt(
+            session.agent_id,
+            msg.content.clone(),
+        ))
+        .await
+    {
+        error!(
+            session_id = %session.session_id,
+            error = %e,
+            "Failed to record UserPrompt transaction through kernel"
+        );
+        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+            code: "kernel_error".into(),
+            message: format!("Failed to record user prompt: {e}"),
+            recoverable: true,
+        }));
+        return None;
+    }
 
     let model_gateway = KernelModelGateway::new(kernel.clone());
     let tool_gateway = KernelToolGateway::new(kernel);
@@ -578,4 +499,104 @@ async fn start_turn(
         stream_forward_handle,
         message_id,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_core::{
+        InstalledIntegrationDefinition, InstalledToolDefinition,
+        InstalledToolIntegrationRequirement, ToolAuth,
+    };
+    use aura_reasoner::MockProvider;
+    use aura_store::RocksStore;
+    use aura_tools::{ToolCatalog, ToolConfig};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn test_context() -> WsContext {
+        let workspace = tempfile::tempdir().expect("temp workspace");
+        let db_dir = tempfile::tempdir().expect("temp db");
+        let store = RocksStore::open(db_dir.path(), false).expect("open rocks store");
+        let workspace_base = workspace.path().to_path_buf();
+        std::mem::forget(workspace);
+        std::mem::forget(db_dir);
+
+        WsContext {
+            workspace_base,
+            provider: Arc::new(MockProvider::simple_response("ok")),
+            store: Arc::new(store),
+            tool_config: ToolConfig::default(),
+            auth_token: None,
+            catalog: Arc::new(ToolCatalog::default()),
+            domain_api: None,
+            automaton_controller: None,
+            project_base: None,
+            memory_manager: None,
+            skill_manager: None,
+            router_url: None,
+        }
+    }
+
+    fn gated_tool() -> InstalledToolDefinition {
+        InstalledToolDefinition {
+            name: "brave_search_web".to_string(),
+            description: "Search the web with Brave".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "query": { "type": "string" } },
+                "required": ["query"]
+            }),
+            endpoint: "https://example.com/tool".to_string(),
+            auth: ToolAuth::None,
+            timeout_ms: None,
+            namespace: None,
+            required_integration: Some(InstalledToolIntegrationRequirement {
+                integration_id: None,
+                provider: Some("brave_search".to_string()),
+                kind: Some("workspace_integration".to_string()),
+            }),
+            runtime_execution: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    fn brave_integration() -> InstalledIntegrationDefinition {
+        InstalledIntegrationDefinition {
+            integration_id: "integration-brave-1".to_string(),
+            name: "Brave Search".to_string(),
+            provider: "brave_search".to_string(),
+            kind: "workspace_integration".to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn populate_tool_definitions_hides_integration_backed_tool_without_install() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.installed_tools.push(gated_tool());
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert!(!session
+            .tool_definitions
+            .iter()
+            .any(|tool| tool.name == "brave_search_web"));
+    }
+
+    #[test]
+    fn populate_tool_definitions_keeps_integration_backed_tool_with_install() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.installed_tools.push(gated_tool());
+        session.installed_integrations.push(brave_integration());
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert!(session
+            .tool_definitions
+            .iter()
+            .any(|tool| tool.name == "brave_search_web"));
+    }
 }

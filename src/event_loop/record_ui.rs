@@ -62,7 +62,7 @@ pub(super) async fn send_record_to_ui(
 
     let info = extract_tool_info(tx);
 
-    let full_hash = hex::encode(entry.context_hash);
+    let full_hash = entry.context_hash.as_hex();
     let hash_suffix = full_hash[full_hash.len() - 4..].to_string();
 
     let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();

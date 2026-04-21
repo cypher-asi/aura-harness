@@ -3,6 +3,7 @@
 //! Includes Transaction, Action, Effect, `RecordEntry`, and related types.
 
 mod action;
+mod context_hash;
 mod effect;
 mod identity;
 mod process;
@@ -14,6 +15,7 @@ mod tool;
 mod transaction;
 
 pub use action::{Action, ActionKind};
+pub use context_hash::ContextHash;
 pub use effect::{Effect, EffectKind, EffectStatus};
 pub use identity::Identity;
 pub use process::{ActionResultPayload, ProcessPending};

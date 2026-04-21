@@ -7,8 +7,16 @@
 use crate::error::SkillError;
 use crate::parser::parse_skill_md;
 use crate::types::{Skill, SkillSource};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
+
+/// Maximum size of a `SKILL.md` file, in bytes.
+///
+/// A pathological or untrusted skill directory could otherwise load a
+/// multi-gigabyte file directly into memory. 1 MiB is well above every
+/// real-world skill we've shipped. (Wave 5 / T4.)
+const MAX_SKILL_MD_BYTES: u64 = 1024 * 1024;
 
 /// Configuration for the skill loader — specifies which directories to scan.
 #[derive(Debug, Clone, Default)]
@@ -144,12 +152,30 @@ fn load_from_dir(base_dir: &Path, source: &SkillSource, out: &mut Vec<Result<Ski
 }
 
 /// Parse a single SKILL.md file into a [`Skill`].
+///
+/// Reads at most [`MAX_SKILL_MD_BYTES`] using a bounded `File::take` so a
+/// hostile skill directory cannot OOM the loader. Files whose reported
+/// metadata size already exceeds the cap are rejected up-front with
+/// [`SkillError::TooLarge`]; shorter files are read into a `String` via
+/// the same bounded reader. (Wave 5 / T4.)
 fn load_single_skill(
     skill_md: &Path,
     source: SkillSource,
     dir_path: &Path,
 ) -> Result<Skill, SkillError> {
-    let content = std::fs::read_to_string(skill_md)?;
+    let mut file = std::fs::File::open(skill_md)?;
+    let meta = file.metadata()?;
+    if meta.len() > MAX_SKILL_MD_BYTES {
+        return Err(SkillError::TooLarge {
+            path: skill_md.to_path_buf(),
+            actual: meta.len(),
+            limit: MAX_SKILL_MD_BYTES,
+        });
+    }
+    let mut content = String::new();
+    (&mut file)
+        .take(MAX_SKILL_MD_BYTES)
+        .read_to_string(&mut content)?;
     let (frontmatter, body) = parse_skill_md(&content)?;
 
     Ok(Skill {
@@ -200,5 +226,40 @@ mod tests {
         });
         let results = loader.load_all();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn oversize_skill_md_is_rejected() {
+        use std::io::Write;
+
+        let tmp = TempDir::new().unwrap();
+        let skills_dir = tmp.path().join("skills");
+        let big_dir = skills_dir.join("bloated");
+        std::fs::create_dir_all(&big_dir).unwrap();
+
+        // Write just over the 1 MiB cap. Content doesn't have to parse:
+        // the size check triggers before `parse_skill_md` runs.
+        let path = big_dir.join("SKILL.md");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let chunk = vec![b'a'; 64 * 1024];
+        for _ in 0..17 {
+            f.write_all(&chunk).unwrap(); // ~1.06 MiB total
+        }
+        drop(f);
+
+        let loader = SkillLoader::new(SkillLoaderConfig {
+            workspace_root: Some(tmp.path().to_path_buf()),
+            ..SkillLoaderConfig::default()
+        });
+
+        let results = loader.load_all();
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            Err(SkillError::TooLarge { actual, limit, .. }) => {
+                assert!(*actual > *limit);
+                assert_eq!(*limit, super::MAX_SKILL_MD_BYTES);
+            }
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
     }
 }

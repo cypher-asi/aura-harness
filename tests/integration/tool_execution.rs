@@ -285,18 +285,22 @@ async fn test_cmd_run_in_workspace_dir() {
     let ctx = create_context(&workspace);
 
     // List files in the workspace (dir on Windows, ls on Unix)
+    // Explicit `allow_shell: true` — after Wave 5 / T3.1 the zero-args
+    // form is rejected unless the caller opts in.
     #[cfg(windows)]
     let tool_call = ToolCall::new(
         "run_command",
         serde_json::json!({
-            "program": "dir"
+            "program": "dir",
+            "allow_shell": true,
         }),
     );
     #[cfg(not(windows))]
     let tool_call = ToolCall::new(
         "run_command",
         serde_json::json!({
-            "program": "ls"
+            "program": "ls",
+            "allow_shell": true,
         }),
     );
 

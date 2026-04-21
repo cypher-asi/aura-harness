@@ -6,6 +6,7 @@
 //!   through [`Kernel::reason`] and [`Kernel::reason_streaming`].
 
 use crate::helpers;
+use crate::recording_stream::RecordingStream;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
 use aura_kernel::Kernel;
@@ -119,10 +120,11 @@ impl ModelProvider for KernelModelGateway {
                 ReasonerError::Internal(format!("kernel reason_streaming error: {e}"))
             })?;
 
-        // TODO: In Phase 5+, wrap the stream to auto-record via the handle.
-        drop(handle);
-
-        Ok(stream)
+        // Wrap the raw provider stream in a `RecordingStream` so the
+        // `ReasonStreamHandle` is always finalized exactly once —
+        // on natural end, error, or drop — per Invariant §3.
+        let recording = RecordingStream::new(stream, handle);
+        Ok(Box::pin(recording))
     }
 
     async fn health_check(&self) -> bool {

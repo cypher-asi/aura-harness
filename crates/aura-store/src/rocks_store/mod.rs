@@ -38,7 +38,7 @@
 use crate::cf;
 use crate::error::StoreError;
 use crate::keys::{AgentMetaKey, InboxKey, KeyCodec, RecordKey};
-use crate::store::Store;
+use crate::store::ReadStore;
 use aura_core::AgentStatus;
 use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, Transaction};
 use rocksdb::{
@@ -245,7 +245,12 @@ impl RocksStore {
     }
 }
 
-impl Store for RocksStore {
+// Wave 2 T3: the legacy `impl Store for RocksStore` is split into the two
+// narrower traits + the sealed marker so the type system enforces who is
+// allowed to append to the record log (Invariant §10).
+impl crate::store::sealed::Sealed for RocksStore {}
+
+impl ReadStore for RocksStore {
     #[instrument(skip(self, tx), fields(agent_id = %tx.agent_id, hash = %tx.hash))]
     fn enqueue_tx(&self, tx: &Transaction) -> Result<(), StoreError> {
         let cf_inbox = self.cf(cf::INBOX)?;
@@ -313,113 +318,6 @@ impl Store for RocksStore {
     fn get_head_seq(&self, agent_id: AgentId) -> Result<u64, StoreError> {
         let key = AgentMetaKey::head_seq(agent_id);
         self.read_meta_u64(&key)
-    }
-
-    #[instrument(skip(self, entry), fields(agent_id = %agent_id, seq = next_seq))]
-    fn append_entry_atomic(
-        &self,
-        agent_id: AgentId,
-        next_seq: u64,
-        entry: &RecordEntry,
-        dequeued_inbox_seq: u64,
-    ) -> Result<(), StoreError> {
-        self.append_entry_atomic_internal(
-            agent_id,
-            next_seq,
-            entry,
-            dequeued_inbox_seq,
-            None,
-            false,
-        )
-    }
-
-    #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]
-    fn append_entry_dequeued_with_runtime_capabilities(
-        &self,
-        agent_id: AgentId,
-        next_seq: u64,
-        entry: &RecordEntry,
-        token: crate::store::DequeueToken,
-        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
-        clear_runtime_capabilities: bool,
-    ) -> Result<(), StoreError> {
-        self.append_entry_atomic_internal(
-            agent_id,
-            next_seq,
-            entry,
-            token.inbox_seq(),
-            runtime_capabilities,
-            clear_runtime_capabilities,
-        )
-    }
-
-    #[instrument(skip(self, entry), fields(agent_id = %agent_id, seq = next_seq))]
-    fn append_entry_direct(
-        &self,
-        agent_id: AgentId,
-        next_seq: u64,
-        entry: &RecordEntry,
-    ) -> Result<(), StoreError> {
-        self.append_entry_direct_internal(agent_id, next_seq, entry, None, false)
-    }
-
-    #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]
-    fn append_entry_direct_with_runtime_capabilities(
-        &self,
-        agent_id: AgentId,
-        next_seq: u64,
-        entry: &RecordEntry,
-        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
-        clear_runtime_capabilities: bool,
-    ) -> Result<(), StoreError> {
-        self.append_entry_direct_internal(
-            agent_id,
-            next_seq,
-            entry,
-            runtime_capabilities,
-            clear_runtime_capabilities,
-        )
-    }
-
-    #[instrument(skip(self, entries), fields(agent_id = %agent_id, base_seq, count = entries.len()))]
-    fn append_entries_batch(
-        &self,
-        agent_id: AgentId,
-        base_seq: u64,
-        entries: &[RecordEntry],
-    ) -> Result<(), StoreError> {
-        if entries.is_empty() {
-            return Ok(());
-        }
-
-        let cf_record = self.cf(cf::RECORD)?;
-        let cf_meta = self.cf(cf::AGENT_META)?;
-
-        let current_head = self.get_head_seq(agent_id)?;
-        if base_seq != current_head + 1 {
-            return Err(StoreError::SequenceMismatch {
-                expected: current_head + 1,
-                actual: base_seq,
-            });
-        }
-
-        let mut batch = WriteBatch::default();
-        let head_seq_key = AgentMetaKey::head_seq(agent_id);
-
-        for (i, entry) in entries.iter().enumerate() {
-            let seq = base_seq + i as u64;
-            let entry_bytes = serde_json::to_vec(entry)?;
-            let record_key = RecordKey::new(agent_id, seq);
-            batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
-        }
-
-        let last_seq = base_seq + entries.len() as u64 - 1;
-        batch.put_cf(&cf_meta, head_seq_key.encode(), last_seq.to_be_bytes());
-
-        self.db.write_opt(batch, &self.write_opts())?;
-
-        debug!(last_seq, "Batch record entries committed");
-        Ok(())
     }
 
     #[instrument(skip(self), fields(agent_id = %agent_id, from_seq, limit))]
@@ -540,6 +438,224 @@ impl Store for RocksStore {
         let head = self.read_meta_u64(&AgentMetaKey::inbox_head(agent_id))?;
         let tail = self.read_meta_u64(&AgentMetaKey::inbox_tail(agent_id))?;
         Ok(tail.saturating_sub(head))
+    }
+}
+
+impl crate::store::WriteStore for RocksStore {
+    #[instrument(skip(self, entry), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_atomic(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        dequeued_inbox_seq: u64,
+    ) -> Result<(), StoreError> {
+        self.append_entry_atomic_internal(
+            agent_id,
+            next_seq,
+            entry,
+            dequeued_inbox_seq,
+            None,
+            false,
+        )
+    }
+
+    #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_dequeued_with_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        token: crate::store::DequeueToken,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        self.append_entry_atomic_internal(
+            agent_id,
+            next_seq,
+            entry,
+            token.inbox_seq(),
+            runtime_capabilities,
+            clear_runtime_capabilities,
+        )
+    }
+
+    #[instrument(skip(self, entry), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_direct(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+    ) -> Result<(), StoreError> {
+        self.append_entry_direct_internal(agent_id, next_seq, entry, None, false)
+    }
+
+    #[instrument(skip(self, entry, runtime_capabilities), fields(agent_id = %agent_id, seq = next_seq))]
+    fn append_entry_direct_with_runtime_capabilities(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        self.append_entry_direct_internal(
+            agent_id,
+            next_seq,
+            entry,
+            runtime_capabilities,
+            clear_runtime_capabilities,
+        )
+    }
+
+    #[instrument(skip(self, entries), fields(agent_id = %agent_id, base_seq, count = entries.len()))]
+    fn append_entries_batch(
+        &self,
+        agent_id: AgentId,
+        base_seq: u64,
+        entries: &[RecordEntry],
+    ) -> Result<(), StoreError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let cf_record = self.cf(cf::RECORD)?;
+        let cf_meta = self.cf(cf::AGENT_META)?;
+
+        let current_head = self.get_head_seq(agent_id)?;
+        if base_seq != current_head + 1 {
+            return Err(StoreError::SequenceMismatch {
+                expected: current_head + 1,
+                actual: base_seq,
+            });
+        }
+
+        let mut batch = WriteBatch::default();
+        let head_seq_key = AgentMetaKey::head_seq(agent_id);
+
+        for (i, entry) in entries.iter().enumerate() {
+            let seq = base_seq + i as u64;
+            let entry_bytes = serde_json::to_vec(entry)?;
+            let record_key = RecordKey::new(agent_id, seq);
+            batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
+        }
+
+        let last_seq = base_seq + entries.len() as u64 - 1;
+        batch.put_cf(&cf_meta, head_seq_key.encode(), last_seq.to_be_bytes());
+
+        self.db.write_opt(batch, &self.write_opts())?;
+
+        debug!(last_seq, "Batch record entries committed");
+        Ok(())
+    }
+}
+
+// --------------------------------------------------------------------
+// Fault-injection helpers (Wave 7 / T2 — invariant_atomicity suite).
+//
+// These helpers are gated on `#[cfg(any(test, feature = "test-support"))]`
+// so they are never compiled into non-test builds unless a caller
+// explicitly opts into the `test-support` feature. They exist solely to
+// exercise Invariant §10 against `RocksStore::append_entry_atomic` —
+// specifically to prove that a record-write and the paired inbox-delete
+// either both commit or both roll back, under every simulated fault
+// point.
+// --------------------------------------------------------------------
+
+/// Fault point for [`RocksStore::append_entry_atomic_with_fault`].
+///
+/// See [`RocksStore::append_entry_atomic_with_fault`] for semantics.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultAt {
+    /// Fail the call before issuing the `WriteBatch`. Expected outcome:
+    /// no record is appended and no inbox slot is deleted.
+    BeforeBatchWrite,
+    /// Fail the call **after** the `WriteBatch` commits. Expected
+    /// outcome: the record is appended **and** the inbox slot is
+    /// deleted (the atomic commit is durable even though the caller
+    /// observes an error).
+    AfterBatchWrite,
+    /// Deliberately write the record entry in one `WriteBatch`, fail
+    /// before queueing the paired inbox delete, and return an error.
+    /// This is the "broken non-atomic path" the test uses to prove
+    /// that the real atomic path is strictly required by Invariant §10.
+    /// Observing partial state here is expected and documents the
+    /// failure mode that `append_entry_atomic` prevents.
+    InsideBatch,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl RocksStore {
+    /// Fault-injected variant of `append_entry_atomic`. See [`FaultAt`].
+    ///
+    /// # Errors
+    /// Always returns an error in every fault mode so callers can assert
+    /// both "the call failed" and the resulting store state in a single
+    /// shot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_entry_atomic_with_fault(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        dequeued_inbox_seq: u64,
+        fault: FaultAt,
+    ) -> Result<(), StoreError> {
+        // Fault helper reuses `StoreError::InvalidKey` as a general-purpose
+        // error carrier for injected faults so we don't have to grow the
+        // public `StoreError` enum for test-only purposes. Callers assert
+        // on the `injected fault:` prefix.
+        let fault_err =
+            |tag: &str| -> StoreError { StoreError::InvalidKey(format!("injected fault: {tag}")) };
+        match fault {
+            FaultAt::BeforeBatchWrite => Err(fault_err("BeforeBatchWrite")),
+            FaultAt::AfterBatchWrite => {
+                // Commit the full atomic batch first, then synthesize a
+                // caller-side failure. This simulates e.g. a network
+                // error after RocksDB has already fsynced.
+                self.append_entry_atomic_internal(
+                    agent_id,
+                    next_seq,
+                    entry,
+                    dequeued_inbox_seq,
+                    None,
+                    false,
+                )?;
+                Err(fault_err("AfterBatchWrite"))
+            }
+            FaultAt::InsideBatch => {
+                // Deliberately non-atomic: write the record entry in
+                // one batch, then bail before queueing the inbox
+                // delete. The assertion in the paired test is that
+                // this path produces *partial* state — which is why
+                // the real `append_entry_atomic` uses a single
+                // `WriteBatch` containing both the record put and the
+                // inbox delete.
+                let cf_record = self.cf(cf::RECORD)?;
+                let cf_meta = self.cf(cf::AGENT_META)?;
+
+                let current_head = self.get_head_seq(agent_id)?;
+                if next_seq != current_head + 1 {
+                    return Err(StoreError::SequenceMismatch {
+                        expected: current_head + 1,
+                        actual: next_seq,
+                    });
+                }
+
+                let entry_bytes = serde_json::to_vec(entry)?;
+                let record_key = RecordKey::new(agent_id, next_seq);
+                let head_seq_key = AgentMetaKey::head_seq(agent_id);
+
+                let mut batch = WriteBatch::default();
+                batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
+                batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
+                self.db.write_opt(batch, &self.write_opts())?;
+
+                // Intentionally no inbox delete — this is the bug.
+                Err(fault_err("InsideBatch (broken non-atomic path)"))
+            }
+        }
     }
 }
 

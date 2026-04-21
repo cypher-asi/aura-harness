@@ -1,10 +1,10 @@
 use super::*;
 use aura_core::{
-    InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolIntegrationRequirement,
-    RuntimeCapabilityInstall, SystemKind,
+    ActionKind, InstalledIntegrationDefinition, InstalledToolCapability,
+    InstalledToolIntegrationRequirement, Proposal, RuntimeCapabilityInstall, SystemKind, ToolCall,
 };
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[test]
 fn test_default_permissions() {
@@ -18,7 +18,7 @@ fn test_default_permissions() {
     );
     assert_eq!(
         default_tool_permission("run_command"),
-        PermissionLevel::AlwaysAllow
+        PermissionLevel::AlwaysAsk
     );
     assert_eq!(
         default_tool_permission("unknown_tool"),
@@ -154,7 +154,9 @@ fn test_always_allow_does_not_require_approval() {
     let policy = Policy::with_defaults();
     assert!(!policy.requires_approval("read_file"));
     assert!(!policy.requires_approval("list_files"));
-    assert!(!policy.requires_approval("run_command"));
+    // `run_command` now defaults to `AlwaysAsk` (Wave 5 / T3.3); verify
+    // the read-only tools above still pass through without approval.
+    assert!(policy.requires_approval("run_command"));
 }
 
 #[test]

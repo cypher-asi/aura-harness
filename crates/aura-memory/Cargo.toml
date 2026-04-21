@@ -19,10 +19,11 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 rocksdb = { workspace = true }
 tokio = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+aura-kernel = { path = "../aura-kernel" }
 
 [lints]
 workspace = true

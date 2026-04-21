@@ -134,7 +134,8 @@ pub struct DecodedToolResult {
 
 /// Decode a tool execution [`Effect`] into text content, error status, and metadata.
 ///
-/// Used by `KernelToolExecutor` in the agent loop.
+/// Used by the agent loop's `KernelToolGateway` to convert kernel effects
+/// back into user-visible tool results.
 #[must_use]
 pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
     if effect.status == EffectStatus::Committed {

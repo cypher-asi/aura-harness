@@ -18,11 +18,9 @@
 //! crate already depends on `aura-kernel`, but `aura-kernel` does not depend
 //! on `aura-tools`.
 
-use aura_core::{
-    AgentId, AgentPermissions, Hash, Identity, Transaction, TransactionType,
-};
-use aura_store::Store;
 use async_trait::async_trait;
+use aura_core::{AgentId, AgentPermissions, Hash, Identity, Transaction, TransactionType};
+use aura_store::Store;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -97,9 +95,7 @@ impl SpawnHook for NoopSpawnHook {
         _originating_user_id: Option<&str>,
         child: ChildAgentSpec,
     ) -> Result<SpawnOutcome, SpawnError> {
-        let child_agent_id = child
-            .preassigned_agent_id
-            .unwrap_or_else(AgentId::generate);
+        let child_agent_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
         Ok(SpawnOutcome {
             child_agent_id,
             delegate_tx_hash: Hash::default(),
@@ -154,9 +150,7 @@ impl SpawnHook for KernelSpawnHook {
         originating_user_id: Option<&str>,
         child: ChildAgentSpec,
     ) -> Result<SpawnOutcome, SpawnError> {
-        let child_agent_id = child
-            .preassigned_agent_id
-            .unwrap_or_else(AgentId::generate);
+        let child_agent_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
 
         let zns_id = format!("0://spawn/{}", child_agent_id.to_hex());
         let mut identity = Identity::new(&zns_id, &child.name);
@@ -184,8 +178,10 @@ impl SpawnHook for KernelSpawnHook {
             .get_head_seq(child_agent_id)
             .map_err(|e| SpawnError::Store(format!("get_head_seq(child): {e}")))?
             + 1;
+        let child_ctx_hash = crate::context::hash_tx_with_window(&child_tx, &[])
+            .map_err(|e| SpawnError::Other(format!("context hash(child): {e}")))?;
         let child_entry = aura_core::RecordEntry::builder(child_seq, child_tx)
-            .context_hash([0u8; 32])
+            .context_hash(child_ctx_hash)
             .build();
         self.store
             .append_entry_direct(child_agent_id, child_seq, &child_entry)
@@ -215,8 +211,10 @@ impl SpawnHook for KernelSpawnHook {
             .get_head_seq(*parent_agent_id)
             .map_err(|e| SpawnError::Store(format!("get_head_seq(parent): {e}")))?
             + 1;
+        let parent_ctx_hash = crate::context::hash_tx_with_window(&delegate_tx, &[])
+            .map_err(|e| SpawnError::Other(format!("context hash(parent): {e}")))?;
         let parent_entry = aura_core::RecordEntry::builder(parent_seq, delegate_tx)
-            .context_hash([0u8; 32])
+            .context_hash(parent_ctx_hash)
             .build();
         self.store
             .append_entry_direct(*parent_agent_id, parent_seq, &parent_entry)
@@ -261,8 +259,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn Store> =
-            Arc::new(RocksStore::open(dir.path(), false).unwrap());
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path(), false).unwrap());
         let hook = KernelSpawnHook::new(store.clone());
 
         let parent = AgentId::generate();
@@ -303,6 +300,47 @@ mod tests {
             serde_json::json!(outcome.child_agent_id)
         );
         assert_ne!(outcome.delegate_tx_hash, aura_core::Hash::default());
+    }
+
+    #[tokio::test]
+    async fn kernel_hook_writes_nonzero_context_hashes() {
+        use aura_store::{RocksStore, Store};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path(), false).unwrap());
+        let hook = KernelSpawnHook::new(store.clone());
+
+        let parent = AgentId::generate();
+        let outcome = hook
+            .spawn_child(
+                &parent,
+                Some("user-root"),
+                ChildAgentSpec {
+                    name: "c".into(),
+                    role: "r".into(),
+                    permissions: AgentPermissions::ceo_preset(),
+                    system_prompt_override: None,
+                    preassigned_agent_id: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Regression guard for Invariant §6: spawn hook must compute a real
+        // context_hash, never leave it zeroed.
+        let child_entries = store.scan_record(outcome.child_agent_id, 1, 10).unwrap();
+        assert_ne!(
+            child_entries[0].context_hash,
+            aura_core::ContextHash::zero(),
+            "child entry must have a non-zero context_hash"
+        );
+        let parent_entries = store.scan_record(parent, 1, 10).unwrap();
+        assert_ne!(
+            parent_entries[0].context_hash,
+            aura_core::ContextHash::zero(),
+            "parent delegate entry must have a non-zero context_hash"
+        );
     }
 
     #[tokio::test]

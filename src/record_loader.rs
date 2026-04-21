@@ -1,7 +1,7 @@
 //! Loading and displaying historical records from the store.
 
 use aura_core::{AgentId, EffectStatus, Identity, Transaction, TransactionType};
-use aura_store::{RocksStore, Store};
+use aura_store::{ReadStore, RocksStore};
 use aura_terminal::{
     events::{AgentSummary, RecordStatus, RecordSummary},
     UiCommand,
@@ -93,7 +93,7 @@ pub fn load_existing_records(
 
         let info = extract_tool_info(&entry.tx);
 
-        let full_hash = hex::encode(entry.context_hash);
+        let full_hash = entry.context_hash.as_hex();
         let hash_suffix = full_hash[full_hash.len() - 4..].to_string();
 
         let timestamp = chrono::DateTime::from_timestamp_millis(entry.tx.ts_ms as i64)

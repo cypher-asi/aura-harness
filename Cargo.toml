@@ -2,6 +2,7 @@
 name = "aura"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [[bin]]
 name = "aura"
@@ -18,13 +19,13 @@ aura-agent = { path = "crates/aura-agent" }
 aura-memory = { path = "crates/aura-memory" }
 aura-auth = { path = "crates/aura-auth" }
 aura-node = { path = "crates/aura-node" }
-anyhow = "1.0"
-tokio = { version = "1.35", features = ["full"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
-colored = "2.1"
-rpassword = "5.0"
+colored = { workspace = true }
+rpassword = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -32,7 +33,7 @@ blake3 = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-dotenvy = "0.15.7"
+dotenvy = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tokio-util = { workspace = true }
@@ -46,7 +47,6 @@ members = [
     "crates/aura-reasoner",
     "crates/aura-kernel",
     "crates/aura-terminal",
-    "crates/aura-cli",
     "crates/aura-agent",
     "crates/aura-auth",
     "crates/aura-automaton",
@@ -94,8 +94,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 # HTTP
 axum = { version = "0.7", features = ["ws"] }
 reqwest = { version = "0.11", features = ["json"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "cors"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "timeout", "limit"] }
 
 # Storage
 rocksdb = "0.22"
@@ -133,6 +133,44 @@ base64 = "0.22"
 # Directories
 dirs = "5.0"
 
+# CLI / TTY helpers
+colored = "2.1"
+rpassword = "5.0"
+rustyline = "14.0"
+
+# Environment / config loading
+dotenvy = "0.15.7"
+
+# Async traits / utilities
+async-trait = "0.1"
+
+# Windows-friendly binary discovery
+which = "7"
+
+# Embedded PTY (terminal spawning)
+portable-pty = "0.8"
+
+# Unicode display width
+unicode-width = "0.2"
+
+# Filesystem traversal / matching
+walkdir = "2.5"
+glob = "0.3"
+regex = "1.11"
+
+# Config parsing (skills, workflows)
+toml = "0.8"
+
+# Cross-platform credential storage (DPAPI / Keychain / libsecret)
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+] }
+
+# Lazy statics (used for default HTTP client initialization)
+once_cell = "1.19"
+
 [dev-dependencies]
 aura-node = { path = "crates/aura-node", features = ["test-support"] }
 aura-core = { path = "crates/aura-core" }
@@ -152,6 +190,28 @@ dashmap = { workspace = true }
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
-nursery = "warn"
+all = { level = "warn", priority = -1 }
+# Full `pedantic` / `nursery` groups remain deferred — they produce ~230
+# findings across legacy modules that are better addressed by the Wave 6
+# module-splits than sprayed with `#[allow]`s. The curated subset below
+# is the Wave 4 stretch: each lint is individually enforceable, has few
+# findings in the current tree, and catches real bugs.
+pedantic = { level = "allow", priority = -1 }
+nursery = { level = "allow", priority = -1 }
+# Curated pedantic set re-enabled in Wave 4 stretch. Each lint here is
+# independently valuable and has zero or near-zero findings after the
+# Wave 1–3 cleanups. If a lint starts flaring (>20 findings) during
+# Wave 5/6 work, prefer fixing rather than suppressing.
+needless_pass_by_value = "warn"
+ref_option = "warn"
+manual_let_else = "warn"
+semicolon_if_nothing_returned = "warn"
+map_unwrap_or = "warn"
+unnecessary_wraps = "warn"
+if_not_else = "warn"
+from_iter_instead_of_collect = "warn"
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"

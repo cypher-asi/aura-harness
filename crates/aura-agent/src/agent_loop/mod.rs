@@ -325,6 +325,7 @@ impl AgentLoop {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // TODO(W3): regroup retry inputs behind a `RetryCtx` struct.
     async fn retry_after_context_overflow(
         &self,
         provider: &dyn ModelProvider,
@@ -375,7 +376,7 @@ impl AgentLoop {
 }
 
 /// Mutable state carried across iterations of the agent loop.
-pub struct LoopState {
+pub(crate) struct LoopState {
     pub(crate) result: AgentLoopResult,
     pub(crate) tool_cache: HashMap<String, String>,
     pub(crate) blocking_ctx: BlockingContext,
@@ -523,13 +524,10 @@ fn latest_user_text(messages: &[Message]) -> Option<&str> {
                 .iter()
                 .any(|b| matches!(b, aura_reasoner::ContentBlock::Text { .. }))
         {
-            return msg
-                .content
-                .iter()
-                .find_map(|b| match b {
-                    aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                });
+            return msg.content.iter().find_map(|b| match b {
+                aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            });
         }
     }
     None

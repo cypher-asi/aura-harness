@@ -5,6 +5,10 @@ use regex::Regex;
 
 use super::{validate_path, FileOp};
 
+// INVARIANT: The pattern is a compile-time constant. `Regex::new` only fails
+// on a syntax error, and `lazy_regex_compiles` below forces each lazy to
+// guarantee that failure becomes a test-time panic rather than a production
+// panic (rules §4.1 allows this form of documented `expect`).
 static FN_SIGNATURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
         .expect("static regex")
@@ -297,4 +301,16 @@ fn all_params_ignored(params_str: &str) -> bool {
     }
 
     named_count > 0 && named_count == ignored_count
+}
+
+#[cfg(test)]
+mod lazy_regex_guard {
+    use super::{FN_SIGNATURE_RE, RETURN_TYPE_RE};
+
+    #[test]
+    fn lazy_regex_compiles() {
+        // Force each lazy so a bad pattern is caught by the test suite.
+        let _ = &*FN_SIGNATURE_RE;
+        let _ = &*RETURN_TYPE_RE;
+    }
 }

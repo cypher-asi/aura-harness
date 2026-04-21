@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use aura_auth::CredentialStore;
 use aura_kernel::Executor;
-use aura_node::test_support::{create_router, RouterState, Scheduler};
+use aura_node::test_support::{create_router, RouterState, RouterStateConfig, Scheduler};
 use aura_node::NodeConfig;
 use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
@@ -22,6 +22,19 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
+
+/// Minimal `agent_permissions` payload for `session_init` messages.
+///
+/// Wave 0 (Apr 2026): `aura_protocol::SessionInit` made `agent_permissions`
+/// a required field. Tests don't actually exercise capability gating today,
+/// so we inject the empty (no-capability) preset to keep the wire payload
+/// valid.
+pub(crate) fn default_agent_permissions_payload() -> Value {
+    json!({
+        "scope": { "orgs": [], "projects": [], "agent_ids": [] },
+        "capabilities": []
+    })
+}
 
 // ============================================================================
 // Credential helpers
@@ -152,7 +165,7 @@ impl TestServer {
             None,
         ));
 
-        let state = RouterState {
+        let state = RouterState::new(RouterStateConfig {
             store,
             scheduler,
             config,
@@ -162,11 +175,10 @@ impl TestServer {
             domain_api: None,
             automaton_controller: None,
             automaton_bridge: None,
-            failed_txs: Arc::new(dashmap::DashMap::new()),
             memory_manager: None,
             skill_manager: None,
             router_url: None,
-        };
+        });
         let app = create_router(state);
 
         let bind = std::env::var("E2E_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:0".to_string());
@@ -292,7 +304,8 @@ impl WsClient {
         let mut init = json!({
             "type": "session_init",
             "workspace": workspace.to_string_lossy(),
-            "max_turns": max_turns.unwrap_or(10)
+            "max_turns": max_turns.unwrap_or(10),
+            "agent_permissions": default_agent_permissions_payload()
         });
         if let Some(t) = token {
             init["token"] = json!(t);
@@ -318,6 +331,7 @@ impl WsClient {
         let mut init = json!({
             "type": "session_init",
             "workspace": workspace.to_string_lossy(),
+            "agent_permissions": default_agent_permissions_payload(),
         });
         if let Some(t) = opts.token {
             init["token"] = json!(t);

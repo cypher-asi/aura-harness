@@ -225,22 +225,16 @@ pub(crate) mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
+    use async_trait::async_trait;
     use aura_core::{AgentScope, Capability, Hash};
     use aura_kernel::{SpawnError, SpawnHook, SpawnOutcome};
-    use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
     /// Test-only spawn hook that records each invocation so assertions can
     /// inspect the parent id + originating user id that the tool forwarded.
     #[derive(Default)]
     pub(crate) struct MockSpawnHook {
-        pub calls: Mutex<
-            Vec<(
-                AgentId,
-                Option<String>,
-                aura_kernel::ChildAgentSpec,
-            )>,
-        >,
+        pub calls: Mutex<Vec<(AgentId, Option<String>, aura_kernel::ChildAgentSpec)>>,
     }
 
     #[async_trait]
@@ -251,9 +245,7 @@ pub(crate) mod tests {
             originating_user_id: Option<&str>,
             child: aura_kernel::ChildAgentSpec,
         ) -> Result<SpawnOutcome, SpawnError> {
-            let child_agent_id = child
-                .preassigned_agent_id
-                .unwrap_or_else(AgentId::generate);
+            let child_agent_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
             self.calls.lock().unwrap().push((
                 *parent_agent_id,
                 originating_user_id.map(ToString::to_string),
@@ -399,10 +391,7 @@ pub(crate) mod tests {
             system_prompt: None,
         };
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
-        assert!(
-            err.to_string().contains("caller_permissions"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("caller_permissions"), "got: {err}");
     }
 
     #[tokio::test]
@@ -432,7 +421,11 @@ pub(crate) mod tests {
             "permissions": AgentPermissions::empty(),
         });
         let result = SpawnAgentTool.execute(&ctx, args).await.unwrap();
-        assert!(result.ok, "stderr={}", String::from_utf8_lossy(&result.stderr));
+        assert!(
+            result.ok,
+            "stderr={}",
+            String::from_utf8_lossy(&result.stderr)
+        );
 
         let calls = hook.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);

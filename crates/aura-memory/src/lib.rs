@@ -5,7 +5,7 @@
 //! deterministic retrieval for system prompt injection.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 #![allow(clippy::option_if_let_else)]
 
 mod consolidation;
@@ -19,6 +19,9 @@ mod salience;
 mod store;
 mod types;
 mod write_pipeline;
+
+#[cfg(test)]
+mod test_kernel;
 
 pub use consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 pub use error::MemoryError;

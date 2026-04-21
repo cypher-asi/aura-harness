@@ -77,7 +77,7 @@ pub fn activate(skill: &Skill, arguments: &str) -> Result<SkillActivation, Skill
         if let Some(end) = content[abs_start..].find(']') {
             let idx_str = &content[abs_start + 11..abs_start + end];
             if let Ok(idx) = idx_str.parse::<usize>() {
-                let replacement = args.get(idx).map(|s| s.as_str()).unwrap_or("");
+                let replacement = args.get(idx).map_or("", |s| s.as_str());
                 let full_placeholder = &content[abs_start..=abs_start + end].to_string();
                 content = content.replacen(full_placeholder, replacement, 1);
             } else {

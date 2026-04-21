@@ -72,9 +72,13 @@ async fn test_full_kernel_mediated_flow() {
     }
 
     // Verify context hashes are non-zero and unique
-    let hashes: Vec<[u8; 32]> = entries.iter().map(|e| e.context_hash).collect();
+    let hashes: Vec<aura_core::ContextHash> = entries.iter().map(|e| e.context_hash).collect();
     for hash in &hashes {
-        assert_ne!(*hash, [0u8; 32], "Context hash should be non-zero");
+        assert_ne!(
+            *hash,
+            aura_core::ContextHash::zero(),
+            "Context hash should be non-zero"
+        );
     }
     assert_ne!(hashes[0], hashes[1]);
     assert_ne!(hashes[1], hashes[2]);

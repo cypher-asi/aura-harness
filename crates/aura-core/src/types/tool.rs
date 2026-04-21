@@ -259,18 +259,15 @@ impl RuntimeCapabilityInstall {
             requirement
                 .integration_id
                 .as_deref()
-                .map(|expected| integration.integration_id == expected)
-                .unwrap_or(true)
+                .map_or(true, |expected| integration.integration_id == expected)
                 && requirement
                     .provider
                     .as_deref()
-                    .map(|expected| integration.provider == expected)
-                    .unwrap_or(true)
+                    .map_or(true, |expected| integration.provider == expected)
                 && requirement
                     .kind
                     .as_deref()
-                    .map(|expected| integration.kind == expected)
-                    .unwrap_or(true)
+                    .map_or(true, |expected| integration.kind == expected)
         })
     }
 }

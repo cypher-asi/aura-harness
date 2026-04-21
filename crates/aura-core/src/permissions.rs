@@ -111,10 +111,9 @@ impl Capability {
             (Capability::WriteAllProjects, Capability::ReadProject { .. }) => true,
             (Capability::WriteAllProjects, Capability::WriteProject { .. }) => true,
             // Write implies read for the same project id.
-            (
-                Capability::WriteProject { id: held_id },
-                Capability::ReadProject { id: req_id },
-            ) => held_id == req_id,
+            (Capability::WriteProject { id: held_id }, Capability::ReadProject { id: req_id }) => {
+                held_id == req_id
+            }
             _ => false,
         }
     }
@@ -352,17 +351,13 @@ mod tests {
 
     #[test]
     fn read_all_projects_satisfies_read_project() {
-        let req = Capability::ReadProject {
-            id: "any".into(),
-        };
+        let req = Capability::ReadProject { id: "any".into() };
         assert!(Capability::ReadAllProjects.satisfies(&req));
     }
 
     #[test]
     fn read_all_projects_does_not_satisfy_write_project() {
-        let req = Capability::WriteProject {
-            id: "p".into(),
-        };
+        let req = Capability::WriteProject { id: "p".into() };
         assert!(!Capability::ReadAllProjects.satisfies(&req));
     }
 

@@ -52,7 +52,7 @@ pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<Ap
         });
     }
 
-    if request.max_tokens > 2048 {
+    if request.max_tokens.get() > 2048 {
         Some(ApiThinkingConfig {
             thinking_type: match thinking_mode {
                 ThinkingMode::Adaptive => "adaptive".to_string(),
@@ -60,7 +60,7 @@ pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<Ap
             },
             budget_tokens: match thinking_mode {
                 ThinkingMode::Adaptive => None,
-                ThinkingMode::Enabled => Some((request.max_tokens / 2).clamp(1024, 16000)),
+                ThinkingMode::Enabled => Some((request.max_tokens.get() / 2).clamp(1024, 16000)),
             },
         })
     } else {

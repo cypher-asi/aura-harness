@@ -34,6 +34,7 @@ fn test_session() -> SessionInfo<'static> {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // TODO(W3): wrap inputs in `BuildFixPromptParams`.
 fn build_fix_prompt(
     project: &ProjectInfo<'_>,
     spec: &SpecInfo<'_>,

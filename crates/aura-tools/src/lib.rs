@@ -14,7 +14,7 @@
 //! Command execution is disabled by default and requires explicit allowlisting.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
+#![warn(clippy::all)]
 #![allow(
     clippy::missing_errors_doc,
     clippy::missing_const_for_fn,
@@ -61,6 +61,24 @@ pub struct ToolConfig {
     pub enable_commands: bool,
     /// Allowed commands (empty = all allowed if commands enabled)
     pub command_allowlist: Vec<String>,
+    /// Allowed binary names for `run_command`.
+    ///
+    /// Unlike [`Self::command_allowlist`], which matches the first whitespace
+    /// token of the full shell string, this list is checked **after**
+    /// resolving `program` through `which`, so it guards against PATH
+    /// shadowing tricks (e.g. a malicious `rg` shim dropped next to
+    /// `cargo`).
+    ///
+    /// Empty vec = no binary allow-list enforcement (backwards compatible).
+    /// Any non-empty list causes `run_command` to reject programs whose
+    /// resolved file name is not present. (Wave 5 / T3.2.)
+    pub binary_allowlist: Vec<String>,
+    /// When `false` (default), `run_command` refuses the legacy
+    /// "empty args treated as shell script" form. Callers must then
+    /// supply `program` + non-empty `args`, avoiding the shell-injection
+    /// surface that made `command: "git status; rm -rf"` executable.
+    /// (Wave 5 / T3.1.)
+    pub allow_shell: bool,
     /// Maximum read bytes
     pub max_read_bytes: usize,
     /// Sync threshold for command execution (milliseconds).
@@ -80,6 +98,8 @@ impl Default for ToolConfig {
             enable_fs: true,
             enable_commands: true,
             command_allowlist: vec![],
+            binary_allowlist: vec![],
+            allow_shell: false,
             max_read_bytes: 5 * 1024 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,

@@ -36,6 +36,14 @@ pub enum SkillError {
     /// Persistent storage failure (RocksDB column family or I/O).
     #[error("store error: {0}")]
     Store(String),
+
+    /// A `SKILL.md` file exceeded the maximum allowed size (Wave 5 / T4).
+    #[error("skill too large: {path} is {actual} bytes, limit {limit} bytes")]
+    TooLarge {
+        path: std::path::PathBuf,
+        actual: u64,
+        limit: u64,
+    },
 }
 
 impl SkillError {

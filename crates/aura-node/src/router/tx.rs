@@ -53,9 +53,7 @@ pub(super) async fn submit_tx_handler(
     // during session bootstrap. Any attempt to ship a new permission
     // bundle via `/tx` (regardless of transaction kind) is refused so a
     // running session cannot escalate its own capabilities.
-    if matches!(tx_type, TransactionType::System)
-        && carries_agent_permissions_mutation(&payload)
-    {
+    if matches!(tx_type, TransactionType::System) && carries_agent_permissions_mutation(&payload) {
         return Err((
             StatusCode::FORBIDDEN,
             "permissions: AgentPermissions are frozen per session; send a new SessionInit instead"

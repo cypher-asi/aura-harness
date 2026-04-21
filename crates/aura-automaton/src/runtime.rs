@@ -271,6 +271,55 @@ impl Default for AutomatonRuntime {
     }
 }
 
+/// `Registry` trait impl (Wave 4 unification). The automaton runtime has
+/// a genuinely lifecycle-managed surface (async `install`, cooperative
+/// `stop`, worker-task–initiated cleanup), so `register` / `remove` are
+/// intentionally *not* wired to `install` / `stop` here — those have
+/// different semantics and invoking them through a generic trait would
+/// hide the async/cancellation contract. The trait impl instead exposes
+/// the read-only name -> metadata view (`get` / `iter` / `len`) shared by
+/// `SkillRegistry` and `DefaultToolRegistry`.
+impl aura_core::Registry for AutomatonRuntime {
+    type Id = String;
+    type Item = AutomatonInfo;
+
+    fn register(
+        &mut self,
+        _id: Self::Id,
+        _item: Self::Item,
+    ) -> Result<(), aura_core::RegistryError> {
+        Err(aura_core::RegistryError::Unsupported(
+            "AutomatonRuntime uses async install() to spawn running automatons",
+        ))
+    }
+
+    fn get(&self, id: &Self::Id) -> Option<Self::Item> {
+        self.get_info(id)
+    }
+
+    fn iter(&self) -> Vec<(Self::Id, Self::Item)> {
+        self.list()
+            .into_iter()
+            .map(|info| (info.id.as_str().to_string(), info))
+            .collect()
+    }
+
+    fn remove(&mut self, _id: &Self::Id) -> Option<Self::Item> {
+        // AutomatonRuntime cleanup is worker-task-driven; direct removal
+        // through the Registry surface is unsupported. Callers should
+        // invoke `stop(id)` and wait for the `Stopped` event.
+        None
+    }
+
+    fn len(&self) -> usize {
+        self.instances.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +354,37 @@ mod tests {
         );
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].kind, "immediate");
+    }
+
+    #[tokio::test]
+    async fn registry_trait_read_only_view() {
+        use aura_core::{Registry, RegistryError};
+
+        let mut runtime = AutomatonRuntime::new();
+        assert!(Registry::is_empty(&runtime));
+
+        let (handle, _rx) = runtime
+            .install(Box::new(ImmediateAutomaton), serde_json::json!({}), None)
+            .await
+            .unwrap();
+        let id = handle.id().as_str().to_string();
+
+        assert_eq!(Registry::len(&runtime), 1);
+        let info = Registry::get(&runtime, &id).expect("info present");
+        assert_eq!(info.kind, "immediate");
+
+        let iter_ids: Vec<_> = Registry::iter(&runtime)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(iter_ids, vec![id.clone()]);
+
+        let err = Registry::register(&mut runtime, id.clone(), info)
+            .expect_err("direct register must be unsupported");
+        assert!(matches!(err, RegistryError::Unsupported(_)));
+
+        let removed = Registry::remove(&mut runtime, &id);
+        assert!(removed.is_none(), "direct remove is unsupported");
     }
 
     #[tokio::test]
