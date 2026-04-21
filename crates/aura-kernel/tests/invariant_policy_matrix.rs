@@ -183,8 +183,8 @@ fn rows() -> Vec<(&'static str, PolicyConfig, Expected, Option<Pre>)> {
     ));
 
     out.push((
-        "permission_always_ask/tool_listed",
-        policy_with_level(PermissionLevel::AlwaysAsk),
+        "permission_require_approval/tool_listed",
+        policy_with_level(PermissionLevel::RequireApproval),
         Rejected {
             substring: "requires approval for each use",
         },
@@ -225,10 +225,10 @@ fn rows() -> Vec<(&'static str, PolicyConfig, Expected, Option<Pre>)> {
     ));
 
     out.push((
-        "permission_always_ask_override/tool_unlisted/allow_unlisted_true",
+        "permission_require_approval_override/tool_unlisted/allow_unlisted_true",
         {
             let mut cfg = PolicyConfig::default()
-                .with_tool_permission(TARGET_TOOL, PermissionLevel::AlwaysAsk);
+                .with_tool_permission(TARGET_TOOL, PermissionLevel::RequireApproval);
             cfg.allowed_tools = HashSet::new();
             cfg.allow_unlisted = true;
             cfg

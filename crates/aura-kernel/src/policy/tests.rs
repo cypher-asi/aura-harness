@@ -18,11 +18,31 @@ fn test_default_permissions() {
     );
     assert_eq!(
         default_tool_permission("run_command"),
-        PermissionLevel::AlwaysAsk
+        PermissionLevel::RequireApproval
     );
     assert_eq!(
         default_tool_permission("unknown_tool"),
         PermissionLevel::Deny
+    );
+}
+
+#[test]
+fn test_always_ask_serde_alias_deserializes_to_require_approval() {
+    // Phase 6 rename: old configs serialized with `"always_ask"` must
+    // continue to parse into the new `RequireApproval` variant via the
+    // `#[serde(alias = "always_ask")]` on the enum.
+    let legacy: PermissionLevel =
+        serde_json::from_str("\"always_ask\"").expect("legacy alias should deserialize");
+    assert_eq!(legacy, PermissionLevel::RequireApproval);
+
+    // Forward direction: the canonical serde tag for the new variant
+    // is `"require_approval"` (snake_case of `RequireApproval`).
+    let canonical: PermissionLevel =
+        serde_json::from_str("\"require_approval\"").expect("canonical tag should deserialize");
+    assert_eq!(canonical, PermissionLevel::RequireApproval);
+    assert_eq!(
+        serde_json::to_string(&PermissionLevel::RequireApproval).unwrap(),
+        "\"require_approval\""
     );
 }
 
@@ -92,11 +112,12 @@ fn test_default_config_fail_closed_flags() {
     // Read-only / narrow filesystem tools stay in.
     assert!(cfg.allowed_tools.contains("read_file"));
     assert!(cfg.allowed_tools.contains("write_file"));
-    // `default_tool_permission` still classes run_command as AlwaysAsk
-    // so hosts that opt in get per-invocation approval.
+    // `default_tool_permission` still classes run_command as
+    // `RequireApproval` (renamed from `AlwaysAsk` in Phase 6) so hosts
+    // that opt in get per-invocation approval.
     assert_eq!(
         default_tool_permission("run_command"),
-        PermissionLevel::AlwaysAsk
+        PermissionLevel::RequireApproval
     );
 }
 
@@ -212,8 +233,9 @@ fn test_always_allow_does_not_require_approval() {
     let policy = Policy::with_defaults();
     assert!(!policy.requires_approval("read_file"));
     assert!(!policy.requires_approval("list_files"));
-    // `run_command` now defaults to `AlwaysAsk` (Wave 5 / T3.3); verify
-    // the read-only tools above still pass through without approval.
+    // `run_command` now defaults to `RequireApproval` (Wave 5 / T3.3,
+    // renamed Phase 6); verify the read-only tools above still pass
+    // through without approval.
     assert!(policy.requires_approval("run_command"));
 }
 
@@ -407,9 +429,9 @@ fn test_check_tool_ask_once_after_approval() {
 }
 
 #[test]
-fn test_always_ask_permission_override() {
+fn test_require_approval_permission_override() {
     let config =
-        PolicyConfig::default().with_tool_permission("read_file", PermissionLevel::AlwaysAsk);
+        PolicyConfig::default().with_tool_permission("read_file", PermissionLevel::RequireApproval);
     let policy = Policy::new(config);
 
     let result = policy.check_tool("read_file", &serde_json::json!({}));
@@ -418,6 +440,12 @@ fn test_always_ask_permission_override() {
         .reason
         .unwrap()
         .contains("requires approval for each use"));
+    // Phase 6 — the structured verdict must distinguish this from a
+    // plain `Deny` so HTTP callers can return 423 Locked.
+    assert!(matches!(
+        result.verdict,
+        PolicyVerdict::RequireApproval { .. }
+    ));
 }
 
 #[test]
@@ -558,9 +586,9 @@ fn test_check_allows_ask_once_tool_after_approval() {
 }
 
 #[test]
-fn test_check_denies_always_ask_tool() {
+fn test_check_denies_require_approval_tool() {
     let config =
-        PolicyConfig::default().with_tool_permission("read_file", PermissionLevel::AlwaysAsk);
+        PolicyConfig::default().with_tool_permission("read_file", PermissionLevel::RequireApproval);
     let policy = Policy::new(config);
 
     let tool_call = ToolCall::new("read_file", serde_json::json!({"path": "f.txt"}));
@@ -573,4 +601,8 @@ fn test_check_denies_always_ask_tool() {
         .reason
         .unwrap()
         .contains("requires approval for each use"));
+    assert!(matches!(
+        result.verdict,
+        PolicyVerdict::RequireApproval { .. }
+    ));
 }

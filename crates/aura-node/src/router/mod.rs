@@ -38,11 +38,13 @@ mod automaton;
 mod files;
 mod memory;
 mod skills;
+mod tool_approval;
 mod tx;
 mod ws;
 
 use automaton::*;
 use files::*;
+use tool_approval::{grant_tool_approval_handler, revoke_tool_approval_handler};
 use tx::*;
 use ws::*;
 
@@ -166,6 +168,10 @@ pub fn create_router(state: RouterState) -> Router {
         .route("/api/read-file", get(read_file_handler))
         .route("/workspace/resolve", get(resolve_workspace_handler))
         .route("/tx", post(submit_tx_handler))
+        .route(
+            "/tool-approval",
+            post(grant_tool_approval_handler).delete(revoke_tool_approval_handler),
+        )
         .route("/tx/status/:agent_id/:tx_id", get(tx_status_handler))
         .route("/agents/:agent_id/head", get(get_head_handler))
         .route("/agents/:agent_id/record", get(scan_record_handler))

@@ -109,7 +109,7 @@ The policy pipeline for a `ToolProposal`:
    - What is the `PermissionLevel`?
      - `AlwaysAllow` — proceed
      - `AskOnce` — check `session_approvals`; deny if not approved
-     - `AlwaysAsk` — deny (requires per-use approval)
+     - `RequireApproval` (renamed from `AlwaysAsk` in Phase 6) — deny unless the caller has registered a single-use approval via `Kernel::grant_approval` for the exact `(agent_id, tool, args_hash)` triple
      - `Deny` — deny
 4. Decision is recorded: accepted action IDs or rejected proposals with reasons
 5. Only approved proposals become `Action`s and are executed
@@ -118,7 +118,7 @@ The policy pipeline for a `ToolProposal`:
 
 ### 4.a Default permissions for high-privilege tools
 
-The shipped `Policy::with_defaults()` preset (`crates/aura-kernel/src/policy/mod.rs::default_tool_permission`) defaults **`run_command` to `PermissionLevel::AlwaysAsk`** (Wave 5 / T3). The kernel must never invoke arbitrary binaries without an explicit per-use approval. Read-only FS inspection (`list_files`, `read_file`, `stat_file`, `search_code`) and in-workspace FS writes (`write_file`, `edit_file`, `delete_file`) remain `AlwaysAllow` because they are sandboxed to the workspace root.
+The shipped `Policy::with_defaults()` preset (`crates/aura-kernel/src/policy/mod.rs::default_tool_permission`) defaults **`run_command` to `PermissionLevel::RequireApproval`** (Wave 5 / T3, renamed from `AlwaysAsk` in Phase 6 of the security audit). The kernel must never invoke arbitrary binaries without an explicit, single-use per-call approval registered via `Kernel::grant_approval` (or `POST /tool-approval`). Read-only FS inspection (`list_files`, `read_file`, `stat_file`, `search_code`) and in-workspace FS writes (`write_file`, `edit_file`, `delete_file`) remain `AlwaysAllow` because they are sandboxed to the workspace root.
 
 Complementary enforcement in `aura-tools`:
 

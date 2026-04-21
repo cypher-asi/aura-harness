@@ -283,7 +283,7 @@ The invariant core. Builds context from the record, calls the reasoner, enforces
 | `ExecuteLimits` | Caps for read/write bytes, command timeout, stdout/stderr |
 | `Policy` | Runtime permission engine with session approval memory |
 | `PolicyConfig` | Allowed action kinds, tool allowlists, per-tool `PermissionLevel` overrides |
-| `PermissionLevel` | `AlwaysAllow`, `AskOnce`, `AlwaysAsk`, `Deny` |
+| `PermissionLevel` | `AlwaysAllow`, `AskOnce`, `RequireApproval`, `Deny` |
 | `PolicyResult` | Result of a policy check |
 | `ContextBuilder` | Builds `Context` (context hash + record summaries) from transaction + record window |
 | `decode_tool_effect` | Parses an `Effect` back into human-readable `DecodedToolResult` |

@@ -7,6 +7,7 @@ use aura_core::{
     ActionKind, AgentPermissions, Capability, InstalledIntegrationDefinition,
     InstalledToolIntegrationRequirement,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
@@ -14,32 +15,46 @@ use std::collections::{HashMap, HashSet};
 // ============================================================================
 
 /// Permission level for tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `RequireApproval` was called `AlwaysAsk` prior to the Phase 6 security
+/// rename. The old name was a misnomer because the kernel never actually
+/// paused for an interactive prompt — it simply denied. It now means
+/// "deny unless the caller has registered an explicit, single-use
+/// approval for the exact `(agent_id, tool, args_hash)` triple via
+/// [`crate::Kernel::grant_approval`]". Serde still deserializes the old
+/// `"always_ask"` tag via the alias so persisted configs keep loading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PermissionLevel {
-    /// Always allowed without asking
+    /// Always allowed without asking.
     AlwaysAllow,
-    /// Ask once per session, then remember
+    /// Ask once per session, then remember.
     AskOnce,
-    /// Always ask before each use
-    AlwaysAsk,
-    /// Never allowed
+    /// Deny unless the caller has registered an explicit single-use
+    /// approval for the exact `(agent_id, tool, args_hash)` triple.
+    /// Consumed on first match.
+    #[serde(alias = "always_ask")]
+    RequireApproval,
+    /// Never allowed.
     Deny,
 }
 
 /// Default permission level for a tool based on its name.
 ///
 /// Read-only and narrow filesystem tools default to `AlwaysAllow`.
-/// `run_command` defaults to [`PermissionLevel::AlwaysAsk`] (Wave 5 /
-/// T3.3): spawning arbitrary shell commands is the biggest blast-radius
-/// tool the kernel exposes, so every invocation must be approved. Hosts
-/// that trust the running agent (e.g. headless CI) can still flip this
-/// to `AlwaysAllow` via [`PolicyConfig::tool_permissions`].
+/// `run_command` defaults to [`PermissionLevel::RequireApproval`] (Wave 5 /
+/// T3.3, renamed in Phase 6 / security audit): spawning arbitrary shell
+/// commands is the biggest blast-radius tool the kernel exposes, so
+/// every invocation must be explicitly pre-approved via
+/// [`crate::Kernel::grant_approval`]. Hosts that trust the running
+/// agent (e.g. headless CI) can still flip this to `AlwaysAllow` via
+/// [`PolicyConfig::tool_permissions`].
 #[must_use]
 pub fn default_tool_permission(tool: &str) -> PermissionLevel {
     match tool {
         "list_files" | "read_file" | "stat_file" | "search_code" | "write_file" | "edit_file"
         | "delete_file" => PermissionLevel::AlwaysAllow,
-        "run_command" => PermissionLevel::AlwaysAsk,
+        "run_command" => PermissionLevel::RequireApproval,
         _ => PermissionLevel::Deny,
     }
 }
@@ -89,8 +104,9 @@ impl Default for PolicyConfig {
     ///   and not explicitly named in `tool_permissions` is denied.
     /// * `run_command` is **not** pre-populated in `allowed_tools`.
     ///   `default_tool_permission("run_command")` still returns
-    ///   `AlwaysAsk`, so a host that opts in by inserting `run_command`
-    ///   continues to require per-invocation approval.
+    ///   `RequireApproval`, so a host that opts in by inserting `run_command`
+    ///   continues to require per-invocation approval via
+    ///   [`crate::Kernel::grant_approval`].
     fn default() -> Self {
         let mut allowed_action_kinds = HashSet::new();
         allowed_action_kinds.insert(ActionKind::Reason);

@@ -305,6 +305,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "futures-util",
+ "hex",
  "portable-pty",
  "reqwest",
  "serde",

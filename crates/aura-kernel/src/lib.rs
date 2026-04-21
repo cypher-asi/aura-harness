@@ -37,9 +37,13 @@ pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
 };
 pub use kernel::{
-    Kernel, KernelConfig, ProcessResult, ReasonResult, ReasonStreamHandle, ToolOutput,
+    ApprovalRequiredInfo, Kernel, KernelConfig, ProcessResult, ReasonResult, ReasonStreamHandle,
+    ToolDecision, ToolOutput,
 };
-pub use policy::{default_tool_permission, PermissionLevel, Policy, PolicyConfig, PolicyResult};
+pub use policy::{
+    default_tool_permission, ApprovalKey, ApprovalRegistry, PermissionLevel, Policy, PolicyConfig,
+    PolicyResult, PolicyVerdict,
+};
 pub use router::ExecutorRouter;
 pub use spawn_hook::{
     ChildAgentSpec, KernelSpawnHook, NoopSpawnHook, SpawnError, SpawnHook, SpawnOutcome,

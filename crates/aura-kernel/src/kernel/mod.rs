@@ -25,7 +25,7 @@
 //! - [`stream`]  — the `ReasonStreamHandle` finalization handle.
 //! - [`tests`]   — integration tests that exercise the full `Kernel` surface.
 
-use crate::policy::{Policy, PolicyConfig};
+use crate::policy::{ApprovalRegistry, Policy, PolicyConfig};
 use crate::ExecutorRouter;
 use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall};
 use aura_reasoner::ModelProvider;
@@ -94,6 +94,54 @@ pub struct ToolOutput {
     pub content: String,
     /// Whether the tool execution failed.
     pub is_error: bool,
+    /// Phase 6 (security audit): `true` when the kernel produced this
+    /// output because the policy raised
+    /// [`crate::PolicyVerdict::RequireApproval`] and no matching
+    /// single-use approval was registered. Callers (router, agent
+    /// loop) use this flag to surface a `423 Locked` response instead
+    /// of a generic failure.
+    pub approval_required: Option<ApprovalRequiredInfo>,
+}
+
+/// Details about a tool invocation that was denied because it needs an
+/// out-of-band operator approval. Set on [`ToolOutput::approval_required`]
+/// when the policy returns [`crate::PolicyVerdict::RequireApproval`] and
+/// no matching entry exists in the [`ApprovalRegistry`].
+#[derive(Debug, Clone)]
+pub struct ApprovalRequiredInfo {
+    /// Tool name, e.g. `"run_command"`.
+    pub tool: String,
+    /// Blake3 hash of the canonical JSON args the agent wanted to run.
+    /// Hex-encoded in the API layer.
+    pub args_hash: [u8; 32],
+}
+
+/// Decision produced by [`Kernel::process_tool_proposal`] for a single
+/// tool call. Surfaced on [`ProcessResult`] so HTTP routers (and any
+/// other caller) can distinguish "needs operator sign-off" from
+/// "permanently denied" without pattern-matching on the error string.
+#[derive(Debug, Clone)]
+pub enum ToolDecision {
+    /// Tool call was authorized and executed.
+    Allowed,
+    /// Tool call was permanently denied by policy. No approval will
+    /// unlock it.
+    Denied {
+        /// Human-readable reason pulled from the policy engine.
+        reason: String,
+    },
+    /// Tool call is awaiting an out-of-band operator approval. The
+    /// caller should surface `args_hash` so an authenticated operator
+    /// can register it via `Kernel::grant_approval` (or the
+    /// `POST /tool-approval` HTTP endpoint).
+    NeedsApproval {
+        /// Human-readable reason, e.g.
+        /// `"Tool 'run_command' requires approval for each use"`.
+        reason: String,
+        /// Blake3 hash of the canonical JSON args. Exposed to
+        /// authenticated operators in the `423 Locked` response.
+        args_hash: [u8; 32],
+    },
 }
 
 /// Result of processing a transaction.
@@ -109,6 +157,9 @@ pub struct ProcessResult {
     pub runtime_capability_update: Option<RuntimeCapabilityInstall>,
     /// Whether the persisted runtime capability ledger should be cleared.
     pub clear_runtime_capabilities: bool,
+    /// Structured policy decision, set when this `ProcessResult` came
+    /// from a tool-proposal path. `None` for non-tool transactions.
+    pub tool_decision: Option<ToolDecision>,
 }
 
 /// Result of a reasoning call.
@@ -137,6 +188,13 @@ pub struct Kernel {
     /// Agent this kernel instance is bound to.
     pub agent_id: AgentId,
     pub(super) seq: Arc<Mutex<u64>>,
+    /// Shared store of pending single-use approvals consulted when the
+    /// policy raises [`crate::PolicyVerdict::RequireApproval`]. The
+    /// scheduler hands the same `ApprovalRegistry` handle to every
+    /// per-agent kernel so a grant issued through the HTTP API
+    /// survives the short-lived kernel that was active when the
+    /// proposal was first denied.
+    pub(super) approvals: ApprovalRegistry,
 }
 
 impl Kernel {
@@ -154,6 +212,33 @@ impl Kernel {
         config: KernelConfig,
         agent_id: AgentId,
     ) -> Result<Self, crate::KernelError> {
+        Self::new_with_approvals(
+            store,
+            provider,
+            executor,
+            config,
+            agent_id,
+            ApprovalRegistry::new(),
+        )
+    }
+
+    /// Construct a kernel with a caller-supplied [`ApprovalRegistry`].
+    ///
+    /// Phase 6 entry point used by the scheduler so every per-agent
+    /// kernel it builds shares the same registry. Tests that want the
+    /// default "per-kernel empty registry" behavior should keep using
+    /// [`Self::new`].
+    ///
+    /// # Errors
+    /// Returns an error if the store cannot be read.
+    pub fn new_with_approvals(
+        store: Arc<dyn Store>,
+        provider: Arc<dyn ModelProvider + Send + Sync>,
+        executor: ExecutorRouter,
+        config: KernelConfig,
+        agent_id: AgentId,
+        approvals: ApprovalRegistry,
+    ) -> Result<Self, crate::KernelError> {
         let head_seq = store
             .get_head_seq(agent_id)
             .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
@@ -166,6 +251,7 @@ impl Kernel {
             config,
             agent_id,
             seq: Arc::new(Mutex::new(head_seq + 1)),
+            approvals,
         })
     }
 
@@ -184,6 +270,36 @@ impl Kernel {
     #[must_use]
     pub fn policy(&self) -> &Policy {
         &self.policy
+    }
+
+    /// Return a handle to the shared [`ApprovalRegistry`] consulted
+    /// when a tool proposal triggers [`crate::PolicyVerdict::RequireApproval`].
+    ///
+    /// Cloning the returned registry yields a handle that still points
+    /// at the same underlying storage — that's what lets the HTTP
+    /// `/tool-approval` handler talk to the scheduler's registry
+    /// without holding a specific kernel instance.
+    #[must_use]
+    pub fn approval_registry(&self) -> ApprovalRegistry {
+        self.approvals.clone()
+    }
+
+    /// Register a single-use approval for `(agent_id, tool, args_hash)`.
+    ///
+    /// Phase 6 (security audit) — closes the "AlwaysAsk silently
+    /// downgrades to Deny" finding. The next tool proposal whose
+    /// canonical Blake3 args hash equals `args_hash` runs as if the
+    /// tool were `AlwaysAllow`; the registry entry is consumed on
+    /// match, so a second proposal with the same hash needs a fresh
+    /// grant.
+    pub fn grant_approval(&self, agent_id: AgentId, tool: &str, args_hash: [u8; 32]) {
+        self.approvals.grant(agent_id, tool, args_hash);
+    }
+
+    /// Revoke a previously granted approval without consuming it via
+    /// a tool call. Returns `true` when an entry was actually removed.
+    pub fn revoke_approval(&self, agent_id: AgentId, tool: &str, args_hash: [u8; 32]) -> bool {
+        self.approvals.revoke(agent_id, tool, args_hash)
     }
 
     // -----------------------------------------------------------------------

@@ -30,13 +30,77 @@ pub struct Policy {
     session_approvals: Mutex<HashSet<String>>,
 }
 
+/// Distinguishable verdict returned by the tool authorization pipeline.
+///
+/// Phase 6 (security audit) split what used to be "allowed / not allowed"
+/// into three cases so downstream code can differentiate a permanent
+/// deny from a proposal that is waiting on an out-of-band operator
+/// approval. `Allow` carries no reason because "allowed" is the sole
+/// happy path; the other two always carry a human-readable reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyVerdict {
+    /// Allowed to proceed.
+    Allow,
+    /// Denied at the policy layer but *may* be unlocked by an out-of-band
+    /// [`crate::ApprovalRegistry::grant`] for the exact
+    /// `(agent_id, tool, args_hash)` triple. Callers surface this as
+    /// `423 Locked` + the args hash.
+    RequireApproval {
+        /// Human-readable reason, e.g. `"Tool 'run_command' requires approval"`.
+        reason: String,
+    },
+    /// Permanently denied. No approval will unlock it.
+    Deny {
+        /// Human-readable reason, e.g. `"Tool 'foo' is not allowed"`.
+        reason: String,
+    },
+}
+
+impl PolicyVerdict {
+    /// `true` iff the verdict is [`PolicyVerdict::Allow`].
+    #[must_use]
+    pub const fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allow)
+    }
+
+    /// Extract the reason string, if any. `Allow` has none.
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Allow => None,
+            Self::RequireApproval { reason } | Self::Deny { reason } => Some(reason.as_str()),
+        }
+    }
+}
+
 /// Result of policy check.
-#[derive(Debug)]
+///
+/// Legacy compat shim around [`PolicyVerdict`]: `allowed` is exactly
+/// `verdict.is_allowed()`. Downstream code that needs to branch on
+/// "approval required" vs "hard deny" should switch to [`PolicyVerdict`]
+/// directly via the `*_verdict` variants of the `Policy` methods.
+#[derive(Debug, Clone)]
 pub struct PolicyResult {
-    /// Whether the proposal is allowed
+    /// Whether the proposal is allowed.
     pub allowed: bool,
-    /// Reason for rejection (if not allowed)
+    /// Reason for rejection (if not allowed).
     pub reason: Option<String>,
+    /// Structured verdict this `PolicyResult` was derived from. Phase 6
+    /// additions (e.g. `process_tool_proposal`) should match on this
+    /// instead of `allowed`.
+    pub verdict: PolicyVerdict,
+}
+
+impl From<PolicyVerdict> for PolicyResult {
+    fn from(verdict: PolicyVerdict) -> Self {
+        let allowed = verdict.is_allowed();
+        let reason = verdict.reason().map(std::string::ToString::to_string);
+        Self {
+            allowed,
+            reason,
+            verdict,
+        }
+    }
 }
 
 impl Policy {
@@ -121,7 +185,7 @@ impl Policy {
         match permission {
             PermissionLevel::AlwaysAllow => false,
             PermissionLevel::AskOnce => !self.is_session_approved(tool),
-            PermissionLevel::AlwaysAsk | PermissionLevel::Deny => true,
+            PermissionLevel::RequireApproval | PermissionLevel::Deny => true,
         }
     }
 
@@ -139,51 +203,63 @@ impl Policy {
         proposal: &Proposal,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> PolicyResult {
+        self.check_with_runtime_capabilities_verdict(proposal, runtime_capabilities)
+            .into()
+    }
+
+    /// [`Self::check_with_runtime_capabilities`] returning the richer
+    /// [`PolicyVerdict`]. Prefer this in new code so
+    /// "needs operator approval" is distinguishable from "hard deny".
+    #[must_use]
+    pub fn check_with_runtime_capabilities_verdict(
+        &self,
+        proposal: &Proposal,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+    ) -> PolicyVerdict {
         if !self
             .config
             .allowed_action_kinds
             .contains(&proposal.action_kind)
         {
             warn!(kind = ?proposal.action_kind, "Action kind not allowed");
-            return PolicyResult {
-                allowed: false,
-                reason: Some(format!(
-                    "Action kind {:?} not allowed",
-                    proposal.action_kind
-                )),
+            return PolicyVerdict::Deny {
+                reason: format!("Action kind {:?} not allowed", proposal.action_kind),
             };
         }
 
         if proposal.action_kind == ActionKind::Delegate {
-            if let Ok(tool_call) = serde_json::from_slice::<ToolCall>(&proposal.payload) {
-                let result = self.check_tool_with_runtime_capabilities(
-                    &tool_call.tool,
-                    &tool_call.args,
-                    runtime_capabilities,
-                );
-                if !result.allowed {
-                    return result;
-                }
+            match serde_json::from_slice::<ToolCall>(&proposal.payload) {
+                Ok(tool_call) => {
+                    let verdict = self.check_tool_with_runtime_capabilities_verdict(
+                        &tool_call.tool,
+                        &tool_call.args,
+                        runtime_capabilities,
+                    );
+                    if !verdict.is_allowed() {
+                        return verdict;
+                    }
 
-                if let Some(result) = self.check_agent_permissions(&tool_call) {
-                    if !result.allowed {
-                        return result;
+                    if let Some(result) = self.check_agent_permissions(&tool_call) {
+                        if !result.allowed {
+                            return PolicyVerdict::Deny {
+                                reason: result
+                                    .reason
+                                    .unwrap_or_else(|| "Policy denied".to_string()),
+                            };
+                        }
                     }
                 }
-            } else {
-                warn!("Malformed delegate payload");
-                return PolicyResult {
-                    allowed: false,
-                    reason: Some("Malformed delegate payload".to_string()),
-                };
+                Err(_) => {
+                    warn!("Malformed delegate payload");
+                    return PolicyVerdict::Deny {
+                        reason: "Malformed delegate payload".to_string(),
+                    };
+                }
             }
         }
 
         debug!(kind = ?proposal.action_kind, "Proposal allowed");
-        PolicyResult {
-            allowed: true,
-            reason: None,
-        }
+        PolicyVerdict::Allow
     }
 
     /// Check if a tool call is allowed (includes session approval check).
@@ -198,37 +274,48 @@ impl Policy {
     pub fn check_tool_with_runtime_capabilities(
         &self,
         tool: &str,
-        _input: &serde_json::Value,
+        input: &serde_json::Value,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> PolicyResult {
+        self.check_tool_with_runtime_capabilities_verdict(tool, input, runtime_capabilities)
+            .into()
+    }
+
+    /// [`Self::check_tool_with_runtime_capabilities`] returning the
+    /// structured [`PolicyVerdict`] instead of the compat shim.
+    #[must_use]
+    pub fn check_tool_with_runtime_capabilities_verdict(
+        &self,
+        tool: &str,
+        _input: &serde_json::Value,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+    ) -> PolicyVerdict {
         let integration_gate = self.integration_requirement_satisfied(tool, runtime_capabilities);
         let permission = self.check_tool_permission(tool);
 
+        let apply_integration_gate = |verdict: PolicyVerdict| -> PolicyVerdict {
+            match integration_gate {
+                Some(reason) => PolicyVerdict::Deny { reason },
+                None => verdict,
+            }
+        };
+
         match permission {
-            PermissionLevel::Deny => PolicyResult {
-                allowed: false,
-                reason: Some(format!("Tool '{tool}' is not allowed")),
+            PermissionLevel::Deny => PolicyVerdict::Deny {
+                reason: format!("Tool '{tool}' is not allowed"),
             },
-            PermissionLevel::AlwaysAllow => PolicyResult {
-                allowed: integration_gate.is_none(),
-                reason: integration_gate,
-            },
+            PermissionLevel::AlwaysAllow => apply_integration_gate(PolicyVerdict::Allow),
             PermissionLevel::AskOnce => {
                 if self.is_session_approved(tool) {
-                    PolicyResult {
-                        allowed: integration_gate.is_none(),
-                        reason: integration_gate,
-                    }
+                    apply_integration_gate(PolicyVerdict::Allow)
                 } else {
-                    PolicyResult {
-                        allowed: false,
-                        reason: Some(format!("Tool '{tool}' requires approval")),
+                    PolicyVerdict::Deny {
+                        reason: format!("Tool '{tool}' requires approval"),
                     }
                 }
             }
-            PermissionLevel::AlwaysAsk => PolicyResult {
-                allowed: false,
-                reason: Some(format!("Tool '{tool}' requires approval for each use")),
+            PermissionLevel::RequireApproval => PolicyVerdict::RequireApproval {
+                reason: format!("Tool '{tool}' requires approval for each use"),
             },
         }
     }
@@ -268,18 +355,17 @@ impl Policy {
                 .iter()
                 .any(|held| held.satisfies(required));
             if !held {
-                return Some(PolicyResult {
-                    allowed: false,
-                    reason: Some(format!("permissions: requires capability {required:?}")),
-                });
+                return Some(
+                    PolicyVerdict::Deny {
+                        reason: format!("permissions: requires capability {required:?}"),
+                    }
+                    .into(),
+                );
             }
         }
 
         if let Some(reason) = scope_violation(&permissions.scope, &tool_call.args) {
-            return Some(PolicyResult {
-                allowed: false,
-                reason: Some(reason),
-            });
+            return Some(PolicyVerdict::Deny { reason }.into());
         }
 
         None

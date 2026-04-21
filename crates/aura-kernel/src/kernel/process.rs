@@ -90,6 +90,7 @@ impl Kernel {
                     had_failures: false,
                     runtime_capability_update: None,
                     clear_runtime_capabilities: true,
+                    tool_decision: None,
                 })
             }
             TransactionType::System => {
@@ -108,6 +109,7 @@ impl Kernel {
                     had_failures: false,
                     runtime_capability_update,
                     clear_runtime_capabilities: false,
+                    tool_decision: None,
                 })
             }
             _ => {
@@ -120,6 +122,7 @@ impl Kernel {
                     had_failures: false,
                     runtime_capability_update: None,
                     clear_runtime_capabilities: false,
+                    tool_decision: None,
                 })
             }
         }
