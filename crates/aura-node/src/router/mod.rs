@@ -147,9 +147,21 @@ impl Clone for RouterState {
 }
 
 /// Create the router.
+///
+/// The router is split into two halves:
+///
+/// - A **public** sub-router that currently only exposes `GET /health`
+///   for liveness probes.
+/// - A **protected** sub-router that layers every other route behind the
+///   [`auth::require_bearer_mw`] middleware via `.route_layer(...)` so
+///   unauthenticated callers are rejected with `401` before any handler
+///   logic runs. Using `route_layer` (not `layer`) keeps the middleware
+///   scoped to the matched routes and lets `.fallback` still apply
+///   uniformly across both halves. (Security audit — phase 1.)
 pub fn create_router(state: RouterState) -> Router {
-    Router::new()
-        .route("/health", get(health_handler))
+    let public = Router::new().route("/health", get(health_handler));
+
+    let protected = Router::new()
         .route("/api/files", get(list_files_handler))
         .route("/api/read-file", get(read_file_handler))
         .route("/workspace/resolve", get(resolve_workspace_handler))
@@ -286,6 +298,11 @@ pub fn create_router(state: RouterState) -> Router {
             "/api/harness/agents/:agent_id/skills/:name",
             axum::routing::delete(skills::uninstall_agent_skill),
         )
+        .route_layer(axum::middleware::from_fn(auth::require_bearer_mw));
+
+    Router::new()
+        .merge(public)
+        .merge(protected)
         .with_state(state)
         // Security + observability layers (Wave 5 / T1).
         //

@@ -55,6 +55,13 @@ pub(super) async fn automaton_ws_handler(
     Path(automaton_id): Path<String>,
     State(state): State<RouterState>,
 ) -> Response {
+    // Belt-and-suspenders: the router-wide `require_bearer_mw` middleware
+    // (see `router::create_router`) has already rejected callers without
+    // a valid Bearer header by the time we get here. Keeping the inline
+    // check guards against accidental regressions — e.g. someone wiring
+    // this handler up to a fresh `Router` that doesn't inherit the
+    // middleware layer. Cost is a single `HeaderMap::get` on an already
+    // authenticated path.
     if let Err(status) = super::auth::require_bearer(&headers) {
         return status.into_response();
     }

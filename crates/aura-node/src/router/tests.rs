@@ -10,8 +10,27 @@ use aura_reasoner::MockProvider;
 use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_store::RocksStore;
 use axum::body::Body;
-use axum::http::Request;
+use axum::http::{request::Builder as RequestBuilder, Request};
 use tower::util::ServiceExt;
+
+/// Test bearer token injected by [`authed_request`].
+///
+/// The router middleware added in the phase-1 security hardening only
+/// checks for the *presence* of a non-empty Bearer token — the value
+/// itself is not validated yet (phase 4 will introduce the shared secret).
+/// So every non-`/health` test route just needs a syntactically valid
+/// header and this constant provides one.
+const TEST_BEARER: &str = "test";
+
+/// Build a [`Request`] pre-populated with an `Authorization: Bearer test`
+/// header so the protected routes let us through.
+///
+/// Tests that explicitly want to exercise the unauthenticated path
+/// (e.g. [`test_requires_bearer_on_protected_routes`]) bypass this and
+/// use [`Request::builder`] directly.
+fn authed_request() -> RequestBuilder {
+    Request::builder().header("authorization", format!("Bearer {TEST_BEARER}"))
+}
 
 fn test_router_state(store: Arc<dyn Store>) -> RouterState {
     let provider: Arc<dyn ModelProvider + Send + Sync> =
@@ -56,7 +75,11 @@ async fn test_health_endpoint() {
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/health must remain reachable without a bearer token"
+    );
 
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -82,7 +105,7 @@ async fn test_submit_tx_valid() {
         "payload": payload_b64
     });
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri("/tx")
         .header("content-type", "application/json")
@@ -112,7 +135,7 @@ async fn test_submit_tx_invalid_agent_id() {
         "payload": "aGVsbG8="
     });
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri("/tx")
         .header("content-type", "application/json")
@@ -136,7 +159,7 @@ async fn test_submit_tx_invalid_kind() {
         "payload": "aGVsbG8="
     });
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri("/tx")
         .header("content-type", "application/json")
@@ -160,7 +183,7 @@ async fn test_submit_tx_invalid_base64() {
         "payload": "!!! not base64 !!!"
     });
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri("/tx")
         .header("content-type", "application/json")
@@ -192,7 +215,7 @@ async fn test_submit_tx_rejects_mid_session_permissions_change() {
         "payload": payload_b64,
     });
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri("/tx")
         .header("content-type", "application/json")
@@ -227,7 +250,7 @@ async fn test_submit_tx_allows_normal_system_payload() {
         "payload": payload_b64,
     });
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri("/tx")
         .header("content-type", "application/json")
@@ -245,7 +268,7 @@ async fn test_get_head_new_agent() {
     let app = create_router(state);
 
     let agent_id = AgentId::generate();
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/agents/{}/head", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -266,7 +289,7 @@ async fn test_get_head_invalid_agent_id() {
     let state = test_router_state(store);
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/agents/zzz-bad/head")
         .body(Body::empty())
         .unwrap();
@@ -282,7 +305,7 @@ async fn test_scan_record_empty() {
     let app = create_router(state);
 
     let agent_id = AgentId::generate();
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/agents/{}/record", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -304,7 +327,7 @@ async fn test_scan_record_with_query_params() {
     let app = create_router(state);
 
     let agent_id = AgentId::generate();
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!(
             "/agents/{}/record?from_seq=5&limit=10",
             agent_id.to_hex()
@@ -322,7 +345,7 @@ async fn test_scan_record_invalid_agent() {
     let state = test_router_state(store);
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/agents/bad-hex/record")
         .body(Body::empty())
         .unwrap();
@@ -358,7 +381,7 @@ async fn test_submit_tx_all_kinds() {
             "payload": payload_b64
         });
 
-        let req = Request::builder()
+        let req = authed_request()
             .method("POST")
             .uri("/tx")
             .header("content-type", "application/json")
@@ -380,7 +403,7 @@ async fn test_nonexistent_route_returns_404() {
     let state = test_router_state(store);
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/nonexistent")
         .body(Body::empty())
         .unwrap();
@@ -471,7 +494,7 @@ async fn test_memory_create_and_list_facts() {
         "confidence": 0.9,
         "importance": 0.7
     });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -480,7 +503,7 @@ async fn test_memory_create_and_list_facts() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -501,7 +524,7 @@ async fn test_memory_get_fact_by_key() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "key": "framework", "value": "Axum" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -510,7 +533,7 @@ async fn test_memory_get_fact_by_key() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!(
             "/memory/{}/facts/by-key/framework",
             agent_id.to_hex()
@@ -534,7 +557,7 @@ async fn test_memory_delete_fact() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "key": "temp", "value": "delete me" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -548,7 +571,7 @@ async fn test_memory_delete_fact() {
     let fact: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let fact_id = fact["fact_id"].as_str().unwrap();
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("DELETE")
         .uri(format!("/memory/{}/facts/{}", agent_id.to_hex(), fact_id))
         .body(Body::empty())
@@ -556,7 +579,7 @@ async fn test_memory_delete_fact() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -582,7 +605,7 @@ async fn test_memory_create_and_list_events() {
         "event_type": "task_run",
         "summary": "completed build"
     });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/events", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -591,7 +614,7 @@ async fn test_memory_create_and_list_events() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/events", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -615,7 +638,7 @@ async fn test_memory_bulk_delete_events_alias() {
         "event_type": "task_run",
         "summary": "completed build"
     });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/events", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -626,7 +649,7 @@ async fn test_memory_bulk_delete_events_alias() {
     let bulk_delete_body = serde_json::json!({
         "before": chrono::Utc::now().to_rfc3339()
     });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!(
             "/api/agents/{}/memory/events/bulk-delete",
@@ -643,7 +666,7 @@ async fn test_memory_bulk_delete_events_alias() {
     let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(result["deleted"], 1);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/events", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -670,7 +693,7 @@ async fn test_memory_create_and_list_procedures() {
         "trigger": "user says deploy",
         "steps": ["cargo build", "cargo test", "deploy binary"]
     });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/procedures", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -679,7 +702,7 @@ async fn test_memory_create_and_list_procedures() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/procedures", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -703,7 +726,7 @@ async fn test_memory_stats() {
     let agent_id = AgentId::generate();
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/stats", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -725,7 +748,7 @@ async fn test_memory_wipe() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "key": "k", "value": "v" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -733,7 +756,7 @@ async fn test_memory_wipe() {
         .unwrap();
     let _ = app.clone().oneshot(req).await.unwrap();
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/wipe", agent_id.to_hex()))
         .body(Body::empty())
@@ -741,7 +764,7 @@ async fn test_memory_wipe() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/stats", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -761,7 +784,7 @@ async fn test_memory_snapshot() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "key": "lang", "value": "Rust" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -769,7 +792,7 @@ async fn test_memory_snapshot() {
         .unwrap();
     let _ = app.clone().oneshot(req).await.unwrap();
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/snapshot", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -793,7 +816,7 @@ async fn test_memory_invalid_agent_id() {
     let state = test_router_state_with_managers();
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/memory/bad-hex/facts")
         .body(Body::empty())
         .unwrap();
@@ -812,7 +835,7 @@ async fn test_memory_returns_503_when_not_configured() {
     let agent_id = AgentId::generate();
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/memory/{}/facts", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -829,7 +852,7 @@ async fn test_skills_list() {
     let state = test_router_state_with_managers();
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/api/skills")
         .body(Body::empty())
         .unwrap();
@@ -847,7 +870,7 @@ async fn test_skills_get_not_found() {
     let state = test_router_state_with_managers();
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/api/skills/nonexistent")
         .body(Body::empty())
         .unwrap();
@@ -862,7 +885,7 @@ async fn test_skills_agent_install_and_list() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "name": "test-skill" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -871,7 +894,7 @@ async fn test_skills_agent_install_and_list() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -892,7 +915,7 @@ async fn test_skills_agent_uninstall() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "name": "removable" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -901,7 +924,7 @@ async fn test_skills_agent_uninstall() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("DELETE")
         .uri(format!(
             "/api/agents/{}/skills/removable",
@@ -912,7 +935,7 @@ async fn test_skills_agent_uninstall() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -931,7 +954,7 @@ async fn test_skills_legacy_harness_aliases() {
     let app = create_router(state);
 
     let body = serde_json::json!({ "name": "legacy-skill" });
-    let req = Request::builder()
+    let req = authed_request()
         .method("POST")
         .uri(format!("/api/harness/agents/{}/skills", agent_id.to_hex()))
         .header("content-type", "application/json")
@@ -940,7 +963,7 @@ async fn test_skills_legacy_harness_aliases() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/api/harness/agents/{}/skills", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -953,7 +976,7 @@ async fn test_skills_legacy_harness_aliases() {
     assert_eq!(installs.len(), 1);
     assert_eq!(installs[0]["skill_name"], "legacy-skill");
 
-    let req = Request::builder()
+    let req = authed_request()
         .method("DELETE")
         .uri(format!(
             "/api/harness/agents/{}/skills/legacy-skill",
@@ -964,7 +987,7 @@ async fn test_skills_legacy_harness_aliases() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri(format!("/api/agents/{}/skills", agent_id.to_hex()))
         .body(Body::empty())
         .unwrap();
@@ -982,10 +1005,165 @@ async fn test_skills_returns_503_when_not_configured() {
     let state = test_router_state(store);
     let app = create_router(state);
 
-    let req = Request::builder()
+    let req = authed_request()
         .uri("/api/skills")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// ============================================================================
+// Auth middleware integration tests (security audit — phase 1)
+// ============================================================================
+//
+// These tests exercise the router-wide `require_bearer_mw` middleware by
+// issuing unauthenticated requests against every non-`/health` route and
+// asserting that the response is `401 UNAUTHORIZED`. They also confirm
+// that `/health` stays reachable without a token (liveness / readiness
+// probes run anonymously).
+//
+// The matrix is hand-maintained rather than auto-discovered from the
+// router because axum does not expose route introspection. When adding
+// a new route to `create_router`, add a matching entry here.
+
+/// Every protected route in the router, expressed as `(method, uri)`
+/// pairs. Concrete path params (`:agent_id`, `:automaton_id`, `:name`,
+/// `:id`, `:key`, `:tx_id`) are substituted with values that would
+/// normally reach the handler body; because the middleware rejects the
+/// request before any extractor runs, the specific values don't matter.
+const PROTECTED_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/files"),
+    ("GET", "/api/read-file"),
+    ("GET", "/workspace/resolve"),
+    ("POST", "/tx"),
+    ("GET", "/tx/status/deadbeef/abcd"),
+    ("GET", "/agents/deadbeef/head"),
+    ("GET", "/agents/deadbeef/record"),
+    ("GET", "/ws/terminal"),
+    ("GET", "/stream"),
+    ("GET", "/stream/automaton/test-automaton"),
+    ("POST", "/automaton/start"),
+    ("GET", "/automaton/list"),
+    ("GET", "/automaton/test-automaton/status"),
+    ("POST", "/automaton/test-automaton/pause"),
+    ("POST", "/automaton/test-automaton/stop"),
+    // Memory canonical
+    ("GET", "/memory/deadbeef/facts"),
+    ("POST", "/memory/deadbeef/facts"),
+    ("GET", "/memory/deadbeef/facts/some-id"),
+    ("PUT", "/memory/deadbeef/facts/some-id"),
+    ("DELETE", "/memory/deadbeef/facts/some-id"),
+    ("GET", "/memory/deadbeef/facts/by-key/some-key"),
+    ("GET", "/memory/deadbeef/events"),
+    ("POST", "/memory/deadbeef/events"),
+    ("DELETE", "/memory/deadbeef/events/some-id"),
+    ("POST", "/memory/deadbeef/events/bulk-delete"),
+    ("GET", "/memory/deadbeef/procedures"),
+    ("POST", "/memory/deadbeef/procedures"),
+    ("GET", "/memory/deadbeef/procedures/some-id"),
+    ("PUT", "/memory/deadbeef/procedures/some-id"),
+    ("DELETE", "/memory/deadbeef/procedures/some-id"),
+    ("GET", "/memory/deadbeef/snapshot"),
+    ("POST", "/memory/deadbeef/wipe"),
+    ("GET", "/memory/deadbeef/stats"),
+    ("POST", "/memory/deadbeef/consolidate"),
+    // Memory aliases
+    ("GET", "/api/agents/deadbeef/memory"),
+    ("DELETE", "/api/agents/deadbeef/memory"),
+    ("GET", "/api/agents/deadbeef/memory/facts"),
+    ("POST", "/api/agents/deadbeef/memory/facts"),
+    ("GET", "/api/agents/deadbeef/memory/facts/some-id"),
+    ("PUT", "/api/agents/deadbeef/memory/facts/some-id"),
+    ("DELETE", "/api/agents/deadbeef/memory/facts/some-id"),
+    ("GET", "/api/agents/deadbeef/memory/facts/by-key/some-key"),
+    ("GET", "/api/agents/deadbeef/memory/events"),
+    ("POST", "/api/agents/deadbeef/memory/events"),
+    ("DELETE", "/api/agents/deadbeef/memory/events/some-id"),
+    ("POST", "/api/agents/deadbeef/memory/events/bulk-delete"),
+    ("GET", "/api/agents/deadbeef/memory/procedures"),
+    ("POST", "/api/agents/deadbeef/memory/procedures"),
+    ("GET", "/api/agents/deadbeef/memory/procedures/some-id"),
+    ("PUT", "/api/agents/deadbeef/memory/procedures/some-id"),
+    ("DELETE", "/api/agents/deadbeef/memory/procedures/some-id"),
+    ("GET", "/api/agents/deadbeef/memory/stats"),
+    ("POST", "/api/agents/deadbeef/memory/consolidate"),
+    // Skills
+    ("GET", "/api/skills"),
+    ("POST", "/api/skills"),
+    ("GET", "/api/skills/some-skill"),
+    ("POST", "/api/skills/some-skill/activate"),
+    ("GET", "/api/agents/deadbeef/skills"),
+    ("POST", "/api/agents/deadbeef/skills"),
+    ("DELETE", "/api/agents/deadbeef/skills/some-skill"),
+    // Legacy harness aliases
+    ("GET", "/api/harness/agents/deadbeef/skills"),
+    ("POST", "/api/harness/agents/deadbeef/skills"),
+    ("DELETE", "/api/harness/agents/deadbeef/skills/some-skill"),
+];
+
+#[tokio::test]
+async fn test_requires_bearer_on_protected_routes() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    for (method, uri) in PROTECTED_ROUTES {
+        // NOTE: deliberately does not go through `authed_request()`.
+        // We want the *unauthenticated* code path.
+        let req = Request::builder()
+            .method(*method)
+            .uri(*uri)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "expected 401 for {method} {uri}, got {}",
+            resp.status()
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_rejects_malformed_bearer_header() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    // Wrong scheme — `Basic` instead of `Bearer`.
+    let req = Request::builder()
+        .uri("/api/skills")
+        .header("authorization", "Basic dXNlcjpwYXNz")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct scheme but empty token.
+    let req = Request::builder()
+        .uri("/api/skills")
+        .header("authorization", "Bearer   ")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_health_remains_anonymous() {
+    let store = create_test_store();
+    let state = test_router_state(store);
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/health must remain reachable without a bearer token (liveness probe)"
+    );
 }

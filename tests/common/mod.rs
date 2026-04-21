@@ -249,7 +249,19 @@ pub struct WsClient {
 }
 
 impl WsClient {
+    /// Open a WebSocket to the node, attaching the default test Bearer
+    /// header. The router `require_bearer_mw` middleware rejects WS
+    /// upgrade requests without auth, so every `/stream*` connection
+    /// now goes through this code path. Tests that want to exercise
+    /// the unauthenticated path should use [`Self::connect_anonymous`].
     pub async fn connect(ws_url: &str) -> Self {
+        Self::connect_with_auth(ws_url, E2E_TEST_BEARER).await
+    }
+
+    /// Open a WebSocket without an Authorization header. Only used by
+    /// tests that deliberately verify the 401 rejection path.
+    #[allow(dead_code)]
+    pub async fn connect_anonymous(ws_url: &str) -> Self {
         let (stream, _) = tokio_tungstenite::connect_async(ws_url)
             .await
             .expect("ws connect");
@@ -548,9 +560,29 @@ pub fn place_file_in_agent_dir(ws_path: &Path, name: &str, content: &str) {
     }
 }
 
-/// Create a reqwest HTTP client.
+/// Bearer token used by the integration tests.
+///
+/// The router-wide `require_bearer_mw` middleware (security audit —
+/// phase 1) rejects any non-`/health` request that doesn't carry a
+/// non-empty Bearer token. These tests don't exercise the value of
+/// the token (phase 4 will add a real shared secret), so we just need
+/// a well-formed header — this constant is shared by `http_client`
+/// and `WsClient::connect` to keep every caller honest.
+pub const E2E_TEST_BEARER: &str = "test";
+
+/// Create a reqwest HTTP client with the default test Bearer header.
+///
+/// Anything that hits `/tx`, `/agents/...`, etc. now requires auth.
+/// Baking the header into the client keeps individual test functions
+/// from sprinkling `.bearer_auth(...)` calls everywhere.
 pub fn http_client() -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {E2E_TEST_BEARER}")).unwrap(),
+    );
     reqwest::Client::builder()
+        .default_headers(headers)
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap()

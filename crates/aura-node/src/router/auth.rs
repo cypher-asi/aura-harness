@@ -5,7 +5,12 @@
 //! Added in Wave 5 (T1.4) to close the "read token, ignore value" pattern
 //! that existed on `/stream/automaton/:id`.
 
-use axum::http::{HeaderMap, StatusCode};
+use axum::{
+    extract::Request,
+    http::{HeaderMap, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 
 /// Extract a non-empty Bearer token from the `Authorization` header.
 ///
@@ -33,6 +38,36 @@ pub(crate) fn require_bearer(headers: &HeaderMap) -> Result<String, StatusCode> 
     }
 
     Ok(token.to_string())
+}
+
+/// Strongly-typed Bearer token extracted by the auth middleware.
+///
+/// Inserted into request extensions by [`require_bearer_mw`] so downstream
+/// handlers can read the validated token without having to re-parse the
+/// `Authorization` header. Wrapped in a newtype so it can't be confused
+/// with any other `String` extension.
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // read by future handlers once phase 4 wires up
+// the shared-secret check
+pub(crate) struct BearerToken(pub String);
+
+/// Axum middleware enforcing that every request carries a non-empty
+/// Bearer token in the `Authorization` header.
+///
+/// Returns `401 UNAUTHORIZED` when [`require_bearer`] rejects the headers.
+/// On success, the validated token is cloned into the request extensions
+/// as a [`BearerToken`] before the request is forwarded to `next`.
+///
+/// This deliberately does not validate the token against a configured
+/// secret — that is scheduled for a later phase. For now the middleware
+/// matches the existing "presence only" semantics of [`require_bearer`].
+pub(crate) async fn require_bearer_mw(mut request: Request, next: Next) -> Response {
+    let token = match require_bearer(request.headers()) {
+        Ok(t) => t,
+        Err(status) => return status.into_response(),
+    };
+    request.extensions_mut().insert(BearerToken(token));
+    next.run(request).await
 }
 
 #[cfg(test)]
