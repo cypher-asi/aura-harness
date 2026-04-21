@@ -29,10 +29,11 @@ mod tests_advanced;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aura_reasoner::{Message, ModelProvider, ModelRequest, Role, StopReason, ToolDefinition};
 use aura_tools::IntentClassifier;
+use chrono::Utc;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -44,7 +45,7 @@ use crate::constants::{
     AUTO_BUILD_COOLDOWN, DEFAULT_EXPLORATION_ALLOWANCE, MAX_ITERATIONS, THINKING_MIN_BUDGET,
     THINKING_TAPER_AFTER, THINKING_TAPER_FACTOR,
 };
-use crate::events::AgentLoopEvent;
+use crate::events::{AgentLoopEvent, DebugEvent};
 use crate::read_guard::ReadGuardState;
 use crate::types::{AgentLoopResult, AgentToolExecutor, BuildBaseline, TurnObserver};
 
@@ -83,8 +84,6 @@ pub struct AgentLoopConfig {
     pub model: String,
     /// JWT auth token for proxy routing.
     pub auth_token: Option<String>,
-    /// Optional upstream provider family hint for managed proxy routing.
-    pub upstream_provider_family: Option<String>,
     /// Tool names the user wants prioritized for the current turn.
     /// On the first iteration, tools are filtered to this set and
     /// `tool_choice` is set to force tool usage.
@@ -152,7 +151,6 @@ impl Default for AgentLoopConfig {
             system_prompt: String::new(),
             model: crate::constants::DEFAULT_MODEL.to_string(),
             auth_token: None,
-            upstream_provider_family: None,
             tool_hints: None,
             aura_project_id: None,
             aura_agent_id: None,
@@ -231,6 +229,52 @@ impl AgentLoop {
         event_tx: Option<Sender<AgentLoopEvent>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
+        // Route provider-level `debug.retry` observations back into the
+        // `event_tx` channel by installing a task-local observer for
+        // the duration of this turn. The observer forwards through the
+        // same channel as UI events so downstream consumers see all
+        // `debug.*` frames inline with the streaming text.
+        let observer: Option<aura_reasoner::RetryObserver> = event_tx.as_ref().map(|tx| {
+            let tx = tx.clone();
+            Arc::new(move |info: aura_reasoner::RetryInfo| {
+                let event = AgentLoopEvent::Debug(DebugEvent::Retry {
+                    timestamp: Utc::now(),
+                    reason: info.reason,
+                    attempt: info.attempt,
+                    wait_ms: info.wait_ms,
+                    provider: Some(info.provider),
+                    model: Some(info.model),
+                    task_id: None,
+                });
+                if let Err(e) = tx.try_send(event) {
+                    tracing::warn!("debug.retry channel full or closed: {e}");
+                }
+            }) as aura_reasoner::RetryObserver
+        });
+
+        let fut = self.run_inner(
+            provider,
+            executor,
+            messages,
+            tools,
+            event_tx,
+            cancellation_token,
+        );
+        match observer {
+            Some(obs) => aura_reasoner::DEBUG_RETRY_OBSERVER.scope(obs, fut).await,
+            None => fut.await,
+        }
+    }
+
+    async fn run_inner(
+        &self,
+        provider: &dyn ModelProvider,
+        executor: &dyn AgentToolExecutor,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        event_tx: Option<Sender<AgentLoopEvent>>,
+        cancellation_token: Option<CancellationToken>,
+    ) -> Result<AgentLoopResult, crate::AgentError> {
         let mut state = LoopState::new(&self.config, messages);
         state.build_baseline = executor.capture_build_baseline().await;
         info!(
@@ -245,6 +289,7 @@ impl AgentLoop {
                 break;
             }
             state.begin_iteration(&self.config, iteration);
+            let iteration_started_at = Instant::now();
             context::compact_if_needed(&self.config, &mut state);
 
             let request = state.build_request(&self.config, &tools, iteration);
@@ -286,7 +331,12 @@ impl AgentLoop {
 
             iteration::accumulate_response(&mut state, &response);
             state.result.iterations = iteration + 1;
-            streaming::emit_iteration_complete(event_tx.as_ref(), iteration, &response);
+            streaming::emit_iteration_complete(
+                event_tx.as_ref(),
+                iteration,
+                &response,
+                iteration_started_at,
+            );
 
             if self
                 .dispatch_stop_reason(&response, executor, event_tx.as_ref(), &mut state)
@@ -376,7 +426,7 @@ impl AgentLoop {
 }
 
 /// Mutable state carried across iterations of the agent loop.
-pub(crate) struct LoopState {
+pub struct LoopState {
     pub(crate) result: AgentLoopResult,
     pub(crate) tool_cache: HashMap<String, String>,
     pub(crate) blocking_ctx: BlockingContext,
@@ -478,7 +528,6 @@ impl LoopState {
             .tool_choice(tool_choice)
             .max_tokens(self.thinking_budget)
             .auth_token(config.auth_token.clone())
-            .upstream_provider_family(config.upstream_provider_family.clone())
             .aura_project_id(config.aura_project_id.clone())
             .aura_agent_id(config.aura_agent_id.clone())
             .aura_session_id(config.aura_session_id.clone())
@@ -524,10 +573,13 @@ fn latest_user_text(messages: &[Message]) -> Option<&str> {
                 .iter()
                 .any(|b| matches!(b, aura_reasoner::ContentBlock::Text { .. }))
         {
-            return msg.content.iter().find_map(|b| match b {
-                aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            });
+            return msg
+                .content
+                .iter()
+                .find_map(|b| match b {
+                    aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                });
         }
     }
     None

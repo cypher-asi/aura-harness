@@ -5,12 +5,13 @@ use std::time::Instant;
 use aura_reasoner::{
     ModelProvider, ModelRequest, ModelResponse, StreamAccumulator, StreamContentType, StreamEvent,
 };
+use chrono::Utc;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::events::AgentLoopEvent;
+use crate::events::{AgentLoopEvent, DebugEvent};
 
 use super::iteration::LlmCallError;
 use super::AgentLoop;
@@ -24,11 +25,16 @@ pub(super) fn emit(tx: Option<&Sender<AgentLoopEvent>>, event: AgentLoopEvent) {
     }
 }
 
-/// Emit an [`AgentLoopEvent::IterationComplete`] event.
+/// Emit an [`AgentLoopEvent::IterationComplete`] event along with the
+/// matching [`DebugEvent::Iteration`] frame for the `aura-os` run
+/// bundle. `duration_ms` reflects wall-clock time since the start of
+/// the current iteration (model call + tool dispatch); `tool_calls` is
+/// the number of `ContentBlock::ToolUse` blocks in the response.
 pub(super) fn emit_iteration_complete(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     iteration: usize,
     response: &ModelResponse,
+    iteration_started_at: Instant,
 ) {
     emit(
         event_tx,
@@ -37,6 +43,60 @@ pub(super) fn emit_iteration_complete(
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         },
+    );
+
+    let tool_calls = response
+        .message
+        .content
+        .iter()
+        .filter(|b| matches!(b, aura_reasoner::ContentBlock::ToolUse { .. }))
+        .count();
+
+    let duration_ms =
+        u64::try_from(iteration_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let index = u32::try_from(iteration).unwrap_or(u32::MAX);
+    let tool_calls = u32::try_from(tool_calls).unwrap_or(u32::MAX);
+
+    emit(
+        event_tx,
+        AgentLoopEvent::Debug(DebugEvent::Iteration {
+            timestamp: Utc::now(),
+            index,
+            tool_calls,
+            duration_ms,
+            task_id: None,
+        }),
+    );
+}
+
+/// Emit a [`DebugEvent::LlmCall`] frame. Called at the end of every
+/// completed provider call (streaming happy path, non-streaming
+/// fallback path, and the compact-and-retry path).
+fn emit_debug_llm_call(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    provider_name: &str,
+    model_name: &str,
+    response: &ModelResponse,
+    duration_ms: u64,
+) {
+    let model = if response.trace.model.is_empty() {
+        model_name.to_string()
+    } else {
+        response.trace.model.clone()
+    };
+    emit(
+        event_tx,
+        AgentLoopEvent::Debug(DebugEvent::LlmCall {
+            timestamp: Utc::now(),
+            provider: provider_name.to_string(),
+            model,
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+            duration_ms,
+            task_id: None,
+            agent_instance_id: None,
+            request_id: response.trace.request_id.clone(),
+        }),
     );
 }
 
@@ -111,6 +171,8 @@ impl AgentLoop {
         cancellation_token: Option<&CancellationToken>,
     ) -> Result<ModelResponse, LlmCallError> {
         let start = Instant::now();
+        let provider_name = provider.name();
+        let model_name = request.model.as_ref().to_string();
 
         let mut stream = provider
             .complete_streaming(request.clone())
@@ -144,6 +206,7 @@ impl AgentLoop {
                             reason: format!("Stream error, retrying without streaming: {e}"),
                         },
                     );
+                    let fallback_start = Instant::now();
                     let response = provider
                         .complete(request)
                         .await
@@ -159,6 +222,15 @@ impl AgentLoop {
                             _ => {}
                         }
                     }
+                    let duration_ms = u64::try_from(fallback_start.elapsed().as_millis())
+                        .unwrap_or(u64::MAX);
+                    emit_debug_llm_call(
+                        event_tx,
+                        provider_name,
+                        &model_name,
+                        &response,
+                        duration_ms,
+                    );
                     return Ok(response);
                 }
                 None => break,
@@ -166,8 +238,10 @@ impl AgentLoop {
         }
 
         let latency_ms = start.elapsed().as_millis() as u64;
-        accumulator
+        let response = accumulator
             .into_response(0, latency_ms)
-            .map_err(|e| LlmCallError::from_reasoner_error(&e))
+            .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
+        emit_debug_llm_call(event_tx, provider_name, &model_name, &response, latency_ms);
+        Ok(response)
     }
 }

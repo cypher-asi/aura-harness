@@ -6,13 +6,17 @@ use crate::blocking::detection::{detect_all_blocked, BlockingContext};
 use crate::blocking::stall::StallDetector;
 use crate::budget::ExplorationState;
 use crate::build;
+use crate::events::{AgentLoopEvent, DebugEvent};
 use crate::helpers;
 use crate::read_guard::ReadGuardState;
 use crate::types::{
     AgentLoopResult, AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
+use chrono::Utc;
+use tokio::sync::mpsc::Sender;
 use tracing::warn;
 
+use super::streaming::emit as emit_event;
 use super::{AgentLoop, AgentLoopConfig, LoopState};
 
 impl AgentLoop {
@@ -29,6 +33,7 @@ impl AgentLoop {
         tool_calls: &[ToolCallInfo],
         executor: &dyn AgentToolExecutor,
         state: &mut LoopState,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
     ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>) {
         let mut side_messages: Vec<String> = Vec::new();
 
@@ -37,6 +42,7 @@ impl AgentLoop {
             &state.blocking_ctx,
             &state.read_guard,
             &mut side_messages,
+            event_tx,
         );
 
         let blocked_ids: HashSet<String> = blocked_results
@@ -90,6 +96,7 @@ fn partition_blocked(
     blocking_ctx: &BlockingContext,
     read_guard: &ReadGuardState,
     side_messages: &mut Vec<String>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
 ) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
     let mut blocked = Vec::new();
     let mut to_execute = Vec::new();
@@ -105,6 +112,7 @@ fn partition_blocked(
                 .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let blocked_content = format!("[BLOCKED] {msg}");
             warn!(
                 tool_use_id = %tool.id,
                 tool_name = %tool.name,
@@ -112,10 +120,35 @@ fn partition_blocked(
                 reason = %msg,
                 "Tool call blocked by detection policy"
             );
+
+            // Route the blocker into the observability stream so the
+            // aura-os loop-log picks it up on `blockers.jsonl`. `kind`
+            // is inferred from the kind of tool: writes → duplicate
+            // writes (the only blocker category at the moment), reads
+            // → read_required, everything else → policy.
+            let kind = if helpers::is_write_tool(&tool.name) {
+                "duplicate_write"
+            } else if helpers::is_exploration_tool(&tool.name) {
+                "read_required"
+            } else {
+                "policy"
+            };
+            let path = (!path_hint.is_empty()).then(|| path_hint.to_string());
+            emit_event(
+                event_tx,
+                AgentLoopEvent::Debug(DebugEvent::Blocker {
+                    timestamp: Utc::now(),
+                    kind: kind.to_string(),
+                    path,
+                    message: blocked_content.clone(),
+                    task_id: None,
+                }),
+            );
+
             side_messages.push(msg.clone());
             blocked.push(ToolCallResult {
                 tool_use_id: tool.id.clone(),
-                content: format!("[BLOCKED] {msg}"),
+                content: blocked_content,
                 is_error: true,
                 stop_loop: false,
                 file_changes: Vec::new(),

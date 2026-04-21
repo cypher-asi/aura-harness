@@ -220,6 +220,10 @@ pub fn forward_agent_event(
             automaton_id: String::new(),
             message,
         },
+        // `debug.*` observability frames pass through verbatim; the
+        // `From<DebugEvent>` impl preserves the exact JSON shape the
+        // aura-os forwarder routes on (`type: "debug.<kind>"`).
+        AgentLoopEvent::Debug(ev) => AutomatonEvent::from(ev),
         _ => return,
     };
     if let Err(e) = tx.try_send(automaton_event) {

@@ -92,7 +92,7 @@ pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS, DEFAULT_MODEL, FALLBACK_MODEL};
-pub use events::{AgentLoopEvent, TurnEvent};
+pub use events::{AgentLoopEvent, DebugEvent, TurnEvent};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway};
 pub use runtime::{
     ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,

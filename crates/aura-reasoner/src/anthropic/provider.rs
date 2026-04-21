@@ -8,8 +8,8 @@ use super::{AnthropicProvider, ApiError};
 
 use crate::error::ReasonerError;
 use crate::{
-    stream_from_response, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, StopReason,
-    StreamEventStream, Usage,
+    emit_retry, stream_from_response, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
+    RetryInfo, StopReason, StreamEventStream, Usage,
 };
 use async_trait::async_trait;
 use serde::Serialize;
@@ -379,9 +379,9 @@ fn classify_retry_action(
     match err {
         ApiError::CloudflareBlock(msg) if attempt < max_retries => {
             let sleep = exp_backoff_with_jitter(attempt);
-            // Backoffs are seconds-scale; u128→u64 narrowing cannot lose
-            // meaningful bits. TODO(W5): switch to u64::try_from when the
-            // helper itself is refactored to return u64.
+            // `Duration::as_millis` returns u128 but 30s backoff caps well below
+            // u64::MAX; truncation cannot happen. `warn!` field value expressions
+            // can't carry attributes directly, so bind first.
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = sleep.as_millis() as u64;
             warn!(model = %model, attempt, backoff_ms, "Cloudflare block, will retry");
@@ -396,9 +396,7 @@ fn classify_retry_action(
             retry_after,
         } if attempt < max_retries => {
             let sleep = sleep_for_overloaded(attempt, *retry_after);
-            // Backoffs are seconds-scale; u128→u64 narrowing cannot lose
-            // meaningful bits. TODO(W5): switch to u64::try_from when the
-            // helper itself is refactored to return u64.
+            // 60s cap on `sleep_for_overloaded` means u128 -> u64 is safe here.
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = sleep.as_millis() as u64;
             warn!(
@@ -425,6 +423,39 @@ fn classify_retry_action(
         }
         _ => RetryAction::Propagate,
     }
+}
+
+/// Classify an `ApiError` into the `reason` string we expose through
+/// [`RetryInfo::reason`]. Keep the strings stable: the aura-harness
+/// debug-event pipeline writes them verbatim into `retries.jsonl`.
+fn retry_reason_for(err: &ApiError) -> &'static str {
+    match err {
+        ApiError::Overloaded { .. } => "rate_limited_429",
+        ApiError::CloudflareBlock(_) => "transient_5xx",
+        ApiError::InsufficientCredits(_) => "insufficient_credits",
+        ApiError::Other(_) => "transient",
+    }
+}
+
+/// Emit a `debug.retry` observation to the task-local observer (if
+/// any). `attempt_that_failed` is the 0-based attempt counter of the
+/// call that just failed; the 1-based "upcoming" attempt number is
+/// `attempt_that_failed + 2`.
+fn emit_retry_observation(
+    err: &ApiError,
+    sleep: Duration,
+    attempt_that_failed: u32,
+    model: &str,
+) {
+    let wait_ms = u64::try_from(sleep.as_millis()).unwrap_or(u64::MAX);
+    let info = RetryInfo {
+        reason: retry_reason_for(err).to_string(),
+        attempt: attempt_that_failed.saturating_add(2),
+        wait_ms,
+        provider: "anthropic".to_string(),
+        model: model.to_string(),
+    };
+    emit_retry(info);
 }
 
 /// Pure exponential backoff with small jitter for non-overloaded retries
@@ -534,6 +565,7 @@ impl ModelProvider for AnthropicProvider {
                             &mut last_err,
                         ) {
                             RetryAction::Retry { sleep } => {
+                                emit_retry_observation(&e, sleep, attempt, model);
                                 pending_sleep = Some(sleep);
                             }
                             RetryAction::FallbackModel => break,
@@ -647,6 +679,7 @@ impl ModelProvider for AnthropicProvider {
                             &mut last_err,
                         ) {
                             RetryAction::Retry { sleep } => {
+                                emit_retry_observation(&e, sleep, attempt, model);
                                 pending_sleep = Some(sleep);
                             }
                             RetryAction::FallbackModel => break,
@@ -671,7 +704,10 @@ mod retry_tests {
     #[test]
     fn retry_after_header_parses_integer_seconds() {
         let mut headers = HeaderMap::new();
-        headers.insert(reqwest::header::RETRY_AFTER, HeaderValue::from_static("7"));
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("7"),
+        );
         assert_eq!(
             parse_retry_after_header(&headers),
             Some(Duration::from_secs(7))

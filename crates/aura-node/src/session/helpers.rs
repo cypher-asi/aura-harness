@@ -318,7 +318,8 @@ pub(super) async fn forward_events_to_ws(
             | AgentLoopEvent::ThinkingComplete
             | AgentLoopEvent::StepComplete
             | AgentLoopEvent::StreamReset { .. }
-            | AgentLoopEvent::Warning(_) => continue,
+            | AgentLoopEvent::Warning(_)
+            | AgentLoopEvent::Debug(_) => continue,
         };
         if outbound.try_send(msg).is_err() {
             break;

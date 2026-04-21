@@ -48,6 +48,49 @@ pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
 
 pub use anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
 pub use error::ReasonerError;
+
+// ============================================================================
+// Retry observability (debug.retry emission)
+// ============================================================================
+
+/// Metadata for a single upcoming retry attempt, surfaced to external
+/// observers via [`DEBUG_RETRY_OBSERVER`]. The provider invokes the
+/// observer *before* it sleeps, so subscribers can time the backoff
+/// themselves if they need more than `wait_ms` worth of accuracy.
+#[derive(Debug, Clone)]
+pub struct RetryInfo {
+    /// Short class name, e.g. `"rate_limited_429"`, `"transient_5xx"`.
+    pub reason: String,
+    /// 1-based attempt number that will now occur (first retry = 2).
+    pub attempt: u32,
+    /// The delay the provider is about to sleep, in milliseconds.
+    pub wait_ms: u64,
+    /// Provider name (e.g. `"anthropic"`).
+    pub provider: String,
+    /// Model name the retry is happening against.
+    pub model: String,
+}
+
+/// Trait-object callback type used by [`DEBUG_RETRY_OBSERVER`]. Agents
+/// wrap an [`std::sync::Arc`]-ed closure that forwards `RetryInfo` into
+/// their event stream.
+pub type RetryObserver = std::sync::Arc<dyn Fn(RetryInfo) + Send + Sync>;
+
+tokio::task_local! {
+    /// Task-local observer invoked on every retry decision inside the
+    /// provider's retry loop. Left unset in normal call paths; the
+    /// `AgentLoop` sets it with [`tokio::task::LocalKey::scope`] around
+    /// `ModelProvider` calls to route `debug.retry` emissions back into
+    /// its event channel without widening the `ModelProvider` trait.
+    pub static DEBUG_RETRY_OBSERVER: RetryObserver;
+}
+
+/// Invoke the task-local [`DEBUG_RETRY_OBSERVER`] if one has been set
+/// for the current task. No-op when nothing is subscribed. Intended for
+/// provider-internal use.
+pub fn emit_retry(info: RetryInfo) {
+    let _ = DEBUG_RETRY_OBSERVER.try_with(|obs| obs(info));
+}
 pub use kernel_propose::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use mock::{MockProvider, MockResponse};
 pub use types::{

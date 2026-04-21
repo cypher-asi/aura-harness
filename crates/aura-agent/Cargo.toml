@@ -27,6 +27,7 @@ url = "2"
 base64 = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

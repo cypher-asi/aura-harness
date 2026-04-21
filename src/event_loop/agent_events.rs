@@ -75,7 +75,8 @@ pub(super) async fn forward_agent_events(
             AgentLoopEvent::IterationComplete { .. }
             | AgentLoopEvent::ThinkingComplete
             | AgentLoopEvent::StepComplete
-            | AgentLoopEvent::ToolComplete { .. } => {}
+            | AgentLoopEvent::ToolComplete { .. }
+            | AgentLoopEvent::Debug(_) => {}
             AgentLoopEvent::StreamReset { reason } => {
                 debug!(reason = %reason, "Stream reset received");
                 if state.streaming_active {

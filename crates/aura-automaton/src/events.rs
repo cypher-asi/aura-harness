@@ -1,6 +1,17 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Events emitted by an automaton during its lifecycle (start, stop, tool use, progress, etc.).
+///
+/// # `debug.*` frames
+///
+/// The `Debug*` variants below correspond 1:1 to
+/// [`aura_agent::DebugEvent`] and intentionally serialize with an
+/// explicit `type: "debug.<kind>"` tag (overriding the `snake_case`
+/// default) so the `aura-os-server` run-log forwarder classifies them
+/// into `llm_calls.jsonl`, `iterations.jsonl`, `blockers.jsonl`, or
+/// `retries.jsonl`. The harness-side emitter is
+/// [`aura_agent::AgentLoop`]; this enum is just the wire projection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AutomatonEvent {
@@ -163,4 +174,129 @@ pub enum AutomatonEvent {
         message: String,
     },
     Done,
+
+    // ------------------------------------------------------------------
+    // `debug.*` observability frames. The `rename` attributes force the
+    // `type` tag to be `debug.llm_call` / `debug.iteration` /
+    // `debug.blocker` / `debug.retry` so the aura-os forwarder routes
+    // them into the matching per-run `*.jsonl` channel files.
+    // ------------------------------------------------------------------
+    #[serde(rename = "debug.llm_call")]
+    DebugLlmCall {
+        timestamp: DateTime<Utc>,
+        provider: String,
+        model: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_instance_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+    },
+    #[serde(rename = "debug.iteration")]
+    DebugIteration {
+        timestamp: DateTime<Utc>,
+        index: u32,
+        tool_calls: u32,
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
+    #[serde(rename = "debug.blocker")]
+    DebugBlocker {
+        timestamp: DateTime<Utc>,
+        kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
+    #[serde(rename = "debug.retry")]
+    DebugRetry {
+        timestamp: DateTime<Utc>,
+        reason: String,
+        attempt: u32,
+        wait_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
+}
+
+impl From<aura_agent::DebugEvent> for AutomatonEvent {
+    fn from(ev: aura_agent::DebugEvent) -> Self {
+        match ev {
+            aura_agent::DebugEvent::LlmCall {
+                timestamp,
+                provider,
+                model,
+                input_tokens,
+                output_tokens,
+                duration_ms,
+                task_id,
+                agent_instance_id,
+                request_id,
+            } => Self::DebugLlmCall {
+                timestamp,
+                provider,
+                model,
+                input_tokens,
+                output_tokens,
+                duration_ms,
+                task_id,
+                agent_instance_id,
+                request_id,
+            },
+            aura_agent::DebugEvent::Iteration {
+                timestamp,
+                index,
+                tool_calls,
+                duration_ms,
+                task_id,
+            } => Self::DebugIteration {
+                timestamp,
+                index,
+                tool_calls,
+                duration_ms,
+                task_id,
+            },
+            aura_agent::DebugEvent::Blocker {
+                timestamp,
+                kind,
+                path,
+                message,
+                task_id,
+            } => Self::DebugBlocker {
+                timestamp,
+                kind,
+                path,
+                message,
+                task_id,
+            },
+            aura_agent::DebugEvent::Retry {
+                timestamp,
+                reason,
+                attempt,
+                wait_ms,
+                provider,
+                model,
+                task_id,
+            } => Self::DebugRetry {
+                timestamp,
+                reason,
+                attempt,
+                wait_ms,
+                provider,
+                model,
+                task_id,
+            },
+        }
+    }
 }

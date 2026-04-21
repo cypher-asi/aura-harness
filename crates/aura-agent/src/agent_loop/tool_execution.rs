@@ -37,7 +37,7 @@ pub(super) async fn handle_tool_use(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
 ) -> bool {
-    let tools = match execute_and_cache_tools(agent, response, executor, state).await {
+    let tools = match execute_and_cache_tools(agent, response, executor, state, event_tx).await {
         Some(t) => t,
         None => return true,
     };
@@ -50,6 +50,7 @@ async fn execute_and_cache_tools(
     response: &ModelResponse,
     executor: &dyn AgentToolExecutor,
     state: &mut LoopState,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
 ) -> Option<ExecutedTools> {
     let tool_calls = extract_tool_calls(response);
     if tool_calls.is_empty() {
@@ -83,7 +84,7 @@ async fn execute_and_cache_tools(
         (Vec::new(), Vec::new(), false, HashSet::new())
     } else {
         agent
-            .process_tool_results(&uncached_calls, executor, state)
+            .process_tool_results(&uncached_calls, executor, state, event_tx)
             .await
     };
 
