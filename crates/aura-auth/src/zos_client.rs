@@ -176,7 +176,14 @@ async fn parse_zos_error(res: reqwest::Response) -> AuthError {
         Err(_) => (String::new(), String::new()),
     };
 
-    let (message, truncated) = truncate_error_message(&raw_message, ZOS_ERROR_MESSAGE_MAX_CHARS);
+    // Run the upstream message through the shared `redact_error` scrub
+    // first (homes / UUIDs / long hex), then apply the stricter 80-char
+    // cap we want specifically for zOS errors. The two combine cleanly:
+    // `redact_error` shortens to 200 chars with `…`, and
+    // `truncate_error_message` further caps to 80 and appends
+    // `[redacted]` when it bites.
+    let scrubbed = crate::redact::redact_error(&raw_message);
+    let (message, truncated) = truncate_error_message(&scrubbed, ZOS_ERROR_MESSAGE_MAX_CHARS);
 
     error!(
         status,

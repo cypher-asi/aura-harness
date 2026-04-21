@@ -20,8 +20,10 @@
 
 mod credentials;
 mod error;
+mod redact;
 mod zos_client;
 
 pub use credentials::{CredentialStore, StoredSession};
 pub use error::AuthError;
+pub use redact::redact_error;
 pub use zos_client::ZosClient;

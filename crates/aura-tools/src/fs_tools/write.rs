@@ -5,11 +5,43 @@ use async_trait::async_trait;
 use aura_core::ToolDefinition;
 use aura_core::ToolResult;
 use std::fs;
+use std::path::Path;
 use tracing::{debug, instrument};
+
+/// File extensions for which the unbalanced-brace/paren heuristic is
+/// worth running. Anything outside this set (Markdown, plain text,
+/// YAML/TOML, HTML, …) routinely contains unbalanced braces in
+/// legitimate content (string literals, prose, closing tags) and
+/// produced noisy warnings before this gate was added.
+///
+/// Intentionally narrow: the heuristic is a stopgap, not a parser, and
+/// the cost of a false negative on a rare extension is much lower than
+/// the cost of spamming a false positive on every README write.
+const CODE_EXTENSIONS: &[&str] = &[
+    "rs", "js", "ts", "tsx", "jsx", "c", "cpp", "h", "java", "go", "cs", "swift", "kt",
+];
+
+fn is_code_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            CODE_EXTENSIONS
+                .iter()
+                .any(|code_ext| ext.eq_ignore_ascii_case(code_ext))
+        })
+}
 
 /// Check whether `content` has unbalanced `{}`/`()` pairs, which may
 /// indicate truncated output from an LLM.
-fn looks_truncated(content: &str) -> bool {
+///
+/// Only runs the balance check for files whose extension appears in
+/// [`CODE_EXTENSIONS`] — Markdown, prose, and config files routinely
+/// carry unbalanced braces inside string literals / code fences and
+/// shouldn't trip the warning.
+fn looks_truncated(path: &Path, content: &str) -> bool {
+    if !is_code_file(path) {
+        return false;
+    }
     let mut brace_depth: i64 = 0;
     let mut paren_depth: i64 = 0;
     for ch in content.chars() {
@@ -93,7 +125,7 @@ pub fn fs_write(
     }
 
     let bytes_written = content.len();
-    let truncated_warning = looks_truncated(content);
+    let truncated_warning = looks_truncated(&resolved, content);
 
     let mut result = ToolResult::success(
         "write_file",
@@ -339,11 +371,13 @@ mod tests {
     }
 
     #[test]
-    fn test_fs_write_truncation_warning_unbalanced_braces() {
+    fn test_fs_write_truncation_warning_unbalanced_braces_in_rust() {
         let (sandbox, _dir) = create_test_sandbox();
 
+        // `.rs` is code-like — unbalanced braces should trip the
+        // warning.
         let content = "fn main() { if true {";
-        let result = fs_write(&sandbox, "warn.txt", content, false).unwrap();
+        let result = fs_write(&sandbox, "warn.rs", content, false).unwrap();
         assert!(result.ok);
         assert!(result.metadata.contains_key("warning"));
     }
@@ -353,7 +387,35 @@ mod tests {
         let (sandbox, _dir) = create_test_sandbox();
 
         let content = "fn main() { println!(); }";
-        let result = fs_write(&sandbox, "ok.txt", content, false).unwrap();
+        let result = fs_write(&sandbox, "ok.rs", content, false).unwrap();
+        assert!(result.ok);
+        assert!(!result.metadata.contains_key("warning"));
+    }
+
+    #[test]
+    fn test_fs_write_no_truncation_warning_on_markdown() {
+        // Markdown routinely has unbalanced braces inside string
+        // literals, code fences, or prose (e.g. `Vec<T> { ... }` in a
+        // doc). The heuristic must not fire for `.md` files.
+        let (sandbox, _dir) = create_test_sandbox();
+
+        let content = "# Note\n\nThe struct is shaped like `Foo { a, b`.\n";
+        let result = fs_write(&sandbox, "notes.md", content, false).unwrap();
+        assert!(result.ok);
+        assert!(
+            !result.metadata.contains_key("warning"),
+            "markdown must not trip the truncation heuristic"
+        );
+    }
+
+    #[test]
+    fn test_fs_write_no_truncation_warning_on_txt() {
+        // Plain-text files are not code — suppress warnings even if
+        // braces happen to be unbalanced.
+        let (sandbox, _dir) = create_test_sandbox();
+
+        let content = "todo: check the { state";
+        let result = fs_write(&sandbox, "notes.txt", content, false).unwrap();
         assert!(result.ok);
         assert!(!result.metadata.contains_key("warning"));
     }

@@ -82,7 +82,7 @@ struct ApiState {
 /// request.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // fields are part of the public handle shape;
-// consumers outside this crate (e.g. future IPC wiring) may read them.
+                    // consumers outside this crate (e.g. future IPC wiring) may read them.
 pub struct ApiServerHandle {
     pub url: String,
     pub token: String,
@@ -151,9 +151,7 @@ pub async fn start_api_server(
                 // operator can copy the token into curl / browser
                 // tooling. Do NOT promote this to stdout or a file: the
                 // token is only as strong as its handling.
-                eprintln!(
-                    "[aura] API server listening on {url} — bearer token: {token}"
-                );
+                eprintln!("[aura] API server listening on {url} — bearer token: {token}");
 
                 if port != API_PORT {
                     let _ = cmd_tx.try_send(UiCommand::ShowWarning(format!(
@@ -191,6 +189,16 @@ pub async fn start_api_server(
     None
 }
 
+/// Strip the `\\?\` verbatim prefix that Windows `canonicalize` adds
+/// so walk-time canonical paths compare cleanly against the sandbox
+/// root (which has already had its own prefix stripped). No-op on
+/// non-Windows targets.
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    s.strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
+}
+
 /// Generate a random 32-byte hex token (~256 bits of entropy).
 ///
 /// Uses two `uuid::Uuid::new_v4()` values concatenated so we don't have
@@ -216,7 +224,9 @@ async fn require_bearer_mw(
     next: Next,
 ) -> Response {
     match extract_bearer(request.headers()) {
-        Some(presented) if constant_time_eq(presented.as_bytes(), state.expected_token.as_bytes()) => {
+        Some(presented)
+            if constant_time_eq(presented.as_bytes(), state.expected_token.as_bytes()) =>
+        {
             next.run(request).await
         }
         _ => StatusCode::UNAUTHORIZED.into_response(),
@@ -283,17 +293,55 @@ struct DirEntry {
     children: Option<Vec<Self>>,
 }
 
-async fn walk_directory(start: &Path, max_depth: usize) -> Vec<DirEntry> {
-    use std::collections::HashMap;
+async fn walk_directory(start: &Path, workspace_root: &Path, max_depth: usize) -> Vec<DirEntry> {
+    use std::collections::{HashMap, HashSet};
 
     // Phase 1: async iterative walk driven by an explicit stack. For each
     // directory we visit we record its ordered children (dirs before files,
     // alphabetical within each group) into a flat map.
+    //
+    // Symlink-loop defense: before descending into any directory we
+    // canonicalize its path and consult a visited-set. Two hostile
+    // shapes we want to neutralise —
+    //
+    //  1. `a -> b -> a` style cycles, which inflate cost even with the
+    //     `max_depth` cap because every hop adds a new `PathBuf` key
+    //     to the contents map.
+    //  2. Symlinks whose canonical target escapes the workspace root.
+    //     The sandbox's `resolve_existing` already canonicalises the
+    //     entry point, but a mid-walk symlink to `/etc` is still a
+    //     leak if we blindly recurse. We reject any canonical child
+    //     whose prefix does not match the workspace root.
     let mut contents: HashMap<PathBuf, Vec<(String, bool, PathBuf)>> = HashMap::new();
+    let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<(PathBuf, usize)> = vec![(start.to_path_buf(), 0)];
 
     while let Some((path, depth)) = stack.pop() {
         if depth >= max_depth {
+            continue;
+        }
+        // Canonicalize per-step so intermediate symlinks collapse to
+        // their real target. Failed canonicalize (broken symlink,
+        // permission denied, missing) => skip rather than bail the
+        // whole walk.
+        let canonical = match std::fs::canonicalize(&path) {
+            Ok(c) => strip_unc_prefix(&c),
+            Err(_) => continue,
+        };
+        if !canonical.starts_with(workspace_root) {
+            // Defense-in-depth against the Phase 3 sandbox check —
+            // a symlink encountered mid-walk that points outside the
+            // workspace must not be followed even if depth allows it.
+            debug!(
+                path = %path.display(),
+                canonical = %canonical.display(),
+                "walk_directory skipping path that canonicalises outside workspace"
+            );
+            continue;
+        }
+        if !visited.insert(canonical) {
+            // Already walked via some other name (symlink, junction) —
+            // skip so we don't inflate the contents map on cycles.
             continue;
         }
         let mut read_dir = match tokio::fs::read_dir(&path).await {
@@ -408,7 +456,7 @@ async fn api_list_files_handler(
     }
 
     let max_depth = query.depth.min(20);
-    let entries = walk_directory(&target, max_depth).await;
+    let entries = walk_directory(&target, state.sandbox.root(), max_depth).await;
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "entries": entries })),
@@ -461,7 +509,10 @@ async fn api_read_file_handler(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": aura_auth::redact_error(e.to_string()),
+                })),
             )
                 .into_response();
         }
@@ -472,7 +523,10 @@ async fn api_read_file_handler(
     if let Err(e) = limited.read_to_end(&mut buf).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+            Json(serde_json::json!({
+                "ok": false,
+                "error": aura_auth::redact_error(e.to_string()),
+            })),
         )
             .into_response();
     }
@@ -555,7 +609,10 @@ mod tests {
                 state.clone(),
                 require_bearer_mw,
             ));
-        let app = Router::new().merge(public).merge(protected).with_state(state);
+        let app = Router::new()
+            .merge(public)
+            .merge(protected)
+            .with_state(state);
         (app, token, tmp)
     }
 
@@ -610,7 +667,10 @@ mod tests {
         ));
         std::fs::write(&secret, "top-secret").unwrap();
 
-        let uri = format!("/api/read-file?path={}", urlencode(&secret.to_string_lossy()));
+        let uri = format!(
+            "/api/read-file?path={}",
+            urlencode(&secret.to_string_lossy())
+        );
         let req = Request::builder()
             .uri(uri)
             .header("authorization", format!("Bearer {token}"))
@@ -668,5 +728,90 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"ab"));
         assert!(!constant_time_eq(b"", b"a"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    /// Cyclic symlink must not cause an unbounded walk. Gated to
+    /// `cfg(unix)` because creating symlinks on Windows needs
+    /// either Developer Mode or `SeCreateSymbolicLinkPrivilege`,
+    /// which CI runners typically lack.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_directory_breaks_symlink_loops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        // Create a real subdir with one file so we can verify the
+        // legitimate entries still show up.
+        let child = root.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(child.join("marker.txt"), "ok").unwrap();
+
+        // Create a loop: <root>/child/loop -> <root>
+        std::os::unix::fs::symlink(&root, child.join("loop")).unwrap();
+
+        // Run with plenty of depth — the visited-set must stop the
+        // traversal rather than bottoming out on `max_depth`.
+        let entries = walk_directory(&root, &root, 20).await;
+
+        // Sanity: the legitimate file is present somewhere in the
+        // returned tree.
+        fn contains_marker(entries: &[DirEntry]) -> bool {
+            entries.iter().any(|e| {
+                e.name == "marker.txt"
+                    || e.children
+                        .as_ref()
+                        .is_some_and(|c| contains_marker(c))
+            })
+        }
+        assert!(contains_marker(&entries), "legitimate file should survive");
+
+        // Walk the tree and count nodes — a successful visited-set
+        // means the count is linear in the real tree, not exponential
+        // in depth.
+        fn count(entries: &[DirEntry]) -> usize {
+            entries
+                .iter()
+                .map(|e| 1 + e.children.as_deref().map(count).unwrap_or(0))
+                .sum()
+        }
+        let n = count(&entries);
+        assert!(
+            n < 50,
+            "symlink loop inflated the tree to {n} nodes — visited-set not working"
+        );
+    }
+
+    /// Symlink whose canonical target escapes the workspace root is
+    /// refused mid-walk, even if the entry point itself is legal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_directory_rejects_escaping_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        // A sibling directory outside the workspace, with one file.
+        let outside_parent = tempfile::tempdir().unwrap();
+        let outside = outside_parent.path().canonicalize().unwrap();
+        std::fs::write(outside.join("secret.txt"), "top-secret").unwrap();
+
+        // Point a symlink from inside the workspace to the outside
+        // directory. The walker must canonicalize and refuse the
+        // descent.
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+
+        let entries = walk_directory(&root, &root, 5).await;
+
+        fn has_name(entries: &[DirEntry], needle: &str) -> bool {
+            entries.iter().any(|e| {
+                e.name == needle
+                    || e.children
+                        .as_ref()
+                        .is_some_and(|c| has_name(c, needle))
+            })
+        }
+        assert!(
+            !has_name(&entries, "secret.txt"),
+            "escaping-symlink contents must not leak into the listing"
+        );
     }
 }
