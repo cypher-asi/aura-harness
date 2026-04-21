@@ -24,8 +24,12 @@ use axum::{
 use bytes::Bytes;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::sync::Semaphore;
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     timeout::TimeoutLayer,
@@ -81,6 +85,22 @@ pub struct RouterState {
     pub(crate) skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
     /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
     pub(crate) router_url: Option<String>,
+    /// Bounded pool of WebSocket connection slots.
+    ///
+    /// Every upgrade handler (`/ws/terminal`, `/stream`,
+    /// `/stream/automaton/:id`) must call
+    /// [`ws::try_acquire_ws_slot`] and attach the returned permit to the
+    /// spawned socket task. When the semaphore is empty, the handler
+    /// short-circuits with `503 Service Unavailable` instead of tying
+    /// up another tokio task (the H5 "unbounded WS frames + slow-client
+    /// task exhaustion" finding — phase 9 of the audit remediation).
+    ///
+    /// A strict per-IP cap would need to plumb the peer socket address
+    /// through every upgrade handler; tower_governor can't rate-limit
+    /// long-lived WS sessions because it only inspects the upgrade
+    /// request, so we leave per-IP for a future iteration and bound
+    /// the global count here.
+    pub(crate) ws_slots: Arc<Semaphore>,
 }
 
 /// Input bundle for [`RouterState::new`].
@@ -124,6 +144,7 @@ impl RouterState {
             memory_manager: cfg.memory_manager,
             skill_manager: cfg.skill_manager,
             router_url: cfg.router_url,
+            ws_slots: Arc::new(Semaphore::new(ws::MAX_WS_CONNS_PER_NODE)),
         }
     }
 }
@@ -144,6 +165,7 @@ impl Clone for RouterState {
             memory_manager: self.memory_manager.clone(),
             skill_manager: self.skill_manager.clone(),
             router_url: self.router_url.clone(),
+            ws_slots: self.ws_slots.clone(),
         }
     }
 }
@@ -161,28 +183,35 @@ impl Clone for RouterState {
 ///   scoped to the matched routes and lets `.fallback` still apply
 ///   uniformly across both halves. (Security audit — phase 1.)
 pub fn create_router(state: RouterState) -> Router {
-    let public = Router::new().route("/health", get(health_handler));
+    // Per-route body limits — tighter ceilings for endpoints that have
+    // no legitimate reason to accept a large body. Each one is a
+    // *layer* so it overrides the 1 MiB global default applied at the
+    // bottom of this function. Phase 9 of the security audit.
+    let body_limit_1k = DefaultBodyLimit::max(1024);
+    let body_limit_16k = DefaultBodyLimit::max(16 * 1024);
+    let body_limit_4k = DefaultBodyLimit::max(4 * 1024);
 
-    let protected = Router::new()
-        .route("/api/files", get(list_files_handler))
-        .route("/api/read-file", get(read_file_handler))
-        .route("/workspace/resolve", get(resolve_workspace_handler))
-        .route("/tx", post(submit_tx_handler))
+    let public = Router::new().route(
+        "/health",
+        get(health_handler).route_layer(body_limit_1k),
+    );
+
+    // Mutating JSON endpoints get a stricter per-IP governor (5/sec,
+    // burst 10) so a misbehaving client can't flood writes even if
+    // they stay under the global 30/sec cap. See `build_strict_governor`.
+    let strict_governor_layer = GovernorLayer {
+        config: build_strict_governor(),
+    };
+
+    // Strict-rate-limit sub-router: `/tx`, `/tool-approval`,
+    // `/automaton/start`, and the `:id/pause` + `:id/stop` path params.
+    // The body limit for tool-approval + pause + stop is 4 KiB (tiny
+    // JSON payloads); `/tx` and `/automaton/start` keep the 1 MiB
+    // default because legitimate requests can be large.
+    let strict_small_body = Router::new()
         .route(
             "/tool-approval",
             post(grant_tool_approval_handler).delete(revoke_tool_approval_handler),
-        )
-        .route("/tx/status/:agent_id/:tx_id", get(tx_status_handler))
-        .route("/agents/:agent_id/head", get(get_head_handler))
-        .route("/agents/:agent_id/record", get(scan_record_handler))
-        .route("/ws/terminal", get(terminal_ws_handler))
-        .route("/stream", get(ws_upgrade_handler))
-        .route("/stream/automaton/:automaton_id", get(automaton_ws_handler))
-        .route("/automaton/start", post(automaton_start_handler))
-        .route("/automaton/list", get(automaton_list_handler))
-        .route(
-            "/automaton/:automaton_id/status",
-            get(automaton_status_handler),
         )
         .route(
             "/automaton/:automaton_id/pause",
@@ -191,6 +220,52 @@ pub fn create_router(state: RouterState) -> Router {
         .route(
             "/automaton/:automaton_id/stop",
             post(automaton_stop_handler),
+        )
+        .route_layer(body_limit_4k);
+
+    let strict_default_body = Router::new()
+        .route("/tx", post(submit_tx_handler))
+        .route("/automaton/start", post(automaton_start_handler));
+
+    let strict = strict_small_body
+        .merge(strict_default_body)
+        .route_layer(strict_governor_layer);
+
+    let protected = Router::new()
+        .route(
+            "/api/files",
+            get(list_files_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/api/read-file",
+            get(read_file_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/workspace/resolve",
+            get(resolve_workspace_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/tx/status/:agent_id/:tx_id",
+            get(tx_status_handler).route_layer(body_limit_1k),
+        )
+        .route(
+            "/agents/:agent_id/head",
+            get(get_head_handler).route_layer(body_limit_1k),
+        )
+        .route(
+            "/agents/:agent_id/record",
+            get(scan_record_handler).route_layer(body_limit_16k),
+        )
+        .route("/ws/terminal", get(terminal_ws_handler))
+        .route("/stream", get(ws_upgrade_handler))
+        .route("/stream/automaton/:automaton_id", get(automaton_ws_handler))
+        .route(
+            "/automaton/list",
+            get(automaton_list_handler).route_layer(body_limit_1k),
+        )
+        .route(
+            "/automaton/:automaton_id/status",
+            get(automaton_status_handler).route_layer(body_limit_1k),
         )
         // Memory CRUD (canonical paths)
         .route(
@@ -304,6 +379,7 @@ pub fn create_router(state: RouterState) -> Router {
             "/api/harness/agents/:agent_id/skills/:name",
             axum::routing::delete(skills::uninstall_agent_skill),
         )
+        .merge(strict)
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer_mw,
@@ -313,14 +389,45 @@ pub fn create_router(state: RouterState) -> Router {
         .merge(public)
         .merge(protected)
         .with_state(state)
-        // Security + observability layers (Wave 5 / T1).
+        // Security + observability layers (Wave 5 / T1 + phase 9).
         //
-        // Order matters: outermost first. DefaultBodyLimit caps request
-        // bodies BEFORE they reach handlers so malicious clients can't
-        // blow up memory via `/tx`. Anonymous routes (GET /health,
-        // GET /api/files, GET /workspace/resolve) stay anonymous — see
-        // per-handler comments — but they still inherit the body limit,
-        // CORS allow-list, request timeout, and trace span.
+        // Order matters: `.layer(X)` wraps the existing stack, so the
+        // *last* `.layer()` call runs first on an incoming request.
+        // The stack from outermost (first seen) to innermost is:
+        //   TraceLayer -> TimeoutLayer -> CorsLayer ->
+        //   DefaultBodyLimit -> ConnectInfo-fallback ->
+        //   GlobalConcurrencyLimitLayer -> GovernorLayer (global) ->
+        //   (router + per-route strict governor + per-route body limits).
+        //
+        // Per-route body-limit layers on specific endpoints (e.g.
+        // `/health` at 1 KiB, the GET query-param handlers at 16 KiB,
+        // the small-JSON POSTs at 4 KiB) override the 1 MiB default
+        // that applies to everything else. This keeps the 1 MiB
+        // ceiling as a safety net for the few legitimately-large
+        // endpoints (`/tx`, `/automaton/start`) while throwing 413
+        // early for everything that has no business seeing a megabyte
+        // of body.
+        //
+        // `GlobalConcurrencyLimitLayer::new(MAX_IN_FLIGHT_REQUESTS)`
+        // uses a shared `Arc<Semaphore>` — cloning the layer reuses
+        // the same semaphore, which is what we need when axum clones
+        // the router per connection. A plain `ConcurrencyLimitLayer`
+        // would allocate a fresh semaphore per clone and defeat the
+        // cap entirely.
+        //
+        // The `ensure_connect_info` fallback inserts
+        // `ConnectInfo<SocketAddr>` into request extensions when it's
+        // absent. Production serves with
+        // `into_make_service_with_connect_info::<SocketAddr>()` so the
+        // real peer is already there; this layer is a no-op in that
+        // path. In `oneshot` tests we don't run through a listener,
+        // so the fallback keeps the governor's `PeerIpKeyExtractor`
+        // from rejecting requests with `UnableToExtractKey`.
+        .layer(GovernorLayer {
+            config: build_global_governor(),
+        })
+        .layer(GlobalConcurrencyLimitLayer::new(MAX_IN_FLIGHT_REQUESTS))
+        .layer(axum::middleware::from_fn(ensure_connect_info))
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MiB
         .layer(build_cors_layer())
         .layer(TimeoutLayer::with_status_code(
@@ -410,10 +517,27 @@ fn is_loopback_origin(origin: &HeaderValue, _req_parts: &axum::http::request::Pa
 
 // === Terminal WebSocket ===
 
-async fn terminal_ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
+async fn terminal_ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<RouterState>,
+) -> axum::response::Response {
+    let Some(permit) = ws::try_acquire_ws_slot(&state.ws_slots) else {
+        warn!(
+            cap = ws::MAX_WS_CONNS_PER_NODE,
+            "Refusing /ws/terminal upgrade: WS connection cap reached"
+        );
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
     ws.max_frame_size(ws::WS_MAX_FRAME_BYTES)
         .max_message_size(ws::WS_MAX_MESSAGE_BYTES)
-        .on_upgrade(terminal::handle_terminal_ws)
+        .on_upgrade(move |socket| async move {
+            // `permit` is moved into the per-socket task so the slot
+            // is only released when the socket task actually exits.
+            terminal::handle_terminal_ws(socket).await;
+            drop(permit);
+        })
+        .into_response()
 }
 
 // === Health ===
@@ -424,4 +548,74 @@ async fn health_handler() -> impl IntoResponse {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION")
     }))
+}
+
+// === Rate limiting / concurrency helpers (phase 9) ===
+
+/// Maximum number of in-flight HTTP requests the node will serve
+/// concurrently before new requests wait on the
+/// [`GlobalConcurrencyLimitLayer`] semaphore. Each pending request
+/// occupies a tokio task plus its body buffer, so this caps worst-case
+/// memory+task pressure on the runtime.
+pub(crate) const MAX_IN_FLIGHT_REQUESTS: usize = 256;
+
+/// Concrete type of the governor config we construct — spelled out so
+/// helper builders can return something that the `GovernorLayer` field
+/// accepts. `PeerIpKeyExtractor` is the default when the `axum`
+/// feature is enabled, `NoOpMiddleware<QuantaInstant>` is the default
+/// middleware `GovernorConfigBuilder` produces.
+type GovernorCfg = tower_governor::governor::GovernorConfig<
+    tower_governor::key_extractor::PeerIpKeyExtractor,
+    governor::middleware::NoOpMiddleware<governor::clock::QuantaInstant>,
+>;
+
+/// Build the router-wide rate-limit config.
+///
+/// 30 requests/sec with a burst of 60, keyed on peer IP address.
+/// Fresh per `create_router` call so different test routers don't
+/// share a limiter — production only calls `create_router` once.
+fn build_global_governor() -> Arc<GovernorCfg> {
+    Arc::new(
+        GovernorConfigBuilder::default()
+            .per_millisecond(1000 / 30) // ≈30 req/sec sustained
+            .burst_size(60)
+            .finish()
+            .expect("global governor config should be valid"),
+    )
+}
+
+/// Stricter rate limit for mutating endpoints (`/tx`, `/tool-approval`,
+/// `/automaton/start`, `:id/pause`, `:id/stop`). 5/sec burst 10.
+fn build_strict_governor() -> Arc<GovernorCfg> {
+    Arc::new(
+        GovernorConfigBuilder::default()
+            .per_millisecond(200) // 5 req/sec sustained
+            .burst_size(10)
+            .finish()
+            .expect("strict governor config should be valid"),
+    )
+}
+
+/// Inject a default `ConnectInfo<SocketAddr>` into request extensions
+/// when one isn't already present.
+///
+/// Production uses `into_make_service_with_connect_info::<SocketAddr>()`
+/// which inserts the real peer address before the request reaches this
+/// layer, so this is a no-op in that code path. In `oneshot` tests
+/// there is no listener, so without a fallback the governor's
+/// `PeerIpKeyExtractor` would error out with `UnableToExtractKey`
+/// (which tower_governor surfaces as `500 Internal Server Error`) on
+/// every request. Injecting a loopback default means every oneshot
+/// request is attributed to the same synthetic "client", which is
+/// exactly what the rate-limit test wants.
+async fn ensure_connect_info(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::extract::ConnectInfo;
+    if req.extensions().get::<ConnectInfo<SocketAddr>>().is_none() {
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    }
+    next.run(req).await
 }

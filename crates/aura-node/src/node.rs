@@ -196,9 +196,16 @@ impl Node {
             .with_context(|| format!("binding TCP listener on {addr}"))?;
         info!(%addr, "HTTP server listening");
 
-        axum::serve(listener, app)
-            .await
-            .context("running HTTP server")?;
+        // `into_make_service_with_connect_info::<SocketAddr>()` is
+        // required for the tower_governor `PeerIpKeyExtractor` layered
+        // inside `create_router` (phase 9 rate limiting). Without it,
+        // every request would be rejected with `UnableToExtractKey`.
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .context("running HTTP server")?;
 
         Ok(())
     }

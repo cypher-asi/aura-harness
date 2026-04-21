@@ -1,5 +1,6 @@
 use super::*;
 use axum::response::Response;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Maximum size of a single WebSocket frame. Hardens against memory
 /// amplification from oversized binary frames. 64 KiB matches typical
@@ -11,12 +12,48 @@ pub(super) const WS_MAX_FRAME_BYTES: usize = 64 * 1024;
 /// largest legitimate session payload we expect. (Wave 5 / T1.3.)
 pub(super) const WS_MAX_MESSAGE_BYTES: usize = 256 * 1024;
 
+/// Maximum number of concurrent WebSocket connections this node will
+/// serve at once, across `/ws/terminal`, `/stream`, and
+/// `/stream/automaton/:id`. Each live socket holds a tokio task plus
+/// terminal/session state; capping the count bounds the "slow-client
+/// task exhaustion" worst case flagged by the H5 audit finding.
+///
+/// Enforced via [`try_acquire_ws_slot`] against the
+/// `Arc<Semaphore>` stored on [`super::RouterState::ws_slots`]. An
+/// upgrade handler that fails to acquire a permit returns
+/// `503 Service Unavailable` instead of spawning another socket task.
+///
+/// This cap is *global* — per-IP limiting would require plumbing the
+/// peer socket address through every upgrade path. `tower_governor`
+/// can't cover long-lived WS sessions because it only inspects the
+/// upgrade request. Phase 9 leaves the per-IP cap as a TODO.
+pub(super) const MAX_WS_CONNS_PER_NODE: usize = 128;
+
+/// Try to reserve a WebSocket connection slot.
+///
+/// Returns `Some(permit)` on success — the caller must attach the
+/// permit to the spawned socket task so the slot stays held for the
+/// lifetime of the connection. Returns `None` when the semaphore is
+/// full, in which case the handler should short-circuit with
+/// `503 Service Unavailable`.
+pub(super) fn try_acquire_ws_slot(sem: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+    Arc::clone(sem).try_acquire_owned().ok()
+}
+
 /// Upgrade an HTTP connection to a WebSocket for interactive agent sessions.
 pub(super) async fn ws_upgrade_handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
     State(state): State<RouterState>,
-) -> impl IntoResponse {
+) -> Response {
+    let Some(permit) = try_acquire_ws_slot(&state.ws_slots) else {
+        warn!(
+            cap = MAX_WS_CONNS_PER_NODE,
+            "Refusing /stream upgrade: WS connection cap reached"
+        );
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
     let auth_token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -39,7 +76,13 @@ pub(super) async fn ws_upgrade_handler(
     };
     ws.max_frame_size(WS_MAX_FRAME_BYTES)
         .max_message_size(WS_MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_ws_connection(socket, ctx))
+        .on_upgrade(move |socket| async move {
+            // Hold the permit for the lifetime of the socket task so
+            // the slot only frees up when the client actually leaves.
+            handle_ws_connection(socket, ctx).await;
+            drop(permit);
+        })
+        .into_response()
 }
 
 /// WebSocket endpoint for streaming automaton events.
@@ -66,9 +109,21 @@ pub(super) async fn automaton_ws_handler(
         return status.into_response();
     }
 
+    let Some(permit) = try_acquire_ws_slot(&state.ws_slots) else {
+        warn!(
+            cap = MAX_WS_CONNS_PER_NODE,
+            automaton_id = %automaton_id,
+            "Refusing /stream/automaton/:id upgrade: WS connection cap reached"
+        );
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
     ws.max_frame_size(WS_MAX_FRAME_BYTES)
         .max_message_size(WS_MAX_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_automaton_ws(socket, automaton_id, state.automaton_bridge))
+        .on_upgrade(move |socket| async move {
+            handle_automaton_ws(socket, automaton_id, state.automaton_bridge).await;
+            drop(permit);
+        })
         .into_response()
 }
 
