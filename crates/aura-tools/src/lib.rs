@@ -79,6 +79,18 @@ pub struct ToolConfig {
     /// surface that made `command: "git status; rm -rf"` executable.
     /// (Wave 5 / T3.1.)
     pub allow_shell: bool,
+    /// Allow-list of verbatim shell scripts permitted via the
+    /// `shell_script` field of `run_command`. Used together with
+    /// [`Self::allow_shell`] == `true` — the caller explicitly opts into
+    /// a shell interpreter by passing a script, and that script MUST be
+    /// present in this list for the invocation to be accepted.
+    ///
+    /// Empty (default) means no shell scripts are permitted, so the
+    /// `shell_script` field is effectively disabled until an operator
+    /// populates it. This guards against the historic shell-injection
+    /// path where an attacker-controlled `program` string was routed
+    /// through `sh -c` / `cmd.exe /C`. (Phase 2 hardening.)
+    pub allowed_shell_scripts: Vec<String>,
     /// Maximum read bytes
     pub max_read_bytes: usize,
     /// Sync threshold for command execution (milliseconds).
@@ -100,6 +112,7 @@ impl Default for ToolConfig {
             command_allowlist: vec![],
             binary_allowlist: vec![],
             allow_shell: false,
+            allowed_shell_scripts: vec![],
             max_read_bytes: 5 * 1024 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,

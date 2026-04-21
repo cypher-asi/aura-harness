@@ -27,11 +27,23 @@ fn test_sync_command_immediate_commit() {
     let workspace = create_test_workspace();
     let sandbox = Sandbox::new(workspace.path()).unwrap();
 
-    // Run a fast command with generous threshold
+    // Phase 2 hardening: `cmd_run_with_threshold` no longer routes
+    // through a shell, so we need a bare executable that's present on
+    // both Unix (`echo`) and Windows (`PING.EXE`).
+    #[cfg(windows)]
+    let (program, args, expected_in_stdout) = (
+        "cmd",
+        vec!["/c".to_string(), "echo".to_string(), "sync_test".to_string()],
+        "sync_test",
+    );
+    #[cfg(not(windows))]
+    let (program, args, expected_in_stdout) =
+        ("echo", vec!["sync_test".to_string()], "sync_test");
+
     let (result, command) = cmd_run_with_threshold(
         &sandbox,
-        "echo",
-        &["sync_test".to_string()],
+        program,
+        &args,
         None,
         5000, // 5 second threshold
     )
@@ -42,7 +54,7 @@ fn test_sync_command_immediate_commit() {
         ThresholdResult::Completed(output) => {
             assert!(output.status.success());
             let stdout = String::from_utf8_lossy(&output.stdout);
-            assert!(stdout.contains("sync_test"));
+            assert!(stdout.contains(expected_in_stdout), "stdout: {stdout}");
         }
         ThresholdResult::Pending(_) => {
             panic!("Expected fast command to complete synchronously");
@@ -361,9 +373,17 @@ async fn test_interleaved_sync_async() {
 
     let agent_id = AgentId::generate();
 
-    // First: synchronous fast command
+    // First: synchronous fast command (Phase 2: no-shell path)
+    #[cfg(windows)]
+    let (sync_program, sync_args_1) = (
+        "cmd",
+        vec!["/c".to_string(), "echo".to_string(), "sync1".to_string()],
+    );
+    #[cfg(not(windows))]
+    let (sync_program, sync_args_1) = ("echo", vec!["sync1".to_string()]);
+
     let (result1, _) =
-        cmd_run_with_threshold(&sandbox, "echo", &["sync1".to_string()], None, 5000).unwrap();
+        cmd_run_with_threshold(&sandbox, sync_program, &sync_args_1, None, 5000).unwrap();
 
     let sync1_output = match result1 {
         ThresholdResult::Completed(output) => {
@@ -405,8 +425,13 @@ async fn test_interleaved_sync_async() {
     );
 
     // Third: another synchronous fast command (while async is pending)
+    #[cfg(windows)]
+    let sync_args_2 = vec!["/c".to_string(), "echo".to_string(), "sync2".to_string()];
+    #[cfg(not(windows))]
+    let sync_args_2 = vec!["sync2".to_string()];
+
     let (result2, _) =
-        cmd_run_with_threshold(&sandbox, "echo", &["sync2".to_string()], None, 5000).unwrap();
+        cmd_run_with_threshold(&sandbox, sync_program, &sync_args_2, None, 5000).unwrap();
 
     let sync2_output = match result2 {
         ThresholdResult::Completed(output) => {
