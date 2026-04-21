@@ -110,7 +110,11 @@ pub fn cmd_spawn(
         None => sandbox.root().to_path_buf(),
     };
 
-    debug!(?working_dir, arg_count = args.len(), "Spawning command (no shell)");
+    debug!(
+        ?working_dir,
+        arg_count = args.len(),
+        "Spawning command (no shell)"
+    );
 
     let display = if args.is_empty() {
         program.to_string()
@@ -130,6 +134,13 @@ pub fn cmd_spawn(
         cmd.env("PYTHONIOENCODING", "utf-8");
     }
 
+    // Strip ANSI color and progress-bar output from spawned tools.
+    // Cargo, ripgrep, ls, etc. all inherit these, keeping captured
+    // stdout/stderr free of escape sequences and carriage returns so
+    // it renders cleanly when the harness forwards it to the LLM and
+    // then on into the main chat.
+    apply_plain_output_env(&mut cmd);
+
     cmd.current_dir(&working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -139,6 +150,20 @@ pub fn cmd_spawn(
     })?;
 
     Ok((child, display))
+}
+
+/// Disable colored / progress output for spawned child processes.
+///
+/// Applied uniformly to every command the harness launches so we never
+/// have to worry about ANSI escape sequences or `\r`-driven progress
+/// bars leaking into captured stdout/stderr.
+fn apply_plain_output_env(cmd: &mut std::process::Command) {
+    cmd.env("CARGO_TERM_COLOR", "never");
+    cmd.env("CARGO_TERM_PROGRESS_WHEN", "never");
+    cmd.env("NO_COLOR", "1");
+    cmd.env("CLICOLOR", "0");
+    cmd.env("CLICOLOR_FORCE", "0");
+    cmd.env("TERM", "dumb");
 }
 
 /// Spawn a raw shell script under `sh -c` / `cmd.exe /C`.
@@ -187,13 +212,15 @@ fn cmd_spawn_shell_script(
         cmd.env("PYTHONIOENCODING", "utf-8");
     }
 
+    apply_plain_output_env(&mut cmd);
+
     cmd.current_dir(&working_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let child = cmd.spawn().map_err(|e| {
-        ToolError::CommandFailed(format!("Failed to spawn shell script: {e}"))
-    })?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn shell script: {e}")))?;
 
     Ok((child, shell_script.to_string()))
 }
@@ -621,10 +648,9 @@ impl Tool for CmdRunTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description:
-                "Run an external program. Default: pass 'program' + 'args' (no shell). \
+            description: "Run an external program. Default: pass 'program' + 'args' (no shell). \
                  Shell scripts require allow_shell=true AND allowed_shell_scripts membership."
-                    .into(),
+                .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -727,8 +753,7 @@ impl Tool for CmdRunTool {
             // Shell-script path — strictest gate.
             if !allow_shell {
                 return Err(ToolError::InvalidArguments(
-                    "'shell_script' requires allow_shell=true (per-call or in ToolConfig)"
-                        .into(),
+                    "'shell_script' requires allow_shell=true (per-call or in ToolConfig)".into(),
                 ));
             }
             if program.is_some() || !cmd_args.is_empty() {
@@ -736,7 +761,12 @@ impl Tool for CmdRunTool {
                     "'shell_script' is mutually exclusive with 'program' / 'args'".into(),
                 ));
             }
-            if !ctx.config.allowed_shell_scripts.iter().any(|s| s == &script) {
+            if !ctx
+                .config
+                .allowed_shell_scripts
+                .iter()
+                .any(|s| s == &script)
+            {
                 return Err(ToolError::Forbidden(
                     "shell_script not present in ToolConfig::allowed_shell_scripts; \
                      operator must opt in by listing the script verbatim"

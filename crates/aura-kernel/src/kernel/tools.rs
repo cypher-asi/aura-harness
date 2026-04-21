@@ -13,7 +13,7 @@
 
 use super::{Kernel, ProcessResult, ToolOutput};
 use crate::context::hash_tx_with_window;
-use crate::executor::ExecuteContext;
+use crate::executor::{decode_tool_effect, ExecuteContext};
 use aura_core::{
     Action, ActionId, ActionKind, ContextHash, Decision, Effect, EffectKind, EffectStatus,
     Proposal, ProposalSet, RecordEntry, ToolCall, ToolProposal, Transaction,
@@ -71,7 +71,13 @@ impl Kernel {
             let effect = self.executor.execute(&ctx, &action).await;
 
             let had_failures = effect.status == EffectStatus::Failed;
-            let output_content = String::from_utf8_lossy(&effect.payload).to_string();
+            // Decode the ToolResult so the LLM sees the tool's actual
+            // stdout/stderr as plain UTF-8 text. Using the raw JSON
+            // payload here surfaces base64-encoded byte fields (see
+            // `aura_core::serde_helpers::bytes_serde`) directly to the
+            // model, which then parrots them back into chat as
+            // `binary` noise.
+            let output_content = decode_tool_effect(&effect).content;
 
             let mut decision = Decision::new();
             decision.accept(action_id);
@@ -259,7 +265,7 @@ impl Kernel {
                 approved_idx += 1;
 
                 let had_failures = effect.status == EffectStatus::Failed;
-                let output_content = String::from_utf8_lossy(&effect.payload).to_string();
+                let output_content = decode_tool_effect(effect).content;
 
                 let mut decision = Decision::new();
                 decision.accept(action.action_id);

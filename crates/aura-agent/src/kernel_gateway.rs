@@ -240,11 +240,10 @@ mod tests {
             results[0].content
         );
 
-        let tool_result: aura_core::ToolResult = serde_json::from_str(&results[0].content).unwrap();
-        assert!(tool_result.ok);
-        assert_eq!(
-            String::from_utf8_lossy(&tool_result.stdout),
-            "This file lives in the workspace root."
-        );
+        // The kernel decodes ToolResult.stdout/stderr from their
+        // base64-on-the-wire form back to plain UTF-8 text before
+        // handing content to the LLM, so the LLM no longer sees the
+        // JSON-wrapped payload.
+        assert_eq!(results[0].content, "This file lives in the workspace root.");
     }
 }
