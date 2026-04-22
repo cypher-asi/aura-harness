@@ -73,6 +73,7 @@ pub(super) async fn ws_upgrade_handler(
         memory_manager: state.memory_manager.clone(),
         skill_manager: state.skill_manager.clone(),
         router_url: state.router_url.clone(),
+        strict_mode: state.config.strict_mode,
     };
     ws.max_frame_size(WS_MAX_FRAME_BYTES)
         .max_message_size(WS_MAX_MESSAGE_BYTES)

@@ -389,7 +389,7 @@ async fn start_turn(
         }
     }
 
-    let kernel = match helpers::build_kernel_with_config(session, ctx, &tool_config) {
+    let kernel = match helpers::build_kernel_with_config(session, ctx, &tool_config).await {
         Ok(k) => k,
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Failed to build kernel");
@@ -535,6 +535,7 @@ mod tests {
             memory_manager: None,
             skill_manager: None,
             router_url: None,
+            strict_mode: false,
         }
     }
 

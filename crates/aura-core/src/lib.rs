@@ -31,8 +31,9 @@ pub use types::{
     Effect, EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition,
     InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
     InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
-    InstalledToolRuntimeProviderExecution, ProcessPending, Proposal, ProposalSet, RecordEntry,
-    RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth, ToolCall, ToolCallContext,
+    InstalledToolRuntimeProviderExecution, PermissionLevel, ProcessPending, Proposal, ProposalSet,
+    RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth, ToolCall,
+    ToolCallContext,
     ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent,
     Trace, Transaction, TransactionType,
 };

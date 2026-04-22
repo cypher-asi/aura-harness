@@ -5,7 +5,9 @@
 //! without depending on the concrete app crate.
 
 use async_trait::async_trait;
+use aura_core::PermissionLevel;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Descriptor types – lightweight DTOs that avoid pulling in app domain types
@@ -284,4 +286,29 @@ pub trait DomainApi: Send + Sync {
         body: Option<&serde_json::Value>,
         jwt: Option<&str>,
     ) -> anyhow::Result<String>;
+
+    /// Fetch per-agent tool permission overrides from aura-network.
+    ///
+    /// * `Ok(Some(map))` — aura-network returned an explicit permission
+    ///   map (may be empty) for this agent. Callers should splice the
+    ///   entries into [`aura_kernel::PolicyConfig::tool_permissions`]
+    ///   and add every key to `allowed_tools` so the policy check does
+    ///   not fall through to `Deny` via `allow_unlisted = false`.
+    /// * `Ok(None)` — aura-network has no entry for this agent (404 /
+    ///   empty profile). Callers decide the fallback based on their
+    ///   operational mode (`strict_mode` off → seed a permissive default
+    ///   for aura-os-style hosts; `strict_mode` on → no overrides).
+    /// * `Err(_)` — transport or deserialization error. Callers MUST
+    ///   fail closed (no permissive overrides) and log the failure.
+    ///
+    /// Default implementation returns `Ok(None)` so test doubles and
+    /// embedded hosts without an aura-network dependency don't need to
+    /// implement this explicitly.
+    async fn get_agent_permissions(
+        &self,
+        _agent_id: &str,
+        _jwt: Option<&str>,
+    ) -> anyhow::Result<Option<HashMap<String, PermissionLevel>>> {
+        Ok(None)
+    }
 }

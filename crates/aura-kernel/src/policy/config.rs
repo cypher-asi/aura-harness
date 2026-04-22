@@ -7,37 +7,19 @@ use aura_core::{
     ActionKind, AgentPermissions, Capability, InstalledIntegrationDefinition,
     InstalledToolIntegrationRequirement,
 };
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // Permission Levels
 // ============================================================================
 
-/// Permission level for tools.
-///
-/// `RequireApproval` was called `AlwaysAsk` prior to the Phase 6 security
-/// rename. The old name was a misnomer because the kernel never actually
-/// paused for an interactive prompt — it simply denied. It now means
-/// "deny unless the caller has registered an explicit, single-use
-/// approval for the exact `(agent_id, tool, args_hash)` triple via
-/// [`crate::Kernel::grant_approval`]". Serde still deserializes the old
-/// `"always_ask"` tag via the alias so persisted configs keep loading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionLevel {
-    /// Always allowed without asking.
-    AlwaysAllow,
-    /// Ask once per session, then remember.
-    AskOnce,
-    /// Deny unless the caller has registered an explicit single-use
-    /// approval for the exact `(agent_id, tool, args_hash)` triple.
-    /// Consumed on first match.
-    #[serde(alias = "always_ask")]
-    RequireApproval,
-    /// Never allowed.
-    Deny,
-}
+// `PermissionLevel` moved to `aura_core::types::permission` so crates on
+// the "outside" of the kernel (notably the `DomainApi` in `aura-tools`
+// that fetches per-agent overrides from aura-network) can marshal these
+// values without pulling in the kernel itself. Re-exported here so
+// `aura_kernel::PermissionLevel` and `aura_kernel::policy::PermissionLevel`
+// keep working for existing callers.
+pub use aura_core::PermissionLevel;
 
 /// Default permission level for a tool based on its name.
 ///

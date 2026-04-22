@@ -103,7 +103,7 @@ pub(super) async fn handle_session_init(
 
     populate_tool_definitions(session, ctx);
 
-    match build_kernel_with_config(session, ctx, &ctx.tool_config) {
+    match build_kernel_with_config(session, ctx, &ctx.tool_config).await {
         Ok(kernel) => {
             // Invariant §2 (Every State Change Is a Transaction) +
             // §11 (Session-Scoped Approvals): the session start is itself
@@ -186,7 +186,7 @@ pub(super) async fn handle_session_init(
     }));
 }
 
-pub(super) fn build_kernel_with_config(
+pub(super) async fn build_kernel_with_config(
     session: &Session,
     ctx: &WsContext,
     tool_config: &aura_tools::ToolConfig,
@@ -220,9 +220,29 @@ pub(super) fn build_kernel_with_config(
     let router = executor_factory::build_executor_router(resolver);
 
     let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
+
+    // Fetch per-agent permission overrides from aura-network before
+    // building the policy. The helper applies the aura-os fallback
+    // matrix: Ok(None) + strict_mode off → seed `run_command` with
+    // `AlwaysAllow`; Err(_) → empty map (fail closed); strict_mode on
+    // → drop any entry looser than the kernel default. See
+    // `runtime_capabilities::fetch_agent_permissions_with_default`.
+    let agent_id_str = session
+        .aura_agent_id
+        .clone()
+        .unwrap_or_else(|| session.agent_id.to_string());
+    let agent_permissions = runtime_capabilities::fetch_agent_permissions_with_default(
+        ctx.domain_api.as_ref(),
+        Some(&agent_id_str),
+        session.auth_token.as_deref(),
+        ctx.strict_mode,
+    )
+    .await;
+
     let mut policy = runtime_capabilities::build_policy_config(
         &session.installed_tools,
         &session.installed_integrations,
+        &agent_permissions,
     );
     // Permissions are mandatory on every session; wire them into the
     // kernel policy unconditionally so the Delegate gate enforces them.
@@ -482,6 +502,7 @@ mod tests {
             memory_manager: None,
             skill_manager: None,
             router_url: None,
+            strict_mode: false,
         }
     }
 

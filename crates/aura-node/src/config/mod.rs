@@ -77,6 +77,17 @@ pub struct NodeConfig {
     /// middleware reads it via constant-time compare and the
     /// `TraceLayer` is configured to omit the `Authorization` header.
     pub auth_token: String,
+    /// When true, per-agent permission overrides fetched from
+    /// aura-network are discarded at session bootstrap and the kernel
+    /// falls back to the fail-closed [`aura_kernel::PolicyConfig::default`]
+    /// matrix.
+    ///
+    /// Default is `false` — aura-os deployments expect `run_command`
+    /// to default to `AlwaysAllow` for agents that don't have an
+    /// explicit profile. Set `AURA_STRICT_MODE=1` in CI / high-trust
+    /// deployments where aura-os must **not** be able to elevate
+    /// permissions out-of-band.
+    pub strict_mode: bool,
 }
 
 impl std::fmt::Debug for NodeConfig {
@@ -94,6 +105,7 @@ impl std::fmt::Debug for NodeConfig {
             .field("aura_storage_url", &self.aura_storage_url)
             .field("aura_network_url", &self.aura_network_url)
             .field("auth_token", &"***")
+            .field("strict_mode", &self.strict_mode)
             .finish()
     }
 }
@@ -113,6 +125,7 @@ impl Default for NodeConfig {
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
             auth_token: DEFAULT_TEST_AUTH_TOKEN.to_string(),
+            strict_mode: false,
         }
     }
 }
@@ -172,6 +185,10 @@ impl NodeConfig {
             if !trimmed.is_empty() {
                 config.auth_token = trimmed.to_string();
             }
+        }
+        if let Ok(val) = std::env::var("AURA_STRICT_MODE") {
+            let v = val.trim();
+            config.strict_mode = v == "1" || v.eq_ignore_ascii_case("true");
         }
         config
     }

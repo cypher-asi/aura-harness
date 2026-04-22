@@ -170,6 +170,10 @@ impl AutomatonBridge {
             policy: runtime_capabilities::build_policy_config(
                 &installed_tools,
                 &installed_integrations,
+                // Dev-loop automaton kernels have no per-agent
+                // aura-network profile; fall back to the kernel's
+                // built-in default tool-permission matrix.
+                &std::collections::HashMap::new(),
             ),
             ..KernelConfig::default()
         };
@@ -205,6 +209,7 @@ impl AutomatonBridge {
                         policy: runtime_capabilities::build_policy_config(
                             &installed_tools,
                             &installed_integrations,
+                            &std::collections::HashMap::new(),
                         ),
                         ..KernelConfig::default()
                     },
