@@ -307,7 +307,7 @@ impl AgentLoop {
             let iteration_started_at = Instant::now();
             context::compact_if_needed(&self.config, &mut state);
 
-            let request = state.build_request(&self.config, &tools, iteration);
+            let request = state.build_request(&self.config, &tools, iteration)?;
             let response = match self
                 .call_model(
                     provider,
@@ -426,7 +426,9 @@ impl AgentLoop {
                 (state.thinking_budget / 2).max(self.config.thinking_min_budget);
             streaming::emit(event_tx, AgentLoopEvent::Warning(warning.to_string()));
 
-            let request = state.build_request(&self.config, tools, iteration);
+            let request = state
+                .build_request(&self.config, tools, iteration)
+                .map_err(|e| iteration::LlmCallError::Fatal(e.to_string()))?;
             match self
                 .call_model(provider, request, event_tx, cancellation_token)
                 .await
@@ -525,7 +527,7 @@ impl LoopState {
         config: &AgentLoopConfig,
         tools: &[ToolDefinition],
         iteration: usize,
-    ) -> ModelRequest {
+    ) -> Result<ModelRequest, crate::AgentError> {
         // Phase 3: narrow `tools` down to domain-relevant entries before the
         // tool-hints logic runs. The classifier is keyed on the most recent
         // pure-text user message, so scratchpad tool-result turns reuse the
@@ -569,7 +571,8 @@ impl LoopState {
             .aura_agent_id(config.aura_agent_id.clone())
             .aura_session_id(config.aura_session_id.clone())
             .aura_org_id(config.aura_org_id.clone())
-            .build()
+            .try_build()
+            .map_err(crate::AgentError::from)
     }
 }
 
@@ -655,7 +658,7 @@ mod intent_classifier_tests {
             mk_tool("read_file"),
         ];
 
-        let req = state.build_request(&config, &tools, 1);
+        let req = state.build_request(&config, &tools, 1).unwrap();
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
 
         assert!(names.contains(&"create_project"), "tier-1 tool kept");
@@ -675,7 +678,7 @@ mod intent_classifier_tests {
         );
         let tools = vec![mk_tool("create_project"), mk_tool("list_credits")];
 
-        let req = state.build_request(&config, &tools, 1);
+        let req = state.build_request(&config, &tools, 1).unwrap();
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"list_credits"));
         assert!(names.contains(&"create_project"));
@@ -696,7 +699,7 @@ mod intent_classifier_tests {
         let state = LoopState::new(&config, msgs);
         let tools = vec![mk_tool("list_credits"), mk_tool("create_project")];
 
-        let req = state.build_request(&config, &tools, 2);
+        let req = state.build_request(&config, &tools, 2).unwrap();
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
             names.contains(&"list_credits"),
@@ -709,7 +712,7 @@ mod intent_classifier_tests {
         let config = AgentLoopConfig::default();
         let state = LoopState::new(&config, vec![Message::user("anything")]);
         let tools = vec![mk_tool("anything_tool")];
-        let req = state.build_request(&config, &tools, 1);
+        let req = state.build_request(&config, &tools, 1).unwrap();
         assert_eq!(req.tools.len(), 1);
     }
 }

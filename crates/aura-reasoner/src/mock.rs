@@ -254,7 +254,8 @@ mod tests {
 
         let request = ModelRequest::builder("test-model", "Test system")
             .message(Message::user("Hi"))
-            .build();
+            .try_build()
+            .unwrap();
 
         let response = provider.complete(request).await.unwrap();
         assert_eq!(response.stop_reason, StopReason::EndTurn);
@@ -268,7 +269,8 @@ mod tests {
 
         let request = ModelRequest::builder("test-model", "Test system")
             .message(Message::user("Read a file"))
-            .build();
+            .try_build()
+            .unwrap();
 
         let response = provider.complete(request).await.unwrap();
         assert_eq!(response.stop_reason, StopReason::ToolUse);
@@ -287,7 +289,8 @@ mod tests {
 
         let request = ModelRequest::builder("test-model", "System")
             .message(Message::user("List files"))
-            .build();
+            .try_build()
+            .unwrap();
 
         // First call returns tool use
         let r1 = provider.complete(request.clone()).await.unwrap();
@@ -305,7 +308,8 @@ mod tests {
 
         let request = ModelRequest::builder("test-model", "System")
             .message(Message::user("Hi"))
-            .build();
+            .try_build()
+            .unwrap();
 
         let result = provider.complete(request).await;
         assert!(result.is_err());

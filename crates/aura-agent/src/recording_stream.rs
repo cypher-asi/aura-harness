@@ -271,7 +271,8 @@ mod tests {
 
         let request = ModelRequest::builder("mock-stream-model", "system")
             .message(Message::user("hi"))
-            .build();
+            .try_build()
+            .unwrap();
         let (handle, inner) = kernel.reason_streaming(request).await.unwrap();
         let mut stream = RecordingStream::new(inner, handle);
 
@@ -317,7 +318,8 @@ mod tests {
 
         let request = ModelRequest::builder("test-model", "system")
             .message(Message::user("hi"))
-            .build();
+            .try_build()
+            .unwrap();
         let (handle, inner) = kernel.reason_streaming(request).await.unwrap();
         let mut stream = RecordingStream::new(inner, handle);
         while stream.next().await.is_some() {}
@@ -349,7 +351,8 @@ mod tests {
 
         let request = ModelRequest::builder("mock-stream-model", "system")
             .message(Message::user("hi"))
-            .build();
+            .try_build()
+            .unwrap();
         let (handle, inner) = kernel.reason_streaming(request).await.unwrap();
         let mut stream = RecordingStream::new(inner, handle);
 

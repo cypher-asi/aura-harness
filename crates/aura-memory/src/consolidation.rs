@@ -225,7 +225,8 @@ impl MemoryConsolidator {
             .messages(vec![Message::user(prompt)])
             .max_tokens(2048)
             .auth_token(self.config.auth_token.clone())
-            .build();
+            .try_build()
+            .map_err(|e| MemoryError::Provider(e.to_string()))?;
 
         let response = self
             .provider
@@ -343,7 +344,8 @@ impl MemoryConsolidator {
             .messages(vec![Message::user(prompt)])
             .max_tokens(2048)
             .auth_token(self.config.auth_token.clone())
-            .build();
+            .try_build()
+            .map_err(|e| MemoryError::Provider(e.to_string()))?;
 
         let response = self
             .provider

@@ -47,7 +47,8 @@ fn test_model_request_builder() {
         .message(Message::user("Hi"))
         .max_tokens(1000)
         .temperature(0.7)
-        .build();
+        .try_build()
+        .unwrap();
 
     assert_eq!(request.model.as_str(), "claude-opus-4-6");
     assert_eq!(request.system, "You are helpful");
@@ -236,7 +237,8 @@ fn test_model_request_builder_with_tools() {
     let request = ModelRequest::builder("model", "system")
         .tools(vec![tool])
         .tool_choice(ToolChoice::Required)
-        .build();
+        .try_build()
+        .unwrap();
 
     assert_eq!(request.tools.len(), 1);
     assert!(matches!(request.tool_choice, ToolChoice::Required));
@@ -244,7 +246,9 @@ fn test_model_request_builder_with_tools() {
 
 #[test]
 fn test_model_request_builder_defaults() {
-    let request = ModelRequest::builder("model", "system").build();
+    let request = ModelRequest::builder("model", "system")
+        .try_build()
+        .unwrap();
 
     assert_eq!(request.max_tokens.get(), 4096);
     assert!(request.temperature.is_none());

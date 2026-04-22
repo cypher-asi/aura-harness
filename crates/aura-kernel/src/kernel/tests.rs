@@ -97,7 +97,8 @@ async fn test_reason_records_and_returns_response() {
     let (kernel, _db, _ws) = create_new_kernel();
     let request = ModelRequest::builder("test-model", "system prompt")
         .message(aura_reasoner::Message::user("hello"))
-        .build();
+        .try_build()
+        .unwrap();
     let result = kernel.reason(request).await.unwrap();
     assert_eq!(result.entry.seq, 1);
     assert!(!result.response.message.content.is_empty());
@@ -124,7 +125,8 @@ async fn reason_sync_error_records_failed() {
 
     let request = ModelRequest::builder("test-model", "system")
         .message(aura_reasoner::Message::user("hello"))
-        .build();
+        .try_build()
+        .unwrap();
     let err = kernel
         .reason(request)
         .await
@@ -171,7 +173,8 @@ async fn reason_streaming_handshake_error_records_failed() {
 
     let request = ModelRequest::builder("test-model", "system")
         .message(aura_reasoner::Message::user("hello"))
-        .build();
+        .try_build()
+        .unwrap();
     let err = kernel
         .reason_streaming(request)
         .await
@@ -207,7 +210,8 @@ async fn test_sequence_across_process_and_reason() {
 
     let request = ModelRequest::builder("test-model", "system")
         .message(aura_reasoner::Message::user("test"))
-        .build();
+        .try_build()
+        .unwrap();
     let r2 = kernel.reason(request).await.unwrap();
     assert_eq!(r2.entry.seq, 2);
 

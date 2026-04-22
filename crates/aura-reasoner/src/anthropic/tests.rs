@@ -288,7 +288,8 @@ fn test_resolve_thinking_explicit_config() {
         .thinking(ThinkingConfig {
             budget_tokens: 4000,
         })
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_some());
     let thinking = thinking.unwrap();
@@ -300,7 +301,8 @@ fn test_resolve_thinking_explicit_config() {
 fn test_resolve_thinking_auto_for_capable_model() {
     let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
         .max_tokens(8192)
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_some());
     let thinking = thinking.unwrap();
@@ -312,7 +314,8 @@ fn test_resolve_thinking_auto_for_capable_model() {
 fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
     let request = ModelRequest::builder("aura-claude-opus-4-7", "system")
         .max_tokens(8192)
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, "aura-claude-opus-4-7").unwrap();
     assert_eq!(thinking.thinking_type, "adaptive");
     assert_eq!(thinking.budget_tokens, None);
@@ -325,7 +328,8 @@ fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
         .thinking(ThinkingConfig {
             budget_tokens: 4000,
         })
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, "claude-3-7-sonnet").unwrap();
     assert_eq!(thinking.thinking_type, "enabled");
     assert_eq!(thinking.budget_tokens, Some(4000));
@@ -335,7 +339,8 @@ fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
 fn test_resolve_thinking_none_for_unsupported_haiku_variants() {
     let request = ModelRequest::builder("aura-claude-haiku-4-5", "system")
         .max_tokens(8192)
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, "aura-claude-haiku-4-5");
     assert!(thinking.is_none());
 }
@@ -344,7 +349,8 @@ fn test_resolve_thinking_none_for_unsupported_haiku_variants() {
 fn test_resolve_thinking_auto_for_non_claude_model_is_none() {
     let request = ModelRequest::builder("aura-gpt-5-4", "system")
         .max_tokens(8192)
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, "aura-gpt-5-4");
     assert!(thinking.is_none());
 }
@@ -353,7 +359,8 @@ fn test_resolve_thinking_auto_for_non_claude_model_is_none() {
 fn test_resolve_thinking_none_for_small_budget() {
     let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
         .max_tokens(1024)
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL);
     assert!(thinking.is_none());
 }
@@ -362,7 +369,8 @@ fn test_resolve_thinking_none_for_small_budget() {
 fn test_resolve_thinking_none_for_unsupported_claude_3_variants() {
     let request = ModelRequest::builder("claude-3-haiku", "system")
         .max_tokens(8192)
-        .build();
+        .try_build()
+        .unwrap();
     let thinking = resolve_thinking(&request, "claude-3-haiku");
     assert!(thinking.is_none());
 }
@@ -371,7 +379,8 @@ fn test_resolve_thinking_none_for_unsupported_claude_3_variants() {
 fn test_resolve_output_config_only_for_claude_4_thinking_models() {
     let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
         .max_tokens(8192)
-        .build();
+        .try_build()
+        .unwrap();
     let output = resolve_output_config(&request, TEST_DEFAULT_MODEL).unwrap();
     assert_eq!(output.effort, "high");
 
@@ -418,7 +427,8 @@ async fn test_proxy_mode_sends_caching_beta_header() {
     let request = ModelRequest::builder("aura-claude-sonnet-4-6", "system")
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let _ = provider.complete(request).await;
 
@@ -471,7 +481,8 @@ async fn test_direct_mode_sends_caching_beta_header() {
     let provider = AnthropicProvider::new(config).unwrap();
     let request = ModelRequest::builder("test-model", "system")
         .message(Message::user("test"))
-        .build();
+        .try_build()
+        .unwrap();
 
     let _ = provider.complete(request).await;
 
@@ -514,7 +525,8 @@ async fn test_complete_timeout() {
     let provider = AnthropicProvider::new(config).unwrap();
     let request = ModelRequest::builder("test-model", "system")
         .message(Message::user("test"))
-        .build();
+        .try_build()
+        .unwrap();
 
     let result = provider.complete(request).await;
     assert!(result.is_err());
@@ -563,7 +575,8 @@ async fn test_direct_mode_omits_caching_beta_header_when_disabled() {
     let provider = AnthropicProvider::new(config).unwrap();
     let request = ModelRequest::builder("test-model", "system")
         .message(Message::user("test"))
-        .build();
+        .try_build()
+        .unwrap();
 
     let _ = provider.complete(request).await;
 
@@ -613,7 +626,8 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
     let request = ModelRequest::builder("aura-gpt-4.1", "system")
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let stream = provider.complete_streaming(request).await.unwrap();
     let events = stream.collect::<Vec<_>>().await;
@@ -691,7 +705,8 @@ async fn test_cross_family_proxy_fallback_buffers_streaming_and_omits_anthropic_
         .message(Message::user("test"))
         .max_tokens(8192)
         .auth_token(Some("test-jwt-token".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let stream = provider.complete_streaming(request).await.unwrap();
     let events = stream.collect::<Vec<_>>().await;
@@ -762,7 +777,8 @@ async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
     let request = ModelRequest::builder("aura-gpt-4.1", "system")
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let _ = provider.complete(request).await.unwrap();
 
@@ -817,7 +833,8 @@ async fn test_proxy_hint_prefers_anthropic_family_over_model_heuristics() {
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
         .upstream_provider_family(Some("anthropic".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let _ = provider.complete(request).await.unwrap();
 
@@ -872,7 +889,8 @@ async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_
         .message(Message::user("test"))
         .auth_token(Some("test-jwt-token".to_string()))
         .upstream_provider_family(Some("openai".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let stream = provider.complete_streaming(request).await.unwrap();
     let events = stream.collect::<Vec<_>>().await;
@@ -941,7 +959,8 @@ async fn test_proxy_non_anthropic_family_omits_thinking_and_output_config_for_co
         .max_tokens(8192)
         .auth_token(Some("test-jwt-token".to_string()))
         .upstream_provider_family(Some("openai".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     let _ = provider.complete(request).await.unwrap();
 

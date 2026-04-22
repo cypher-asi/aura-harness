@@ -591,7 +591,8 @@ fn test_model_request_builder_with_thinking() {
         .thinking(ThinkingConfig {
             budget_tokens: 4096,
         })
-        .build();
+        .try_build()
+        .unwrap();
 
     assert!(request.thinking.is_some());
     assert_eq!(request.thinking.unwrap().budget_tokens, 4096);
@@ -601,7 +602,8 @@ fn test_model_request_builder_with_thinking() {
 fn test_model_request_builder_with_auth_token() {
     let request = ModelRequest::builder("model", "system")
         .auth_token(Some("tok_abc".to_string()))
-        .build();
+        .try_build()
+        .unwrap();
 
     assert_eq!(request.auth_token, Some("tok_abc".to_string()));
 }
@@ -612,7 +614,8 @@ fn test_model_request_builder_multiple_messages() {
         .message(Message::user("first"))
         .message(Message::assistant("response"))
         .message(Message::user("second"))
-        .build();
+        .try_build()
+        .unwrap();
 
     assert_eq!(request.messages.len(), 3);
     assert_eq!(request.messages[0].role, Role::User);

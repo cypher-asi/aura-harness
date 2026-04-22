@@ -382,20 +382,6 @@ impl ModelRequestBuilder {
             aura_org_id: self.aura_org_id,
         })
     }
-
-    /// Build the request, panicking on validation failure. Preserved for
-    /// call sites that have already validated their inputs (the agent loop,
-    /// memory crate, tests). New code should prefer
-    /// [`Self::try_build`].
-    ///
-    /// # Panics
-    /// Panics if [`Self::try_build`] would have returned an error
-    /// (empty model name, zero max-tokens, or out-of-range temperature).
-    #[must_use]
-    pub fn build(self) -> ModelRequest {
-        self.try_build()
-            .expect("ModelRequestBuilder::build: newtype validation failed")
-    }
 }
 
 #[cfg(test)]

@@ -45,7 +45,8 @@ async fn test_full_kernel_mediated_flow() {
     // 2. Reason (LLM call)
     let request = ModelRequest::builder("test-model", "system prompt")
         .message(Message::user("Hello agent"))
-        .build();
+        .try_build()
+        .unwrap();
     let r2 = kernel.reason(request).await.unwrap();
     assert_eq!(r2.entry.seq, 2, "Reasoning should be seq 2");
     assert_eq!(r2.entry.tx.tx_type, TransactionType::Reasoning);
@@ -117,7 +118,8 @@ async fn test_sequence_continuity() {
         } else {
             let request = ModelRequest::builder("test-model", "system")
                 .message(Message::user(format!("msg {i}")))
-                .build();
+                .try_build()
+                .unwrap();
             kernel.reason(request).await.unwrap();
         }
     }

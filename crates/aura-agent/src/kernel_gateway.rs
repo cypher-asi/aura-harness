@@ -194,7 +194,8 @@ mod tests {
 
         let request = ModelRequest::builder("test-model", "system")
             .message(Message::user("hello"))
-            .build();
+            .try_build()
+            .unwrap();
         let response = gateway.complete(request).await.unwrap();
         assert!(!response.message.content.is_empty());
     }

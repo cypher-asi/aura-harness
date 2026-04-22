@@ -147,7 +147,8 @@ impl SpecGenAutomaton {
         let request = aura_reasoner::ModelRequest::builder(&model, SPEC_GENERATION_SYSTEM_PROMPT)
             .messages(vec![aura_reasoner::Message::user(requirements)])
             .max_tokens(MAX_TOKENS)
-            .build();
+            .try_build()
+            .map_err(|e| AutomatonError::AgentExecution(format!("invalid model request: {e}")))?;
 
         let response = self
             .provider

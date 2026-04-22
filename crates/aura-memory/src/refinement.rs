@@ -78,7 +78,8 @@ impl LlmRefiner {
             .messages(vec![Message::user(prompt)])
             .max_tokens(1024)
             .auth_token(effective_token)
-            .build();
+            .try_build()
+            .map_err(|e| MemoryError::Provider(e.to_string()))?;
 
         let response = self
             .provider
