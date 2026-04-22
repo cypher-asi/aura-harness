@@ -49,46 +49,25 @@ pub(crate) mod build;
 pub(crate) mod compaction;
 pub mod constants;
 pub(crate) mod events;
-// TODO: file_ops submodules are WIP — remove allow once integrated
-#[allow(dead_code)]
 pub(crate) mod file_ops;
 pub mod git;
-// TODO: helpers has unused utility functions — remove allow once integrated
-#[allow(dead_code)]
 pub mod helpers;
 mod kernel_domain_gateway;
 mod kernel_gateway;
-mod recording_stream;
-// TODO: parser is WIP — remove allow once integrated
-#[allow(dead_code)]
-pub(crate) mod parser;
-// TODO: planning is WIP — remove allow once integrated
-#[allow(dead_code)]
 pub(crate) mod planning;
 pub(crate) mod policy;
 pub mod prompts;
 mod read_guard;
+mod recording_stream;
 mod sanitize;
 pub(crate) mod self_review;
-// TODO: shell_parse is WIP — remove allow once integrated
-#[allow(dead_code)]
-pub(crate) mod shell_parse;
 pub mod types;
-// TODO: verify module is WIP — remove allow once integrated
-#[allow(dead_code)]
 pub(crate) mod verify;
 
 pub mod agent_runner;
-// TODO: message_conversion is WIP — remove allow once integrated
-#[allow(dead_code)]
-pub(crate) mod message_conversion;
 pub mod runtime;
 pub mod session_bootstrap;
-// TODO: task_context is WIP — remove allow once integrated
-#[allow(dead_code)]
 pub(crate) mod task_context;
-// TODO: task_executor is WIP — remove allow once integrated
-#[allow(dead_code)]
 pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};

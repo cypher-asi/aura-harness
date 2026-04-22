@@ -3,6 +3,11 @@
 //! Gathers codebase context, dependency APIs, type definitions, and
 //! conventions, then assembles them into a single context string that
 //! fits within a configurable token budget.
+//
+// TODO(phase5, 2026-04-22): task-context helpers are staged for Phase 5
+// integration with the task-aware tool executor. Until then, silence
+// dead-code warnings at the module root rather than per-symbol.
+#![allow(dead_code)]
 
 use std::path::Path;
 

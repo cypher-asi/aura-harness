@@ -1,4 +1,13 @@
 #![allow(clippy::module_name_repetitions)]
+// TODO(phase5, 2026-04-22): most of the file_ops helpers (walkers,
+// workspace_map, task_keywords, task_relevance, type_resolution,
+// validation, and the apply module) are WIP plumbing that is not yet
+// wired into the live agent loop. Rather than deleting them — Phase 5
+// is expected to integrate them as part of the task-centric executor —
+// we keep the symbols but silence the dead-code warning at the module
+// root so the workspace can build with `-D warnings`. When Phase 5
+// lands, remove this allow and prune whatever still is unused.
+#![allow(dead_code)]
 
 use std::path::Path;
 

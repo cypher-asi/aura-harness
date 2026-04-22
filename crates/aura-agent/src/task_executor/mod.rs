@@ -4,6 +4,12 @@
 //! [`TaskToolExecutor`] wraps an inner [`AgentToolExecutor`] to intercept
 //! engine-level tools (`task_done`, `submit_plan`, `get_task_context`) and
 //! enforce the explore-then-implement workflow.
+//
+// TODO(phase5, 2026-04-22): TaskToolExecutor and its helpers are not
+// yet invoked from the live agent loop — plan gating and task context
+// are staged for Phase 5 integration. Until then, silence dead-code
+// warnings at the module root rather than per-symbol.
+#![allow(dead_code)]
 
 use std::path::Path;
 use std::sync::Arc;

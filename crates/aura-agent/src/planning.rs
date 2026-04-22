@@ -3,6 +3,10 @@
 //! Before the agent submits a plan, write operations (`write_file`, `edit_file`,
 //! `delete_file`) are rejected. The `submit_plan` tool transitions the phase
 //! from `Exploring` to `Implementing`.
+//
+// TODO(phase5, 2026-04-22): the `TaskPlan::empty()` constructor is
+// unused for now but is part of the Phase 5 task-executor integration.
+#![allow(dead_code)]
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskPhase {

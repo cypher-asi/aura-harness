@@ -12,6 +12,14 @@
 //! Callers implement [`FixProvider`] to supply LLM fix generation and response
 //! parsing, then call [`build::verify_and_fix_build`] to run the loop. Events
 //! are streamed through an optional `UnboundedSender<VerifyEvent>`.
+//
+// TODO(phase5, 2026-04-22): the `verify_and_fix_build` loop plus its
+// helpers (snapshot/rollback, test runners, error stagnation) are not
+// wired into the agent loop yet — only error-context helpers and
+// run_build_command are actively invoked. Phase 5 is expected to
+// integrate the full fix-loop. Until then, silence dead-code at the
+// module root rather than per-function.
+#![allow(dead_code)]
 
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
