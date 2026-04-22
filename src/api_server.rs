@@ -25,12 +25,13 @@
 //! wire-format mapping from [`aura_node::files_api::WalkedEntry`] onto
 //! the TUI JSON contract.
 
+use aura_node::auth::check_bearer;
 use aura_node::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
 use aura_terminal::UiCommand;
 use aura_tools::Sandbox;
 use axum::{
     extract::{Query, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -232,47 +233,20 @@ fn generate_token() -> String {
 /// `Authorization: Bearer <token>` header. Returns `401 UNAUTHORIZED`
 /// on missing, malformed, or wrong token — distinguishing these cases
 /// would leak whether a particular token-length probe had succeeded.
+///
+/// The actual parsing and constant-time compare live in
+/// [`aura_node::auth::check_bearer`], shared with the aura-node HTTP
+/// router so the two servers can't drift on edge cases (empty secrets,
+/// prefix-length probing, etc.).
 async fn require_bearer_mw(
     State(state): State<ApiState>,
     request: Request,
     next: Next,
 ) -> Response {
-    match extract_bearer(request.headers()) {
-        Some(presented)
-            if constant_time_eq(presented.as_bytes(), state.expected_token.as_bytes()) =>
-        {
-            next.run(request).await
-        }
-        _ => StatusCode::UNAUTHORIZED.into_response(),
+    match check_bearer(request.headers(), &state.expected_token) {
+        Ok(_) => next.run(request).await,
+        Err(status) => status.into_response(),
     }
-}
-
-fn extract_bearer(headers: &HeaderMap) -> Option<String> {
-    let value = headers
-        .get(axum::http::header::AUTHORIZATION)?
-        .to_str()
-        .ok()?;
-    let token = value.strip_prefix("Bearer ")?.trim();
-    if token.is_empty() {
-        None
-    } else {
-        Some(token.to_string())
-    }
-}
-
-/// Constant-time byte-slice compare.
-///
-/// Pads the shorter side by folding its length into the accumulator so
-/// timing doesn't leak whether lengths matched. `subtle` would be a
-/// nicer dep but we don't want to take on a new crate in this phase.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let len_diff = (a.len() ^ b.len()) as u8;
-    let n = a.len().min(b.len());
-    let mut acc = len_diff;
-    for i in 0..n {
-        acc |= a[i] ^ b[i];
-    }
-    acc == 0
 }
 
 /// Health check endpoint handler.
@@ -607,12 +581,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
-    #[test]
-    fn constant_time_eq_matches_equal_slices() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
-        assert!(!constant_time_eq(b"", b"a"));
-        assert!(constant_time_eq(b"", b""));
-    }
+    // The constant-time bearer compare now lives in
+    // `aura_node::auth::check_bearer` and is exercised by that crate's
+    // test suite. No duplicated test kept here — see
+    // `crates/aura-node/src/auth.rs::tests` for coverage.
 }

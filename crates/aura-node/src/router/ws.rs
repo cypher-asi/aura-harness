@@ -111,7 +111,7 @@ pub(super) async fn automaton_ws_handler(
     // we skip the check so unauthenticated clients can upgrade to the
     // automaton stream (matching the relaxed HTTP routes).
     if state.config.require_auth {
-        if let Err(status) = super::auth::require_bearer(&headers, &state.config.auth_token) {
+        if let Err(status) = crate::auth::check_bearer(&headers, &state.config.auth_token) {
             return status.into_response();
         }
     }

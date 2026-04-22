@@ -30,6 +30,7 @@
 )]
 
 pub(crate) mod automaton_bridge;
+pub mod auth;
 mod config;
 pub(crate) mod domain;
 pub(crate) mod executor_factory;
