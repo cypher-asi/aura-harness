@@ -1,5 +1,9 @@
 use super::{AgentInfo, ProjectInfo};
 
+pub mod sections;
+
+pub use sections::tool_discipline::TOOL_CALL_DISCIPLINE_SECTION;
+
 pub const CHAT_SYSTEM_PROMPT_BASE: &str = r#"You are Aura, an AI software engineering assistant embedded in a project management and code execution platform.
 
 You have access to tools that let you directly manage the user's project:
@@ -218,7 +222,10 @@ SCOPE: Stay strictly on-task.
 - Once your task-specific changes compile and any directly-related tests pass, call task_done immediately. Do NOT keep exploring or "improving" unrelated code.
 - When verifying, prefer scoped commands (e.g. `cargo test -p <crate> --lib <module>`) over workspace-wide commands to avoid noise from pre-existing failures.
 - NEVER output raw JSON with file_ops in your text response. Always use the provided tools (write_file, edit_file, task_done, etc.) to make changes and signal completion.
-"#
+
+{tool_discipline}
+"#,
+        tool_discipline = TOOL_CALL_DISCIPLINE_SECTION,
     );
 
     if let Some(ws_info) = workspace_info {

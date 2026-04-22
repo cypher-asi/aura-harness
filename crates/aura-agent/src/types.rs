@@ -240,6 +240,13 @@ pub struct AgentLoopResult {
     pub iterations: usize,
     /// Final message history.
     pub messages: Vec<aura_reasoner::Message>,
+    /// Non-standard stop reason set by the loop when it terminates for a
+    /// harness-specific condition (e.g. `"narration_budget_exhausted"`
+    /// when Phase 4's narration budget forces a stop). Consumed by the
+    /// aura-automaton task validator so it can translate harness-side
+    /// stalls into structured `NeedsDecomposition` outcomes without
+    /// having to inspect message history.
+    pub stop_reason_override: Option<String>,
 }
 
 impl AgentLoopResult {

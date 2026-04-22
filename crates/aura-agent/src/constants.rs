@@ -136,3 +136,21 @@ pub const WRITE_FILE_CHUNK_BYTES: usize = 6_000;
 /// executor-side enforcement; the current short-circuit in
 /// `tool_processing` fires at [`WRITE_FILE_CHUNK_BYTES`] first.
 pub const WRITE_FILE_HARD_MAX_BYTES: usize = 12_000;
+
+// ---------------------------------------------------------------------------
+// Narration budget (Phase 4 live steering)
+// ---------------------------------------------------------------------------
+
+/// Soft threshold (in output tokens) for consecutive tool-free narration
+/// across turns. When the running total crosses this value, the loop
+/// injects a synthetic user message demanding that the next turn be a
+/// single tool call, then resets the counter. This is the live analog of
+/// the Phase 2a `ForceToolCallNextTurn` hint.
+pub const NARRATION_TOKEN_SOFT_BUDGET: usize = 1_500;
+
+/// Hard ceiling (in output tokens) for consecutive tool-free narration.
+/// Crossing this value is treated as a non-recoverable stall: the loop
+/// stamps `AgentLoopResult::stop_reason_override` with
+/// `"narration_budget_exhausted"` so downstream (the aura-automaton task
+/// validator) can map it to a Phase 2b `NeedsDecomposition` outcome.
+pub const NARRATION_TOKEN_HARD_BUDGET: usize = 4_000;

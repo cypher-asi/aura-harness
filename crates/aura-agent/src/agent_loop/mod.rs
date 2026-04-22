@@ -345,6 +345,9 @@ impl AgentLoop {
             {
                 break;
             }
+            if iteration::update_narration_budget(event_tx.as_ref(), &mut state, &response) {
+                break;
+            }
             if post_iteration_checks(&self.config, event_tx.as_ref(), &mut state, iteration) {
                 break;
             }
@@ -452,6 +455,15 @@ pub struct LoopState {
     pub(crate) build_baseline: Option<BuildBaseline>,
     /// Consecutive iterations where every tool call returned an error.
     pub(crate) consecutive_all_error_iterations: usize,
+    /// Rolling count of output tokens produced across turns that
+    /// emitted no `tool_use` blocks. Reset to zero whenever a turn
+    /// executes at least one tool call or when the soft narration
+    /// budget fires a steering injection.
+    pub(crate) consecutive_narration_tokens: usize,
+    /// Whether the most recently processed turn produced at least one
+    /// `tool_use` block. Initialized to `true` so the first turn starts
+    /// with a budget-clean state.
+    pub(crate) last_turn_had_tool_call: bool,
 }
 
 impl LoopState {
@@ -474,6 +486,8 @@ impl LoopState {
             messages,
             build_baseline: None,
             consecutive_all_error_iterations: 0,
+            consecutive_narration_tokens: 0,
+            last_turn_had_tool_call: true,
         }
     }
 

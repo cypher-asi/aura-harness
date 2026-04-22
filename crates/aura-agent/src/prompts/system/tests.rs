@@ -86,6 +86,46 @@ fn chat_system_prompt_includes_project_details() {
 }
 
 #[test]
+fn agentic_prompt_includes_tool_call_discipline_section() {
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+
+    assert!(
+        prompt.contains("Tool-call discipline:"),
+        "discipline section header missing from assembled prompt"
+    );
+    assert!(
+        prompt.contains("write_file must stay under 6000 bytes"),
+        "write_file chunk rule missing"
+    );
+    assert!(
+        prompt.contains(
+            "After any read_file or search_code call, your next turn must either call \
+             another tool or submit a tool_result-producing action"
+        ),
+        "post-read tool-call rule missing"
+    );
+    assert!(
+        prompt
+            .contains("Never issue two search_code calls whose patterns share an alternation term"),
+        "overlapping-alternation rule missing"
+    );
+    assert!(
+        prompt.contains("If your last two turns produced no tool calls, the next turn MUST be a single tool call"),
+        "two-turns-no-tool rule missing"
+    );
+}
+
+#[test]
+fn tool_call_discipline_constant_matches_golden_wording() {
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.starts_with("Tool-call discipline:\n"));
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("6000 bytes per call"));
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("append_after_eof"));
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("alternation term"));
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("MUST be a single tool call"));
+}
+
+#[test]
 fn chat_system_prompt_detects_tech_stack() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
