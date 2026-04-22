@@ -41,6 +41,8 @@ pub enum AutomatonError {
     #[error("credits exhausted")]
     CreditsExhausted,
 
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    /// Catch-all for unexpected conditions that don't fit a typed variant.
+    /// Prefer adding a dedicated variant over introducing new call-sites here.
+    #[error("unexpected: {0}")]
+    Unexpected(String),
 }

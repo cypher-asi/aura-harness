@@ -31,14 +31,10 @@ impl DevLoopAutomaton {
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
-        let result = self
+        let exec = self
             .run_agentic_task(ctx, &project, &spec, task, &effective_path)
-            .await;
-
-        match result {
-            Ok(exec) => validate_execution(exec),
-            Err(e) => Err(AutomatonError::AgentExecution(e.to_string())),
-        }
+            .await?;
+        validate_execution(exec)
     }
 
     async fn execute_shell(
@@ -70,7 +66,7 @@ impl DevLoopAutomaton {
         spec: &aura_tools::domain_tools::SpecDescriptor,
         task: &TaskDescriptor,
         effective_path: &str,
-    ) -> Result<TaskExecutionResult, anyhow::Error> {
+    ) -> Result<TaskExecutionResult, AutomatonError> {
         let failure_reasons: HashMap<String, String> =
             ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
         let prior_failure = failure_reasons.get(&task.id).cloned().unwrap_or_default();
@@ -143,7 +139,7 @@ impl DevLoopAutomaton {
                 Some(cancel),
             )
             .await
-            .map_err(Into::into)
+            .map_err(|e| AutomatonError::AgentExecution(e.to_string()))
     }
 
     pub(super) async fn try_retry_failed(
