@@ -197,7 +197,10 @@ pub(super) fn build_kernel_with_config(
             api.clone(),
             session.auth_token.clone(),
             session.project_id.clone(),
-            session.project_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            session
+                .project_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned()),
         ))
     });
 
