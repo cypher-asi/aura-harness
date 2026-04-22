@@ -17,7 +17,7 @@ use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
 use crate::file_ops::FileOp;
 use crate::planning::TaskPhase;
-use crate::policy::{
+use crate::turn_config::{
     classify_task_complexity, compute_exploration_allowance, compute_thinking_budget,
     resolve_simple_model, TaskComplexity,
 };

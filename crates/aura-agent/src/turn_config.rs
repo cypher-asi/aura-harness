@@ -1,6 +1,10 @@
-//! Turn-configuration policy: heuristics that determine how the agent loop
+//! Turn-level configuration: heuristics that determine how the agent loop
 //! runs for a given task (complexity classification, token budgets, exploration
 //! allowances, model selection).
+//!
+//! NOTE: Previously named `policy`; renamed to `turn_config` to avoid semantic
+//! collision with `aura_kernel::policy::Policy` (which is the authorization
+//! policy for tool execution). These are turn-level knobs, not authorization.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskComplexity {
