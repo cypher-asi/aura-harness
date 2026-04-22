@@ -6,6 +6,7 @@
 
 mod context;
 mod iteration;
+mod search_cache;
 mod streaming;
 mod tool_execution;
 #[cfg(test)]
@@ -429,6 +430,13 @@ impl AgentLoop {
 pub struct LoopState {
     pub(crate) result: AgentLoopResult,
     pub(crate) tool_cache: HashMap<String, String>,
+    /// Secondary, normalized index for `search_code` / `find_files`
+    /// that collapses alternation-order and trivial whitespace
+    /// variants. Populated alongside `tool_cache` in `update_cache`;
+    /// consulted only on a miss of the exact key. Cleared together
+    /// with `tool_cache` on any successful write so the "write
+    /// invalidates cache" invariant is preserved.
+    pub(crate) fuzzy_tool_cache: HashMap<String, String>,
     pub(crate) blocking_ctx: BlockingContext,
     pub(crate) read_guard: ReadGuardState,
     pub(crate) exploration_state: ExplorationState,
@@ -451,6 +459,7 @@ impl LoopState {
         Self {
             result: AgentLoopResult::default(),
             tool_cache: HashMap::new(),
+            fuzzy_tool_cache: HashMap::new(),
             blocking_ctx: BlockingContext::new(config.exploration_allowance),
             read_guard: ReadGuardState::default(),
             exploration_state: ExplorationState::default(),

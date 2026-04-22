@@ -6,6 +6,7 @@ use crate::blocking::detection::{detect_all_blocked, BlockingContext};
 use crate::blocking::stall::StallDetector;
 use crate::budget::ExplorationState;
 use crate::build;
+use crate::constants::WRITE_FILE_CHUNK_BYTES;
 use crate::events::{AgentLoopEvent, DebugEvent};
 use crate::helpers;
 use crate::read_guard::ReadGuardState;
@@ -37,16 +38,25 @@ impl AgentLoop {
     ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>) {
         let mut side_messages: Vec<String> = Vec::new();
 
+        // Pre-dispatch chunk guard: short-circuit oversized `write_file`
+        // calls before the real executor runs, so the turn never pays
+        // for the huge content re-echo. These synthetic errors flow
+        // through the same `blocked_ids` channel so the source label
+        // becomes `blocked` and cache invalidation skips them.
+        let (oversized_writes, post_chunk_calls) =
+            partition_oversized_writes(tool_calls, &mut side_messages, event_tx);
+
         let (blocked_results, to_execute) = partition_blocked(
-            tool_calls,
+            &post_chunk_calls,
             &state.blocking_ctx,
             &state.read_guard,
             &mut side_messages,
             event_tx,
         );
 
-        let blocked_ids: HashSet<String> = blocked_results
+        let blocked_ids: HashSet<String> = oversized_writes
             .iter()
+            .chain(blocked_results.iter())
             .map(|r| r.tool_use_id.clone())
             .collect();
 
@@ -85,10 +95,76 @@ impl AgentLoop {
             state.blocking_ctx.exploration_allowance += 2;
         }
 
-        let mut all_results = blocked_results;
+        let mut all_results = oversized_writes;
+        all_results.extend(blocked_results);
         all_results.extend(executed);
         (all_results, side_messages, stalled, blocked_ids)
     }
+}
+
+/// Pre-dispatch chunk guard for `write_file`.
+///
+/// Short-circuits any `write_file` call whose `content` field exceeds
+/// [`WRITE_FILE_CHUNK_BYTES`]. The returned [`ToolCallResult`] is marked
+/// `is_error = true` so the existing `update_cache` / `any_write`
+/// detection treats it as NOT a successful write — nothing touches disk,
+/// nothing clears the read-only cache. The same message is also pushed
+/// as a side-message and emitted through the event stream as
+/// [`AgentLoopEvent::Warning`] so it is visible to humans watching the
+/// run.
+fn partition_oversized_writes(
+    tool_calls: &[ToolCallInfo],
+    side_messages: &mut Vec<String>,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
+    let mut oversized = Vec::new();
+    let mut remaining = Vec::with_capacity(tool_calls.len());
+
+    for tool in tool_calls {
+        if tool.name == "write_file" {
+            if let Some(content) = tool.input.get("content").and_then(|v| v.as_str()) {
+                if content.len() > WRITE_FILE_CHUNK_BYTES {
+                    let path_hint = tool
+                        .input
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let msg = format!(
+                        "`write_file` content of {} bytes exceeds the {}-byte per-turn cap. \
+                         Next turn: call `write_file` with only the module-doc + imports + one stub \
+                         (≤{} bytes), then use `edit_file` appends for the rest.",
+                        content.len(),
+                        WRITE_FILE_CHUNK_BYTES,
+                        WRITE_FILE_CHUNK_BYTES,
+                    );
+                    let content_msg = format!("[CHUNK_GUARD] {msg}");
+                    warn!(
+                        tool_use_id = %tool.id,
+                        tool_name = %tool.name,
+                        path = path_hint,
+                        content_bytes = content.len(),
+                        chunk_cap = WRITE_FILE_CHUNK_BYTES,
+                        "write_file content exceeds per-turn chunk cap; short-circuiting"
+                    );
+
+                    emit_event(event_tx, AgentLoopEvent::Warning(msg.clone()));
+
+                    side_messages.push(msg);
+                    oversized.push(ToolCallResult {
+                        tool_use_id: tool.id.clone(),
+                        content: content_msg,
+                        is_error: true,
+                        stop_loop: false,
+                        file_changes: Vec::new(),
+                    });
+                    continue;
+                }
+            }
+        }
+        remaining.push(tool.clone());
+    }
+
+    (oversized, remaining)
 }
 
 fn partition_blocked(
@@ -266,4 +342,95 @@ async fn run_auto_build(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod chunk_guard_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn mk_tool(id: &str, name: &str, input: serde_json::Value) -> ToolCallInfo {
+        ToolCallInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            input,
+        }
+    }
+
+    #[test]
+    fn write_file_over_chunk_bytes_is_rejected_without_disk_write() {
+        let huge = "x".repeat(7_000);
+        let call = mk_tool(
+            "toolu_1",
+            "write_file",
+            json!({"path": "src/big.rs", "content": huge}),
+        );
+        let mut side_messages: Vec<String> = Vec::new();
+        let (oversized, remaining) =
+            partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
+
+        assert_eq!(oversized.len(), 1, "one oversized write should short-circuit");
+        assert_eq!(oversized[0].tool_use_id, "toolu_1");
+        assert!(
+            oversized[0].is_error,
+            "synthetic tool_result must be is_error=true so cache invalidation skips it"
+        );
+        assert!(
+            oversized[0].file_changes.is_empty(),
+            "chunk guard must NOT record any file changes (nothing hit disk)"
+        );
+        assert!(
+            oversized[0].content.contains("edit_file"),
+            "synthetic content should name edit_file in the recovery hint"
+        );
+        assert!(
+            oversized[0].content.contains("6000"),
+            "synthetic content should reference the byte cap"
+        );
+        assert!(
+            remaining.is_empty(),
+            "oversized write should NOT be forwarded to the executor"
+        );
+        assert_eq!(
+            side_messages.len(),
+            1,
+            "a warning side-message should be queued for the next user turn"
+        );
+    }
+
+    #[test]
+    fn write_file_under_chunk_bytes_proceeds() {
+        let small = "y".repeat(2_000);
+        let call = mk_tool(
+            "toolu_2",
+            "write_file",
+            json!({"path": "src/small.rs", "content": small}),
+        );
+        let mut side_messages: Vec<String> = Vec::new();
+        let (oversized, remaining) =
+            partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
+
+        assert!(
+            oversized.is_empty(),
+            "under-threshold writes must pass through unchanged"
+        );
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "toolu_2");
+        assert!(side_messages.is_empty());
+    }
+
+    #[test]
+    fn chunk_guard_ignores_non_write_tools() {
+        let big_arg = "z".repeat(10_000);
+        let call = mk_tool(
+            "toolu_3",
+            "search_code",
+            json!({"pattern": big_arg}),
+        );
+        let mut side_messages: Vec<String> = Vec::new();
+        let (oversized, remaining) =
+            partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
+        assert!(oversized.is_empty());
+        assert_eq!(remaining.len(), 1);
+    }
 }

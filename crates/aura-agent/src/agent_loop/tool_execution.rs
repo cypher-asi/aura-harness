@@ -11,6 +11,7 @@ use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 
+use super::search_cache::normalized_search_key;
 use super::streaming;
 use super::{AgentLoop, LoopState};
 
@@ -69,7 +70,8 @@ async fn execute_and_cache_tools(
         );
     }
 
-    let (cached_results, uncached_calls) = split_cached(&tool_calls, &state.tool_cache);
+    let (cached_results, uncached_calls) =
+        split_cached(&tool_calls, &state.tool_cache, &state.fuzzy_tool_cache);
     let cached_ids: HashSet<String> = cached_results
         .iter()
         .map(|r| r.tool_use_id.clone())
@@ -88,7 +90,12 @@ async fn execute_and_cache_tools(
             .await
     };
 
-    update_cache(&mut state.tool_cache, &uncached_calls, &executed_results);
+    update_cache(
+        &mut state.tool_cache,
+        &mut state.fuzzy_tool_cache,
+        &uncached_calls,
+        &executed_results,
+    );
 
     let mut all_results: Vec<ToolCallResult> = cached_results;
     all_results.extend(executed_results);
@@ -222,16 +229,51 @@ fn extract_tool_calls(response: &ModelResponse) -> Vec<ToolCallInfo> {
 pub(super) fn split_cached(
     tool_calls: &[ToolCallInfo],
     cache: &std::collections::HashMap<String, String>,
+    fuzzy_cache: &std::collections::HashMap<String, String>,
 ) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
     let mut cached = Vec::new();
     let mut uncached = Vec::new();
 
     for tc in tool_calls {
-        if is_cacheable(&tc.name) {
-            let key = tool_result_cache_key(&tc.name, &tc.input);
-            if let Some(hit) = cache.get(&key) {
+        if !is_cacheable(&tc.name) {
+            uncached.push(tc.clone());
+            continue;
+        }
+
+        let exact_key = tool_result_cache_key(&tc.name, &tc.input);
+        if let Some(hit) = cache.get(&exact_key) {
+            let content = helpers::summarize_cached_tool_result(&tc.name, &tc.input, hit)
+                .unwrap_or_else(|| hit.clone());
+            info!(
+                tool_use_id = %tc.id,
+                tool_name = %tc.name,
+                source = "cache:exact",
+                "Tool call satisfied from cache"
+            );
+            cached.push(ToolCallResult {
+                tool_use_id: tc.id.clone(),
+                content,
+                is_error: false,
+                stop_loop: false,
+                file_changes: Vec::new(),
+            });
+            continue;
+        }
+
+        // Fall back to the normalized (fuzzy) index for
+        // `search_code` / `find_files` only. Other cacheable tools
+        // (`read_file`, `list_files`, `stat_file`) stay exact-only
+        // because their keys already describe a single resource.
+        if let Some(fkey) = normalized_search_key(&tc.name, &tc.input) {
+            if let Some(hit) = fuzzy_cache.get(&fkey) {
                 let content = helpers::summarize_cached_tool_result(&tc.name, &tc.input, hit)
                     .unwrap_or_else(|| hit.clone());
+                info!(
+                    tool_use_id = %tc.id,
+                    tool_name = %tc.name,
+                    source = "cache:fuzzy",
+                    "Tool call satisfied from fuzzy cache"
+                );
                 cached.push(ToolCallResult {
                     tool_use_id: tc.id.clone(),
                     content,
@@ -242,14 +284,16 @@ pub(super) fn split_cached(
                 continue;
             }
         }
+
         uncached.push(tc.clone());
     }
 
     (cached, uncached)
 }
 
-fn update_cache(
+pub(super) fn update_cache(
     cache: &mut std::collections::HashMap<String, String>,
+    fuzzy_cache: &mut std::collections::HashMap<String, String>,
     uncached: &[ToolCallInfo],
     executed: &[ToolCallResult],
 ) {
@@ -261,6 +305,7 @@ fn update_cache(
     });
     if any_write {
         cache.clear();
+        fuzzy_cache.clear();
     }
 
     for r in executed {
@@ -268,6 +313,9 @@ fn update_cache(
             if is_cacheable(&tc.name) && !r.is_error {
                 let key = tool_result_cache_key(&tc.name, &tc.input);
                 cache.insert(key, r.content.clone());
+                if let Some(fkey) = normalized_search_key(&tc.name, &tc.input) {
+                    fuzzy_cache.insert(fkey, r.content.clone());
+                }
             }
         }
     }

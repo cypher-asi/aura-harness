@@ -241,15 +241,31 @@ pub(super) fn handle_max_tokens(
 
     let results: Vec<(String, ToolResultContent, bool)> = pending_tools
         .iter()
-        .map(|(id, name)| {
-            (
-                id.clone(),
-                ToolResultContent::text(format!(
-                    "Error: Response was truncated (max_tokens). Tool '{name}' was not executed. \
-                     Please try again with a simpler approach or break the task into smaller steps."
-                )),
-                true,
-            )
+        .map(|pt| {
+            let text = if pt.name == "write_file" {
+                match pt.path.as_deref() {
+                    Some(path) => format!(
+                        "Error: Response was truncated (max_tokens) mid-`write_file`. \
+                         Target path: `{path}`. Partial content (if any) is NOT on disk. \
+                         Next turn: call `edit_file` on `{path}` with `append_after_eof` to add \
+                         remaining content incrementally, or call `write_file` with only the \
+                         skeleton (module-doc + imports + one stub) and switch to `edit_file` \
+                         appends for the rest."
+                    ),
+                    None => "Error: Response was truncated (max_tokens) mid-`write_file` \
+                         (no target path recovered). Next turn: retry with the skeleton \
+                         (module-doc + imports + one stub) and use `edit_file` \
+                         `append_after_eof` for the rest."
+                        .to_string(),
+                }
+            } else {
+                format!(
+                    "Error: Response was truncated (max_tokens). Tool '{}' was not executed. \
+                     Please try again with a simpler approach or break the task into smaller steps.",
+                    pt.name
+                )
+            };
+            (pt.id.clone(), ToolResultContent::text(text), true)
         })
         .collect();
 
@@ -264,14 +280,32 @@ pub(super) fn handle_max_tokens(
     true
 }
 
-fn extract_pending_tools(response: &ModelResponse) -> Vec<(String, String)> {
+/// Subset of a pending `tool_use` block used to shape the synthetic
+/// error injected on `max_tokens`. `path` is best-effort — extracted
+/// from the partial input when it serialized cleanly enough to decode
+/// the `path` field before truncation hit.
+struct PendingTool {
+    id: String,
+    name: String,
+    path: Option<String>,
+}
+
+fn extract_pending_tools(response: &ModelResponse) -> Vec<PendingTool> {
     response
         .message
         .content
         .iter()
         .filter_map(|block| {
-            if let ContentBlock::ToolUse { id, name, .. } = block {
-                Some((id.clone(), name.clone()))
+            if let ContentBlock::ToolUse { id, name, input } = block {
+                let path = input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string);
+                Some(PendingTool {
+                    id: id.clone(),
+                    name: name.clone(),
+                    path,
+                })
             } else {
                 None
             }
@@ -334,5 +368,100 @@ mod rate_limit_tests {
         assert!(looks_like_rate_limited("Too Many Requests"));
         assert!(looks_like_rate_limited("code: RATE_LIMITED"));
         assert!(!looks_like_rate_limited("invalid api key"));
+    }
+}
+
+#[cfg(test)]
+mod max_tokens_tests {
+    use super::*;
+    use aura_reasoner::{ContentBlock, Message, ProviderTrace, Role, Usage};
+
+    use crate::agent_loop::AgentLoopConfig;
+
+    fn tool_use_response(tool_name: &str, path: Option<&str>) -> ModelResponse {
+        let input = match path {
+            Some(p) => serde_json::json!({"path": p, "content": "stub"}),
+            None => serde_json::json!({"content": "stub"}),
+        };
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "toolu_1".into(),
+                name: tool_name.into(),
+                input,
+            }],
+        };
+        ModelResponse {
+            stop_reason: aura_reasoner::StopReason::MaxTokens,
+            message,
+            usage: Usage::default(),
+            trace: ProviderTrace::default(),
+            model_used: String::new(),
+        }
+    }
+
+    fn find_tool_result_text(state: &LoopState) -> Vec<String> {
+        let Some(last) = state.messages.last() else {
+            return Vec::new();
+        };
+        last.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { content, .. } => match content {
+                    aura_reasoner::ToolResultContent::Text(t) => Some(t.clone()),
+                    aura_reasoner::ToolResultContent::Json(v) => Some(v.to_string()),
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Build a realistic in-progress conversation: a prior user turn
+    /// followed by the assistant message with the truncated tool_use
+    /// block. handle_max_tokens will push a tool_result Message after
+    /// the assistant message, which sanitize::validate_and_repair then
+    /// keeps paired correctly.
+    fn seed_state_with(config: &AgentLoopConfig, response: &ModelResponse) -> LoopState {
+        let initial = vec![
+            Message::user("go write the file"),
+            response.message.clone(),
+        ];
+        LoopState::new(config, initial)
+    }
+
+    #[test]
+    fn handle_max_tokens_for_write_file_carries_path_hint() {
+        let config = AgentLoopConfig::default();
+        let response = tool_use_response("write_file", Some("crates/foo/src/lib.rs"));
+        let mut state = seed_state_with(&config, &response);
+
+        assert!(handle_max_tokens(&config, &response, &mut state));
+        let texts = find_tool_result_text(&state);
+        assert_eq!(texts.len(), 1, "one tool_result per pending tool_use");
+        let text = &texts[0];
+        assert!(
+            text.contains("crates/foo/src/lib.rs"),
+            "path should appear in the recovery hint, got: {text}"
+        );
+        assert!(
+            text.contains("edit_file") && text.contains("append_after_eof"),
+            "recovery pattern should name edit_file + append_after_eof, got: {text}"
+        );
+    }
+
+    #[test]
+    fn handle_max_tokens_for_non_write_tool_uses_generic_text() {
+        let config = AgentLoopConfig::default();
+        let response = tool_use_response("read_file", Some("src/main.rs"));
+        let mut state = seed_state_with(&config, &response);
+
+        assert!(handle_max_tokens(&config, &response, &mut state));
+        let texts = find_tool_result_text(&state);
+        assert_eq!(texts.len(), 1);
+        assert!(
+            !texts[0].contains("append_after_eof"),
+            "non-write tools should not get the append_after_eof hint"
+        );
+        assert!(texts[0].contains("truncated"));
     }
 }

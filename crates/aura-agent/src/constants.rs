@@ -120,3 +120,19 @@ pub const COMMAND_TOOLS: &[&str] = &["run_command"];
 
 /// Consecutive iterations where every tool call errors before forcing a stop.
 pub const CONSECUTIVE_ERROR_ITERATIONS_LIMIT: usize = 5;
+
+// ---------------------------------------------------------------------------
+// Write-side chunk guard
+// ---------------------------------------------------------------------------
+
+/// Per-turn soft cap on `write_file` content size. Calls exceeding this are
+/// short-circuited with a synthetic error that asks the agent to write a
+/// skeleton first and use `edit_file` appends for the rest. The goal is to
+/// avoid re-echoing huge content into the next turn when the model
+/// inevitably trips `max_tokens` mid-write.
+pub const WRITE_FILE_CHUNK_BYTES: usize = 6_000;
+
+/// Hard ceiling on `write_file` content size. Reserved for future use by
+/// executor-side enforcement; the current short-circuit in
+/// `tool_processing` fires at [`WRITE_FILE_CHUNK_BYTES`] first.
+pub const WRITE_FILE_HARD_MAX_BYTES: usize = 12_000;

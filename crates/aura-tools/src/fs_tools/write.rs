@@ -8,6 +8,12 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, instrument};
 
+/// Soft cap on `write_file` content size mirrored from
+/// `aura_agent::constants::WRITE_FILE_CHUNK_BYTES`. Kept local to avoid a
+/// circular dep between `aura-tools` and `aura-agent`; tests guard against
+/// drift by asserting on the numeric threshold directly.
+const WRITE_FILE_CHUNK_BYTES: usize = 6_000;
+
 /// File extensions for which the unbalanced-brace/paren heuristic is
 /// worth running. Anything outside this set (Markdown, plain text,
 /// YAML/TOML, HTML, …) routinely contains unbalanced braces in
@@ -139,6 +145,10 @@ pub fn fs_write(
             "warning",
             "Content has unbalanced braces/parentheses – may be truncated".to_string(),
         );
+    }
+
+    if bytes_written > WRITE_FILE_CHUNK_BYTES {
+        result = result.with_metadata("chunk_suggestion", "true");
     }
 
     Ok(result)
@@ -439,5 +449,27 @@ mod tests {
         let result = fs_write(&sandbox, "a/b/c/d/e/f/deep.txt", "deep", true).unwrap();
         assert!(result.ok);
         assert!(dir.path().join("a/b/c/d/e/f/deep.txt").exists());
+    }
+
+    #[test]
+    fn fs_write_metadata_chunk_suggestion_when_over_threshold() {
+        let (sandbox, _dir) = create_test_sandbox();
+
+        let big = "x".repeat(7_000);
+        let result = fs_write(&sandbox, "big_chunk.txt", &big, false).unwrap();
+        assert!(result.ok);
+        assert_eq!(
+            result.metadata.get("chunk_suggestion").map(String::as_str),
+            Some("true"),
+            "chunk_suggestion metadata should be set when content exceeds WRITE_FILE_CHUNK_BYTES"
+        );
+
+        let small = "y".repeat(2_000);
+        let result = fs_write(&sandbox, "small_chunk.txt", &small, false).unwrap();
+        assert!(result.ok);
+        assert!(
+            !result.metadata.contains_key("chunk_suggestion"),
+            "chunk_suggestion metadata should be absent for content under WRITE_FILE_CHUNK_BYTES"
+        );
     }
 }
