@@ -34,8 +34,12 @@ pub use aura_core::PermissionLevel;
 #[must_use]
 pub fn default_tool_permission(tool: &str) -> PermissionLevel {
     match tool {
-        "list_files" | "read_file" | "stat_file" | "search_code" | "write_file" | "edit_file"
-        | "delete_file" => PermissionLevel::AlwaysAllow,
+        // Read-only discovery / content tools, plus the core edit and
+        // delete verbs. `find_files` was historically missing from this
+        // arm (followup to the Phase 5 audit) which made it permanently
+        // `Deny` even for hosts that spliced it into `allowed_tools`.
+        "list_files" | "find_files" | "read_file" | "stat_file" | "search_code" | "write_file"
+        | "edit_file" | "delete_file" => PermissionLevel::AlwaysAllow,
         "run_command" => PermissionLevel::RequireApproval,
         _ => PermissionLevel::Deny,
     }
@@ -98,11 +102,18 @@ impl Default for PolicyConfig {
 
         let mut allowed_tools = HashSet::new();
         allowed_tools.insert("list_files".to_string());
+        allowed_tools.insert("find_files".to_string());
         allowed_tools.insert("read_file".to_string());
         allowed_tools.insert("stat_file".to_string());
         allowed_tools.insert("search_code".to_string());
         allowed_tools.insert("write_file".to_string());
         allowed_tools.insert("edit_file".to_string());
+        // `delete_file` already had `AlwaysAllow` in
+        // `default_tool_permission` but was missing from this set,
+        // making it effectively `Deny` under `allow_unlisted = false`.
+        // Reconcile the two so the Phase-5 fail-closed default stops
+        // contradicting itself.
+        allowed_tools.insert("delete_file".to_string());
 
         Self {
             allowed_action_kinds,

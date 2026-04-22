@@ -205,7 +205,18 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
-    let (executor_router, tools) = session_helpers::build_executor_router();
+    let tool_config = session_helpers::tool_config_from_env();
+    if session_helpers::allow_run_command_from_env() && tool_config.binary_allowlist.is_empty() {
+        // Reach the operator via the same status-line the provider
+        // fallback uses so they know the flag was seen but didn't
+        // actually unlock anything. Keeps the failure mode obvious
+        // without leaking env values into logs.
+        let _ = cmd_tx.try_send(UiCommand::SetStatus(
+            "AURA_ALLOW_RUN_COMMAND=1 set but AURA_ALLOWED_COMMANDS is empty — commands still blocked"
+                .to_string(),
+        ));
+    }
+    let (executor_router, tools) = session_helpers::build_executor_router_with_config(&tool_config);
 
     let config = session_helpers::default_agent_config();
     let agent_loop = AgentLoop::new(config);
@@ -230,6 +241,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
+        policy: session_helpers::policy_config_from_env(),
         ..KernelConfig::default()
     };
     let agent_id = identity.agent_id;
