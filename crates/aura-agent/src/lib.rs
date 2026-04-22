@@ -55,7 +55,7 @@ pub(crate) mod file_ops;
 pub mod git;
 // TODO: helpers has unused utility functions — remove allow once integrated
 #[allow(dead_code)]
-mod helpers;
+pub mod helpers;
 mod kernel_gateway;
 mod recording_stream;
 // TODO: parser is WIP — remove allow once integrated

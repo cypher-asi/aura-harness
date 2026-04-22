@@ -15,7 +15,7 @@ use aura_reasoner::ModelProvider;
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::DomainApi;
 
-use super::dev_loop::commit_and_push;
+use super::dev_loop::{commit_and_push, validate_execution};
 use super::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
@@ -187,7 +187,7 @@ impl TaskRunAutomaton {
         ctx: &TickContext,
         project: &aura_tools::domain_tools::ProjectDescriptor,
         shell_cmd: &str,
-    ) -> Result<aura_agent::agent_runner::TaskExecutionResult, anyhow::Error> {
+    ) -> Result<aura_agent::agent_runner::TaskExecutionResult, AutomatonError> {
         let workspace = ctx
             .workspace_root
             .as_deref()
@@ -201,7 +201,7 @@ impl TaskRunAutomaton {
                 None,
             )
             .await
-            .map_err(Into::into)
+            .map_err(|e| AutomatonError::AgentExecution(e.to_string()))
     }
 
     async fn run_agentic_task(
@@ -210,7 +210,7 @@ impl TaskRunAutomaton {
         project: &aura_tools::domain_tools::ProjectDescriptor,
         spec: &aura_tools::domain_tools::SpecDescriptor,
         task: &aura_tools::domain_tools::TaskDescriptor,
-    ) -> Result<aura_agent::agent_runner::TaskExecutionResult, anyhow::Error> {
+    ) -> Result<aura_agent::agent_runner::TaskExecutionResult, AutomatonError> {
         let effective_path = ctx
             .workspace_root
             .as_ref()
@@ -285,25 +285,10 @@ impl TaskRunAutomaton {
                 Some(event_tx),
                 Some(cancel),
             )
-            .await;
+            .await
+            .map_err(|e| AutomatonError::AgentExecution(e.to_string()))?;
 
-        match result {
-            Ok(exec) => {
-                if exec.file_ops.is_empty() && !exec.no_changes_needed {
-                    let msg = if exec.reached_implementing {
-                        "task reached implementation phase but no file operations completed \
-                         — likely truncated by max_tokens or interrupted. \
-                         On retry, use smaller incremental edits (one file per turn)."
-                    } else {
-                        "task completed without any file operations — completion not verified"
-                    };
-                    Err(anyhow::anyhow!("{msg}"))
-                } else {
-                    Ok(exec)
-                }
-            }
-            Err(e) => Err(e.into()),
-        }
+        validate_execution(result)
     }
 
     async fn finalize_task(
@@ -311,7 +296,7 @@ impl TaskRunAutomaton {
         ctx: &mut TickContext,
         task_id: &str,
         _task_title: &str,
-        result: Result<aura_agent::agent_runner::TaskExecutionResult, anyhow::Error>,
+        result: Result<aura_agent::agent_runner::TaskExecutionResult, AutomatonError>,
     ) -> Result<TickOutcome, AutomatonError> {
         match result {
             Ok(exec) => {

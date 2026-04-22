@@ -53,6 +53,10 @@ pub struct TaskExecutionResult {
     /// submitted a plan. Automatons use this to distinguish "never tried"
     /// from "tried but was interrupted" when `file_ops` is empty.
     pub reached_implementing: bool,
+    /// Final message history from the agent loop. Downstream validators use
+    /// this to build recovery hints (e.g. which file paths the agent tried
+    /// to write before truncation).
+    pub messages: Vec<aura_reasoner::Message>,
 }
 
 /// Suggested follow-up task from agent execution.
@@ -450,20 +454,28 @@ pub fn configure_loop_config(
 
 /// Process an [`AgentLoopResult`] into a [`TaskExecutionResult`].
 fn finalize_loop_result(result: AgentLoopResult) -> TaskExecutionResult {
-    let notes = if result.total_text.is_empty() {
+    let AgentLoopResult {
+        total_text,
+        total_input_tokens,
+        total_output_tokens,
+        messages,
+        ..
+    } = result;
+    let notes = if total_text.is_empty() {
         "Task completed via agentic tool-use loop".to_string()
     } else {
-        result.total_text
+        total_text
     };
     TaskExecutionResult {
         notes,
         file_ops: Vec::new(),
         follow_up_tasks: Vec::new(),
-        input_tokens: result.total_input_tokens,
-        output_tokens: result.total_output_tokens,
+        input_tokens: total_input_tokens,
+        output_tokens: total_output_tokens,
         files_already_applied: true,
         no_changes_needed: false,
         reached_implementing: false,
+        messages,
     }
 }
 

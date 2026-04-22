@@ -1,5 +1,5 @@
 mod chat;
-pub(crate) mod dev_loop;
+pub mod dev_loop;
 mod noop_executor;
 mod spec_gen;
 mod task_run;

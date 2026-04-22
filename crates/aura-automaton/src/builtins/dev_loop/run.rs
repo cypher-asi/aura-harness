@@ -1,9 +1,10 @@
 use super::{
-    extract_shell_command, forward_agent_event, info, warn, AgenticTaskParams, Arc, AutomatonError,
-    AutomatonEvent, DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap, ProjectInfo, SessionInfo,
-    ShellTaskParams, SpecInfo, TaskDescriptor, TaskExecutionResult, TaskInfo, TaskTrackingConfig,
-    TickContext, ToolProfile, MAX_RETRIES_PER_TASK, STATE_FAILED_IDS, STATE_FAILURE_REASONS,
-    STATE_RETRY_COUNTS, STATE_TASK_QUEUE, STATE_WORK_LOG,
+    extract_shell_command, forward_agent_event, info, validate_execution, warn,
+    AgenticTaskParams, Arc, AutomatonError, AutomatonEvent, DevLoopAutomaton, DevLoopConfig,
+    DomainApi, HashMap, ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor,
+    TaskExecutionResult, TaskInfo, TaskTrackingConfig, TickContext, ToolProfile,
+    MAX_RETRIES_PER_TASK, STATE_FAILED_IDS, STATE_FAILURE_REASONS, STATE_RETRY_COUNTS,
+    STATE_TASK_QUEUE, STATE_WORK_LOG,
 };
 use crate::builtins::noop_executor::NoOpExecutor;
 
@@ -229,17 +230,3 @@ fn effective_project_path(
         .unwrap_or_else(|| project.path.clone())
 }
 
-fn validate_execution(exec: TaskExecutionResult) -> Result<TaskExecutionResult, AutomatonError> {
-    if exec.file_ops.is_empty() && !exec.no_changes_needed {
-        let msg = if exec.reached_implementing {
-            "task reached implementation phase but no file operations completed \
-             — likely truncated by max_tokens or interrupted. \
-             On retry, use smaller incremental edits (one file per turn)."
-        } else {
-            "task completed without any file operations — completion not verified"
-        };
-        Err(AutomatonError::AgentExecution(msg.into()))
-    } else {
-        Ok(exec)
-    }
-}
