@@ -112,6 +112,40 @@ jobs:
         run: cargo test --workspace --all-features
 
   # ---------------------------------------------------------------------------
+  # MSRV (Minimum Supported Rust Version) check — must match
+  # `rust-version` in the workspace Cargo.toml.
+  # ---------------------------------------------------------------------------
+  msrv:
+    name: cargo check (MSRV 1.80.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aura-harness
+
+      - name: Checkout aura-os sibling
+        uses: actions/checkout@v4
+        with:
+          repository: cypher-asi/aura-os
+          path: aura-os
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@1.80.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aura-harness
+          key: msrv-1.80.0
+
+      - name: cargo check --workspace --locked (MSRV)
+        working-directory: aura-harness
+        run: cargo check --workspace --all-targets --locked
+
+  # ---------------------------------------------------------------------------
   # License / dependency policy
   # ---------------------------------------------------------------------------
   deny:
