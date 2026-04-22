@@ -29,13 +29,12 @@
 //! [`reqwest`]'s own client against a TCP loopback server configured
 //! per test.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_core::{ToolDefinition, ToolResult};
 use futures_util::StreamExt;
-use once_cell::sync::Lazy;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::Method;
 use serde_json::Value;
@@ -59,19 +58,37 @@ const HTTP_TOOL_MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 /// Shared default client — built once, lazily, with the request/connect
 /// timeouts above. Using `Client::default()` previously meant every http
 /// tool had an unbounded request horizon, which is how slow endpoints
-/// could hang an entire agent turn.
-static DEFAULT_HTTP_TOOL_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    // `reqwest::Client::builder().build()` only fails on catastrophic
-    // runtime failures (TLS backend init, etc.); if we can't build a
-    // client at all, nothing else in the agent will work either, and
-    // silently returning an un-timed `Client::new()` here would defeat
-    // the exact security guarantee this module promises. (Wave 5 / T2.4.)
-    reqwest::Client::builder()
+/// could hang an entire agent turn. (Wave 5 / T2.4.)
+///
+/// We use `OnceLock` + a fallible accessor ([`default_http_tool_client`])
+/// rather than `Lazy` + `.expect(...)` so that catastrophic
+/// `reqwest::Client::builder().build()` failures (TLS backend init,
+/// etc.) surface as a [`ToolError`] instead of a process-wide panic
+/// at module-load time.
+static DEFAULT_HTTP_TOOL_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Return a clone of the process-wide default HTTP tool client.
+///
+/// Builds the client on first call with the timeouts declared above.
+/// Returns `Err(ToolError::CommandFailed)` if `reqwest` cannot construct
+/// a client (essentially TLS backend init failure) — callers propagate
+/// this as any other recoverable tool error.
+fn default_http_tool_client() -> Result<reqwest::Client, ToolError> {
+    if let Some(c) = DEFAULT_HTTP_TOOL_CLIENT.get() {
+        return Ok(c.clone());
+    }
+    let client = reqwest::Client::builder()
         .timeout(HTTP_TOOL_REQUEST_TIMEOUT)
         .connect_timeout(HTTP_TOOL_CONNECT_TIMEOUT)
         .build()
-        .expect("failed to build default HTTP tool client with timeouts")
-});
+        .map_err(|e| {
+            ToolError::CommandFailed(format!("failed to build default HTTP tool client: {e}"))
+        })?;
+    // set() may race with another caller; either way, whichever client
+    // wins is fine — both have identical config.
+    let _ = DEFAULT_HTTP_TOOL_CLIENT.set(client.clone());
+    Ok(client)
+}
 
 /// HTTP methods supported by [`HttpToolDefinition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,9 +298,19 @@ impl HttpToolDefinitionBuilder {
         self
     }
 
-    #[must_use]
-    pub fn build(self) -> HttpToolDefinition {
-        HttpToolDefinition {
+    /// Finalize the builder.
+    ///
+    /// Returns an error if no client was supplied and the process-wide
+    /// default client cannot be built (see
+    /// [`default_http_tool_client`]).
+    pub fn try_build(self) -> Result<HttpToolDefinition, ToolError> {
+        // Prefer a caller-supplied client; otherwise share the process-wide
+        // default that carries sane timeouts. (Wave 5 / T2.4.)
+        let client = match self.client {
+            Some(c) => c,
+            None => default_http_tool_client()?,
+        };
+        Ok(HttpToolDefinition {
             name: self.name,
             description: self.description,
             input_schema: self.input_schema,
@@ -293,12 +320,8 @@ impl HttpToolDefinitionBuilder {
             method: self.method,
             auth: self.auth,
             static_headers: self.static_headers,
-            // Prefer a caller-supplied client; otherwise share the process-wide
-            // default that carries sane timeouts. (Wave 5 / T2.4.)
-            client: self
-                .client
-                .unwrap_or_else(|| DEFAULT_HTTP_TOOL_CLIENT.clone()),
-        }
+            client,
+        })
     }
 }
 
@@ -547,7 +570,8 @@ mod tests {
         )
         .method(HttpMethod::Post)
         .auth(HttpAuthSource::StaticBearer("jwt-xyz".to_string()))
-        .build();
+        .try_build()
+        .expect("tool must build in tests");
 
         let _ = dummy_agent();
         let result = tool
@@ -590,7 +614,8 @@ mod tests {
             "/api/projects/{project_id}",
         )
         .method(HttpMethod::Put)
-        .build();
+        .try_build()
+        .expect("tool must build in tests");
 
         let _ = tool
             .execute(&ctx(), json!({"project_id": "abc-123", "name": "new"}))
@@ -615,7 +640,8 @@ mod tests {
             "/api/orgs/{org_id}/projects",
         )
         .method(HttpMethod::Get)
-        .build();
+        .try_build()
+        .expect("tool must build in tests");
 
         let _ = tool
             .execute(
@@ -645,7 +671,8 @@ mod tests {
             "/api/projects/{project_id}/archive",
         )
         .method(HttpMethod::Post)
-        .build();
+        .try_build()
+        .expect("tool must build in tests");
 
         let result = tool
             .execute(&ctx(), json!({"project_id": "p-1"}))
@@ -678,7 +705,8 @@ mod tests {
         .auth(HttpAuthSource::Dynamic(Arc::new(move || {
             token_slot_for_tool.lock().unwrap().clone()
         })))
-        .build();
+        .try_build()
+        .expect("tool must build in tests");
 
         let _ = tool
             .execute(&ctx(), json!({"org_id": "o-1"}))
@@ -706,7 +734,8 @@ mod tests {
         )
         .method(HttpMethod::Post)
         .eager_input_streaming(true)
-        .build();
+        .try_build()
+        .expect("tool must build in tests");
 
         let def = tool.definition();
         assert_eq!(def.name, "create_spec");

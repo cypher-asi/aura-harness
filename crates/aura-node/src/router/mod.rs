@@ -596,6 +596,12 @@ type GovernorCfg = tower_governor::governor::GovernorConfig<
 /// 30 requests/sec with a burst of 60, keyed on peer IP address.
 /// Fresh per `create_router` call so different test routers don't
 /// share a limiter — production only calls `create_router` once.
+///
+/// INVARIANT: both `per_millisecond` and `burst_size` are hard-coded
+/// non-zero integer literals, so `GovernorConfigBuilder::finish()`
+/// cannot fail here; the `.expect(...)` below is a
+/// provably-infallible-at-compile-time assertion. Covered by
+/// `router::tests::test_global_governor_config_is_valid`.
 fn build_global_governor() -> Arc<GovernorCfg> {
     Arc::new(
         GovernorConfigBuilder::default()
@@ -608,6 +614,10 @@ fn build_global_governor() -> Arc<GovernorCfg> {
 
 /// Stricter rate limit for mutating endpoints (`/tx`, `/tool-approval`,
 /// `/automaton/start`, `:id/pause`, `:id/stop`). 5/sec burst 10.
+///
+/// INVARIANT: same reasoning as [`build_global_governor`] — hard-coded
+/// non-zero integer literals make the `.expect(...)` infallible by
+/// construction.
 fn build_strict_governor() -> Arc<GovernorCfg> {
     Arc::new(
         GovernorConfigBuilder::default()

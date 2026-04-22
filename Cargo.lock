@@ -424,7 +424,6 @@ dependencies = [
  "bytes",
  "futures-util",
  "glob",
- "once_cell",
  "regex",
  "reqwest",
  "serde",
