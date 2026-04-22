@@ -1,6 +1,4 @@
-//! Embedded API server for health checks, file access, and local tooling.
-//!
-//! # Security
+//! Embedded HTTP server for TUI mode with `/health` plus bearer-gated file APIs.
 //!
 //! The terminal harness runs as whatever user launched it, which means
 //! this server — if reachable from a browser on the same host — can
@@ -17,8 +15,17 @@
 //!    which canonicalises the workspace root and the candidate path
 //!    before comparing prefixes. That catches both plain `../` traversal
 //!    and symlinks / junctions whose real target lives outside the
-//!    workspace. Reads are additionally capped at [`MAX_READ_BYTES`].
+//!    workspace.
+//!
+//! The directory-walking and capped-read logic lives in
+//! [`aura_node::files_api`] — the TUI server and the aura-node HTTP
+//! router share the same implementation so a change to the ignore list
+//! or the read cap only needs to land in one place. This module owns
+//! the bearer middleware, the sandbox-aware path resolution, and the
+//! wire-format mapping from [`aura_node::files_api::WalkedEntry`] onto
+//! the TUI JSON contract.
 
+use aura_node::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
 use aura_terminal::UiCommand;
 use aura_tools::Sandbox;
 use axum::{
@@ -29,9 +36,8 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, warn};
@@ -41,25 +47,6 @@ const API_PORT: u16 = 8080;
 
 /// Fallback ports to try if the default is busy
 const FALLBACK_PORTS: &[u16] = &[8081, 8082, 8090, 3000];
-
-/// Maximum bytes `/api/read-file` will return before tripping `413`.
-///
-/// Mirrors the cap in `aura-node` so a reader can't OOM us by pointing
-/// the handler at a pseudo-file like `/dev/zero` or a multi-gig log.
-const MAX_READ_BYTES: u64 = 5 * 1024 * 1024;
-
-const IGNORED_DIRS: &[&str] = &[
-    ".git",
-    "node_modules",
-    "target",
-    "__pycache__",
-    ".next",
-    "dist",
-    "build",
-    ".svn",
-    ".hg",
-    "vendor",
-];
 
 /// State shared by the embedded server's handlers.
 ///
@@ -211,16 +198,6 @@ pub async fn start_api_server(
     None
 }
 
-/// Strip the `\\?\` verbatim prefix that Windows `canonicalize` adds
-/// so walk-time canonical paths compare cleanly against the sandbox
-/// root (which has already had its own prefix stripped). No-op on
-/// non-Windows targets.
-fn strip_unc_prefix(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    s.strip_prefix(r"\\?\")
-        .map_or_else(|| path.to_path_buf(), PathBuf::from)
-}
-
 /// Whether the embedded API server should enforce bearer-token auth.
 ///
 /// Reads `AURA_NODE_REQUIRE_AUTH` — the same gate that controls the
@@ -321,6 +298,14 @@ fn default_files_depth() -> usize {
     3
 }
 
+/// Wire shape for `/api/files` (TUI variant).
+///
+/// Paths are reported as absolute strings (matching the pre-consolidation
+/// behaviour) because the TUI workspace panel resolves them directly.
+/// The `aura-node` HTTP router uses a different DTO with workspace-
+/// relative paths — the two JSON contracts are deliberately separate
+/// and each caller owns its own mapping away from
+/// [`aura_node::files_api::WalkedEntry`].
 #[derive(serde::Serialize)]
 struct DirEntry {
     name: String,
@@ -330,141 +315,23 @@ struct DirEntry {
     children: Option<Vec<Self>>,
 }
 
-async fn walk_directory(start: &Path, workspace_root: &Path, max_depth: usize) -> Vec<DirEntry> {
-    use std::collections::{HashMap, HashSet};
-
-    // Phase 1: async iterative walk driven by an explicit stack. For each
-    // directory we visit we record its ordered children (dirs before files,
-    // alphabetical within each group) into a flat map.
-    //
-    // Symlink-loop defense: before descending into any directory we
-    // canonicalize its path and consult a visited-set. Two hostile
-    // shapes we want to neutralise —
-    //
-    //  1. `a -> b -> a` style cycles, which inflate cost even with the
-    //     `max_depth` cap because every hop adds a new `PathBuf` key
-    //     to the contents map.
-    //  2. Symlinks whose canonical target escapes the workspace root.
-    //     The sandbox's `resolve_existing` already canonicalises the
-    //     entry point, but a mid-walk symlink to `/etc` is still a
-    //     leak if we blindly recurse. We reject any canonical child
-    //     whose prefix does not match the workspace root.
-    let mut contents: HashMap<PathBuf, Vec<(String, bool, PathBuf)>> = HashMap::new();
-    let mut visited: HashSet<PathBuf> = HashSet::new();
-    let mut stack: Vec<(PathBuf, usize)> = vec![(start.to_path_buf(), 0)];
-
-    while let Some((path, depth)) = stack.pop() {
-        if depth >= max_depth {
-            continue;
-        }
-        // Canonicalize per-step so intermediate symlinks collapse to
-        // their real target. Failed canonicalize (broken symlink,
-        // permission denied, missing) => skip rather than bail the
-        // whole walk.
-        let canonical = match std::fs::canonicalize(&path) {
-            Ok(c) => strip_unc_prefix(&c),
-            Err(_) => continue,
-        };
-        if !canonical.starts_with(workspace_root) {
-            // Defense-in-depth against the Phase 3 sandbox check —
-            // a symlink encountered mid-walk that points outside the
-            // workspace must not be followed even if depth allows it.
-            debug!(
-                path = %path.display(),
-                canonical = %canonical.display(),
-                "walk_directory skipping path that canonicalises outside workspace"
-            );
-            continue;
-        }
-        if !visited.insert(canonical) {
-            // Already walked via some other name (symlink, junction) —
-            // skip so we don't inflate the contents map on cycles.
-            continue;
-        }
-        let mut read_dir = match tokio::fs::read_dir(&path).await {
-            Ok(rd) => rd,
-            Err(_) => continue,
-        };
-
-        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
-        let mut files: Vec<(String, PathBuf)> = Vec::new();
-
-        loop {
-            match read_dir.next_entry().await {
-                Ok(Some(entry)) => {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    let entry_path = entry.path();
-                    let is_dir = match entry.file_type().await {
-                        Ok(ft) => ft.is_dir(),
-                        Err(_) => false,
-                    };
-                    if is_dir {
-                        if !IGNORED_DIRS.contains(&name.as_str()) {
-                            dirs.push((name, entry_path));
-                        }
-                    } else {
-                        files.push((name, entry_path));
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => break,
-            }
-        }
-
-        dirs.sort_by(|a, b| a.0.cmp(&b.0));
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-
-        let mut rel_contents: Vec<(String, bool, PathBuf)> =
-            Vec::with_capacity(dirs.len() + files.len());
-        for (name, entry_path) in &dirs {
-            rel_contents.push((name.clone(), true, entry_path.clone()));
-        }
-        for (name, entry_path) in files {
-            rel_contents.push((name, false, entry_path));
-        }
-        contents.insert(path, rel_contents);
-
-        for (_, entry_path) in dirs {
-            stack.push((entry_path, depth + 1));
-        }
-    }
-
-    // Phase 2: pure in-memory tree assembly bounded by `max_depth` (<= 20),
-    // so sync recursion is safe and keeps the shape simple.
-    fn assemble(
-        path: &Path,
-        contents: &std::collections::HashMap<PathBuf, Vec<(String, bool, PathBuf)>>,
-    ) -> Vec<DirEntry> {
-        let Some(children) = contents.get(path) else {
-            return Vec::new();
-        };
-        children
-            .iter()
-            .map(|(name, is_dir, entry_path)| {
-                let kids = if *is_dir {
-                    Some(assemble(entry_path, contents))
-                } else {
-                    None
-                };
-                DirEntry {
-                    name: name.clone(),
-                    path: entry_path.to_string_lossy().into_owned(),
-                    is_dir: *is_dir,
-                    children: kids,
-                }
-            })
-            .collect()
-    }
-
-    assemble(start, &contents)
+fn to_dir_entries(entries: Vec<WalkedEntry>) -> Vec<DirEntry> {
+    entries
+        .into_iter()
+        .map(|e| DirEntry {
+            name: e.name,
+            path: e.abs_path.to_string_lossy().into_owned(),
+            is_dir: e.is_dir,
+            children: e.children.map(to_dir_entries),
+        })
+        .collect()
 }
 
 /// `GET /api/files?path=...&depth=...`
 ///
-/// Lists directory contents recursively, returning a tree of `DirEntry` objects.
+/// Lists directory contents recursively, returning a tree of
+/// [`DirEntry`] objects. Depth is clamped to
+/// [`aura_node::files_api::MAX_WALK_DEPTH`].
 async fn api_list_files_handler(
     State(state): State<ApiState>,
     Query(query): Query<ListFilesQuery>,
@@ -492,8 +359,9 @@ async fn api_list_files_handler(
             .into_response();
     }
 
-    let max_depth = query.depth.min(20);
-    let entries = walk_directory(&target, state.sandbox.root(), max_depth).await;
+    let max_depth = query.depth.min(MAX_WALK_DEPTH);
+    let walked = files_api::walk_directory(&target, Some(state.sandbox.root()), max_depth).await;
+    let entries = to_dir_entries(walked);
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "entries": entries })),
@@ -509,9 +377,9 @@ struct ReadFileQuery {
 /// `GET /api/read-file?path=...`
 ///
 /// Reads a file and returns its text content, capped at
-/// [`MAX_READ_BYTES`]. Files whose canonical path is outside the
-/// sandbox root are refused with `403 Forbidden`; files exceeding the
-/// cap return `413 Payload Too Large`.
+/// [`aura_node::files_api::MAX_READ_BYTES`]. Files whose canonical path
+/// is outside the sandbox root are refused with `403 Forbidden`; files
+/// exceeding the cap return `413 Payload Too Large`.
 async fn api_read_file_handler(
     State(state): State<ApiState>,
     Query(query): Query<ReadFileQuery>,
@@ -539,57 +407,38 @@ async fn api_read_file_handler(
             .into_response();
     }
 
-    // `take(cap + 1)` lets us distinguish "at the limit" from "over the
-    // limit" without ever buffering more than `cap + 1` bytes.
-    let file = match tokio::fs::File::open(&target).await {
-        Ok(f) => f,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+    match files_api::read_file_capped(&target, MAX_READ_BYTES).await {
+        Ok(ReadOutcome::Ok { bytes }) => {
+            let content = String::from_utf8_lossy(&bytes).into_owned();
+            (
+                StatusCode::OK,
                 Json(serde_json::json!({
-                    "ok": false,
-                    "error": aura_auth::redact_error(e.to_string()),
+                    "ok": true,
+                    "content": content,
+                    "path": target.to_string_lossy(),
+                    "bytes": bytes.len(),
                 })),
             )
-                .into_response();
+                .into_response()
         }
-    };
-    let cap = MAX_READ_BYTES;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut limited = file.take(cap + 1);
-    if let Err(e) = limited.read_to_end(&mut buf).await {
-        return (
+        Ok(ReadOutcome::TooLarge { max_bytes }) => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("file exceeds {max_bytes}-byte read cap"),
+                "max_bytes": max_bytes,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({
                 "ok": false,
                 "error": aura_auth::redact_error(e.to_string()),
             })),
         )
-            .into_response();
+            .into_response(),
     }
-    if buf.len() as u64 > cap {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({
-                "ok": false,
-                "error": format!("file exceeds {cap}-byte read cap"),
-                "max_bytes": cap,
-            })),
-        )
-            .into_response();
-    }
-
-    let content = String::from_utf8_lossy(&buf).into_owned();
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "ok": true,
-            "content": content,
-            "path": target.to_string_lossy(),
-            "bytes": buf.len(),
-        })),
-    )
-        .into_response()
 }
 
 /// Map [`aura_tools::ToolError`] variants onto HTTP responses.
@@ -765,84 +614,5 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"ab"));
         assert!(!constant_time_eq(b"", b"a"));
         assert!(constant_time_eq(b"", b""));
-    }
-
-    /// Cyclic symlink must not cause an unbounded walk. Gated to
-    /// `cfg(unix)` because creating symlinks on Windows needs
-    /// either Developer Mode or `SeCreateSymbolicLinkPrivilege`,
-    /// which CI runners typically lack.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn walk_directory_breaks_symlink_loops() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-
-        // Create a real subdir with one file so we can verify the
-        // legitimate entries still show up.
-        let child = root.join("child");
-        std::fs::create_dir(&child).unwrap();
-        std::fs::write(child.join("marker.txt"), "ok").unwrap();
-
-        // Create a loop: <root>/child/loop -> <root>
-        std::os::unix::fs::symlink(&root, child.join("loop")).unwrap();
-
-        // Run with plenty of depth — the visited-set must stop the
-        // traversal rather than bottoming out on `max_depth`.
-        let entries = walk_directory(&root, &root, 20).await;
-
-        // Sanity: the legitimate file is present somewhere in the
-        // returned tree.
-        fn contains_marker(entries: &[DirEntry]) -> bool {
-            entries.iter().any(|e| {
-                e.name == "marker.txt" || e.children.as_ref().is_some_and(|c| contains_marker(c))
-            })
-        }
-        assert!(contains_marker(&entries), "legitimate file should survive");
-
-        // Walk the tree and count nodes — a successful visited-set
-        // means the count is linear in the real tree, not exponential
-        // in depth.
-        fn count(entries: &[DirEntry]) -> usize {
-            entries
-                .iter()
-                .map(|e| 1 + e.children.as_deref().map(count).unwrap_or(0))
-                .sum()
-        }
-        let n = count(&entries);
-        assert!(
-            n < 50,
-            "symlink loop inflated the tree to {n} nodes — visited-set not working"
-        );
-    }
-
-    /// Symlink whose canonical target escapes the workspace root is
-    /// refused mid-walk, even if the entry point itself is legal.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn walk_directory_rejects_escaping_symlink() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-
-        // A sibling directory outside the workspace, with one file.
-        let outside_parent = tempfile::tempdir().unwrap();
-        let outside = outside_parent.path().canonicalize().unwrap();
-        std::fs::write(outside.join("secret.txt"), "top-secret").unwrap();
-
-        // Point a symlink from inside the workspace to the outside
-        // directory. The walker must canonicalize and refuse the
-        // descent.
-        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
-
-        let entries = walk_directory(&root, &root, 5).await;
-
-        fn has_name(entries: &[DirEntry], needle: &str) -> bool {
-            entries.iter().any(|e| {
-                e.name == needle || e.children.as_ref().is_some_and(|c| has_name(c, needle))
-            })
-        }
-        assert!(
-            !has_name(&entries, "secret.txt"),
-            "escaping-symlink contents must not leak into the listing"
-        );
     }
 }

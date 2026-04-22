@@ -60,7 +60,14 @@ pub struct TaskExecutionResult {
 }
 
 /// Suggested follow-up task from agent execution.
-#[derive(Debug, Clone)]
+///
+/// `Serialize` / `Deserialize` are derived because this type travels
+/// through the JSON execution-response parser in
+/// [`crate::parser::parse_execution_response`]; the parser used to
+/// carry its own copy of the struct and convert at the boundary, which
+/// meant a field rename silently dropped the field on one side of the
+/// copy. Phase 3 consolidated the two definitions here.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FollowUpSuggestion {
     pub title: String,
     pub description: String,

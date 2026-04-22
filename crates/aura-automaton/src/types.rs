@@ -93,9 +93,9 @@ pub enum FileOpType {
     Deleted,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FollowUpSuggestion {
-    pub title: String,
-    pub description: String,
-}
+// `FollowUpSuggestion` is defined canonically in
+// [`aura_agent::agent_runner::FollowUpSuggestion`]. Re-exported here so
+// existing callers referencing `aura_automaton::types::FollowUpSuggestion`
+// continue to compile without duplicating the struct definition.
+#[allow(unused_imports)]
+pub use aura_agent::agent_runner::FollowUpSuggestion;

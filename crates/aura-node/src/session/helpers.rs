@@ -10,7 +10,10 @@ use crate::protocol::{
     ToolUseStart,
 };
 use crate::runtime_capabilities;
-use aura_agent::{AgentLoopEvent, AgentLoopResult};
+use async_trait::async_trait;
+use aura_agent::{
+    map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
+};
 use aura_kernel::{Kernel, KernelConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -273,79 +276,124 @@ pub(super) async fn build_kernel_with_config(
     Ok(Arc::new(kernel))
 }
 
+/// [`TurnEventSink`] that maps events onto the WebSocket wire protocol.
+///
+/// Phase 3 consolidated the handwritten match here and its sibling in
+/// the TUI's `UiCommandSink` into a single dispatcher
+/// ([`map_agent_loop_event`]). Each sink overrides only the hooks it
+/// cares about; unhandled variants fall through to no-op defaults,
+/// but the dispatcher's match is exhaustive, so adding a new
+/// [`AgentLoopEvent`] variant is still a compile error until every
+/// consumer has handled it.
+///
+/// The WS sink's send path is a best-effort `try_send`: when the
+/// outbound mpsc is full or closed we flip `closed` so the driver
+/// loop can drop out. This matches the pre-consolidation behaviour of
+/// `break`-ing on the first failed send.
+struct OutboundMessageSink<'a> {
+    outbound: &'a mpsc::Sender<OutboundMessage>,
+    closed: bool,
+}
+
+impl OutboundMessageSink<'_> {
+    fn push(&mut self, msg: OutboundMessage) {
+        if self.closed {
+            return;
+        }
+        if self.outbound.try_send(msg).is_err() {
+            self.closed = true;
+        }
+    }
+}
+
+#[async_trait]
+impl TurnEventSink for OutboundMessageSink<'_> {
+    async fn on_text_delta(&mut self, text: String) {
+        self.push(OutboundMessage::TextDelta(TextDelta { text }));
+    }
+
+    async fn on_thinking_delta(&mut self, thinking: String) {
+        self.push(OutboundMessage::ThinkingDelta(ThinkingDelta { thinking }));
+    }
+
+    async fn on_tool_start(&mut self, id: String, name: String) {
+        self.push(OutboundMessage::ToolUseStart(ToolUseStart { id, name }));
+    }
+
+    async fn on_tool_result(
+        &mut self,
+        tool_use_id: String,
+        tool_name: String,
+        content: String,
+        is_error: bool,
+    ) {
+        self.push(OutboundMessage::ToolResult(ToolResultMsg {
+            name: tool_name,
+            result: content,
+            is_error,
+            tool_use_id: Some(tool_use_id),
+        }));
+    }
+
+    async fn on_tool_input_snapshot(&mut self, id: String, name: String, input: String) {
+        // While streaming with `eager_input_streaming`, `input` is
+        // partial JSON like `{"title":"Hi","markdown_contents":"# H`.
+        // A strict `serde_json::from_str` would fail and yield `{}`,
+        // making every mid-stream snapshot useless to the UI. Use a
+        // tool-aware partial-JSON extractor that pulls out the
+        // best-effort value of well-known string fields the preview
+        // cards consume (markdown_contents, content, old_text, etc.).
+        let parsed = super::partial_json::parse_partial_tool_input(&name, &input);
+        let md_len = parsed
+            .get("markdown_contents")
+            .and_then(|v| v.as_str())
+            .map_or(0, str::len);
+        let content_len = parsed
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map_or(0, str::len);
+        tracing::info!(
+            tool = %name,
+            raw_input_bytes = input.len(),
+            parsed_keys = parsed.as_object().map_or(0, |o| o.len()),
+            markdown_len = md_len,
+            content_len,
+            "forwarding tool_call_snapshot"
+        );
+        self.push(OutboundMessage::ToolCallSnapshot(ToolCallSnapshot {
+            id,
+            name,
+            input: parsed,
+        }));
+    }
+
+    async fn on_error(&mut self, code: String, message: String, recoverable: bool) {
+        self.push(OutboundMessage::Error(ErrorMsg {
+            code,
+            message,
+            recoverable,
+        }));
+    }
+
+    // The following variants are intentional no-ops on the WS wire —
+    // `ToolComplete`, `IterationComplete`, `ThinkingComplete`,
+    // `StepComplete`, `StreamReset`, `Warning`, `Debug`. The trait
+    // defaults cover them, but the mapper's exhaustive match still
+    // forces a decision here whenever the event enum changes.
+    async fn on_debug(&mut self, _event: DebugEvent) {}
+}
+
 pub(super) async fn forward_events_to_ws(
     mut event_rx: mpsc::Receiver<AgentLoopEvent>,
     outbound: mpsc::Sender<OutboundMessage>,
 ) {
+    let mut sink = OutboundMessageSink {
+        outbound: &outbound,
+        closed: false,
+    };
     while let Some(event) = event_rx.recv().await {
-        let msg = match event {
-            AgentLoopEvent::TextDelta(text) => OutboundMessage::TextDelta(TextDelta { text }),
-            AgentLoopEvent::ThinkingDelta(thinking) => {
-                OutboundMessage::ThinkingDelta(ThinkingDelta { thinking })
-            }
-            AgentLoopEvent::ToolStart { id, name } => {
-                OutboundMessage::ToolUseStart(ToolUseStart { id, name })
-            }
-            AgentLoopEvent::ToolResult {
-                tool_use_id,
-                tool_name,
-                content,
-                is_error,
-            } => OutboundMessage::ToolResult(ToolResultMsg {
-                name: tool_name,
-                result: content,
-                is_error,
-                tool_use_id: Some(tool_use_id),
-            }),
-            AgentLoopEvent::Error {
-                code,
-                message,
-                recoverable,
-            } => OutboundMessage::Error(ErrorMsg {
-                code,
-                message,
-                recoverable,
-            }),
-            AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
-                // While streaming with `eager_input_streaming`, `input` is
-                // partial JSON like `{"title":"Hi","markdown_contents":"# H`.
-                // A strict `serde_json::from_str` would fail and yield `{}`,
-                // making every mid-stream snapshot useless to the UI. Use a
-                // tool-aware partial-JSON extractor that pulls out the
-                // best-effort value of well-known string fields the preview
-                // cards consume (markdown_contents, content, old_text, etc.).
-                let parsed = super::partial_json::parse_partial_tool_input(&name, &input);
-                let md_len = parsed
-                    .get("markdown_contents")
-                    .and_then(|v| v.as_str())
-                    .map_or(0, str::len);
-                let content_len = parsed
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .map_or(0, str::len);
-                tracing::info!(
-                    tool = %name,
-                    raw_input_bytes = input.len(),
-                    parsed_keys = parsed.as_object().map_or(0, |o| o.len()),
-                    markdown_len = md_len,
-                    content_len,
-                    "forwarding tool_call_snapshot"
-                );
-                OutboundMessage::ToolCallSnapshot(ToolCallSnapshot {
-                    id,
-                    name,
-                    input: parsed,
-                })
-            }
-            AgentLoopEvent::ToolComplete { .. }
-            | AgentLoopEvent::IterationComplete { .. }
-            | AgentLoopEvent::ThinkingComplete
-            | AgentLoopEvent::StepComplete
-            | AgentLoopEvent::StreamReset { .. }
-            | AgentLoopEvent::Warning(_)
-            | AgentLoopEvent::Debug(_) => continue,
-        };
-        if outbound.try_send(msg).is_err() {
+        map_agent_loop_event(event, &mut sink).await;
+        if sink.closed {
             break;
         }
     }

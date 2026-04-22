@@ -1,5 +1,6 @@
 //! JSON extraction and execution-response parsing from model output.
 
+use crate::agent_runner::FollowUpSuggestion;
 use crate::file_ops::FileOp;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -17,24 +18,12 @@ pub struct TaskExecution {
     pub files_already_applied: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FollowUpSuggestion {
-    pub title: String,
-    pub description: String,
-}
-
 #[derive(serde::Deserialize)]
 struct RawExecutionResponse {
     notes: String,
     file_ops: Vec<FileOp>,
     #[serde(default)]
-    follow_up_tasks: Vec<RawFollowUp>,
-}
-
-#[derive(serde::Deserialize)]
-struct RawFollowUp {
-    title: String,
-    description: String,
+    follow_up_tasks: Vec<FollowUpSuggestion>,
 }
 
 pub fn parse_execution_response(response: &str) -> anyhow::Result<TaskExecution> {
@@ -66,14 +55,7 @@ fn raw_to_execution(raw: RawExecutionResponse) -> TaskExecution {
     TaskExecution {
         notes: raw.notes,
         file_ops: raw.file_ops,
-        follow_up_tasks: raw
-            .follow_up_tasks
-            .into_iter()
-            .map(|f| FollowUpSuggestion {
-                title: f.title,
-                description: f.description,
-            })
-            .collect(),
+        follow_up_tasks: raw.follow_up_tasks,
         input_tokens: 0,
         output_tokens: 0,
         parse_retries: 0,

@@ -68,10 +68,16 @@ policy pipeline. The AgentLoop never knows the difference.
 | `aura-protocol` | Wire-level request/response/event types for transport boundaries. |
 | `aura-auth` | Auth token extraction/validation utilities for node and agent startup. |
 | `aura-terminal` | Terminal UI layer: Ratatui-based TUI with themes, components, input, and rendering. |
-| `aura-cli` | Interactive command-line REPL over the shared agent runtime. |
+| `aura-memory` | Per-agent memory: fact/event/procedure store, two-stage write pipeline, deterministic retrieval for prompt injection. |
+| `aura-skills` | Skill system wire-compatible with the Claude Code `SKILL.md` / `AgentSkills` open standard; per-agent install store and activation. |
 | `aura-automaton` | Workflow/automation helpers that drive scripted agent behavior. |
 | `aura-node` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
 | `aura` | Root binary wiring for launch modes, runtime setup, and top-level command entrypoints. |
+
+> **Note:** `aura-cli` is not shipped in this workspace. A previous interactive
+> CLI REPL is tracked for possible reintroduction in a future phase; for now
+> the TUI + embedded HTTP server (`src/api_server.rs`) and the headless
+> `aura-node` server are the only consumers of the agent runtime.
 
 ### Dependency Graph
 
@@ -117,31 +123,38 @@ additional cross-cutting dependencies.
  │  → core, kernel, reasoner, tools, store, auth    │
  └────────────────────────┬─────────────────────────┘
                           │
- L5  Higher Consumers     ▼
+ L4a Memory / Skills      ▼
  ┌──────────────────────────────────────────────────┐
- │  ┌──────────────┐            ┌────────────┐      │
- │  │aura-automaton│            │  aura-cli  │      │
- │  │ → agent,core │            │ → agent,   │      │
- │  │   tools,     │            │   core,auth│      │
- │  │   reasoner   │            │   store,   │      │
- │  └──────┬───────┘            │   reasoner,│      │
- │         │                    │   tools,   │      │
- │         │                    │   kernel   │      │
- │         │                    └────────────┘      │
+ │  ┌──────────────┐            ┌──────────────┐    │
+ │  │ aura-memory  │            │ aura-skills  │    │
+ │  │ → core,      │            │ → core,      │    │
+ │  │   store,     │            │   store      │    │
+ │  │   reasoner   │            │              │    │
+ │  └──────┬───────┘            └──────┬───────┘    │
+ └─────────┼───────────────────────────┼────────────┘
+           │                           │
+ L5  Higher Consumers                  │
+ ┌────────┴───────────────────────────┴─────────────┐
+ │  ┌──────────────┐                                │
+ │  │aura-automaton│                                │
+ │  │ → agent,core │                                │
+ │  │   tools,     │                                │
+ │  │   reasoner   │                                │
+ │  └──────┬───────┘                                │
  └─────────┼────────────────────────────────────────┘
            │
  L6  Server▼
  ┌──────────────────────────────────────────────────┐
  │                   aura-node                      │
  │  → core, protocol, store, reasoner, kernel,      │
- │    tools, agent, automaton                        │
+ │    tools, agent, automaton, memory, skills       │
  └────────────────────────┬─────────────────────────┘
                           │
  L7  Binary               ▼
  ┌──────────────────────────────────────────────────┐
  │                 aura (binary)                    │
  │  → terminal, core, kernel, store, reasoner,      │
- │    tools, agent, auth, node                      │
+ │    tools, agent, auth, node, memory, skills      │
  └──────────────────────────────────────────────────┘
 ```
 
@@ -287,6 +300,7 @@ The invariant core. Builds context from the record, calls the reasoner, enforces
 | `PolicyResult` | Result of a policy check |
 | `ContextBuilder` | Builds `Context` (context hash + record summaries) from transaction + record window |
 | `decode_tool_effect` | Parses an `Effect` back into human-readable `DecodedToolResult` |
+| `KernelDomainGateway` | Phase 1 addition (lives in `aura-agent` but belongs conceptually with the kernel boundary): the sole `DomainApi` wrapper that routes every automaton / agent domain call through `Kernel::process_direct` so mutations produce a `System/DomainMutation` `RecordEntry` (Invariant §1). |
 | `KernelError` | Error enum: `Store`, `Reasoner`, `Timeout`, `Serialization`, `Internal` |
 
 #### Submodules
@@ -335,6 +349,25 @@ Filesystem, command, search, and domain tools. Sandboxed execution ensures agent
 | `git_commit` | `git_tool/` | Stage + commit under the kernel-sandboxed workspace. Invariant §1 compliant. |
 | `git_push` | `git_tool/` | Push `HEAD` to a remote with inline JWT-authenticated URL (no on-disk remote registration). |
 | `git_commit_push` | `git_tool/` | Transactional `add`+`commit`+`push` used by the dev-loop automaton. |
+
+#### Git Tools (`git_tool/`)
+
+Phase 2 addition. Mutating `git` operations now live here — `aura-agent`'s
+`git.rs` retains only read-only helpers (`is_git_repo`,
+`list_unpushed_commits`). `GitExecutor` is the single permitted call-site
+for mutating `Command::new("git")` in the tree and Invariant §1 is
+enforced by an `rg` band in `scripts/check_invariants.sh`.
+
+| Tool | Purpose |
+|------|---------|
+| `git_commit` | Stage (either explicit paths or all tracked changes) and commit under the kernel-sandboxed workspace. Returns the new commit SHA and parent SHA. |
+| `git_push` | Push `HEAD` (or a named branch) to a remote using an inline JWT-authenticated URL — no on-disk remote registration, no credential leaks into `.git/config`. |
+| `git_commit_push` | Transactional `add` + `commit` + `push` used by the dev-loop automaton. Fails atomically if the push step fails after a successful commit, leaving callers with a single success/failure boundary. |
+
+All three route through `Kernel::process_direct` so every mutating git
+operation produces a `System/DomainMutation` `RecordEntry` (Invariants
+§1 + §3). The `orbit_push` domain tool reuses the shared
+`git_commit_impl` / `git_push_impl` helpers under the hood.
 
 #### Domain Tools (`domain_tools/`)
 
@@ -470,10 +503,10 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 
 | Module | Contents |
 |--------|----------|
-| `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration.rs` (model calls), `streaming.rs` (event emission), `tool_execution.rs` (cache/execute/emit), `tool_processing.rs` (blocking/stall/build), `context.rs` (compaction) |
+| `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration.rs` (model calls), `streaming.rs` (event emission), `tool_execution.rs` (cache/execute/emit), `tool_processing.rs` (blocking/stall/build), `context.rs` (compaction), `search_cache.rs` (cached `search_code` results shared across iterations) |
 | `kernel_gateway.rs` | `KernelToolGateway`, `KernelModelGateway` — kernel bridge implementations |
-| `kernel_executor.rs` | `KernelToolExecutor` (deprecated alias) |
-| `events.rs` | `TurnEvent` enum (alias: `AgentLoopEvent`) |
+| `kernel_domain_gateway.rs` | `KernelDomainGateway` (Phase 1): the sole `DomainApi` wrapper that routes every domain mutation through `Kernel::process_direct`, producing a `System/DomainMutation` `RecordEntry` per Invariant §1. |
+| `events/` | `mod.rs` re-exports; `mapper.rs` hosts the `TurnEventSink` trait and `map_agent_loop_event` dispatch (Phase 3 — shared by the TUI `UiCommandSink` and the node `OutboundMessageSink`). |
 | `types.rs` | `AgentToolExecutor` trait, `ToolCallInfo`, `ToolCallResult`, `AgentLoopResult`, `BuildBaseline`, `AutoBuildResult` |
 | `blocking/` | `detection/` (write-failure tracking, read-guard), `stall.rs` (repeated-target detection) |
 | `budget.rs` | `BudgetState`, `ExplorationState` — token and exploration tracking |
@@ -484,7 +517,7 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 | `verify/` | Build verification runner, error signatures, test baseline capture |
 | `runtime/process_manager/` | `ProcessManager` — background process tracking with completion callbacks |
 | `agent_runner/` | Higher-level agent run coordination (`AgentRunner`, `AgentRunnerConfig`, task execution) |
-| `session_bootstrap.rs` | `resolve_store_path`, `open_store`, `build_tool_executor`, `select_provider`, `load_auth_token` |
+| `session_bootstrap.rs` | Shared embedder bootstrap (Phase 3): `resolve_store_path`, `open_store`, `load_auth_token`, `default_agent_config`, `tool_config_from_env`, `policy_config_from_env`, `build_executor_router`, `build_executor_router_with_config`. `src/session_helpers.rs` is a thin re-export layer over this module. Provider selection moved to `aura_reasoner::provider_factory`. |
 | `sanitize.rs` | Message sanitization (malformed tool_use/tool_result repair) |
 | `read_guard.rs` | Tracks which files have been read (full vs range) to prevent redundant reads |
 | `helpers.rs` | `is_write_tool`, `is_exploration_tool`, `append_warning` |
@@ -565,31 +598,85 @@ Ratatui-based TUI library. Provides the `App` state machine, themed rendering, i
 
 ---
 
-### 10. `aura-cli` — Interactive REPL
+### 10. `aura-memory` — Per-Agent Memory System
 
-Binary-only crate providing an interactive command-line session. Wires `AgentLoop` to a REPL with slash commands.
+Phase-2 addition (Wave 5). Provides per-agent memory for Aura: fact
+storage, episodic event logging, procedural pattern detection, a
+two-stage write pipeline (heuristic extraction followed by LLM
+refinement), and deterministic retrieval for system-prompt injection.
+Routes through its own `MemoryStore` abstraction so facts, events, and
+procedures live in RocksDB column families separate from the record log.
 
 | Type | Purpose |
 |------|---------|
-| `Session` | Holds `AgentLoop`, provider, executor, store, messages, identity |
-| `SessionConfig` | `data_dir`, `workspace_root`, `provider`, `agent_name`, `loop_config` |
-| `Command` | Slash-command enum: `/status`, `/history`, `/login`, `/logout`, `/whoami`, `/approve`, `/deny`, `/diff`, `/help`, `/quit` |
-| `ApprovalQueue` | Pending approval requests |
+| `MemoryManager` | High-level facade that owns a `MemoryStore`, a `MemoryRetriever`, and a `MemoryWritePipeline`; the single entry point embedders use. |
+| `MemoryStore` / `MemoryStoreApi` | Trait + RocksDB-backed implementation for CRUD on facts, events, and procedures. `MemoryStats` is the dashboard snapshot shape. |
+| `MemoryWritePipeline` | Two-stage pipeline: heuristic extraction → optional LLM refinement → commit. `WriteConfig` gates which stages run; `WriteReport` is the per-run summary. |
+| `MemoryRetriever` | Scores facts/events/procedures against the active turn and produces a deterministic `MemoryPacket` for system-prompt injection. `RetrievalConfig` controls budgets and cutoffs. |
+| `MemoryConsolidator` | Periodic compaction pass: demotes low-salience facts, expires stale events, and merges procedure variants. `ConsolidationReport` describes the diff. |
+| `ProcedureExtractor` / `compute_skill_relevance` | Procedural learning: detects repeated tool-call sequences and promotes them to `Procedure`s; `compute_skill_relevance` is the canonical scorer shared with `aura-skills` activation. |
+| `RefinerConfig` | LLM-refinement-stage tuning (model, token budget, retries). |
+| `AgentEvent`, `Fact`, `Procedure`, `MemoryCandidate`, `MemoryPacket` | The core data shapes. `FactSource` distinguishes operator-supplied vs. extracted memories. |
+| `score_event`, `score_fact`, `score_procedure`, `estimate_tokens` | Deterministic salience / token-budget helpers. |
+| `MemoryError` | `thiserror` enum for the crate (store I/O, bad payload, refiner failures). |
 
 #### Submodules
 
 | Module | Contents |
 |--------|----------|
-| `session` | `Session`, `SessionConfig` |
-| `commands` | `Command` enum parsing |
-| `handlers` | Command handlers (`handle_prompt`, `handle_status`, `handle_history`, `handle_login`, ...) |
-| `approval` | `ApprovalRequest`, `ApprovalDecision`, `ApprovalQueue` |
-| `session_helpers` | Re-exports from `aura_agent::session_bootstrap` |
-| `ui` | `print_help`, `banner` |
+| `store/` | `MemoryStore` trait, RocksDB impl, `MemoryStats` |
+| `manager` | `MemoryManager` facade |
+| `types` | Core data types and serde |
+| `extraction` | Heuristic write-stage extractors; `ConversationTurn` |
+| `refinement` | LLM refinement stage (`RefinerConfig`) |
+| `write_pipeline` | `MemoryWritePipeline`, `WriteConfig`, `WriteReport` |
+| `retrieval` | `MemoryRetriever`, `RetrievalConfig` |
+| `consolidation` | `MemoryConsolidator`, `ConsolidationConfig`, `ConsolidationReport` |
+| `procedures` | `ProcedureExtractor`, `StepSequence`, `compute_skill_relevance` |
+| `salience` | Deterministic scoring functions |
+| `error` | `MemoryError` |
 
 ---
 
-### 11. `aura-automaton` — Workflow Automation
+### 11. `aura-skills` — Skill System
+
+Skill system for Aura agents, wire-compatible with the Claude Code
+`SKILL.md` / `AgentSkills` open standard. Skills are authored, versioned
+packages of instructions plus supporting files that get installed on an
+agent. Loader precedence: workspace (`{workspace}/skills/`) →
+agent-personal (`~/.aura/agents/{id}/skills/`) → personal
+(`~/.aura/skills/`) → extra directories from config → bundled. Dependency
+footprint is deliberately minimal (just `aura-core` + `aura-store`) so
+the TUI and the node can both reach it without pulling in the reasoner
+or the agent loop.
+
+| Type | Purpose |
+|------|---------|
+| `SkillLoader` | Discovers skills across the precedence chain, parses `SKILL.md` frontmatter, and returns a `Vec<Skill>`. `SkillLoaderConfig` controls extra search roots. |
+| `SkillRegistry` | Indexed, deduplicated view of all loaded skills; the runtime lookup surface. |
+| `SkillManager` | Facade tying loader + registry + installs together: `inject_skills` renders a catalogue into a system prompt; `activate(name, args)` returns a `SkillActivation`. |
+| `SkillInstallStore` / `SkillInstallation` | RocksDB-backed per-agent installations (which skills are enabled on which agent, with permissions). |
+| `AgentSkillPermissions` | Per-install policy — which tools the skill may invoke and under what conditions. |
+| `Skill`, `SkillMeta`, `SkillFrontmatter`, `SkillSource`, `SkillActivation` | Core data shapes. `SkillSource` records which layer of the precedence chain a skill came from. |
+| `SkillError` | `thiserror` enum (parse failure, missing file, conflicting install, etc.). |
+
+#### Submodules
+
+| Module | Contents |
+|--------|----------|
+| `loader` | `SkillLoader`, `SkillLoaderConfig`, filesystem discovery |
+| `parser` | `SKILL.md` frontmatter + body parser |
+| `registry` | `SkillRegistry` deduplication + lookup |
+| `manager` | `SkillManager`, `AgentSkillPermissions` |
+| `install` | `SkillInstallStore`, `SkillInstallation` (per-agent installs) |
+| `activation` | `activate()` entry points and argument binding |
+| `prompt` | System-prompt catalogue rendering |
+| `types` | Core data shapes |
+| `error` | `SkillError` |
+
+---
+
+### 12. `aura-automaton` — Workflow Automation
 
 Long-running automaton workflows that drive `AgentLoop` on a schedule.
 
@@ -632,7 +719,7 @@ Long-running automaton workflows that drive `AgentLoop` on a schedule.
 
 ---
 
-### 12. `aura-node` — HTTP & WebSocket Server
+### 13. `aura-node` — HTTP & WebSocket Server
 
 Headless server with REST API, WebSocket streaming sessions, per-agent scheduling, and a worker loop.
 
@@ -665,6 +752,34 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 | `/automaton/:automaton_id/status` | GET | Automaton status |
 | `/automaton/:automaton_id/pause` | POST | Pause automaton |
 | `/automaton/:automaton_id/stop` | POST | Stop automaton |
+| `/tool-approval` | POST / DELETE | Grant or revoke a tool-approval token (strict governor) |
+| `/memory/:agent_id/facts` | GET / POST | List or create facts for an agent |
+| `/memory/:agent_id/facts/:id` | GET / PUT / DELETE | Read / update / delete a fact by ID |
+| `/memory/:agent_id/facts/by-key/:key` | GET | Read a fact by canonical key |
+| `/memory/:agent_id/events` | GET / POST | List or append an event |
+| `/memory/:agent_id/events/:id` | DELETE | Delete an event |
+| `/memory/:agent_id/events/bulk-delete` | POST | Bulk-delete events by filter |
+| `/memory/:agent_id/procedures` | GET / POST | List or create procedures |
+| `/memory/:agent_id/procedures/:id` | GET / PUT / DELETE | Read / update / delete a procedure |
+| `/memory/:agent_id/snapshot` | GET | Full memory snapshot |
+| `/memory/:agent_id/wipe` | POST | Wipe all memory for an agent |
+| `/memory/:agent_id/stats` | GET | `MemoryStats` dashboard snapshot |
+| `/memory/:agent_id/consolidate` | POST | Run `MemoryConsolidator` and return the diff |
+| `/api/agents/:agent_id/memory/...` | various | `aura-os` proxy aliases mirroring the above |
+| `/api/skills` | GET / POST | List skills in registry / create a new one |
+| `/api/skills/:name` | GET | Get a single skill by name |
+| `/api/skills/:name/activate` | POST | Activate a skill (runs `SkillManager::activate`) |
+| `/api/agents/:agent_id/skills` | GET / POST | List or install skills for an agent |
+| `/api/agents/:agent_id/skills/:name` | DELETE | Uninstall a skill for an agent |
+| `/api/harness/agents/:agent_id/skills[/:name]` | various | Legacy compatibility aliases for older harness callers |
+
+All `/api/*`, `/memory/*`, `/workspace/*`, `/tx`, `/agents/:id/*`,
+`/automaton/*`, and `/stream*` routes sit behind the bearer-token
+middleware (`auth::require_bearer_mw`) when `config.require_auth` is
+set. The mutating subset (`/tx`, `/tool-approval`,
+`/automaton/start`, `/automaton/:id/pause`, `/automaton/:id/stop`)
+additionally gets a stricter per-IP governor (5 req/s burst 10) on top
+of the global 30 req/s cap.
 
 #### Submodules
 
@@ -675,7 +790,8 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 | `router/` | Axum router, `RouterState`, route handlers (`tx`, `ws`, `files`, `automaton`) |
 | `scheduler.rs` | `Scheduler` — per-agent locking and dispatch |
 | `worker.rs` | `process_agent` — dequeue + `AgentLoop` execution |
-| `session/` | `Session` state, `handle_ws_connection`, `TurnEvent` → `OutboundMessage` mapping |
+| `session/` | `Session` state, `handle_ws_connection`. `TurnEvent` → `OutboundMessage` mapping goes through `aura_agent::TurnEventSink` (Phase 3) via the local `OutboundMessageSink`. |
+| `files_api.rs` | Shared workspace walker + capped file reader (Phase 3). Used by both the node's own `/api/files` / `/api/read-file` handlers and the TUI-embedded `src/api_server.rs`. |
 | `terminal.rs` | Terminal WebSocket handler |
 | `automaton_bridge.rs` | Bridge between automaton runtime and node sessions |
 | `domain.rs` | `HttpDomainApi` — HTTP-backed `DomainApi` implementation |
@@ -694,8 +810,8 @@ The primary entry point. Supports TUI mode (default) and headless mode.
 | `main.rs` | CLI parse, auth subcommands (`login`/`logout`/`whoami`), `run_with_args` |
 | `cli.rs` | Clap definitions: `Cli`, `Commands`, `RunArgs`, `UiMode` (Terminal/None) |
 | `event_loop/` | Terminal event loop: `EventLoopContext`, `run_event_loop` — bridges `UiEvent` ↔ `AgentLoop` ↔ `UiCommand`. Subfiles: `handlers.rs`, `agent_events.rs`, `record_ui.rs` |
-| `session_helpers.rs` | Re-exports from `aura_agent::session_bootstrap`, plus `default_agent_config` |
-| `api_server.rs` | Embedded `/health` endpoint for TUI mode |
+| `session_helpers.rs` | Thin re-export layer over `aura_agent::session_bootstrap` (Phase 3 consolidation). All environment-driven bootstrap helpers — `default_agent_config`, `tool_config_from_env`, `policy_config_from_env`, `build_executor_router_with_config` — now live in `aura_agent`. |
+| `api_server.rs` | Embedded HTTP server for TUI mode: `/health` plus bearer-gated `/api/files` and `/api/read-file`. File walking / reading logic lives in `aura_node::files_api` (Phase 3 consolidation). |
 | `record_loader.rs` | Record loading utilities |
 
 ---
@@ -859,42 +975,16 @@ sequenceDiagram
 
 **Data path:** HTTP POST → Store inbox → Scheduler dequeues → Worker runs `AgentLoop` (no streaming) → Result committed atomically to record log → Client polls via GET.
 
----
-
-### Flow 4: CLI REPL (aura-cli)
-
-The `aura-cli` binary provides a minimal interactive session without the TUI.
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant REPL as CLI Session
-    participant AL as AgentLoop
-    participant MP as ModelProvider
-    participant KTG as KernelToolGateway
-
-    User->>REPL: Types prompt at > 
-    REPL->>REPL: session.messages.push(user message)
-    REPL->>AL: agent_loop.run_with_events(provider, executor, tools, messages, event_tx)
-    
-    loop Iterations
-        AL->>MP: Model call
-        AL-->>REPL: TurnEvent::TextDelta (printed to stdout)
-        alt Tools
-            AL->>KTG: Execute
-            KTG-->>AL: Results
-            AL-->>REPL: TurnEvent::ToolResult (printed)
-        end
-    end
-    
-    AL-->>REPL: Complete
-    REPL-->>User: Shows final output
-    User->>REPL: Next prompt or /quit
-```
+> **Phase 1 note:** automaton lifecycle transitions (start / stop) also flow
+> through this same scheduler. `AutomatonBridge::record_lifecycle_event`
+> now `.await`s `scheduler.schedule_agent` *after* enqueueing the
+> `System/AutomatonLifecycle` transaction, so every lifecycle change
+> reliably becomes a committed `RecordEntry` rather than sitting in the
+> inbox until the next user prompt.
 
 ---
 
-### Flow 5: Streaming Error Recovery (StreamReset)
+### Flow 4: Streaming Error Recovery (StreamReset)
 
 When a streaming model call fails mid-stream, the system recovers deterministically.
 

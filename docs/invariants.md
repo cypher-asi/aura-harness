@@ -10,16 +10,16 @@ sync with the `Enforcement:` lines under each section.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| §1 | Sole External Gateway | Architectural / `rg` grep bands documented in §1 Verification; no dedicated suite (see Untested Invariants). |
-| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`. |
-| §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`). |
+| §1 | Sole External Gateway | CI-gated `rg` bands in `scripts/check_invariants.sh` + `.github/workflows/invariants.yml` (ModelProvider `.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/agent_loop/`). Git-mutation surface covered by `crates/aura-tools/src/git_tool/tests.rs` (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by `crates/aura-agent/src/kernel_domain_gateway.rs` tests. |
+| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-node/src/automaton_bridge.rs::tests::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path). |
+| §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), `crates/aura-kernel/src/kernel/tests.rs::reason_sync_error_records_failed` + `reason_streaming_handshake_error_records_failed` (Phase 1 sync + handshake failure paths), `tests/automaton_reasoning_recording.rs` (automaton spec-gen / dev-loop calls). |
 | §4 | Full Policy Enforcement | `crates/aura-kernel/tests/invariant_policy_matrix.rs` + `crates/aura-kernel/src/policy/tests.rs`. |
 | §5 | Complete Audit Trail | `crates/aura-kernel/src/kernel/tests.rs` + §4 matrix asserts `decision`/`actions`/`context_hash`. |
 | §6 | Deterministic Context | `crates/aura-kernel/tests/invariant_determinism.rs` (proptest). |
 | §7 | Monotonic Sequencing | `crates/aura-store/tests/invariant_atomicity.rs` + `crates/aura-store/src/rocks_store/tests.rs`. |
 | §8 | Gateway Transparency | `crates/aura-agent/src/agent_loop/parity_tests.rs`. |
-| §9 | AgentLoop Isolation | Architectural / `rg` grep bands (see Untested Invariants). |
-| §10 | Append-Only Record | `crates/aura-store/tests/invariant_atomicity.rs` (`static_assertions` sealed-trait check + atomic-commit fault injection). |
+| §9 | AgentLoop Isolation | Architectural / `rg` grep bands (see Untested Invariants) — now CI-gated via `scripts/check_invariants.sh` (aura_store import band scoped to `aura-agent/agent_loop/`). |
+| §10 | Append-Only Record | `crates/aura-store/tests/invariant_atomicity.rs` (`static_assertions` sealed-trait check + atomic-commit fault injection) + `crates/aura-store/tests/invariant_readstore_surface.rs` (Phase 2: pins the `ReadStore` trait surface so record-append methods stay on the sealed `WriteStore`). |
 | §11 | Session-Scoped Approvals | `crates/aura-kernel/src/policy/tests.rs` (`clear_session_approvals`) + §4 matrix's `AskOnce` rows. |
 | §12 | Single Writer Per Agent | `crates/aura-store/src/rocks_store/tests_concurrent.rs`. |
 

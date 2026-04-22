@@ -11,6 +11,15 @@
 //! `aura-os` run-log consumer expects — see
 //! `apps/aura-os-server/src/loop_log.rs::update_counters` in the
 //! sibling repo.
+//!
+//! The [`mapper`] submodule provides a shared `TurnEventSink` trait +
+//! [`map_agent_loop_event`] dispatcher used by both the TUI's
+//! `UiCommandSink` and the headless WebSocket session's
+//! `OutboundMessageSink` so adding a new `TurnEvent` variant is a
+//! compile error until every consumer handles it.
+
+pub mod mapper;
+pub use mapper::{map_agent_loop_event, TurnEventSink};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
