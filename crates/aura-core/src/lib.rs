@@ -12,14 +12,14 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
-pub mod error;
+pub(crate) mod error;
 pub mod hash;
-pub mod ids;
-pub mod permissions;
-pub mod registry;
+pub(crate) mod ids;
+pub(crate) mod permissions;
+pub(crate) mod registry;
 pub(crate) mod serde_helpers;
-pub mod time;
-pub mod types;
+pub(crate) mod time;
+pub(crate) mod types;
 
 pub use error::{AuraError, Result};
 #[allow(deprecated)]

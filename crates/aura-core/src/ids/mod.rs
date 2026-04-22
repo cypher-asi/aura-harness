@@ -238,8 +238,5 @@ impl ProcedureId {
     }
 }
 
-// Re-export hex for crate-internal convenience
-pub(crate) use hex;
-
 #[cfg(test)]
 mod tests;

@@ -24,14 +24,15 @@
 // TODO(Phase 8): GitExecutor for kernel-recorded git mutations
 // TODO(Phase 8): BuildVerifyExecutor for kernel-recorded build/test
 
-pub mod billing;
+pub(crate) mod billing;
 mod context;
-pub mod executor;
+pub(crate) mod executor;
 mod kernel;
 mod policy;
-pub mod router;
-pub mod spawn_hook;
+pub(crate) mod router;
+pub(crate) mod spawn_hook;
 
+pub use billing::walk_parent_chain;
 pub use context::{hash_tx_with_window, Context, ContextBuilder};
 pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,

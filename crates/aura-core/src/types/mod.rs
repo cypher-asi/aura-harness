@@ -23,7 +23,7 @@ pub use permission::PermissionLevel;
 pub use process::{ActionResultPayload, ProcessPending};
 pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
 pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
-pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
+pub use record::RecordEntry;
 pub use status::AgentStatus;
 pub use tool::{
     InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
