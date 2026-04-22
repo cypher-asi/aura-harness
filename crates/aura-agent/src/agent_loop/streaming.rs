@@ -52,8 +52,7 @@ pub(super) fn emit_iteration_complete(
         .filter(|b| matches!(b, aura_reasoner::ContentBlock::ToolUse { .. }))
         .count();
 
-    let duration_ms =
-        u64::try_from(iteration_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let duration_ms = u64::try_from(iteration_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
     let index = u32::try_from(iteration).unwrap_or(u32::MAX);
     let tool_calls = u32::try_from(tool_calls).unwrap_or(u32::MAX);
 
@@ -222,8 +221,8 @@ impl AgentLoop {
                             _ => {}
                         }
                     }
-                    let duration_ms = u64::try_from(fallback_start.elapsed().as_millis())
-                        .unwrap_or(u64::MAX);
+                    let duration_ms =
+                        u64::try_from(fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     emit_debug_llm_call(
                         event_tx,
                         provider_name,

@@ -58,7 +58,8 @@ fn value_to_display(v: &Value) -> String {
 }
 
 fn normalize_scalar(raw: Option<&str>) -> String {
-    raw.map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default()
+    raw.map(|s| s.trim().to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 fn normalize_path(raw: Option<&str>) -> String {
@@ -152,8 +153,7 @@ mod tests {
 
     #[test]
     fn normalized_key_dedupes_alternation_terms() {
-        let a =
-            normalized_search_key("search_code", &json!({"pattern": "Foo|foo|FOO"})).unwrap();
+        let a = normalized_search_key("search_code", &json!({"pattern": "Foo|foo|FOO"})).unwrap();
         let b = normalized_search_key("search_code", &json!({"pattern": "foo"})).unwrap();
         assert_eq!(a, b);
     }
@@ -170,7 +170,10 @@ mod tests {
             &json!({"pattern": "NeuralKey", "path": "crates/aura-agent/"}),
         )
         .unwrap();
-        assert_eq!(base, trailing_slash, "trailing slash on path should be ignored");
+        assert_eq!(
+            base, trailing_slash,
+            "trailing slash on path should be ignored"
+        );
 
         let different_path = normalized_search_key(
             "search_code",
@@ -194,11 +197,9 @@ mod tests {
             &json!({"pattern": "**/*.rs", "path": "crates/"}),
         )
         .unwrap();
-        let with_glob = normalized_search_key(
-            "find_files",
-            &json!({"glob": "**/*.rs", "path": "crates"}),
-        )
-        .unwrap();
+        let with_glob =
+            normalized_search_key("find_files", &json!({"glob": "**/*.rs", "path": "crates"}))
+                .unwrap();
         assert_eq!(
             with_pattern, with_glob,
             "find_files should accept either `pattern` or `glob` and collapse path trailing-slash"
@@ -210,7 +211,9 @@ mod tests {
         assert!(normalized_search_key("read_file", &json!({"path": "src/lib.rs"})).is_none());
         assert!(normalized_search_key("list_files", &json!({"path": "src"})).is_none());
         assert!(normalized_search_key("stat_file", &json!({"path": "src/lib.rs"})).is_none());
-        assert!(normalized_search_key("write_file", &json!({"path": "x", "content": "y"})).is_none());
+        assert!(
+            normalized_search_key("write_file", &json!({"path": "x", "content": "y"})).is_none()
+        );
         assert!(normalized_search_key("run_command", &json!({"cmd": "ls"})).is_none());
     }
 }

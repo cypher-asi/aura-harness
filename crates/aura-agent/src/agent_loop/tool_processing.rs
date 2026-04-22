@@ -369,7 +369,11 @@ mod chunk_guard_tests {
         let (oversized, remaining) =
             partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
 
-        assert_eq!(oversized.len(), 1, "one oversized write should short-circuit");
+        assert_eq!(
+            oversized.len(),
+            1,
+            "one oversized write should short-circuit"
+        );
         assert_eq!(oversized[0].tool_use_id, "toolu_1");
         assert!(
             oversized[0].is_error,
@@ -422,11 +426,7 @@ mod chunk_guard_tests {
     #[test]
     fn chunk_guard_ignores_non_write_tools() {
         let big_arg = "z".repeat(10_000);
-        let call = mk_tool(
-            "toolu_3",
-            "search_code",
-            json!({"pattern": big_arg}),
-        );
+        let call = mk_tool("toolu_3", "search_code", json!({"pattern": big_arg}));
         let mut side_messages: Vec<String> = Vec::new();
         let (oversized, remaining) =
             partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);

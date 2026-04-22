@@ -284,8 +284,7 @@ pub(crate) fn build_decomposition_hint(messages: &[Message]) -> DecompositionHin
         }
     }
 
-    let (last_pending_tool_name, last_pending_tool_input_summary) =
-        last_pending_tool_use(messages);
+    let (last_pending_tool_name, last_pending_tool_input_summary) = last_pending_tool_use(messages);
 
     DecompositionHint {
         failed_paths,
@@ -295,10 +294,7 @@ pub(crate) fn build_decomposition_hint(messages: &[Message]) -> DecompositionHin
 }
 
 fn last_pending_tool_use(messages: &[Message]) -> (Option<String>, Option<String>) {
-    let last_assistant = messages
-        .iter()
-        .rev()
-        .find(|m| m.role == Role::Assistant);
+    let last_assistant = messages.iter().rev().find(|m| m.role == Role::Assistant);
     let Some(msg) = last_assistant else {
         return (None, None);
     };

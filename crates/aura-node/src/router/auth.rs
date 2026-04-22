@@ -70,7 +70,7 @@ pub(crate) fn require_bearer(headers: &HeaderMap, expected: &str) -> Result<Stri
 /// with any other `String` extension.
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // read by future handlers that want to surface the
-// authenticated principal
+                    // authenticated principal
 pub(crate) struct BearerToken(pub String);
 
 /// Axum middleware enforcing that every request presents the expected
@@ -203,10 +203,7 @@ mod tests {
             axum::http::header::AUTHORIZATION,
             HeaderValue::from_static("Bearer whatever"),
         );
-        assert_eq!(
-            require_bearer(&headers, ""),
-            Err(StatusCode::UNAUTHORIZED)
-        );
+        assert_eq!(require_bearer(&headers, ""), Err(StatusCode::UNAUTHORIZED));
     }
 
     #[test]
@@ -216,10 +213,7 @@ mod tests {
             axum::http::header::AUTHORIZATION,
             HeaderValue::from_static("Bearer expected-token"),
         );
-        assert_eq!(
-            require_bearer(&headers, EXPECTED),
-            Ok(EXPECTED.to_string())
-        );
+        assert_eq!(require_bearer(&headers, EXPECTED), Ok(EXPECTED.to_string()));
     }
 
     #[test]

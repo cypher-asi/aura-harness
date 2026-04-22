@@ -292,11 +292,7 @@ mod tests {
         ) -> anyhow::Result<Option<TaskDescriptor>> {
             unimplemented!()
         }
-        async fn get_task(
-            &self,
-            _id: &str,
-            _j: Option<&str>,
-        ) -> anyhow::Result<TaskDescriptor> {
+        async fn get_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<TaskDescriptor> {
             unimplemented!()
         }
         async fn get_project(
@@ -357,10 +353,7 @@ mod tests {
         ) -> anyhow::Result<SessionDescriptor> {
             unimplemented!()
         }
-        async fn get_active_session(
-            &self,
-            _i: &str,
-        ) -> anyhow::Result<Option<SessionDescriptor>> {
+        async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
             unimplemented!()
         }
         async fn orbit_api_call(
@@ -420,12 +413,17 @@ mod tests {
 
     #[test]
     fn permissiveness_ordering_matches_trust_hierarchy() {
-        assert!(permissiveness(PermissionLevel::Deny) < permissiveness(PermissionLevel::RequireApproval));
+        assert!(
+            permissiveness(PermissionLevel::Deny)
+                < permissiveness(PermissionLevel::RequireApproval)
+        );
         assert!(
             permissiveness(PermissionLevel::RequireApproval)
                 < permissiveness(PermissionLevel::AskOnce)
         );
-        assert!(permissiveness(PermissionLevel::AskOnce) < permissiveness(PermissionLevel::AlwaysAllow));
+        assert!(
+            permissiveness(PermissionLevel::AskOnce) < permissiveness(PermissionLevel::AlwaysAllow)
+        );
     }
 
     #[test]
@@ -448,10 +446,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_no_domain_api_non_strict_returns_permissive_defaults() {
         let map = fetch_agent_permissions_with_default(None, None, None, false).await;
-        assert_eq!(
-            map.get("run_command"),
-            Some(&PermissionLevel::AlwaysAllow)
-        );
+        assert_eq!(map.get("run_command"), Some(&PermissionLevel::AlwaysAllow));
     }
 
     #[tokio::test]
@@ -465,10 +460,7 @@ mod tests {
         let mock: Arc<dyn DomainApi> = Arc::new(MockDomain::new(|| Ok(None)));
         let map =
             fetch_agent_permissions_with_default(Some(&mock), Some("agent-1"), None, false).await;
-        assert_eq!(
-            map.get("run_command"),
-            Some(&PermissionLevel::AlwaysAllow)
-        );
+        assert_eq!(map.get("run_command"), Some(&PermissionLevel::AlwaysAllow));
     }
 
     #[tokio::test]

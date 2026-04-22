@@ -206,7 +206,10 @@ fn write_clears_both_caches() {
         std::slice::from_ref(&write_result),
     );
 
-    assert!(cache.is_empty(), "exact cache must be cleared by successful write");
+    assert!(
+        cache.is_empty(),
+        "exact cache must be cleared by successful write"
+    );
     assert!(
         fuzzy_cache.is_empty(),
         "fuzzy cache must be cleared alongside the exact cache"
@@ -258,7 +261,10 @@ fn failed_write_does_not_clear_caches() {
         std::slice::from_ref(&failed_result),
     );
 
-    assert!(!cache.is_empty(), "failed write must NOT clear the exact cache");
+    assert!(
+        !cache.is_empty(),
+        "failed write must NOT clear the exact cache"
+    );
     assert!(
         !fuzzy_cache.is_empty(),
         "failed write must NOT clear the fuzzy cache"

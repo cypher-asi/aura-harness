@@ -50,10 +50,7 @@ impl ToolApprovalRequest {
         let hash: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
-                format!(
-                    "args_hash_hex must decode to 32 bytes, got {}",
-                    bytes.len()
-                ),
+                format!("args_hash_hex must decode to 32 bytes, got {}", bytes.len()),
             )
         })?;
         Ok((agent_id, self.tool.as_str(), hash))

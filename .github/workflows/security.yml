@@ -31,11 +31,10 @@ jobs:
       # aura-harness has a dev-dependency on ../aura-os/crates/aura-protocol;
       # cargo-deny has to resolve the workspace graph, so the sibling repo
       # must be on disk at the expected relative path.
-      # TODO: set aura-os repo slug once published (match ci.yml).
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps
@@ -60,11 +59,10 @@ jobs:
         with:
           path: aura-harness
 
-      # TODO: set aura-os repo slug once published (match ci.yml).
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps

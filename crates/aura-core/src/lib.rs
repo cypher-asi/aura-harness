@@ -33,7 +33,6 @@ pub use types::{
     InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
     InstalledToolRuntimeProviderExecution, PermissionLevel, ProcessPending, Proposal, ProposalSet,
     RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth, ToolCall,
-    ToolCallContext,
-    ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent,
-    Trace, Transaction, TransactionType,
+    ToolCallContext, ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult,
+    ToolResultContent, Trace, Transaction, TransactionType,
 };

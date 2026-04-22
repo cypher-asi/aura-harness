@@ -198,7 +198,9 @@ impl Kernel {
             );
             let args_hash = ApprovalKey::hash_args(&proposal.args);
             let approval_unlocked = matches!(verdict, PolicyVerdict::RequireApproval { .. })
-                && self.approvals.take(self.agent_id, &proposal.tool, args_hash);
+                && self
+                    .approvals
+                    .take(self.agent_id, &proposal.tool, args_hash);
             verdicts.push((verdict, approval_unlocked));
             args_hashes.push(args_hash);
             kernel_proposals.push(kernel_proposal);

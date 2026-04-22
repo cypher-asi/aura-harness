@@ -596,13 +596,10 @@ fn latest_user_text(messages: &[Message]) -> Option<&str> {
                 .iter()
                 .any(|b| matches!(b, aura_reasoner::ContentBlock::Text { .. }))
         {
-            return msg
-                .content
-                .iter()
-                .find_map(|b| match b {
-                    aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                });
+            return msg.content.iter().find_map(|b| match b {
+                aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            });
         }
     }
     None

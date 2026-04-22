@@ -79,11 +79,7 @@ impl HttpDomainApi {
         }
     }
 
-    fn store_permissions(
-        &self,
-        agent_id: &str,
-        value: Option<HashMap<String, PermissionLevel>>,
-    ) {
+    fn store_permissions(&self, agent_id: &str, value: Option<HashMap<String, PermissionLevel>>) {
         if let Ok(mut cache) = self.permission_cache.write() {
             cache.insert(agent_id.to_string(), (Instant::now(), value));
         }

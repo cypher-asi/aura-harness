@@ -55,8 +55,8 @@ fn test_validate_program_rejects_whitespace() {
 #[test]
 fn test_validate_program_rejects_shell_metacharacters() {
     for bad in [
-        "a|b", "a&b", "a>b", "a<b", "a$b", "a`b", "a(b", "a)b", "a{b", "a}b", "a[b", "a]b",
-        "a*b", "a?b", "a#b", "a'b", "a\"b", "a\\b", "a\nb", "a\rb",
+        "a|b", "a&b", "a>b", "a<b", "a$b", "a`b", "a(b", "a)b", "a{b", "a}b", "a[b", "a]b", "a*b",
+        "a?b", "a#b", "a'b", "a\"b", "a\\b", "a\nb", "a\rb",
     ] {
         assert!(
             matches!(
@@ -653,10 +653,7 @@ async fn test_cmd_run_tool_shell_script_not_in_allowlist() {
     let tool = CmdRunTool;
 
     let err = tool
-        .execute(
-            &ctx,
-            serde_json::json!({ "shell_script": "rm -rf /" }),
-        )
+        .execute(&ctx, serde_json::json!({ "shell_script": "rm -rf /" }))
         .await
         .expect_err("unlisted shell_script must be refused");
 

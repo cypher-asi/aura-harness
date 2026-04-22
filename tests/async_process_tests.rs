@@ -33,19 +33,18 @@ fn test_sync_command_immediate_commit() {
     #[cfg(windows)]
     let (program, args, expected_in_stdout) = (
         "cmd",
-        vec!["/c".to_string(), "echo".to_string(), "sync_test".to_string()],
+        vec![
+            "/c".to_string(),
+            "echo".to_string(),
+            "sync_test".to_string(),
+        ],
         "sync_test",
     );
     #[cfg(not(windows))]
-    let (program, args, expected_in_stdout) =
-        ("echo", vec!["sync_test".to_string()], "sync_test");
+    let (program, args, expected_in_stdout) = ("echo", vec!["sync_test".to_string()], "sync_test");
 
     let (result, command) = cmd_run_with_threshold(
-        &sandbox,
-        program,
-        &args,
-        None,
-        5000, // 5 second threshold
+        &sandbox, program, &args, None, 5000, // 5 second threshold
     )
     .unwrap();
 

@@ -197,10 +197,7 @@ pub fn create_router(state: RouterState) -> Router {
     let body_limit_16k = DefaultBodyLimit::max(16 * 1024);
     let body_limit_4k = DefaultBodyLimit::max(4 * 1024);
 
-    let public = Router::new().route(
-        "/health",
-        get(health_handler).route_layer(body_limit_1k),
-    );
+    let public = Router::new().route("/health", get(health_handler).route_layer(body_limit_1k));
 
     // Mutating JSON endpoints get a stricter per-IP governor (5/sec,
     // burst 10) so a misbehaving client can't flood writes even if

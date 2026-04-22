@@ -26,11 +26,10 @@ jobs:
       # `aura-protocol` crate via a `../aura-os/crates/aura-protocol` path
       # dependency. CI must check out that sibling at `../aura-os` relative to
       # `aura-harness`.
-      # TODO: set aura-os repo slug once published (e.g. `aura/aura-os`).
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps
@@ -57,11 +56,10 @@ jobs:
         with:
           path: aura-harness
 
-      # TODO: set aura-os repo slug.
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps
@@ -92,11 +90,10 @@ jobs:
         with:
           path: aura-harness
 
-      # TODO: set aura-os repo slug.
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps
@@ -125,11 +122,10 @@ jobs:
         with:
           path: aura-harness
 
-      # TODO: set aura-os repo slug.
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps
@@ -163,11 +159,10 @@ jobs:
         with:
           path: aura-harness
 
-      # TODO: set aura-os repo slug.
       - name: Checkout aura-os sibling
         uses: actions/checkout@v4
         with:
-          repository: PLACEHOLDER_ORG/aura-os
+          repository: cypher-asi/aura-os
           path: aura-os
 
       - name: Install system deps

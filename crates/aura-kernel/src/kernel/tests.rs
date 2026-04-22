@@ -411,8 +411,10 @@ async fn test_require_approval_tool_denied_without_grant_then_consumed_after_gra
         Arc::new(MockProvider::simple_response("test response"));
     let executor = ExecutorRouter::new();
 
-    let policy = crate::policy::PolicyConfig::default()
-        .with_tool_permission("run_command", crate::policy::PermissionLevel::RequireApproval);
+    let policy = crate::policy::PolicyConfig::default().with_tool_permission(
+        "run_command",
+        crate::policy::PermissionLevel::RequireApproval,
+    );
 
     let config = KernelConfig {
         workspace_base: ws_dir.path().to_path_buf(),
@@ -481,8 +483,10 @@ async fn test_revoke_approval_prevents_consumption() {
         Arc::new(MockProvider::simple_response("test response"));
     let executor = ExecutorRouter::new();
 
-    let policy = crate::policy::PolicyConfig::default()
-        .with_tool_permission("run_command", crate::policy::PermissionLevel::RequireApproval);
+    let policy = crate::policy::PolicyConfig::default().with_tool_permission(
+        "run_command",
+        crate::policy::PermissionLevel::RequireApproval,
+    );
 
     let config = KernelConfig {
         workspace_base: ws_dir.path().to_path_buf(),

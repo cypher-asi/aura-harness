@@ -441,12 +441,7 @@ fn retry_reason_for(err: &ApiError) -> &'static str {
 /// any). `attempt_that_failed` is the 0-based attempt counter of the
 /// call that just failed; the 1-based "upcoming" attempt number is
 /// `attempt_that_failed + 2`.
-fn emit_retry_observation(
-    err: &ApiError,
-    sleep: Duration,
-    attempt_that_failed: u32,
-    model: &str,
-) {
+fn emit_retry_observation(err: &ApiError, sleep: Duration, attempt_that_failed: u32, model: &str) {
     let wait_ms = u64::try_from(sleep.as_millis()).unwrap_or(u64::MAX);
     let info = RetryInfo {
         reason: retry_reason_for(err).to_string(),
@@ -704,10 +699,7 @@ mod retry_tests {
     #[test]
     fn retry_after_header_parses_integer_seconds() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            reqwest::header::RETRY_AFTER,
-            HeaderValue::from_static("7"),
-        );
+        headers.insert(reqwest::header::RETRY_AFTER, HeaderValue::from_static("7"));
         assert_eq!(
             parse_retry_after_header(&headers),
             Some(Duration::from_secs(7))

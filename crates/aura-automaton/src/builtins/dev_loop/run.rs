@@ -1,10 +1,9 @@
 use super::{
-    extract_shell_command, forward_agent_event, info, validate_execution, warn,
-    AgenticTaskParams, Arc, AutomatonError, AutomatonEvent, DevLoopAutomaton, DevLoopConfig,
-    DomainApi, HashMap, ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor,
-    TaskExecutionResult, TaskInfo, TaskTrackingConfig, TickContext, ToolProfile,
-    MAX_RETRIES_PER_TASK, STATE_FAILED_IDS, STATE_FAILURE_REASONS, STATE_RETRY_COUNTS,
-    STATE_TASK_QUEUE, STATE_WORK_LOG,
+    extract_shell_command, forward_agent_event, info, validate_execution, warn, AgenticTaskParams,
+    Arc, AutomatonError, AutomatonEvent, DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap,
+    ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor, TaskExecutionResult,
+    TaskInfo, TaskTrackingConfig, TickContext, ToolProfile, MAX_RETRIES_PER_TASK, STATE_FAILED_IDS,
+    STATE_FAILURE_REASONS, STATE_RETRY_COUNTS, STATE_TASK_QUEUE, STATE_WORK_LOG,
 };
 use crate::builtins::noop_executor::NoOpExecutor;
 
@@ -229,4 +228,3 @@ fn effective_project_path(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| project.path.clone())
 }
-

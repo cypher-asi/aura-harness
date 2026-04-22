@@ -794,10 +794,7 @@ mod tests {
         // returned tree.
         fn contains_marker(entries: &[DirEntry]) -> bool {
             entries.iter().any(|e| {
-                e.name == "marker.txt"
-                    || e.children
-                        .as_ref()
-                        .is_some_and(|c| contains_marker(c))
+                e.name == "marker.txt" || e.children.as_ref().is_some_and(|c| contains_marker(c))
             })
         }
         assert!(contains_marker(&entries), "legitimate file should survive");
@@ -840,10 +837,7 @@ mod tests {
 
         fn has_name(entries: &[DirEntry], needle: &str) -> bool {
             entries.iter().any(|e| {
-                e.name == needle
-                    || e.children
-                        .as_ref()
-                        .is_some_and(|c| has_name(c, needle))
+                e.name == needle || e.children.as_ref().is_some_and(|c| has_name(c, needle))
             })
         }
         assert!(
