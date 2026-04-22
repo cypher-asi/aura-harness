@@ -63,6 +63,9 @@ pub struct DomainToolExecutor {
     /// Per-session project ID; used as fallback when the LLM tool call args
     /// do not include `project_id` (single-project mode).
     session_project_id: Option<String>,
+    /// Per-session workspace path; injected into orbit tool calls that need
+    /// a local working directory (e.g. `orbit_push`).
+    session_workspace: Option<String>,
 }
 
 impl DomainToolExecutor {
@@ -71,6 +74,7 @@ impl DomainToolExecutor {
             api,
             session_jwt: None,
             session_project_id: None,
+            session_workspace: None,
         }
     }
 
@@ -80,6 +84,7 @@ impl DomainToolExecutor {
             api,
             session_jwt: jwt,
             session_project_id: None,
+            session_workspace: None,
         }
     }
 
@@ -91,20 +96,30 @@ impl DomainToolExecutor {
         api: Arc<dyn DomainApi>,
         jwt: Option<String>,
         project_id: Option<String>,
+        workspace: Option<String>,
     ) -> Self {
         Self {
             api,
             session_jwt: jwt,
             session_project_id: project_id,
+            session_workspace: workspace,
         }
     }
 
-    /// Inject the session JWT into input args so orbit/network handlers can use it.
-    fn inject_jwt(&self, input: &Value) -> Value {
+    /// Inject session-scoped fields (JWT, workspace) into input args so
+    /// orbit/network handlers can use them without the LLM needing to provide them.
+    fn inject_session_fields(&self, input: &Value) -> Value {
         let mut patched = input.clone();
-        if let (Some(jwt), Some(obj)) = (&self.session_jwt, patched.as_object_mut()) {
-            if !obj.contains_key("jwt") {
-                obj.insert("jwt".to_string(), Value::String(jwt.clone()));
+        if let Some(obj) = patched.as_object_mut() {
+            if let Some(jwt) = &self.session_jwt {
+                if !obj.contains_key("jwt") {
+                    obj.insert("jwt".to_string(), Value::String(jwt.clone()));
+                }
+            }
+            if let Some(workspace) = &self.session_workspace {
+                if !obj.contains_key("workspace") {
+                    obj.insert("workspace".to_string(), Value::String(workspace.clone()));
+                }
             }
         }
         patched
@@ -128,7 +143,7 @@ impl DomainToolExecutor {
     /// Returns a JSON string result (always contains an `ok` field).
     pub async fn execute(&self, tool_name: &str, project_id: &str, input: &Value) -> String {
         let project_id = self.effective_project_id(project_id);
-        let input = self.inject_jwt(input);
+        let input = self.inject_session_fields(input);
         match tool_name {
             // Specs
             "list_specs" => specs::list_specs(self.api.as_ref(), project_id, &input).await,
