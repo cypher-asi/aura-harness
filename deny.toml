@@ -33,12 +33,13 @@ yanked = "warn"
 # TODO(W1+): these advisories are on transitive deps we can't easily bump today.
 # Revisit once the upstream dep graph moves; each ignore is explicit.
 ignore = [
-  # `paste` is feature-complete and unmaintained; pulled in by ratatui.
-  "RUSTSEC-2024-0436",
   # `rustls-pemfile` unmaintained; transitive via tonic/reqwest ecosystem.
   "RUSTSEC-2025-0134",
   # `serial` (transitive via portable-pty on Windows). No safe upgrade path.
   "RUSTSEC-2017-0008",
+  # Previously carried RUSTSEC-2024-0436 (`paste` unmaintained) — dropped
+  # when ratatui 0.29→0.30 stopped depending on it. Don't add back
+  # without a dep-graph check first.
 ]
 
 # ---------------------------------------------------------------------------

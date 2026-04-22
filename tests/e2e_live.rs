@@ -26,6 +26,12 @@ use common::{
 };
 use serde_json::{json, Value};
 
+// Local wrapper around `common::require_llm_token` that first gates on
+// `AURA_RUN_LIVE_E2E`. The inner call used to be `$crate::require_llm!()`,
+// which resolved back to *this* macro (the local definition shadows the
+// `#[macro_export]` sibling in `tests/common/mod.rs`) — triggering
+// unbounded recursion on the first real run. Calling the function
+// directly sidesteps the macro-resolution ambiguity.
 macro_rules! require_llm {
     () => {{
         let enabled = std::env::var("AURA_RUN_LIVE_E2E")
@@ -35,7 +41,7 @@ macro_rules! require_llm {
             eprintln!("skipping live LLM test: set AURA_RUN_LIVE_E2E=1 to enable it");
             return;
         }
-        $crate::require_llm!()
+        $crate::common::require_llm_token()
     }};
 }
 

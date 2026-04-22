@@ -1179,10 +1179,13 @@ async fn test_rejects_malformed_bearer_header() {
     let state = test_router_state_with_managers();
     let app = create_router(state);
 
-    // Wrong scheme — `Basic` instead of `Bearer`.
+    // Wrong scheme — `Basic` instead of `Bearer`. The value after the
+    // scheme is an arbitrary non-credential placeholder; the assertion
+    // below is purely about the scheme, and a base64-shaped literal
+    // here tripped GitHub secret scanning for no defensive benefit.
     let req = Request::builder()
         .uri("/api/skills")
-        .header("authorization", "Basic dXNlcjpwYXNz")
+        .header("authorization", "Basic placeholder")
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
