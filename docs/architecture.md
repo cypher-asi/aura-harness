@@ -74,10 +74,16 @@ policy pipeline. The AgentLoop never knows the difference.
 | `aura-node` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
 | `aura` | Root binary wiring for launch modes, runtime setup, and top-level command entrypoints. |
 
-> **Note:** `aura-cli` is not shipped in this workspace. A previous interactive
-> CLI REPL is tracked for possible reintroduction in a future phase; for now
-> the TUI + embedded HTTP server (`src/api_server.rs`) and the headless
-> `aura-node` server are the only consumers of the agent runtime.
+> **Historical deviation (2026, Wave 4 / Phase 5d):** the v0.1.0 design
+> specs mention a separate `aura-cli` crate. That crate was **never
+> created** and has been dropped from the dependency graph and the
+> crate table above. The canonical CLI entry is the root `aura`
+> binary (`src/main.rs`), which covers the interactive TUI, login /
+> logout / whoami, and the embedded HTTP API server. The headless
+> half is `aura-node`. Spec references to `aura-cli/src/...` should
+> be read as `src/...` under the root binary. See
+> [`docs/specs/v0.1.0/README.md`](specs/v0.1.0/README.md) for the
+> full mapping.
 
 ### Dependency Graph
 

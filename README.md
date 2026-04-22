@@ -99,12 +99,17 @@ This workspace ships two binaries:
 
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
-| `aura` | [`src/main.rs`](src/main.rs) | Primary binary — TUI by default, headless node with `run --ui none`. |
+| `aura` | [`src/main.rs`](src/main.rs) | **Canonical CLI entry point.** TUI by default; headless node with `run --ui none`; also hosts `login` / `logout` / `whoami` / `hello`. |
 | `aura-node` | [`crates/aura-node/src/main.rs`](crates/aura-node/src/main.rs) | Standalone headless server (HTTP + WebSocket API). |
 
-> The earlier `aura-cli` REPL crate was retired in Wave 4 of the refactor.
-> Its surface is covered by `aura` (TUI + `run --ui none`). See
-> `docs/architecture.md` for history.
+> **Historical:** earlier design drafts and the v0.1.0 specs referred
+> to a separate `aura-cli` crate. That crate was retired in Wave 4 of
+> the refactor (2026) and never shipped in this workspace. Its intended
+> surface — interactive REPL, approvals, slash commands, record
+> tailing — is now split between the `aura` binary at the workspace
+> root (`src/`) for the interactive TUI and `aura-node` for the
+> headless server. Anyone reading a spec that mentions `aura-cli/src/...`
+> should map those paths onto `src/...` in the root crate.
 
 ## CLI Reference
 

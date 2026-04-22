@@ -54,22 +54,32 @@ cargo test -p aura-kernel
 
 ## 2.1 Current Workspace Shape (Post-Refactor)
 
-The workspace currently contains 12 crates:
+The workspace currently contains the following crates (root `aura`
+binary plus `aura-*` library crates; `aura-protocol` lives in the
+sibling `aura-os` workspace and is consumed as a path dependency):
 
 ```text
+aura              (root binary — canonical CLI entry; see README.md)
 aura-core
 aura-store
 aura-tools
 aura-reasoner
 aura-kernel
 aura-terminal
-aura-cli
 aura-agent
+aura-memory
+aura-skills
 aura-auth
 aura-automaton
 aura-node
-aura-protocol
+aura-protocol    (external, ../aura-os/crates/aura-protocol)
 ```
+
+> **Historical (2026):** earlier drafts of this list named an `aura-cli`
+> crate. That crate was never created; its intended surface is split
+> between the root `aura` binary (interactive TUI) and `aura-node`
+> (headless server). See `README.md` → "Binaries" for the canonical
+> entry point.
 
 Refactor outcomes reflected in codebase:
 

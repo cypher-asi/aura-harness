@@ -259,16 +259,27 @@ Approval flow for sensitive operations.
 ---
 
 ### Phase 15: CLI (`aura-cli`)
-**Status:** 🔴 Not Started
+**Status:** ⛔ Superseded (2026, Wave 4 refactor)
 
-Interactive command-line interface.
+Interactive command-line interface. **The separate `aura-cli` crate
+was never created.** Its intended surface is now delivered by the
+root `aura` binary (`src/`) — interactive TUI, login / logout /
+whoami, and the embedded HTTP server for file / record access. The
+headless server half lives in `aura-node`. See
+[`README.md`](../README.md) under "Binaries" for the canonical entry
+point.
 
-- [ ] Create `aura-cli` crate
-- [ ] REPL loop with prompt
-- [ ] Transaction submission
-- [ ] Record streaming / tailing
-- [ ] Slash commands (/status, /history, /approve, /deny)
-- [ ] Approval prompts inline
+- [x] ~~Create `aura-cli` crate~~ — dropped; root `aura` binary
+  covers this.
+- [x] REPL loop with prompt — delivered by the ratatui TUI in
+  `src/event_loop/` and `aura-terminal`.
+- [x] Transaction submission — delivered by `aura run` / the TUI's
+  session bootstrap.
+- [x] Record streaming / tailing — delivered by the `/stream`
+  WebSocket in `aura-node`.
+- [x] Slash commands (/status, /history, /approve, /deny) — TUI
+  command palette / event loop.
+- [x] Approval prompts inline — TUI approval modal.
 
 ---
 
@@ -310,13 +321,26 @@ aura_os/
 │   └── rules.md         # Rust coding conventions
 ├── aura-core/           # Core types, IDs, errors
 ├── aura-store/          # RocksDB storage
-├── aura-executor/       # Executor trait & router
 ├── aura-tools/          # Tool executor (fs, cmd)
 ├── aura-reasoner/       # Model provider abstraction + Anthropic
 ├── aura-kernel/         # Deterministic kernel + Turn Processor
+├── aura-agent/          # Multi-step orchestration / AgentLoop
+├── aura-memory/         # Per-agent memory (facts / events / procedures)
+├── aura-skills/         # SKILL.md skill system
+├── aura-terminal/       # Ratatui TUI library
+├── aura-automaton/      # Automaton lifecycle + built-ins
+├── aura-auth/           # zOS login / credential store
 ├── aura-node/           # HTTP router, scheduler
-└── aura-cli/            # Interactive CLI (planned)
+└── src/                 # Root `aura` binary (canonical CLI entry;
+                         # supersedes the historical `aura-cli` crate
+                         # — see README.md "Binaries").
 ```
+
+> **Historical note (2026):** this tree previously listed
+> `aura-executor/` and `aura-cli/`. `aura-executor` was dissolved into
+> `aura-core` + `aura-kernel`. `aura-cli` was never created — its
+> surface is the root `aura` binary (`src/`) plus `aura-node` for the
+> headless half.
 
 ---
 
