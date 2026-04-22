@@ -332,6 +332,9 @@ Filesystem, command, search, and domain tools. Sandboxed execution ensures agent
 | `delete_file` | `delete.rs` | File deletion |
 | `search_code` | `search/` | Ripgrep-powered code search |
 | `run_command` | `cmd/` | Shell command execution with sync/async threshold |
+| `git_commit` | `git_tool/` | Stage + commit under the kernel-sandboxed workspace. Invariant §1 compliant. |
+| `git_push` | `git_tool/` | Push `HEAD` to a remote with inline JWT-authenticated URL (no on-disk remote registration). |
+| `git_commit_push` | `git_tool/` | Transactional `add`+`commit`+`push` used by the dev-loop automaton. |
 
 #### Domain Tools (`domain_tools/`)
 
@@ -353,6 +356,7 @@ Dev-loop and task control tools (`start_dev_loop`, `pause_dev_loop`, `stop_dev_l
 | `tool` | `Tool` trait, `ToolContext`, `builtin_tools()`, `read_only_builtin_tools()` |
 | `definitions` | Static `ToolDefinition` sets for catalog profiles |
 | `fs_tools/` | All built-in tool implementations |
+| `git_tool/` | `GitExecutor` — kernel-mediated `git_commit`, `git_push`, `git_commit_push` tools. The single permitted call-site for mutating `Command::new("git")` (Invariant §1). Shared `git_commit_impl` / `git_push_impl` helpers are also re-used by the `orbit_push` domain tool. |
 | `domain_tools/` | `DomainToolExecutor`, `DomainApi` trait, per-area handlers (orbit, network, specs, tasks, project, storage) |
 | `automaton_tools` | `AutomatonController` trait and dev-loop/task tools |
 
@@ -491,7 +495,7 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 | `task_context.rs` | Task-scoped context for multi-task agents |
 | `task_executor/` | Task execution handlers |
 | `file_ops/` | File operation pipeline: apply, validation, stub detection, workspace mapping, file walkers |
-| `git.rs` | Git integration helpers (`is_git_repo`, `git_commit`, `git_push`, `list_unpushed_commits`) |
+| `git.rs` | **Read-only** git helpers only (`is_git_repo`, `list_unpushed_commits`). Mutating ops (`add`, `commit`, `push`) moved to `aura-tools/src/git_tool/` — see Invariant §1 and the `GitExecutor` entry below. |
 | `message_conversion.rs` | Protocol ↔ internal message conversion |
 | `parser.rs` | Message/output parsing utilities |
 

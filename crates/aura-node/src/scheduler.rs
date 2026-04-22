@@ -52,6 +52,10 @@ type AgentLock = Arc<Mutex<()>>;
 
 /// Scheduler for managing agent workers.
 pub struct Scheduler {
+    // TODO(phase2-followup): Invariant §10 — bind to `Arc<dyn ReadStore>`
+    // once `Kernel::new` accepts a `(ReadStore, WriteHook)` pair. The
+    // scheduler itself never calls `append_entry_*`; it only forwards the
+    // store handle when constructing per-agent kernels.
     store: Arc<dyn Store>,
     provider: Arc<dyn ModelProvider + Send + Sync>,
     agent_loop_config: AgentLoopConfig,

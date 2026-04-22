@@ -76,13 +76,53 @@ run_band "§2" "append_entry_* used outside aura-kernel / aura-store / tests" \
     'append_entry_(atomic|dequeued|direct|entries_batch)' \
     '^(crates/aura-kernel/|crates/aura-store/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
-# §1 — raw `git` processes must live in a kernel-mediated executor. Phase 2
-# will introduce the `GitExecutor` and tighten this band. For now the
-# allowlist pins the current call-sites so any *new* location triggers a
-# failure.
-run_band "§1" "Command::new(\"git\") outside the approved call-sites (phase2 TODO: move to GitExecutor)" \
+# §1 — raw `git` processes must live in a kernel-mediated executor.
+#
+# After Phase 2 the ONLY permitted locations for `Command::new("git")` are:
+#
+#   * `crates/aura-tools/src/git_tool/` — the `GitExecutor` and its shared
+#     helpers (`git_commit_impl`, `git_push_impl`, `git_commit_push_impl`).
+#     Every mutating `git` subprocess in the tree must funnel through here.
+#   * `crates/aura-agent/src/git.rs` — read-only helpers (`git log` for
+#     unpushed-commit telemetry). Declared exception in docs/invariants.md.
+#   * `crates/aura-automaton/src/builtins/dev_loop/tick.rs` — the single
+#     `git init` bootstrap call-site (analogous to RocksStore::open).
+#     Declared exception in docs/invariants.md.
+#   * Test files.
+run_band "§1" "Command::new(\"git\") outside the GitExecutor" \
     'Command::new\("git"\)' \
-    '^(crates/aura-agent/src/git\.rs|crates/aura-automaton/src/builtins/dev_loop/tick\.rs|crates/aura-tools/src/domain_tools/orbit\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-tools/src/git_tool/|crates/aura-agent/src/git\.rs|crates/aura-automaton/src/builtins/dev_loop/tick\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+
+# §10 — non-kernel, non-store crates must bind to `Arc<dyn ReadStore>`.
+#
+# `Arc<dyn Store>` exposes the sealed `WriteStore` surface. It is only
+# legitimate in:
+#
+#   * `aura-kernel` and `aura-store` themselves.
+#   * Test scaffolding (`mod tests`, `tests/`, `*_tests.rs`).
+#   * A bounded set of binary-wiring sites that must hand a store handle
+#     to `Kernel::new` (which still takes `Arc<dyn Store>`). These are
+#     flagged `TODO(phase2-followup)` in-code and are listed explicitly
+#     below. Once the kernel accepts a `(ReadStore, WriteHook)` pair,
+#     this allowlist collapses to just the kernel/store crates.
+#
+# Production holders with follow-up TODOs:
+#   - crates/aura-node/src/router/mod.rs      — RouterState field piped into WsContext
+#   - crates/aura-node/src/session/mod.rs     — WsContext handed to Kernel::new
+#   - crates/aura-node/src/scheduler.rs       — Scheduler builds per-agent kernels
+#   - crates/aura-node/src/automaton_bridge.rs — AutomatonBridge builds automaton kernels
+#   - crates/aura-node/src/node.rs            — boots the process-wide store
+#   - src/main.rs                             — top-level binary wiring
+#
+# Test-only holders (filenames that don't match `*test*.rs` but whose hits
+# are inside `#[cfg(test)] mod tests`):
+#   - crates/aura-agent/src/kernel_gateway.rs
+#   - crates/aura-agent/src/kernel_domain_gateway.rs
+#   - crates/aura-agent/src/recording_stream.rs
+#   - crates/aura-node/src/worker.rs
+run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
+    'Arc<dyn (aura_store::)?Store>' \
+    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-node/src/scheduler\.rs|crates/aura-node/src/automaton_bridge\.rs|crates/aura-node/src/router/mod\.rs|crates/aura-node/src/session/mod\.rs|crates/aura-node/src/worker\.rs|crates/aura-node/src/node\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into aura-store directly. Any code
 # that needs persistence goes through the kernel. Test files in the same

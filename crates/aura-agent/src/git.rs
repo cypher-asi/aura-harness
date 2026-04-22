@@ -1,148 +1,66 @@
-//! Git operations: commit, push, and repository detection.
+//! Read-only git helpers.
+//!
+//! Phase 2 remediation (Invariant §1 — Sole External Gateway):
+//! **mutating** git operations (`git add`, `git commit`, `git push`,
+//! `git remote set-url`) now live exclusively in
+//! [`aura_tools::git_tool`](../../../aura-tools/src/git_tool/mod.rs),
+//! where they run inside the kernel-mediated tool pipeline. This module
+//! retains only the read-only helpers used by the agent surface
+//! (`is_git_repo`, `list_unpushed_commits`) — the former is a filesystem
+//! check, the latter reads commit metadata via `git log` and is
+//! explicitly listed as a declared exception in `docs/invariants.md`.
+//!
+//! If you find yourself adding a mutating helper here, route it through
+//! `aura_tools::git_tool` instead.
 
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::debug;
 
-const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Timeout used for the read-only helpers below. Mutating operations
+/// have their own timeout managed by the git tools in `aura-tools`.
+const GIT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn redact_url(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(parsed) if !parsed.password().unwrap_or_default().is_empty() => {
-            let mut redacted = parsed;
-            redacted.set_password(Some("***")).ok();
-            redacted.to_string()
-        }
-        _ => url.to_string(),
-    }
-}
-
+/// Lightweight record of a single commit surfaced by
+/// [`list_unpushed_commits`]. Kept stable so aura-os / dev-loop events
+/// that emit `GitPushed { commits }` do not churn when the push helper
+/// is moved to `aura-tools`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub sha: String,
     pub message: String,
 }
 
+/// Quick workspace-level check: does the directory contain a `.git`
+/// entry? This is a pure filesystem probe — no subprocess, no kernel
+/// mediation required.
 #[must_use]
 pub fn is_git_repo(project_root: &str) -> bool {
     Path::new(project_root).join(".git").exists()
 }
 
 async fn git_output(cmd: &mut Command, label: &str) -> Result<std::process::Output, String> {
-    tokio::time::timeout(GIT_TIMEOUT, cmd.output())
+    tokio::time::timeout(GIT_READ_TIMEOUT, cmd.output())
         .await
-        .map_err(|_| format!("git {label}: timed out after {}s", GIT_TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            format!(
+                "git {label}: timed out after {}s",
+                GIT_READ_TIMEOUT.as_secs()
+            )
+        })?
         .map_err(|e| format!("git {label}: {e}"))
 }
 
-pub async fn ensure_remote(project_root: &str, name: &str, url: &str) {
-    let existing = git_output(
-        Command::new("git")
-            .args(["remote", "get-url", name])
-            .current_dir(project_root),
-        "remote get-url",
-    )
-    .await;
-
-    match existing {
-        Ok(o) if o.status.success() => {
-            let current = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if current != url {
-                let safe = redact_url(url);
-                if let Err(e) = git_output(
-                    Command::new("git")
-                        .args(["remote", "set-url", name, url])
-                        .current_dir(project_root),
-                    "remote set-url",
-                )
-                .await
-                {
-                    tracing::warn!(remote = name, url = %safe, error = %e, "failed to set-url git remote");
-                } else {
-                    debug!(remote = name, url = %safe, "updated git remote URL");
-                }
-            }
-        }
-        _ => {
-            let safe = redact_url(url);
-            if let Err(e) = git_output(
-                Command::new("git")
-                    .args(["remote", "add", name, url])
-                    .current_dir(project_root),
-                "remote add",
-            )
-            .await
-            {
-                tracing::warn!(remote = name, url = %safe, error = %e, "failed to add git remote");
-            } else {
-                debug!(remote = name, url = %safe, "added git remote");
-            }
-        }
-    }
-}
-
-/// Stage all changes and commit. Returns the commit SHA if a commit was created.
-pub async fn git_commit(project_root: &str, message: &str) -> Result<Option<String>, String> {
-    let add = git_output(
-        Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(project_root),
-        "add -A",
-    )
-    .await?;
-
-    if !add.status.success() {
-        return Err(format!(
-            "git add -A failed: {}",
-            String::from_utf8_lossy(&add.stderr)
-        ));
-    }
-
-    let diff = git_output(
-        Command::new("git")
-            .args(["diff", "--cached", "--quiet"])
-            .current_dir(project_root),
-        "diff --cached",
-    )
-    .await?;
-
-    if diff.status.success() {
-        debug!("nothing to commit");
-        return Ok(None);
-    }
-
-    let commit = git_output(
-        Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(project_root),
-        "commit",
-    )
-    .await?;
-
-    if !commit.status.success() {
-        return Err(format!(
-            "git commit failed: {}",
-            String::from_utf8_lossy(&commit.stderr)
-        ));
-    }
-
-    let sha = git_output(
-        Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(project_root),
-        "rev-parse HEAD",
-    )
-    .await?;
-
-    let sha_str = String::from_utf8_lossy(&sha.stdout).trim().to_string();
-    info!(%sha_str, "git commit created");
-    Ok(Some(sha_str))
-}
-
-/// List commits that exist locally but haven't been pushed to `remote/branch`.
+/// List commits on `HEAD` that have not yet been pushed to
+/// `<remote>/<branch>`.
+///
+/// This is a **read-only** inspection used by dev-loop and orbit
+/// telemetry. It does not mutate any repository state. When the
+/// remote ref is missing (e.g. first push) we return an empty vector
+/// rather than propagating an error.
 pub async fn list_unpushed_commits(
     project_root: &str,
     remote: &str,
@@ -178,45 +96,4 @@ pub async fn list_unpushed_commits(
             Vec::new()
         }
     }
-}
-
-/// Push to the remote using a JWT-authenticated URL.
-/// Returns the list of commits that were pushed.
-pub async fn git_push(
-    project_root: &str,
-    remote_url: &str,
-    branch: &str,
-    jwt: &str,
-) -> Result<Vec<CommitInfo>, String> {
-    let unpushed = list_unpushed_commits(project_root, "orbit", branch).await;
-
-    let auth_url = build_auth_url(remote_url, jwt)?;
-    ensure_remote(project_root, "orbit", &auth_url).await;
-
-    let push = git_output(
-        Command::new("git")
-            .args(["push", "orbit", &format!("HEAD:{branch}")])
-            .current_dir(project_root),
-        &format!("push orbit HEAD:{branch}"),
-    )
-    .await?;
-
-    if !push.status.success() {
-        let stderr = String::from_utf8_lossy(&push.stderr);
-        return Err(format!("git push failed: {stderr}"));
-    }
-
-    ensure_remote(project_root, "orbit", remote_url).await;
-
-    info!(branch, commits = unpushed.len(), "git push succeeded");
-    Ok(unpushed)
-}
-
-fn build_auth_url(remote_url: &str, jwt: &str) -> Result<String, String> {
-    let url = url::Url::parse(remote_url).map_err(|e| format!("invalid remote URL: {e}"))?;
-    let host = url.host_str().ok_or("remote URL has no host")?;
-    let scheme = url.scheme();
-    let port_part = url.port().map(|p| format!(":{p}")).unwrap_or_default();
-    let path = url.path();
-    Ok(format!("{scheme}://x-token:{jwt}@{host}{port_part}{path}"))
 }

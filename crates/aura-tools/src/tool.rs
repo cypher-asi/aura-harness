@@ -32,7 +32,7 @@ pub struct ToolContext {
     /// Propagated onto every Delegate transaction for billing attribution.
     pub originating_user_id: Option<String>,
     /// Phase 5 part 2: optional spawn hook used by the `spawn_agent` tool to
-    /// actually persist a new child agent. `None` means "no hook wired" — the
+    /// actually persist a new child agent. `None` means "no hook wired" â€” the
     /// tool returns a pure outcome payload without touching a store.
     pub spawn_hook: Option<Arc<dyn SpawnHook>>,
     /// Phase 5 part 2: optional cross-agent control hook used by
@@ -50,7 +50,7 @@ pub struct ToolContext {
 /// tools to actually affect the target agent. Kept as a trait so the
 /// permission gate can be tested without wiring a real kernel writer.
 ///
-/// Production wiring of this hook is deferred — see
+/// Production wiring of this hook is deferred â€” see
 /// `TODO(phase5-runtime)` in `agents/` for the runtime effects.
 #[async_trait]
 pub trait AgentControlHook: Send + Sync {
@@ -161,6 +161,9 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(FsFindTool),
         Box::new(SearchCodeTool),
         Box::new(CmdRunTool),
+        Box::new(crate::git_tool::GitCommitTool),
+        Box::new(crate::git_tool::GitPushTool),
+        Box::new(crate::git_tool::GitCommitPushTool),
     ]
 }
 

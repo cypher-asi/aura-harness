@@ -40,7 +40,9 @@ pub fn default_tool_permission(tool: &str) -> PermissionLevel {
         // `Deny` even for hosts that spliced it into `allowed_tools`.
         "list_files" | "find_files" | "read_file" | "stat_file" | "search_code" | "write_file"
         | "edit_file" | "delete_file" => PermissionLevel::AlwaysAllow,
-        "run_command" => PermissionLevel::RequireApproval,
+        "run_command" | "git_commit" | "git_push" | "git_commit_push" => {
+            PermissionLevel::RequireApproval
+        }
         _ => PermissionLevel::Deny,
     }
 }
@@ -66,14 +68,14 @@ pub struct PolicyConfig {
     pub tool_integration_requirements: HashMap<String, InstalledToolIntegrationRequirement>,
     /// When true, tools not in `allowed_tools` or `tool_permissions` get
     /// `AlwaysAllow` instead of `Deny`. **Defaults to `false`** (Phase 5
-    /// hardening — closes finding C5): unlisted tools fall through to
+    /// hardening â€” closes finding C5): unlisted tools fall through to
     /// `Deny` so adding a tool to the runtime registry no longer
     /// auto-grants it at policy-check time. Hosts that deliberately
     /// want a wide-open policy (e.g. a controlled test harness) can
     /// flip this back to `true` explicitly.
     pub allow_unlisted: bool,
     /// Scope + capability bundle for the agent this policy governs.
-    /// Always consulted on `Delegate` proposals — the check is
+    /// Always consulted on `Delegate` proposals â€” the check is
     /// unconditional and cannot be disabled. [`AgentPermissions::empty`]
     /// denies every capability-gated tool; [`AgentPermissions::ceo_preset`]
     /// grants everything.
@@ -84,7 +86,7 @@ pub struct PolicyConfig {
 }
 
 impl Default for PolicyConfig {
-    /// Fail-closed defaults (Phase 5 hardening — closes finding C5):
+    /// Fail-closed defaults (Phase 5 hardening â€” closes finding C5):
     ///
     /// * `allow_unlisted` is `false`, so anything not in `allowed_tools`
     ///   and not explicitly named in `tool_permissions` is denied.

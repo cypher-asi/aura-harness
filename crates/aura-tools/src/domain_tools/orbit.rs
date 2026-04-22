@@ -177,28 +177,29 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
         .orbit_url()
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let remote_url = format!("https://x-token:{jwt}@{orbit_host}/{org_id}/{repo}.git");
+    // `orbit_push` is itself a domain tool that runs inside the
+    // kernel's executor pipeline (policy + recording already applied
+    // at the outer `ToolCall` boundary). Re-entering the full tool
+    // executor just to run `git push` would double-record the
+    // mutation and risk recursive policy gating. Instead we call the
+    // shared `git_push_impl` helper in `aura-tools/src/git_tool/` —
+    // the same code path the dedicated `git_push` tool uses — so the
+    // single git spawn call-site remains centralized in `git_tool`
+    // (see `docs/invariants.md` §1).
+    let remote_url = format!("https://{orbit_host}/{org_id}/{repo}.git");
+    let workspace_path = std::path::Path::new(&workspace);
+    let timeout = std::time::Duration::from_secs(120);
 
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.arg("push").arg(&remote_url);
-    if force {
-        cmd.arg("--force");
-    }
-    cmd.arg(format!("HEAD:refs/heads/{branch}"));
-    cmd.current_dir(&workspace);
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-
-    match tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if output.status.success() {
-                domain_ok(json!({ "result": format!("{stdout}{stderr}").trim().to_string() }))
-            } else {
-                domain_err(format!("git push failed: {stderr}").trim().to_string())
-            }
-        }
-        Ok(Err(e)) => domain_err(format!("Failed to run git push: {e}")),
-        Err(_) => domain_err("git push timed out after 120s"),
+    match crate::git_tool::git_push_impl(workspace_path, &remote_url, branch, &jwt, force, timeout)
+        .await
+    {
+        Ok(commits) => domain_ok(json!({
+            "result": format!("pushed {} commit(s) to {branch}", commits.len()),
+            "commits": commits
+                .iter()
+                .map(|c| json!({ "sha": c.sha, "message": c.message }))
+                .collect::<Vec<_>>(),
+        })),
+        Err(e) => domain_err(format!("git push failed: {e}")),
     }
 }

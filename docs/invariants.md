@@ -270,7 +270,8 @@ The following operations intentionally do NOT route through the kernel:
 | Server listeners (`TcpListener::bind`) | Inbound edge, not an outbound state change. |
 | Interactive PTY (terminal.rs) | User-driven interactive shell; different execution model. |
 | Tool sandbox setup (`sandbox.rs` directory creation) | Infrastructure for the kernel-managed tool pipeline. |
-| Read-only git operations (`git diff`, `git status`, `git log`) | No external side effect. Only mutating git ops (push, commit) require kernel mediation. |
+| Read-only git operations (`git diff`, `git status`, `git log`) in `aura-agent/src/git.rs` | No external side effect. The `is_git_repo` filesystem probe and `list_unpushed_commits` (`git log` scan) stay in `aura-agent` as read-only helpers. Every mutating `git` subprocess (`add`, `commit`, `push`) lives behind the `GitExecutor` in `crates/aura-tools/src/git_tool/` and routes through the kernel's `ToolExecutor`. |
+| `git init` bootstrap in `crates/aura-automaton/src/builtins/dev_loop/tick.rs` | One-time creation of a local `.git/` directory when a fresh workspace is first driven by the dev-loop automaton. Has no remote, cannot leak state across agents, and is strictly analogous to `RocksStore::open`. The call-site is pinned by the `Command::new("git")` band in `scripts/check_invariants.sh`; any second `git init` anywhere else is a CI failure. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
 | Generation proxy (`session/generation.rs`) for image/3D requests | Pure SSE proxy to `aura-router`; the session does not mutate local state or consume LLM credits. All remote calls use bounded `reqwest` connect/read timeouts. When this surface starts spending credits or persisting artifacts locally it **must** move behind a `KernelGenerationGateway`. |
 

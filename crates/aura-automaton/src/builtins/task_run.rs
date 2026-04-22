@@ -316,7 +316,7 @@ impl TaskRunAutomaton {
                     output_tokens: exec.output_tokens,
                 });
 
-                commit_and_push(ctx, task_id).await;
+                commit_and_push(ctx, self.tool_executor.as_ref(), task_id).await;
             }
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");

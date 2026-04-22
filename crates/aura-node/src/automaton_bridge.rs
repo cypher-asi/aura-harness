@@ -56,6 +56,10 @@ struct ProjectHandle {
 /// Concrete [`AutomatonController`] wired to the real runtime.
 pub struct AutomatonBridge {
     runtime: Arc<AutomatonRuntime>,
+    // TODO(phase2-followup): Invariant §10 — bind to `Arc<dyn ReadStore>`
+    // once `Kernel::new` accepts a read-only store + write hook. The
+    // bridge never calls `append_entry_*` itself; it only passes the
+    // handle through to `build_kernel` → `Kernel::new`.
     store: Arc<dyn Store>,
     domain: Arc<dyn DomainApi>,
     provider: Arc<dyn ModelProvider + Send + Sync>,
@@ -188,6 +192,7 @@ impl AutomatonBridge {
         use_workspace_base_as_root: bool,
         installed_tools: Vec<InstalledToolDefinition>,
         installed_integrations: Vec<InstalledIntegrationDefinition>,
+        extra_permissions: std::collections::HashMap<String, aura_core::PermissionLevel>,
     ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -209,10 +214,12 @@ impl AutomatonBridge {
             policy: runtime_capabilities::build_policy_config(
                 &installed_tools,
                 &installed_integrations,
-                // Dev-loop automaton kernels have no per-agent
-                // aura-network profile; fall back to the kernel's
-                // built-in default tool-permission matrix.
-                &std::collections::HashMap::new(),
+                // Dev-loop / task-runner automatons have no per-agent
+                // aura-network profile. Callers pass `extra_permissions`
+                // to elevate specific tools (e.g. the `git_*` tools when
+                // the operator explicitly wired a repo URL + JWT into
+                // the automaton's config).
+                &extra_permissions,
             ),
             ..KernelConfig::default()
         };
@@ -248,7 +255,7 @@ impl AutomatonBridge {
                         policy: runtime_capabilities::build_policy_config(
                             &installed_tools,
                             &installed_integrations,
-                            &std::collections::HashMap::new(),
+                            &extra_permissions,
                         ),
                         ..KernelConfig::default()
                     },
@@ -328,6 +335,17 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
+        // Dev-loop authorization model: when the operator explicitly
+        // wires a repo URL + auth token into the automaton's config,
+        // the session-level approval for `git_commit`, `git_push`, and
+        // `git_commit_push` has already been granted. Elevate those
+        // three tools to `AlwaysAllow` for this kernel so the
+        // automaton doesn't stall on `RequireApproval` on every tick.
+        // See `docs/invariants.md` §1 — mutations still flow through
+        // the kernel-mediated executor and land in the record log.
+        let extra_permissions =
+            dev_loop_git_permissions(git_repo_url.as_deref(), auth_token.as_deref());
+
         let kernel = self.build_kernel(
             domain.clone(),
             auth_token.as_deref(),
@@ -336,6 +354,7 @@ impl AutomatonBridge {
             effective_workspace.is_some(),
             installed_tools.clone(),
             installed_integrations.clone(),
+            extra_permissions,
         );
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
             &kernel,
@@ -427,6 +446,11 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
+        // Same git-tool elevation as `start_dev_loop_with_capabilities`
+        // — see that call-site for the authorization rationale.
+        let extra_permissions =
+            dev_loop_git_permissions(git_repo_url.as_deref(), auth_token.as_deref());
+
         let kernel = self.build_kernel(
             domain.clone(),
             auth_token.as_deref(),
@@ -435,6 +459,7 @@ impl AutomatonBridge {
             effective_workspace.is_some(),
             installed_tools.clone(),
             installed_integrations.clone(),
+            extra_permissions,
         );
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
             &kernel,
@@ -625,6 +650,32 @@ impl AutomatonBridge {
     pub fn list_automatons(&self) -> Vec<aura_automaton::AutomatonInfo> {
         self.runtime.list()
     }
+}
+
+/// Build the `extra_permissions` override map for an automaton kernel.
+///
+/// When the dev-loop / task-runner automatons are launched with BOTH a
+/// git repo URL and an auth token, the operator has already approved
+/// pushing to that remote at the session level — the kernel's default
+/// `RequireApproval` on `git_commit` / `git_push` / `git_commit_push`
+/// would stall the automaton forever. We elevate those three tools
+/// here. All other kernels (interactive agents, workers) continue to
+/// use the conservative `RequireApproval` default.
+///
+/// Mutations still flow through the kernel-mediated `GitExecutor` in
+/// `aura-tools/src/git_tool/`; elevation only bypasses the prompt, not
+/// the record log or the sandbox. See `docs/invariants.md` §1.
+fn dev_loop_git_permissions(
+    git_repo_url: Option<&str>,
+    auth_token: Option<&str>,
+) -> std::collections::HashMap<String, aura_core::PermissionLevel> {
+    let mut map = std::collections::HashMap::new();
+    if git_repo_url.is_some() && auth_token.is_some() {
+        for name in aura_tools::GIT_TOOL_NAMES {
+            map.insert((*name).to_string(), aura_core::PermissionLevel::AlwaysAllow);
+        }
+    }
+    map
 }
 
 #[async_trait]

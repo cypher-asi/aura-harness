@@ -1,0 +1,273 @@
+//! Unit tests for the `git_tool` module.
+//!
+//! These tests exercise the internal spawn helpers against a real `git`
+//! binary. If `git` is not on PATH the test is skipped (rather than
+//! failing) so CI runs in environments without git (docker scratch
+//! images, etc.) still pass the rest of the aura-tools suite.
+
+use super::*;
+use std::path::Path;
+use tempfile::TempDir;
+
+fn git_available() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+async fn init_repo(dir: &Path) {
+    let status = Command::new("git")
+        .arg("init")
+        .current_dir(dir)
+        .output()
+        .await
+        .expect("git init");
+    assert!(status.status.success(), "git init failed: {status:?}");
+
+    // Local identity so commits are accepted on hosts without a global config.
+    for (k, v) in [
+        ("user.email", "aura-test@example.com"),
+        ("user.name", "Aura Test"),
+    ] {
+        let s = Command::new("git")
+            .args(["config", k, v])
+            .current_dir(dir)
+            .output()
+            .await
+            .expect("git config");
+        assert!(s.status.success(), "git config {k} failed: {s:?}");
+    }
+}
+
+#[tokio::test]
+async fn commit_reports_sha_when_there_are_changes() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path()).await;
+    std::fs::write(dir.path().join("hello.txt"), b"hello").unwrap();
+
+    let sha = git_commit_impl(dir.path(), "test commit", Duration::from_secs(15))
+        .await
+        .expect("git_commit_impl");
+    let sha = sha.expect("commit should have produced a sha");
+    assert_eq!(sha.len(), 40, "expected a 40-char sha, got {sha:?}");
+}
+
+#[tokio::test]
+async fn commit_returns_none_when_tree_is_clean() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path()).await;
+    // No changes staged: commit must be a no-op.
+    let sha = git_commit_impl(dir.path(), "nothing to do", Duration::from_secs(15))
+        .await
+        .expect("git_commit_impl");
+    assert!(sha.is_none(), "expected no commit for a clean tree");
+}
+
+#[tokio::test]
+async fn commit_rejects_empty_message() {
+    let dir = TempDir::new().unwrap();
+    let err = git_commit_impl(dir.path(), "   ", Duration::from_secs(5))
+        .await
+        .expect_err("empty message should be rejected");
+    assert!(matches!(
+        err,
+        GitToolError::InvalidArg {
+            name: "message",
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn commit_surfaces_nonzero_exit_from_add() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    // A non-git directory: `git add -A` fails with a non-zero exit
+    // that we must surface as NonZeroExit.
+    let dir = TempDir::new().unwrap();
+    let err = git_commit_impl(dir.path(), "should fail", Duration::from_secs(10))
+        .await
+        .expect_err("non-repo should fail");
+    match err {
+        GitToolError::NonZeroExit { op, .. } => assert_eq!(op, "add"),
+        other => panic!("expected NonZeroExit on add, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn spawn_git_enforces_subcommand_allowlist() {
+    let dir = TempDir::new().unwrap();
+    let err = spawn_git(
+        dir.path(),
+        "clone",
+        &["https://example.com/x.git"],
+        Duration::from_secs(1),
+        "clone",
+    )
+    .await
+    .expect_err("clone is not on the allow-list");
+    assert!(matches!(err, GitToolError::DisallowedSubcommand(ref s) if s == "clone"));
+}
+
+#[tokio::test]
+async fn spawn_git_times_out() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    // `git push` to an unreachable URL will block on DNS/TCP for well
+    // over 50 ms. We cap the timeout aggressively to prove the hard
+    // kill path works.
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path()).await;
+    std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+    // Create a commit so `push` has something to try to send.
+    let _ = git_commit_impl(dir.path(), "seed", Duration::from_secs(10))
+        .await
+        .expect("seed commit");
+    let err = git_push_impl(
+        dir.path(),
+        "https://10.255.255.1/unreachable.git",
+        "main",
+        "fake-token",
+        false,
+        Duration::from_millis(50),
+    )
+    .await
+    .expect_err("push must time out");
+    assert!(matches!(err, GitToolError::Timeout(_, _)), "got {err:?}");
+}
+
+#[test]
+fn build_auth_url_injects_token() {
+    let url = build_auth_url("https://orbit.example.com/acme/repo.git", "jwt123").unwrap();
+    assert_eq!(
+        url,
+        "https://x-token:jwt123@orbit.example.com/acme/repo.git"
+    );
+}
+
+#[test]
+fn build_auth_url_strips_existing_credentials() {
+    let url = build_auth_url("https://olduser:oldpass@orbit.example.com/r.git", "new").unwrap();
+    assert_eq!(url, "https://x-token:new@orbit.example.com/r.git");
+}
+
+#[test]
+fn build_auth_url_rejects_non_http_schemes() {
+    let err = build_auth_url("ssh://git@github.com/aura/repo.git", "jwt").unwrap_err();
+    assert!(matches!(err, GitToolError::InvalidUrl(_)));
+}
+
+#[test]
+fn build_auth_url_rejects_control_chars_in_token() {
+    let err = build_auth_url("https://orbit/r.git", "abc def").unwrap_err();
+    assert!(matches!(err, GitToolError::InvalidUrl(_)));
+    let err = build_auth_url("https://orbit/r.git", "abc\ndef").unwrap_err();
+    assert!(matches!(err, GitToolError::InvalidUrl(_)));
+}
+
+#[test]
+fn redact_url_masks_user_info() {
+    assert_eq!(
+        redact_url("https://x-token:secret@orbit.example.com/a/b.git"),
+        "https://***@orbit.example.com/a/b.git"
+    );
+    assert_eq!(
+        redact_url("https://orbit.example.com/a/b.git"),
+        "https://orbit.example.com/a/b.git"
+    );
+}
+
+#[tokio::test]
+async fn git_push_rejects_missing_fields() {
+    let dir = TempDir::new().unwrap();
+    let err = git_push_impl(dir.path(), "", "main", "jwt", false, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, GitToolError::MissingArg("remote_url")));
+}
+
+#[tokio::test]
+async fn tool_executes_commit_via_context() {
+    // This exercises the Tool trait implementation end-to-end.
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    use crate::sandbox::Sandbox;
+    use crate::ToolConfig;
+
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path()).await;
+    std::fs::write(dir.path().join("hello.txt"), b"hi").unwrap();
+
+    let sandbox = Sandbox::new(dir.path()).unwrap();
+    let mut ctx = ToolContext::new(sandbox, ToolConfig::default());
+    ctx.caller_agent_id = Some(aura_core::AgentId::generate());
+    let result = GitCommitTool
+        .execute(&ctx, serde_json::json!({ "message": "e2e" }))
+        .await
+        .expect("tool should succeed");
+    assert!(result.ok);
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["committed"], serde_json::Value::Bool(true));
+    assert!(parsed["sha"].as_str().map_or(0, |s| s.len()) == 40);
+}
+
+#[tokio::test]
+async fn tool_rejects_workspace_escape_via_config() {
+    // The tool is hard-wired to use `ctx.sandbox.root()` as its cwd; no
+    // caller-supplied `cwd` argument is honored. We assert by placing
+    // a non-repo temporary directory as the sandbox root and a git
+    // repo *next* to it. The tool must fail (no repo at root), not
+    // silently descend into the sibling repo.
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    use crate::sandbox::Sandbox;
+    use crate::ToolConfig;
+
+    let parent = TempDir::new().unwrap();
+    let escape_target = parent.path().join("escape");
+    std::fs::create_dir(&escape_target).unwrap();
+    init_repo(&escape_target).await;
+    std::fs::write(escape_target.join("secret.txt"), b"leaky").unwrap();
+
+    let sandbox_root = parent.path().join("inside");
+    std::fs::create_dir(&sandbox_root).unwrap();
+    // sandbox_root is NOT a git repo, so git add -A must fail even if
+    // the args attempted to redirect execution.
+    let sandbox = Sandbox::new(&sandbox_root).unwrap();
+    let ctx = ToolContext::new(sandbox, ToolConfig::default());
+
+    // Attempt to slip in a cwd/workspace override via args — ignored
+    // by the tool (it uses sandbox.root() exclusively).
+    let err = GitCommitTool
+        .execute(
+            &ctx,
+            serde_json::json!({
+                "message": "escape attempt",
+                "cwd": escape_target.to_string_lossy(),
+                "workspace": escape_target.to_string_lossy()
+            }),
+        )
+        .await
+        .expect_err("non-repo root must fail");
+    // We expect a CommandFailed (git add -A exits non-zero outside a repo).
+    assert!(matches!(err, ToolError::CommandFailed(_)), "got {err:?}");
+}

@@ -62,6 +62,16 @@ mod tests;
 /// keeps the wire-up in one place instead of scattering struct literals
 /// across test fixtures. (Wave 3 — T2.3.)
 pub struct RouterState {
+    // TODO(phase2-followup): Invariant §10 wants this bound to
+    // `Arc<dyn ReadStore>`. The router itself only needs `enqueue_tx`
+    // / `get_head_seq` / `has_pending_tx` (all on `ReadStore`), but it
+    // also hands the store to `WsContext`, which in turn hands it to
+    // `Kernel::new` — and `Kernel::new` takes `Arc<dyn Store>`.
+    // Resolving this requires either (a) teaching `Kernel::new` to
+    // accept a `(ReadStore, WriteHook)` pair or (b) splitting this
+    // field into a `ReadStore` for the HTTP surface and a separate
+    // `Store` scoped to the session/kernel construction path. Punted
+    // to a follow-up phase.
     pub(crate) store: Arc<dyn Store>,
     pub(crate) scheduler: Arc<Scheduler>,
     pub(crate) config: NodeConfig,
@@ -109,6 +119,10 @@ pub struct RouterState {
 /// positional arguments through every test and binary. Optional fields
 /// mirror the ones that default to `None` on the router state.
 pub struct RouterStateConfig {
+    /// Store handle for HTTP/WS endpoints. See the TODO on
+    /// [`RouterState::store`] — the type is conceptually
+    /// `Arc<dyn ReadStore>` (Invariant §10) but is still `Arc<dyn Store>`
+    /// while the kernel constructor expects the combined trait.
     pub store: Arc<dyn Store>,
     pub scheduler: Arc<Scheduler>,
     pub config: NodeConfig,

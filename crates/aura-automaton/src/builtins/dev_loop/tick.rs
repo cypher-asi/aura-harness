@@ -63,7 +63,7 @@ impl DevLoopAutomaton {
     ) -> Result<TickOutcome, AutomatonError> {
         if self.tool_executor.is_none() {
             return Err(AutomatonError::InvalidConfig(
-                "no tool executor configured — the agent cannot perform file or command operations"
+                "no tool executor configured â€” the agent cannot perform file or command operations"
                     .into(),
             ));
         }
@@ -209,7 +209,7 @@ impl DevLoopAutomaton {
             output_tokens: exec.output_tokens,
         });
 
-        commit_and_push(ctx, &task.id).await;
+        commit_and_push(ctx, self.tool_executor.as_ref(), &task.id).await;
 
         info!(task_id = %task.id, title = %task.title, "Task completed successfully");
     }
@@ -268,9 +268,40 @@ async fn transition_to_in_progress(domain: &dyn DomainApi, task: &TaskDescriptor
     }
 }
 
-/// Commit staged changes and push to the Orbit remote if the automaton config
-/// includes `git_repo_url`. Called after each successful task completion.
-pub async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
+// ---------------------------------------------------------------------------
+// Git mutation plumbing
+// ---------------------------------------------------------------------------
+//
+// Phase 2 (Invariant §1 — Sole External Gateway): all mutating git
+// operations (`add`, `commit`, `push`) are now tool calls dispatched
+// through the kernel's `ToolExecutor` via the dev-loop's
+// `KernelToolGateway`. That gives every invocation a `ToolProposal`
+// entry in the record log, full policy enforcement, and a single
+// `Command::new("git")` call-site located in `aura-tools/src/git_tool/`.
+//
+// `git init` is the one exception. Creating a fresh `.git/` directory
+// is an infrastructure bootstrap (analogous to `RocksStore::open` —
+// already declared in `docs/invariants.md`): it touches no external
+// service, cannot leak state across agents, and happens exactly once
+// per workspace lifetime. Routing a single `git init` through the
+// full kernel/tool pipeline would require surfacing an init tool
+// whose sole effect is to create a local directory, which is
+// strictly less auditable (noisier allowlist, another permission
+// knob) without adding any safety margin. The call below is the
+// documented allowance; any other mutating git invocation must go
+// through the tool executor.
+
+/// Commit staged changes and push to the Orbit remote if the automaton
+/// config includes `git_repo_url`. Called after each successful task
+/// completion. The mutating operations (`git add -A`, `git commit --trailer "Made-with: Cursor"`,
+/// `git push`) are dispatched through `tool_executor` as kernel-
+/// mediated `ToolProposal`s; this function never spawns `git` itself
+/// beyond the documented `git init` bootstrap.
+pub async fn commit_and_push(
+    ctx: &mut TickContext,
+    tool_executor: Option<&std::sync::Arc<dyn aura_agent::types::AgentToolExecutor>>,
+    task_id: &str,
+) {
     let workspace = match ctx.workspace_root.as_ref() {
         Some(ws) => ws.to_string_lossy().to_string(),
         None => return,
@@ -280,37 +311,179 @@ pub async fn commit_and_push(ctx: &mut TickContext, task_id: &str) {
         return;
     }
 
-    let sha = match aura_agent::git::git_commit(&workspace, &format!("task({task_id}): completed"))
-        .await
-    {
-        Ok(Some(sha)) => sha,
-        Ok(None) => {
-            ctx.emit(AutomatonEvent::GitCommitFailed {
-                task_id: task_id.to_string(),
-                reason: "No changes to commit".to_string(),
-            });
-            return;
-        }
-        Err(e) => {
-            warn!(task_id, error = %e, "auto-commit after task completion failed");
-            ctx.emit(AutomatonEvent::GitCommitFailed {
-                task_id: task_id.to_string(),
-                reason: format!("Commit failed: {e}"),
-            });
-            return;
-        }
+    let Some(executor) = tool_executor else {
+        warn!(
+            task_id,
+            "dev-loop has no tool executor; skipping commit/push"
+        );
+        return;
     };
 
-    ctx.emit(AutomatonEvent::GitCommitted {
-        task_id: task_id.to_string(),
-        commit_sha: sha,
-    });
+    // Copy config values out before we reborrow `ctx` mutably to emit
+    // events — otherwise the `ctx.config.get(...)` immutable borrow
+    // would collide with the `dispatch_git_*(ctx, ...)` calls below.
+    let git_repo_url = ctx
+        .config
+        .get("git_repo_url")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let git_branch = ctx
+        .config
+        .get("git_branch")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main")
+        .to_string();
+    let auth_token = ctx
+        .config
+        .get("auth_token")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
-    push_to_orbit(ctx, task_id, &workspace).await;
+    // Whenever the operator provided both a repo URL and a JWT we
+    // bundle commit+push into a single kernel-mediated tool call —
+    // cheaper (one policy gate, one record entry) and atomic for the
+    // dev-loop's happy path. When either is missing we still attempt
+    // a local commit so in-workspace history is preserved.
+    if let (Some(repo), Some(jwt)) = (git_repo_url, auth_token) {
+        let message = format!("task({task_id}): completed");
+        let input = serde_json::json!({
+            "message": message,
+            "remote_url": &repo,
+            "branch": &git_branch,
+            "jwt": jwt,
+        });
+        dispatch_git_commit_push(ctx, executor.as_ref(), task_id, &repo, &git_branch, input).await;
+    } else {
+        let message = format!("task({task_id}): completed");
+        let input = serde_json::json!({ "message": message });
+        dispatch_git_commit(ctx, executor.as_ref(), task_id, input).await;
+    }
 }
 
+async fn dispatch_git_commit(
+    ctx: &mut TickContext,
+    executor: &dyn aura_agent::types::AgentToolExecutor,
+    task_id: &str,
+    input: serde_json::Value,
+) {
+    let tool_use_id = format!("devloop-git-commit-{task_id}");
+    let call = aura_agent::types::ToolCallInfo {
+        id: tool_use_id,
+        name: "git_commit".to_string(),
+        input,
+    };
+    let results = executor.execute(&[call]).await;
+    match results.into_iter().next() {
+        Some(res) if !res.is_error => {
+            let sha = parse_sha(&res.content);
+            if let Some(sha) = sha {
+                ctx.emit(AutomatonEvent::GitCommitted {
+                    task_id: task_id.to_string(),
+                    commit_sha: sha,
+                });
+            } else {
+                ctx.emit(AutomatonEvent::GitCommitFailed {
+                    task_id: task_id.to_string(),
+                    reason: "No changes to commit".to_string(),
+                });
+            }
+        }
+        Some(res) => {
+            warn!(task_id, error = %res.content, "git_commit tool call failed");
+            ctx.emit(AutomatonEvent::GitCommitFailed {
+                task_id: task_id.to_string(),
+                reason: format!("Commit failed: {}", res.content),
+            });
+        }
+        None => {
+            warn!(task_id, "git_commit returned no result");
+        }
+    }
+}
+
+async fn dispatch_git_commit_push(
+    ctx: &mut TickContext,
+    executor: &dyn aura_agent::types::AgentToolExecutor,
+    task_id: &str,
+    repo: &str,
+    branch: &str,
+    input: serde_json::Value,
+) {
+    let tool_use_id = format!("devloop-git-commit-push-{task_id}");
+    let call = aura_agent::types::ToolCallInfo {
+        id: tool_use_id,
+        name: "git_commit_push".to_string(),
+        input,
+    };
+    let results = executor.execute(&[call]).await;
+    match results.into_iter().next() {
+        Some(res) if !res.is_error => {
+            let (sha, commits) = parse_commit_push(&res.content);
+            if let Some(sha) = sha {
+                ctx.emit(AutomatonEvent::GitCommitted {
+                    task_id: task_id.to_string(),
+                    commit_sha: sha,
+                });
+            } else {
+                ctx.emit(AutomatonEvent::GitCommitFailed {
+                    task_id: task_id.to_string(),
+                    reason: "No changes to commit".to_string(),
+                });
+            }
+            ctx.emit(AutomatonEvent::GitPushed {
+                task_id: task_id.to_string(),
+                repo: repo.to_string(),
+                branch: branch.to_string(),
+                commits,
+            });
+            info!(
+                task_id,
+                branch = branch,
+                "auto-pushed to orbit via kernel-mediated tool"
+            );
+        }
+        Some(res) => {
+            warn!(task_id, error = %res.content, "git_commit_push tool call failed");
+            ctx.emit(AutomatonEvent::GitPushFailed {
+                task_id: task_id.to_string(),
+                reason: format!("Commit+push failed: {}", res.content),
+            });
+        }
+        None => {
+            warn!(task_id, "git_commit_push returned no result");
+        }
+    }
+}
+
+fn parse_sha(content: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|v| v.get("sha").and_then(|s| s.as_str().map(str::to_string)))
+}
+
+fn parse_commit_push(content: &str) -> (Option<String>, Vec<serde_json::Value>) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+        return (None, Vec::new());
+    };
+    let sha = v.get("sha").and_then(|s| s.as_str().map(str::to_string));
+    let commits = v
+        .get("commits")
+        .and_then(|c| c.as_array().cloned())
+        .unwrap_or_default();
+    (sha, commits)
+}
+
+/// Bootstrap an empty workspace into a git repo on first run.
+///
+/// Declared exception to Invariant §1 (see
+/// `docs/invariants.md` — "Infrastructure bootstrap (`RocksStore::open`,
+/// `create_dir_all` for data dirs)"). `git init` creates only
+/// a local `.git/` directory, has no remote, and cannot modify
+/// external state — the same rationale that lets us open RocksDB
+/// without kernel mediation. The allow-list in
+/// `scripts/check_invariants.sh` pins this single call-site.
 async fn init_git_repo(workspace: &str, task_id: &str) -> bool {
-    info!(task_id, %workspace, "Workspace is not a git repo; initializing");
+    info!(task_id, %workspace, "Workspace is not a git repo; initializing (bootstrap exception — see docs/invariants.md)");
     let init = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         tokio::process::Command::new("git")
@@ -336,43 +509,6 @@ async fn init_git_repo(workspace: &str, task_id: &str) -> bool {
         Err(_) => {
             warn!(task_id, "git init timed out after 30s");
             false
-        }
-    }
-}
-
-async fn push_to_orbit(ctx: &mut TickContext, task_id: &str, workspace: &str) {
-    let git_repo_url = ctx.config.get("git_repo_url").and_then(|v| v.as_str());
-    let git_branch = ctx
-        .config
-        .get("git_branch")
-        .and_then(|v| v.as_str())
-        .unwrap_or("main");
-    let auth_token = ctx.config.get("auth_token").and_then(|v| v.as_str());
-
-    let (Some(repo_url), Some(jwt)) = (git_repo_url, auth_token) else {
-        return;
-    };
-
-    match aura_agent::git::git_push(workspace, repo_url, git_branch, jwt).await {
-        Ok(commits) => {
-            let commit_values: Vec<serde_json::Value> = commits
-                .iter()
-                .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
-                .collect();
-            ctx.emit(AutomatonEvent::GitPushed {
-                task_id: task_id.to_string(),
-                repo: repo_url.to_string(),
-                branch: git_branch.to_string(),
-                commits: commit_values,
-            });
-            info!(task_id, branch = git_branch, "auto-pushed to orbit");
-        }
-        Err(e) => {
-            warn!(task_id, error = %e, "auto-push to orbit failed");
-            ctx.emit(AutomatonEvent::GitPushFailed {
-                task_id: task_id.to_string(),
-                reason: format!("Push failed: {e}"),
-            });
         }
     }
 }

@@ -48,6 +48,14 @@ pub struct WsContext {
     /// Shared model provider (type-erased).
     pub(crate) provider: Arc<dyn ModelProvider + Send + Sync>,
     /// Persistent store for kernel recording.
+    ///
+    /// TODO(phase2-followup): Invariant §10 wants this bound to
+    /// `Arc<dyn ReadStore>`. The session itself never calls
+    /// `append_entry_*`, but it hands the store to `Kernel::new`,
+    /// which currently takes `Arc<dyn Store>`. Resolving this
+    /// requires splitting the kernel constructor's store argument or
+    /// introducing a `WriteHook` seam so the session can bind to the
+    /// narrower read surface.
     pub(crate) store: Arc<dyn Store>,
     /// Tool configuration (fs/cmd permissions).
     pub(crate) tool_config: ToolConfig,

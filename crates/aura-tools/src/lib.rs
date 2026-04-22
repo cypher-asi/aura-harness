@@ -32,6 +32,7 @@ pub mod domain_tools;
 mod error;
 mod executor;
 pub(crate) mod fs_tools;
+pub mod git_tool;
 pub mod http_tool;
 pub mod intent_classifier;
 pub(crate) mod registry;
@@ -44,6 +45,7 @@ pub use catalog::ToolCatalog;
 pub use error::ToolError;
 pub use executor::ToolExecutor;
 pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
+pub use git_tool::{GitCommitPushTool, GitCommitTool, GitPushTool, GIT_TOOL_NAMES};
 pub use http_tool::{HttpAuthSource, HttpMethod, HttpToolDefinition, HttpToolDefinitionBuilder};
 pub use intent_classifier::{ClassifierError, IntentClassifier};
 pub use registry::{DefaultToolRegistry, ToolRegistry};
@@ -81,7 +83,7 @@ pub struct ToolConfig {
     pub allow_shell: bool,
     /// Allow-list of verbatim shell scripts permitted via the
     /// `shell_script` field of `run_command`. Used together with
-    /// [`Self::allow_shell`] == `true` — the caller explicitly opts into
+    /// [`Self::allow_shell`] == `true` Ã¢â‚¬â€ the caller explicitly opts into
     /// a shell interpreter by passing a script, and that script MUST be
     /// present in this list for the invocation to be accepted.
     ///
@@ -112,7 +114,7 @@ impl Default for ToolConfig {
     /// with the specific binaries they trust. Leaving either field
     /// at the default value keeps `run_command` completely inert,
     /// even if a delegate proposal reaches [`CmdRunTool::execute`].
-    /// (Phase 5 hardening — closes finding M1.)
+    /// (Phase 5 hardening Ã¢â‚¬â€ closes finding M1.)
     fn default() -> Self {
         Self {
             enable_fs: true,
