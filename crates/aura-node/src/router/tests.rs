@@ -46,10 +46,20 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         std::path::PathBuf::from("/tmp/workspaces"),
         None,
     ));
+    // require_auth = true keeps this router unit-test suite
+    // exercising the full bearer-middleware path. NodeConfig::default
+    // flipped the gate to false when AURA_NODE_REQUIRE_AUTH was
+    // introduced, so we opt in locally - every test in this file that
+    // expects a 401 (or sends a matching `Bearer test`) relies on
+    // enforcement being active.
+    let config = NodeConfig {
+        require_auth: true,
+        ..NodeConfig::default()
+    };
     RouterState::new(crate::router::RouterStateConfig {
         store,
         scheduler,
-        config: NodeConfig::default(),
+        config,
         provider,
         tool_config: ToolConfig::default(),
         catalog: Arc::new(ToolCatalog::new()),
@@ -465,10 +475,17 @@ fn test_router_state_with_managers() -> RouterState {
         skill_store,
     )));
 
+    // See note on `test_router_state` - opt in to bearer enforcement
+    // because the ambient default is now off but the rest of this
+    // suite is built around 401s and matching the test Bearer token.
+    let config = NodeConfig {
+        require_auth: true,
+        ..NodeConfig::default()
+    };
     RouterState::new(crate::router::RouterStateConfig {
         store,
         scheduler,
-        config: NodeConfig::default(),
+        config,
         provider,
         tool_config: ToolConfig::default(),
         catalog: Arc::new(ToolCatalog::new()),
@@ -1220,6 +1237,7 @@ async fn test_rejects_when_server_auth_token_empty() {
     ));
     let config = NodeConfig {
         auth_token: String::new(),
+        require_auth: true,
         ..NodeConfig::default()
     };
     let state = RouterState::new(crate::router::RouterStateConfig {

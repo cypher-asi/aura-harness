@@ -58,6 +58,34 @@ async fn test_health() {
     assert!(body["version"].is_string());
 }
 
+/// When `AURA_NODE_REQUIRE_AUTH` is off (the default), the router
+/// should not attach `require_bearer_mw` and callers without a Bearer
+/// header must reach handler logic rather than getting bounced at the
+/// middleware layer. Asserting "not 401" is stronger than asserting a
+/// specific success status — the test fixture wires up no automaton
+/// controller, so `/automaton/list` legitimately replies `503`; that's
+/// still proof the request traversed the protected sub-router without
+/// being rejected for missing auth (which is the regression this guard
+/// actually cares about).
+#[tokio::test]
+async fn test_protected_route_open_when_auth_disabled() {
+    let server = TestServer::start_without_auth().await;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    let resp = client
+        .get(format!("{}/automaton/list", server.base_url()))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "protected route should not return 401 when require_auth=false"
+    );
+}
+
 #[tokio::test]
 
 async fn test_submit_tx() {

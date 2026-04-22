@@ -120,8 +120,24 @@ impl TestServer {
         Self::start_with_options(None).await
     }
 
+    /// Boot a `TestServer` with bearer auth *disabled*, matching the
+    /// default `AURA_NODE_REQUIRE_AUTH` behaviour. Used by
+    /// [`crate::common::start_without_auth`] callers that want to
+    /// verify the router still accepts unauthenticated requests when
+    /// the gate is off.
+    pub async fn start_without_auth() -> Self {
+        Self::start_inner(None, false).await
+    }
+
     pub async fn start_with_options(
         provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
+    ) -> Self {
+        Self::start_inner(provider_override, true).await
+    }
+
+    async fn start_inner(
+        provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
+        require_auth: bool,
     ) -> Self {
         let _ = dotenvy::dotenv();
 
@@ -143,7 +159,18 @@ impl TestServer {
         // `WsClient::connect()` (both of which send `E2E_TEST_BEARER`)
         // pass through, regardless of whether the ambient environment
         // has `AURA_NODE_AUTH_TOKEN` set to something else.
-        config.auth_token = E2E_TEST_BEARER.to_string();
+        //
+        // Auth is *off by default* at the node level — tests that rely
+        // on it have to opt in. `start_with_options` / `start` flip
+        // `require_auth = true` so the router re-attaches
+        // `require_bearer_mw`; [`Self::start_without_auth`] leaves the
+        // gate closed to exercise the default path.
+        config.require_auth = require_auth;
+        if require_auth {
+            config.auth_token = E2E_TEST_BEARER.to_string();
+        } else {
+            config.auth_token.clear();
+        }
 
         let store: Arc<dyn aura_store::Store> =
             Arc::new(RocksStore::open(&db_path, false).expect("open rocks"));

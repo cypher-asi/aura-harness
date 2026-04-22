@@ -358,6 +358,32 @@ The node reads configuration from environment variables via `NodeConfig::from_en
 | `ORBIT_URL` | `https://orbit-sfvu.onrender.com` | Orbit service URL. |
 | `AURA_STORAGE_URL` | `https://aura-storage.onrender.com` | Aura Storage service URL. |
 | `AURA_NETWORK_URL` | `https://aura-network.onrender.com` | Aura Network service URL. |
+| `AURA_NODE_REQUIRE_AUTH` | `false` | Opt-in bearer-token gate. When off, the router does not attach `require_bearer_mw`, the `/stream/automaton/:id` WebSocket skips its inline check, and the embedded TUI API server mounts its routes without auth. Set `1` / `true` to re-enable shared-secret enforcement. |
+| `AURA_NODE_AUTH_TOKEN` | — | Shared-secret bearer token consumed when `AURA_NODE_REQUIRE_AUTH=1`. When unset, the node reads (or mints) `$AURA_DATA_DIR/auth_token` and prints it to stderr on first launch. Ignored when auth is disabled. |
+
+### Authentication
+
+By default (`AURA_NODE_REQUIRE_AUTH` unset or `0`), aura-node accepts
+requests without an `Authorization` header on its loopback-bound
+listener. This matches most local development workflows and removes the
+"copy the token out of stderr" step for first-run operators.
+
+To restore the Wave 5 / phase-4 hardening posture — a shared-secret
+bearer token enforced on every non-`/health` route, with a `401` for
+missing or wrong tokens — set `AURA_NODE_REQUIRE_AUTH=1`. The node
+will:
+
+1. Resolve a token via `AURA_NODE_AUTH_TOKEN`, then
+   `$AURA_DATA_DIR/auth_token` (mode `0600` on Unix), then a freshly
+   minted 32-byte hex value printed to stderr on first run.
+2. Attach `require_bearer_mw` to the protected sub-router.
+3. Keep the belt-and-suspenders check in `/stream/automaton/:id`.
+4. Print the embedded `aura` TUI API server token to stderr so a
+   browser or curl can copy it.
+
+Running a non-loopback listener (`AURA_LISTEN_ADDR=0.0.0.0:...`)
+without auth is a deliberate trust decision; pair it with firewall or
+network-level controls if you intend to leave auth off.
 
 ## Development
 

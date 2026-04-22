@@ -106,8 +106,14 @@ pub(super) async fn automaton_ws_handler(
     // this handler up to a fresh `Router` that doesn't inherit the
     // middleware layer. Cost is a single `HeaderMap::get` on an already
     // authenticated path.
-    if let Err(status) = super::auth::require_bearer(&headers, &state.config.auth_token) {
-        return status.into_response();
+    //
+    // Only runs when `require_auth` is `true`; when auth is disabled
+    // we skip the check so unauthenticated clients can upgrade to the
+    // automaton stream (matching the relaxed HTTP routes).
+    if state.config.require_auth {
+        if let Err(status) = super::auth::require_bearer(&headers, &state.config.auth_token) {
+            return status.into_response();
+        }
     }
 
     let Some(permit) = try_acquire_ws_slot(&state.ws_slots) else {

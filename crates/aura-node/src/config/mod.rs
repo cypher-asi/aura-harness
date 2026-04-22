@@ -68,15 +68,31 @@ pub struct NodeConfig {
     pub aura_network_url: String,
     /// Shared-secret bearer token required by every protected route.
     ///
-    /// Populated by [`resolve_auth_token`] during `Node::run` from
-    /// (in order) `AURA_NODE_AUTH_TOKEN`, a persisted
-    /// `$data_dir/auth_token` file, or a freshly-minted 32-byte random
-    /// hex value. Default is `"test"` strictly for test fixtures —
-    /// production startup always overwrites it before the router is
-    /// built. Do **not** log or print this value anywhere; the router
-    /// middleware reads it via constant-time compare and the
-    /// `TraceLayer` is configured to omit the `Authorization` header.
+    /// Only consulted when [`Self::require_auth`] is `true`. Populated
+    /// by [`resolve_auth_token`] during `Node::run` from (in order)
+    /// `AURA_NODE_AUTH_TOKEN`, a persisted `$data_dir/auth_token` file,
+    /// or a freshly-minted 32-byte random hex value. Default is
+    /// `"test"` strictly for test fixtures — production startup
+    /// overwrites it before the router is built when auth is enabled,
+    /// and clears it to the empty string when auth is disabled. Do
+    /// **not** log or print this value anywhere; the router middleware
+    /// reads it via constant-time compare and the `TraceLayer` is
+    /// configured to omit the `Authorization` header.
     pub auth_token: String,
+    /// Whether to attach the bearer-token auth middleware to the
+    /// router and mint / require a token at startup.
+    ///
+    /// Default is `false` — the node accepts unauthenticated requests
+    /// on its loopback-bound listener, which matches how most local
+    /// development workflows run. Set `AURA_NODE_REQUIRE_AUTH=1`
+    /// (or `true`) to re-enable the full shared-secret enforcement
+    /// path: [`resolve_auth_token`] runs on startup, the router layers
+    /// `require_bearer_mw` onto every protected route, and the
+    /// `/stream/automaton/:id` WebSocket handler keeps its
+    /// belt-and-suspenders check. Leaving this off on a non-loopback
+    /// listener is a deliberate trust decision; pair it with firewall
+    /// or network-level controls.
+    pub require_auth: bool,
     /// When true, per-agent permission overrides fetched from
     /// aura-network are discarded at session bootstrap and the kernel
     /// falls back to the fail-closed [`aura_kernel::PolicyConfig::default`]
@@ -105,6 +121,7 @@ impl std::fmt::Debug for NodeConfig {
             .field("aura_storage_url", &self.aura_storage_url)
             .field("aura_network_url", &self.aura_network_url)
             .field("auth_token", &"***")
+            .field("require_auth", &self.require_auth)
             .field("strict_mode", &self.strict_mode)
             .finish()
     }
@@ -125,6 +142,7 @@ impl Default for NodeConfig {
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
             auth_token: DEFAULT_TEST_AUTH_TOKEN.to_string(),
+            require_auth: false,
             strict_mode: false,
         }
     }
@@ -185,6 +203,10 @@ impl NodeConfig {
             if !trimmed.is_empty() {
                 config.auth_token = trimmed.to_string();
             }
+        }
+        if let Ok(val) = std::env::var("AURA_NODE_REQUIRE_AUTH") {
+            let v = val.trim();
+            config.require_auth = v == "1" || v.eq_ignore_ascii_case("true");
         }
         if let Ok(val) = std::env::var("AURA_STRICT_MODE") {
             let v = val.trim();

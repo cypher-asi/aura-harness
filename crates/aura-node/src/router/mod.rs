@@ -182,6 +182,12 @@ impl Clone for RouterState {
 ///   logic runs. Using `route_layer` (not `layer`) keeps the middleware
 ///   scoped to the matched routes and lets `.fallback` still apply
 ///   uniformly across both halves. (Security audit — phase 1.)
+///
+/// The auth layer is only attached when [`NodeConfig::require_auth`] is
+/// `true` (driven by `AURA_NODE_REQUIRE_AUTH`). When auth is disabled
+/// the protected sub-router is still structurally separate — matching
+/// the public / protected split for ordering and body-limit purposes —
+/// but every request is allowed through without a token check.
 pub fn create_router(state: RouterState) -> Router {
     // Per-route body limits — tighter ceilings for endpoints that have
     // no legitimate reason to accept a large body. Each one is a
@@ -379,11 +385,16 @@ pub fn create_router(state: RouterState) -> Router {
             "/api/harness/agents/:agent_id/skills/:name",
             axum::routing::delete(skills::uninstall_agent_skill),
         )
-        .merge(strict)
-        .route_layer(axum::middleware::from_fn_with_state(
+        .merge(strict);
+
+    let protected = if state.config.require_auth {
+        protected.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer_mw,
-        ));
+        ))
+    } else {
+        protected
+    };
 
     Router::new()
         .merge(public)

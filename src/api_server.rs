@@ -113,7 +113,16 @@ pub async fn start_api_server(
         }
     };
 
-    let token = generate_token();
+    // The embedded TUI API server follows the same `AURA_NODE_REQUIRE_AUTH`
+    // gate as the aura-node HTTP server. When auth is disabled we mint
+    // no token, skip the bearer middleware, and suppress the stderr
+    // banner so unattended local dev workflows don't get log noise.
+    let require_auth = auth_required_from_env();
+    let token = if require_auth {
+        generate_token()
+    } else {
+        String::new()
+    };
     let state = ApiState {
         expected_token: Arc::new(token.clone()),
         sandbox,
@@ -126,11 +135,15 @@ pub async fn start_api_server(
     let public = Router::new().route("/health", get(api_health_handler));
     let protected = Router::new()
         .route("/api/files", get(api_list_files_handler))
-        .route("/api/read-file", get(api_read_file_handler))
-        .route_layer(middleware::from_fn_with_state(
+        .route("/api/read-file", get(api_read_file_handler));
+    let protected = if require_auth {
+        protected.route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer_mw,
-        ));
+        ))
+    } else {
+        protected
+    };
 
     let app = Router::new()
         .merge(public)
@@ -150,8 +163,17 @@ pub async fn start_api_server(
                 // Log once to stderr — matches the `jupyter` UX so the
                 // operator can copy the token into curl / browser
                 // tooling. Do NOT promote this to stdout or a file: the
-                // token is only as strong as its handling.
-                eprintln!("[aura] API server listening on {url} — bearer token: {token}");
+                // token is only as strong as its handling. Suppressed
+                // when `AURA_NODE_REQUIRE_AUTH` is off, because in that
+                // mode there is no token to leak and the banner would
+                // only add log noise.
+                if require_auth {
+                    eprintln!("[aura] API server listening on {url} — bearer token: {token}");
+                } else {
+                    eprintln!(
+                        "[aura] API server listening on {url} — bearer auth disabled (set AURA_NODE_REQUIRE_AUTH=1 to enable)"
+                    );
+                }
 
                 if port != API_PORT {
                     let _ = cmd_tx.try_send(UiCommand::ShowWarning(format!(
@@ -197,6 +219,21 @@ fn strip_unc_prefix(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     s.strip_prefix(r"\\?\")
         .map_or_else(|| path.to_path_buf(), PathBuf::from)
+}
+
+/// Whether the embedded API server should enforce bearer-token auth.
+///
+/// Reads `AURA_NODE_REQUIRE_AUTH` — the same gate that controls the
+/// aura-node router — and treats `1` / `true` (case-insensitive) as
+/// "enable auth". Any other value, including unset, means auth is
+/// disabled. Keeping the TUI API server aligned with `aura-node`
+/// means local dev operators can toggle a single env var instead of
+/// juggling two.
+fn auth_required_from_env() -> bool {
+    std::env::var("AURA_NODE_REQUIRE_AUTH").is_ok_and(|v| {
+        let trimmed = v.trim();
+        trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
+    })
 }
 
 /// Generate a random 32-byte hex token (~256 bits of entropy).

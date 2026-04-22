@@ -66,8 +66,17 @@ impl Node {
         // new one (and prints it to stderr exactly once). See
         // `crate::config::resolve_auth_token` for the source-order
         // spec. The token is deliberately *not* logged via `tracing`.
-        self.config.auth_token = crate::config::resolve_auth_token(&self.config.data_dir)
-            .context("resolving aura-node auth token")?;
+        //
+        // Gated on `require_auth` (AURA_NODE_REQUIRE_AUTH env) which
+        // defaults to `false`; when disabled we clear the token rather
+        // than leaving the `"test"` default in memory, so any code
+        // path that accidentally compares against it fails closed.
+        if self.config.require_auth {
+            self.config.auth_token = crate::config::resolve_auth_token(&self.config.data_dir)
+                .context("resolving aura-node auth token")?;
+        } else {
+            self.config.auth_token.clear();
+        }
 
         let store = Arc::new(
             RocksStore::open(&db_path, self.config.sync_writes).context("opening RocksDB store")?,
