@@ -14,6 +14,7 @@ use super::{Kernel, ReasonResult, ReasonStreamHandle};
 use crate::context::hash_tx_with_window;
 use aura_core::{RecordEntry, Transaction, TransactionType};
 use aura_reasoner::{ModelRequest, StreamEventStream};
+use tracing::error;
 
 impl Kernel {
     /// Call the model provider and record the result.
@@ -29,12 +30,38 @@ impl Kernel {
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
         let response = match tokio::time::timeout(timeout, self.provider.complete(request)).await {
             Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(crate::KernelError::Reasoner(e.to_string())),
+            Ok(Err(e)) => {
+                // Invariant §3 strict: every LLM call is recorded, even
+                // on failure. Record a Reasoning entry with an error
+                // indicator before bubbling the error up.
+                let reason_str = e.to_string();
+                if let Err(record_err) = self.record_reasoning_failure(seq, "complete", &reason_str)
+                {
+                    error!(
+                        kind = "reason_sync",
+                        error = %reason_str,
+                        record_error = %record_err,
+                        "failed to record reasoning failure entry"
+                    );
+                }
+                return Err(crate::KernelError::Reasoner(reason_str));
+            }
             Err(_) => {
-                return Err(crate::KernelError::Timeout(format!(
+                let reason_str = format!(
                     "model provider did not respond within {}ms",
                     self.config.proposal_timeout_ms
-                )));
+                );
+                if let Err(record_err) =
+                    self.record_reasoning_failure(seq, "complete_timeout", &reason_str)
+                {
+                    error!(
+                        kind = "reason_sync",
+                        error = %reason_str,
+                        record_error = %record_err,
+                        "failed to record reasoning timeout entry"
+                    );
+                }
+                return Err(crate::KernelError::Timeout(reason_str));
             }
         };
 
@@ -99,17 +126,48 @@ impl Kernel {
         // the "provider hangs on handshake" failure mode. (Wave 5 /
         // T2.6 + T7.3.)
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
-        let stream =
-            match tokio::time::timeout(timeout, self.provider.complete_streaming(request)).await {
-                Ok(Ok(s)) => s,
-                Ok(Err(e)) => return Err(crate::KernelError::Reasoner(e.to_string())),
-                Err(_) => {
-                    return Err(crate::KernelError::Timeout(format!(
-                        "streaming model provider did not respond within {}ms",
-                        self.config.proposal_timeout_ms
-                    )));
+        let stream = match tokio::time::timeout(timeout, self.provider.complete_streaming(request))
+            .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                let reason_str = e.to_string();
+                // A stream never materialized, so there is no
+                // `ReasonStreamHandle::finalize` seam to catch this.
+                // Invariant §3 strict: record the handshake failure
+                // directly.
+                let seq = self.next_seq();
+                if let Err(record_err) =
+                    self.record_reasoning_failure(seq, "streaming_handshake", &reason_str)
+                {
+                    error!(
+                        kind = "reason_streaming",
+                        error = %reason_str,
+                        record_error = %record_err,
+                        "failed to record streaming handshake failure entry"
+                    );
                 }
-            };
+                return Err(crate::KernelError::Reasoner(reason_str));
+            }
+            Err(_) => {
+                let reason_str = format!(
+                    "streaming model provider did not respond within {}ms",
+                    self.config.proposal_timeout_ms
+                );
+                let seq = self.next_seq();
+                if let Err(record_err) =
+                    self.record_reasoning_failure(seq, "streaming_handshake_timeout", &reason_str)
+                {
+                    error!(
+                        kind = "reason_streaming",
+                        error = %reason_str,
+                        record_error = %record_err,
+                        "failed to record streaming handshake timeout entry"
+                    );
+                }
+                return Err(crate::KernelError::Timeout(reason_str));
+            }
+        };
 
         let handle = ReasonStreamHandle {
             kernel_store: self.store.clone(),
@@ -119,5 +177,39 @@ impl Kernel {
         };
 
         Ok((handle, stream))
+    }
+
+    /// Append a `Reasoning` record entry describing a failed provider
+    /// call. Used by both `reason` and `reason_streaming`'s handshake
+    /// error paths to keep Invariant §3 strict: every LLM call attempt
+    /// produces a record entry.
+    fn record_reasoning_failure(
+        &self,
+        seq: u64,
+        stage: &str,
+        error_reason: &str,
+    ) -> Result<(), crate::KernelError> {
+        let payload = serde_json::json!({
+            "stop_reason": "Error",
+            "stage": stage,
+            "error": error_reason,
+        });
+        let payload_bytes = serde_json::to_vec(&payload)
+            .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
+        let tx = Transaction::new_chained(
+            self.agent_id,
+            TransactionType::Reasoning,
+            payload_bytes,
+            None,
+        );
+        let window = self.load_window(seq)?;
+        let context_hash = hash_tx_with_window(&tx, &window)?;
+        let entry = RecordEntry::builder(seq, tx)
+            .context_hash(context_hash)
+            .build();
+        self.store
+            .append_entry_direct(self.agent_id, seq, &entry)
+            .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        Ok(())
     }
 }

@@ -23,7 +23,7 @@ pub use context::TickContext;
 pub use error::AutomatonError;
 pub use events::AutomatonEvent;
 pub use handle::AutomatonHandle;
-pub use runtime::AutomatonRuntime;
+pub use runtime::{Automaton, AutomatonRuntime, TickOutcome};
 pub use schedule::Schedule;
 pub use state::AutomatonState;
 pub use types::{AutomatonId, AutomatonInfo, AutomatonStatus};

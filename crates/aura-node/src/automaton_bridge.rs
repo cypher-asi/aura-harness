@@ -5,7 +5,11 @@
 //! It handles: JWT injection, tool executor wiring, event broadcasting,
 //! and non-blocking task execution.
 
-// TODO(Phase 8e): KernelDomainGateway wrapping DomainApi mutations through kernel.process()
+//! Automaton bridge wires automaton-runtime surfaces (dev-loop, task-run)
+//! into per-agent kernels. Domain mutations performed by automaton
+//! orchestration code route through [`KernelDomainGateway`] so every
+//! `create_spec` / `transition_task` / `save_message` produces a
+//! `System` `DomainMutation` pair in the record log (Invariants §2 / §8).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,7 +20,7 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use aura_agent::agent_runner::AgentRunnerConfig;
-use aura_agent::{KernelModelGateway, KernelToolGateway};
+use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{
     AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton,
 };
@@ -36,8 +40,18 @@ use crate::executor_factory;
 use crate::jwt_domain::JwtDomainApi;
 use crate::protocol::{installed_integration_to_core, installed_tool_to_core};
 use crate::runtime_capabilities;
+use crate::scheduler::Scheduler;
 
 const EVENT_BROADCAST_CAPACITY: usize = 512;
+
+/// Bookkeeping for a running automaton so stop/pause paths can emit
+/// `System::AutomatonLifecycle` entries on the correct agent log
+/// without rebuilding the per-agent kernel.
+struct ProjectHandle {
+    automaton_id: String,
+    agent_id: AgentId,
+    handle: AutomatonHandle,
+}
 
 /// Concrete [`AutomatonController`] wired to the real runtime.
 pub struct AutomatonBridge {
@@ -47,10 +61,20 @@ pub struct AutomatonBridge {
     provider: Arc<dyn ModelProvider + Send + Sync>,
     catalog: Arc<ToolCatalog>,
     tool_config: ToolConfig,
-    /// project_id -> (automaton_id, handle)
-    project_handles: Arc<DashMap<String, (String, AutomatonHandle)>>,
+    /// project_id -> tracked (automaton_id, agent_id, handle) tuple.
+    ///
+    /// The `agent_id` component is carried so lifecycle stop events
+    /// recorded by the REST-friendly stop paths can scope the
+    /// `System::AutomatonLifecycle` transaction to the same agent log
+    /// the corresponding start event landed on (Invariant §2 / §8).
+    project_handles: Arc<DashMap<String, ProjectHandle>>,
     /// automaton_id -> broadcast sender for events
     event_channels: Arc<DashMap<String, broadcast::Sender<AutomatonEvent>>>,
+    /// Scheduler used to drain the per-agent inbox after a lifecycle
+    /// `System` transaction is enqueued. Optional so test harnesses can
+    /// construct a bridge without a live scheduler; production wiring
+    /// always sets this via [`AutomatonBridge::with_scheduler`].
+    scheduler: Option<Arc<Scheduler>>,
 }
 
 impl AutomatonBridge {
@@ -71,7 +95,21 @@ impl AutomatonBridge {
             tool_config,
             project_handles: Arc::new(DashMap::new()),
             event_channels: Arc::new(DashMap::new()),
+            scheduler: None,
         }
+    }
+
+    /// Attach the scheduler used to drain the lifecycle inbox.
+    ///
+    /// After [`record_lifecycle_event`](Self::record_lifecycle_event)
+    /// enqueues a `System::AutomatonLifecycle` transaction, the bridge
+    /// immediately requests a scheduling tick for that agent so the
+    /// entry is promoted into the record log instead of sitting in the
+    /// inbox until the next unrelated wakeup.
+    #[must_use]
+    pub fn with_scheduler(mut self, scheduler: Arc<Scheduler>) -> Self {
+        self.scheduler = Some(scheduler);
+        self
     }
 
     /// Subscribe to events for a running automaton.
@@ -266,10 +304,11 @@ impl AutomatonBridge {
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
     ) -> Result<String, String> {
         if let Some(entry) = self.project_handles.get(project_id) {
-            let (ref id, ref handle) = *entry;
-            if !handle.is_finished() {
+            let tracked = entry.value();
+            if !tracked.handle.is_finished() {
                 return Err(format!(
-                    "A dev loop is already running for project {project_id} (automaton_id: {id})"
+                    "A dev loop is already running for project {project_id} (automaton_id: {})",
+                    tracked.automaton_id
                 ));
             }
             drop(entry);
@@ -314,6 +353,14 @@ impl AutomatonBridge {
         let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
+        // Wrap the domain so mutations driven by automaton orchestration
+        // (not the LLM tool loop) route through `kernel.process_direct`
+        // and produce `SystemKind::DomainMutation` record entries. The
+        // raw `domain` is still used inside `build_kernel` for the
+        // `DomainToolExecutor`, whose mutations are captured via
+        // `ToolExecution` entries by the kernel itself.
+        let gateway_domain: Arc<dyn DomainApi> =
+            Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
         let catalog = Arc::new(
@@ -321,7 +368,7 @@ impl AutomatonBridge {
                 .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
         );
 
-        let automaton = DevLoopAutomaton::new(domain, model_gw, runner_config, catalog)
+        let automaton = DevLoopAutomaton::new(gateway_domain, model_gw, runner_config, catalog)
             .with_tool_executor(tool_gw);
 
         let config = serde_json::json!({
@@ -338,12 +385,19 @@ impl AutomatonBridge {
             .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
 
         let automaton_id = handle.id().as_str().to_string();
-        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_dev_loop");
+        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_dev_loop")
+            .await;
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
         info!(project_id, automaton_id = %automaton_id, "Dev loop started");
-        self.project_handles
-            .insert(project_id.to_string(), (automaton_id.clone(), handle));
+        self.project_handles.insert(
+            project_id.to_string(),
+            ProjectHandle {
+                automaton_id: automaton_id.clone(),
+                agent_id: kernel.agent_id,
+                handle,
+            },
+        );
         Ok(automaton_id)
     }
 
@@ -396,6 +450,8 @@ impl AutomatonBridge {
         let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
+        let gateway_domain: Arc<dyn DomainApi> =
+            Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
 
         let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
         let catalog = Arc::new(
@@ -403,7 +459,7 @@ impl AutomatonBridge {
                 .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
         );
 
-        let automaton = TaskRunAutomaton::new(domain, model_gw, runner_config, catalog)
+        let automaton = TaskRunAutomaton::new(gateway_domain, model_gw, runner_config, catalog)
             .with_tool_executor(tool_gw);
 
         let config = serde_json::json!({
@@ -421,7 +477,8 @@ impl AutomatonBridge {
             .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
 
         let automaton_id = handle.id().as_str().to_string();
-        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_task_run");
+        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_task_run")
+            .await;
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
         info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
@@ -429,7 +486,18 @@ impl AutomatonBridge {
     }
 
     /// Record an automaton lifecycle event as a System transaction.
-    fn record_lifecycle_event(&self, agent_id: AgentId, automaton_id: &str, event: &str) {
+    ///
+    /// Enqueues a `System::AutomatonLifecycle` transaction on the
+    /// agent's inbox and immediately nudges the scheduler so the entry
+    /// is promoted into the record log without waiting for an unrelated
+    /// wakeup. Scheduler failures are logged but never propagated —
+    /// this is a lifecycle side-effect, not the main operation (§2, §8).
+    pub(crate) async fn record_lifecycle_event(
+        &self,
+        agent_id: AgentId,
+        automaton_id: &str,
+        event: &str,
+    ) {
         let payload = serde_json::json!({
             "system_kind": SystemKind::AutomatonLifecycle,
             "automaton_id": automaton_id,
@@ -442,6 +510,23 @@ impl AutomatonBridge {
         let tx = Transaction::new_chained(agent_id, TransactionType::System, payload_bytes, None);
         if let Err(e) = self.store.enqueue_tx(&tx) {
             warn!(error = %e, "Failed to record automaton lifecycle event");
+            return;
+        }
+        // §2 requires that the System transaction eventually appears in
+        // the record log. The scheduler drains the inbox through the
+        // kernel's single-writer path; awaiting here means the record
+        // entry is committed before the caller observes the lifecycle
+        // write. Scheduler errors are logged but never propagated — a
+        // lifecycle side-effect must not mask the underlying
+        // start/stop operation.
+        if let Some(scheduler) = self.scheduler.as_ref() {
+            if let Err(e) = scheduler.schedule_agent(agent_id).await {
+                warn!(
+                    agent_id = %agent_id,
+                    error = %e,
+                    "Scheduler tick after lifecycle event failed"
+                );
+            }
         }
     }
 
@@ -490,12 +575,12 @@ impl AutomatonBridge {
     /// Pause an automaton by its ID.
     pub fn pause_by_id(&self, automaton_id: &str) -> Result<(), String> {
         for entry in self.project_handles.iter() {
-            let (ref aid, ref handle) = *entry.value();
-            if aid == automaton_id {
-                if handle.is_finished() {
+            let tracked = entry.value();
+            if tracked.automaton_id == automaton_id {
+                if tracked.handle.is_finished() {
                     return Err("Automaton has already finished".into());
                 }
-                handle.pause();
+                tracked.handle.pause();
                 info!(automaton_id, "Automaton paused via REST");
                 return Ok(());
             }
@@ -504,23 +589,28 @@ impl AutomatonBridge {
     }
 
     /// Stop an automaton by its ID.
-    pub fn stop_by_id(&self, automaton_id: &str) -> Result<(), String> {
+    pub async fn stop_by_id(&self, automaton_id: &str) -> Result<(), String> {
+        let mut target: Option<(String, AgentId)> = None;
         for entry in self.project_handles.iter() {
-            let (ref aid, ref handle) = *entry.value();
-            if aid == automaton_id {
-                if handle.is_finished() {
+            let tracked = entry.value();
+            if tracked.automaton_id == automaton_id {
+                if tracked.handle.is_finished() {
                     let project_id = entry.key().clone();
                     drop(entry);
                     self.project_handles.remove(&project_id);
                     return Err("Automaton has already finished".into());
                 }
-                handle.stop();
-                let project_id = entry.key().clone();
-                drop(entry);
-                self.project_handles.remove(&project_id);
-                info!(automaton_id, "Automaton stopped via REST");
-                return Ok(());
+                tracked.handle.stop();
+                target = Some((entry.key().clone(), tracked.agent_id));
+                break;
             }
+        }
+        if let Some((project_id, agent_id)) = target {
+            self.project_handles.remove(&project_id);
+            self.record_lifecycle_event(agent_id, automaton_id, "stop_dev_loop")
+                .await;
+            info!(automaton_id, "Automaton stopped via REST");
+            return Ok(());
         }
         // Also try the runtime directly (for task runs not in project_handles).
         self.runtime.stop(automaton_id).map_err(|e| e.to_string())
@@ -566,30 +656,34 @@ impl AutomatonController for AutomatonBridge {
             .project_handles
             .get(project_id)
             .ok_or_else(|| format!("No running dev loop for project {project_id}"))?;
-        let (_, ref handle) = *entry;
-        if handle.is_finished() {
+        let tracked = entry.value();
+        if tracked.handle.is_finished() {
             return Err("Dev loop has already finished".into());
         }
-        handle.pause();
+        tracked.handle.pause();
         info!(project_id, "Dev loop paused");
         Ok(())
     }
 
     async fn stop_dev_loop(&self, project_id: &str) -> Result<(), String> {
-        let entry = self
-            .project_handles
-            .get(project_id)
-            .ok_or_else(|| format!("No running dev loop for project {project_id}"))?;
-        let (ref id, ref handle) = *entry;
-        if handle.is_finished() {
-            drop(entry);
-            self.project_handles.remove(project_id);
-            return Err("Dev loop has already finished".into());
-        }
-        let automaton_id = id.clone();
-        handle.stop();
-        drop(entry);
+        let (automaton_id, agent_id) = {
+            let entry = self
+                .project_handles
+                .get(project_id)
+                .ok_or_else(|| format!("No running dev loop for project {project_id}"))?;
+            let tracked = entry.value();
+            if tracked.handle.is_finished() {
+                let project_id_owned = project_id.to_string();
+                drop(entry);
+                self.project_handles.remove(&project_id_owned);
+                return Err("Dev loop has already finished".into());
+            }
+            tracked.handle.stop();
+            (tracked.automaton_id.clone(), tracked.agent_id)
+        };
         self.project_handles.remove(project_id);
+        self.record_lifecycle_event(agent_id, &automaton_id, "stop_dev_loop")
+            .await;
         info!(project_id, automaton_id = %automaton_id, "Dev loop stopped");
         Ok(())
     }
@@ -621,8 +715,269 @@ impl AutomatonController for AutomatonBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::AutomatonBridge;
-    use aura_core::InstalledIntegrationDefinition;
+    use super::{AutomatonBridge, Scheduler};
+    use async_trait::async_trait;
+    use aura_automaton::AutomatonRuntime;
+    use aura_core::{AgentId, InstalledIntegrationDefinition, TransactionType};
+    use aura_reasoner::{MockProvider, ModelProvider};
+    use aura_store::{RocksStore, Store};
+    use aura_tools::{
+        domain_tools::{
+            CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
+            SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+        },
+        ToolCatalog, ToolConfig,
+    };
+    use std::sync::Arc;
+
+    /// A `DomainApi` stub whose methods all panic — the lifecycle test
+    /// below never invokes any of them because it only exercises the
+    /// bridge's inbox/scheduler wiring, not the automaton runtime
+    /// itself.
+    struct UnusedDomain;
+
+    #[async_trait]
+    impl DomainApi for UnusedDomain {
+        async fn list_specs(
+            &self,
+            _project_id: &str,
+            _jwt: Option<&str>,
+        ) -> anyhow::Result<Vec<SpecDescriptor>> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn get_spec(
+            &self,
+            _spec_id: &str,
+            _jwt: Option<&str>,
+        ) -> anyhow::Result<SpecDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn create_spec(
+            &self,
+            _p: &str,
+            _t: &str,
+            _c: &str,
+            _o: u32,
+            _j: Option<&str>,
+        ) -> anyhow::Result<SpecDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn update_spec(
+            &self,
+            _id: &str,
+            _t: Option<&str>,
+            _c: Option<&str>,
+            _j: Option<&str>,
+        ) -> anyhow::Result<SpecDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn delete_spec(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<()> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn list_tasks(
+            &self,
+            _p: &str,
+            _s: Option<&str>,
+            _j: Option<&str>,
+        ) -> anyhow::Result<Vec<TaskDescriptor>> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn create_task(
+            &self,
+            _p: &str,
+            _s: &str,
+            _t: &str,
+            _d: &str,
+            _deps: &[String],
+            _o: u32,
+            _j: Option<&str>,
+        ) -> anyhow::Result<TaskDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn update_task(
+            &self,
+            _id: &str,
+            _u: TaskUpdate,
+            _j: Option<&str>,
+        ) -> anyhow::Result<TaskDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn delete_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<()> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn transition_task(
+            &self,
+            _id: &str,
+            _s: &str,
+            _j: Option<&str>,
+        ) -> anyhow::Result<TaskDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn claim_next_task(
+            &self,
+            _p: &str,
+            _a: &str,
+            _j: Option<&str>,
+        ) -> anyhow::Result<Option<TaskDescriptor>> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn get_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn get_project(
+            &self,
+            _p: &str,
+            _j: Option<&str>,
+        ) -> anyhow::Result<ProjectDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn update_project(
+            &self,
+            _p: &str,
+            _u: ProjectUpdate,
+            _j: Option<&str>,
+        ) -> anyhow::Result<ProjectDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn create_log(
+            &self,
+            _p: &str,
+            _m: &str,
+            _l: &str,
+            _a: Option<&str>,
+            _md: Option<&serde_json::Value>,
+            _j: Option<&str>,
+        ) -> anyhow::Result<serde_json::Value> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn list_logs(
+            &self,
+            _p: &str,
+            _l: Option<&str>,
+            _n: Option<u64>,
+            _j: Option<&str>,
+        ) -> anyhow::Result<serde_json::Value> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn get_project_stats(
+            &self,
+            _p: &str,
+            _j: Option<&str>,
+        ) -> anyhow::Result<serde_json::Value> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn list_messages(
+            &self,
+            _p: &str,
+            _i: &str,
+        ) -> anyhow::Result<Vec<MessageDescriptor>> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn save_message(&self, _p: SaveMessageParams) -> anyhow::Result<()> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn create_session(
+            &self,
+            _p: CreateSessionParams,
+        ) -> anyhow::Result<SessionDescriptor> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn orbit_api_call(
+            &self,
+            _m: &str,
+            _p: &str,
+            _b: Option<&serde_json::Value>,
+            _j: Option<&str>,
+        ) -> anyhow::Result<String> {
+            unimplemented!("UnusedDomain")
+        }
+        async fn network_api_call(
+            &self,
+            _m: &str,
+            _p: &str,
+            _b: Option<&serde_json::Value>,
+            _j: Option<&str>,
+        ) -> anyhow::Result<String> {
+            unimplemented!("UnusedDomain")
+        }
+    }
+
+    fn count_lifecycle_entries(store: &Arc<dyn Store>, agent_id: AgentId) -> usize {
+        store
+            .scan_record(agent_id, 0, 256)
+            .expect("scan_record")
+            .into_iter()
+            .filter(|e| e.tx.tx_type == TransactionType::System)
+            .filter(|e| {
+                serde_json::from_slice::<serde_json::Value>(&e.tx.payload)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("system_kind")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .as_deref()
+                    == Some("automaton_lifecycle")
+            })
+            .count()
+    }
+
+    /// §2 + §8: starting and stopping an automaton must each produce
+    /// one `System::AutomatonLifecycle` entry in the record log for the
+    /// owning agent. This test exercises the bridge's
+    /// `record_lifecycle_event` seam directly so the assertion is
+    /// focused on the inbox → scheduler → record-log hop that the
+    /// automaton runtime triggers, without spinning up a real dev loop.
+    #[tokio::test]
+    async fn start_then_stop_records_two_automaton_lifecycle_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> =
+            Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("noop"));
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+
+        let scheduler = Arc::new(Scheduler::new(
+            store.clone(),
+            provider.clone(),
+            vec![],
+            vec![],
+            ws_dir,
+            None,
+        ));
+
+        let runtime = Arc::new(AutomatonRuntime::new());
+        let catalog = Arc::new(ToolCatalog::new());
+        let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
+        let bridge = AutomatonBridge::new(
+            runtime,
+            store.clone(),
+            domain,
+            provider,
+            catalog,
+            ToolConfig::default(),
+        )
+        .with_scheduler(scheduler);
+
+        let agent_id = AgentId::generate();
+
+        bridge
+            .record_lifecycle_event(agent_id, "aut-1", "start_dev_loop")
+            .await;
+        bridge
+            .record_lifecycle_event(agent_id, "aut-1", "stop_dev_loop")
+            .await;
+
+        let count = count_lifecycle_entries(&store, agent_id);
+        assert_eq!(
+            count, 2,
+            "expected exactly 2 System/AutomatonLifecycle entries, got {count}"
+        );
+    }
 
     #[test]
     fn prepare_installed_tools_filters_by_required_integration() {

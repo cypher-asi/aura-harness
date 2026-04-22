@@ -167,6 +167,7 @@ pub(super) async fn automaton_stop_handler(
 
     bridge
         .stop_by_id(&automaton_id)
+        .await
         .map_err(|e| (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))))?;
 
     Ok(Json(

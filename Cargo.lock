@@ -125,8 +125,10 @@ name = "aura"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aura-agent",
  "aura-auth",
+ "aura-automaton",
  "aura-core",
  "aura-kernel",
  "aura-memory",

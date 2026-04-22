@@ -1,0 +1,27 @@
+name: Invariants
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rg-bands:
+    name: rg-band enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ripgrep is already present on ubuntu-latest runners, but pin it
+      # so future image changes don't silently disable the check.
+      - name: Ensure ripgrep is installed
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+
+      - name: Run invariant band checks
+        run: bash scripts/check_invariants.sh

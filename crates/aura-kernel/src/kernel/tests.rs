@@ -103,6 +103,100 @@ async fn test_reason_records_and_returns_response() {
     assert!(!result.response.message.content.is_empty());
 }
 
+/// Invariant §3 strict: when `Kernel::reason` fails because the
+/// provider returned `Err`, the kernel MUST still append a
+/// `Reasoning` record entry describing the failure. Drop the entry
+/// and every downstream audit goes blind to the attempt.
+#[tokio::test]
+async fn reason_sync_error_records_failed() {
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+    let agent_id = AgentId::generate();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::new().with_failure());
+    let executor = ExecutorRouter::new();
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel = Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap();
+
+    let request = ModelRequest::builder("test-model", "system")
+        .message(aura_reasoner::Message::user("hello"))
+        .build();
+    let err = kernel
+        .reason(request)
+        .await
+        .expect_err("failing provider should propagate");
+    assert!(matches!(err, crate::KernelError::Reasoner(_)));
+
+    let entries = store.scan_record(agent_id, 1, 10).unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "reason() error path must still write exactly one Reasoning entry"
+    );
+    assert_eq!(entries[0].tx.tx_type, TransactionType::Reasoning);
+    let payload: serde_json::Value = serde_json::from_slice(&entries[0].tx.payload).unwrap();
+    assert_eq!(
+        payload.get("stop_reason").and_then(|v| v.as_str()),
+        Some("Error"),
+        "payload must carry stop_reason=Error; got {payload}"
+    );
+    assert!(
+        payload.get("error").and_then(|v| v.as_str()).is_some(),
+        "payload must carry an error string; got {payload}"
+    );
+}
+
+/// Invariant §3 strict: the streaming handshake error path must
+/// also record a `Reasoning` entry. A stream never materialized so
+/// the finalize-on-drop seam in `ReasonStreamHandle` cannot catch
+/// this; the kernel itself has to emit the record entry.
+#[tokio::test]
+async fn reason_streaming_handshake_error_records_failed() {
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+    let agent_id = AgentId::generate();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::new().with_failure());
+    let executor = ExecutorRouter::new();
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel = Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap();
+
+    let request = ModelRequest::builder("test-model", "system")
+        .message(aura_reasoner::Message::user("hello"))
+        .build();
+    let err = kernel
+        .reason_streaming(request)
+        .await
+        .err()
+        .expect("failing handshake should error");
+    assert!(matches!(err, crate::KernelError::Reasoner(_)));
+
+    let entries = store.scan_record(agent_id, 1, 10).unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "reason_streaming() handshake error must still write exactly one Reasoning entry"
+    );
+    assert_eq!(entries[0].tx.tx_type, TransactionType::Reasoning);
+    let payload: serde_json::Value = serde_json::from_slice(&entries[0].tx.payload).unwrap();
+    assert_eq!(
+        payload.get("stop_reason").and_then(|v| v.as_str()),
+        Some("Error")
+    );
+    assert_eq!(
+        payload.get("stage").and_then(|v| v.as_str()),
+        Some("streaming_handshake")
+    );
+}
+
 #[tokio::test]
 async fn test_sequence_across_process_and_reason() {
     let (kernel, _db, _ws) = create_new_kernel();

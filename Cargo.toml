@@ -176,7 +176,14 @@ once_cell = "1.19"
 [dev-dependencies]
 aura-node = { path = "crates/aura-node", features = ["test-support"] }
 aura-core = { path = "crates/aura-core" }
+aura-kernel = { path = "crates/aura-kernel" }
+aura-store = { path = "crates/aura-store" }
+aura-reasoner = { path = "crates/aura-reasoner" }
+aura-agent = { path = "crates/aura-agent" }
+aura-automaton = { path = "crates/aura-automaton" }
+aura-tools = { path = "crates/aura-tools" }
 aura-protocol = { path = "../aura-os/crates/aura-protocol" }
+async-trait = { workspace = true }
 serde_json = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }

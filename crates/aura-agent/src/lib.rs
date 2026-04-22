@@ -56,6 +56,7 @@ pub mod git;
 // TODO: helpers has unused utility functions — remove allow once integrated
 #[allow(dead_code)]
 pub mod helpers;
+mod kernel_domain_gateway;
 mod kernel_gateway;
 mod recording_stream;
 // TODO: parser is WIP — remove allow once integrated
@@ -93,6 +94,7 @@ pub(crate) mod task_executor;
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS, DEFAULT_MODEL, FALLBACK_MODEL};
 pub use events::{AgentLoopEvent, DebugEvent, TurnEvent};
+pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway};
 pub use runtime::{
     ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,
