@@ -195,6 +195,24 @@ async fn classify_api_error(response: reqwest::Response) -> ApiError {
                 retry_after,
             }
         }
+        // Axis 2: generic 5xx from the upstream LLM / proxy. Routed
+        // through the retry path with bounded exponential backoff so a
+        // single provider blip (`500 Internal server error`, `502 Bad
+        // gateway`, `503 Service Unavailable` with a non-Cloudflare
+        // body, `504 Gateway Timeout`) doesn't immediately surface as
+        // a terminal failure to the dev loop. 501/505..=511 are left
+        // as `Other` — those are configuration or protocol errors that
+        // retrying will not fix.
+        500 | 502 | 504 => ApiError::TransientServer {
+            status: status_code,
+            message: format!("Anthropic API error: {status} - {body}"),
+        },
+        // 503 hits the Cloudflare short-circuit above when the body
+        // matches — anything else is a real upstream 503.
+        503 => ApiError::TransientServer {
+            status: status_code,
+            message: format!("Anthropic API error: {status} - {body}"),
+        },
         _ => ApiError::Other(ReasonerError::Api {
             status: status_code,
             message: format!("{status} - {body}"),
@@ -421,6 +439,43 @@ fn classify_retry_action(
             ));
             RetryAction::FallbackModel
         }
+        // Axis 2: retry generic 5xx just like Cloudflare cold-starts,
+        // using the same exponential-backoff-with-jitter schedule.
+        // These resolve on the order of seconds on the provider side;
+        // `exp_backoff_with_jitter` caps at 30s so we never wedge the
+        // dev loop behind a single provider incident.
+        ApiError::TransientServer { status, message } if attempt < max_retries => {
+            let sleep = exp_backoff_with_jitter(attempt);
+            #[allow(clippy::cast_possible_truncation)]
+            let backoff_ms = sleep.as_millis() as u64;
+            warn!(
+                model = %model,
+                attempt,
+                status = *status,
+                backoff_ms,
+                "Upstream 5xx, will retry"
+            );
+            *last_err = Some(ReasonerError::Api {
+                status: *status,
+                message: message.clone(),
+            });
+            RetryAction::Retry { sleep }
+        }
+        // After retries are exhausted, try the fallback model rather
+        // than surfacing the 5xx to the caller — the same escape hatch
+        // we already give 429/529 overload errors.
+        ApiError::TransientServer { status, message } if model_idx < model_count - 1 => {
+            warn!(
+                model = %model,
+                status = *status,
+                "5xx retries exhausted, falling back to next model"
+            );
+            *last_err = Some(ReasonerError::Api {
+                status: *status,
+                message: message.clone(),
+            });
+            RetryAction::FallbackModel
+        }
         _ => RetryAction::Propagate,
     }
 }
@@ -432,6 +487,10 @@ fn retry_reason_for(err: &ApiError) -> &'static str {
     match err {
         ApiError::Overloaded { .. } => "rate_limited_429",
         ApiError::CloudflareBlock(_) => "transient_5xx",
+        // Axis 2: distinct label so the dev loop can tell a real
+        // upstream 5xx apart from Cloudflare cold-starts in
+        // `retries.jsonl` (the heuristic reports bucket by reason).
+        ApiError::TransientServer { .. } => "upstream_5xx",
         ApiError::InsufficientCredits(_) => "insufficient_credits",
         ApiError::Other(_) => "transient",
     }
@@ -852,5 +911,84 @@ mod retry_tests {
         let mut last_err = None;
         let action = classify_retry_action(&err, 0, 2, 0, 1, "m", &mut last_err);
         assert!(matches!(action, RetryAction::Propagate));
+    }
+
+    // ---------- Axis 2 coverage ----------
+
+    #[test]
+    fn classify_retry_action_retries_transient_5xx_with_exp_backoff() {
+        let err = ApiError::TransientServer {
+            status: 500,
+            message: "Anthropic API error: 500 Internal Server Error - body".into(),
+        };
+        let mut last_err = None;
+        let action = classify_retry_action(&err, 0, 2, 0, 1, "primary", &mut last_err);
+        match action {
+            RetryAction::Retry { sleep } => {
+                // `exp_backoff_with_jitter(0)` → base 1s + up to 250ms jitter.
+                assert!(
+                    sleep >= Duration::from_secs(1),
+                    "first-attempt 5xx backoff must be >= 1s, got {sleep:?}"
+                );
+                assert!(
+                    sleep <= Duration::from_millis(1_300),
+                    "first-attempt 5xx backoff must stay under the jitter cap, got {sleep:?}"
+                );
+            }
+            other => panic!("expected Retry on 5xx, got {other:?}"),
+        }
+        match last_err {
+            Some(ReasonerError::Api { status, .. }) => assert_eq!(status, 500),
+            other => panic!("expected ReasonerError::Api last_err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_retry_action_falls_back_when_5xx_retries_exhausted() {
+        let err = ApiError::TransientServer {
+            status: 502,
+            message: "Anthropic API error: 502 Bad Gateway - body".into(),
+        };
+        let mut last_err = None;
+        let action = classify_retry_action(&err, 2, 2, 0, 2, "primary", &mut last_err);
+        assert!(
+            matches!(action, RetryAction::FallbackModel),
+            "expected FallbackModel after 5xx retries are used up"
+        );
+        match last_err {
+            Some(ReasonerError::Api { status, .. }) => assert_eq!(status, 502),
+            other => panic!("expected ReasonerError::Api last_err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_retry_action_propagates_5xx_when_no_fallback_available() {
+        let err = ApiError::TransientServer {
+            status: 504,
+            message: "Anthropic API error: 504 Gateway Timeout - body".into(),
+        };
+        let mut last_err = None;
+        let action = classify_retry_action(&err, 2, 2, 0, 1, "only", &mut last_err);
+        assert!(
+            matches!(action, RetryAction::Propagate),
+            "no fallback model → 5xx must propagate so the dev loop can retry"
+        );
+    }
+
+    #[test]
+    fn retry_reason_for_labels_transient_5xx_distinctly() {
+        // `upstream_5xx` must be distinct from the Cloudflare-specific
+        // `transient_5xx` bucket so run heuristics can separate
+        // provider-internal outages from cold-start cloudflare
+        // blocks in retry histograms.
+        let err = ApiError::TransientServer {
+            status: 503,
+            message: "Anthropic API error: 503 - body".into(),
+        };
+        assert_eq!(retry_reason_for(&err), "upstream_5xx");
+        assert_eq!(
+            retry_reason_for(&ApiError::CloudflareBlock("cf".into())),
+            "transient_5xx"
+        );
     }
 }

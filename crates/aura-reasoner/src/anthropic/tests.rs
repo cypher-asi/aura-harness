@@ -218,6 +218,25 @@ fn test_api_error_classification() {
     let other: ReasonerError =
         ApiError::Other(ReasonerError::Request("network error".into())).into();
     assert!(other.to_string().contains("network error"));
+
+    // Axis 2: generic 5xx round-trips back to `ReasonerError::Api`
+    // when retries are exhausted, preserving both the status and the
+    // preview the dev loop already surfaces in `task_failed` reasons.
+    let transient_5xx: ReasonerError = ApiError::TransientServer {
+        status: 500,
+        message: "Anthropic API error: 500 Internal Server Error - body".into(),
+    }
+    .into();
+    match transient_5xx {
+        ReasonerError::Api { status, ref message } => {
+            assert_eq!(status, 500);
+            assert!(
+                message.contains("Internal Server Error"),
+                "TransientServer should preserve the body preview: {message}"
+            );
+        }
+        other => panic!("TransientServer should map to ReasonerError::Api, got {other:?}"),
+    }
 }
 
 #[test]

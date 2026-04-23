@@ -37,6 +37,14 @@ enum ApiError {
     InsufficientCredits(String),
     /// 403 / 503 with Cloudflare HTML — retryable (service cold-starting).
     CloudflareBlock(String),
+    /// Generic transient upstream 5xx — 500 / 502 / 503 (non-Cloudflare) /
+    /// 504. Mapped to a retryable class so a single provider blip doesn't
+    /// immediately surface a terminal `LLM error: ...` to the dev loop.
+    /// When retries are exhausted this falls back to `ReasonerError::Api
+    /// { status, message }` via the `From<ApiError>` impl, preserving the
+    /// pre-Axis-2 behaviour for callers that don't care about the retry
+    /// classification.
+    TransientServer { status: u16, message: String },
     /// Any other failure.
     Other(ReasonerError),
 }
@@ -53,6 +61,7 @@ impl From<ApiError> for ReasonerError {
                 status: 403,
                 message: msg,
             },
+            ApiError::TransientServer { status, message } => Self::Api { status, message },
             ApiError::Other(e) => e,
         }
     }
