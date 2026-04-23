@@ -206,15 +206,17 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
     let tool_config = session_helpers::tool_config_from_env();
-    if session_helpers::allow_run_command_from_env() && tool_config.binary_allowlist.is_empty() {
-        // Reach the operator via the same status-line the provider
-        // fallback uses so they know the flag was seen but didn't
-        // actually unlock anything. Keeps the failure mode obvious
-        // without leaking env values into logs.
-        let _ = cmd_tx.try_send(UiCommand::SetStatus(
-            "AURA_ALLOW_RUN_COMMAND=1 set but AURA_ALLOWED_COMMANDS is empty — commands still blocked"
-                .to_string(),
-        ));
+    if tool_config.enable_commands {
+        // Empty `binary_allowlist` is the ToolConfig contract for
+        // "all binaries allowed" — log the effective policy so
+        // operators can verify what the harness resolved without a
+        // UI status pop (which used to incorrectly claim commands
+        // were blocked in that case).
+        info!(
+            binary_allowlist = ?tool_config.binary_allowlist,
+            allow_shell = tool_config.allow_shell,
+            "run_command enabled"
+        );
     }
     let (executor_router, tools) = session_helpers::build_executor_router_with_config(&tool_config);
 

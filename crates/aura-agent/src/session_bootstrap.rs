@@ -167,12 +167,27 @@ fn env_csv(name: &str) -> Vec<String> {
 /// Starts from [`ToolConfig::default`] — the Phase-5 fail-closed
 /// defaults — and only loosens things when the operator opts in:
 ///
+/// * `AURA_AUTONOMOUS_DEV_LOOP=1` — short-circuits to a fully
+///   permissive config: `enable_fs = true`, `enable_commands = true`,
+///   empty `binary_allowlist` (= all binaries allowed per the
+///   [`ToolConfig`] contract), and `allow_shell = true`. The
+///   `AURA_ALLOW_RUN_COMMAND` / `AURA_ALLOWED_COMMANDS` /
+///   `AURA_ALLOW_SHELL` knobs below are ignored in this mode.
 /// * `AURA_ALLOW_RUN_COMMAND=1` — flips `enable_commands = true`.
 /// * `AURA_ALLOWED_COMMANDS=cargo,git,ls` — comma-separated binary
 ///   allowlist. Additive.
 /// * `AURA_ALLOW_SHELL=1` — allow `sh`/`bash`/`pwsh` fan-out.
 #[must_use]
 pub fn tool_config_from_env() -> ToolConfig {
+    if autonomous_dev_loop_from_env() {
+        return ToolConfig {
+            enable_fs: true,
+            enable_commands: true,
+            binary_allowlist: vec![],
+            allow_shell: true,
+            ..ToolConfig::default()
+        };
+    }
     let mut cfg = ToolConfig::default();
     if env_bool("AURA_ALLOW_RUN_COMMAND") {
         cfg.enable_commands = true;
@@ -194,18 +209,41 @@ pub fn allow_run_command_from_env() -> bool {
     env_bool("AURA_ALLOW_RUN_COMMAND")
 }
 
+/// True when the operator has opted into the autonomous dev-loop
+/// permissive preset via `AURA_AUTONOMOUS_DEV_LOOP`.
+///
+/// Callers in [`tool_config_from_env`] and [`policy_config_from_env`]
+/// branch on this to short-circuit to fully permissive defaults so the
+/// bundled desktop sidecar can run `cargo check`/`test`/`fmt`/`clippy`
+/// without the operator having to enumerate binaries.
+#[must_use]
+pub fn autonomous_dev_loop_from_env() -> bool {
+    env_bool("AURA_AUTONOMOUS_DEV_LOOP")
+}
+
 /// Build a [`PolicyConfig`] with `run_command` elevated when
 /// `AURA_ALLOW_RUN_COMMAND=1` is set.
 ///
-/// With the env flag unset this is exactly [`PolicyConfig::default`]
-/// (fail-closed, `run_command` denied). With it set, `run_command`
-/// joins `allowed_tools` and is mapped to
-/// [`PermissionLevel::AlwaysAllow`] so embedders without an approval
-/// pump don't permanently deny every shell invocation. The
-/// executor-layer [`ToolConfig`] from [`tool_config_from_env`] still
-/// enforces `binary_allowlist`.
+/// Precedence:
+///
+/// * `AURA_AUTONOMOUS_DEV_LOOP=1` — short-circuits to
+///   [`PolicyConfig::permissive`] (`allow_unlisted = true` with
+///   `run_command` in `allowed_tools`). All other env knobs are
+///   ignored in this mode.
+/// * With no env flags set this is exactly [`PolicyConfig::default`]
+///   (fail-closed, `run_command` denied).
+/// * With `AURA_ALLOW_RUN_COMMAND=1`, `run_command` joins
+///   `allowed_tools` and is mapped to
+///   [`PermissionLevel::AlwaysAllow`] so embedders without an
+///   approval pump don't permanently deny every shell invocation.
+///
+/// The executor-layer [`ToolConfig`] from [`tool_config_from_env`]
+/// still enforces `binary_allowlist` in the non-autonomous path.
 #[must_use]
 pub fn policy_config_from_env() -> PolicyConfig {
+    if autonomous_dev_loop_from_env() {
+        return PolicyConfig::permissive();
+    }
     let mut policy = PolicyConfig::default();
     if allow_run_command_from_env() {
         policy.allowed_tools.insert("run_command".to_string());
@@ -247,6 +285,7 @@ mod env_tests {
         "AURA_ALLOW_RUN_COMMAND",
         "AURA_ALLOWED_COMMANDS",
         "AURA_ALLOW_SHELL",
+        "AURA_AUTONOMOUS_DEV_LOOP",
     ];
 
     fn clear_env() {
@@ -316,6 +355,25 @@ mod env_tests {
         let cfg = tool_config_from_env();
         assert!(cfg.enable_commands);
         assert!(cfg.binary_allowlist.is_empty());
+
+        clear_env();
+    }
+
+    #[test]
+    fn autonomous_dev_loop_flag_yields_permissive_tool_and_policy() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        clear_env();
+        set_env(&[("AURA_AUTONOMOUS_DEV_LOOP", "1")]);
+
+        let cfg = tool_config_from_env();
+        assert!(cfg.enable_commands);
+        assert!(cfg.binary_allowlist.is_empty());
+        assert!(cfg.allow_shell);
+
+        let policy = policy_config_from_env();
+        assert!(policy.allow_unlisted);
+        assert!(policy.allowed_tools.contains("run_command"));
 
         clear_env();
     }
