@@ -1,10 +1,18 @@
 use aura_agent::agent_runner::TaskExecutionResult;
 use aura_reasoner::{ContentBlock, Message, Role, ToolResultContent};
 use serde_json::json;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
-use super::{forward_agent_event, validate_execution};
+use super::{
+    commit_and_push, forward_agent_event, validate_execution, TaskAggregate,
+    COMMIT_SKIPPED_NO_CHANGES,
+};
+use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
+use crate::state::AutomatonState;
+use crate::types::AutomatonId;
 
 #[test]
 fn forwards_valid_tool_input_snapshot() {
@@ -192,4 +200,208 @@ fn validate_execution_passes_through_when_no_changes_needed() {
 
     let ok = validate_execution(exec).expect("no_changes_needed must short-circuit");
     assert!(ok.no_changes_needed);
+}
+
+// ---------------------------------------------------------------------------
+// Commit-skip DoD precheck (Section 2 of fix_4.6-class_failures plan).
+//
+// These tests exercise `TaskAggregate::from_exec` and `commit_and_push`'s
+// early-skip branch to ensure a task that produced no file changes and
+// no verification evidence never dispatches `git_commit` /
+// `git_commit_push`. See `TaskAggregate`'s docs for the chosen signal.
+// ---------------------------------------------------------------------------
+
+fn make_ctx() -> (TickContext, mpsc::Receiver<AutomatonEvent>) {
+    let (tx, rx) = mpsc::channel(64);
+    let ctx = TickContext::new(
+        AutomatonId::from_string("test-automaton"),
+        AutomatonState::new(),
+        tx,
+        json!({}),
+        None,
+        CancellationToken::new(),
+    );
+    (ctx, rx)
+}
+
+fn drain(rx: &mut mpsc::Receiver<AutomatonEvent>) -> Vec<AutomatonEvent> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        out.push(ev);
+    }
+    out
+}
+
+#[test]
+fn task_aggregate_from_empty_exec_is_zero() {
+    let agg = TaskAggregate::from_exec(&TaskExecutionResult::default());
+    assert_eq!(agg.files_changed, 0);
+    assert_eq!(agg.verification_steps, 0);
+    assert!(agg.should_skip_commit());
+}
+
+#[test]
+fn task_aggregate_counts_successful_write_file_tool_results() {
+    // When the runner's `file_ops` is empty but the message log shows
+    // a successful write_file tool_result, we should still treat the
+    // task as having file changes. Guards against runners that only
+    // populate `file_ops` in some code paths.
+    let messages = vec![
+        assistant_tool_use(
+            "call-1",
+            "write_file",
+            json!({ "path": "src/foo.rs", "content": "pub fn foo() {}" }),
+        ),
+        user_tool_result("call-1", r#"{"bytes_written":16}"#, false),
+    ];
+    let exec = TaskExecutionResult {
+        messages,
+        ..TaskExecutionResult::default()
+    };
+    let agg = TaskAggregate::from_exec(&exec);
+    assert_eq!(agg.files_changed, 1);
+    assert_eq!(agg.verification_steps, 0);
+    assert!(!agg.should_skip_commit());
+}
+
+#[test]
+fn task_aggregate_dedupes_repeat_writes_to_same_path() {
+    // Two successful write_file tool_results targeting the same path
+    // should count as a single file change; otherwise the count inflates
+    // and the DoD precheck could silently pass even when only one file
+    // was ever touched.
+    let messages = vec![
+        assistant_tool_use(
+            "call-1",
+            "write_file",
+            json!({ "path": "src/foo.rs", "content": "v1" }),
+        ),
+        user_tool_result("call-1", "ok", false),
+        assistant_tool_use(
+            "call-2",
+            "write_file",
+            json!({ "path": "src/foo.rs", "content": "v2" }),
+        ),
+        user_tool_result("call-2", "ok", false),
+    ];
+    let exec = TaskExecutionResult {
+        messages,
+        ..TaskExecutionResult::default()
+    };
+    let agg = TaskAggregate::from_exec(&exec);
+    assert_eq!(agg.files_changed, 1);
+}
+
+#[test]
+fn task_aggregate_ignores_errored_write_tool_results() {
+    // tool_result with is_error=true must NOT count as a file change.
+    let messages = vec![
+        assistant_tool_use(
+            "call-1",
+            "write_file",
+            json!({ "path": "src/foo.rs", "content": "x" }),
+        ),
+        user_tool_result("call-1", "permission denied", true),
+    ];
+    let exec = TaskExecutionResult {
+        messages,
+        ..TaskExecutionResult::default()
+    };
+    let agg = TaskAggregate::from_exec(&exec);
+    assert_eq!(agg.files_changed, 0);
+    assert!(agg.should_skip_commit());
+}
+
+#[test]
+fn task_aggregate_counts_run_command_as_verification_evidence() {
+    let messages = vec![
+        assistant_tool_use("call-1", "run_command", json!({ "command": "cargo test" })),
+        user_tool_result("call-1", "test result: ok. 42 passed", false),
+    ];
+    let exec = TaskExecutionResult {
+        messages,
+        ..TaskExecutionResult::default()
+    };
+    let agg = TaskAggregate::from_exec(&exec);
+    assert_eq!(agg.files_changed, 0);
+    assert_eq!(agg.verification_steps, 1);
+    assert!(!agg.should_skip_commit());
+}
+
+#[tokio::test]
+async fn commit_and_push_emits_commit_skipped_when_aggregate_is_empty() {
+    // When the aggregate shows zero files_changed and zero
+    // verification_steps, `commit_and_push` must emit `CommitSkipped`
+    // WITHOUT consulting `tool_executor` (so `None` is fine) and
+    // WITHOUT touching any workspace (so `workspace_root = None` is
+    // fine). This guarantees the skip path is deterministic and
+    // independent of whether the workspace happens to be a git repo.
+    let (mut ctx, mut rx) = make_ctx();
+    let aggregate = TaskAggregate::default();
+    assert!(aggregate.should_skip_commit());
+
+    commit_and_push(&mut ctx, None, "task-42", &aggregate).await;
+
+    let events = drain(&mut rx);
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly one event, got {events:?}"
+    );
+    match &events[0] {
+        AutomatonEvent::CommitSkipped { task_id, reason } => {
+            assert_eq!(task_id, "task-42");
+            assert_eq!(reason, COMMIT_SKIPPED_NO_CHANGES);
+        }
+        other => panic!("expected CommitSkipped, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn commit_and_push_does_not_skip_when_aggregate_has_file_changes() {
+    // When the aggregate carries at least one file change, the skip
+    // precheck must NOT fire. We deliberately pass `workspace_root =
+    // None` so the existing post-precheck path bails early with no
+    // further events; the assertion is simply that no CommitSkipped
+    // event was emitted, i.e. the precheck did not short-circuit.
+    let (mut ctx, mut rx) = make_ctx();
+    let aggregate = TaskAggregate {
+        files_changed: 1,
+        verification_steps: 0,
+    };
+    assert!(!aggregate.should_skip_commit());
+
+    commit_and_push(&mut ctx, None, "task-42", &aggregate).await;
+
+    let events = drain(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AutomatonEvent::CommitSkipped { .. })),
+        "did not expect CommitSkipped, got {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn commit_and_push_does_not_skip_when_aggregate_has_verification_only() {
+    // A task with zero file changes but at least one verification step
+    // (e.g. a shell-task that only ran `cargo test`) should still fall
+    // through to the existing commit path; the skip is only for the
+    // "nothing happened" case.
+    let (mut ctx, mut rx) = make_ctx();
+    let aggregate = TaskAggregate {
+        files_changed: 0,
+        verification_steps: 1,
+    };
+    assert!(!aggregate.should_skip_commit());
+
+    commit_and_push(&mut ctx, None, "task-42", &aggregate).await;
+
+    let events = drain(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AutomatonEvent::CommitSkipped { .. })),
+        "did not expect CommitSkipped, got {events:?}"
+    );
 }

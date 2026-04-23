@@ -30,7 +30,134 @@ mod finish;
 mod run;
 mod tick;
 
-pub use tick::commit_and_push;
+pub(crate) use tick::commit_and_push;
+
+/// Reason string attached to `AutomatonEvent::CommitSkipped` when
+/// the DoD precheck trips. Kept as a module constant so the tick.rs
+/// skip path and any future task-run callers stay in lockstep.
+pub(crate) const COMMIT_SKIPPED_NO_CHANGES: &str =
+    "no file changes or verification evidence; skipping commit to avoid orphan commits";
+
+/// Per-task aggregate the automaton consults before dispatching
+/// `git_commit` / `git_commit_push`. The canonical server-side
+/// `CachedTaskOutput` lives in `aura-os-server` and is not visible
+/// from this crate, so we derive an equivalent shape locally from
+/// the `TaskExecutionResult` the runner hands back:
+///
+/// * `files_changed` counts the file-mutation evidence we can see
+///   without talking to the server: `exec.file_ops` (the canonical
+///   list of writes the runner actually applied) plus the set of
+///   unique `path`s from successful `write_file` / `edit_file` /
+///   `delete_file` `tool_result`s in the task's message log. Using
+///   the max of the two is a belt-and-braces signal: `file_ops`
+///   may lag when the runner abandoned a partially-applied batch,
+///   and the message scan catches successful tool calls whose side
+///   effects never made it into `file_ops`.
+///
+/// * `verification_steps` counts successful `run_command`
+///   `tool_result`s. `run_command` is the only generic shell tool
+///   in the catalog (see `aura_agent::constants::COMMAND_TOOLS`)
+///   so build / test / fmt / lint invocations all flow through it;
+///   a single non-error result is treated as verification evidence.
+///
+/// `should_skip_commit` trips only when both counters are zero,
+/// matching the plan's "no file changes AND no verification
+/// evidence" trigger for the commit-skip DoD precheck.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TaskAggregate {
+    pub files_changed: usize,
+    pub verification_steps: usize,
+}
+
+impl TaskAggregate {
+    /// Derive the aggregate from a completed `TaskExecutionResult`.
+    pub(crate) fn from_exec(exec: &TaskExecutionResult) -> Self {
+        let mut tool_uses: HashMap<String, String> = HashMap::new();
+        let mut successful_file_paths: HashSet<String> = HashSet::new();
+        let mut verification_steps: usize = 0;
+
+        // First pass: index tool_use ids -> tool name so we can
+        // classify the matching tool_result blocks in the second
+        // pass. The assistant always emits the tool_use before the
+        // user-side tool_result, so a single forward pass over the
+        // message log is sufficient.
+        for msg in &exec.messages {
+            match msg.role {
+                Role::Assistant => {
+                    for block in &msg.content {
+                        if let ContentBlock::ToolUse { id, name, .. } = block {
+                            tool_uses.insert(id.clone(), name.clone());
+                        }
+                    }
+                }
+                Role::User => {
+                    for block in &msg.content {
+                        if let ContentBlock::ToolResult {
+                            tool_use_id,
+                            is_error,
+                            ..
+                        } = block
+                        {
+                            if *is_error {
+                                continue;
+                            }
+                            let Some(tool_name) = tool_uses.get(tool_use_id) else {
+                                continue;
+                            };
+                            match tool_name.as_str() {
+                                "write_file" | "edit_file" | "delete_file" => {
+                                    // Recover the path argument from
+                                    // the originating tool_use to
+                                    // dedupe repeated writes to the
+                                    // same file. Tool_uses without a
+                                    // `path` field still count via
+                                    // their id (rare: malformed
+                                    // input).
+                                    let path_key = exec
+                                        .messages
+                                        .iter()
+                                        .flat_map(|m| m.content.iter())
+                                        .find_map(|b| match b {
+                                            ContentBlock::ToolUse { id, input, .. }
+                                                if id == tool_use_id =>
+                                            {
+                                                input
+                                                    .get("path")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(str::to_string)
+                                            }
+                                            _ => None,
+                                        })
+                                        .unwrap_or_else(|| format!("<id:{tool_use_id}>"));
+                                    successful_file_paths.insert(path_key);
+                                }
+                                "run_command" => {
+                                    verification_steps += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prefer the max of the runner-reported `file_ops` count and
+        // the message-derived count (see struct docs).
+        let files_changed = exec.file_ops.len().max(successful_file_paths.len());
+
+        Self {
+            files_changed,
+            verification_steps,
+        }
+    }
+
+    /// DoD precheck: skip the commit only when we have neither any
+    /// observed file changes nor any verification-step evidence.
+    pub(crate) fn should_skip_commit(&self) -> bool {
+        self.files_changed == 0 && self.verification_steps == 0
+    }
+}
 
 #[cfg(test)]
 mod tests;

@@ -80,6 +80,16 @@ pub enum AutomatonEvent {
         task_id: String,
         reason: String,
     },
+    /// Emitted when a task completed but the per-task aggregate shows
+    /// no file changes and no build/test/fmt/lint verification
+    /// evidence. In that case the dev-loop / task-run builtins skip
+    /// dispatching `git_commit` / `git_commit_push` to avoid creating
+    /// orphan commits that the server-side DoD gate would later have
+    /// to roll back.
+    CommitSkipped {
+        task_id: String,
+        reason: String,
+    },
     TaskRetrying {
         task_id: String,
         attempt: u32,
@@ -197,11 +207,7 @@ pub enum AutomatonEvent {
         /// key against aura-router / provider logs. Accepts the legacy
         /// `request_id` field on the wire for backwards compatibility
         /// with bundles emitted before the split.
-        #[serde(
-            default,
-            alias = "request_id",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, alias = "request_id", skip_serializing_if = "Option::is_none")]
         provider_request_id: Option<String>,
         /// Provider-internal message id (Anthropic
         /// `message_start.message.id`).

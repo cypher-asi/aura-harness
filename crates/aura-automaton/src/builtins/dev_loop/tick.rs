@@ -1,9 +1,10 @@
 use super::{
     info, topological_sort, warn, Automaton, AutomatonError, AutomatonEvent, DevLoopAutomaton,
-    DevLoopConfig, DomainApi, HashMap, HashSet, Schedule, TaskDescriptor, TaskExecutionResult,
-    TickContext, TickOutcome, STATE_COMPLETED_COUNT, STATE_DONE_IDS, STATE_FAILED_COUNT,
-    STATE_FAILED_IDS, STATE_FAILURE_REASONS, STATE_INITIALIZED, STATE_LOOP_FINISHED,
-    STATE_TASK_QUEUE, STATE_WORK_LOG,
+    DevLoopConfig, DomainApi, HashMap, HashSet, Schedule, TaskAggregate, TaskDescriptor,
+    TaskExecutionResult, TickContext, TickOutcome, COMMIT_SKIPPED_NO_CHANGES,
+    STATE_COMPLETED_COUNT, STATE_DONE_IDS, STATE_FAILED_COUNT, STATE_FAILED_IDS,
+    STATE_FAILURE_REASONS, STATE_INITIALIZED, STATE_LOOP_FINISHED, STATE_TASK_QUEUE,
+    STATE_WORK_LOG,
 };
 
 #[async_trait::async_trait]
@@ -193,6 +194,13 @@ impl DevLoopAutomaton {
         let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0) + 1;
         ctx.state.set(STATE_COMPLETED_COUNT, &completed);
 
+        // Build the DoD aggregate BEFORE we move `exec.notes` into
+        // the work-log entry / `TaskCompleted` summary: after those
+        // moves `exec` is partially dropped and can no longer be
+        // borrowed. The aggregate is the only thing `commit_and_push`
+        // needs from `exec` (see the commit-skip precheck below).
+        let aggregate = TaskAggregate::from_exec(&exec);
+
         let mut work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
         work_log.push(format!(
             "Task (completed): {}\nNotes: {}",
@@ -209,7 +217,7 @@ impl DevLoopAutomaton {
             output_tokens: exec.output_tokens,
         });
 
-        commit_and_push(ctx, self.tool_executor.as_ref(), &task.id).await;
+        commit_and_push(ctx, self.tool_executor.as_ref(), &task.id, &aggregate).await;
 
         info!(task_id = %task.id, title = %task.title, "Task completed successfully");
     }
@@ -297,11 +305,34 @@ async fn transition_to_in_progress(domain: &dyn DomainApi, task: &TaskDescriptor
 /// `git push`) are dispatched through `tool_executor` as kernel-
 /// mediated `ToolProposal`s; this function never spawns `git` itself
 /// beyond the documented `git init` bootstrap.
-pub async fn commit_and_push(
+pub(crate) async fn commit_and_push(
     ctx: &mut TickContext,
     tool_executor: Option<&std::sync::Arc<dyn aura_agent::types::AgentToolExecutor>>,
     task_id: &str,
+    aggregate: &TaskAggregate,
 ) {
+    // DoD precheck: when the per-task aggregate shows zero file
+    // changes AND zero verification steps, skip both git_commit and
+    // git_commit_push entirely. Runs BEFORE the workspace / git-init
+    // checks so callers see a deterministic `CommitSkipped` event
+    // regardless of whether the workspace happens to be a git repo.
+    // Prevents the "orphan commit" pattern where all `write_file`
+    // calls got abandoned by transient 5xx yet the runner still
+    // emitted `task_completed`, producing a commit the server-side
+    // DoD gate later has to roll back via `git_commit_rolled_back`.
+    if aggregate.should_skip_commit() {
+        warn!(
+            task_id,
+            reason = COMMIT_SKIPPED_NO_CHANGES,
+            "skipping git_commit: no file changes or verification evidence in per-task aggregate"
+        );
+        ctx.emit(AutomatonEvent::CommitSkipped {
+            task_id: task_id.to_string(),
+            reason: COMMIT_SKIPPED_NO_CHANGES.to_string(),
+        });
+        return;
+    }
+
     let workspace = match ctx.workspace_root.as_ref() {
         Some(ws) => ws.to_string_lossy().to_string(),
         None => return,

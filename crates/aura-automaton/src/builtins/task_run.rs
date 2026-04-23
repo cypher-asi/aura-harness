@@ -15,7 +15,7 @@ use aura_reasoner::ModelProvider;
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::DomainApi;
 
-use super::dev_loop::{commit_and_push, validate_execution};
+use super::dev_loop::{commit_and_push, validate_execution, TaskAggregate};
 use super::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
@@ -338,6 +338,12 @@ impl TaskRunAutomaton {
 
                 info!(task_id, notes = %exec.notes, "task completed");
 
+                // Compute the DoD aggregate BEFORE moving `exec.notes`
+                // into the `TaskCompleted` summary; after the move
+                // `exec` can no longer be borrowed by the aggregate
+                // builder. Same precheck contract as dev_loop/tick.rs.
+                let aggregate = TaskAggregate::from_exec(&exec);
+
                 ctx.emit(AutomatonEvent::TaskCompleted {
                     task_id: task_id.to_string(),
                     summary: exec.notes,
@@ -347,7 +353,7 @@ impl TaskRunAutomaton {
                     output_tokens: exec.output_tokens,
                 });
 
-                commit_and_push(ctx, self.tool_executor.as_ref(), task_id).await;
+                commit_and_push(ctx, self.tool_executor.as_ref(), task_id, &aggregate).await;
             }
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");
