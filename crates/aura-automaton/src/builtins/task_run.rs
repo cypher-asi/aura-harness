@@ -65,6 +65,18 @@ struct TaskRunConfig {
     // TODO: will be used when task sessions tag their agent instance
     #[allow(dead_code)]
     agent_instance_id: String,
+    /// Retry-warm-up: the reason text persisted on the previous
+    /// attempt's `task_failed` record. Threaded into `TaskInfo
+    /// ::execution_notes` so the model does not see a prompt-identical
+    /// cold re-run on single-task retries. `None` on initial attempts
+    /// and on dev-loop ticks (dev-loop derives its own notes via
+    /// `STATE_FAILURE_REASONS` in `aura-app`).
+    prior_failure: Option<String>,
+    /// Retry-warm-up: recent work-log entries the caller wants the
+    /// agent to re-see. Matches the shape
+    /// `AgenticTaskParams::work_log` expects. Defaults to empty for
+    /// initial attempts.
+    work_log: Vec<String>,
 }
 
 impl TaskRunConfig {
@@ -84,10 +96,26 @@ impl TaskRunConfig {
             .and_then(|v| v.as_str())
             .unwrap_or("default")
             .to_string();
+        let prior_failure = config
+            .get("prior_failure")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let work_log = config
+            .get("work_log")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         Ok(Self {
             project_id,
             task_id,
             agent_instance_id,
+            prior_failure,
+            work_log,
         })
     }
 }
@@ -125,7 +153,9 @@ impl Automaton for TaskRunAutomaton {
             return self.finalize_task(ctx, &task.id, &task.title, result).await;
         }
 
-        let result = self.run_agentic_task(ctx, &project, &spec, &task).await;
+        let result = self
+            .run_agentic_task(ctx, &project, &spec, &task, &cfg)
+            .await;
         self.finalize_task(ctx, &task.id, &task.title, result).await
     }
 }
@@ -210,6 +240,7 @@ impl TaskRunAutomaton {
         project: &aura_tools::domain_tools::ProjectDescriptor,
         spec: &aura_tools::domain_tools::SpecDescriptor,
         task: &aura_tools::domain_tools::TaskDescriptor,
+        cfg: &TaskRunConfig,
     ) -> Result<aura_agent::agent_runner::TaskExecutionResult, AutomatonError> {
         let effective_path = ctx
             .workspace_root
@@ -232,7 +263,7 @@ impl TaskRunAutomaton {
         let task_info = TaskInfo {
             title: &task.title,
             description: &task.description,
-            execution_notes: "",
+            execution_notes: cfg.prior_failure.as_deref().unwrap_or(""),
             files_changed: &[],
         };
         let session_info = SessionInfo {
@@ -246,7 +277,7 @@ impl TaskRunAutomaton {
             task: &task_info,
             session: &session_info,
             agent: None,
-            work_log: &[],
+            work_log: cfg.work_log.as_slice(),
             completed_deps: &[],
             workspace_map: "",
             codebase_snapshot: "",
@@ -333,5 +364,78 @@ impl TaskRunAutomaton {
         }
 
         Ok(TickOutcome::Done)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskRunConfig;
+    use serde_json::json;
+
+    #[test]
+    fn from_json_defaults_prior_failure_and_work_log_to_empty() {
+        let cfg = TaskRunConfig::from_json(&json!({
+            "project_id": "proj-1",
+            "task_id": "task-1",
+        }))
+        .expect("parse minimal config");
+        assert_eq!(cfg.project_id, "proj-1");
+        assert_eq!(cfg.task_id, "task-1");
+        assert_eq!(cfg.agent_instance_id, "default");
+        assert!(cfg.prior_failure.is_none());
+        assert!(cfg.work_log.is_empty());
+    }
+
+    #[test]
+    fn from_json_treats_empty_prior_failure_as_none() {
+        // Dev-loop / initial attempts send `""` rather than omitting
+        // the field. Treat it the same as absent so callers don't
+        // have to branch.
+        let cfg = TaskRunConfig::from_json(&json!({
+            "project_id": "proj-1",
+            "task_id": "task-1",
+            "prior_failure": "",
+        }))
+        .expect("parse empty prior_failure");
+        assert!(cfg.prior_failure.is_none());
+    }
+
+    #[test]
+    fn from_json_parses_prior_failure_and_work_log() {
+        let cfg = TaskRunConfig::from_json(&json!({
+            "project_id": "proj-1",
+            "task_id": "task-1",
+            "agent_instance_id": "inst-7",
+            "prior_failure": "stream terminated with error: Internal server error",
+            "work_log": [
+                "attempt 1: edited src/lib.rs",
+                "attempt 1: tests failed with type error",
+            ],
+        }))
+        .expect("parse retry-warm config");
+        assert_eq!(cfg.agent_instance_id, "inst-7");
+        assert_eq!(
+            cfg.prior_failure.as_deref(),
+            Some("stream terminated with error: Internal server error")
+        );
+        assert_eq!(cfg.work_log.len(), 2);
+        assert_eq!(cfg.work_log[0], "attempt 1: edited src/lib.rs");
+    }
+
+    #[test]
+    fn from_json_skips_non_string_work_log_entries() {
+        // Forward-compat: if a newer server shape sends structured
+        // work_log entries, drop them silently instead of erroring.
+        let cfg = TaskRunConfig::from_json(&json!({
+            "project_id": "proj-1",
+            "task_id": "task-1",
+            "work_log": [
+                "ok string",
+                {"structured": "ignored"},
+                42,
+            ],
+        }))
+        .expect("parse mixed work_log");
+        assert_eq!(cfg.work_log, vec!["ok string".to_string()]);
     }
 }

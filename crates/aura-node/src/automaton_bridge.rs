@@ -432,6 +432,8 @@ impl AutomatonBridge {
         git_branch: Option<String>,
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        prior_failure: Option<String>,
+        work_log: Vec<String>,
     ) -> Result<String, String> {
         let domain = self.domain_with_jwt(auth_token.as_deref());
         let effective_workspace = workspace_root.clone();
@@ -493,6 +495,8 @@ impl AutomatonBridge {
             "git_repo_url": git_repo_url,
             "git_branch": git_branch,
             "auth_token": auth_token.as_deref(),
+            "prior_failure": prior_failure,
+            "work_log": work_log,
         });
 
         let (handle, event_rx) = self
@@ -759,6 +763,8 @@ impl AutomatonController for AutomatonBridge {
             git_branch,
             None,
             None,
+            None,
+            Vec::new(),
         )
         .await
     }

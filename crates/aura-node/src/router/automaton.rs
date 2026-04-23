@@ -20,6 +20,20 @@ pub(super) struct AutomatonStartRequest {
     installed_tools: Option<Vec<InstalledTool>>,
     #[serde(default)]
     installed_integrations: Option<Vec<InstalledIntegration>>,
+    /// Retry-warm-up: the reason text persisted on the previous
+    /// attempt's `task_failed` record. Threaded into the task-run
+    /// automaton config as `prior_failure`, which the automaton folds
+    /// into `TaskInfo::execution_notes`. Ignored on dev-loop starts
+    /// (`task_id` is `None`). `#[serde(default)]` keeps older clients
+    /// — which never sent this field — working unchanged.
+    #[serde(default)]
+    prior_failure: Option<String>,
+    /// Retry-warm-up: recent work-log entries the caller wants the
+    /// agent to re-see on this attempt. Threaded into the task-run
+    /// automaton config as `work_log` and fed straight into
+    /// `AgenticTaskParams::work_log`. Ignored on dev-loop starts.
+    #[serde(default)]
+    work_log: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +81,8 @@ pub(super) async fn automaton_start_handler(
                 req.git_branch,
                 req.installed_tools,
                 req.installed_integrations,
+                req.prior_failure,
+                req.work_log,
             )
             .await
     } else {
