@@ -21,7 +21,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
-mod anthropic;
+pub mod anthropic;
 mod error;
 mod kernel_propose;
 mod mock;
@@ -95,9 +95,9 @@ pub use kernel_propose::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use mock::{MockProvider, MockResponse};
 pub use types::{
     AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, MaxTokens, Message, ModelName,
-    ModelRequest, ModelResponse, ProviderTrace, Role, StopReason, StreamAccumulator,
-    StreamContentType, StreamEvent, Temperature, ThinkingConfig, ToolChoice, ToolDefinition,
-    ToolResultContent, Usage,
+    ModelRequest, ModelResponse, PartialToolUse, ProviderTrace, Role, StopReason,
+    StreamAccumulator, StreamContentType, StreamEvent, Temperature, ThinkingConfig, ToolChoice,
+    ToolDefinition, ToolResultContent, Usage,
 };
 
 use futures_util::Stream;

@@ -55,12 +55,12 @@ pub mod helpers;
 mod kernel_domain_gateway;
 mod kernel_gateway;
 pub(crate) mod planning;
-pub(crate) mod turn_config;
 pub mod prompts;
 mod read_guard;
 mod recording_stream;
 mod sanitize;
 pub(crate) mod self_review;
+pub(crate) mod turn_config;
 pub mod types;
 pub(crate) mod verify;
 
@@ -118,6 +118,13 @@ impl From<aura_reasoner::ReasonerError> for AgentError {
             }
             aura_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
             aura_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
+            // Exhausted per-tool-call streaming retries: surface the
+            // classified reason through `Model(..)` so the outer
+            // loop / server treats it the same as any other
+            // provider error (credit accounting, task retry, etc.).
+            aura_reasoner::ReasonerError::StreamAbortedWithPartial { reason, .. } => {
+                Self::Model(reason)
+            }
         }
     }
 }

@@ -205,9 +205,7 @@ fn check_termination_conditions(
         return true;
     }
 
-    if state.consecutive_empty_path_block_iterations
-        >= crate::constants::EMPTY_PATH_BLOCK_LIMIT
-    {
+    if state.consecutive_empty_path_block_iterations >= crate::constants::EMPTY_PATH_BLOCK_LIMIT {
         let msg = format!(
             "CRITICAL: Agent emitted pathless `write_file`/`edit_file` \
              calls for {} consecutive iterations. The `path` argument is \

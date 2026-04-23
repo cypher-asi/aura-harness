@@ -101,6 +101,43 @@ pub enum TurnEvent {
         reason: String,
     },
 
+    /// An in-flight `tool_use` streaming request was interrupted by a
+    /// transient provider error and will be retried with exponential
+    /// backoff. Emitted BEFORE the backoff sleep so the UI can render
+    /// "Write retrying (attempt/max)..." instead of "Write failed".
+    ///
+    /// When the in-flight tool use is not recoverable from the
+    /// accumulator (e.g. the stream died before `content_block_start`)
+    /// `tool_use_id` and `tool_name` are the placeholder string
+    /// `"<unknown>"`.
+    ToolCallRetrying {
+        /// Provider-side `tool_use` id, or `"<unknown>"`.
+        tool_use_id: String,
+        /// Tool name (`write_file`, `edit_file`, ...), or `"<unknown>"`.
+        tool_name: String,
+        /// 1-based attempt number that is about to run.
+        attempt: u32,
+        /// Total retry budget.
+        max_attempts: u32,
+        /// Backoff the loop is about to sleep, in milliseconds.
+        delay_ms: u64,
+        /// Human-readable classification (already prefixed with the
+        /// upstream error-type when available).
+        reason: String,
+    },
+
+    /// Retry budget for an in-flight `tool_use` streaming request was
+    /// exhausted; the interrupted call is abandoned. The outer task-
+    /// level retry ladder (in `aura-os-server`) takes over from here.
+    ToolCallFailed {
+        /// Provider-side `tool_use` id, or `"<unknown>"`.
+        tool_use_id: String,
+        /// Tool name, or `"<unknown>"`.
+        tool_name: String,
+        /// Human-readable classification of the final error.
+        reason: String,
+    },
+
     /// A warning was injected into the context.
     Warning(String),
 
@@ -151,11 +188,7 @@ pub enum DebugEvent {
         /// HTTP `x-request-id` captured from the provider response. This
         /// is the correlation key against aura-router / provider logs.
         /// Populated from `ProviderTrace.provider_request_id`.
-        #[serde(
-            default,
-            alias = "request_id",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, alias = "request_id", skip_serializing_if = "Option::is_none")]
         provider_request_id: Option<String>,
         /// Provider-internal message id (Anthropic `message_start.message.id`).
         /// Useful for correlating with a specific assistant turn, but

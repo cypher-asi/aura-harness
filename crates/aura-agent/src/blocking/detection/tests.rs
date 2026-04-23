@@ -124,10 +124,7 @@ fn test_detect_missing_args_blocks_edit_file_without_path() {
     let tool = make_tool("edit_file", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
-    assert!(result
-        .recovery_message
-        .unwrap()
-        .contains("edit_file(path="));
+    assert!(result.recovery_message.unwrap().contains("edit_file(path="));
 }
 
 #[test]

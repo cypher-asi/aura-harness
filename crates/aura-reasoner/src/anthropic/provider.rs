@@ -387,10 +387,13 @@ enum RetryAction {
 /// which — when the aura-router proxy reported `Retry after 7 seconds` —
 /// burned every retry inside the rate-limit window and surfaced the 429 to
 /// the user even though a single longer sleep would have unblocked the turn.
+#[allow(clippy::too_many_arguments)]
 fn classify_retry_action(
     err: &ApiError,
     attempt: u32,
     max_retries: u32,
+    backoff_initial_ms: u64,
+    backoff_cap_ms: u64,
     model_idx: usize,
     model_count: usize,
     model: &str,
@@ -398,7 +401,7 @@ fn classify_retry_action(
 ) -> RetryAction {
     match err {
         ApiError::CloudflareBlock(msg) if attempt < max_retries => {
-            let sleep = exp_backoff_with_jitter(attempt);
+            let sleep = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
             // `Duration::as_millis` returns u128 but 30s backoff caps well below
             // u64::MAX; truncation cannot happen. `warn!` field value expressions
             // can't carry attributes directly, so bind first.
@@ -415,7 +418,8 @@ fn classify_retry_action(
             message,
             retry_after,
         } if attempt < max_retries => {
-            let sleep = sleep_for_overloaded(attempt, *retry_after);
+            let sleep =
+                sleep_for_overloaded(attempt, *retry_after, backoff_initial_ms, backoff_cap_ms);
             // 60s cap on `sleep_for_overloaded` means u128 -> u64 is safe here.
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = sleep.as_millis() as u64;
@@ -447,7 +451,7 @@ fn classify_retry_action(
         // `exp_backoff_with_jitter` caps at 30s so we never wedge the
         // dev loop behind a single provider incident.
         ApiError::TransientServer { status, message } if attempt < max_retries => {
-            let sleep = exp_backoff_with_jitter(attempt);
+            let sleep = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = sleep.as_millis() as u64;
             warn!(
@@ -515,10 +519,20 @@ fn emit_retry_observation(err: &ApiError, sleep: Duration, attempt_that_failed: 
 }
 
 /// Pure exponential backoff with small jitter for non-overloaded retries
-/// (e.g. Cloudflare cold-starts). Caps at 30s.
-fn exp_backoff_with_jitter(attempt: u32) -> Duration {
-    let base_ms = 1000u64.saturating_mul(2u64.saturating_pow(attempt));
-    let capped = base_ms.min(30_000);
+/// (e.g. Cloudflare cold-starts, per-tool-call streaming retries in
+/// `aura_agent::agent_loop::streaming`).
+///
+/// The `initial_ms` and `cap_ms` parameters come from
+/// [`super::AnthropicConfig::backoff_initial_ms`] /
+/// [`super::AnthropicConfig::backoff_cap_ms`] (env-overridable via
+/// `AURA_LLM_BACKOFF_INITIAL_MS` / `AURA_LLM_BACKOFF_CAP_MS`) so
+/// operators can widen the window without rebuilding. `pub` because
+/// the agent crate reuses this exact schedule for its per-tool-call
+/// retry loop.
+#[must_use]
+pub fn exp_backoff_with_jitter(attempt: u32, initial_ms: u64, cap_ms: u64) -> Duration {
+    let base_ms = initial_ms.saturating_mul(2u64.saturating_pow(attempt));
+    let capped = base_ms.min(cap_ms);
     let jitter = jitter_ms(capped);
     Duration::from_millis(capped.saturating_add(jitter))
 }
@@ -529,8 +543,13 @@ fn exp_backoff_with_jitter(attempt: u32) -> Duration {
 /// us to wait N seconds we always honour it (and then some), otherwise we
 /// fall back to exponential backoff. Capped at 60s so a mis-reported
 /// retry-after cannot wedge the loop indefinitely.
-fn sleep_for_overloaded(attempt: u32, retry_after: Option<Duration>) -> Duration {
-    let exp = exp_backoff_with_jitter(attempt);
+fn sleep_for_overloaded(
+    attempt: u32,
+    retry_after: Option<Duration>,
+    backoff_initial_ms: u64,
+    backoff_cap_ms: u64,
+) -> Duration {
+    let exp = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
     let chosen = match retry_after {
         // Pad by 500ms to clear the window edge.
         Some(hint) => exp.max(hint + Duration::from_millis(500)),
@@ -628,6 +647,8 @@ impl ModelProvider for AnthropicProvider {
                             &e,
                             attempt,
                             self.config.max_retries,
+                            self.config.backoff_initial_ms,
+                            self.config.backoff_cap_ms,
                             model_idx,
                             models.len(),
                             model,
@@ -757,6 +778,8 @@ impl ModelProvider for AnthropicProvider {
                             &e,
                             attempt,
                             self.config.max_retries,
+                            self.config.backoff_initial_ms,
+                            self.config.backoff_cap_ms,
                             model_idx,
                             models.len(),
                             model,
@@ -850,7 +873,7 @@ mod retry_tests {
     fn sleep_for_overloaded_waits_past_the_upstream_hint() {
         // Attempt 0 would otherwise sleep ~1s of exp backoff, but the upstream
         // told us 7s — the next attempt must land after the window.
-        let sleep = sleep_for_overloaded(0, Some(Duration::from_secs(7)));
+        let sleep = sleep_for_overloaded(0, Some(Duration::from_secs(7)), 1000, 30_000);
         assert!(
             sleep >= Duration::from_millis(7_500),
             "sleep ({:?}) must clear the 7s retry-after window",
@@ -865,7 +888,7 @@ mod retry_tests {
 
     #[test]
     fn sleep_for_overloaded_caps_absurd_retry_after() {
-        let sleep = sleep_for_overloaded(0, Some(Duration::from_secs(3600)));
+        let sleep = sleep_for_overloaded(0, Some(Duration::from_secs(3600)), 1000, 30_000);
         assert!(
             sleep <= Duration::from_secs(60),
             "sleep must be capped at 60s, got {:?}",
@@ -876,7 +899,7 @@ mod retry_tests {
     #[test]
     fn sleep_for_overloaded_falls_back_to_exp_backoff_without_hint() {
         // attempt=0 → base 1s + up to 250ms jitter
-        let sleep = sleep_for_overloaded(0, None);
+        let sleep = sleep_for_overloaded(0, None, 1000, 30_000);
         assert!(sleep >= Duration::from_secs(1));
         assert!(sleep <= Duration::from_millis(1_250) + Duration::from_millis(50));
     }
@@ -888,7 +911,8 @@ mod retry_tests {
             retry_after: Some(Duration::from_secs(7)),
         };
         let mut last_err = None;
-        let action = classify_retry_action(&err, 0, 2, 0, 1, "test-model", &mut last_err);
+        let action =
+            classify_retry_action(&err, 0, 2, 1000, 30_000, 0, 1, "test-model", &mut last_err);
         match action {
             RetryAction::Retry { sleep } => {
                 assert!(
@@ -918,7 +942,8 @@ mod retry_tests {
         };
         let mut last_err = None;
         // attempt == max_retries → retries exhausted, fallback chain available
-        let action = classify_retry_action(&err, 2, 2, 0, 2, "primary", &mut last_err);
+        let action =
+            classify_retry_action(&err, 2, 2, 1000, 30_000, 0, 2, "primary", &mut last_err);
         assert!(matches!(action, RetryAction::FallbackModel));
         assert!(matches!(last_err, Some(ReasonerError::RateLimited(_))));
     }
@@ -931,7 +956,7 @@ mod retry_tests {
         };
         let mut last_err = None;
         // attempt == max_retries AND model_idx == model_count - 1 → no fallback left
-        let action = classify_retry_action(&err, 2, 2, 0, 1, "only", &mut last_err);
+        let action = classify_retry_action(&err, 2, 2, 1000, 30_000, 0, 1, "only", &mut last_err);
         assert!(matches!(action, RetryAction::Propagate));
     }
 
@@ -939,7 +964,7 @@ mod retry_tests {
     fn classify_retry_action_other_errors_propagate() {
         let err = ApiError::Other(ReasonerError::Request("boom".into()));
         let mut last_err = None;
-        let action = classify_retry_action(&err, 0, 2, 0, 1, "m", &mut last_err);
+        let action = classify_retry_action(&err, 0, 2, 1000, 30_000, 0, 1, "m", &mut last_err);
         assert!(matches!(action, RetryAction::Propagate));
     }
 
@@ -952,7 +977,8 @@ mod retry_tests {
             message: "Anthropic API error: 500 Internal Server Error - body".into(),
         };
         let mut last_err = None;
-        let action = classify_retry_action(&err, 0, 2, 0, 1, "primary", &mut last_err);
+        let action =
+            classify_retry_action(&err, 0, 2, 1000, 30_000, 0, 1, "primary", &mut last_err);
         match action {
             RetryAction::Retry { sleep } => {
                 // `exp_backoff_with_jitter(0)` → base 1s + up to 250ms jitter.
@@ -980,7 +1006,8 @@ mod retry_tests {
             message: "Anthropic API error: 502 Bad Gateway - body".into(),
         };
         let mut last_err = None;
-        let action = classify_retry_action(&err, 2, 2, 0, 2, "primary", &mut last_err);
+        let action =
+            classify_retry_action(&err, 2, 2, 1000, 30_000, 0, 2, "primary", &mut last_err);
         assert!(
             matches!(action, RetryAction::FallbackModel),
             "expected FallbackModel after 5xx retries are used up"
@@ -998,7 +1025,7 @@ mod retry_tests {
             message: "Anthropic API error: 504 Gateway Timeout - body".into(),
         };
         let mut last_err = None;
-        let action = classify_retry_action(&err, 2, 2, 0, 1, "only", &mut last_err);
+        let action = classify_retry_action(&err, 2, 2, 1000, 30_000, 0, 1, "only", &mut last_err);
         assert!(
             matches!(action, RetryAction::Propagate),
             "no fallback model → 5xx must propagate so the dev loop can retry"

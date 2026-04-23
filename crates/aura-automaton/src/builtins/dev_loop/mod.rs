@@ -463,10 +463,28 @@ pub fn forward_agent_event(
         AgentLoopEvent::ThinkingDelta(d) => AutomatonEvent::ThinkingDelta { delta: d },
         AgentLoopEvent::ToolStart { id, name } => AutomatonEvent::ToolCallStarted { id, name },
         AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
-            let Ok(input) = serde_json::from_str::<serde_json::Value>(&input) else {
-                return;
-            };
-            AutomatonEvent::ToolCallSnapshot { id, name, input }
+            // Partial JSON is expected while a `tool_use` block is
+            // still streaming -- forward it with
+            // `snapshot_partial: true` so the UI can render an
+            // "in flight…" card instead of dropping the event
+            // entirely and leaving the card empty. When the JSON
+            // parses cleanly we still emit `snapshot_partial: false`
+            // so downstream consumers that only care about finished
+            // blocks can filter.
+            match serde_json::from_str::<serde_json::Value>(&input) {
+                Ok(parsed) => AutomatonEvent::ToolCallSnapshot {
+                    id,
+                    name,
+                    input: parsed,
+                    snapshot_partial: false,
+                },
+                Err(_) => AutomatonEvent::ToolCallSnapshot {
+                    id,
+                    name,
+                    input: serde_json::Value::String(input),
+                    snapshot_partial: true,
+                },
+            }
         }
         AgentLoopEvent::ToolResult {
             tool_use_id,
@@ -491,6 +509,36 @@ pub fn forward_agent_event(
         AgentLoopEvent::Error { message, .. } => AutomatonEvent::Error {
             automaton_id: String::new(),
             message,
+        },
+        // Per-tool-call streaming retry lifecycle. `task_id` is left
+        // empty here because this forwarder is not task-aware; the
+        // surrounding tick.rs / task_run.rs emits TaskStarted with the
+        // id so UI consumers can correlate on the preceding frame.
+        AgentLoopEvent::ToolCallRetrying {
+            tool_use_id,
+            tool_name,
+            attempt,
+            max_attempts,
+            delay_ms,
+            reason,
+        } => AutomatonEvent::ToolCallRetrying {
+            task_id: String::new(),
+            tool_use_id,
+            tool_name,
+            attempt,
+            max_attempts,
+            delay_ms,
+            reason,
+        },
+        AgentLoopEvent::ToolCallFailed {
+            tool_use_id,
+            tool_name,
+            reason,
+        } => AutomatonEvent::ToolCallFailed {
+            task_id: String::new(),
+            tool_use_id,
+            tool_name,
+            reason,
         },
         // `debug.*` observability frames pass through verbatim; the
         // `From<DebugEvent>` impl preserves the exact JSON shape the

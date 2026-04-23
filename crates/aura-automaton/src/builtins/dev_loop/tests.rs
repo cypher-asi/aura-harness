@@ -28,31 +28,130 @@ fn forwards_valid_tool_input_snapshot() {
 
     let event = rx.try_recv().expect("expected forwarded event");
     match event {
-        AutomatonEvent::ToolCallSnapshot { id, name, input } => {
+        AutomatonEvent::ToolCallSnapshot {
+            id,
+            name,
+            input,
+            snapshot_partial,
+        } => {
             assert_eq!(id, "tool-1");
             assert_eq!(name, "run_command");
             assert_eq!(input["command"], "npm run build");
+            assert!(
+                !snapshot_partial,
+                "parseable JSON must surface as a complete snapshot"
+            );
         }
         other => panic!("unexpected event: {other:?}"),
     }
 }
 
 #[test]
-fn drops_invalid_tool_input_snapshot_json() {
+fn forwards_partial_tool_input_snapshot_with_flag() {
+    // Partial JSON streamed mid-`tool_use` must now be forwarded with
+    // `snapshot_partial: true` so the UI can render a live
+    // in-flight card instead of dropping the event and leaving the
+    // tool preview blank while the model is still writing.
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     forward_agent_event(
         &tx,
         aura_agent::AgentLoopEvent::ToolInputSnapshot {
             id: "tool-1".to_string(),
-            name: "run_command".to_string(),
-            input: "{".to_string(),
+            name: "write_file".to_string(),
+            input: "{\"path\":\"src/".to_string(),
         },
     );
 
-    assert!(
-        rx.try_recv().is_err(),
-        "invalid JSON snapshot should be ignored"
+    let event = rx
+        .try_recv()
+        .expect("partial snapshot must still be forwarded");
+    match event {
+        AutomatonEvent::ToolCallSnapshot {
+            id,
+            name,
+            input,
+            snapshot_partial,
+        } => {
+            assert_eq!(id, "tool-1");
+            assert_eq!(name, "write_file");
+            assert!(
+                snapshot_partial,
+                "unparseable JSON must set snapshot_partial"
+            );
+            // The raw string is preserved so consumers can run their
+            // own partial-parser on it (or render as-is).
+            assert_eq!(
+                input,
+                serde_json::Value::String("{\"path\":\"src/".to_string())
+            );
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn forwards_tool_call_retrying_event() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+    forward_agent_event(
+        &tx,
+        aura_agent::AgentLoopEvent::ToolCallRetrying {
+            tool_use_id: "toolu_1".to_string(),
+            tool_name: "write_file".to_string(),
+            attempt: 2,
+            max_attempts: 8,
+            delay_ms: 500,
+            reason: "overloaded_error".to_string(),
+        },
     );
+
+    let event = rx.try_recv().expect("ToolCallRetrying must forward");
+    match event {
+        AutomatonEvent::ToolCallRetrying {
+            tool_use_id,
+            tool_name,
+            attempt,
+            max_attempts,
+            delay_ms,
+            reason,
+            ..
+        } => {
+            assert_eq!(tool_use_id, "toolu_1");
+            assert_eq!(tool_name, "write_file");
+            assert_eq!(attempt, 2);
+            assert_eq!(max_attempts, 8);
+            assert_eq!(delay_ms, 500);
+            assert_eq!(reason, "overloaded_error");
+        }
+        other => panic!("expected ToolCallRetrying, got: {other:?}"),
+    }
+}
+
+#[test]
+fn forwards_tool_call_failed_event() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
+    forward_agent_event(
+        &tx,
+        aura_agent::AgentLoopEvent::ToolCallFailed {
+            tool_use_id: "toolu_1".to_string(),
+            tool_name: "write_file".to_string(),
+            reason: "retries exhausted".to_string(),
+        },
+    );
+
+    let event = rx.try_recv().expect("ToolCallFailed must forward");
+    match event {
+        AutomatonEvent::ToolCallFailed {
+            tool_use_id,
+            tool_name,
+            reason,
+            ..
+        } => {
+            assert_eq!(tool_use_id, "toolu_1");
+            assert_eq!(tool_name, "write_file");
+            assert_eq!(reason, "retries exhausted");
+        }
+        other => panic!("expected ToolCallFailed, got: {other:?}"),
+    }
 }
 
 /// Build an assistant message containing a single `tool_use` block.

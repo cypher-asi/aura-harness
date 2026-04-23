@@ -219,6 +219,8 @@ pub fn from_provider_config(config: &ProviderConfig) -> Result<ProviderSelection
                     .unwrap_or_else(|| "claude-opus-4-6".to_string()),
                 timeout_ms: 300_000,
                 max_retries: 2,
+                backoff_initial_ms: 250,
+                backoff_cap_ms: 30_000,
                 base_url: config
                     .base_url
                     .clone()

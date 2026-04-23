@@ -2,8 +2,11 @@
 
 use std::time::Instant;
 
+use std::time::Duration;
+
+use aura_reasoner::anthropic::exp_backoff_with_jitter;
 use aura_reasoner::{
-    ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamAccumulator,
+    ModelProvider, ModelRequest, ModelResponse, PartialToolUse, ReasonerError, StreamAccumulator,
     StreamContentType, StreamEvent,
 };
 use chrono::Utc;
@@ -244,6 +247,27 @@ impl AgentLoop {
                 emit_debug_llm_call(event_tx, provider_name, &model_name, &response, latency_ms);
                 Ok(response)
             }
+            Err(ReasonerError::StreamAbortedWithPartial {
+                reason,
+                partial_tool_use,
+            }) => {
+                // Per-tool-call streaming retry: re-issue a fresh
+                // streaming request (up to N attempts) instead of
+                // dropping down to the non-streaming fallback, which
+                // has no memory of the in-flight tool call and would
+                // effectively drop the Write/Edit the model was
+                // mid-way through. Matches `fix_4.6-class_failures`
+                // plan § `harness-retry-streaming`.
+                self.retry_streaming_for_partial_tool_use(
+                    provider,
+                    request,
+                    event_tx,
+                    cancellation_token,
+                    reason,
+                    partial_tool_use,
+                )
+                .await
+            }
             Err(e) if stream_error_is_retryable(&e) => {
                 // Upstream emitted a mid-stream SSE `error` event (HTTP 200
                 // body, not an HTTP 5xx status). The SSE transport layer
@@ -260,9 +284,7 @@ impl AgentLoop {
                 emit(
                     event_tx,
                     AgentLoopEvent::StreamReset {
-                        reason: format!(
-                            "Mid-stream SSE error, retrying without streaming: {e}"
-                        ),
+                        reason: format!("Mid-stream SSE error, retrying without streaming: {e}"),
                     },
                 );
                 let fallback_start = Instant::now();
@@ -283,13 +305,7 @@ impl AgentLoop {
                 }
                 let duration_ms =
                     u64::try_from(fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                emit_debug_llm_call(
-                    event_tx,
-                    provider_name,
-                    &model_name,
-                    &response,
-                    duration_ms,
-                );
+                emit_debug_llm_call(event_tx, provider_name, &model_name, &response, duration_ms);
                 Ok(response)
             }
             Err(e) => Err(LlmCallError::from_reasoner_error(&e)),
@@ -326,6 +342,13 @@ fn stream_error_is_retryable(err: &ReasonerError) -> bool {
         | ReasonerError::Request(_) => false,
         ReasonerError::Api { status, .. } => matches!(status, 500 | 502 | 503 | 504),
         ReasonerError::Internal(message) => looks_like_transient_stream_error(message),
+        // `StreamAbortedWithPartial` is handled by the dedicated
+        // retry loop in `complete_with_streaming` above, not by
+        // the legacy non-streaming fallback classifier. Returning
+        // `true` here would cause a redundant second fallback
+        // path; returning `false` keeps responsibility where it
+        // belongs.
+        ReasonerError::StreamAbortedWithPartial { .. } => false,
     }
 }
 
@@ -340,6 +363,222 @@ fn looks_like_transient_stream_error(message: &str) -> bool {
         || lower.contains("bad gateway")
         || lower.contains("service unavailable")
         || lower.contains("gateway timeout")
+}
+
+// ---------------------------------------------------------------------------
+// Per-tool-call streaming retry loop
+// ---------------------------------------------------------------------------
+//
+// Implemented as a free function (not an inherent impl method) to keep
+// the `impl AgentLoop { ... complete_with_streaming ... }` block above
+// focused on stream orchestration. The caller is a method so
+// `Self::retry_streaming_for_partial_tool_use` is still the natural
+// call shape, but the function itself lives here at module scope for
+// readability.
+
+impl super::AgentLoop {
+    /// Retry budget / backoff envelope used by the per-tool-call
+    /// retry loop. Reads `AURA_LLM_MAX_RETRIES`,
+    /// `AURA_LLM_BACKOFF_INITIAL_MS`, and `AURA_LLM_BACKOFF_CAP_MS`
+    /// (same variables `aura_reasoner::AnthropicConfig` honours) so
+    /// operators can widen the window via env without rebuilding.
+    ///
+    /// Defaults match [`aura_reasoner::AnthropicConfig::new`]: 8
+    /// retries with initial 250ms, cap 30s, doubling each attempt.
+    fn stream_retry_params() -> (u32, u64, u64) {
+        let max_retries: u32 = std::env::var("AURA_LLM_MAX_RETRIES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8);
+        let backoff_initial_ms: u64 = std::env::var("AURA_LLM_BACKOFF_INITIAL_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(250);
+        let backoff_cap_ms: u64 = std::env::var("AURA_LLM_BACKOFF_CAP_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30_000);
+        (max_retries, backoff_initial_ms, backoff_cap_ms)
+    }
+
+    /// Re-drive `provider.complete_streaming` after a mid-stream abort
+    /// that carried a [`PartialToolUse`]. Emits
+    /// [`AgentLoopEvent::ToolCallRetrying`] before every sleep and
+    /// [`AgentLoopEvent::ToolCallFailed`] when the retry budget is
+    /// exhausted. Returns the first successful `ModelResponse` or the
+    /// final error classification.
+    async fn retry_streaming_for_partial_tool_use(
+        &self,
+        provider: &dyn ModelProvider,
+        request: ModelRequest,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
+        cancellation_token: Option<&CancellationToken>,
+        initial_reason: String,
+        initial_partial: Option<PartialToolUse>,
+    ) -> Result<ModelResponse, LlmCallError> {
+        let (max_retries, backoff_initial_ms, backoff_cap_ms) = Self::stream_retry_params();
+        // Preserve tool identity across retries: once a stream starts
+        // and dies before `content_block_start`, subsequent retries may
+        // not carry any partial at all — but the UI still benefits from
+        // seeing the original tool name if we had one.
+        let mut tool_use_id = initial_partial
+            .as_ref()
+            .map_or_else(|| "<unknown>".to_string(), |p| p.tool_use_id.clone());
+        let mut tool_name = initial_partial
+            .as_ref()
+            .map_or_else(|| "<unknown>".to_string(), |p| p.tool_name.clone());
+
+        let mut last_reason = initial_reason;
+        let mut last_err: Option<LlmCallError> = None;
+
+        for attempt in 1..=max_retries {
+            let delay = exp_backoff_with_jitter(attempt - 1, backoff_initial_ms, backoff_cap_ms);
+            let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+
+            emit(
+                event_tx,
+                AgentLoopEvent::ToolCallRetrying {
+                    tool_use_id: tool_use_id.clone(),
+                    tool_name: tool_name.clone(),
+                    attempt,
+                    max_attempts: max_retries,
+                    delay_ms,
+                    reason: last_reason.clone(),
+                },
+            );
+
+            // Honour cancellation during the backoff so a Ctrl-C
+            // doesn't have to wait out a 30s cap.
+            if let Some(token) = cancellation_token {
+                tokio::select! {
+                    () = token.cancelled() => {
+                        return Err(LlmCallError::Fatal("Cancelled".to_string()));
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
+                }
+            } else {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+
+            match self
+                .drive_streaming_once(provider, request.clone(), event_tx, cancellation_token)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(DriveStreamingError::AbortedWithPartial {
+                    reason,
+                    partial_tool_use,
+                }) => {
+                    if let Some(p) = partial_tool_use {
+                        tool_use_id = p.tool_use_id;
+                        tool_name = p.tool_name;
+                    }
+                    last_reason = reason;
+                    // fall through: loop continues to next retry
+                }
+                Err(DriveStreamingError::Other(err)) => {
+                    last_err = Some(err);
+                    break;
+                }
+            }
+        }
+
+        emit(
+            event_tx,
+            AgentLoopEvent::ToolCallFailed {
+                tool_use_id,
+                tool_name,
+                reason: last_reason.clone(),
+            },
+        );
+
+        Err(last_err.unwrap_or_else(|| LlmCallError::Fatal(last_reason.clone())))
+    }
+
+    /// Drive a single streaming attempt (one `complete_streaming` +
+    /// accumulation + classification). Used by the retry loop above so
+    /// we can cleanly distinguish "retryable mid-stream abort" from
+    /// "other fatal error".
+    async fn drive_streaming_once(
+        &self,
+        provider: &dyn ModelProvider,
+        request: ModelRequest,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
+        cancellation_token: Option<&CancellationToken>,
+    ) -> Result<ModelResponse, DriveStreamingError> {
+        let start = std::time::Instant::now();
+        let provider_name = provider.name();
+        let model_name = request.model.as_ref().to_string();
+
+        let mut stream = provider
+            .complete_streaming(request)
+            .await
+            .map_err(|e| DriveStreamingError::Other(LlmCallError::from_reasoner_error(&e)))?;
+
+        let mut accumulator = StreamAccumulator::new();
+
+        loop {
+            let next = if let Some(token) = cancellation_token {
+                tokio::select! {
+                    () = token.cancelled() => {
+                        return Err(DriveStreamingError::Other(
+                            LlmCallError::Fatal("Cancelled".to_string()),
+                        ));
+                    }
+                    item = futures_util::StreamExt::next(&mut stream) => item,
+                }
+            } else {
+                futures_util::StreamExt::next(&mut stream).await
+            };
+
+            match next {
+                Some(Ok(event)) => {
+                    accumulator.process(&event);
+                    emit_stream_event(event_tx, &event, &accumulator);
+                }
+                Some(Err(e)) => {
+                    // Transport-level error on the retry attempt. Don't
+                    // recurse into another non-streaming fallback here —
+                    // the outer retry loop will decide whether to try
+                    // again based on classification.
+                    return Err(DriveStreamingError::Other(
+                        LlmCallError::from_reasoner_error(&e),
+                    ));
+                }
+                None => break,
+            }
+        }
+
+        let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match accumulator.into_response(0, latency_ms) {
+            Ok(response) => {
+                emit_debug_llm_call(event_tx, provider_name, &model_name, &response, latency_ms);
+                Ok(response)
+            }
+            Err(ReasonerError::StreamAbortedWithPartial {
+                reason,
+                partial_tool_use,
+            }) => Err(DriveStreamingError::AbortedWithPartial {
+                reason,
+                partial_tool_use,
+            }),
+            Err(e) => Err(DriveStreamingError::Other(
+                LlmCallError::from_reasoner_error(&e),
+            )),
+        }
+    }
+}
+
+/// Internal classification for a single streaming attempt driven by
+/// [`AgentLoop::drive_streaming_once`]. Callers match on this to decide
+/// whether the attempt should be retried (AbortedWithPartial) or
+/// propagated as-is (Other).
+enum DriveStreamingError {
+    AbortedWithPartial {
+        reason: String,
+        partial_tool_use: Option<PartialToolUse>,
+    },
+    Other(LlmCallError),
 }
 
 #[cfg(test)]

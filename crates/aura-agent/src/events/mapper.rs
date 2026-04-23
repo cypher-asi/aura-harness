@@ -71,6 +71,23 @@ pub trait TurnEventSink: Send {
     async fn on_stream_reset(&mut self, _reason: String) {}
     async fn on_warning(&mut self, _message: String) {}
     async fn on_error(&mut self, _code: String, _message: String, _recoverable: bool) {}
+    async fn on_tool_call_retrying(
+        &mut self,
+        _tool_use_id: String,
+        _tool_name: String,
+        _attempt: u32,
+        _max_attempts: u32,
+        _delay_ms: u64,
+        _reason: String,
+    ) {
+    }
+    async fn on_tool_call_failed(
+        &mut self,
+        _tool_use_id: String,
+        _tool_name: String,
+        _reason: String,
+    ) {
+    }
     async fn on_debug(&mut self, _event: DebugEvent) {}
 }
 
@@ -122,6 +139,32 @@ where
             message,
             recoverable,
         } => sink.on_error(code, message, recoverable).await,
+        AgentLoopEvent::ToolCallRetrying {
+            tool_use_id,
+            tool_name,
+            attempt,
+            max_attempts,
+            delay_ms,
+            reason,
+        } => {
+            sink.on_tool_call_retrying(
+                tool_use_id,
+                tool_name,
+                attempt,
+                max_attempts,
+                delay_ms,
+                reason,
+            )
+            .await;
+        }
+        AgentLoopEvent::ToolCallFailed {
+            tool_use_id,
+            tool_name,
+            reason,
+        } => {
+            sink.on_tool_call_failed(tool_use_id, tool_name, reason)
+                .await;
+        }
         AgentLoopEvent::Debug(event) => sink.on_debug(event).await,
     }
 }

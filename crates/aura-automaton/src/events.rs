@@ -54,6 +54,14 @@ pub enum AutomatonEvent {
         id: String,
         name: String,
         input: serde_json::Value,
+        /// `true` when the forwarded JSON could not be parsed as a full
+        /// value (e.g. the stream died mid-JSON during an in-flight
+        /// `write_file`). Consumers can render a "streaming…" badge
+        /// instead of an empty card. When the JSON parsed cleanly this
+        /// is `false`. Defaults to `false` on the wire for backwards
+        /// compatibility with pre-retry bundles.
+        #[serde(default)]
+        snapshot_partial: bool,
     },
     ToolCallCompleted {
         id: String,
@@ -93,6 +101,27 @@ pub enum AutomatonEvent {
     TaskRetrying {
         task_id: String,
         attempt: u32,
+        reason: String,
+    },
+    /// Mid-stream `tool_use` request was interrupted and the agent is
+    /// retrying with exponential backoff. 1:1 projection of
+    /// [`aura_agent::AgentLoopEvent::ToolCallRetrying`]; the
+    /// automaton forwarder attaches the task_id for correlation.
+    ToolCallRetrying {
+        task_id: String,
+        tool_use_id: String,
+        tool_name: String,
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        reason: String,
+    },
+    /// Retry budget for an in-flight `tool_use` exhausted. 1:1
+    /// projection of [`aura_agent::AgentLoopEvent::ToolCallFailed`].
+    ToolCallFailed {
+        task_id: String,
+        tool_use_id: String,
+        tool_name: String,
         reason: String,
     },
     LoopFinished {

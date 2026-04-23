@@ -17,16 +17,16 @@ use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
 use crate::file_ops::FileOp;
 use crate::planning::TaskPhase;
-use crate::turn_config::{
-    classify_task_complexity, compute_exploration_allowance, compute_thinking_budget,
-    resolve_simple_model, TaskComplexity,
-};
 use crate::prompts::{
     agentic_execution_system_prompt, build_agentic_task_context, build_chat_system_prompt,
     AgentInfo, ProjectInfo, SessionInfo, SpecInfo, TaskInfo,
 };
 use crate::task_context;
 use crate::task_executor::TaskToolExecutor;
+use crate::turn_config::{
+    classify_task_complexity, compute_exploration_allowance, compute_thinking_budget,
+    resolve_simple_model, TaskComplexity,
+};
 use crate::types::{AgentLoopResult, AgentToolExecutor};
 use crate::verify::{
     auto_correct_build_command, normalize_error_signature, run_build_command, BuildFixAttemptRecord,

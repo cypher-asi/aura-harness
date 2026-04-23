@@ -425,10 +425,8 @@ mod tests {
     /// every `SseStream` now emits before any provider event. Keeps
     /// the rest of the SSE body tests focused on protocol parsing
     /// instead of the transport preamble.
-    async fn expect_http_meta<S>(
-        stream: &mut SseStream<S>,
-        expected_request_id: Option<&str>,
-    ) where
+    async fn expect_http_meta<S>(stream: &mut SseStream<S>, expected_request_id: Option<&str>)
+    where
         S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
     {
         match stream.next().await {
@@ -444,8 +442,7 @@ mod tests {
         let inner = bytes_stream(vec![
             "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
         ]);
-        let mut stream =
-            SseStream::with_request_id(inner, Some("req_01ABC".to_string()));
+        let mut stream = SseStream::with_request_id(inner, Some("req_01ABC".to_string()));
         // First event must be the synthetic HttpMeta, before any
         // provider event — otherwise `StreamAccumulator` can't seed
         // `provider_request_id` when `message_start` arrives.

@@ -200,12 +200,12 @@ fn detect_missing_required_args(
     if WRITE_TOOLS.contains(&tool.name.as_str()) && extract_path(tool).is_none() {
         let hint = ctx.pathless_write_hint().unwrap_or("crates/foo/src/lib.rs");
         let example = match tool.name.as_str() {
-            "write_file" => format!(
-                "write_file(path=\"{hint}\", content=\"...module contents...\")"
-            ),
-            "edit_file" => format!(
-                "edit_file(path=\"{hint}\", old_text=\"...\", new_text=\"...\")"
-            ),
+            "write_file" => {
+                format!("write_file(path=\"{hint}\", content=\"...module contents...\")")
+            }
+            "edit_file" => {
+                format!("edit_file(path=\"{hint}\", old_text=\"...\", new_text=\"...\")")
+            }
             "delete_file" => format!("delete_file(path=\"{hint}\")"),
             other => format!("{other}(path=\"{hint}\", ...)"),
         };

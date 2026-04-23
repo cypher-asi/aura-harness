@@ -293,7 +293,11 @@ async fn task_done_ignores_policy_denied_run_command() {
     let results = executor.execute(&calls).await;
 
     assert_eq!(results.len(), 1);
-    assert!(!results[0].is_error, "task_done should accept: {}", results[0].content);
+    assert!(
+        !results[0].is_error,
+        "task_done should accept: {}",
+        results[0].content
+    );
     assert!(results[0].stop_loop);
 }
 
@@ -325,7 +329,11 @@ async fn policy_denials_do_not_count_against_error_ratio() {
     let results = executor.execute(&calls).await;
 
     assert_eq!(results.len(), 1);
-    assert!(!results[0].is_error, "should not be blocked by policy denials: {}", results[0].content);
+    assert!(
+        !results[0].is_error,
+        "should not be blocked by policy denials: {}",
+        results[0].content
+    );
 }
 
 #[tokio::test]

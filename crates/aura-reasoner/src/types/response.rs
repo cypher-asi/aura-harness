@@ -137,10 +137,8 @@ impl ProviderTrace {
     /// Prefer [`with_message_id`](Self::with_message_id) or
     /// [`with_provider_request_id`](Self::with_provider_request_id).
     #[must_use]
-    #[deprecated(
-        note = "Ambiguous: old call sites stored a message id here. Prefer \
-                with_message_id or with_provider_request_id."
-    )]
+    #[deprecated(note = "Ambiguous: old call sites stored a message id here. Prefer \
+                with_message_id or with_provider_request_id.")]
     pub fn with_request_id(self, id: impl Into<String>) -> Self {
         self.with_message_id(id)
     }

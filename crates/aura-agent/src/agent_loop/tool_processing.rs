@@ -35,7 +35,13 @@ impl AgentLoop {
         executor: &dyn AgentToolExecutor,
         state: &mut LoopState,
         event_tx: Option<&Sender<AgentLoopEvent>>,
-    ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>, bool) {
+    ) -> (
+        Vec<ToolCallResult>,
+        Vec<String>,
+        bool,
+        HashSet<String>,
+        bool,
+    ) {
         let mut side_messages: Vec<String> = Vec::new();
 
         // Pre-dispatch chunk guard: short-circuit oversized `write_file`

@@ -4,6 +4,8 @@
 //! logic can branch on the error *variant* rather than string-matching status
 //! codes embedded in the error message.
 
+use crate::types::PartialToolUse;
+
 /// Classified model-provider error.
 ///
 /// Returned from [`ModelProvider::complete`](crate::ModelProvider::complete) and
@@ -35,6 +37,28 @@ pub enum ReasonerError {
     #[error("parse error: {0}")]
     Parse(String),
 
+    /// A streaming response was interrupted mid-flight by a transport
+    /// or SSE-level error while a `tool_use` block was still being
+    /// accumulated.
+    ///
+    /// Carries enough context for the agent-loop to drive a
+    /// per-tool-call retry (re-issuing a fresh streaming request) rather
+    /// than silently fall back to a non-streaming call that would have
+    /// no memory of the interrupted tool call. Returned from
+    /// [`crate::types::StreamAccumulator::into_response`] when
+    /// `stream_error` is set; the caller is responsible for deciding
+    /// whether to retry or propagate.
+    #[error("{reason}")]
+    StreamAbortedWithPartial {
+        /// Human-readable reason, already annotated with
+        /// `model=... msg_id=... request_id=...` context when
+        /// available.
+        reason: String,
+        /// In-flight tool-use captured just before the stream died.
+        /// `None` when the error arrived before `content_block_start`.
+        partial_tool_use: Option<PartialToolUse>,
+    },
+
     /// Catch-all for other provider-level failures.
     #[error("{0}")]
     Internal(String),
@@ -57,7 +81,10 @@ impl ReasonerError {
             Self::Request(message) | Self::Parse(message) | Self::Internal(message) => {
                 message_indicates_context_overflow(message)
             }
-            Self::RateLimited(_) | Self::InsufficientCredits(_) | Self::Timeout => false,
+            Self::RateLimited(_)
+            | Self::InsufficientCredits(_)
+            | Self::Timeout
+            | Self::StreamAbortedWithPartial { .. } => false,
         }
     }
 }

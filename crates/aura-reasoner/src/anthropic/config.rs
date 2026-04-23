@@ -17,7 +17,19 @@ pub struct AnthropicConfig {
     /// Request timeout in milliseconds
     pub timeout_ms: u64,
     /// Maximum retries per model before falling back.
+    ///
+    /// Overridable via `AURA_LLM_MAX_RETRIES`. Default bumped to 8 to
+    /// give the per-tool-call streaming retry loop
+    /// (`aura_agent::agent_loop::streaming`) a meaningful budget when
+    /// a 5xx hits mid-stream.
     pub max_retries: u32,
+    /// Initial backoff before the first retry, in milliseconds.
+    /// Doubled on each subsequent retry up to `backoff_cap_ms`.
+    /// Overridable via `AURA_LLM_BACKOFF_INITIAL_MS`.
+    pub backoff_initial_ms: u64,
+    /// Maximum backoff between retries, in milliseconds. Overridable
+    /// via `AURA_LLM_BACKOFF_CAP_MS`.
+    pub backoff_cap_ms: u64,
     /// API base URL
     pub base_url: String,
     pub routing_mode: RoutingMode,
@@ -84,11 +96,26 @@ impl AnthropicConfig {
             Some("1" | "true" | "TRUE" | "yes" | "YES")
         );
 
+        let max_retries: u32 = std::env::var("AURA_LLM_MAX_RETRIES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8);
+        let backoff_initial_ms: u64 = std::env::var("AURA_LLM_BACKOFF_INITIAL_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(250);
+        let backoff_cap_ms: u64 = std::env::var("AURA_LLM_BACKOFF_CAP_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30_000);
+
         Ok(Self {
             api_key,
             default_model,
             timeout_ms,
-            max_retries: 3,
+            max_retries,
+            backoff_initial_ms,
+            backoff_cap_ms,
             base_url,
             routing_mode,
             fallback_model,
@@ -103,11 +130,88 @@ impl AnthropicConfig {
             api_key: api_key.into(),
             default_model: model.into(),
             timeout_ms: 300_000,
-            max_retries: 3,
+            max_retries: 8,
+            backoff_initial_ms: 250,
+            backoff_cap_ms: 30_000,
             base_url: "https://api.anthropic.com".to_string(),
             routing_mode: RoutingMode::Direct,
             fallback_model: None,
             prompt_caching_enabled: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod env_backoff_tests {
+    use super::*;
+
+    /// Serializes env-var mutation so the tests in this module do not race
+    /// each other (and do not race other `from_env` tests in the crate).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII helper that sets an env var for the life of the test and
+    /// restores the previous value on drop.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+        fn unset(key: &'static str) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn with_env<F: FnOnce() -> AnthropicConfig>(f: F) -> AnthropicConfig {
+        let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+        f()
+    }
+
+    #[test]
+    fn backoff_fields_default_when_env_unset() {
+        let cfg = with_env(|| {
+            let _g1 = EnvGuard::unset("AURA_LLM_MAX_RETRIES");
+            let _g2 = EnvGuard::unset("AURA_LLM_BACKOFF_INITIAL_MS");
+            let _g3 = EnvGuard::unset("AURA_LLM_BACKOFF_CAP_MS");
+            // `from_env` needs a routing mode + key; force Direct with a
+            // dummy key so we don't wander through the proxy branch.
+            let _g4 = EnvGuard::set("AURA_LLM_ROUTING", "direct");
+            let _g5 = EnvGuard::set("AURA_ANTHROPIC_API_KEY", "sk-test");
+            AnthropicConfig::from_env().expect("from_env")
+        });
+        assert_eq!(cfg.max_retries, 8, "default max_retries");
+        assert_eq!(cfg.backoff_initial_ms, 250, "default backoff_initial_ms");
+        assert_eq!(cfg.backoff_cap_ms, 30_000, "default backoff_cap_ms");
+    }
+
+    #[test]
+    fn backoff_fields_read_env_overrides() {
+        let cfg = with_env(|| {
+            let _g1 = EnvGuard::set("AURA_LLM_MAX_RETRIES", "12");
+            let _g2 = EnvGuard::set("AURA_LLM_BACKOFF_INITIAL_MS", "500");
+            let _g3 = EnvGuard::set("AURA_LLM_BACKOFF_CAP_MS", "60000");
+            let _g4 = EnvGuard::set("AURA_LLM_ROUTING", "direct");
+            let _g5 = EnvGuard::set("AURA_ANTHROPIC_API_KEY", "sk-test");
+            AnthropicConfig::from_env().expect("from_env")
+        });
+        assert_eq!(cfg.max_retries, 12);
+        assert_eq!(cfg.backoff_initial_ms, 500);
+        assert_eq!(cfg.backoff_cap_ms, 60_000);
     }
 }

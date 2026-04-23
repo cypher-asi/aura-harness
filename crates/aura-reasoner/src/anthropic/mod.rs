@@ -13,6 +13,7 @@ mod provider;
 mod sse;
 
 pub use config::{AnthropicConfig, RoutingMode};
+pub use provider::exp_backoff_with_jitter;
 
 use crate::error::ReasonerError;
 use std::time::Duration;

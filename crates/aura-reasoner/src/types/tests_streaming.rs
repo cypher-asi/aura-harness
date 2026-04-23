@@ -382,9 +382,15 @@ fn test_stream_accumulator_into_response_propagates_error_with_no_content() {
     );
     // Model and message_id should be threaded into the error so
     // operators can correlate with provider / router logs.
-    assert!(msg.contains("model=claude-sonnet-test"), "missing model: {msg}");
+    assert!(
+        msg.contains("model=claude-sonnet-test"),
+        "missing model: {msg}"
+    );
     assert!(msg.contains("msg_id=msg_01ABC"), "missing msg_id: {msg}");
-    assert!(msg.contains("Internal server error"), "missing raw msg: {msg}");
+    assert!(
+        msg.contains("Internal server error"),
+        "missing raw msg: {msg}"
+    );
     // No HttpMeta was processed, so the error should NOT claim a
     // request_id — better to omit the key than to surface a
     // misleading `request_id=` fragment.
@@ -422,7 +428,10 @@ fn test_stream_accumulator_into_response_error_includes_request_id() {
     assert!(msg.contains("model=claude-sonnet-4"), "got: {msg}");
     assert!(msg.contains("msg_id=msg_01ABC"), "got: {msg}");
     assert!(msg.contains("request_id=req_01XYZ"), "got: {msg}");
-    assert!(msg.contains("api_error: Internal server error"), "got: {msg}");
+    assert!(
+        msg.contains("api_error: Internal server error"),
+        "got: {msg}"
+    );
 }
 
 #[test]
@@ -486,7 +495,10 @@ fn test_stream_accumulator_into_response_propagates_error_even_with_partial_cont
         msg.contains("stream terminated with error"),
         "partial-content path must still fail, got: {msg}"
     );
-    assert!(msg.contains("overloaded_error"), "error type preserved: {msg}");
+    assert!(
+        msg.contains("overloaded_error"),
+        "error type preserved: {msg}"
+    );
 }
 
 #[test]
@@ -503,8 +515,7 @@ fn test_stream_accumulator_into_response_error_without_message_start() {
     let err = acc.into_response(0, 100).unwrap_err();
     let msg = err.to_string();
     assert_eq!(
-        msg,
-        "stream terminated with error: connection reset by peer",
+        msg, "stream terminated with error: connection reset by peer",
         "no empty context parentheses when metadata unavailable"
     );
 }
@@ -813,4 +824,106 @@ fn test_role_serialization() {
         serde_json::to_string(&Role::Assistant).unwrap(),
         "\"assistant\""
     );
+}
+
+// ========================================================================
+// StreamAbortedWithPartial tests (per-tool-call streaming retry)
+// ========================================================================
+
+#[test]
+fn stream_aborted_with_partial_preserves_tool_use() {
+    // Mid-stream SSE error landing AFTER a content_block_start +
+    // partial input_json_delta MUST surface the in-flight tool_use
+    // inside `StreamAbortedWithPartial`, not get silently promoted
+    // into `tool_uses` and treated like a successful call. This is
+    // the contract `complete_with_streaming` relies on to drive its
+    // per-tool-call retry loop.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_abort".to_string(),
+        model: "claude-sonnet".to_string(),
+        input_tokens: Some(5),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    acc.process(&StreamEvent::ContentBlockStart {
+        index: 0,
+        content_type: StreamContentType::ToolUse {
+            id: "toolu_abc".to_string(),
+            name: "write_file".to_string(),
+        },
+    });
+    acc.process(&StreamEvent::InputJsonDelta {
+        partial_json: r#"{"path":"src/"#.to_string(),
+    });
+    acc.process(&StreamEvent::InputJsonDelta {
+        partial_json: r#"lib.rs","#.to_string(),
+    });
+    // No ContentBlockStop -- the stream dies here.
+    acc.process(&StreamEvent::Error {
+        message: "overloaded_error: provider overloaded".to_string(),
+        request_id: None,
+    });
+
+    let err = acc
+        .into_response(0, 100)
+        .expect_err("aborted stream must be an error");
+
+    match err {
+        crate::ReasonerError::StreamAbortedWithPartial {
+            reason,
+            partial_tool_use,
+        } => {
+            assert!(
+                reason.contains("overloaded_error"),
+                "reason should carry upstream message, got: {reason}"
+            );
+            let partial = partial_tool_use.expect("partial_tool_use must be Some");
+            assert_eq!(partial.tool_use_id, "toolu_abc");
+            assert_eq!(partial.tool_name, "write_file");
+            assert_eq!(partial.partial_json, "{\"path\":\"src/lib.rs\",");
+        }
+        other => panic!("expected StreamAbortedWithPartial, got: {other:?}"),
+    }
+}
+
+#[test]
+fn stream_aborted_without_tool_use_returns_none() {
+    // When the SSE error arrives before any `tool_use` content-block
+    // started, the partial_tool_use must be None -- we still want the
+    // new variant (so the retry loop kicks in) but there is nothing
+    // meaningful to preserve.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_abort2".to_string(),
+        model: "claude-sonnet".to_string(),
+        input_tokens: Some(5),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    acc.process(&StreamEvent::Error {
+        message: "api_error: internal server error".to_string(),
+        request_id: None,
+    });
+
+    let err = acc
+        .into_response(0, 100)
+        .expect_err("aborted stream must be an error");
+
+    match err {
+        crate::ReasonerError::StreamAbortedWithPartial {
+            reason,
+            partial_tool_use,
+        } => {
+            assert!(
+                reason.contains("api_error"),
+                "reason should carry upstream message, got: {reason}"
+            );
+            assert!(
+                partial_tool_use.is_none(),
+                "no in-flight tool use; expected None"
+            );
+        }
+        other => panic!("expected StreamAbortedWithPartial, got: {other:?}"),
+    }
 }

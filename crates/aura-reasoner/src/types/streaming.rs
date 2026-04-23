@@ -163,6 +163,24 @@ pub struct StreamAccumulator {
     pub provider_request_id: Option<String>,
 }
 
+/// Snapshot of an in-flight `tool_use` block at the moment a mid-stream
+/// error truncated the response.
+///
+/// Returned inside [`crate::error::ReasonerError::StreamAbortedWithPartial`]
+/// so the agent loop can surface which tool call was interrupted (and on
+/// what partial input) when it decides to retry.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PartialToolUse {
+    /// Provider-side `tool_use` id (e.g. `toolu_01...`). Empty when the
+    /// stream died before `content_block_start` landed.
+    pub tool_use_id: String,
+    /// Tool name (`write_file`, `edit_file`, ...). Empty when unknown.
+    pub tool_name: String,
+    /// Accumulated tool-input JSON so far. May be empty or truncated
+    /// (not parseable on its own).
+    pub partial_json: String,
+}
+
 /// Tool use being accumulated from streaming events.
 #[derive(Debug, Clone, Default)]
 pub struct AccumulatedToolUse {
@@ -304,15 +322,23 @@ impl StreamAccumulator {
             }
         }
 
-        if let Some(ref err_msg) = self.stream_error {
+        if let Some(err_msg) = self.stream_error.take() {
             // Always propagate a mid-stream error, even if partial text
             // or tool_use blocks arrived first. The previous behaviour
             // swallowed the error when any content was accumulated,
             // which caused partial tool-use blocks to be executed as if
-            // the stream had finished cleanly — a correctness bug that
+            // the stream had finished cleanly -- a correctness bug that
             // could trigger malformed tool calls on the next iteration.
             //
-            // Include model + message_id when known so the user-visible
+            // NOTE: the caller (`complete_with_streaming`) relies on the
+            // `StreamAbortedWithPartial` variant to drive a per-tool-call
+            // retry that re-issues a fresh streaming request. Because we
+            // now preserve the in-flight tool_use separately via
+            // `partial_tool_use`, it is NOT pushed into `self.tool_uses`
+            // on this path (unlike the clean-finish path above) -- the
+            // caller is responsible for discarding / replaying it.
+            //
+            // Include model + message_id when known so the operator-visible
             // failure string is actionable (operators can correlate
             // `msg_id` with provider / router logs). The `err_msg`
             // string already carries the Anthropic `error.type` prefix
@@ -335,9 +361,25 @@ impl StreamAccumulator {
             } else {
                 format!(" ({})", context_parts.join(", "))
             };
-            return Err(ReasonerError::Internal(format!(
-                "stream terminated with error{context}: {err_msg}"
-            )));
+            let reason = format!("stream terminated with error{context}: {err_msg}");
+
+            // The recovery path above (pre-stream-error) already pushed
+            // a pending `current_tool_use` onto `self.tool_uses` and
+            // set `current_tool_use` to None. For the aborted-stream
+            // path we undo that: pop the recovered tool off
+            // `self.tool_uses` if it is still there so the caller gets
+            // it back as `partial_tool_use` instead of seeing it as a
+            // completed tool call.
+            let partial_tool_use = self.tool_uses.pop().map(|pending| PartialToolUse {
+                tool_use_id: pending.id,
+                tool_name: pending.name,
+                partial_json: pending.input_json,
+            });
+
+            return Err(ReasonerError::StreamAbortedWithPartial {
+                reason,
+                partial_tool_use,
+            });
         }
 
         let mut content_blocks = Vec::new();

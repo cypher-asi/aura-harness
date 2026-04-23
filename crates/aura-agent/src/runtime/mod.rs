@@ -44,6 +44,13 @@ impl From<aura_reasoner::ReasonerError> for RuntimeError {
             }
             aura_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
             aura_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
+            // Exhausted per-tool-call streaming retries: surface the
+            // classified reason through `Model(..)` so the outer
+            // loop / server treats it the same as any other
+            // provider error (credit accounting, task retry, etc.).
+            aura_reasoner::ReasonerError::StreamAbortedWithPartial { reason, .. } => {
+                Self::Model(reason)
+            }
         }
     }
 }

@@ -16,7 +16,9 @@ pub use request::{
     MaxTokens, ModelName, ModelRequest, ModelRequestBuilder, Temperature, ThinkingConfig,
 };
 pub use response::{ModelResponse, ProviderTrace, StopReason, Usage};
-pub use streaming::{AccumulatedToolUse, StreamAccumulator, StreamContentType, StreamEvent};
+pub use streaming::{
+    AccumulatedToolUse, PartialToolUse, StreamAccumulator, StreamContentType, StreamEvent,
+};
 pub use tool::{CacheControl, ToolChoice, ToolDefinition};
 
 #[cfg(test)]
