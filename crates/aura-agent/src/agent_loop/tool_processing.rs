@@ -35,7 +35,7 @@ impl AgentLoop {
         executor: &dyn AgentToolExecutor,
         state: &mut LoopState,
         event_tx: Option<&Sender<AgentLoopEvent>>,
-    ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>) {
+    ) -> (Vec<ToolCallResult>, Vec<String>, bool, HashSet<String>, bool) {
         let mut side_messages: Vec<String> = Vec::new();
 
         // Pre-dispatch chunk guard: short-circuit oversized `write_file`
@@ -46,7 +46,7 @@ impl AgentLoop {
         let (oversized_writes, post_chunk_calls) =
             partition_oversized_writes(tool_calls, &mut side_messages, event_tx);
 
-        let (blocked_results, to_execute) = partition_blocked(
+        let (blocked_results, to_execute, saw_empty_path_block) = partition_blocked(
             &post_chunk_calls,
             &state.blocking_ctx,
             &state.read_guard,
@@ -98,7 +98,13 @@ impl AgentLoop {
         let mut all_results = oversized_writes;
         all_results.extend(blocked_results);
         all_results.extend(executed);
-        (all_results, side_messages, stalled, blocked_ids)
+        (
+            all_results,
+            side_messages,
+            stalled,
+            blocked_ids,
+            saw_empty_path_block,
+        )
     }
 }
 
@@ -173,9 +179,10 @@ fn partition_blocked(
     read_guard: &ReadGuardState,
     side_messages: &mut Vec<String>,
     event_tx: Option<&Sender<AgentLoopEvent>>,
-) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
+) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>, bool) {
     let mut blocked = Vec::new();
     let mut to_execute = Vec::new();
+    let mut saw_empty_path_block = false;
 
     for tool in tool_calls {
         let check = detect_all_blocked(tool, blocking_ctx, read_guard);
@@ -188,6 +195,11 @@ fn partition_blocked(
                 .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let is_empty_path_write =
+                helpers::is_write_tool(&tool.name) && path_hint.trim().is_empty();
+            if is_empty_path_write {
+                saw_empty_path_block = true;
+            }
             let blocked_content = format!("[BLOCKED] {msg}");
             warn!(
                 tool_use_id = %tool.id,
@@ -234,7 +246,7 @@ fn partition_blocked(
         }
     }
 
-    (blocked, to_execute)
+    (blocked, to_execute, saw_empty_path_block)
 }
 
 fn track_tool_effects(
@@ -260,6 +272,9 @@ fn track_tool_effects(
                     read_guard.record_range_read(path);
                 } else {
                     read_guard.record_full_read(path);
+                }
+                if tool.name == "read_file" && !exec_result.is_error {
+                    blocking_ctx.on_read_path(path);
                 }
             }
         }

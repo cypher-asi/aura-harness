@@ -70,6 +70,23 @@ pub enum GitToolError {
 
     #[error("invalid remote URL: {0}")]
     InvalidUrl(String),
+
+    /// The remote rejected the push because it could not persist the
+    /// objects (out of disk, HTTP 507, disk quota exceeded, etc.).
+    /// This is deliberately a non-retryable variant because retrying
+    /// within the dev-loop's backoff window cannot heal remote
+    /// storage — the operator must free space or redirect the remote
+    /// before the next push attempt. Surfaced as a specific variant
+    /// so the dev-loop can render an actionable recovery hint instead
+    /// of a generic "push failed" message.
+    #[error(
+        "remote storage exhausted on git {op}; free space on the remote or switch remotes. \
+         server reported: {stderr}"
+    )]
+    RemoteStorageExhausted {
+        op: &'static str,
+        stderr: String,
+    },
 }
 
 impl From<GitToolError> for ToolError {
@@ -92,6 +109,10 @@ impl From<GitToolError> for ToolError {
                 stderr,
             } => Self::CommandFailed(format!("git {op} exited {exit_code}: {stderr}")),
             GitToolError::InvalidUrl(msg) => Self::InvalidArguments(msg),
+            GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
+                "git {op} failed: remote storage exhausted ({stderr}). \
+                 Free space on the remote (or switch remotes) before retrying."
+            )),
         }
     }
 }
@@ -282,15 +303,6 @@ pub struct CommitPushOutcome {
 /// failures (auth rejected, non-fast-forward without `--force`, malformed
 /// refspec) surface immediately so the agent gets the signal it needs
 /// without spending its retry budget on a dead-letter push.
-///
-/// Remote-side storage exhaustion (`No space left on device` on the
-/// git server, HTTP 507, etc.) is classified as transient because the
-/// operator clearing disk space on the remote is the mitigation — the
-/// local commit is already safe and a retry after the cleanup
-/// succeeds without any action from the agent. Historically these
-/// fell into the non-retryable branch, so a single unlucky push left
-/// the task in an inconsistent state (commit locally, not on remote)
-/// until the next turn's push attempt.
 const TRANSIENT_PUSH_STDERR: &[&str] = &[
     "could not read from remote",
     "fatal: unable to access",
@@ -303,19 +315,42 @@ const TRANSIENT_PUSH_STDERR: &[&str] = &[
     "temporary failure in name resolution",
     "ssl_read",
     "tls",
-    // Remote-side storage exhaustion.
+    // Server-side unpack/index failures can have transient roots
+    // (receive-pack sigterm, concurrent writes), so retry them even
+    // though they can also co-occur with remote-storage exhaustion —
+    // we check the storage-exhaustion list first.
+    "unpack failed",
+    "index-pack abnormal exit",
+];
+
+/// Remote-side storage exhaustion markers. Retrying these within the
+/// dev-loop's backoff window cannot heal remote disk; short-circuit
+/// instead so the caller can render an actionable recovery hint and
+/// the dev-loop does not burn ~22s of backoff per push attempt.
+const REMOTE_EXHAUSTED_PUSH_STDERR: &[&str] = &[
     "no space left on device",
     "insufficient storage",
     "http 507",
     "disk quota exceeded",
     "write error: no space",
-    "unpack failed",
-    "index-pack abnormal exit",
 ];
 
 fn stderr_looks_transient(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
+    // Storage-exhaustion markers take precedence: a push that
+    // reports both `no space left on device` AND `rpc failed` is
+    // fundamentally a remote-disk problem, not a network one.
+    if REMOTE_EXHAUSTED_PUSH_STDERR.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
     TRANSIENT_PUSH_STDERR.iter().any(|m| lower.contains(m))
+}
+
+fn stderr_looks_remote_exhausted(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    REMOTE_EXHAUSTED_PUSH_STDERR
+        .iter()
+        .any(|m| lower.contains(m))
 }
 
 /// Bounded exponential backoff between push attempts: 2s, 5s, 15s,
@@ -394,6 +429,25 @@ pub async fn git_push_impl(
                 return Ok(commits);
             }
             Err(err) => {
+                // Remote storage exhaustion: short-circuit with a
+                // dedicated variant so the dev-loop renders an
+                // actionable recovery hint. Retrying cannot heal
+                // remote disk within our backoff window.
+                if let GitToolError::NonZeroExit { stderr, .. } = &err {
+                    if stderr_looks_remote_exhausted(stderr) {
+                        warn!(
+                            remote = %safe_remote,
+                            %branch,
+                            attempt = attempt + 1,
+                            error = %err,
+                            "git push failed: remote storage exhausted; not retrying"
+                        );
+                        return Err(GitToolError::RemoteStorageExhausted {
+                            op: "push",
+                            stderr: stderr.clone(),
+                        });
+                    }
+                }
                 let transient = match &err {
                     GitToolError::Timeout(_, _) => true,
                     GitToolError::NonZeroExit { stderr, .. } => stderr_looks_transient(stderr),

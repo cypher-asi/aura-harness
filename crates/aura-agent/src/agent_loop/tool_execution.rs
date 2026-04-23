@@ -26,6 +26,11 @@ struct ExecutedTools {
     is_stalled: bool,
     blocked_ids: HashSet<String>,
     cached_ids: HashSet<String>,
+    /// `true` when the iteration contained at least one
+    /// `write_file`/`edit_file`/`delete_file` blocked for missing
+    /// `path`. Used to drive
+    /// [`crate::constants::EMPTY_PATH_BLOCK_LIMIT`] early stop.
+    saw_empty_path_block: bool,
 }
 
 /// Handle `StopReason::ToolUse` — cache, execute, emit, stall-check.
@@ -82,13 +87,14 @@ async fn execute_and_cache_tools(
         "Resolved cached vs executable tool calls"
     );
 
-    let (executed_results, side_messages, is_stalled, blocked_ids) = if uncached_calls.is_empty() {
-        (Vec::new(), Vec::new(), false, HashSet::new())
-    } else {
-        agent
-            .process_tool_results(&uncached_calls, executor, state, event_tx)
-            .await
-    };
+    let (executed_results, side_messages, is_stalled, blocked_ids, saw_empty_path_block) =
+        if uncached_calls.is_empty() {
+            (Vec::new(), Vec::new(), false, HashSet::new(), false)
+        } else {
+            agent
+                .process_tool_results(&uncached_calls, executor, state, event_tx)
+                .await
+        };
 
     update_cache(
         &mut state.tool_cache,
@@ -107,6 +113,7 @@ async fn execute_and_cache_tools(
         is_stalled,
         blocked_ids,
         cached_ids,
+        saw_empty_path_block,
     })
 }
 
@@ -170,6 +177,12 @@ fn check_termination_conditions(
         state.consecutive_all_error_iterations = 0;
     }
 
+    if tools.saw_empty_path_block {
+        state.consecutive_empty_path_block_iterations += 1;
+    } else {
+        state.consecutive_empty_path_block_iterations = 0;
+    }
+
     push_tool_result_message_with_context(
         &mut state.messages,
         tools.all_results,
@@ -189,6 +202,20 @@ fn check_termination_conditions(
              to write to the same files. Stopping to prevent \
              infinite loop. Try a different approach or ask for help.",
         );
+        return true;
+    }
+
+    if state.consecutive_empty_path_block_iterations
+        >= crate::constants::EMPTY_PATH_BLOCK_LIMIT
+    {
+        let msg = format!(
+            "CRITICAL: Agent emitted pathless `write_file`/`edit_file` \
+             calls for {} consecutive iterations. The `path` argument is \
+             required; retrying without one cannot recover. Stopping so \
+             the dev loop can retry with a fresh plan.",
+            state.consecutive_empty_path_block_iterations
+        );
+        emit_stop_error(event_tx, state, "empty_path_blocks", &msg);
         return true;
     }
 

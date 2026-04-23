@@ -121,6 +121,18 @@ pub const COMMAND_TOOLS: &[&str] = &["run_command"];
 /// Consecutive iterations where every tool call errors before forcing a stop.
 pub const CONSECUTIVE_ERROR_ITERATIONS_LIMIT: usize = 5;
 
+/// Consecutive iterations containing at least one pathless
+/// `write_file` / `edit_file` / `delete_file` block before forcing a
+/// stop.
+///
+/// Pathless write blocks are a strong signal that the model has lost
+/// the path argument and is re-emitting the same malformed call in a
+/// loop. Stopping at this threshold is tighter than
+/// [`CONSECUTIVE_ERROR_ITERATIONS_LIMIT`] because pathless-write loops
+/// never recover on their own and every retry burns LLM tokens and
+/// inflates the DoD gate's empty-path counter.
+pub const EMPTY_PATH_BLOCK_LIMIT: usize = 3;
+
 // ---------------------------------------------------------------------------
 // Write-side chunk guard
 // ---------------------------------------------------------------------------

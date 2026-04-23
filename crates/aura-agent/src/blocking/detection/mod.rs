@@ -28,6 +28,13 @@ pub struct BlockingContext {
     pub(crate) exploration_allowance: usize,
     /// Count of write tool calls that had no extractable path (malformed args).
     pub(crate) malformed_write_count: usize,
+    /// Most-recently-read file path. Used as a fallback hint when the
+    /// model emits a `write_file` / `edit_file` with a missing or empty
+    /// `path`: the model almost always wants to operate on a file it
+    /// just read, so we surface that path in the block message so the
+    /// next attempt has a concrete target rather than repeating the
+    /// pathless misfire.
+    pub(crate) last_read_path: Option<String>,
 }
 
 impl BlockingContext {
@@ -71,6 +78,24 @@ impl BlockingContext {
         self.malformed_write_count += 1;
     }
 
+    /// Record the path the model just read so a subsequent pathless
+    /// `write_file` / `edit_file` can be nudged toward it.
+    pub(crate) fn on_read_path(&mut self, path: &str) {
+        if !path.is_empty() {
+            self.last_read_path = Some(path.to_string());
+        }
+    }
+
+    /// Best-effort hint for a pathless write, preferring the most
+    /// recently read file (which the model almost always intends to
+    /// edit) and falling back to any previously-written path.
+    pub(crate) fn pathless_write_hint(&self) -> Option<&str> {
+        if let Some(path) = self.last_read_path.as_deref() {
+            return Some(path);
+        }
+        self.written_paths.iter().next().map(String::as_str)
+    }
+
     /// Record a command result (success or failure).
     pub(crate) fn on_command_result(&mut self, success: bool) {
         if success {
@@ -112,7 +137,7 @@ pub fn detect_all_blocked(
     ctx: &BlockingContext,
     read_guard: &ReadGuardState,
 ) -> BlockCheckResult {
-    if let Some(result) = detect_missing_required_args(tool) {
+    if let Some(result) = detect_missing_required_args(tool, ctx) {
         if result.blocked {
             return result;
         }
@@ -163,12 +188,35 @@ pub fn detect_all_blocked(
 /// all return `None` (inapplicable) instead of blocking, letting the call
 /// through to the executor where it fails and disrupts stall detection.
 /// This detector catches that case upfront for all tool families.
-fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult> {
+///
+/// The block message for pathless write tools includes a concrete
+/// example using the most recently read path (if any) so the model
+/// has a specific target to retry against, rather than re-emitting
+/// the same pathless call.
+fn detect_missing_required_args(
+    tool: &ToolCallInfo,
+    ctx: &BlockingContext,
+) -> Option<BlockCheckResult> {
     if WRITE_TOOLS.contains(&tool.name.as_str()) && extract_path(tool).is_none() {
+        let hint = ctx.pathless_write_hint().unwrap_or("crates/foo/src/lib.rs");
+        let example = match tool.name.as_str() {
+            "write_file" => format!(
+                "write_file(path=\"{hint}\", content=\"...module contents...\")"
+            ),
+            "edit_file" => format!(
+                "edit_file(path=\"{hint}\", old_text=\"...\", new_text=\"...\")"
+            ),
+            "delete_file" => format!("delete_file(path=\"{hint}\")"),
+            other => format!("{other}(path=\"{hint}\", ...)"),
+        };
         return Some(BlockCheckResult::blocked(format!(
-            "`{}` requires a non-empty `path` argument. Provide the file path to operate on \
-             (empty strings and whitespace-only paths are rejected because they cannot land on disk).",
-            tool.name
+            "`{name}` requires a non-empty `path` argument. Empty strings and whitespace-only \
+             paths are rejected because they cannot land on disk. Retry with a concrete file \
+             path, e.g. `{example}`. Do NOT re-issue the same pathless call -- the harness will \
+             keep blocking it and the task will be rejected by the Definition-of-Done gate if \
+             you never follow up with a real-path write.",
+            name = tool.name,
+            example = example,
         )));
     }
     if COMMAND_TOOLS.contains(&tool.name.as_str()) {

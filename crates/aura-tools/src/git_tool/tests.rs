@@ -276,18 +276,70 @@ fn stderr_looks_transient_matches_network_markers() {
 }
 
 #[test]
-fn stderr_looks_transient_matches_remote_storage_exhaustion() {
-    // Task 2.4 regression: the remote git server filled up. The error
-    // is transient (operator clears space) but used to be classified
-    // as a hard failure, leaving the task inconsistent.
-    assert!(stderr_looks_transient(
+fn stderr_looks_remote_exhausted_matches_storage_markers() {
+    // Task 2.6 regression: remote storage exhaustion must NOT be
+    // classified as transient (retrying cannot heal remote disk
+    // within the backoff window) and must be matched by the
+    // dedicated short-circuit detector so `git_push_impl` returns
+    // `RemoteStorageExhausted` instead of burning the retry budget.
+    assert!(stderr_looks_remote_exhausted(
         "remote: fatal: write error: No space left on device"
     ));
+    assert!(stderr_looks_remote_exhausted("HTTP 507 Insufficient Storage"));
+    assert!(stderr_looks_remote_exhausted("fatal: disk quota exceeded"));
+    assert!(stderr_looks_remote_exhausted(
+        "remote: fatal: write error: no space left"
+    ));
+    assert!(!stderr_looks_remote_exhausted("Connection reset by peer"));
+    assert!(!stderr_looks_remote_exhausted(
+        "remote: Permission to foo/bar.git denied"
+    ));
+}
+
+#[test]
+fn remote_exhaustion_is_not_retried_as_transient() {
+    // Retrying a `no space left` push 3x with ~22s backoff is pure
+    // latency; the caller must short-circuit so the dev-loop can
+    // surface the actionable recovery hint immediately.
+    assert!(!stderr_looks_transient(
+        "remote: fatal: write error: No space left on device"
+    ));
+    assert!(!stderr_looks_transient("HTTP 507 Insufficient Storage"));
+    assert!(!stderr_looks_transient("fatal: disk quota exceeded"));
+    // Even when both a network-ish marker AND a storage marker show
+    // up in the same stderr blob, storage wins: the underlying
+    // problem is remote disk.
+    assert!(!stderr_looks_transient(
+        "remote: error: RPC failed; result=18; write error: no space left on device"
+    ));
+}
+
+#[test]
+fn transient_network_markers_still_retry_after_split() {
+    // Defence-in-depth: the split between transient and
+    // remote-exhausted markers must not demote network failures.
+    assert!(stderr_looks_transient("error: RPC failed; result=18"));
+    assert!(stderr_looks_transient("Connection reset by peer"));
     assert!(stderr_looks_transient(
         "remote: error: unpack failed: index-pack abnormal exit"
     ));
-    assert!(stderr_looks_transient("HTTP 507 Insufficient Storage"));
-    assert!(stderr_looks_transient("fatal: disk quota exceeded"));
+}
+
+#[test]
+fn remote_storage_exhausted_error_renders_actionable_message() {
+    let err = GitToolError::RemoteStorageExhausted {
+        op: "push",
+        stderr: "remote: fatal: write error: No space left on device".into(),
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.to_lowercase().contains("remote storage exhausted"),
+        "error message must name the failure mode, got: {msg}"
+    );
+    assert!(
+        msg.contains("free space") || msg.contains("switch remotes"),
+        "error message must include a recovery hint, got: {msg}"
+    );
 }
 
 #[test]

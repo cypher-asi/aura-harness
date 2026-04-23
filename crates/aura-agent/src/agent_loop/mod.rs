@@ -471,6 +471,14 @@ pub struct LoopState {
     pub(crate) build_baseline: Option<BuildBaseline>,
     /// Consecutive iterations where every tool call returned an error.
     pub(crate) consecutive_all_error_iterations: usize,
+    /// Consecutive iterations that contained at least one pathless
+    /// `write_file`/`edit_file`/`delete_file` block. Reset whenever an
+    /// iteration finishes with no pathless-write blocks. See
+    /// [`crate::constants::EMPTY_PATH_BLOCK_LIMIT`] — the loop exits
+    /// with a hard error when this counter crosses the threshold, so a
+    /// model stuck re-emitting the same malformed call cannot drag
+    /// the run to the full consecutive-error limit.
+    pub(crate) consecutive_empty_path_block_iterations: usize,
     /// Rolling count of output tokens produced across turns that
     /// emitted no `tool_use` blocks. Reset to zero whenever a turn
     /// executes at least one tool call or when the soft narration
@@ -502,6 +510,7 @@ impl LoopState {
             messages,
             build_baseline: None,
             consecutive_all_error_iterations: 0,
+            consecutive_empty_path_block_iterations: 0,
             consecutive_narration_tokens: 0,
             last_turn_had_tool_call: true,
         }
