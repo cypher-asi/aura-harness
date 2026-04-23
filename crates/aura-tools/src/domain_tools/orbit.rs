@@ -188,9 +188,13 @@ pub async fn orbit_push(api: &dyn DomainApi, _project_id: &str, input: &Value) -
     // (see `docs/invariants.md` §1).
     let remote_url = format!("https://{orbit_host}/{org_id}/{repo}.git");
     let workspace_path = std::path::Path::new(&workspace);
-    let timeout = std::time::Duration::from_secs(120);
+    // `orbit_push` historically used a fixed 120s single-attempt
+    // policy. Keep that behaviour as the floor but route through the
+    // new `PushPolicy` so the single retry/timeout surface is
+    // consistent across all `git push` call-sites.
+    let policy = crate::git_tool::PushPolicy::single(std::time::Duration::from_secs(120));
 
-    match crate::git_tool::git_push_impl(workspace_path, &remote_url, branch, &jwt, force, timeout)
+    match crate::git_tool::git_push_impl(workspace_path, &remote_url, branch, &jwt, force, policy)
         .await
     {
         Ok(commits) => domain_ok(json!({

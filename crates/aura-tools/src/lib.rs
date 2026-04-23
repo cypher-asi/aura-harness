@@ -101,6 +101,24 @@ pub struct ToolConfig {
     pub sync_threshold_ms: u64,
     /// Maximum timeout for async processes (milliseconds).
     pub max_async_timeout_ms: u64,
+    /// Per-attempt timeout for `git push` (milliseconds).
+    ///
+    /// Push is a network operation against Orbit and is routinely
+    /// slower than `git add` / `git commit`, which run entirely
+    /// locally. Keeping it on its own knob lets slow pushes finish
+    /// without having to raise every other async command's ceiling,
+    /// and decouples push tolerance from the workspace-wide
+    /// `max_async_timeout_ms` cap (clamped to 120s for every other
+    /// git operation inside `git_tool::workspace_timeout`).
+    pub git_push_timeout_ms: u64,
+    /// Number of `git push` attempts, including the first. Values
+    /// below 1 are coerced to 1 at the call-site. Each retry waits
+    /// an exponentially increasing backoff (2s, 5s, 15s) before the
+    /// next attempt; only timeouts and transient network errors
+    /// (`could not read from remote`, `RPC failed`, `early EOF`,
+    /// `connection reset`) are retried — auth failures and
+    /// non-fast-forward rejections short-circuit immediately.
+    pub git_push_attempts: u32,
     /// Extra filesystem paths to allow beyond the workspace root.
     /// Granted by skill permissions at runtime.
     pub extra_allowed_paths: Vec<std::path::PathBuf>,
@@ -126,6 +144,8 @@ impl Default for ToolConfig {
             max_read_bytes: 5 * 1024 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,
+            git_push_timeout_ms: 300_000,
+            git_push_attempts: 3,
             extra_allowed_paths: vec![],
         }
     }

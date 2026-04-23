@@ -418,8 +418,14 @@ async fn dispatch_git_commit_push(
     let results = executor.execute(&[call]).await;
     match results.into_iter().next() {
         Some(res) if !res.is_error => {
-            let (sha, commits) = parse_commit_push(&res.content);
-            if let Some(sha) = sha {
+            // The tool returns a successful `ToolResult` even when the
+            // push leg failed — the payload carries `pushed: false` and
+            // `push_error` in that case. We surface the commit SHA
+            // first (so `GitCommitted` is recorded regardless of push
+            // status) and then either `GitPushed` or `GitPushFailed`
+            // based on the `pushed` flag.
+            let parsed = parse_commit_push(&res.content);
+            if let Some(sha) = parsed.sha {
                 ctx.emit(AutomatonEvent::GitCommitted {
                     task_id: task_id.to_string(),
                     commit_sha: sha,
@@ -430,17 +436,33 @@ async fn dispatch_git_commit_push(
                     reason: "No changes to commit".to_string(),
                 });
             }
-            ctx.emit(AutomatonEvent::GitPushed {
-                task_id: task_id.to_string(),
-                repo: repo.to_string(),
-                branch: branch.to_string(),
-                commits,
-            });
-            info!(
-                task_id,
-                branch = branch,
-                "auto-pushed to orbit via kernel-mediated tool"
-            );
+            if parsed.pushed {
+                ctx.emit(AutomatonEvent::GitPushed {
+                    task_id: task_id.to_string(),
+                    repo: repo.to_string(),
+                    branch: branch.to_string(),
+                    commits: parsed.commits,
+                });
+                info!(
+                    task_id,
+                    branch = branch,
+                    "auto-pushed to orbit via kernel-mediated tool"
+                );
+            } else {
+                let reason = parsed.push_error.unwrap_or_else(|| {
+                    "Commit+push: push leg reported no success but no error message".to_string()
+                });
+                warn!(
+                    task_id,
+                    branch = branch,
+                    %reason,
+                    "git_commit_push: commit succeeded, push failed"
+                );
+                ctx.emit(AutomatonEvent::GitPushFailed {
+                    task_id: task_id.to_string(),
+                    reason: format!("Commit+push failed: {reason}"),
+                });
+            }
         }
         Some(res) => {
             warn!(task_id, error = %res.content, "git_commit_push tool call failed");
@@ -461,16 +483,45 @@ fn parse_sha(content: &str) -> Option<String> {
         .and_then(|v| v.get("sha").and_then(|s| s.as_str().map(str::to_string)))
 }
 
-fn parse_commit_push(content: &str) -> (Option<String>, Vec<serde_json::Value>) {
+struct ParsedCommitPush {
+    sha: Option<String>,
+    pushed: bool,
+    push_error: Option<String>,
+    commits: Vec<serde_json::Value>,
+}
+
+fn parse_commit_push(content: &str) -> ParsedCommitPush {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
-        return (None, Vec::new());
+        return ParsedCommitPush {
+            sha: None,
+            pushed: false,
+            push_error: None,
+            commits: Vec::new(),
+        };
     };
     let sha = v.get("sha").and_then(|s| s.as_str().map(str::to_string));
+    // Legacy payloads (before the commit/push split) never carried a
+    // `pushed` field; their `Ok` arm always implied both commit and
+    // push succeeded. Default to `true` when the field is absent so
+    // older tool runtimes stay on the success path, and only treat
+    // `pushed: false` (the new post-split shape) as a push failure.
+    let pushed = v
+        .get("pushed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let push_error = v
+        .get("push_error")
+        .and_then(|e| e.as_str().map(str::to_string));
     let commits = v
         .get("commits")
         .and_then(|c| c.as_array().cloned())
         .unwrap_or_default();
-    (sha, commits)
+    ParsedCommitPush {
+        sha,
+        pushed,
+        push_error,
+        commits,
+    }
 }
 
 /// Bootstrap an empty workspace into a git repo on first run.

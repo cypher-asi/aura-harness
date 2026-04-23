@@ -143,7 +143,7 @@ async fn spawn_git_times_out() {
         "main",
         "fake-token",
         false,
-        Duration::from_millis(50),
+        PushPolicy::single(Duration::from_millis(50)),
     )
     .await
     .expect_err("push must time out");
@@ -194,9 +194,16 @@ fn redact_url_masks_user_info() {
 #[tokio::test]
 async fn git_push_rejects_missing_fields() {
     let dir = TempDir::new().unwrap();
-    let err = git_push_impl(dir.path(), "", "main", "jwt", false, Duration::from_secs(5))
-        .await
-        .unwrap_err();
+    let err = git_push_impl(
+        dir.path(),
+        "",
+        "main",
+        "jwt",
+        false,
+        PushPolicy::single(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(err, GitToolError::MissingArg("remote_url")));
 }
 
@@ -226,6 +233,105 @@ async fn tool_executes_commit_via_context() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(parsed["committed"], serde_json::Value::Bool(true));
     assert!(parsed["sha"].as_str().map_or(0, |s| s.len()) == 40);
+}
+
+#[test]
+fn push_policy_from_config_reads_knobs() {
+    let mut cfg = crate::ToolConfig::default();
+    cfg.git_push_timeout_ms = 45_000;
+    cfg.git_push_attempts = 4;
+    let policy = PushPolicy::from_config(&cfg);
+    assert_eq!(policy.per_attempt_timeout, Duration::from_millis(45_000));
+    assert_eq!(policy.attempts, 4);
+}
+
+#[test]
+fn push_policy_attempts_clamped_to_at_least_one() {
+    let mut cfg = crate::ToolConfig::default();
+    cfg.git_push_attempts = 0;
+    let policy = PushPolicy::from_config(&cfg);
+    assert_eq!(
+        policy.attempts, 1,
+        "attempts=0 must be coerced to 1 so the push runs at least once"
+    );
+}
+
+#[test]
+fn stderr_looks_transient_matches_network_markers() {
+    assert!(stderr_looks_transient(
+        "fatal: unable to access 'https://...': Could not read from remote repository."
+    ));
+    assert!(stderr_looks_transient("error: RPC failed; result=18"));
+    assert!(stderr_looks_transient("early EOF on the wire"));
+    assert!(stderr_looks_transient("Connection reset by peer"));
+    assert!(stderr_looks_transient("Operation timed out after 30s"));
+    // Non-transient failures (auth, non-fast-forward) do NOT retry.
+    assert!(!stderr_looks_transient(
+        "remote: Permission to foo/bar.git denied to user."
+    ));
+    assert!(!stderr_looks_transient(
+        "! [rejected]   main -> main (non-fast-forward)"
+    ));
+    assert!(!stderr_looks_transient("fatal: refusing to update checked out branch"));
+}
+
+#[test]
+fn push_backoff_is_bounded() {
+    assert_eq!(push_backoff_for_attempt(0), Duration::from_secs(2));
+    assert_eq!(push_backoff_for_attempt(1), Duration::from_secs(5));
+    assert_eq!(push_backoff_for_attempt(2), Duration::from_secs(15));
+    // Cap holds for anything past the third retry so a
+    // misconfigured `git_push_attempts` value can't stall the
+    // dev-loop for minutes.
+    assert_eq!(push_backoff_for_attempt(9), Duration::from_secs(15));
+}
+
+#[tokio::test]
+async fn git_push_retries_on_timeout_then_errors_out() {
+    // Unroutable destination + tight per-attempt timeout forces every
+    // attempt to time out. We verify the final error is a Timeout and
+    // (implicitly) that the retry loop ran all attempts — any early
+    // return would have surfaced the first attempt's error, but the
+    // test documents the public shape: the function returns a Timeout
+    // error even after exhausting retries, rather than bubbling a
+    // different variant.
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    init_repo(dir.path()).await;
+    std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+    let _ = git_commit_impl(dir.path(), "seed", Duration::from_secs(10))
+        .await
+        .expect("seed commit");
+
+    let policy = PushPolicy {
+        per_attempt_timeout: Duration::from_millis(50),
+        // Two attempts keeps the test fast (~2s backoff between) while
+        // still exercising the retry path.
+        attempts: 2,
+    };
+    let start = std::time::Instant::now();
+    let err = git_push_impl(
+        dir.path(),
+        "https://10.255.255.1/unreachable.git",
+        "main",
+        "fake-token",
+        false,
+        policy,
+    )
+    .await
+    .expect_err("push must time out on all attempts");
+    assert!(matches!(err, GitToolError::Timeout(_, _)), "got {err:?}");
+    // At least one 2s backoff must have elapsed between the two
+    // attempts, confirming the retry loop ran instead of short-
+    // circuiting after the first timeout.
+    assert!(
+        start.elapsed() >= Duration::from_millis(1_500),
+        "expected retry backoff to add ≥1.5s, got {:?}",
+        start.elapsed()
+    );
 }
 
 #[tokio::test]

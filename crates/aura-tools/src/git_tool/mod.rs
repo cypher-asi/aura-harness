@@ -218,6 +218,102 @@ pub async fn git_commit_impl(
     Ok(Some(sha))
 }
 
+/// Per-attempt timeout and attempt budget for `git push`.
+///
+/// Push is a network operation and benefits from a different budget
+/// than the rest of the git tools — Orbit round-trips routinely
+/// exceed the 120s cap that covers `git add` / `git commit`. Keeping
+/// push on its own knob also makes it safe to retry: a single slow
+/// remote shouldn't force us to raise every other tool's ceiling.
+#[derive(Debug, Clone, Copy)]
+pub struct PushPolicy {
+    /// Per-attempt timeout passed to the underlying `git push`
+    /// subprocess.
+    pub per_attempt_timeout: Duration,
+    /// Total number of attempts, including the initial one. Values
+    /// below 1 are coerced to 1 at the call-site.
+    pub attempts: u32,
+}
+
+impl PushPolicy {
+    /// Single-attempt policy with `timeout` — preserves the pre-retry
+    /// behavior for callers that don't care about the retry surface
+    /// (tests, ad-hoc tools).
+    pub const fn single(timeout: Duration) -> Self {
+        Self {
+            per_attempt_timeout: timeout,
+            attempts: 1,
+        }
+    }
+
+    /// Build a push policy from the crate's `ToolConfig` knobs
+    /// (`git_push_timeout_ms` + `git_push_attempts`). Any `attempts`
+    /// value below 1 is coerced to 1 so the call-site is free to
+    /// trust the `attempts` field non-zero.
+    pub fn from_config(config: &crate::ToolConfig) -> Self {
+        Self {
+            per_attempt_timeout: Duration::from_millis(config.git_push_timeout_ms),
+            attempts: config.git_push_attempts.max(1),
+        }
+    }
+}
+
+/// Outcome of [`git_commit_push_impl`].
+///
+/// The commit half and the push half are reported independently so a
+/// push-only failure does not mask a successful commit. The orchestrator
+/// (dev-loop automaton) uses this to emit `GitCommitted` alongside
+/// `GitPushFailed` when the commit landed locally but the push timed
+/// out — preserving the commit SHA in the task history instead of
+/// pretending the work never happened.
+#[derive(Debug)]
+pub struct CommitPushOutcome {
+    /// Commit SHA from the local `git commit`, or `None` when there
+    /// were no staged changes (i.e. the tool was a no-op).
+    pub commit_sha: Option<String>,
+    /// Result of the subsequent `git push`. `Ok` on success, `Err`
+    /// on any push-specific failure (timeout, non-zero exit, spawn
+    /// error). Independent of `commit_sha` — the commit SHA stays
+    /// populated even when the push fails.
+    pub push_result: Result<Vec<CommitInfo>, GitToolError>,
+}
+
+/// Transient git push stderr markers that warrant a retry. Non-transient
+/// failures (auth rejected, non-fast-forward without `--force`, malformed
+/// refspec) surface immediately so the agent gets the signal it needs
+/// without spending its retry budget on a dead-letter push.
+const TRANSIENT_PUSH_STDERR: &[&str] = &[
+    "could not read from remote",
+    "fatal: unable to access",
+    "rpc failed",
+    "early eof",
+    "connection reset",
+    "broken pipe",
+    "operation timed out",
+    "unable to connect",
+    "temporary failure in name resolution",
+    "ssl_read",
+    "tls",
+];
+
+fn stderr_looks_transient(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    TRANSIENT_PUSH_STDERR.iter().any(|m| lower.contains(m))
+}
+
+/// Bounded exponential backoff between push attempts: 2s, 5s, 15s,
+/// then 15s for every subsequent attempt. Keeping the cap low means
+/// a push that fails all attempts still returns within ~22s of extra
+/// wall-clock — small enough that the dev-loop's post-commit handoff
+/// isn't held up for minutes.
+fn push_backoff_for_attempt(attempt_index: u32) -> Duration {
+    match attempt_index {
+        0 => Duration::from_secs(2),
+        1 => Duration::from_secs(5),
+        _ => Duration::from_secs(15),
+    }
+}
+
 /// Push the current `HEAD` to `remote_url:branch` using a JWT-auth URL.
 ///
 /// The push is executed with the fully-authenticated URL passed inline
@@ -225,6 +321,11 @@ pub async fn git_commit_impl(
 /// in the on-disk `.git/config`. Returns the list of SHAs that were
 /// newly pushed (derived from `git log orbit/branch..HEAD` before the
 /// push — best-effort, empty on failure).
+///
+/// Retries on transient failures (timeouts, `could not read from
+/// remote`, `RPC failed`, etc.) up to `policy.attempts` total attempts
+/// with exponential backoff. Non-transient failures (auth errors,
+/// non-fast-forward without `--force`) short-circuit immediately.
 #[instrument(skip_all, fields(op = "push", branch = %branch))]
 pub async fn git_push_impl(
     workspace: &std::path::Path,
@@ -232,7 +333,7 @@ pub async fn git_push_impl(
     branch: &str,
     jwt: &str,
     force: bool,
-    timeout: Duration,
+    policy: PushPolicy,
 ) -> Result<Vec<CommitInfo>, GitToolError> {
     if remote_url.is_empty() {
         return Err(GitToolError::MissingArg("remote_url"));
@@ -246,11 +347,13 @@ pub async fn git_push_impl(
 
     let auth_url = build_auth_url(remote_url, jwt)?;
     let safe_remote = redact_url(remote_url);
+    let per_attempt_timeout = policy.per_attempt_timeout;
+    let attempts = policy.attempts.max(1);
 
     // Best-effort unpushed commit listing. Missing remote tracking
     // branches are normal for first-push flows; swallow the error.
     let refspec = format!("HEAD:refs/heads/{branch}");
-    let commits = list_unpushed_commits(workspace, "HEAD", timeout)
+    let commits = list_unpushed_commits(workspace, "HEAD", per_attempt_timeout)
         .await
         .unwrap_or_default();
 
@@ -260,20 +363,77 @@ pub async fn git_push_impl(
     }
     args.push(refspec.as_str());
 
-    let _ = run_git_expect_ok(workspace, "push", &args, timeout, "push").await?;
-
-    info!(
-        remote = %safe_remote,
-        %branch,
-        commit_count = commits.len(),
-        "git push succeeded"
-    );
-    Ok(commits)
+    let mut last_err: Option<GitToolError> = None;
+    for attempt in 0..attempts {
+        match run_git_expect_ok(workspace, "push", &args, per_attempt_timeout, "push").await {
+            Ok(_) => {
+                info!(
+                    remote = %safe_remote,
+                    %branch,
+                    commit_count = commits.len(),
+                    attempt = attempt + 1,
+                    "git push succeeded"
+                );
+                return Ok(commits);
+            }
+            Err(err) => {
+                let transient = match &err {
+                    GitToolError::Timeout(_, _) => true,
+                    GitToolError::NonZeroExit { stderr, .. } => stderr_looks_transient(stderr),
+                    // Spawn / URL / arg errors never retry — they are
+                    // deterministic misconfigurations.
+                    _ => false,
+                };
+                let attempts_left = attempts - (attempt + 1);
+                if !transient || attempts_left == 0 {
+                    if !transient {
+                        warn!(
+                            remote = %safe_remote,
+                            %branch,
+                            attempt = attempt + 1,
+                            error = %err,
+                            "git push failed (non-retryable)"
+                        );
+                    } else {
+                        warn!(
+                            remote = %safe_remote,
+                            %branch,
+                            attempt = attempt + 1,
+                            error = %err,
+                            "git push failed after exhausting retry budget"
+                        );
+                    }
+                    last_err = Some(err);
+                    break;
+                }
+                let backoff = push_backoff_for_attempt(attempt);
+                warn!(
+                    remote = %safe_remote,
+                    %branch,
+                    attempt = attempt + 1,
+                    attempts_left,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %err,
+                    "git push failed transiently; retrying"
+                );
+                last_err = Some(err);
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
+    // Infallible in practice — the loop always records an error before
+    // breaking — but guard against the empty-loop case where
+    // `attempts == 0` was passed (coerced to 1 above, so unreachable).
+    Err(last_err.unwrap_or(GitToolError::Timeout("push", per_attempt_timeout)))
 }
 
 /// Combined `add -A` + `commit` + `push` — the transactional group the
-/// dev-loop relies on. Returns the new commit SHA (or `None` if there
-/// was nothing to commit) and the list of commits pushed.
+/// dev-loop relies on.
+///
+/// Commit failures propagate via the outer `Result` (nothing landed).
+/// Push failures are reported inline via [`CommitPushOutcome::push_result`]
+/// so the caller still sees the commit SHA — the task's work is locally
+/// persisted even if Orbit wasn't reachable.
 #[instrument(skip_all, fields(op = "commit_and_push", branch = %branch))]
 pub async fn git_commit_push_impl(
     workspace: &std::path::Path,
@@ -282,11 +442,16 @@ pub async fn git_commit_push_impl(
     branch: &str,
     jwt: &str,
     force: bool,
-    timeout: Duration,
-) -> Result<(Option<String>, Vec<CommitInfo>), GitToolError> {
-    let sha = git_commit_impl(workspace, message, timeout).await?;
-    let commits = git_push_impl(workspace, remote_url, branch, jwt, force, timeout).await?;
-    Ok((sha, commits))
+    commit_timeout: Duration,
+    push_policy: PushPolicy,
+) -> Result<CommitPushOutcome, GitToolError> {
+    let commit_sha = git_commit_impl(workspace, message, commit_timeout).await?;
+    let push_result =
+        git_push_impl(workspace, remote_url, branch, jwt, force, push_policy).await;
+    Ok(CommitPushOutcome {
+        commit_sha,
+        push_result,
+    })
 }
 
 /// Read `git log HEAD --pretty=format:'%H %s'` up to 50 entries. Only
@@ -395,6 +560,16 @@ fn workspace_timeout(ctx: &ToolContext) -> Duration {
     // (10s) since `git push` over slow networks routinely takes longer.
     // Tools still respect the hard upper bound via `max_async_timeout_ms`.
     Duration::from_millis(ctx.config.max_async_timeout_ms.min(120_000))
+}
+
+/// Push-specific policy derived from the tool context.
+///
+/// Separate from [`workspace_timeout`] so slow `git push` calls can
+/// use their own (longer, configurable) per-attempt budget and a
+/// bounded retry loop without dragging the rest of the git tools up
+/// with them. See [`PushPolicy::from_config`] for the knob.
+fn push_policy_for(ctx: &ToolContext) -> PushPolicy {
+    PushPolicy::from_config(&ctx.config)
 }
 
 fn str_arg<'a>(args: &'a serde_json::Value, name: &'static str) -> Result<&'a str, GitToolError> {
@@ -523,7 +698,7 @@ impl Tool for GitPushTool {
         let jwt = str_arg(&args, "jwt").map_err(ToolError::from)?;
         let force = opt_bool(&args, "force");
         let workspace = ctx.sandbox.root().to_path_buf();
-        let timeout = workspace_timeout(ctx);
+        let policy = push_policy_for(ctx);
 
         let agent_id = ctx
             .caller_agent_id
@@ -533,10 +708,12 @@ impl Tool for GitPushTool {
             %agent_id,
             target_branch = branch,
             remote = %redact_url(remote_url),
+            per_attempt_timeout_ms = policy.per_attempt_timeout.as_millis() as u64,
+            attempts = policy.attempts,
             "git tool dispatched"
         );
 
-        match git_push_impl(&workspace, remote_url, branch, jwt, force, timeout).await {
+        match git_push_impl(&workspace, remote_url, branch, jwt, force, policy).await {
             Ok(commits) => Ok(ToolResult::success(
                 "git_push",
                 serde_json::to_string(&serde_json::json!({
@@ -599,7 +776,8 @@ impl Tool for GitCommitPushTool {
         let jwt = str_arg(&args, "jwt").map_err(ToolError::from)?;
         let force = opt_bool(&args, "force");
         let workspace = ctx.sandbox.root().to_path_buf();
-        let timeout = workspace_timeout(ctx);
+        let commit_timeout = workspace_timeout(ctx);
+        let push_policy = push_policy_for(ctx);
 
         let agent_id = ctx
             .caller_agent_id
@@ -609,28 +787,84 @@ impl Tool for GitCommitPushTool {
             %agent_id,
             target_branch = branch,
             remote = %redact_url(remote_url),
+            commit_timeout_ms = commit_timeout.as_millis() as u64,
+            push_per_attempt_timeout_ms = push_policy.per_attempt_timeout.as_millis() as u64,
+            push_attempts = push_policy.attempts,
             "git tool dispatched"
         );
 
-        match git_commit_push_impl(&workspace, message, remote_url, branch, jwt, force, timeout)
-            .await
+        match git_commit_push_impl(
+            &workspace,
+            message,
+            remote_url,
+            branch,
+            jwt,
+            force,
+            commit_timeout,
+            push_policy,
+        )
+        .await
         {
-            Ok((sha, commits)) => Ok(ToolResult::success(
-                "git_commit_push",
-                serde_json::to_string(&serde_json::json!({
-                    "sha": sha,
-                    "committed": sha.is_some(),
-                    "commits": commits
-                        .iter()
-                        .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
-                        .collect::<Vec<_>>(),
-                }))
-                .unwrap_or_else(|_| {
-                    format!("committed+pushed {}", sha.as_deref().unwrap_or("(none)"))
-                }),
-            )),
+            Ok(outcome) => {
+                let CommitPushOutcome {
+                    commit_sha,
+                    push_result,
+                } = outcome;
+                match push_result {
+                    Ok(commits) => Ok(ToolResult::success(
+                        "git_commit_push",
+                        serde_json::to_string(&serde_json::json!({
+                            "sha": commit_sha,
+                            "committed": commit_sha.is_some(),
+                            "pushed": true,
+                            "commits": commits
+                                .iter()
+                                .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
+                                .collect::<Vec<_>>(),
+                        }))
+                        .unwrap_or_else(|_| {
+                            format!(
+                                "committed+pushed {}",
+                                commit_sha.as_deref().unwrap_or("(none)")
+                            )
+                        }),
+                    )),
+                    Err(push_err) => {
+                        // Commit landed locally; push did not. Surface
+                        // this as a success-with-warning so callers
+                        // (the dev-loop automaton) can preserve the
+                        // commit SHA in their event stream instead of
+                        // dropping the work. The tool-level result
+                        // reports `pushed: false` + `push_error` so
+                        // the agent can see what happened and the
+                        // automaton dispatcher can emit both
+                        // `GitCommitted` and `GitPushFailed`.
+                        warn!(
+                            error = %push_err,
+                            commit_sha = ?commit_sha,
+                            "git_commit_push: commit succeeded but push failed"
+                        );
+                        Ok(ToolResult::success(
+                            "git_commit_push",
+                            serde_json::to_string(&serde_json::json!({
+                                "sha": commit_sha,
+                                "committed": commit_sha.is_some(),
+                                "pushed": false,
+                                "push_error": push_err.to_string(),
+                                "commits": Vec::<serde_json::Value>::new(),
+                            }))
+                            .unwrap_or_else(|_| {
+                                format!(
+                                    "committed {} but push failed: {push_err}",
+                                    commit_sha.as_deref().unwrap_or("(none)")
+                                )
+                            }),
+                        ))
+                    }
+                }
+            }
             Err(e) => {
-                warn!(error = %e, "git_commit_push failed");
+                warn!(error = %e, "git_commit_push failed before commit");
                 Err(e.into())
             }
         }
