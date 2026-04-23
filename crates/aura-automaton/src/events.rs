@@ -193,8 +193,20 @@ pub enum AutomatonEvent {
         task_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         agent_instance_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
+        /// HTTP `x-request-id` from the provider response. Correlation
+        /// key against aura-router / provider logs. Accepts the legacy
+        /// `request_id` field on the wire for backwards compatibility
+        /// with bundles emitted before the split.
+        #[serde(
+            default,
+            alias = "request_id",
+            skip_serializing_if = "Option::is_none"
+        )]
+        provider_request_id: Option<String>,
+        /// Provider-internal message id (Anthropic
+        /// `message_start.message.id`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
     },
     #[serde(rename = "debug.iteration")]
     DebugIteration {
@@ -242,7 +254,8 @@ impl From<aura_agent::DebugEvent> for AutomatonEvent {
                 duration_ms,
                 task_id,
                 agent_instance_id,
-                request_id,
+                provider_request_id,
+                message_id,
             } => Self::DebugLlmCall {
                 timestamp,
                 provider,
@@ -252,7 +265,8 @@ impl From<aura_agent::DebugEvent> for AutomatonEvent {
                 duration_ms,
                 task_id,
                 agent_instance_id,
-                request_id,
+                provider_request_id,
+                message_id,
             },
             aura_agent::DebugEvent::Iteration {
                 timestamp,

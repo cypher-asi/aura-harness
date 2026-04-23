@@ -148,8 +148,20 @@ pub enum DebugEvent {
         task_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         agent_instance_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
+        /// HTTP `x-request-id` captured from the provider response. This
+        /// is the correlation key against aura-router / provider logs.
+        /// Populated from `ProviderTrace.provider_request_id`.
+        #[serde(
+            default,
+            alias = "request_id",
+            skip_serializing_if = "Option::is_none"
+        )]
+        provider_request_id: Option<String>,
+        /// Provider-internal message id (Anthropic `message_start.message.id`).
+        /// Useful for correlating with a specific assistant turn, but
+        /// NOT the same as `provider_request_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
     },
 
     /// A completed agent iteration (one model call + the tool calls it
@@ -236,7 +248,8 @@ mod debug_event_tests {
             duration_ms: 1_337,
             task_id: Some("task-42".into()),
             agent_instance_id: Some("inst-1".into()),
-            request_id: Some("req_abc".into()),
+            provider_request_id: Some("req_abc".into()),
+            message_id: Some("msg_42".into()),
         };
         let v = serde_json::to_value(&ev).expect("serialize");
 
@@ -251,7 +264,8 @@ mod debug_event_tests {
         assert_eq!(v["duration_ms"], 1_337);
         assert_eq!(v["task_id"], "task-42");
         assert_eq!(v["agent_instance_id"], "inst-1");
-        assert_eq!(v["request_id"], "req_abc");
+        assert_eq!(v["provider_request_id"], "req_abc");
+        assert_eq!(v["message_id"], "msg_42");
         assert!(
             v.get("timestamp").and_then(|t| t.as_str()).is_some(),
             "timestamp should serialize as a string (RFC3339)"
@@ -269,12 +283,48 @@ mod debug_event_tests {
             duration_ms: 0,
             task_id: None,
             agent_instance_id: None,
-            request_id: None,
+            provider_request_id: None,
+            message_id: None,
         };
         let v = serde_json::to_value(&ev).expect("serialize");
         assert!(v.get("task_id").is_none());
         assert!(v.get("agent_instance_id").is_none());
-        assert!(v.get("request_id").is_none());
+        assert!(v.get("provider_request_id").is_none());
+        assert!(v.get("message_id").is_none());
+        assert!(
+            v.get("request_id").is_none(),
+            "request_id must not leak onto the wire after the split"
+        );
+    }
+
+    #[test]
+    fn llm_call_accepts_legacy_request_id_alias_on_deserialize() {
+        // Old run bundles (pre-`harden-llm-stream-retry-observability`)
+        // serialized a single `request_id` field that was actually the
+        // provider-internal message id. Accept it as a fallback for
+        // `provider_request_id` so those bundles still parse.
+        let raw = serde_json::json!({
+            "type": "debug.llm_call",
+            "timestamp": fixed_ts(),
+            "provider": "anthropic",
+            "model": "claude-opus-4-6",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "duration_ms": 0,
+            "request_id": "legacy_req_01"
+        });
+        let ev: DebugEvent = serde_json::from_value(raw).expect("parse legacy shape");
+        match ev {
+            DebugEvent::LlmCall {
+                provider_request_id,
+                message_id,
+                ..
+            } => {
+                assert_eq!(provider_request_id.as_deref(), Some("legacy_req_01"));
+                assert!(message_id.is_none());
+            }
+            other => panic!("expected LlmCall, got {other:?}"),
+        }
     }
 
     #[test]
@@ -361,7 +411,8 @@ mod debug_event_tests {
                     duration_ms: 0,
                     task_id: None,
                     agent_instance_id: None,
-                    request_id: None,
+                    provider_request_id: None,
+                    message_id: None,
                 },
                 "debug.llm_call",
             ),

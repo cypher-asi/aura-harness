@@ -95,10 +95,8 @@ fn emit_debug_llm_call(
             duration_ms,
             task_id: None,
             agent_instance_id: None,
-            request_id: {
-                #[allow(deprecated)]
-                response.trace.request_id()
-            },
+            provider_request_id: response.trace.provider_request_id.clone(),
+            message_id: response.trace.message_id.clone(),
         }),
     );
 }
