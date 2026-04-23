@@ -638,10 +638,13 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
         "Buffered fallback should avoid Anthropic SSE requests.\nCaptured request:\n{captured}"
     );
 
-    assert!(matches!(
-        events.first().unwrap().as_ref().unwrap(),
-        StreamEvent::MessageStart { model, .. } if model == "aura-gpt-4.1"
-    ));
+    assert!(
+        events.iter().any(|event| matches!(
+            event.as_ref().unwrap(),
+            StreamEvent::MessageStart { model, .. } if model == "aura-gpt-4.1"
+        )),
+        "expected a MessageStart with model aura-gpt-4.1 somewhere in the event stream"
+    );
     assert!(events.iter().any(|event| matches!(
         event.as_ref().unwrap(),
         StreamEvent::TextDelta { text } if text == "proxy ok"
@@ -912,10 +915,13 @@ async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_
         !captured.contains("output_config"),
         "Explicit non-Anthropic family hints should suppress Anthropic output config even for Claude model names.\nCaptured request:\n{captured}"
     );
-    assert!(matches!(
-        events.first().unwrap().as_ref().unwrap(),
-        StreamEvent::MessageStart { model, .. } if model == "claude-opus-4-6"
-    ));
+    assert!(
+        events.iter().any(|event| matches!(
+            event.as_ref().unwrap(),
+            StreamEvent::MessageStart { model, .. } if model == "claude-opus-4-6"
+        )),
+        "expected a MessageStart with model claude-opus-4-6 somewhere in the event stream"
+    );
 }
 
 #[tokio::test]

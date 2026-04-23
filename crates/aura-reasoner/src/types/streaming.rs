@@ -79,6 +79,26 @@ pub enum StreamEvent {
     Error {
         /// Error message
         message: String,
+        /// Optional provider / proxy-supplied HTTP request id, pulled
+        /// from the SSE error body (some proxies embed
+        /// `error.request_id`). This is a fallback; the primary source
+        /// of truth is the synthetic [`StreamEvent::HttpMeta`] event
+        /// which carries the response-header `x-request-id`.
+        #[doc(hidden)]
+        request_id: Option<String>,
+    },
+
+    /// Synthetic event emitted by the SSE transport on stream open,
+    /// before any provider-level events. Carries HTTP-level metadata
+    /// (specifically the `x-request-id` response header) that the
+    /// provider never emits inside the SSE body and that a failing
+    /// stream would otherwise drop. Not part of the Anthropic / OpenAI
+    /// wire protocol — consumers that only care about model output
+    /// can safely ignore it.
+    HttpMeta {
+        /// The `x-request-id` (or `request-id`) header value captured
+        /// from the streaming response, if the upstream provided one.
+        request_id: Option<String>,
     },
 }
 
@@ -131,6 +151,16 @@ pub struct StreamAccumulator {
     pub cache_read_input_tokens: Option<u64>,
     /// Error captured from a `StreamEvent::Error`.
     pub stream_error: Option<String>,
+    /// HTTP `x-request-id` captured from the streaming response.
+    ///
+    /// Populated by the synthetic [`StreamEvent::HttpMeta`] that
+    /// `SseStream` yields before the first provider event, and
+    /// secondarily from a request_id embedded in an SSE error body
+    /// (only when the header-derived value is still `None`). This is
+    /// the id operators should use to correlate a failed stream with
+    /// provider / router logs — it is distinct from
+    /// [`Self::message_id`], which is the Anthropic message id.
+    pub provider_request_id: Option<String>,
 }
 
 /// Tool use being accumulated from streaming events.
@@ -217,8 +247,25 @@ impl StreamAccumulator {
                 self.output_tokens = *output_tokens;
             }
             StreamEvent::MessageStop | StreamEvent::Ping => {}
-            StreamEvent::Error { message } => {
+            StreamEvent::Error {
+                message,
+                request_id,
+            } => {
                 self.stream_error = Some(message.clone());
+                // Body-level request_id only wins when the HTTP header
+                // path did not already supply one — the header value
+                // also covers the success path and is therefore the
+                // source of truth.
+                if self.provider_request_id.is_none() {
+                    if let Some(id) = request_id {
+                        self.provider_request_id = Some(id.clone());
+                    }
+                }
+            }
+            StreamEvent::HttpMeta { request_id } => {
+                if let Some(id) = request_id {
+                    self.provider_request_id = Some(id.clone());
+                }
             }
         }
     }
@@ -278,6 +325,11 @@ impl StreamAccumulator {
             if !self.message_id.is_empty() {
                 context_parts.push(format!("msg_id={}", self.message_id));
             }
+            if let Some(ref req_id) = self.provider_request_id {
+                if !req_id.is_empty() {
+                    context_parts.push(format!("request_id={req_id}"));
+                }
+            }
             let context = if context_parts.is_empty() {
                 String::new()
             } else {
@@ -335,7 +387,12 @@ impl StreamAccumulator {
                 cache_read_input_tokens: self.cache_read_input_tokens,
             },
             trace: ProviderTrace {
-                request_id: Some(self.message_id),
+                message_id: if self.message_id.is_empty() {
+                    None
+                } else {
+                    Some(self.message_id)
+                },
+                provider_request_id: self.provider_request_id,
                 latency_ms,
                 model: self.model,
             },

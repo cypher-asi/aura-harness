@@ -323,6 +323,7 @@ fn parse_complete_response(
     request_model: &str,
     model: &str,
     latency_ms: u64,
+    provider_request_id: Option<String>,
 ) -> ModelResponse {
     let message = convert_response_to_aura(&api_response.content);
     let stop_reason = match api_response.stop_reason.as_deref() {
@@ -357,7 +358,8 @@ fn parse_complete_response(
             cache_read_input_tokens: api_response.usage.cache_read_input_tokens,
         },
         trace: ProviderTrace {
-            request_id: Some(api_response.id),
+            message_id: Some(api_response.id),
+            provider_request_id,
             latency_ms,
             model: api_response.model,
         },
@@ -596,6 +598,18 @@ impl ModelProvider for AnthropicProvider {
                     Ok(response) => {
                         let latency_ms =
                             u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        // Capture x-request-id before `.json()`
+                        // consumes the response body — otherwise the
+                        // headers are gone by the time we build the
+                        // `ProviderTrace`. Mirrors the streaming
+                        // capture above; both paths feed into the
+                        // same `ProviderTrace.provider_request_id`.
+                        let provider_request_id = response
+                            .headers()
+                            .get("x-request-id")
+                            .or_else(|| response.headers().get("request-id"))
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string);
                         let api_response: ApiResponse = response.json().await.map_err(|e| {
                             error!(error = %e, "Failed to parse Anthropic response");
                             ReasonerError::Parse(format!("Failed to parse Anthropic response: {e}"))
@@ -606,6 +620,7 @@ impl ModelProvider for AnthropicProvider {
                             request.model.as_ref(),
                             model,
                             latency_ms,
+                            provider_request_id,
                         ));
                     }
                     Err(e) => {
@@ -718,8 +733,23 @@ impl ModelProvider for AnthropicProvider {
                                 "Streaming with fallback model"
                             );
                         }
+                        // Capture x-request-id BEFORE `bytes_stream()`
+                        // consumes the response. Once the body is
+                        // drained, the response headers are gone, and
+                        // a mid-stream SSE error would otherwise
+                        // surface with no correlatable id — see the
+                        // `diagnose-single-retry-llm-500` plan, F1.
+                        // Fall back to the non-standard `request-id`
+                        // header for proxies that rewrite the name.
+                        let provider_request_id = response
+                            .headers()
+                            .get("x-request-id")
+                            .or_else(|| response.headers().get("request-id"))
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string);
                         let byte_stream = response.bytes_stream();
-                        let sse_stream = SseStream::new(byte_stream);
+                        let sse_stream =
+                            SseStream::with_request_id(byte_stream, provider_request_id);
                         return Ok(Box::pin(sse_stream));
                     }
                     Err(e) => {

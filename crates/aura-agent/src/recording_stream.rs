@@ -105,7 +105,7 @@ impl Stream for RecordingStream {
                     StreamEvent::MessageStop => {
                         this.finalize_completed();
                     }
-                    StreamEvent::Error { message } => {
+                    StreamEvent::Error { message, .. } => {
                         let reason = message.clone();
                         this.finalize_failed(&reason);
                     }

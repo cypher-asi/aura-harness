@@ -95,7 +95,10 @@ fn emit_debug_llm_call(
             duration_ms,
             task_id: None,
             agent_instance_id: None,
-            request_id: response.trace.request_id.clone(),
+            request_id: {
+                #[allow(deprecated)]
+                response.trace.request_id()
+            },
         }),
     );
 }
@@ -141,7 +144,7 @@ fn emit_stream_event(
                 );
             }
         }
-        StreamEvent::Error { message } => {
+        StreamEvent::Error { message, .. } => {
             emit(
                 event_tx,
                 AgentLoopEvent::Error {

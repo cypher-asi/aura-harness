@@ -119,13 +119,24 @@ pub type StreamEventStream =
 // adapter is split out per the Wave 6 plan.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream {
-    let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![Ok(StreamEvent::MessageStart {
-        message_id: response.trace.request_id.clone().unwrap_or_default(),
-        model: response.trace.model.clone(),
-        input_tokens: Some(response.usage.input_tokens),
-        cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
-        cache_read_input_tokens: response.usage.cache_read_input_tokens,
-    })];
+    // Prepend the synthetic `HttpMeta` frame so consumers that
+    // uniformly seed their accumulator from this event (streaming +
+    // non-streaming fallback + mock paths) always see a single,
+    // well-defined preamble. The value comes from the non-streaming
+    // `complete()` path's header capture — `None` for mock / test
+    // producers.
+    let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![
+        Ok(StreamEvent::HttpMeta {
+            request_id: response.trace.provider_request_id.clone(),
+        }),
+        Ok(StreamEvent::MessageStart {
+            message_id: response.trace.message_id.clone().unwrap_or_default(),
+            model: response.trace.model.clone(),
+            input_tokens: Some(response.usage.input_tokens),
+            cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: response.usage.cache_read_input_tokens,
+        }),
+    ];
 
     for (index, block) in response.message.content.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]

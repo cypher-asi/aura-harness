@@ -298,9 +298,65 @@ fn test_stream_accumulator_ping_and_error() {
     acc.process(&StreamEvent::Ping);
     acc.process(&StreamEvent::Error {
         message: "test error".to_string(),
+        request_id: None,
     });
 
     assert!(acc.text_content.is_empty());
+}
+
+#[test]
+fn test_stream_accumulator_captures_provider_request_id_from_http_meta() {
+    // The synthetic `HttpMeta` preamble carries the HTTP-header
+    // request id. The accumulator must adopt it so a subsequent
+    // `MessageStart` (which carries only the Anthropic *message* id)
+    // doesn't clobber the HTTP value.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::HttpMeta {
+        request_id: Some("req_01XYZ".to_string()),
+    });
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_01ABC".to_string(),
+        model: "claude-sonnet-4".to_string(),
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    assert_eq!(acc.provider_request_id.as_deref(), Some("req_01XYZ"));
+    assert_eq!(acc.message_id, "msg_01ABC");
+}
+
+#[test]
+fn test_stream_accumulator_http_meta_with_none_is_noop() {
+    // `SseStream` always emits the `HttpMeta` preamble, even when no
+    // header was captured. A `None` value must not overwrite a later
+    // body-level fallback.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::HttpMeta { request_id: None });
+    acc.process(&StreamEvent::Error {
+        message: "api_error: Internal server error".to_string(),
+        request_id: Some("req_01FALLBACK".to_string()),
+    });
+    assert_eq!(
+        acc.provider_request_id.as_deref(),
+        Some("req_01FALLBACK"),
+        "body-level request_id should be adopted when HTTP header was absent"
+    );
+}
+
+#[test]
+fn test_stream_accumulator_http_meta_wins_over_body_fallback() {
+    // When both the header *and* the body carry a request_id, the
+    // header value is authoritative (it covers the success path too
+    // and is the one provider / router logs actually key on).
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::HttpMeta {
+        request_id: Some("req_01HEADER".to_string()),
+    });
+    acc.process(&StreamEvent::Error {
+        message: "api_error: Internal server error".to_string(),
+        request_id: Some("req_01BODY".to_string()),
+    });
+    assert_eq!(acc.provider_request_id.as_deref(), Some("req_01HEADER"));
 }
 
 #[test]
@@ -315,6 +371,7 @@ fn test_stream_accumulator_into_response_propagates_error_with_no_content() {
     });
     acc.process(&StreamEvent::Error {
         message: "Internal server error".to_string(),
+        request_id: None,
     });
 
     let err = acc.into_response(0, 100).unwrap_err();
@@ -328,6 +385,72 @@ fn test_stream_accumulator_into_response_propagates_error_with_no_content() {
     assert!(msg.contains("model=claude-sonnet-test"), "missing model: {msg}");
     assert!(msg.contains("msg_id=msg_01ABC"), "missing msg_id: {msg}");
     assert!(msg.contains("Internal server error"), "missing raw msg: {msg}");
+    // No HttpMeta was processed, so the error should NOT claim a
+    // request_id — better to omit the key than to surface a
+    // misleading `request_id=` fragment.
+    assert!(
+        !msg.contains("request_id="),
+        "should not fabricate request_id when absent, got: {msg}"
+    );
+}
+
+#[test]
+fn test_stream_accumulator_into_response_error_includes_request_id() {
+    // Golden for the F1 plumbing: when the transport layer captured a
+    // response-header `x-request-id` via `HttpMeta`, the error string
+    // must surface it alongside `model=…, msg_id=…` so the operator
+    // can grep provider / router logs directly.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::HttpMeta {
+        request_id: Some("req_01XYZ".to_string()),
+    });
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_01ABC".to_string(),
+        model: "claude-sonnet-4".to_string(),
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    acc.process(&StreamEvent::Error {
+        message: "api_error: Internal server error".to_string(),
+        request_id: None,
+    });
+
+    let err = acc.into_response(0, 100).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("stream terminated with error"), "got: {msg}");
+    assert!(msg.contains("model=claude-sonnet-4"), "got: {msg}");
+    assert!(msg.contains("msg_id=msg_01ABC"), "got: {msg}");
+    assert!(msg.contains("request_id=req_01XYZ"), "got: {msg}");
+    assert!(msg.contains("api_error: Internal server error"), "got: {msg}");
+}
+
+#[test]
+fn test_stream_accumulator_into_response_populates_trace_split_ids() {
+    // Happy path: `into_response` must populate both `message_id` and
+    // `provider_request_id` on `ProviderTrace` when the stream
+    // finished cleanly, so downstream observers
+    // (`emit_debug_llm_call`, persistence of `llm_calls.jsonl`) get
+    // both ids.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::HttpMeta {
+        request_id: Some("req_01HAPPY".to_string()),
+    });
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_01HAPPY".to_string(),
+        model: "claude-sonnet-4".to_string(),
+        input_tokens: Some(10),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    acc.process(&StreamEvent::MessageStop);
+    let response = acc.into_response(10, 42).expect("happy path");
+    assert_eq!(response.trace.message_id.as_deref(), Some("msg_01HAPPY"));
+    assert_eq!(
+        response.trace.provider_request_id.as_deref(),
+        Some("req_01HAPPY")
+    );
+    assert_eq!(response.trace.model, "claude-sonnet-4");
 }
 
 #[test]
@@ -354,6 +477,7 @@ fn test_stream_accumulator_into_response_propagates_error_even_with_partial_cont
     });
     acc.process(&StreamEvent::Error {
         message: "overloaded_error: service is overloaded".to_string(),
+        request_id: None,
     });
 
     let err = acc.into_response(0, 100).unwrap_err();
@@ -373,6 +497,7 @@ fn test_stream_accumulator_into_response_error_without_message_start() {
     let mut acc = StreamAccumulator::new();
     acc.process(&StreamEvent::Error {
         message: "connection reset by peer".to_string(),
+        request_id: None,
     });
 
     let err = acc.into_response(0, 100).unwrap_err();
@@ -386,11 +511,45 @@ fn test_stream_accumulator_into_response_error_without_message_start() {
 
 #[test]
 fn test_provider_trace() {
+    // Legacy `with_request_id` now writes to `message_id` (the
+    // deprecation doc-comment explains the split). New code should
+    // prefer `with_message_id` / `with_provider_request_id`.
+    #[allow(deprecated)]
     let trace = ProviderTrace::new("claude", 500).with_request_id("req123");
 
     assert_eq!(trace.model, "claude");
     assert_eq!(trace.latency_ms, 500);
-    assert_eq!(trace.request_id, Some("req123".to_string()));
+    assert_eq!(trace.message_id.as_deref(), Some("req123"));
+    assert_eq!(trace.provider_request_id, None);
+    // Legacy accessor falls back to `message_id` when no HTTP id is
+    // populated, preserving behaviour for callers still reading
+    // `trace.request_id()`.
+    assert_eq!(trace.request_id().as_deref(), Some("req123"));
+}
+
+#[test]
+fn test_provider_trace_new_split_ids() {
+    // When both ids are present, `request_id()` prefers the HTTP one
+    // (that's the key operators need for provider / router logs).
+    let trace = ProviderTrace::new("claude", 100)
+        .with_message_id("msg_01ABC")
+        .with_provider_request_id("req_01XYZ");
+    assert_eq!(trace.message_id.as_deref(), Some("msg_01ABC"));
+    assert_eq!(trace.provider_request_id.as_deref(), Some("req_01XYZ"));
+    assert_eq!(trace.request_id().as_deref(), Some("req_01XYZ"));
+}
+
+#[test]
+fn test_provider_trace_accepts_legacy_request_id_alias() {
+    // Old persisted bundles (`llm_calls.jsonl` entries written before
+    // the split) stored the Anthropic message id under `request_id`.
+    // The serde alias on `message_id` keeps those bundles loadable
+    // — crucial for replay-based regression tests.
+    let json = r#"{"request_id":"msg_01OLD","latency_ms":42,"model":"claude-sonnet-4"}"#;
+    let trace: ProviderTrace = serde_json::from_str(json).expect("legacy shape deserializes");
+    assert_eq!(trace.message_id.as_deref(), Some("msg_01OLD"));
+    assert_eq!(trace.provider_request_id, None);
+    assert_eq!(trace.model, "claude-sonnet-4");
 }
 
 #[test]

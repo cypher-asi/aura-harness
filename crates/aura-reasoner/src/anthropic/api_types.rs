@@ -254,4 +254,11 @@ pub(super) struct SseError {
     /// layers emit a bare `{"error":{"message":"..."}}` shape.
     #[serde(rename = "type", default)]
     pub error_type: Option<String>,
+    /// Optional request id embedded in the SSE error body by some
+    /// proxies (Anthropic itself does *not* do this, but
+    /// `aura-router` and similar layers sometimes surface the
+    /// originating request id here). Used only as a fallback when the
+    /// response-header `x-request-id` was unavailable.
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
