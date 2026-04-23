@@ -112,7 +112,7 @@ fn test_detect_missing_args_blocks_write_file_without_path() {
     assert!(result
         .recovery_message
         .unwrap()
-        .contains("requires a `path`"));
+        .contains("requires a non-empty `path`"));
 }
 
 #[test]
@@ -134,6 +134,32 @@ fn test_detect_missing_args_allows_write_file_with_path() {
     let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_missing_required_args(&tool);
     assert!(result.is_none());
+}
+
+#[test]
+fn test_detect_missing_args_blocks_write_file_with_empty_path_string() {
+    let tool = make_tool("write_file", serde_json::json!({"path": ""}));
+    let result = detect_missing_required_args(&tool).unwrap();
+    assert!(result.blocked);
+    assert!(result
+        .recovery_message
+        .as_deref()
+        .unwrap()
+        .contains("non-empty `path`"));
+}
+
+#[test]
+fn test_detect_missing_args_blocks_edit_file_with_whitespace_path() {
+    let tool = make_tool("edit_file", serde_json::json!({"path": "   \t"}));
+    let result = detect_missing_required_args(&tool).unwrap();
+    assert!(result.blocked);
+}
+
+#[test]
+fn test_detect_missing_args_blocks_read_file_with_empty_path() {
+    let tool = make_tool("read_file", serde_json::json!({"path": ""}));
+    let result = detect_missing_required_args(&tool).unwrap();
+    assert!(result.blocked);
 }
 
 #[test]

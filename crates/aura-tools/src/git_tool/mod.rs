@@ -282,6 +282,15 @@ pub struct CommitPushOutcome {
 /// failures (auth rejected, non-fast-forward without `--force`, malformed
 /// refspec) surface immediately so the agent gets the signal it needs
 /// without spending its retry budget on a dead-letter push.
+///
+/// Remote-side storage exhaustion (`No space left on device` on the
+/// git server, HTTP 507, etc.) is classified as transient because the
+/// operator clearing disk space on the remote is the mitigation — the
+/// local commit is already safe and a retry after the cleanup
+/// succeeds without any action from the agent. Historically these
+/// fell into the non-retryable branch, so a single unlucky push left
+/// the task in an inconsistent state (commit locally, not on remote)
+/// until the next turn's push attempt.
 const TRANSIENT_PUSH_STDERR: &[&str] = &[
     "could not read from remote",
     "fatal: unable to access",
@@ -294,6 +303,14 @@ const TRANSIENT_PUSH_STDERR: &[&str] = &[
     "temporary failure in name resolution",
     "ssl_read",
     "tls",
+    // Remote-side storage exhaustion.
+    "no space left on device",
+    "insufficient storage",
+    "http 507",
+    "disk quota exceeded",
+    "write error: no space",
+    "unpack failed",
+    "index-pack abnormal exit",
 ];
 
 fn stderr_looks_transient(stderr: &str) -> bool {

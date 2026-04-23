@@ -166,7 +166,8 @@ pub fn detect_all_blocked(
 fn detect_missing_required_args(tool: &ToolCallInfo) -> Option<BlockCheckResult> {
     if WRITE_TOOLS.contains(&tool.name.as_str()) && extract_path(tool).is_none() {
         return Some(BlockCheckResult::blocked(format!(
-            "`{}` requires a `path` argument. Provide the file path to operate on.",
+            "`{}` requires a non-empty `path` argument. Provide the file path to operate on \
+             (empty strings and whitespace-only paths are rejected because they cannot land on disk).",
             tool.name
         )));
     }
@@ -198,6 +199,8 @@ fn extract_path(tool: &ToolCallInfo) -> Option<String> {
     tool.input
         .get("path")
         .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(String::from)
 }
 

@@ -276,6 +276,21 @@ fn stderr_looks_transient_matches_network_markers() {
 }
 
 #[test]
+fn stderr_looks_transient_matches_remote_storage_exhaustion() {
+    // Task 2.4 regression: the remote git server filled up. The error
+    // is transient (operator clears space) but used to be classified
+    // as a hard failure, leaving the task inconsistent.
+    assert!(stderr_looks_transient(
+        "remote: fatal: write error: No space left on device"
+    ));
+    assert!(stderr_looks_transient(
+        "remote: error: unpack failed: index-pack abnormal exit"
+    ));
+    assert!(stderr_looks_transient("HTTP 507 Insufficient Storage"));
+    assert!(stderr_looks_transient("fatal: disk quota exceeded"));
+}
+
+#[test]
 fn push_backoff_is_bounded() {
     assert_eq!(push_backoff_for_attempt(0), Duration::from_secs(2));
     assert_eq!(push_backoff_for_attempt(1), Duration::from_secs(5));

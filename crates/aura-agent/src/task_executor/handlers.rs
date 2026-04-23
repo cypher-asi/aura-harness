@@ -180,22 +180,26 @@ impl TaskToolExecutor {
         let outcomes = self.recent_tool_outcomes.lock().await;
         if outcomes.last_command_failed {
             return Some(
-                "ERROR: The last run_command failed (non-zero exit code). \
-                 Your build or test is broken. Fix the errors before completing the task."
+                "ERROR: The last run_command exited non-zero. \
+                 Your build or test is broken. Fix the errors before completing the task. \
+                 (Policy-denied commands do not count — if run_command is blocked, rely on \
+                 the harness's auto-build step and do not keep calling run_command.)"
                     .to_string(),
             );
         }
         let min_calls = 6;
         let error_threshold = 0.7;
-        if outcomes.total >= min_calls {
-            let error_ratio = outcomes.errors as f64 / outcomes.total as f64;
+        let total = outcomes.total();
+        let real_errors = outcomes.real_errors();
+        if total >= min_calls {
+            #[allow(clippy::cast_precision_loss)]
+            let error_ratio = real_errors as f64 / total as f64;
             if error_ratio >= error_threshold {
                 return Some(format!(
-                    "ERROR: {}/{} recent tool calls returned errors ({:.0}% failure rate). \
-                     The task is likely incomplete. Review the errors, fix the underlying \
-                     issue, then try completing again.",
-                    outcomes.errors,
-                    outcomes.total,
+                    "ERROR: {real_errors}/{total} recent tool calls returned errors \
+                     ({:.0}% failure rate, policy denials excluded). The task is likely \
+                     incomplete. Review the errors, fix the underlying issue, then try \
+                     completing again.",
                     error_ratio * 100.0,
                 ));
             }
@@ -268,6 +272,16 @@ impl TaskToolExecutor {
                 {
                     let mut phase = self.task_phase.lock().await;
                     *phase = TaskPhase::Implementing { plan };
+                }
+                // Clear the rolling outcome window on the exploration →
+                // implementing transition. Exploration-phase errors
+                // (directory-as-file reads, policy-denied commands, etc.)
+                // should not vote against the implementation phase's
+                // `task_done`; the guard only cares about recent
+                // implementing-phase behaviour.
+                {
+                    let mut outcomes = self.recent_tool_outcomes.lock().await;
+                    outcomes.reset();
                 }
                 results.push(ToolCallResult {
                     tool_use_id: tc.id.clone(),

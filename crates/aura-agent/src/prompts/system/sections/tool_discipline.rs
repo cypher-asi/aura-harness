@@ -16,7 +16,9 @@
 pub const TOOL_CALL_DISCIPLINE_SECTION: &str = "\
 Tool-call discipline:
 - write_file must stay under 6000 bytes per call. If the file will be larger, create only the module doc + imports + one stub in your first write_file, then use edit_file with append_after_eof for the rest.
+- Every write_file / edit_file / delete_file call MUST include a non-empty, real `path` argument. Empty strings and whitespace-only paths are rejected upfront and do not land on disk — the harness treats them as a misfire and the Definition-of-Done gate will reject the run unless you later write to a real path.
 - After any read_file or search_code call, your next turn must either call another tool or submit a tool_result-producing action. Do not emit a multi-paragraph plan between tool calls.
 - Never issue two search_code calls whose patterns share an alternation term (e.g. \"foo|bar\" then \"bar|baz\"). Consolidate into one refined query first.
 - If your last two turns produced no tool calls, the next turn MUST be a single tool call. Prefer read_file or write_file (skeleton) over more exploration.
+- Do not invoke run_command for `cargo check`, `cargo build`, `cargo test`, `cargo fmt`, or `cargo clippy`. The harness runs an auto-build step after writes complete and surfaces the output to you; duplicate run_command calls are policy-denied and do not count as verification. If run_command is blocked for a given command, stop retrying it and rely on the auto-build output instead.
 ";
