@@ -249,4 +249,9 @@ pub(super) struct SseUsageDelta {
 #[derive(Debug, Deserialize)]
 pub(super) struct SseError {
     pub message: String,
+    /// Anthropic-shape error type (e.g. `overloaded_error`, `api_error`,
+    /// `rate_limit_error`). Optional because some proxies / intermediate
+    /// layers emit a bare `{"error":{"message":"..."}}` shape.
+    #[serde(rename = "type", default)]
+    pub error_type: Option<String>,
 }

@@ -93,7 +93,12 @@ impl Default for AgentRunnerConfig {
             max_shell_task_retries: 4,
             task_execution_max_tokens: 16_384,
             thinking_budget: 10_000,
-            stream_timeout_secs: 120,
+            // Matches the reasoner's default reqwest request timeout
+            // (300s / `AURA_MODEL_TIMEOUT_MS`) so the outer `timeout()`
+            // guard in `AgentLoop::call_model` does not preempt an
+            // in-flight provider request. See the comment on
+            // `AgentLoopConfig::stream_timeout`.
+            stream_timeout_secs: 300,
             max_context_tokens: 200_000,
             max_task_credits: None,
             default_model: crate::constants::DEFAULT_MODEL.to_string(),

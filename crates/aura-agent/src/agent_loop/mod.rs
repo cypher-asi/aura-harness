@@ -57,7 +57,13 @@ pub struct AgentLoopConfig {
     pub max_iterations: usize,
     /// Maximum tokens per response.
     pub max_tokens: u32,
-    /// Streaming timeout per iteration.
+    /// Streaming timeout per iteration. This is an outer guard around
+    /// the provider call; it must be >= the reasoner's reqwest request
+    /// timeout (`AURA_MODEL_TIMEOUT_MS`, default 300s) or the agent
+    /// loop will fire "Model call timed out" while the provider is
+    /// still happily streaming tokens. Aligning the two keeps timeout
+    /// responsibility in a single layer (the HTTP client) instead of
+    /// producing split-timeout races that look like provider errors.
     pub stream_timeout: Duration,
     /// Credit attribution label.
     pub billing_reason: String,
@@ -138,7 +144,15 @@ impl Default for AgentLoopConfig {
         Self {
             max_iterations: MAX_ITERATIONS,
             max_tokens: 16_384,
-            stream_timeout: Duration::from_secs(60),
+            // Matches the default reasoner reqwest timeout (300s /
+            // `AURA_MODEL_TIMEOUT_MS`). The previous 60s caused long
+            // streams with extended thinking to hit `timeout()` in
+            // `call_model` before the provider had a chance to finish
+            // — surfacing "Model call timed out after 60s" even though
+            // the underlying request was still healthy. Keeping the
+            // timeout in one layer (the HTTP client) avoids that
+            // split-responsibility race.
+            stream_timeout: Duration::from_secs(300),
             billing_reason: "agent_loop".to_string(),
             model_override: None,
             max_context_tokens: Some(200_000),

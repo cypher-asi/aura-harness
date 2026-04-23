@@ -304,6 +304,87 @@ fn test_stream_accumulator_ping_and_error() {
 }
 
 #[test]
+fn test_stream_accumulator_into_response_propagates_error_with_no_content() {
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_01ABC".to_string(),
+        model: "claude-sonnet-test".to_string(),
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    acc.process(&StreamEvent::Error {
+        message: "Internal server error".to_string(),
+    });
+
+    let err = acc.into_response(0, 100).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("stream terminated with error"),
+        "expected stream-termination prefix, got: {msg}"
+    );
+    // Model and message_id should be threaded into the error so
+    // operators can correlate with provider / router logs.
+    assert!(msg.contains("model=claude-sonnet-test"), "missing model: {msg}");
+    assert!(msg.contains("msg_id=msg_01ABC"), "missing msg_id: {msg}");
+    assert!(msg.contains("Internal server error"), "missing raw msg: {msg}");
+}
+
+#[test]
+fn test_stream_accumulator_into_response_propagates_error_even_with_partial_content() {
+    // Regression: previously `into_response` silently dropped a
+    // mid-stream error if any text or tool_use content had been
+    // accumulated. That caused partial tool_use blocks to be executed
+    // as if the stream had finished cleanly. The fix always
+    // propagates `stream_error`.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::MessageStart {
+        message_id: "msg_partial".to_string(),
+        model: "claude-sonnet-test".to_string(),
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    });
+    acc.process(&StreamEvent::ContentBlockStart {
+        index: 0,
+        content_type: StreamContentType::Text,
+    });
+    acc.process(&StreamEvent::TextDelta {
+        text: "Partial response before upstream blew up".to_string(),
+    });
+    acc.process(&StreamEvent::Error {
+        message: "overloaded_error: service is overloaded".to_string(),
+    });
+
+    let err = acc.into_response(0, 100).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("stream terminated with error"),
+        "partial-content path must still fail, got: {msg}"
+    );
+    assert!(msg.contains("overloaded_error"), "error type preserved: {msg}");
+}
+
+#[test]
+fn test_stream_accumulator_into_response_error_without_message_start() {
+    // If the SSE error arrives before `message_start` we still fail
+    // cleanly and just omit the context fragment (no trailing empty
+    // parentheses in the rendered message).
+    let mut acc = StreamAccumulator::new();
+    acc.process(&StreamEvent::Error {
+        message: "connection reset by peer".to_string(),
+    });
+
+    let err = acc.into_response(0, 100).unwrap_err();
+    let msg = err.to_string();
+    assert_eq!(
+        msg,
+        "stream terminated with error: connection reset by peer",
+        "no empty context parentheses when metadata unavailable"
+    );
+}
+
+#[test]
 fn test_provider_trace() {
     let trace = ProviderTrace::new("claude", 500).with_request_id("req123");
 

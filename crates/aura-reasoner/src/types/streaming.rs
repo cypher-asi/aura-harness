@@ -258,14 +258,34 @@ impl StreamAccumulator {
         }
 
         if let Some(ref err_msg) = self.stream_error {
-            if self.text_content.is_empty()
-                && self.tool_uses.is_empty()
-                && self.current_tool_use.is_none()
-            {
-                return Err(ReasonerError::Internal(format!(
-                    "stream terminated with error: {err_msg}"
-                )));
+            // Always propagate a mid-stream error, even if partial text
+            // or tool_use blocks arrived first. The previous behaviour
+            // swallowed the error when any content was accumulated,
+            // which caused partial tool-use blocks to be executed as if
+            // the stream had finished cleanly — a correctness bug that
+            // could trigger malformed tool calls on the next iteration.
+            //
+            // Include model + message_id when known so the user-visible
+            // failure string is actionable (operators can correlate
+            // `msg_id` with provider / router logs). The `err_msg`
+            // string already carries the Anthropic `error.type` prefix
+            // (see `anthropic::sse::parse_sse_event`) when the upstream
+            // supplied one.
+            let mut context_parts: Vec<String> = Vec::new();
+            if !self.model.is_empty() {
+                context_parts.push(format!("model={}", self.model));
             }
+            if !self.message_id.is_empty() {
+                context_parts.push(format!("msg_id={}", self.message_id));
+            }
+            let context = if context_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", context_parts.join(", "))
+            };
+            return Err(ReasonerError::Internal(format!(
+                "stream terminated with error{context}: {err_msg}"
+            )));
         }
 
         let mut content_blocks = Vec::new();

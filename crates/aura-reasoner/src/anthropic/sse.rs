@@ -183,9 +183,19 @@ fn parse_sse_event(event_str: &str) -> Option<StreamEvent> {
         }
         SseEvent::MessageStop => Some(StreamEvent::MessageStop),
         SseEvent::Ping => Some(StreamEvent::Ping),
-        SseEvent::Error { error } => Some(StreamEvent::Error {
-            message: error.message,
-        }),
+        SseEvent::Error { error } => {
+            // Preserve the Anthropic-shape `error.type` in the message so
+            // downstream classification (retry policy, UI labeling) can
+            // distinguish `overloaded_error` from `api_error` / generic
+            // `Internal server error`. Proxies often inject a bare
+            // `Internal server error` with no `type`, in which case we
+            // fall back to the raw message.
+            let message = match error.error_type.as_deref() {
+                Some(kind) if !kind.is_empty() => format!("{kind}: {}", error.message),
+                _ => error.message,
+            };
+            Some(StreamEvent::Error { message })
+        }
     }
 }
 
@@ -240,6 +250,39 @@ mod tests {
         );
         match event {
             Some(StreamEvent::Error { message }) => assert_eq!(message, "overloaded"),
+            other => panic!("Expected Error event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_event_preserves_anthropic_error_type() {
+        // Anthropic SSE wire format: `error.type` distinguishes
+        // `overloaded_error` (retryable per-provider) from
+        // `api_error` (generic 5xx). The reasoner's downstream retry
+        // policy keys off this string, so the parser must forward it.
+        let event = parse_sse_event(
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"service is overloaded\"}}",
+        );
+        match event {
+            Some(StreamEvent::Error { message }) => {
+                assert_eq!(message, "overloaded_error: service is overloaded");
+            }
+            other => panic!("Expected Error event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_error_event_without_type_uses_raw_message() {
+        // Proxies sometimes emit a bare `{"error":{"message":"..."}}`
+        // with no `type` — preserve the raw message verbatim so the
+        // downstream classifier still sees the original prose.
+        let event = parse_sse_event(
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"Internal server error\"}}",
+        );
+        match event {
+            Some(StreamEvent::Error { message }) => {
+                assert_eq!(message, "Internal server error");
+            }
             other => panic!("Expected Error event, got {other:?}"),
         }
     }
