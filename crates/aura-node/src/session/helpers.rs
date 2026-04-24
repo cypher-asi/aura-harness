@@ -297,6 +297,24 @@ pub(super) async fn build_kernel_with_config(
         policy.add_allowed_tools(registered_tool_names.iter().cloned());
     }
 
+    // Allow-list the harness-native git tools (`git_commit`,
+    // `git_push`, `git_commit_push`). They are registered into every
+    // resolver via `aura_tools::tool::builtin_tools()` and exposed to
+    // the chat LLM via `ToolCatalog`'s `ToolProfile::Agent` entries,
+    // but they fall through every other allow-listing path: they are
+    // NOT in `PolicyConfig::default().allowed_tools` (only the file
+    // tools are seeded), they are NOT shipped from aura-os-server as
+    // `installed_tools` (no matching tool exists in
+    // `aura-os-agent-tools`), and a chat session does NOT seed them
+    // via `agent_permissions` (only the dev-loop automaton path does
+    // that, in `automaton_bridge::dev_loop_git_permissions`). Without
+    // this extension, any chat-side `git_commit` call dies with
+    // `"Tool 'git_commit' is not allowed"` even though the resolver
+    // and the LLM tool schema both have it. The git tools enforce
+    // their own workspace-escape and timeout invariants
+    // (`aura-tools/src/git_tool/`); this only flips the policy gate.
+    policy.add_allowed_tools(aura_tools::GIT_TOOL_NAMES.iter().map(|s| s.to_string()));
+
     let config = KernelConfig {
         workspace_base: workspace,
         use_workspace_base_as_root,
