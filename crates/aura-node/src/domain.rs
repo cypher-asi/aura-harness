@@ -36,6 +36,19 @@ pub struct HttpDomainApi {
     storage_url: String,
     network_url: String,
     orbit_url: String,
+    /// Optional `aura-os-server` base URL. When set, it replaces
+    /// [`Self::storage_url`] as the base for spec / task / project /
+    /// log routes so those writes hit `aura-os-server` and fire its
+    /// side effects (disk mirror of spec markdown to
+    /// `<workspace_root>/spec/<slug>.md`, SSE broadcast on the project
+    /// stream, JWT billing header injection). Orbit / feed / billing
+    /// routes are unaffected — they keep using their existing direct
+    /// base URLs because `aura-os-server` does not proxy them.
+    ///
+    /// Sourced from `NodeConfig::aura_os_server_url` (env var
+    /// `AURA_OS_SERVER_URL`). `None` preserves the historical
+    /// behavior of posting directly to `aura-storage`.
+    os_server_url: Option<String>,
     /// In-process cache of per-agent permission overrides fetched from
     /// aura-network. Keyed by agent id. Entries live for
     /// [`AGENT_PERMISSIONS_TTL`] before being refetched; negative
@@ -47,11 +60,23 @@ pub struct HttpDomainApi {
 impl HttpDomainApi {
     /// Build a new HTTP-backed domain API.
     ///
+    /// `os_server_url` is the optional `aura-os-server` base URL. When
+    /// `Some`, spec / task / project / log routes go through it so
+    /// `aura-os-server`'s disk-mirror + SSE + JWT-billing side effects
+    /// fire on every write. When `None` those routes fall back to
+    /// `storage_url` (pre-`aura-os-server` behavior). Operators enable
+    /// the override by setting `AURA_OS_SERVER_URL` on the node.
+    ///
     /// # Errors
     /// Returns an error if `reqwest` fails to construct its HTTP client
     /// (typically a TLS backend initialization failure in constrained
     /// environments).
-    pub fn new(storage_url: &str, network_url: &str, orbit_url: &str) -> anyhow::Result<Self> {
+    pub fn new(
+        storage_url: &str,
+        network_url: &str,
+        orbit_url: &str,
+        os_server_url: Option<String>,
+    ) -> anyhow::Result<Self> {
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
@@ -62,8 +87,22 @@ impl HttpDomainApi {
             storage_url: storage_url.trim_end_matches('/').to_string(),
             network_url: network_url.trim_end_matches('/').to_string(),
             orbit_url: orbit_url.trim_end_matches('/').to_string(),
+            os_server_url: os_server_url.map(|u| u.trim_end_matches('/').to_string()),
             permission_cache: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Base URL for routes `aura-os-server` owns (specs, tasks,
+    /// projects, logs, project stats).
+    ///
+    /// Returns `os_server_url` when configured, otherwise falls back
+    /// to `storage_url`. Kept as a helper so every spec/task/log
+    /// handler funnels through a single override point — threading the
+    /// new URL is a one-line change per call site and an operator who
+    /// leaves `AURA_OS_SERVER_URL` unset keeps the historical direct
+    /// `aura-storage` path verbatim.
+    fn specs_tasks_base_url(&self) -> &str {
+        self.os_server_url.as_deref().unwrap_or(&self.storage_url)
     }
 
     fn cached_permissions(
@@ -187,13 +226,16 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<Vec<SpecDescriptor>> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/projects/{project_id}/specs", self.storage_url);
+        let url = format!(
+            "{}/api/projects/{project_id}/specs",
+            self.specs_tasks_base_url()
+        );
         self.api_get(&url, jwt).await
     }
 
     async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/specs/{spec_id}", self.storage_url);
+        let url = format!("{}/api/specs/{spec_id}", self.specs_tasks_base_url());
         self.api_get(&url, jwt).await
     }
 
@@ -206,7 +248,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/projects/{project_id}/specs", self.storage_url);
+        let url = format!(
+            "{}/api/projects/{project_id}/specs",
+            self.specs_tasks_base_url()
+        );
         let body = serde_json::json!({
             "title": title,
             "markdownContents": content,
@@ -223,7 +268,7 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/specs/{spec_id}", self.storage_url);
+        let url = format!("{}/api/specs/{spec_id}", self.specs_tasks_base_url());
         let body = serde_json::json!({
             "title": title,
             "markdownContents": content,
@@ -233,7 +278,7 @@ impl DomainApi for HttpDomainApi {
 
     async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/specs/{spec_id}", self.storage_url);
+        let url = format!("{}/api/specs/{spec_id}", self.specs_tasks_base_url());
         self.api_delete(&url, jwt).await
     }
 
@@ -246,7 +291,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<Vec<TaskDescriptor>> {
         let jwt = Self::require_jwt(jwt)?;
-        let mut url = format!("{}/api/projects/{project_id}/tasks", self.storage_url);
+        let mut url = format!(
+            "{}/api/projects/{project_id}/tasks",
+            self.specs_tasks_base_url()
+        );
         if let Some(sid) = spec_id {
             use std::fmt::Write;
             let _ = write!(url, "?specId={sid}");
@@ -265,7 +313,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/projects/{project_id}/tasks", self.storage_url);
+        let url = format!(
+            "{}/api/projects/{project_id}/tasks",
+            self.specs_tasks_base_url()
+        );
         let body = serde_json::json!({
             "specId": spec_id,
             "title": title,
@@ -283,7 +334,7 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/tasks/{task_id}", self.storage_url);
+        let url = format!("{}/api/tasks/{task_id}", self.specs_tasks_base_url());
         let body = serde_json::json!({
             "title": updates.title,
             "description": updates.description,
@@ -294,7 +345,7 @@ impl DomainApi for HttpDomainApi {
 
     async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/tasks/{task_id}", self.storage_url);
+        let url = format!("{}/api/tasks/{task_id}", self.specs_tasks_base_url());
         self.api_delete(&url, jwt).await
     }
 
@@ -305,14 +356,17 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/tasks/{task_id}/transition", self.storage_url);
+        let url = format!(
+            "{}/api/tasks/{task_id}/transition",
+            self.specs_tasks_base_url()
+        );
         let body = serde_json::json!({ "status": status });
         self.api_post(&url, &body, jwt).await
     }
 
     async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/tasks/{task_id}", self.storage_url);
+        let url = format!("{}/api/tasks/{task_id}", self.specs_tasks_base_url());
         self.api_get(&url, jwt).await
     }
 
@@ -341,7 +395,10 @@ impl DomainApi for HttpDomainApi {
         }
     }
 
-    // -- Project (aura-network, JWT /api/) ------------------------------------
+    // -- Project (aura-os-server when configured, else aura-network
+    //    legacy fallback — project writes also fire aura-os-server's
+    //    SSE broadcast / JWT billing side effects, so we want them on
+    //    the same base URL as specs/tasks when the override is set) --
 
     async fn get_project(
         &self,
@@ -349,7 +406,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/projects/{project_id}", self.network_url);
+        let url = format!(
+            "{}/api/projects/{project_id}",
+            self.specs_tasks_base_url()
+        );
         self.api_get(&url, jwt).await
     }
 
@@ -360,7 +420,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/projects/{project_id}", self.network_url);
+        let url = format!(
+            "{}/api/projects/{project_id}",
+            self.specs_tasks_base_url()
+        );
         let body = serde_json::json!({
             "name": updates.name,
             "description": updates.description,
@@ -383,7 +446,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<serde_json::Value> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/projects/{project_id}/logs", self.storage_url);
+        let url = format!(
+            "{}/api/projects/{project_id}/logs",
+            self.specs_tasks_base_url()
+        );
         let mut body = serde_json::json!({
             "message": message,
             "level": level,
@@ -405,7 +471,10 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<serde_json::Value> {
         let jwt = Self::require_jwt(jwt)?;
-        let mut url = format!("{}/api/projects/{project_id}/logs", self.storage_url);
+        let mut url = format!(
+            "{}/api/projects/{project_id}/logs",
+            self.specs_tasks_base_url()
+        );
         let mut params = Vec::new();
         if let Some(l) = level {
             params.push(format!("level={l}"));
@@ -428,7 +497,7 @@ impl DomainApi for HttpDomainApi {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/stats?scope=project&projectId={project_id}",
-            self.storage_url
+            self.specs_tasks_base_url()
         );
         self.api_get(&url, jwt).await
     }
@@ -583,5 +652,79 @@ impl DomainApi for HttpDomainApi {
             .with_context(|| format!("parse agent permissions response from {url}"))?;
         self.store_permissions(agent_id, Some(map.clone()));
         Ok(Some(map))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `specs_tasks_base_url()` must prefer the aura-os-server override
+    /// when set. This is the routing hook that lets an operator flip
+    /// `AURA_OS_SERVER_URL` and redirect spec / task / project / log
+    /// writes through aura-os-server so its disk-mirror + SSE + JWT
+    /// billing side effects fire.
+    #[test]
+    fn specs_tasks_base_url_prefers_os_server_when_set() {
+        let api = HttpDomainApi::new(
+            "https://storage.example.com",
+            "https://network.example.com",
+            "https://orbit.example.com",
+            Some("http://os".to_string()),
+        )
+        .expect("build HttpDomainApi");
+
+        assert_eq!(api.specs_tasks_base_url(), "http://os");
+
+        // Sanity-check URL composition for the highest-value route
+        // (spec create) to lock in the exact path shape the rest of
+        // the code assumes.
+        let url = format!(
+            "{}/api/projects/{pid}/specs",
+            api.specs_tasks_base_url(),
+            pid = "proj-1",
+        );
+        assert_eq!(url, "http://os/api/projects/proj-1/specs");
+    }
+
+    /// With no override, routing must fall back to `aura_storage_url`
+    /// verbatim so existing deployments that haven't set
+    /// `AURA_OS_SERVER_URL` see no behavior change.
+    #[test]
+    fn specs_tasks_base_url_falls_back_to_storage_when_unset() {
+        let api = HttpDomainApi::new(
+            "https://storage.example.com",
+            "https://network.example.com",
+            "https://orbit.example.com",
+            None,
+        )
+        .expect("build HttpDomainApi");
+
+        assert_eq!(api.specs_tasks_base_url(), "https://storage.example.com");
+
+        let url = format!(
+            "{}/api/projects/{pid}/specs",
+            api.specs_tasks_base_url(),
+            pid = "proj-1",
+        );
+        assert_eq!(url, "https://storage.example.com/api/projects/proj-1/specs");
+    }
+
+    /// Trailing slashes on either base URL must be normalised away so
+    /// `format!("{base}/api/...")` never produces a `//api/...` path
+    /// that some reverse proxies reject. Regression gate for the
+    /// override — if we forget to trim we'd silently break every route
+    /// that runs through the helper.
+    #[test]
+    fn os_server_url_trims_trailing_slash() {
+        let api = HttpDomainApi::new(
+            "https://storage.example.com/",
+            "https://network.example.com",
+            "https://orbit.example.com",
+            Some("http://os/".to_string()),
+        )
+        .expect("build HttpDomainApi");
+
+        assert_eq!(api.specs_tasks_base_url(), "http://os");
     }
 }

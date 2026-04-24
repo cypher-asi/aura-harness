@@ -109,9 +109,11 @@ impl Node {
             &self.config.aura_storage_url,
             &self.config.aura_network_url,
             &self.config.orbit_url,
+            self.config.aura_os_server_url.clone(),
         )?);
         info!(
             storage_url = %self.config.aura_storage_url,
+            os_server_url = ?self.config.aura_os_server_url,
             "Domain API ready (JWT auth)"
         );
 

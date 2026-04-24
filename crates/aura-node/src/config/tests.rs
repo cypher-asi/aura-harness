@@ -17,6 +17,7 @@ fn clear_node_env_vars() {
     std::env::remove_var("ORBIT_URL");
     std::env::remove_var("AURA_STORAGE_URL");
     std::env::remove_var("AURA_NETWORK_URL");
+    std::env::remove_var("AURA_OS_SERVER_URL");
     std::env::remove_var("AURA_PROJECT_BASE");
     std::env::remove_var("AURA_NODE_AUTH_TOKEN");
     std::env::remove_var("AURA_ALLOWED_COMMANDS");
@@ -44,7 +45,45 @@ fn test_default_config() {
     assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
     assert_eq!(config.aura_storage_url, "https://aura-storage.onrender.com");
     assert_eq!(config.aura_network_url, "https://aura-network.onrender.com");
+    assert!(
+        config.aura_os_server_url.is_none(),
+        "aura-os-server override is additive / opt-in; default must be None so HttpDomainApi falls back to aura_storage_url"
+    );
     assert!(config.project_base.is_none());
+}
+
+#[test]
+fn test_aura_os_server_url_env() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_OS_SERVER_URL", "https://os.example.com");
+    let config = NodeConfig::from_env();
+    assert_eq!(
+        config.aura_os_server_url.as_deref(),
+        Some("https://os.example.com")
+    );
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_aura_os_server_url_empty_string_ignored() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_OS_SERVER_URL", "");
+    let config = NodeConfig::from_env();
+    assert!(config.aura_os_server_url.is_none());
+
+    std::env::set_var("AURA_OS_SERVER_URL", "   ");
+    let config = NodeConfig::from_env();
+    assert!(
+        config.aura_os_server_url.is_none(),
+        "whitespace-only should be treated as unset, same as the other URL envs"
+    );
+
+    clear_node_env_vars();
 }
 
 #[test]

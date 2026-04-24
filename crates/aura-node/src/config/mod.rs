@@ -75,6 +75,21 @@ pub struct NodeConfig {
     pub aura_storage_url: String,
     /// Aura Network service URL
     pub aura_network_url: String,
+    /// Optional `aura-os-server` base URL.
+    ///
+    /// When set, `HttpDomainApi` routes spec / task / project / log
+    /// writes through this base URL instead of hitting `aura-storage`
+    /// directly. That matters because `aura-os-server` is the
+    /// component that runs the side effects on those writes —
+    /// mirroring spec markdown to
+    /// `<workspace_root>/spec/<slug>.md` on disk, broadcasting the
+    /// change to the project's SSE stream, and attaching JWT billing
+    /// headers on the outbound storage call.
+    ///
+    /// Populated from `AURA_OS_SERVER_URL`. When `None` the harness
+    /// falls back to [`Self::aura_storage_url`] for those routes, which
+    /// preserves the pre-`aura-os-server` behavior. Opt-in / additive.
+    pub aura_os_server_url: Option<String>,
     /// Shared-secret bearer token required by every protected route.
     ///
     /// Only consulted when [`Self::require_auth`] is `true`. Populated
@@ -130,6 +145,7 @@ impl std::fmt::Debug for NodeConfig {
             .field("orbit_url", &self.orbit_url)
             .field("aura_storage_url", &self.aura_storage_url)
             .field("aura_network_url", &self.aura_network_url)
+            .field("aura_os_server_url", &self.aura_os_server_url)
             .field("auth_token", &"***")
             .field("require_auth", &self.require_auth)
             .field("strict_mode", &self.strict_mode)
@@ -156,6 +172,7 @@ impl Default for NodeConfig {
             orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
+            aura_os_server_url: None,
             auth_token: DEFAULT_TEST_AUTH_TOKEN.to_string(),
             require_auth: false,
             strict_mode: false,
@@ -223,6 +240,12 @@ impl NodeConfig {
         }
         if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
             config.aura_network_url = val;
+        }
+        if let Ok(val) = std::env::var("AURA_OS_SERVER_URL") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                config.aura_os_server_url = Some(trimmed.to_string());
+            }
         }
         if let Ok(val) = std::env::var("AURA_PROJECT_BASE") {
             if !val.is_empty() {
