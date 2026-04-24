@@ -334,3 +334,73 @@ pub fn devloop_control_tools(
         )),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pinned set of dev-loop tool names the harness registers via
+    /// [`devloop_control_tools`]. `aura-node`'s
+    /// `build_kernel_with_config` collects these names from each
+    /// returned tool and seeds them into `policy.allowed_tools`,
+    /// because the kernel's fail-closed `allow_unlisted = false`
+    /// default denies anything not on the list and
+    /// aura-os-server's `tool_dedupe::HARNESS_NATIVE_TOOL_NAMES`
+    /// strips these names from `installed_tools` (so they never
+    /// reach the policy via the installed-tool extension). If a
+    /// fifth dev-loop tool is added without updating the seed —
+    /// or one of these is renamed — the chat session denies it
+    /// with `"Tool 'X' is not allowed"` even though the resolver
+    /// has it registered. This test pins the canonical name set
+    /// so any drift fails loudly here instead of silently in
+    /// production.
+    const CANONICAL_DEVLOOP_TOOL_NAMES: &[&str] = &[
+        "start_dev_loop",
+        "pause_dev_loop",
+        "stop_dev_loop",
+        "run_task",
+    ];
+
+    struct StubController;
+
+    #[async_trait]
+    impl AutomatonController for StubController {
+        async fn start_dev_loop(
+            &self,
+            _project_id: &str,
+            _workspace_root: Option<PathBuf>,
+            _auth_token: Option<String>,
+            _model: Option<String>,
+            _git_repo_url: Option<String>,
+            _git_branch: Option<String>,
+        ) -> Result<String, String> {
+            Ok("stub".into())
+        }
+        async fn pause_dev_loop(&self, _project_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn stop_dev_loop(&self, _project_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+        async fn run_task(
+            &self,
+            _project_id: &str,
+            _task_id: &str,
+            _workspace_root: Option<PathBuf>,
+            _auth_token: Option<String>,
+            _model: Option<String>,
+            _git_repo_url: Option<String>,
+            _git_branch: Option<String>,
+        ) -> Result<String, String> {
+            Ok("stub".into())
+        }
+    }
+
+    #[test]
+    fn devloop_control_tools_returns_canonical_name_set() {
+        let controller: Arc<dyn AutomatonController> = Arc::new(StubController);
+        let tools = devloop_control_tools(controller, "proj-1".into(), None, None);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        assert_eq!(names, CANONICAL_DEVLOOP_TOOL_NAMES);
+    }
+}

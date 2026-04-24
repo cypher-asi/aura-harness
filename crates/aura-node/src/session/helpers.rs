@@ -211,6 +211,20 @@ pub(super) async fn build_kernel_with_config(
         executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec.clone())
             .with_installed_tools(session.installed_tools.clone());
 
+    // Names of harness-native automaton tools registered below
+    // (`start_dev_loop`, `pause_dev_loop`, `stop_dev_loop`,
+    // `run_task`). Captured here so we can extend `policy.allowed_tools`
+    // with them after `build_policy_config` runs — without that, the
+    // kernel's fail-closed `allow_unlisted = false` default denies
+    // every dev-loop tool with `"Tool 'start_dev_loop' is not allowed"`
+    // because aura-os-server's `tool_dedupe::HARNESS_NATIVE_TOOL_NAMES`
+    // strips them from `installed_tools` (the harness handles them
+    // natively, so they intentionally do not ship as HTTP-callback
+    // installed tools to avoid Anthropic's "tool names must be unique"
+    // 400). Same architectural pattern as the domain-tool extension
+    // below; see commit 3373d96 for the original instance.
+    let mut registered_tool_names: Vec<String> = Vec::new();
+
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
         let workspace_root = session.project_path.clone();
@@ -220,6 +234,7 @@ pub(super) async fn build_kernel_with_config(
             workspace_root,
             session.auth_token.clone(),
         ) {
+            registered_tool_names.push(tool.name().to_string());
             resolver.register(tool);
         }
     }
@@ -268,6 +283,18 @@ pub(super) async fn build_kernel_with_config(
     // aura-os-server dispatcher via the session JWT.
     if let Some(ref exec) = domain_exec {
         policy.add_allowed_tools(exec.tool_names().iter().map(|s| s.to_string()));
+    }
+
+    // Mirror of the domain-tool extension above for harness-native
+    // automaton tools (`start_dev_loop` & friends). These were just
+    // registered into `resolver` but are stripped from `installed_tools`
+    // server-side, so `build_policy_config` never saw them — re-add
+    // them here so the kernel allows the dispatch path the resolver
+    // already routes to. The harness controller still enforces
+    // ownership (project-scoped construction binds these tools to a
+    // specific `project_id`), so allow-listing the names is safe.
+    if !registered_tool_names.is_empty() {
+        policy.add_allowed_tools(registered_tool_names.iter().cloned());
     }
 
     let config = KernelConfig {
