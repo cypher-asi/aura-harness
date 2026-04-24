@@ -13,7 +13,7 @@ sync with the `Enforcement:` lines under each section.
 | §1 | Sole External Gateway | CI-gated `rg` bands in `scripts/check_invariants.sh` + `.github/workflows/invariants.yml` (ModelProvider `.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/agent_loop/`). Git-mutation surface covered by `crates/aura-tools/src/git_tool/tests.rs` (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by `crates/aura-agent/src/kernel_domain_gateway.rs` tests. |
 | §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-runtime/src/automaton_bridge.rs::tests::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path). |
 | §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), `crates/aura-kernel/src/kernel/tests.rs::reason_sync_error_records_failed` + `reason_streaming_handshake_error_records_failed` (Phase 1 sync + handshake failure paths), `tests/automaton_reasoning_recording.rs` (automaton spec-gen / dev-loop calls). |
-| §4 | Full Policy Enforcement | `crates/aura-core/src/types/tool_permissions.rs` resolver tests, `crates/aura-kernel/src/policy/check.rs` policy tests, `crates/aura-runtime/src/tool_permissions.rs` validation/monotonic tests, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` command guardrail tests. |
+| §4 | Full Policy Enforcement | `crates/aura-core/src/types/tool_permissions.rs` resolver/full-access tests, `crates/aura-kernel/src/policy/check.rs` policy tests, `crates/aura-runtime/src/tool_permissions.rs` validation/monotonic tests, `crates/aura-runtime/src/session/helpers.rs` session tool-config composition tests, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` command guardrail tests. |
 | §5 | Complete Audit Trail | `crates/aura-kernel/src/kernel/tests.rs` + §4 matrix asserts `decision`/`actions`/`context_hash`. |
 | §6 | Deterministic Context | `crates/aura-kernel/tests/invariant_determinism.rs` (proptest). |
 | §7 | Monotonic Sequencing | `crates/aura-store/tests/invariant_atomicity.rs` + `crates/aura-store/src/rocks_store/tests.rs`. |
@@ -126,7 +126,16 @@ Complementary enforcement in `aura-tools`:
 - `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` / `shell_script` fields unless the caller passes `allow_shell: true`. Once `allow_shell` is granted, `ToolConfig::command.allowed_shell_scripts` switches between "any script allowed" (empty allowlist, the default matching `command_allowlist`) and "verbatim match only" (non-empty allowlist).
 - When `ToolConfig::command.enabled` is true, `ToolConfig::command.binary_allowlist` must be non-empty. `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
 
-**Enforcement:** `crates/aura-core/src/types/tool_permissions.rs` covers the resolver truth table and wire spelling, `crates/aura-kernel/src/policy/check.rs` covers policy resolution and live prompt verdicts, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` covers command/shell/binary guardrails.
+Operator and per-agent layers remain orthogonal by default. When the operator
+explicitly opts in with `ToolConfig::command.allow_unrestricted_full_access`,
+sessions whose user default plus per-agent override are effectively
+`FullAccess` compose into a session-scoped
+`ToolConfig::command.bypass_allowlists`. That derived session flag skips the
+command, binary, and shell-script allowlists only; `command.enabled`,
+`allow_shell`, sandbox/cwd checks, timeout limits, capability gates, and
+installed integration requirements remain in effect.
+
+**Enforcement:** `crates/aura-core/src/types/tool_permissions.rs` covers the resolver truth table, full-access detection, and wire spelling, `crates/aura-kernel/src/policy/check.rs` covers policy resolution and live prompt verdicts, `crates/aura-runtime/src/session/helpers.rs` covers operator-plus-agent composition into session-scoped tool config, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` covers command/shell/binary guardrails.
 
 ---
 

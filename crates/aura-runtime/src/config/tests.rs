@@ -18,6 +18,7 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_PROJECT_BASE");
     std::env::remove_var("AURA_NODE_AUTH_TOKEN");
     std::env::remove_var("AURA_NODE_REQUIRE_AUTH");
+    std::env::remove_var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS");
 }
 
 #[test]
@@ -37,6 +38,7 @@ fn test_default_config() {
         "aura-os-server override is additive / opt-in; default must be None so HttpDomainApi falls back to aura_storage_url"
     );
     assert!(config.project_base.is_none());
+    assert!(!config.allow_unrestricted_full_access);
 }
 
 #[test]
@@ -134,6 +136,26 @@ fn test_sync_writes_parsing() {
     std::env::set_var("SYNC_WRITES", "false");
     let config = NodeConfig::from_env();
     assert!(!config.sync_writes);
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_unrestricted_full_access_env() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS", "1");
+    let config = NodeConfig::from_env();
+    assert!(config.allow_unrestricted_full_access);
+
+    std::env::set_var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS", "true");
+    let config = NodeConfig::from_env();
+    assert!(config.allow_unrestricted_full_access);
+
+    std::env::set_var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS", "false");
+    let config = NodeConfig::from_env();
+    assert!(!config.allow_unrestricted_full_access);
 
     clear_node_env_vars();
 }

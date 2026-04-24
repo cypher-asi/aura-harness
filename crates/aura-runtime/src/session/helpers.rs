@@ -14,7 +14,10 @@ use async_trait::async_trait;
 use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
 };
-use aura_core::{resolve_effective_permission, ToolState, UserToolDefaults};
+use aura_core::{
+    is_effectively_full_access, resolve_effective_permission, AgentToolPermissions, ToolState,
+    UserToolDefaults,
+};
 use aura_kernel::{Kernel, KernelConfig, PolicyConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -52,6 +55,17 @@ fn session_user_defaults(
         .get_user_tool_defaults(&session.user_id)
         .map_err(|e| aura_kernel::KernelError::Store(format!("get_user_tool_defaults: {e}")))
         .map(|defaults| defaults.unwrap_or_default())
+}
+
+fn session_scoped_tool_config(
+    base: &aura_tools::ToolConfig,
+    user_default: &UserToolDefaults,
+    agent_override: Option<&AgentToolPermissions>,
+) -> aura_tools::ToolConfig {
+    let mut config = base.clone();
+    config.command.bypass_allowlists = base.command.allow_unrestricted_full_access
+        && is_effectively_full_access(user_default, agent_override);
+    config
 }
 
 fn effective_tool_infos(session: &Session, defaults: &UserToolDefaults) -> Vec<ToolInfo> {
@@ -256,9 +270,19 @@ pub(super) async fn build_kernel_with_config(
         ))
     });
 
-    let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec.clone())
-            .with_installed_tools(session.installed_tools.clone());
+    let user_default = session_user_defaults(session, ctx)?;
+    let session_tool_config = session_scoped_tool_config(
+        tool_config,
+        &user_default,
+        session.tool_permissions.as_ref(),
+    );
+
+    let mut resolver = executor_factory::build_tool_resolver(
+        &ctx.catalog,
+        &session_tool_config,
+        domain_exec.clone(),
+    )
+    .with_installed_tools(session.installed_tools.clone());
 
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
@@ -285,7 +309,6 @@ pub(super) async fn build_kernel_with_config(
     // Permissions are mandatory on every session; wire them into the
     // kernel policy unconditionally so the Delegate gate enforces them.
     policy.agent_permissions = session.agent_permissions.clone();
-    let user_default = session_user_defaults(session, ctx)?;
     policy = policy
         .with_user_default(user_default.clone())
         .with_agent_override(session.tool_permissions.clone());
@@ -571,10 +594,14 @@ pub(super) fn apply_turn_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_session_init, resolve_session_workspace, summarize_files_changed};
+    use super::{
+        handle_session_init, resolve_session_workspace, session_scoped_tool_config,
+        summarize_files_changed,
+    };
     use crate::protocol::OutboundMessage;
     use crate::session::{Session, WsContext};
     use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
+    use aura_core::{AgentToolPermissions, ToolState, UserToolDefaults};
     use aura_protocol::{AgentPermissionsWire, SessionInit, SessionProviderConfig};
     use aura_reasoner::MockProvider;
     use aura_store::RocksStore;
@@ -663,6 +690,28 @@ mod tests {
 
         assert_eq!(workspace, PathBuf::from("/tmp/aura"));
         assert!(!use_workspace_base_as_root);
+    }
+
+    #[test]
+    fn session_config_bypasses_allowlists_only_when_both_gates_open() {
+        let mut base = ToolConfig::for_autonomous_dev_loop();
+        base.command.allow_unrestricted_full_access = true;
+
+        let full_access = UserToolDefaults::full_access();
+        let config = session_scoped_tool_config(&base, &full_access, None);
+        assert!(config.command.bypass_allowlists);
+
+        let mut operator_off = base.clone();
+        operator_off.command.allow_unrestricted_full_access = false;
+        let config = session_scoped_tool_config(&operator_off, &full_access, None);
+        assert!(!config.command.bypass_allowlists);
+
+        let config = session_scoped_tool_config(&base, &UserToolDefaults::auto_review(), None);
+        assert!(!config.command.bypass_allowlists);
+
+        let narrowing_override = AgentToolPermissions::new().with("run_command", ToolState::Ask);
+        let config = session_scoped_tool_config(&base, &full_access, Some(&narrowing_override));
+        assert!(!config.command.bypass_allowlists);
     }
 
     #[tokio::test]

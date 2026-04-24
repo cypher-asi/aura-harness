@@ -23,7 +23,7 @@ use aura_tools::{ToolCatalog, ToolConfig};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 
 /// The Aura Node runtime.
 pub struct Node {
@@ -83,12 +83,17 @@ impl Node {
         );
         info!("Store opened");
 
-        let tool_config = ToolConfig::autonomous_agent_default();
+        let mut tool_config = ToolConfig::for_autonomous_dev_loop();
+        if self.config.allow_unrestricted_full_access {
+            tool_config.command.allow_unrestricted_full_access = true;
+            warn!("unrestricted full-access command allowlist bypass enabled by operator config");
+        }
         if tool_config.command.enabled {
             info!(
                 allowed_commands = ?tool_config.command.command_allowlist,
                 binary_allowlist = ?tool_config.command.binary_allowlist,
                 allow_shell = tool_config.command.allow_shell,
+                allow_unrestricted_full_access = tool_config.command.allow_unrestricted_full_access,
                 "aura-runtime run_command enabled"
             );
         }

@@ -25,7 +25,7 @@ use colored::Colorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 // ============================================================================
@@ -78,7 +78,7 @@ async fn run_with_args(args: RunArgs) -> anyhow::Result<()> {
                 .with(filter)
                 .init();
 
-            run_headless().await
+            run_headless(args).await
         }
     }
 }
@@ -206,11 +206,16 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
-    let tool_config = ToolConfig::autonomous_agent_default();
+    let mut tool_config = ToolConfig::for_autonomous_dev_loop();
+    if args.allow_unrestricted_full_access || unrestricted_full_access_from_env() {
+        tool_config.command.allow_unrestricted_full_access = true;
+        warn!("unrestricted full-access command allowlist bypass enabled by operator config");
+    }
     if tool_config.command.enabled {
         info!(
             binary_allowlist = ?tool_config.command.binary_allowlist,
             allow_shell = tool_config.command.allow_shell,
+            allow_unrestricted_full_access = tool_config.command.allow_unrestricted_full_access,
             "run_command enabled"
         );
     }
@@ -286,12 +291,23 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 // Headless Mode (Node)
 // ============================================================================
 
-async fn run_headless() -> anyhow::Result<()> {
+async fn run_headless(args: RunArgs) -> anyhow::Result<()> {
     info!("Starting AURA CLI in headless mode (node server)");
 
-    let config = aura_runtime::NodeConfig::from_env();
+    let mut config = aura_runtime::NodeConfig::from_env();
+    config.allow_unrestricted_full_access |= args.allow_unrestricted_full_access;
 
     aura_runtime::Node::new(config).run().await
+}
+
+fn unrestricted_full_access_from_env() -> bool {
+    std::env::var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS")
+        .ok()
+        .map(|value| {
+            let value = value.trim();
+            value == "1" || value.eq_ignore_ascii_case("true")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

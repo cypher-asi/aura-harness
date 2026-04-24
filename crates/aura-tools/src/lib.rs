@@ -60,7 +60,7 @@ pub use tool::{AgentControlHook, AgentReadHook, Tool, ToolContext};
 /// This is an execution guardrail, not a catalog visibility or per-tool
 /// permission switch. The kernel decides whether `run_command` is enabled for
 /// an agent; this policy constrains how the tool may execute after that.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CommandPolicy {
     /// Enable process spawning inside `run_command`.
     pub enabled: bool,
@@ -106,25 +106,61 @@ pub struct CommandPolicy {
     /// defaults to `false`; flipping `allow_shell` on is the deliberate
     /// security decision, and this field narrows further from there.
     pub allowed_shell_scripts: Vec<String>,
+    /// Operator-controlled ceiling for sessions whose per-agent permission
+    /// state is effectively full access.
+    ///
+    /// This flag alone does not bypass any guardrail. Runtime session wiring
+    /// must also prove that the calling agent is effectively full access before
+    /// setting [`Self::bypass_allowlists`] on a session-scoped config clone.
+    pub allow_unrestricted_full_access: bool,
+    /// Session-scoped command allowlist bypass.
+    ///
+    /// Runtime code derives this from `allow_unrestricted_full_access` plus the
+    /// effective per-agent tool permissions. Do not set this on process-global
+    /// config; `command.enabled`, `allow_shell`, sandboxing, and timeouts remain
+    /// enforced even when this is true.
+    pub bypass_allowlists: bool,
+}
+
+impl Default for CommandPolicy {
+    fn default() -> Self {
+        Self::restricted()
+    }
 }
 
 impl CommandPolicy {
-    /// Runtime policy for autonomous agent sessions.
+    /// Fail-closed command policy for library embedders and tests.
+    #[must_use]
+    pub fn restricted() -> Self {
+        Self {
+            enabled: false,
+            command_allowlist: vec![],
+            binary_allowlist: vec![],
+            allow_shell: false,
+            allowed_shell_scripts: vec![],
+            allow_unrestricted_full_access: false,
+            bypass_allowlists: false,
+        }
+    }
+
+    /// Runtime policy for autonomous dev-loop sessions.
     ///
     /// Environment-driven command switches were removed from `aura-runtime`;
     /// production nodes now opt into command execution by selecting this
     /// explicit policy instead of mutating [`ToolConfig::default`] from env.
     #[must_use]
-    pub fn autonomous_agent_default() -> Self {
+    pub fn for_autonomous_dev_loop() -> Self {
         Self {
             enabled: true,
             command_allowlist: vec![],
-            binary_allowlist: DEFAULT_AUTONOMOUS_AGENT_BINARIES
+            binary_allowlist: DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES
                 .iter()
                 .map(|binary| (*binary).to_string())
                 .collect(),
             allow_shell: true,
             allowed_shell_scripts: vec![],
+            allow_unrestricted_full_access: false,
+            bypass_allowlists: false,
         }
     }
 }
@@ -133,7 +169,7 @@ impl CommandPolicy {
 /// bootstraps. This list replaces the removed env-based command allowlist for
 /// node/runtime startup; callers that need a narrower execution surface can
 /// still build a custom [`ToolConfig`] explicitly.
-pub const DEFAULT_AUTONOMOUS_AGENT_BINARIES: &[&str] = &[
+pub const DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
     "bash",
     "bun",
     "cargo",
@@ -149,6 +185,7 @@ pub const DEFAULT_AUTONOMOUS_AGENT_BINARIES: &[&str] = &[
     "npx",
     "pip",
     "pnpm",
+    "powershell",
     "pwsh",
     "pytest",
     "python",
@@ -205,10 +242,19 @@ impl Default for ToolConfig {
     /// populate `binary_allowlist` with the specific binaries they trust.
     /// Leaving either at the default value keeps `run_command` inert, even if a
     /// delegate proposal reaches [`CmdRunTool::execute`].
-    /// (Phase 5 hardening Ã¢â‚¬â€ closes finding M1.)
+    /// (Phase 5 hardening - closes finding M1.)
     fn default() -> Self {
+        Self::restricted()
+    }
+}
+
+impl ToolConfig {
+    /// Fail-closed configuration for tests, libraries, and embedders that
+    /// have not intentionally selected a runtime execution profile.
+    #[must_use]
+    pub fn restricted() -> Self {
         Self {
-            command: CommandPolicy::default(),
+            command: CommandPolicy::restricted(),
             max_read_bytes: 5 * 1024 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,
@@ -217,18 +263,16 @@ impl Default for ToolConfig {
             extra_allowed_paths: vec![],
         }
     }
-}
 
-impl ToolConfig {
-    /// Default runtime configuration for autonomous agent sessions.
+    /// Runtime configuration for autonomous dev-loop sessions.
     ///
     /// Keep [`Self::default`] fail-closed for tests and library embedders. The
     /// node/runtime binaries use this constructor when they are expected to run
     /// dev-loop verification commands without env-based permission switches.
     #[must_use]
-    pub fn autonomous_agent_default() -> Self {
+    pub fn for_autonomous_dev_loop() -> Self {
         Self {
-            command: CommandPolicy::autonomous_agent_default(),
+            command: CommandPolicy::for_autonomous_dev_loop(),
             ..Self::default()
         }
     }
@@ -261,11 +305,19 @@ mod default_tests {
             cfg.command.allowed_shell_scripts.is_empty(),
             "fresh ToolConfig must have an empty allowed_shell_scripts"
         );
+        assert!(
+            !cfg.command.allow_unrestricted_full_access,
+            "fresh ToolConfig must not allow unrestricted full-access sessions"
+        );
+        assert!(
+            !cfg.command.bypass_allowlists,
+            "fresh ToolConfig must not bypass allowlists"
+        );
     }
 
     #[test]
-    fn autonomous_agent_default_enables_command_execution() {
-        let cfg = ToolConfig::autonomous_agent_default();
+    fn dev_loop_config_enables_command_execution() {
+        let cfg = ToolConfig::for_autonomous_dev_loop();
         assert!(
             cfg.command.enabled,
             "runtime policy must enable command execution"
@@ -283,8 +335,18 @@ mod default_tests {
             "workspace synchronization needs git"
         );
         assert!(
+            cfg.command
+                .binary_allowlist
+                .contains(&"powershell".to_string()),
+            "Windows PowerShell is used by local agents on Windows"
+        );
+        assert!(
             !cfg.command.binary_allowlist.is_empty(),
             "enabled command policy must fail open only through an explicit allowlist"
+        );
+        assert!(
+            !cfg.command.allow_unrestricted_full_access,
+            "unrestricted full access requires an explicit operator opt-in"
         );
     }
 }

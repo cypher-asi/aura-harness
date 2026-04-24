@@ -32,8 +32,8 @@ pub use tool::{
     ToolCallContext, ToolDecision, ToolExecution, ToolProposal, ToolResult,
 };
 pub use tool_permissions::{
-    resolve_effective_permission, AgentToolPermissions, ToolState, UserDefaultMode,
-    UserToolDefaults,
+    is_effectively_full_access, resolve_effective_permission, AgentToolPermissions, ToolState,
+    UserDefaultMode, UserToolDefaults,
 };
 pub use transaction::{SystemKind, Transaction, TransactionType};
 

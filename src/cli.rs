@@ -49,6 +49,10 @@ pub struct RunArgs {
     /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Permit FullAccess sessions to bypass command allowlists.
+    #[arg(long)]
+    pub allow_unrestricted_full_access: bool,
 }
 
 impl Default for RunArgs {
@@ -59,6 +63,7 @@ impl Default for RunArgs {
             dir: None,
             provider: "anthropic".to_string(),
             verbose: false,
+            allow_unrestricted_full_access: false,
         }
     }
 }

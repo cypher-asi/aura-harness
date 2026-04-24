@@ -102,6 +102,13 @@ pub struct NodeConfig {
     /// listener is a deliberate trust decision; pair it with firewall
     /// or network-level controls.
     pub require_auth: bool,
+    /// Operator opt-in that permits effective FullAccess sessions to bypass
+    /// command, binary, and shell-script allowlists.
+    ///
+    /// This is only the operator ceiling. Runtime session wiring still requires
+    /// the agent/user permission state to be effectively FullAccess before any
+    /// per-session bypass is enabled.
+    pub allow_unrestricted_full_access: bool,
 }
 
 impl std::fmt::Debug for NodeConfig {
@@ -118,6 +125,10 @@ impl std::fmt::Debug for NodeConfig {
             .field("aura_os_server_url", &self.aura_os_server_url)
             .field("auth_token", &"***")
             .field("require_auth", &self.require_auth)
+            .field(
+                "allow_unrestricted_full_access",
+                &self.allow_unrestricted_full_access,
+            )
             .finish()
     }
 }
@@ -136,6 +147,7 @@ impl Default for NodeConfig {
             aura_os_server_url: None,
             auth_token: DEFAULT_TEST_AUTH_TOKEN.to_string(),
             require_auth: false,
+            allow_unrestricted_full_access: false,
         }
     }
 }
@@ -196,6 +208,10 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("AURA_NODE_REQUIRE_AUTH") {
             let v = val.trim();
             config.require_auth = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(val) = std::env::var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS") {
+            let v = val.trim();
+            config.allow_unrestricted_full_access = v == "1" || v.eq_ignore_ascii_case("true");
         }
         config
     }

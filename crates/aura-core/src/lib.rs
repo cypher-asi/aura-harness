@@ -27,13 +27,14 @@ pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, Proces
 pub use permissions::{AgentPermissions, AgentScope, Capability};
 pub use registry::{Registry, RegistryError};
 pub use types::{
-    installed_integrations_satisfy, integration_match, resolve_effective_permission, Action,
-    ActionKind, ActionResultPayload, AgentStatus, AgentToolPermissions, CacheControl, ContextHash,
-    Decision, Effect, EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition,
-    InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
-    InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
-    InstalledToolRuntimeProviderExecution, ProcessPending, Proposal, ProposalSet, RecordEntry,
-    RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth, ToolCall, ToolCallContext,
-    ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult, ToolResultContent,
-    ToolState, Trace, Transaction, TransactionType, UserDefaultMode, UserToolDefaults,
+    installed_integrations_satisfy, integration_match, is_effectively_full_access,
+    resolve_effective_permission, Action, ActionKind, ActionResultPayload, AgentStatus,
+    AgentToolPermissions, CacheControl, ContextHash, Decision, Effect, EffectKind, EffectStatus,
+    Identity, InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
+    InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
+    InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, ProcessPending,
+    Proposal, ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind,
+    ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolDefinition, ToolExecution, ToolProposal,
+    ToolResult, ToolResultContent, ToolState, Trace, Transaction, TransactionType, UserDefaultMode,
+    UserToolDefaults,
 };

@@ -176,6 +176,28 @@ pub fn resolve_effective_permission(
     }
 }
 
+/// Return whether the current user/agent tool policy is globally full access.
+///
+/// This is intentionally stricter than asking whether one specific tool
+/// resolves to [`ToolState::Allow`]. A session only counts as effectively full
+/// access when the user default is FullAccess and the per-agent override does
+/// not narrow any named tool to `ask` or `off`.
+#[must_use]
+pub fn is_effectively_full_access(
+    user_default: &UserToolDefaults,
+    agent_override: Option<&AgentToolPermissions>,
+) -> bool {
+    matches!(user_default.mode, UserDefaultMode::FullAccess)
+        && agent_override
+            .map(|override_permissions| {
+                override_permissions
+                    .per_tool
+                    .values()
+                    .all(|state| *state == ToolState::Allow)
+            })
+            .unwrap_or(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +288,51 @@ mod tests {
             resolve_effective_permission(&user, Some(&empty), "read_file"),
             resolve_effective_permission(&user, None, "read_file"),
         );
+    }
+
+    #[test]
+    fn effective_full_access_requires_full_access_user_default() {
+        assert!(is_effectively_full_access(
+            &UserToolDefaults::full_access(),
+            None
+        ));
+        assert!(!is_effectively_full_access(
+            &UserToolDefaults::auto_review(),
+            None
+        ));
+        assert!(!is_effectively_full_access(
+            &custom(&[], ToolState::Allow),
+            None
+        ));
+    }
+
+    #[test]
+    fn effective_full_access_allows_empty_or_allow_only_overrides() {
+        let user = UserToolDefaults::full_access();
+        assert!(is_effectively_full_access(
+            &user,
+            Some(&AgentToolPermissions::new())
+        ));
+        assert!(is_effectively_full_access(
+            &user,
+            Some(&override_with(&[
+                ("read_file", ToolState::Allow),
+                ("run_command", ToolState::Allow),
+            ]))
+        ));
+    }
+
+    #[test]
+    fn effective_full_access_rejects_narrowing_overrides() {
+        let user = UserToolDefaults::full_access();
+        assert!(!is_effectively_full_access(
+            &user,
+            Some(&override_with(&[("run_command", ToolState::Ask)]))
+        ));
+        assert!(!is_effectively_full_access(
+            &user,
+            Some(&override_with(&[("read_file", ToolState::Deny)]))
+        ));
     }
 
     #[test]

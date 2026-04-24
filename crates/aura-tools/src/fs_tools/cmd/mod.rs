@@ -530,9 +530,14 @@ fn expand_env_vars(input: &str) -> String {
 fn check_binary_allowlist(
     program: &str,
     command_enabled: bool,
+    bypass_allowlists: bool,
     allowlist: &[String],
 ) -> Result<(), ToolError> {
     if !command_enabled {
+        return Ok(());
+    }
+
+    if bypass_allowlists {
         return Ok(());
     }
 
@@ -585,7 +590,15 @@ fn check_binary_allowlist(
 /// command, enabling rules like `"start obsidian://"` that restrict both the
 /// program and its arguments. Shell metacharacters that could chain additional
 /// commands are rejected.
-fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), ToolError> {
+fn check_command_allowlist(
+    command: &str,
+    bypass_allowlists: bool,
+    allowlist: &[String],
+) -> Result<(), ToolError> {
+    if bypass_allowlists {
+        return Ok(());
+    }
+
     if allowlist.is_empty() {
         return Ok(());
     }
@@ -773,7 +786,8 @@ impl Tool for CmdRunTool {
             // non-empty list switches back to strict verbatim-match
             // enforcement so operators who pin specific scripts keep
             // the original behavior.
-            if !ctx.config.command.allowed_shell_scripts.is_empty()
+            if !ctx.config.command.bypass_allowlists
+                && !ctx.config.command.allowed_shell_scripts.is_empty()
                 && !ctx
                     .config
                     .command
@@ -790,11 +804,16 @@ impl Tool for CmdRunTool {
             // Still run allow-list checks against the first token so
             // an operator who's narrowed `command_allowlist` /
             // `binary_allowlist` sees consistent behavior.
-            check_command_allowlist(&script, &ctx.config.command.command_allowlist)?;
+            check_command_allowlist(
+                &script,
+                ctx.config.command.bypass_allowlists,
+                &ctx.config.command.command_allowlist,
+            )?;
             if let Some(first) = script.split_whitespace().next() {
                 check_binary_allowlist(
                     first,
                     ctx.config.command.enabled,
+                    ctx.config.command.bypass_allowlists,
                     &ctx.config.command.binary_allowlist,
                 )?;
             }
@@ -819,10 +838,15 @@ impl Tool for CmdRunTool {
         // masquerading as `Forbidden`.
         validate_program_name(&program)?;
 
-        check_command_allowlist(&program, &ctx.config.command.command_allowlist)?;
+        check_command_allowlist(
+            &program,
+            ctx.config.command.bypass_allowlists,
+            &ctx.config.command.command_allowlist,
+        )?;
         check_binary_allowlist(
             &program,
             ctx.config.command.enabled,
+            ctx.config.command.bypass_allowlists,
             &ctx.config.command.binary_allowlist,
         )?;
 
