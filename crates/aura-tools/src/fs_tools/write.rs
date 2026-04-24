@@ -12,7 +12,7 @@ use tracing::{debug, instrument};
 /// `aura_agent::constants::WRITE_FILE_CHUNK_BYTES`. Kept local to avoid a
 /// circular dep between `aura-tools` and `aura-agent`; tests guard against
 /// drift by asserting on the numeric threshold directly.
-const WRITE_FILE_CHUNK_BYTES: usize = 6_000;
+const WRITE_FILE_CHUNK_BYTES: usize = 12_000;
 
 /// File extensions for which the unbalanced-brace/paren heuristic is
 /// worth running. Anything outside this set (Markdown, plain text,
@@ -455,7 +455,7 @@ mod tests {
     fn fs_write_metadata_chunk_suggestion_when_over_threshold() {
         let (sandbox, _dir) = create_test_sandbox();
 
-        let big = "x".repeat(7_000);
+        let big = "x".repeat(13_000);
         let result = fs_write(&sandbox, "big_chunk.txt", &big, false).unwrap();
         assert!(result.ok);
         assert_eq!(

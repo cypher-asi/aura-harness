@@ -149,11 +149,11 @@ pub const EMPTY_PATH_BLOCK_LIMIT: usize = 3;
 /// skeleton first and use `edit_file` appends for the rest. The goal is to
 /// avoid re-echoing huge content into the next turn when the model
 /// inevitably trips `max_tokens` mid-write.
-pub const WRITE_FILE_CHUNK_BYTES: usize = 6_000;
+pub const WRITE_FILE_CHUNK_BYTES: usize = 12_000;
 
 /// Hard ceiling on `write_file` content size. Reserved for future use by
-/// executor-side enforcement; the current short-circuit in
-/// `tool_processing` fires at [`WRITE_FILE_CHUNK_BYTES`] first.
+/// executor-side enforcement; currently kept equal to
+/// [`WRITE_FILE_CHUNK_BYTES`] so callers have one effective limit.
 pub const WRITE_FILE_HARD_MAX_BYTES: usize = 12_000;
 
 // ---------------------------------------------------------------------------

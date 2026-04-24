@@ -798,7 +798,7 @@ mod narration_budget_tests {
             "should tell the model to call exactly one tool, got: {injected}"
         );
         assert!(
-            injected.contains("6000 bytes"),
+            injected.contains("12000 bytes"),
             "should cite the Phase 1 write chunk cap, got: {injected}"
         );
         assert!(

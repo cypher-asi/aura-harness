@@ -95,7 +95,7 @@ fn agentic_prompt_includes_tool_call_discipline_section() {
         "discipline section header missing from assembled prompt"
     );
     assert!(
-        prompt.contains("write_file must stay under 6000 bytes"),
+        prompt.contains("write_file must stay at or under 12000 bytes"),
         "write_file chunk rule missing"
     );
     assert!(
@@ -119,7 +119,7 @@ fn agentic_prompt_includes_tool_call_discipline_section() {
 #[test]
 fn tool_call_discipline_constant_matches_golden_wording() {
     assert!(TOOL_CALL_DISCIPLINE_SECTION.starts_with("Tool-call discipline:\n"));
-    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("6000 bytes per call"));
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("12000 bytes per call"));
     assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("append_after_eof"));
     assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("alternation term"));
     assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("MUST be a single tool call"));

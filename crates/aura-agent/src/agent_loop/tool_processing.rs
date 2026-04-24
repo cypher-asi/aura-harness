@@ -380,7 +380,7 @@ mod chunk_guard_tests {
 
     #[test]
     fn write_file_over_chunk_bytes_is_rejected_without_disk_write() {
-        let huge = "x".repeat(7_000);
+        let huge = "x".repeat(13_000);
         let call = mk_tool(
             "toolu_1",
             "write_file",
@@ -409,7 +409,7 @@ mod chunk_guard_tests {
             "synthetic content should name edit_file in the recovery hint"
         );
         assert!(
-            oversized[0].content.contains("6000"),
+            oversized[0].content.contains("12000"),
             "synthetic content should reference the byte cap"
         );
         assert!(
