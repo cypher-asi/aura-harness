@@ -197,7 +197,7 @@ fn test_detect_missing_args_blocks_run_command_without_command() {
     assert!(result
         .recovery_message
         .unwrap()
-        .contains("requires a `command`"));
+        .contains("requires executable input"));
 }
 
 #[test]
@@ -212,6 +212,28 @@ fn test_detect_missing_args_blocks_run_command_with_empty_command() {
 fn test_detect_missing_args_allows_run_command_with_command() {
     let ctx = BlockingContext::new(12);
     let tool = make_tool("run_command", serde_json::json!({"command": "cargo build"}));
+    let result = detect_missing_required_args(&tool, &ctx);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_detect_missing_args_allows_run_command_with_program() {
+    let ctx = BlockingContext::new(12);
+    let tool = make_tool(
+        "run_command",
+        serde_json::json!({"program": "cargo", "args": ["build"]}),
+    );
+    let result = detect_missing_required_args(&tool, &ctx);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_detect_missing_args_allows_run_command_with_shell_script() {
+    let ctx = BlockingContext::new(12);
+    let tool = make_tool(
+        "run_command",
+        serde_json::json!({"shell_script": "cargo build", "allow_shell": true}),
+    );
     let result = detect_missing_required_args(&tool, &ctx);
     assert!(result.is_none());
 }

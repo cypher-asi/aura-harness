@@ -286,24 +286,32 @@ impl Kernel {
     // Sequence helpers
     // -----------------------------------------------------------------------
 
-    pub(super) fn next_seq(&self) -> u64 {
+    pub(super) fn next_seq(&self) -> Result<u64, crate::KernelError> {
+        let head_seq = self
+            .store
+            .get_head_seq(self.agent_id)
+            .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
+        let next = head_seq + 1;
         let mut seq = self
             .seq
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let current = *seq;
-        *seq += 1;
-        current
+        *seq = next + 1;
+        Ok(next)
     }
 
-    pub(super) fn reserve_seq_range(&self, count: usize) -> u64 {
+    pub(super) fn reserve_seq_range(&self, count: usize) -> Result<u64, crate::KernelError> {
+        let head_seq = self
+            .store
+            .get_head_seq(self.agent_id)
+            .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
+        let base = head_seq + 1;
         let mut seq = self
             .seq
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let base = *seq;
-        *seq += count as u64;
-        base
+        *seq = base + count as u64;
+        Ok(base)
     }
 
     pub(super) fn agent_workspace(&self) -> PathBuf {

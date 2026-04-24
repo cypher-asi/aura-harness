@@ -63,6 +63,148 @@ async fn test_process_direct_increments_seq() {
     assert_eq!(r2.entry.seq, 2);
 }
 
+#[tokio::test]
+async fn process_direct_reconciles_stale_kernel_sequence_with_store_head() {
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+    let agent_id = AgentId::generate();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("test response"));
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel_a = Kernel::new(
+        store.clone(),
+        provider.clone(),
+        ExecutorRouter::new(),
+        config.clone(),
+        agent_id,
+    )
+    .unwrap();
+    let kernel_b = Kernel::new(
+        store.clone(),
+        provider,
+        ExecutorRouter::new(),
+        config,
+        agent_id,
+    )
+    .unwrap();
+
+    let first = kernel_a
+        .process_direct(Transaction::user_prompt(agent_id, "first"))
+        .await
+        .unwrap();
+    assert_eq!(first.entry.seq, 1);
+
+    let second = kernel_b
+        .process_direct(Transaction::user_prompt(agent_id, "second"))
+        .await
+        .unwrap();
+    assert_eq!(second.entry.seq, 2);
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 2);
+}
+
+#[tokio::test]
+async fn process_tools_batch_reconciles_stale_kernel_sequence_with_store_head() {
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+    let agent_id = AgentId::generate();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("test response"));
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel_a = Kernel::new(
+        store.clone(),
+        provider.clone(),
+        ExecutorRouter::new(),
+        config.clone(),
+        agent_id,
+    )
+    .unwrap();
+    let kernel_b = Kernel::new(
+        store.clone(),
+        provider,
+        ExecutorRouter::new(),
+        config,
+        agent_id,
+    )
+    .unwrap();
+
+    kernel_a
+        .process_direct(Transaction::user_prompt(agent_id, "first"))
+        .await
+        .unwrap();
+
+    let results = kernel_b
+        .process_tools(vec![
+            ToolProposal::new(
+                "tool-use-1",
+                "read_file",
+                serde_json::json!({ "path": "a.txt" }),
+            ),
+            ToolProposal::new(
+                "tool-use-2",
+                "list_files",
+                serde_json::json!({ "path": "." }),
+            ),
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(results[0].entry.seq, 2);
+    assert_eq!(results[1].entry.seq, 3);
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 3);
+}
+
+#[tokio::test]
+async fn reason_reconciles_stale_kernel_sequence_with_store_head() {
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+    let agent_id = AgentId::generate();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("test response"));
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel_a = Kernel::new(
+        store.clone(),
+        provider.clone(),
+        ExecutorRouter::new(),
+        config.clone(),
+        agent_id,
+    )
+    .unwrap();
+    let kernel_b = Kernel::new(
+        store.clone(),
+        provider,
+        ExecutorRouter::new(),
+        config,
+        agent_id,
+    )
+    .unwrap();
+
+    kernel_a
+        .process_direct(Transaction::user_prompt(agent_id, "first"))
+        .await
+        .unwrap();
+
+    let request = ModelRequest::builder("test-model", "system")
+        .message(aura_reasoner::Message::user("test"))
+        .try_build()
+        .unwrap();
+    let result = kernel_b.reason(request).await.unwrap();
+
+    assert_eq!(result.entry.seq, 2);
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 2);
+}
+
 #[test]
 fn test_agent_workspace_defaults_to_agent_subdirectory() {
     let (kernel, _db, ws_dir) = create_new_kernel();

@@ -31,14 +31,18 @@ pub struct ReasonStreamHandle {
 }
 
 impl ReasonStreamHandle {
-    fn next_seq(&self) -> u64 {
+    fn next_seq(&self) -> Result<u64, crate::KernelError> {
+        let head_seq = self
+            .kernel_store
+            .get_head_seq(self.agent_id)
+            .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
+        let next = head_seq + 1;
         let mut seq = self
             .seq_counter
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let current = *seq;
-        *seq += 1;
-        current
+        *seq = next + 1;
+        Ok(next)
     }
 
     fn append(self, tx: Transaction) -> Result<RecordEntry, crate::KernelError> {
@@ -48,7 +52,7 @@ impl ReasonStreamHandle {
         // *snapshot* window captured when `reason_streaming` started,
         // which is the state the model actually reasoned over
         // (Invariant §6).
-        let seq = self.next_seq();
+        let seq = self.next_seq()?;
         let context_hash = hash_tx_with_window(&tx, &self.window)?;
         let entry = RecordEntry::builder(seq, tx)
             .context_hash(context_hash)

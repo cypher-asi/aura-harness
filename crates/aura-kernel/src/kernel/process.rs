@@ -21,7 +21,7 @@ impl Kernel {
         &self,
         tx: Transaction,
     ) -> Result<ProcessResult, crate::KernelError> {
-        let seq = self.next_seq();
+        let seq = self.next_seq()?;
         let result = self.process_tx(&tx, seq).await?;
         self.store
             .append_entry_direct_with_runtime_capabilities(
@@ -48,7 +48,7 @@ impl Kernel {
         tx: Transaction,
         token: DequeueToken,
     ) -> Result<ProcessResult, crate::KernelError> {
-        let seq = self.next_seq();
+        let seq = self.next_seq()?;
         let result = self.process_tx(&tx, seq).await?;
         self.store
             .append_entry_dequeued_with_runtime_capabilities(

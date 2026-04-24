@@ -220,14 +220,16 @@ fn detect_missing_required_args(
         )));
     }
     if COMMAND_TOOLS.contains(&tool.name.as_str()) {
-        let has_command = tool
-            .input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.trim().is_empty());
+        let has_command = ["command", "shell_script", "program"].iter().any(|key| {
+            tool.input
+                .get(*key)
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| !s.trim().is_empty())
+        });
         if !has_command {
             return Some(BlockCheckResult::blocked(format!(
-                "`{}` requires a `command` argument. Provide the shell command to execute.",
+                "`{}` requires executable input. Provide `program` with optional `args`, \
+                 or use `shell_script` / legacy `command` for shell execution.",
                 tool.name
             )));
         }

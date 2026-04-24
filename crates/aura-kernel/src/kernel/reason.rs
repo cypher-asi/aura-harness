@@ -22,8 +22,6 @@ impl Kernel {
     /// # Errors
     /// Returns error if the model call or storage fails.
     pub async fn reason(&self, request: ModelRequest) -> Result<ReasonResult, crate::KernelError> {
-        let seq = self.next_seq();
-
         // Bound the reasoner call with the kernel-config timeout so a hung
         // provider cannot stall the agent indefinitely. (Wave 5 / T2.6 +
         // T7.3.)
@@ -35,6 +33,7 @@ impl Kernel {
                 // on failure. Record a Reasoning entry with an error
                 // indicator before bubbling the error up.
                 let reason_str = e.to_string();
+                let seq = self.next_seq()?;
                 if let Err(record_err) = self.record_reasoning_failure(seq, "complete", &reason_str)
                 {
                     error!(
@@ -51,6 +50,7 @@ impl Kernel {
                     "model provider did not respond within {}ms",
                     self.config.proposal_timeout_ms
                 );
+                let seq = self.next_seq()?;
                 if let Err(record_err) =
                     self.record_reasoning_failure(seq, "complete_timeout", &reason_str)
                 {
@@ -81,6 +81,7 @@ impl Kernel {
             None,
         );
 
+        let seq = self.next_seq()?;
         let window = self.load_window(seq)?;
         let context_hash = hash_tx_with_window(&tx, &window)?;
 
@@ -136,7 +137,7 @@ impl Kernel {
                 // `ReasonStreamHandle::finalize` seam to catch this.
                 // Invariant §3 strict: record the handshake failure
                 // directly.
-                let seq = self.next_seq();
+                let seq = self.next_seq()?;
                 if let Err(record_err) =
                     self.record_reasoning_failure(seq, "streaming_handshake", &reason_str)
                 {
@@ -154,7 +155,7 @@ impl Kernel {
                     "streaming model provider did not respond within {}ms",
                     self.config.proposal_timeout_ms
                 );
-                let seq = self.next_seq();
+                let seq = self.next_seq()?;
                 if let Err(record_err) =
                     self.record_reasoning_failure(seq, "streaming_handshake_timeout", &reason_str)
                 {

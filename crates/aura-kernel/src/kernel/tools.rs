@@ -245,7 +245,7 @@ impl Kernel {
         let effects: Vec<Effect> = futures_util::future::join_all(exec_futures).await;
 
         let total = tool_proposals.len();
-        let base_seq = self.reserve_seq_range(total);
+        let base_seq = self.reserve_seq_range(total)?;
 
         let mut results = Vec::with_capacity(total);
         let mut entries = Vec::with_capacity(total);
