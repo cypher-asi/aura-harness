@@ -203,24 +203,43 @@ impl AutomatonBridge {
         let resolver = executor_factory::build_tool_resolver(
             &self.catalog,
             &self.tool_config,
-            Some(domain_exec),
+            Some(domain_exec.clone()),
         )
         .with_installed_tools(installed_tools.clone());
         let router = executor_factory::build_executor_router(resolver);
         let agent_id = AgentId::generate();
+        let mut policy = runtime_capabilities::build_policy_config(
+            &installed_tools,
+            &installed_integrations,
+            // Dev-loop / task-runner automatons have no per-agent
+            // aura-network profile. Callers pass `extra_permissions`
+            // to elevate specific tools (e.g. the `git_*` tools when
+            // the operator explicitly wired a repo URL + JWT into
+            // the automaton's config).
+            &extra_permissions,
+        );
+        // Defense-in-depth mirror of `aura-node`'s
+        // `session::helpers::build_kernel_with_config` extension
+        // (commit 3373d96): allow-list every name the live
+        // `DomainToolExecutor` can dispatch. The Engine-profile
+        // catalog does not currently surface domain tools to the
+        // dev-loop LLM (chat_management_tools is `ToolProfile::Agent`
+        // only and `prepare_installed_tools` carries through whatever
+        // the caller passes — currently empty for chat-triggered
+        // dev-loops), so this is dormant in practice. But if the
+        // engine catalog ever gains domain-tool visibility — or if a
+        // future caller splices `create_spec` / `transition_task` /
+        // etc. into `installed_tools` and the strip table on
+        // aura-os-server drops them like it does for the chat path —
+        // the kernel's `allow_unlisted = false` default would deny
+        // every call without this seed. Per-call authorization is
+        // re-enforced by aura-os-server's dispatcher via the session
+        // JWT, so allow-listing the names is safe.
+        policy.add_allowed_tools(domain_exec.tool_names().iter().map(|s| s.to_string()));
         let config = KernelConfig {
             workspace_base: workspace.to_path_buf(),
             use_workspace_base_as_root,
-            policy: runtime_capabilities::build_policy_config(
-                &installed_tools,
-                &installed_integrations,
-                // Dev-loop / task-runner automatons have no per-agent
-                // aura-network profile. Callers pass `extra_permissions`
-                // to elevate specific tools (e.g. the `git_*` tools when
-                // the operator explicitly wired a repo URL + JWT into
-                // the automaton's config).
-                &extra_permissions,
-            ),
+            policy,
             ..KernelConfig::default()
         };
 
