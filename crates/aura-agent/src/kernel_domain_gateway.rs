@@ -498,14 +498,6 @@ impl DomainApi for KernelDomainGateway {
             self.inner.network_api_call(method, path, body, jwt)
         )
     }
-
-    async fn get_agent_permissions(
-        &self,
-        agent_id: &str,
-        jwt: Option<&str>,
-    ) -> anyhow::Result<Option<std::collections::HashMap<String, aura_core::PermissionLevel>>> {
-        self.inner.get_agent_permissions(agent_id, jwt).await
-    }
 }
 
 fn is_read_only_http_method(method: &str) -> bool {

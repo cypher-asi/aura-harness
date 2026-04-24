@@ -3,17 +3,16 @@
 //!
 //! `check.rs` holds everything that actively *evaluates* a [`Proposal`] or
 //! [`ToolCall`] against the declarative [`super::config::PolicyConfig`].
-//! Session-scoped approval state (`AskOnce` memo), tool permission
-//! resolution, runtime-capability checks, and agent-permission scope
-//! checks all live here.
+//! Tool-state resolution, runtime-capability checks, and
+//! agent-permission scope checks all live here.
 
-use super::config::{default_tool_permission, PermissionLevel, PolicyConfig};
+use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
 use aura_core::{
     resolve_effective_permission, ActionKind, Proposal, RuntimeCapabilityInstall, ToolCall,
     ToolState,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::{debug, warn};
 
@@ -31,7 +30,6 @@ use tracing::{debug, warn};
 #[derive(Debug)]
 pub struct Policy {
     config: PolicyConfig,
-    session_approvals: Mutex<HashSet<String>>,
     session_tool_states: Mutex<HashMap<String, ToolState>>,
 }
 
@@ -46,10 +44,7 @@ pub struct Policy {
 pub enum PolicyVerdict {
     /// Allowed to proceed.
     Allow,
-    /// Denied at the policy layer but *may* be unlocked by an out-of-band
-    /// [`crate::ApprovalRegistry::grant`] for the exact
-    /// `(agent_id, tool, args_hash)` triple. Callers surface this as
-    /// `423 Locked` + the args hash.
+    /// Denied at the policy layer pending a live approval prompt.
     RequireApproval {
         /// Human-readable reason, e.g. `"Tool 'run_command' requires approval"`.
         reason: String,
@@ -116,7 +111,6 @@ impl Policy {
     pub fn new(config: PolicyConfig) -> Self {
         Self {
             config,
-            session_approvals: Mutex::new(HashSet::new()),
             session_tool_states: Mutex::new(HashMap::new()),
         }
     }
@@ -130,12 +124,7 @@ impl Policy {
     /// Resolve the tri-state `on` / `off` / `ask` [`ToolState`] for
     /// `tool` against the two-level permission model (user default +
     /// per-agent override). This is the single resolution helper the
-    /// kernel gate will consult once the Phase-E teardown lands.
-    ///
-    /// Currently runs **in parallel with** (and does not replace) the
-    /// legacy `allowed_tools` / `tool_permissions` / `allow_unlisted`
-    /// gate in [`Self::check_tool_with_runtime_capabilities_verdict`];
-    /// the legacy gate is still the enforcement path.
+    /// kernel gate consults for per-tool enablement.
     #[must_use]
     pub fn resolve_tool_state(&self, tool: &str) -> ToolState {
         resolve_effective_permission(
@@ -143,45 +132,6 @@ impl Policy {
             self.config.agent_override.as_ref(),
             tool,
         )
-    }
-
-    /// Get the permission level for a tool.
-    #[must_use]
-    pub fn check_tool_permission(&self, tool: &str) -> PermissionLevel {
-        if let Some(level) = self.config.tool_permissions.get(tool) {
-            return *level;
-        }
-
-        if self.config.allowed_tools.contains(tool) {
-            return default_tool_permission(tool);
-        }
-
-        if self.config.allow_unlisted {
-            return PermissionLevel::AlwaysAllow;
-        }
-
-        PermissionLevel::Deny
-    }
-
-    /// Check if a tool is approved for this session.
-    ///
-    /// Recovers gracefully from mutex poisoning by accessing the inner data.
-    #[must_use]
-    pub fn is_session_approved(&self, tool: &str) -> bool {
-        self.session_approvals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(tool)
-    }
-
-    /// Approve a tool for this session.
-    ///
-    /// Recovers gracefully from mutex poisoning by accessing the inner data.
-    pub fn approve_for_session(&self, tool: &str) {
-        self.session_approvals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(tool.to_string());
     }
 
     /// Cache a live approval decision for this policy's current session.
@@ -192,24 +142,10 @@ impl Policy {
             .insert(tool.to_string(), state);
     }
 
-    /// Revoke session approval for a tool.
-    ///
-    /// Recovers gracefully from mutex poisoning by accessing the inner data.
-    pub fn revoke_session_approval(&self, tool: &str) {
-        self.session_approvals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(tool);
-    }
-
     /// Clear all session approvals.
     ///
     /// Recovers gracefully from mutex poisoning by accessing the inner data.
     pub fn clear_session_approvals(&self) {
-        self.session_approvals
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
         self.session_tool_states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -267,17 +203,6 @@ impl Policy {
         })
     }
 
-    /// Check if a tool call requires approval.
-    #[must_use]
-    pub fn requires_approval(&self, tool: &str) -> bool {
-        let permission = self.check_tool_permission(tool);
-        match permission {
-            PermissionLevel::AlwaysAllow => false,
-            PermissionLevel::AskOnce => !self.is_session_approved(tool),
-            PermissionLevel::RequireApproval | PermissionLevel::Deny => true,
-        }
-    }
-
     /// Check if a proposal is allowed.
     #[must_use]
     pub fn check(&self, proposal: &Proposal) -> PolicyResult {
@@ -319,15 +244,6 @@ impl Policy {
         if proposal.action_kind == ActionKind::Delegate {
             match serde_json::from_slice::<ToolCall>(&proposal.payload) {
                 Ok(tool_call) => {
-                    let verdict = self.check_tool_with_runtime_capabilities_verdict(
-                        &tool_call.tool,
-                        &tool_call.args,
-                        runtime_capabilities,
-                    );
-                    if !verdict.is_allowed() {
-                        return verdict;
-                    }
-
                     if let Some(result) = self.check_agent_permissions(&tool_call) {
                         if !result.allowed {
                             return PolicyVerdict::Deny {
@@ -336,6 +252,15 @@ impl Policy {
                                     .unwrap_or_else(|| "Policy denied".to_string()),
                             };
                         }
+                    }
+
+                    let verdict = self.check_tool_with_runtime_capabilities_verdict(
+                        &tool_call.tool,
+                        &tool_call.args,
+                        runtime_capabilities,
+                    );
+                    if !verdict.is_allowed() {
+                        return verdict;
                     }
                 }
                 Err(_) => {
@@ -379,32 +304,36 @@ impl Policy {
         _input: &serde_json::Value,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> PolicyVerdict {
-        let integration_gate = self.integration_requirement_satisfied(tool, runtime_capabilities);
-        let permission = self.check_tool_permission(tool);
+        if let Some(reason) = self.integration_requirement_satisfied(tool, runtime_capabilities) {
+            return PolicyVerdict::Deny { reason };
+        }
 
-        let apply_integration_gate = |verdict: PolicyVerdict| -> PolicyVerdict {
-            match integration_gate {
-                Some(reason) => PolicyVerdict::Deny { reason },
-                None => verdict,
-            }
-        };
+        if let Some(state) = self
+            .session_tool_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(tool)
+            .copied()
+        {
+            return match state {
+                ToolState::Allow => PolicyVerdict::Allow,
+                ToolState::Deny => PolicyVerdict::Deny {
+                    reason: format!("Tool '{tool}' was denied for this session"),
+                },
+                ToolState::Ask => PolicyVerdict::RequireApproval {
+                    reason: format!("Tool '{tool}' is set to ask"),
+                    prompt: None,
+                },
+            };
+        }
 
-        match permission {
-            PermissionLevel::Deny => PolicyVerdict::Deny {
+        match self.resolve_tool_state(tool) {
+            ToolState::Deny => PolicyVerdict::Deny {
                 reason: format!("Tool '{tool}' is not allowed"),
             },
-            PermissionLevel::AlwaysAllow => apply_integration_gate(PolicyVerdict::Allow),
-            PermissionLevel::AskOnce => {
-                if self.is_session_approved(tool) {
-                    apply_integration_gate(PolicyVerdict::Allow)
-                } else {
-                    PolicyVerdict::Deny {
-                        reason: format!("Tool '{tool}' requires approval"),
-                    }
-                }
-            }
-            PermissionLevel::RequireApproval => PolicyVerdict::RequireApproval {
-                reason: format!("Tool '{tool}' requires approval for each use"),
+            ToolState::Allow => PolicyVerdict::Allow,
+            ToolState::Ask => PolicyVerdict::RequireApproval {
+                reason: format!("Tool '{tool}' is set to ask"),
                 prompt: None,
             },
         }
@@ -414,22 +343,6 @@ impl Policy {
     #[must_use]
     pub const fn max_proposals(&self) -> usize {
         self.config.max_proposals
-    }
-
-    /// Add installed tool names to the policy's allowed set with `AlwaysAllow`.
-    pub fn add_allowed_tools(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
-        self.config.add_allowed_tools(names);
-    }
-
-    /// Add tool names to the policy's allowed set **without** forcing
-    /// `AlwaysAllow`. Use this when the allow-list seed must preserve
-    /// the configured (or default) permission level — e.g. a dev-loop
-    /// allow-lists `git_push` so the LLM can see + dispatch it, but
-    /// the permission level stays `RequireApproval` unless the
-    /// operator explicitly elevated it via
-    /// [`PolicyConfig::tool_permissions`].
-    pub fn allow_tool_names(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
-        self.config.allow_tool_names(names);
     }
 
     /// Evaluate a [`ToolCall`] against the caller's [`AgentPermissions`].
@@ -591,19 +504,12 @@ mod permission_tests {
 
     #[test]
     fn missing_capability_is_denied() {
-        // Phase 5 hardening: `allow_unlisted` defaults to `false`, so
-        // capability tests must opt into the permissive allow-list to
-        // reach the capability gate instead of getting short-circuited
-        // by the "tool not allowed" check.
-        let config = PolicyConfig {
-            allow_unlisted: true,
-            ..PolicyConfig::default()
-        }
-        .with_agent_permissions(AgentPermissions {
-            scope: AgentScope::default(),
-            capabilities: vec![],
-        })
-        .with_tool_capability("spawn_agent", Capability::SpawnAgent);
+        let config = PolicyConfig::default()
+            .with_agent_permissions(AgentPermissions {
+                scope: AgentScope::default(),
+                capabilities: vec![],
+            })
+            .with_tool_capability("spawn_agent", Capability::SpawnAgent);
         let policy = Policy::new(config);
         let result = policy.check(&delegate_proposal("spawn_agent", serde_json::json!({})));
         assert!(!result.allowed);
@@ -612,15 +518,12 @@ mod permission_tests {
 
     #[test]
     fn present_capability_is_allowed() {
-        let config = PolicyConfig {
-            allow_unlisted: true,
-            ..PolicyConfig::default()
-        }
-        .with_agent_permissions(AgentPermissions {
-            scope: AgentScope::default(),
-            capabilities: vec![Capability::SpawnAgent],
-        })
-        .with_tool_capability("spawn_agent", Capability::SpawnAgent);
+        let config = PolicyConfig::default()
+            .with_agent_permissions(AgentPermissions {
+                scope: AgentScope::default(),
+                capabilities: vec![Capability::SpawnAgent],
+            })
+            .with_tool_capability("spawn_agent", Capability::SpawnAgent);
         let policy = Policy::new(config);
         assert!(
             policy
@@ -631,11 +534,7 @@ mod permission_tests {
 
     #[test]
     fn out_of_scope_target_is_denied() {
-        let config = PolicyConfig {
-            allow_unlisted: true,
-            ..PolicyConfig::default()
-        }
-        .with_agent_permissions(AgentPermissions {
+        let config = PolicyConfig::default().with_agent_permissions(AgentPermissions {
             scope: AgentScope {
                 orgs: vec!["only".into()],
                 ..AgentScope::default()
@@ -770,11 +669,7 @@ mod permission_tests {
 
     #[test]
     fn in_scope_target_is_allowed() {
-        let config = PolicyConfig {
-            allow_unlisted: true,
-            ..PolicyConfig::default()
-        }
-        .with_agent_permissions(AgentPermissions {
+        let config = PolicyConfig::default().with_agent_permissions(AgentPermissions {
             scope: AgentScope {
                 orgs: vec!["only".into()],
                 ..AgentScope::default()

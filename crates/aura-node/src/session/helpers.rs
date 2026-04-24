@@ -15,7 +15,7 @@ use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
 };
 use aura_core::{resolve_effective_permission, ToolState, UserToolDefaults};
-use aura_kernel::{Kernel, KernelConfig};
+use aura_kernel::{Kernel, KernelConfig, PolicyConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -260,20 +260,6 @@ pub(super) async fn build_kernel_with_config(
         executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec.clone())
             .with_installed_tools(session.installed_tools.clone());
 
-    // Names of harness-native automaton tools registered below
-    // (`start_dev_loop`, `pause_dev_loop`, `stop_dev_loop`,
-    // `run_task`). Captured here so we can extend `policy.allowed_tools`
-    // with them after `build_policy_config` runs — without that, the
-    // kernel's fail-closed `allow_unlisted = false` default denies
-    // every dev-loop tool with `"Tool 'start_dev_loop' is not allowed"`
-    // because aura-os-server's `tool_dedupe::HARNESS_NATIVE_TOOL_NAMES`
-    // strips them from `installed_tools` (the harness handles them
-    // natively, so they intentionally do not ship as HTTP-callback
-    // installed tools to avoid Anthropic's "tool names must be unique"
-    // 400). Same architectural pattern as the domain-tool extension
-    // below; see commit 3373d96 for the original instance.
-    let mut registered_tool_names: Vec<String> = Vec::new();
-
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
         let workspace_root = session.project_path.clone();
@@ -283,36 +269,19 @@ pub(super) async fn build_kernel_with_config(
             workspace_root,
             session.auth_token.clone(),
         ) {
-            registered_tool_names.push(tool.name().to_string());
             resolver.register(tool);
         }
     }
 
     let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
 
-    // Fetch per-agent permission overrides from aura-network before
-    // building the policy. The helper applies the aura-os fallback
-    // matrix: Ok(None) + strict_mode off → seed `run_command` with
-    // `AlwaysAllow`; Err(_) → empty map (fail closed); strict_mode on
-    // → drop any entry looser than the kernel default. See
-    // `runtime_capabilities::fetch_agent_permissions_with_default`.
-    let agent_id_str = session
-        .aura_agent_id
-        .clone()
-        .unwrap_or_else(|| session.agent_id.to_string());
-    let agent_permissions = runtime_capabilities::fetch_agent_permissions_with_default(
-        ctx.domain_api.as_ref(),
-        Some(&agent_id_str),
-        session.auth_token.as_deref(),
-        ctx.strict_mode,
-    )
-    .await;
-
-    let mut policy = runtime_capabilities::build_policy_config(
-        &session.installed_tools,
-        &session.installed_integrations,
-        &agent_permissions,
-    );
+    let mut policy = PolicyConfig::default();
+    policy.set_installed_integrations(session.installed_integrations.iter().cloned());
+    policy.set_tool_integration_requirements(session.installed_tools.iter().filter_map(|tool| {
+        tool.required_integration
+            .clone()
+            .map(|requirement| (tool.name.clone(), requirement))
+    }));
     // Permissions are mandatory on every session; wire them into the
     // kernel policy unconditionally so the Delegate gate enforces them.
     policy.agent_permissions = session.agent_permissions.clone();
@@ -320,51 +289,6 @@ pub(super) async fn build_kernel_with_config(
     policy = policy
         .with_user_default(user_default.clone())
         .with_agent_override(session.tool_permissions.clone());
-
-    // Extend `allowed_tools` with every name the session's
-    // `DomainToolExecutor` can handle (`create_spec`, `create_task`,
-    // `list_specs`, etc.). Without this, the kernel's fail-closed
-    // `allow_unlisted = false` default denies domain tools with
-    // `"Tool 'X' is not allowed"` whenever the aura-os-server
-    // capability splice fails to ship them as `installed_tools`
-    // (non-CEO agent with empty `capabilities`, remote harness with
-    // unresolvable base URL, etc.). The DomainApi surface is the
-    // authoritative source for these names — they are always safe
-    // to allow because per-call authorization is re-enforced at the
-    // aura-os-server dispatcher via the session JWT.
-    if let Some(ref exec) = domain_exec {
-        policy.add_allowed_tools(exec.tool_names().iter().map(|s| s.to_string()));
-    }
-
-    // Mirror of the domain-tool extension above for harness-native
-    // automaton tools (`start_dev_loop` & friends). These were just
-    // registered into `resolver` but are stripped from `installed_tools`
-    // server-side, so `build_policy_config` never saw them — re-add
-    // them here so the kernel allows the dispatch path the resolver
-    // already routes to. The harness controller still enforces
-    // ownership (project-scoped construction binds these tools to a
-    // specific `project_id`), so allow-listing the names is safe.
-    if !registered_tool_names.is_empty() {
-        policy.add_allowed_tools(registered_tool_names.iter().cloned());
-    }
-
-    // Allow-list the harness-native git tools (`git_commit`,
-    // `git_push`, `git_commit_push`). They are registered into every
-    // resolver via `aura_tools::tool::builtin_tools()` and exposed to
-    // the chat LLM via `ToolCatalog`'s `ToolProfile::Agent` entries,
-    // but they fall through every other allow-listing path: they are
-    // NOT in `PolicyConfig::default().allowed_tools` (only the file
-    // tools are seeded), they are NOT shipped from aura-os-server as
-    // `installed_tools` (no matching tool exists in
-    // `aura-os-agent-tools`), and a chat session does NOT seed them
-    // via `agent_permissions` (only the dev-loop automaton path does
-    // that, in `automaton_bridge::dev_loop_git_permissions`). Without
-    // this extension, any chat-side `git_commit` call dies with
-    // `"Tool 'git_commit' is not allowed"` even though the resolver
-    // and the LLM tool schema both have it. The git tools enforce
-    // their own workspace-escape and timeout invariants
-    // (`aura-tools/src/git_tool/`); this only flips the policy gate.
-    policy.add_allowed_tools(aura_tools::GIT_TOOL_NAMES.iter().map(|s| s.to_string()));
 
     resolver = resolver
         .with_spawn_hook(Arc::new(aura_kernel::KernelSpawnHook::new(
@@ -680,7 +604,6 @@ mod tests {
             memory_manager: None,
             skill_manager: None,
             router_url: None,
-            strict_mode: false,
         }
     }
 

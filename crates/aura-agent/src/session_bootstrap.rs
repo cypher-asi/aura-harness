@@ -10,7 +10,7 @@
 
 use crate::prompts::default_system_prompt;
 use crate::AgentLoopConfig;
-use aura_kernel::{ExecutorRouter, PermissionLevel, PolicyConfig};
+use aura_kernel::{ExecutorRouter, PolicyConfig};
 use aura_reasoner::ToolDefinition;
 use aura_store::RocksStore;
 use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolRegistry};
@@ -194,28 +194,13 @@ pub fn tool_config_from_env() -> ToolConfig {
     cfg
 }
 
-/// Build a [`PolicyConfig`] for env-driven embedders (the standalone
-/// TUI harness, ad-hoc CLI tests).
-///
-/// Non-strict mode unconditionally elevates `run_command` to
-/// [`PermissionLevel::AlwaysAllow`] so agents spawned through this
-/// helper can invoke shell commands without per-call approval.
-/// `AURA_STRICT_MODE=1` keeps the fail-closed [`PolicyConfig::default`]
-/// and denies `run_command` until the caller wires in an approval
-/// pump or a per-agent permission override.
-///
-/// The executor-layer [`ToolConfig`] from [`tool_config_from_env`]
-/// still enforces `binary_allowlist` and `allow_shell` independently.
+/// Build the default [`PolicyConfig`] for env-driven embedders. Per-tool
+/// enablement now comes from user defaults plus optional agent overrides;
+/// executor-layer [`ToolConfig`] still enforces command allowlists and
+/// shell guardrails independently.
 #[must_use]
 pub fn policy_config_from_env() -> PolicyConfig {
-    let mut policy = PolicyConfig::default();
-    if !env_bool("AURA_STRICT_MODE") {
-        policy.allowed_tools.insert("run_command".to_string());
-        policy
-            .tool_permissions
-            .insert("run_command".to_string(), PermissionLevel::AlwaysAllow);
-    }
-    policy
+    PolicyConfig::default()
 }
 
 /// Build an executor router honoring a caller-supplied [`ToolConfig`].
@@ -244,7 +229,7 @@ mod env_tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    const ENV_KEYS: &[&str] = &["AURA_ALLOWED_COMMANDS", "AURA_ALLOW_SHELL", "AURA_STRICT_MODE"];
+    const ENV_KEYS: &[&str] = &["AURA_ALLOWED_COMMANDS", "AURA_ALLOW_SHELL"];
 
     fn clear_env() {
         for k in ENV_KEYS {
@@ -259,45 +244,15 @@ mod env_tests {
     }
 
     #[test]
-    fn default_policy_allows_find_files_and_delete_file() {
-        let policy = PolicyConfig::default();
-        assert!(policy.allowed_tools.contains("find_files"));
-        assert!(policy.allowed_tools.contains("delete_file"));
-    }
-
-    #[test]
-    fn default_kernel_policy_still_denies_run_command() {
-        // The kernel baseline stays fail-closed; only the
-        // `policy_config_from_env` / `fetch_agent_permissions_with_default`
-        // wrappers unlock `run_command` in non-strict mode.
-        let policy = PolicyConfig::default();
-        assert!(!policy.allowed_tools.contains("run_command"));
-    }
-
-    #[test]
-    fn default_env_policy_allows_run_command() {
+    fn default_env_policy_uses_full_access_user_default() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         clear_env();
 
         let policy = policy_config_from_env();
-        assert!(policy.allowed_tools.contains("run_command"));
         assert_eq!(
-            policy.tool_permissions.get("run_command"),
-            Some(&PermissionLevel::AlwaysAllow)
+            policy.user_default,
+            aura_core::UserToolDefaults::full_access()
         );
-
-        clear_env();
-    }
-
-    #[test]
-    fn strict_mode_env_denies_run_command() {
-        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_env();
-
-        set_env(&[("AURA_STRICT_MODE", "1")]);
-        let policy = policy_config_from_env();
-        assert!(!policy.allowed_tools.contains("run_command"));
-        assert!(!policy.tool_permissions.contains_key("run_command"));
 
         clear_env();
     }

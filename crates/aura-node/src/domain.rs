@@ -4,27 +4,16 @@
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use aura_core::PermissionLevel;
 use aura_tools::domain_tools::{
     CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
     SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
 };
 use reqwest::Client;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 const MAX_CLOUDFLARE_RETRIES: u32 = 2;
 const CLOUDFLARE_RETRY_BASE_MS: u64 = 1500;
-
-/// TTL for the per-agent permissions cache. Kept short so a toggle in
-/// aura-os propagates quickly; long enough to absorb a bursty series of
-/// kernel rebuilds from the same session without hammering aura-network.
-const AGENT_PERMISSIONS_TTL: Duration = Duration::from_secs(30);
-
-type PermissionCacheEntry = (Instant, Option<HashMap<String, PermissionLevel>>);
 
 fn is_cloudflare_block(status: reqwest::StatusCode, body: &str) -> bool {
     (status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::SERVICE_UNAVAILABLE)
@@ -49,12 +38,6 @@ pub struct HttpDomainApi {
     /// `AURA_OS_SERVER_URL`). `None` preserves the historical
     /// behavior of posting directly to `aura-storage`.
     os_server_url: Option<String>,
-    /// In-process cache of per-agent permission overrides fetched from
-    /// aura-network. Keyed by agent id. Entries live for
-    /// [`AGENT_PERMISSIONS_TTL`] before being refetched; negative
-    /// responses (404 / no profile) are also cached so we don't spam
-    /// aura-network for agents that have no override row.
-    permission_cache: RwLock<HashMap<String, PermissionCacheEntry>>,
 }
 
 impl HttpDomainApi {
@@ -88,7 +71,6 @@ impl HttpDomainApi {
             network_url: network_url.trim_end_matches('/').to_string(),
             orbit_url: orbit_url.trim_end_matches('/').to_string(),
             os_server_url: os_server_url.map(|u| u.trim_end_matches('/').to_string()),
-            permission_cache: RwLock::new(HashMap::new()),
         })
     }
 
@@ -119,25 +101,6 @@ impl HttpDomainApi {
     /// on.
     fn project_base_url(&self) -> &str {
         self.os_server_url.as_deref().unwrap_or(&self.network_url)
-    }
-
-    fn cached_permissions(
-        &self,
-        agent_id: &str,
-    ) -> Option<Option<HashMap<String, PermissionLevel>>> {
-        let cache = self.permission_cache.read().ok()?;
-        let (fetched_at, value) = cache.get(agent_id)?;
-        if fetched_at.elapsed() < AGENT_PERMISSIONS_TTL {
-            Some(value.clone())
-        } else {
-            None
-        }
-    }
-
-    fn store_permissions(&self, agent_id: &str, value: Option<HashMap<String, PermissionLevel>>) {
-        if let Ok(mut cache) = self.permission_cache.write() {
-            cache.insert(agent_id.to_string(), (Instant::now(), value));
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -617,53 +580,6 @@ impl DomainApi for HttpDomainApi {
             return Err(anyhow!("HTTP {status}: {truncated}"));
         }
         Ok(text)
-    }
-
-    // -- Per-agent permission overrides (aura-network, JWT /api/) ------------
-
-    async fn get_agent_permissions(
-        &self,
-        agent_id: &str,
-        jwt: Option<&str>,
-    ) -> anyhow::Result<Option<HashMap<String, PermissionLevel>>> {
-        if let Some(cached) = self.cached_permissions(agent_id) {
-            debug!(agent_id, "agent permissions cache hit");
-            return Ok(cached);
-        }
-
-        let jwt = Self::require_jwt(jwt)?;
-        let url = format!("{}/api/agents/{agent_id}/permissions", self.network_url);
-        debug!(url, "HttpDomainApi api GET agent permissions");
-
-        // Intentionally bypass `send_with_retry` so we can distinguish
-        // 404 (absent profile — fall back to caller defaults) from other
-        // HTTP errors (fail closed). Cloudflare blocks here are rare and
-        // bubble up as plain HTTP errors, which is the correct
-        // fail-closed behavior.
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(jwt)
-            .send()
-            .await
-            .with_context(|| format!("GET {url}"))?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::NOT_FOUND {
-            self.store_permissions(agent_id, None);
-            return Ok(None);
-        }
-        let text = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = text.chars().take(300).collect();
-            return Err(anyhow!(
-                "GET /api/agents/{agent_id}/permissions failed: HTTP {status}: {truncated}"
-            ));
-        }
-
-        let map: HashMap<String, PermissionLevel> = serde_json::from_str(&text)
-            .with_context(|| format!("parse agent permissions response from {url}"))?;
-        self.store_permissions(agent_id, Some(map.clone()));
-        Ok(Some(map))
     }
 }
 

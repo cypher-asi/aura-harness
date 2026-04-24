@@ -42,14 +42,12 @@ mod automaton;
 mod files;
 mod memory;
 mod skills;
-mod tool_approval;
 mod tool_permissions;
 mod tx;
 mod ws;
 
 use automaton::*;
 use files::*;
-use tool_approval::{grant_tool_approval_handler, revoke_tool_approval_handler};
 use tool_permissions::*;
 use tx::*;
 use ws::*;
@@ -222,16 +220,11 @@ pub fn create_router(state: RouterState) -> Router {
         config: build_strict_governor(),
     };
 
-    // Strict-rate-limit sub-router: `/tx`, `/tool-approval`,
-    // `/automaton/start`, and the `:id/pause` + `:id/stop` path params.
-    // The body limit for tool-approval + pause + stop is 4 KiB (tiny
-    // JSON payloads); `/tx` and `/automaton/start` keep the 1 MiB
-    // default because legitimate requests can be large.
+    // Strict-rate-limit sub-router: `/tx`, `/automaton/start`, and the
+    // `:id/pause` + `:id/stop` path params. Pause/stop use a 4 KiB
+    // body limit for tiny JSON payloads; `/tx` and `/automaton/start`
+    // keep the 1 MiB default because legitimate requests can be large.
     let strict_small_body = Router::new()
-        .route(
-            "/tool-approval",
-            post(grant_tool_approval_handler).delete(revoke_tool_approval_handler),
-        )
         .route(
             "/automaton/:automaton_id/pause",
             post(automaton_pause_handler),
@@ -645,8 +638,8 @@ fn build_global_governor() -> Arc<GovernorCfg> {
     )
 }
 
-/// Stricter rate limit for mutating endpoints (`/tx`, `/tool-approval`,
-/// `/automaton/start`, `:id/pause`, `:id/stop`). 5/sec burst 10.
+/// Stricter rate limit for mutating endpoints (`/tx`, `/automaton/start`,
+/// `:id/pause`, `:id/stop`). 5/sec burst 10.
 ///
 /// INVARIANT: same reasoning as [`build_global_governor`] — hard-coded
 /// non-zero integer literals make the `.expect(...)` infallible by

@@ -1131,8 +1131,6 @@ const PROTECTED_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/read-file"),
     ("GET", "/workspace/resolve"),
     ("POST", "/tx"),
-    ("POST", "/tool-approval"),
-    ("DELETE", "/tool-approval"),
     ("GET", "/tx/status/deadbeef/abcd"),
     ("GET", "/agents/deadbeef/head"),
     ("GET", "/agents/deadbeef/record"),
@@ -1538,119 +1536,6 @@ async fn test_list_files_rejects_path_traversal() {
     );
 }
 
-#[tokio::test]
-async fn test_tool_approval_grant_and_revoke_roundtrip() {
-    let store = create_test_store();
-    let state = test_router_state(store);
-    let scheduler = state.scheduler.clone();
-    let app = create_router(state);
-
-    let agent_id = AgentId::generate();
-    let args_hash = aura_kernel::ApprovalKey::hash_args(&serde_json::json!({"cmd": "ls"}));
-    let args_hash_hex = hex::encode(args_hash);
-    let body = serde_json::json!({
-        "agent_id": agent_id.to_hex(),
-        "tool": "run_command",
-        "args_hash_hex": args_hash_hex,
-    });
-    let body_bytes = serde_json::to_vec(&body).unwrap();
-
-    let req = authed_request()
-        .method("POST")
-        .uri("/tool-approval")
-        .header("content-type", "application/json")
-        .body(Body::from(body_bytes.clone()))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::CREATED,
-        "POST /tool-approval must grant and return 201"
-    );
-    assert!(scheduler
-        .approval_registry()
-        .contains(agent_id, "run_command", args_hash));
-
-    let req = authed_request()
-        .method("DELETE")
-        .uri("/tool-approval")
-        .header("content-type", "application/json")
-        .body(Body::from(body_bytes.clone()))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::OK,
-        "DELETE /tool-approval must succeed when an approval was pending"
-    );
-    assert!(!scheduler
-        .approval_registry()
-        .contains(agent_id, "run_command", args_hash));
-
-    let req = authed_request()
-        .method("DELETE")
-        .uri("/tool-approval")
-        .header("content-type", "application/json")
-        .body(Body::from(body_bytes))
-        .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_FOUND,
-        "DELETE /tool-approval on an already-consumed approval must 404"
-    );
-}
-
-#[tokio::test]
-async fn test_tool_approval_rejects_invalid_agent_id() {
-    let store = create_test_store();
-    let state = test_router_state(store);
-    let app = create_router(state);
-
-    let body = serde_json::json!({
-        "agent_id": "not-a-valid-id",
-        "tool": "run_command",
-        "args_hash_hex": "00".repeat(32),
-    });
-    let req = authed_request()
-        .method("POST")
-        .uri("/tool-approval")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&body).unwrap()))
-        .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::BAD_REQUEST,
-        "malformed agent_id must be rejected before touching the registry"
-    );
-}
-
-#[tokio::test]
-async fn test_tool_approval_rejects_wrong_length_hash() {
-    let store = create_test_store();
-    let state = test_router_state(store);
-    let app = create_router(state);
-
-    let body = serde_json::json!({
-        "agent_id": AgentId::generate().to_hex(),
-        "tool": "run_command",
-        "args_hash_hex": "abcd",
-    });
-    let req = authed_request()
-        .method("POST")
-        .uri("/tool-approval")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&body).unwrap()))
-        .unwrap();
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::BAD_REQUEST,
-        "short args_hash_hex must be rejected"
-    );
-}
-
 // ============================================================================
 // Phase 9 (security audit): DoS-protection tests — body limits, rate
 // limiting, concurrency caps.
@@ -1680,30 +1565,6 @@ async fn test_tx_rejects_body_over_one_mib() {
         resp.status(),
         StatusCode::PAYLOAD_TOO_LARGE,
         "/tx bodies over 1 MiB must be rejected with 413 before reaching the handler"
-    );
-}
-
-/// `POST /tool-approval` has a stricter 4 KiB per-route body limit
-/// that overrides the 1 MiB global default. An 8 KiB body trips it.
-#[tokio::test]
-async fn test_tool_approval_rejects_body_over_four_kib() {
-    let store = create_test_store();
-    let state = test_router_state(store);
-    let app = create_router(state);
-
-    let oversize = vec![b'y'; 8 * 1024];
-    let req = authed_request()
-        .method("POST")
-        .uri("/tool-approval")
-        .header("content-type", "application/json")
-        .body(Body::from(oversize))
-        .unwrap();
-
-    let resp = app.oneshot(req).await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::PAYLOAD_TOO_LARGE,
-        "/tool-approval must enforce its 4 KiB per-route body limit"
     );
 }
 

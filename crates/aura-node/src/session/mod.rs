@@ -77,11 +77,4 @@ pub struct WsContext {
     pub(crate) skill_manager: Option<Arc<RwLock<SkillManager>>>,
     /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
     pub(crate) router_url: Option<String>,
-    /// When true, per-agent permission overrides returned by
-    /// aura-network are discarded and the kernel uses the fail-closed
-    /// [`aura_kernel::PolicyConfig::default`] matrix. Intended as an
-    /// operator kill-switch (`AURA_STRICT_MODE=1`) for high-trust
-    /// environments where aura-os must not be able to elevate an
-    /// agent's permissions.
-    pub(crate) strict_mode: bool,
 }

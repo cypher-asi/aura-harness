@@ -1,4 +1,4 @@
-//! Policy configuration: [`PermissionLevel`], [`PolicyConfig`], defaults.
+//! Policy configuration: [`PolicyConfig`] and related policy shape types.
 //!
 //! All behavior-free, data-shape pieces of the policy engine live here so
 //! [`super::check`] can focus on the authorization pipeline itself.
@@ -10,44 +10,6 @@ use aura_core::{
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
-// Permission Levels
-// ============================================================================
-
-// `PermissionLevel` moved to `aura_core::types::permission` so crates on
-// the "outside" of the kernel (notably the `DomainApi` in `aura-tools`
-// that fetches per-agent overrides from aura-network) can marshal these
-// values without pulling in the kernel itself. Re-exported here so
-// `aura_kernel::PermissionLevel` and `aura_kernel::policy::PermissionLevel`
-// keep working for existing callers.
-pub use aura_core::PermissionLevel;
-
-/// Default permission level for a tool based on its name.
-///
-/// Read-only and narrow filesystem tools default to `AlwaysAllow`.
-/// `run_command` defaults to [`PermissionLevel::RequireApproval`] (Wave 5 /
-/// T3.3, renamed in Phase 6 / security audit): spawning arbitrary shell
-/// commands is the biggest blast-radius tool the kernel exposes, so
-/// every invocation must be explicitly pre-approved via
-/// [`crate::Kernel::grant_approval`]. Hosts that trust the running
-/// agent (e.g. headless CI) can still flip this to `AlwaysAllow` via
-/// [`PolicyConfig::tool_permissions`].
-#[must_use]
-pub fn default_tool_permission(tool: &str) -> PermissionLevel {
-    match tool {
-        // Read-only discovery / content tools, plus the core edit and
-        // delete verbs. `find_files` was historically missing from this
-        // arm (followup to the Phase 5 audit) which made it permanently
-        // `Deny` even for hosts that spliced it into `allowed_tools`.
-        "list_files" | "find_files" | "read_file" | "stat_file" | "search_code" | "write_file"
-        | "edit_file" | "delete_file" => PermissionLevel::AlwaysAllow,
-        "run_command" | "git_commit" | "git_push" | "git_commit_push" => {
-            PermissionLevel::RequireApproval
-        }
-        _ => PermissionLevel::Deny,
-    }
-}
-
-// ============================================================================
 // Policy Configuration
 // ============================================================================
 
@@ -56,24 +18,12 @@ pub fn default_tool_permission(tool: &str) -> PermissionLevel {
 pub struct PolicyConfig {
     /// Allowed action kinds
     pub allowed_action_kinds: HashSet<ActionKind>,
-    /// Allowed tools
-    pub allowed_tools: HashSet<String>,
     /// Maximum proposals per request. Exposed via [`super::Policy::max_proposals`]; the kernel truncates proposals exceeding this limit.
     pub max_proposals: usize,
-    /// Custom permission overrides for specific tools
-    pub tool_permissions: HashMap<String, PermissionLevel>,
     /// Installed integrations currently authorized for this runtime.
     pub installed_integrations: Vec<InstalledIntegrationDefinition>,
     /// Declared integration requirements for tools.
     pub tool_integration_requirements: HashMap<String, InstalledToolIntegrationRequirement>,
-    /// When true, tools not in `allowed_tools` or `tool_permissions` get
-    /// `AlwaysAllow` instead of `Deny`. **Defaults to `false`** (Phase 5
-    /// hardening â€” closes finding C5): unlisted tools fall through to
-    /// `Deny` so adding a tool to the runtime registry no longer
-    /// auto-grants it at policy-check time. Hosts that deliberately
-    /// want a wide-open policy (e.g. a controlled test harness) can
-    /// flip this back to `true` explicitly.
-    pub allow_unlisted: bool,
     /// Scope + capability bundle for the agent this policy governs.
     /// Always consulted on `Delegate` proposals â€” the check is
     /// unconditional and cannot be disabled. [`AgentPermissions::empty`]
@@ -91,10 +41,6 @@ pub struct PolicyConfig {
     /// [`UserToolDefaults::full_access`] to preserve "default ON" for
     /// callers that do not load a persisted user profile.
     ///
-    /// Currently parallel to the legacy `allowed_tools` /
-    /// `tool_permissions` / `allow_unlisted` fields; the legacy gate is
-    /// the enforcement path until the Phase-E teardown cutover, at
-    /// which point this becomes the sole tool-permission source.
     pub user_default: UserToolDefaults,
     /// Optional per-agent override map stamped on this agent's
     /// [`aura_core::Identity`]. `None` (or an empty map) means
@@ -105,15 +51,6 @@ pub struct PolicyConfig {
 }
 
 impl Default for PolicyConfig {
-    /// Fail-closed defaults (Phase 5 hardening â€” closes finding C5):
-    ///
-    /// * `allow_unlisted` is `false`, so anything not in `allowed_tools`
-    ///   and not explicitly named in `tool_permissions` is denied.
-    /// * `run_command` is **not** pre-populated in `allowed_tools`.
-    ///   `default_tool_permission("run_command")` still returns
-    ///   `RequireApproval`, so a host that opts in by inserting `run_command`
-    ///   continues to require per-invocation approval via
-    ///   [`crate::Kernel::grant_approval`].
     fn default() -> Self {
         let mut allowed_action_kinds = HashSet::new();
         allowed_action_kinds.insert(ActionKind::Reason);
@@ -121,29 +58,11 @@ impl Default for PolicyConfig {
         allowed_action_kinds.insert(ActionKind::Decide);
         allowed_action_kinds.insert(ActionKind::Delegate);
 
-        let mut allowed_tools = HashSet::new();
-        allowed_tools.insert("list_files".to_string());
-        allowed_tools.insert("find_files".to_string());
-        allowed_tools.insert("read_file".to_string());
-        allowed_tools.insert("stat_file".to_string());
-        allowed_tools.insert("search_code".to_string());
-        allowed_tools.insert("write_file".to_string());
-        allowed_tools.insert("edit_file".to_string());
-        // `delete_file` already had `AlwaysAllow` in
-        // `default_tool_permission` but was missing from this set,
-        // making it effectively `Deny` under `allow_unlisted = false`.
-        // Reconcile the two so the Phase-5 fail-closed default stops
-        // contradicting itself.
-        allowed_tools.insert("delete_file".to_string());
-
         Self {
             allowed_action_kinds,
-            allowed_tools,
             max_proposals: 8,
-            tool_permissions: HashMap::new(),
             installed_integrations: Vec::new(),
             tool_integration_requirements: HashMap::new(),
-            allow_unlisted: false,
             agent_permissions: AgentPermissions::empty(),
             tool_capability_requirements: HashMap::new(),
             user_default: UserToolDefaults::full_access(),
@@ -153,81 +72,6 @@ impl Default for PolicyConfig {
 }
 
 impl PolicyConfig {
-    /// Create a permissive config that explicitly opens the policy:
-    /// `allow_unlisted = true` and `run_command` is added to
-    /// `allowed_tools`. Kept distinct from [`Self::default`] after the
-    /// Phase 5 fail-closed flip so callers who actually want the wide
-    /// gate still have a one-liner.
-    #[must_use]
-    pub fn permissive() -> Self {
-        let mut cfg = Self::default();
-        cfg.allowed_tools.insert("run_command".to_string());
-        cfg.allow_unlisted = true;
-        cfg
-    }
-
-    /// Create a restrictive config with only read-only tools.
-    /// Unlisted tools are denied.
-    #[must_use]
-    pub fn restrictive() -> Self {
-        let mut allowed_tools = HashSet::new();
-        allowed_tools.insert("list_files".to_string());
-        allowed_tools.insert("read_file".to_string());
-        allowed_tools.insert("stat_file".to_string());
-        allowed_tools.insert("search_code".to_string());
-
-        Self {
-            allowed_tools,
-            allow_unlisted: false,
-            ..Self::default()
-        }
-    }
-
-    /// Set a custom permission level for a tool.
-    #[must_use]
-    pub fn with_tool_permission(mut self, tool: &str, level: PermissionLevel) -> Self {
-        self.tool_permissions.insert(tool.to_string(), level);
-        self
-    }
-
-    /// Add a single tool to the allowed set with `AlwaysAllow` permission.
-    pub fn add_allowed_tool(&mut self, name: impl Into<String>) {
-        let name = name.into();
-        self.allowed_tools.insert(name.clone());
-        self.tool_permissions
-            .insert(name, PermissionLevel::AlwaysAllow);
-    }
-
-    /// Add multiple tools to the allowed set with `AlwaysAllow` permission.
-    pub fn add_allowed_tools(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
-        for name in names {
-            self.add_allowed_tool(name);
-        }
-    }
-
-    /// Add a single tool name to `allowed_tools` **without** forcing a
-    /// permission level. The effective level is whatever
-    /// [`tool_permissions`] already contains for `name`, or
-    /// [`default_tool_permission`] if no override exists — so
-    /// `RequireApproval`-by-default tools like `git_push` stay at
-    /// `RequireApproval` instead of being silently elevated to
-    /// `AlwaysAllow` by the allow-list seed.
-    ///
-    /// Use this when you want the kernel to surface a tool to the LLM
-    /// and route through the dispatcher, but you still want the
-    /// configured approval semantics to govern per-call authorization.
-    pub fn allow_tool_name(&mut self, name: impl Into<String>) {
-        self.allowed_tools.insert(name.into());
-    }
-
-    /// Batched form of [`Self::allow_tool_name`]. Adds every name to
-    /// `allowed_tools` without touching `tool_permissions`.
-    pub fn allow_tool_names(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
-        for name in names {
-            self.allow_tool_name(name);
-        }
-    }
-
     /// Replace the installed integrations set for this runtime.
     pub fn set_installed_integrations(
         &mut self,

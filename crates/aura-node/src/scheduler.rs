@@ -38,7 +38,7 @@
 use crate::worker::process_agent;
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_core::{AgentId, AgentStatus};
-use aura_kernel::{ApprovalRegistry, Executor, ExecutorRouter, Kernel, KernelConfig};
+use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
 use aura_reasoner::{ModelProvider, ToolDefinition};
 use aura_store::Store;
 use dashmap::DashMap;
@@ -64,12 +64,6 @@ pub struct Scheduler {
     agent_locks: DashMap<AgentId, AgentLock>,
     kernel_config: KernelConfig,
     memory_manager: Option<Arc<aura_memory::MemoryManager>>,
-    /// Shared single-use approvals. Every per-agent [`Kernel`] the
-    /// scheduler builds receives a handle to this registry so an
-    /// approval granted via the HTTP API survives the kernel that was
-    /// active when the proposal was first denied (Phase 6, security
-    /// audit).
-    approvals: ApprovalRegistry,
 }
 
 impl Scheduler {
@@ -96,17 +90,7 @@ impl Scheduler {
             agent_locks: DashMap::new(),
             kernel_config,
             memory_manager,
-            approvals: ApprovalRegistry::new(),
         }
-    }
-
-    /// Return a handle to the shared [`ApprovalRegistry`] the scheduler
-    /// injects into each kernel it constructs. The router's
-    /// `POST /tool-approval` handler uses this to register one-shot
-    /// approvals without having to reach through a specific kernel.
-    #[must_use]
-    pub fn approval_registry(&self) -> ApprovalRegistry {
-        self.approvals.clone()
     }
 
     /// Get or create lock for an agent.
@@ -146,13 +130,12 @@ impl Scheduler {
 
         let router = self.build_executor_router();
         let kernel = Arc::new(
-            Kernel::new_with_approvals(
+            Kernel::new(
                 self.store.clone(),
                 self.provider.clone(),
                 router,
                 self.kernel_config.clone(),
                 agent_id,
-                self.approvals.clone(),
             )
             .map_err(|e| anyhow::anyhow!("kernel construction failed: {e}"))?,
         );

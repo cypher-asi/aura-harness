@@ -11,10 +11,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core::{Action, ActionKind, AgentId, Effect, ToolCall, ToolResult};
+use aura_core::{
+    Action, ActionKind, AgentId, AgentToolPermissions, Effect, ToolCall, ToolResult, ToolState,
+};
 use aura_kernel::{
-    ExecuteContext, Executor, ExecutorError, ExecutorRouter, Kernel, KernelConfig, PermissionLevel,
-    PolicyConfig,
+    ExecuteContext, Executor, ExecutorError, ExecutorRouter, Kernel, KernelConfig, PolicyConfig,
 };
 use aura_reasoner::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, StopReason, ToolDefinition,
@@ -225,8 +226,9 @@ async fn tool_timeout_returns_error() {
 
 #[tokio::test]
 async fn policy_deny_returns_error_result() {
-    let policy_config =
-        PolicyConfig::default().with_tool_permission("delete_file", PermissionLevel::Deny);
+    let policy_config = PolicyConfig::default().with_agent_override(Some(
+        AgentToolPermissions::new().with("delete_file", ToolState::Deny),
+    ));
     let harness = build_kernel(
         stub_router(),
         KernelConfig {
@@ -250,8 +252,9 @@ async fn policy_deny_returns_error_result() {
 
 #[tokio::test]
 async fn policy_deny_does_not_block_allowed_tools() {
-    let policy_config =
-        PolicyConfig::default().with_tool_permission("delete_file", PermissionLevel::Deny);
+    let policy_config = PolicyConfig::default().with_agent_override(Some(
+        AgentToolPermissions::new().with("delete_file", ToolState::Deny),
+    ));
     let harness = build_kernel(
         stub_router(),
         KernelConfig {

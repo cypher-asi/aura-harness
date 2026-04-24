@@ -5,12 +5,8 @@
 //! 1. Route each proposal through the full
 //!    `Policy::check_with_runtime_capabilities_verdict` pipeline
 //!    (Invariant §4).
-//! 2. If the verdict is [`crate::PolicyVerdict::RequireApproval`],
-//!    consult the shared [`crate::ApprovalRegistry`]: a matching
-//!    single-use approval unlocks the call and is consumed; otherwise
-//!    the call is denied with a structured
-//!    [`crate::ToolDecision::NeedsApproval`] surfaced on the
-//!    [`ProcessResult`].
+//! 2. Resolve any live `ask` prompt surfaced by
+//!    [`crate::PolicyVerdict::RequireApproval`].
 //! 3. Execute approved tools via `ExecutorRouter`.
 //! 4. Build a `RecordEntry` with the proposal set, decision, actions,
 //!    and effects attached (Invariant §5).
@@ -24,7 +20,7 @@ use super::{
 };
 use crate::context::hash_tx_with_window;
 use crate::executor::{decode_tool_effect, ExecuteContext};
-use crate::policy::{ApprovalKey, PolicyVerdict};
+use crate::policy::PolicyVerdict;
 use aura_core::{
     Action, ActionId, ActionKind, ContextHash, Decision, Effect, EffectKind, EffectStatus,
     Proposal, ProposalSet, RecordEntry, ToolCall, ToolProposal, ToolState, Transaction,
@@ -52,7 +48,6 @@ impl Kernel {
 
         let tool_use_id = proposal.tool_use_id.clone();
         let tool_name = proposal.tool.clone();
-        let args_hash = ApprovalKey::hash_args(&proposal.args);
 
         let kernel_proposal = Proposal::new(
             ActionKind::Delegate,
@@ -69,12 +64,8 @@ impl Kernel {
         let verdict = self
             .resolve_live_ask_verdict(&tool_name, &proposal.args, tool_use_id.clone(), verdict)
             .await?;
-        let approval_unlocked =
-            matches!(verdict, PolicyVerdict::RequireApproval { prompt: None, .. })
-                && self.approvals.take(self.agent_id, &tool_name, args_hash);
-        let effective_allowed = verdict.is_allowed() || approval_unlocked;
 
-        if effective_allowed {
+        if verdict.is_allowed() {
             let action_id = ActionId::generate();
             let action = Action::new(
                 action_id,
@@ -142,7 +133,6 @@ impl Kernel {
                 (
                     Some(ApprovalRequiredInfo {
                         tool: tool_name.clone(),
-                        args_hash,
                         prompt: match &verdict {
                             PolicyVerdict::RequireApproval { prompt, .. } => prompt.clone(),
                             _ => None,
@@ -150,7 +140,6 @@ impl Kernel {
                     }),
                     ToolDecision::NeedsApproval {
                         reason: denial_reason.clone(),
-                        args_hash,
                         prompt: match &verdict {
                             PolicyVerdict::RequireApproval { prompt, .. } => prompt.clone(),
                             _ => None,
@@ -200,8 +189,7 @@ impl Kernel {
         }
 
         let mut kernel_proposals: Vec<Proposal> = Vec::with_capacity(tool_proposals.len());
-        let mut verdicts: Vec<(PolicyVerdict, bool)> = Vec::with_capacity(tool_proposals.len());
-        let mut args_hashes: Vec<[u8; 32]> = Vec::with_capacity(tool_proposals.len());
+        let mut verdicts: Vec<PolicyVerdict> = Vec::with_capacity(tool_proposals.len());
         let runtime_capabilities = self.load_runtime_capabilities()?;
 
         for proposal in &tool_proposals {
@@ -221,14 +209,7 @@ impl Kernel {
                     verdict,
                 )
                 .await?;
-            let args_hash = ApprovalKey::hash_args(&proposal.args);
-            let approval_unlocked =
-                matches!(verdict, PolicyVerdict::RequireApproval { prompt: None, .. })
-                    && self
-                        .approvals
-                        .take(self.agent_id, &proposal.tool, args_hash);
-            verdicts.push((verdict, approval_unlocked));
-            args_hashes.push(args_hash);
+            verdicts.push(verdict);
             kernel_proposals.push(kernel_proposal);
         }
 
@@ -241,8 +222,8 @@ impl Kernel {
         let mut exec_actions: Vec<Action> = Vec::new();
 
         for (i, proposal) in tool_proposals.iter().enumerate() {
-            let (verdict, approval_unlocked) = &verdicts[i];
-            if !(verdict.is_allowed() || *approval_unlocked) {
+            let verdict = &verdicts[i];
+            if !verdict.is_allowed() {
                 continue;
             }
             let action_id = ActionId::generate();
@@ -299,8 +280,8 @@ impl Kernel {
             let context_hash = hash_tx_with_window(&tx, &window)?;
             let tool_use_id = proposal.tool_use_id.clone();
 
-            let (verdict, approval_unlocked) = &verdicts[i];
-            let was_approved = verdict.is_allowed() || *approval_unlocked;
+            let verdict = &verdicts[i];
+            let was_approved = verdict.is_allowed();
 
             if was_approved {
                 let action = &exec_actions[approved_idx];
@@ -343,7 +324,6 @@ impl Kernel {
                     .reason()
                     .map_or_else(|| "Policy denied".to_string(), str::to_string);
                 let needs_approval = matches!(verdict, PolicyVerdict::RequireApproval { .. });
-                let args_hash = args_hashes[i];
                 let mut decision = Decision::new();
                 decision.reject(0, &denial_reason);
 
@@ -360,7 +340,6 @@ impl Kernel {
                     (
                         Some(ApprovalRequiredInfo {
                             tool: proposal.tool.clone(),
-                            args_hash,
                             prompt: match verdict {
                                 PolicyVerdict::RequireApproval { ref prompt, .. } => prompt.clone(),
                                 _ => None,
@@ -368,7 +347,6 @@ impl Kernel {
                         }),
                         ToolDecision::NeedsApproval {
                             reason: denial_reason.clone(),
-                            args_hash,
                             prompt: match verdict {
                                 PolicyVerdict::RequireApproval { ref prompt, .. } => prompt.clone(),
                                 _ => None,

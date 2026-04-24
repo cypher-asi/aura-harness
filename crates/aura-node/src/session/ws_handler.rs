@@ -531,7 +531,6 @@ mod tests {
             memory_manager: None,
             skill_manager: None,
             router_url: None,
-            strict_mode: false,
         }
     }
 

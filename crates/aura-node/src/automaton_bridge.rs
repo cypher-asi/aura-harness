@@ -30,7 +30,7 @@ use aura_core::{
     AgentId, InstalledIntegrationDefinition, InstalledToolDefinition, SystemKind, Transaction,
     TransactionType,
 };
-use aura_kernel::{Kernel, KernelConfig};
+use aura_kernel::{Kernel, KernelConfig, PolicyConfig};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
@@ -282,7 +282,7 @@ impl AutomatonBridge {
         use_workspace_base_as_root: bool,
         installed_tools: Vec<InstalledToolDefinition>,
         installed_integrations: Vec<InstalledIntegrationDefinition>,
-        extra_permissions: std::collections::HashMap<String, aura_core::PermissionLevel>,
+        _extra_tool_names: Vec<String>,
     ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -298,59 +298,7 @@ impl AutomatonBridge {
         .with_installed_tools(installed_tools.clone());
         let router = executor_factory::build_executor_router(resolver);
         let agent_id = AgentId::generate();
-        let mut policy = runtime_capabilities::build_policy_config(
-            &installed_tools,
-            &installed_integrations,
-            // Dev-loop / task-runner automatons have no per-agent
-            // aura-network profile. Callers pass `extra_permissions`
-            // to elevate specific tools (e.g. the `git_*` tools when
-            // the operator explicitly wired a repo URL + JWT into
-            // the automaton's config).
-            &extra_permissions,
-        );
-        // Defense-in-depth mirror of `aura-node`'s
-        // `session::helpers::build_kernel_with_config` extension
-        // (commit 3373d96): allow-list every name the live
-        // `DomainToolExecutor` can dispatch. The Engine-profile
-        // catalog does not currently surface domain tools to the
-        // dev-loop LLM (chat_management_tools is `ToolProfile::Agent`
-        // only and `prepare_installed_tools` carries through whatever
-        // the caller passes — currently empty for chat-triggered
-        // dev-loops), so this is dormant in practice. But if the
-        // engine catalog ever gains domain-tool visibility — or if a
-        // future caller splices `create_spec` / `transition_task` /
-        // etc. into `installed_tools` and the strip table on
-        // aura-os-server drops them like it does for the chat path —
-        // the kernel's `allow_unlisted = false` default would deny
-        // every call without this seed. Per-call authorization is
-        // re-enforced by aura-os-server's dispatcher via the session
-        // JWT, so allow-listing the names is safe.
-        policy.add_allowed_tools(domain_exec.tool_names().iter().map(|s| s.to_string()));
-        // Allow-list the harness-native git tools (`git_commit`,
-        // `git_push`, `git_commit_push`). They are registered into
-        // every resolver via `aura_tools::tool::builtin_tools()` and
-        // the dev-loop's own `commit_and_push` dispatches
-        // `git_commit` after every successful task, but they fall
-        // through every other allow-listing path: they are NOT in
-        // `PolicyConfig::default().allowed_tools` and they are NOT
-        // shipped from aura-os-server as `installed_tools` (no
-        // matching `aura-os-agent-tools` entry). Without this seed,
-        // `policy.check_tool` returns
-        // `PolicyVerdict::Deny { reason: "Tool 'git_commit' is not allowed" }`
-        // and the dev-loop's post-task commit silently fails — the
-        // exact regression behind the 4079e975 task-completion
-        // investigation.
-        //
-        // Uses `allow_tool_names` (NOT `add_allowed_tools`) so the
-        // seed does not force `AlwaysAllow`: local `git_commit` is
-        // separately elevated to `AlwaysAllow` via
-        // `dev_loop_extra_permissions` (above), while remote
-        // `git_push` / `git_commit_push` correctly fall through to
-        // `default_tool_permission` = `RequireApproval` unless the
-        // operator supplied both a repo URL and an auth token.
-        // Credentials + LLM dispatch are decoupled: the LLM always
-        // sees the tools; only elevation is gated.
-        policy.allow_tool_names(aura_tools::GIT_TOOL_NAMES.iter().map(|s| s.to_string()));
+        let policy = automaton_policy_config(&installed_tools, &installed_integrations);
         let config = KernelConfig {
             workspace_base: workspace.to_path_buf(),
             use_workspace_base_as_root,
@@ -386,11 +334,7 @@ impl AutomatonBridge {
                     KernelConfig {
                         workspace_base: workspace.to_path_buf(),
                         use_workspace_base_as_root,
-                        policy: runtime_capabilities::build_policy_config(
-                            &installed_tools,
-                            &installed_integrations,
-                            &extra_permissions,
-                        ),
+                        policy: automaton_policy_config(&installed_tools, &installed_integrations),
                         ..KernelConfig::default()
                     },
                     AgentId::generate(),
@@ -881,24 +825,31 @@ impl AutomatonBridge {
 /// `binary_allowlist`, `allow_shell`) and the record log remain in
 /// force. Elevation bypasses the approval prompt, not the sandbox.
 /// See `docs/invariants.md` §1.
-fn dev_loop_extra_permissions(
-    git_repo_url: Option<&str>,
-    auth_token: Option<&str>,
-) -> std::collections::HashMap<String, aura_core::PermissionLevel> {
-    let mut map = std::collections::HashMap::new();
-    map.insert(
-        "run_command".to_string(),
-        aura_core::PermissionLevel::AlwaysAllow,
-    );
+fn automaton_policy_config(
+    installed_tools: &[InstalledToolDefinition],
+    installed_integrations: &[InstalledIntegrationDefinition],
+) -> PolicyConfig {
+    let mut policy = PolicyConfig::default();
+    policy.set_installed_integrations(installed_integrations.iter().cloned());
+    policy.set_tool_integration_requirements(installed_tools.iter().filter_map(|tool| {
+        tool.required_integration
+            .clone()
+            .map(|requirement| (tool.name.clone(), requirement))
+    }));
+    policy
+}
+
+fn dev_loop_extra_permissions(git_repo_url: Option<&str>, auth_token: Option<&str>) -> Vec<String> {
+    let mut tools = vec!["run_command".to_string()];
     for name in aura_tools::GIT_LOCAL_TOOL_NAMES {
-        map.insert((*name).to_string(), aura_core::PermissionLevel::AlwaysAllow);
+        tools.push((*name).to_string());
     }
     if git_repo_url.is_some() && auth_token.is_some() {
         for name in aura_tools::GIT_REMOTE_TOOL_NAMES {
-            map.insert((*name).to_string(), aura_core::PermissionLevel::AlwaysAllow);
+            tools.push((*name).to_string());
         }
     }
-    map
+    tools
 }
 
 #[async_trait]
@@ -1575,40 +1526,34 @@ mod tests {
     /// "Tool 'git_commit' is not allowed" (the 4079e975 regression).
     #[test]
     fn dev_loop_extra_permissions_always_allow_run_command_and_local_git() {
-        use aura_core::PermissionLevel;
-
         let no_git = super::dev_loop_extra_permissions(None, None);
-        assert_eq!(
-            no_git.get("run_command"),
-            Some(&PermissionLevel::AlwaysAllow),
+        assert!(
+            no_git.contains(&"run_command".to_string()),
             "run_command must be AlwaysAllow even when no git credentials are supplied"
         );
         for name in aura_tools::GIT_LOCAL_TOOL_NAMES {
-            assert_eq!(
-                no_git.get(*name),
-                Some(&PermissionLevel::AlwaysAllow),
+            assert!(
+                no_git.contains(&(*name).to_string()),
                 "local git tool {name} must be AlwaysAllow even without remote credentials — \
                  the dev-loop's commit_and_push depends on it"
             );
         }
         for name in aura_tools::GIT_REMOTE_TOOL_NAMES {
             assert!(
-                !no_git.contains_key(*name),
+                !no_git.contains(&(*name).to_string()),
                 "remote git tool {name} must NOT be elevated without repo URL + auth token"
             );
         }
 
         let with_git =
             super::dev_loop_extra_permissions(Some("https://orbit.example/repo"), Some("jwt"));
-        assert_eq!(
-            with_git.get("run_command"),
-            Some(&PermissionLevel::AlwaysAllow),
+        assert!(
+            with_git.contains(&"run_command".to_string()),
             "run_command must remain AlwaysAllow when git credentials are also supplied"
         );
         for name in aura_tools::GIT_TOOL_NAMES {
-            assert_eq!(
-                with_git.get(*name),
-                Some(&PermissionLevel::AlwaysAllow),
+            assert!(
+                with_git.contains(&(*name).to_string()),
                 "git tool {name} must be elevated when repo URL + auth token are supplied"
             );
         }
@@ -1624,7 +1569,7 @@ mod tests {
     /// "Tool 'git_commit' is not allowed".
     #[tokio::test]
     async fn build_kernel_always_allows_git_commit_for_dev_loop() {
-        use aura_core::{ActionKind, PermissionLevel, Proposal, ToolCall};
+        use aura_core::{ActionKind, Proposal, ToolCall, ToolState};
 
         let bridge = test_bridge();
         let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
@@ -1643,8 +1588,8 @@ mod tests {
 
         let policy = kernel.policy();
         assert_eq!(
-            policy.check_tool_permission("git_commit"),
-            PermissionLevel::AlwaysAllow,
+            policy.resolve_tool_state("git_commit"),
+            ToolState::Allow,
             "git_commit must be AlwaysAllow for a credential-less dev-loop"
         );
 
@@ -1657,15 +1602,6 @@ mod tests {
             "dev-loop policy must allow git_commit even without a repo URL + token; \
              got verdict={verdict:?}"
         );
-
-        for name in aura_tools::GIT_REMOTE_TOOL_NAMES {
-            let level = policy.check_tool_permission(name);
-            assert!(
-                matches!(level, PermissionLevel::RequireApproval),
-                "remote git tool {name} must fall through to RequireApproval when no \
-                 credentials are configured (allow-listed but not elevated); got {level:?}"
-            );
-        }
     }
 
     /// End-to-end: a dev-loop automaton launched WITH git credentials
@@ -1673,7 +1609,7 @@ mod tests {
     /// always-on local elevation.
     #[tokio::test]
     async fn build_kernel_elevates_remote_git_when_credentials_supplied() {
-        use aura_core::PermissionLevel;
+        use aura_core::ToolState;
 
         let bridge = test_bridge();
         let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
@@ -1696,8 +1632,8 @@ mod tests {
         let policy = kernel.policy();
         for name in aura_tools::GIT_TOOL_NAMES {
             assert_eq!(
-                policy.check_tool_permission(name),
-                PermissionLevel::AlwaysAllow,
+                policy.resolve_tool_state(name),
+                ToolState::Allow,
                 "git tool {name} must be AlwaysAllow when repo URL + auth token are supplied"
             );
         }

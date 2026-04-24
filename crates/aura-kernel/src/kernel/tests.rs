@@ -41,7 +41,6 @@ fn create_new_kernel() -> (Kernel, TempDir, TempDir) {
     let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
     (kernel, db_dir, ws_dir)
 }
-
 #[tokio::test]
 async fn test_process_direct_user_prompt() {
     let (kernel, _db, _ws) = create_new_kernel();
@@ -226,7 +225,7 @@ async fn test_sequence_across_process_and_reason() {
 }
 
 #[tokio::test]
-async fn test_session_start_clears_policy_session_approvals() {
+async fn test_session_start_clears_policy_session_tool_states() {
     let db_dir = TempDir::new().unwrap();
     let ws_dir = TempDir::new().unwrap();
     let agent_id = AgentId::generate();
@@ -236,20 +235,31 @@ async fn test_session_start_clears_policy_session_approvals() {
     let executor = ExecutorRouter::new();
     let config = KernelConfig {
         workspace_base: ws_dir.path().to_path_buf(),
-        policy: crate::policy::PolicyConfig::default()
-            .with_tool_permission("guarded_tool", crate::policy::PermissionLevel::AskOnce),
+        policy: crate::policy::PolicyConfig::default(),
         ..KernelConfig::default()
     };
     let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
-    kernel.policy.approve_for_session("guarded_tool");
-    assert!(kernel.policy.is_session_approved("guarded_tool"));
+    kernel
+        .policy
+        .remember_tool_state_for_session("guarded_tool", aura_core::ToolState::Deny);
+    assert!(
+        !kernel
+            .policy
+            .check_tool("guarded_tool", &serde_json::json!({}))
+            .allowed
+    );
 
     kernel
         .process_direct(Transaction::session_start(agent_id))
         .await
         .unwrap();
 
-    assert!(!kernel.policy.is_session_approved("guarded_tool"));
+    assert!(
+        kernel
+            .policy
+            .check_tool("guarded_tool", &serde_json::json!({}))
+            .allowed
+    );
 }
 
 #[tokio::test]
@@ -262,7 +272,6 @@ async fn test_tool_proposal_denied_without_required_integration() {
         Arc::new(MockProvider::simple_response("test response"));
     let executor = ExecutorRouter::new();
     let mut policy = crate::policy::PolicyConfig::default();
-    policy.add_allowed_tool("brave_search_web");
     policy.set_tool_integration_requirements([(
         "brave_search_web".to_string(),
         InstalledToolIntegrationRequirement {
@@ -295,7 +304,6 @@ async fn test_tool_proposal_denied_without_required_integration() {
         .as_ref()
         .is_some_and(|output| output.content.contains("installed integration")));
 }
-
 #[tokio::test]
 async fn test_capability_install_persists_runtime_capability_ledger() {
     let (kernel, _db, _ws) = create_new_kernel();
@@ -385,7 +393,6 @@ async fn test_tool_proposal_uses_persisted_runtime_capability_ledger() {
         Arc::new(MockProvider::simple_response("test response"));
     let executor = ExecutorRouter::new();
     let mut policy = crate::policy::PolicyConfig::default();
-    policy.add_allowed_tool("brave_search_web");
     policy.set_installed_integrations([InstalledIntegrationDefinition {
         integration_id: "integration-brave-1".to_string(),
         name: "Brave Search".to_string(),
@@ -465,11 +472,10 @@ async fn tool_proposal_denied_when_delegate_action_kind_not_allowed() {
     allowed_action_kinds.insert(ActionKind::Memorize);
     allowed_action_kinds.insert(ActionKind::Decide);
 
-    let mut policy = crate::policy::PolicyConfig {
+    let policy = crate::policy::PolicyConfig {
         allowed_action_kinds,
         ..crate::policy::PolicyConfig::default()
     };
-    policy.add_allowed_tool("read_file");
 
     let config = KernelConfig {
         workspace_base: ws_dir.path().to_path_buf(),
@@ -496,118 +502,5 @@ async fn tool_proposal_denied_when_delegate_action_kind_not_allowed() {
         output.content.contains("Action kind"),
         "expected action-kind rejection reason, got: {}",
         output.content
-    );
-}
-
-#[tokio::test]
-async fn test_require_approval_tool_denied_without_grant_then_consumed_after_grant() {
-    let db_dir = TempDir::new().unwrap();
-    let ws_dir = TempDir::new().unwrap();
-    let agent_id = AgentId::generate();
-    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
-    let provider: Arc<dyn ModelProvider + Send + Sync> =
-        Arc::new(MockProvider::simple_response("test response"));
-    let executor = ExecutorRouter::new();
-
-    let policy = crate::policy::PolicyConfig::default().with_tool_permission(
-        "run_command",
-        crate::policy::PermissionLevel::RequireApproval,
-    );
-
-    let config = KernelConfig {
-        workspace_base: ws_dir.path().to_path_buf(),
-        policy,
-        ..KernelConfig::default()
-    };
-    let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
-
-    let args = serde_json::json!({ "cmd": "echo hi" });
-    let proposal = ToolProposal::new("tool-use-1", "run_command", args.clone());
-    let tx = Transaction::tool_proposal(agent_id, &proposal).unwrap();
-
-    let result = kernel.process_direct(tx.clone()).await.unwrap();
-
-    let decision = result
-        .tool_decision
-        .clone()
-        .expect("tool_decision on a tool proposal");
-    let (reason, args_hash) = match decision {
-        crate::kernel::ToolDecision::NeedsApproval {
-            reason, args_hash, ..
-        } => (reason, args_hash),
-        other => panic!("expected NeedsApproval, got {other:?}"),
-    };
-    assert!(
-        !reason.is_empty(),
-        "NeedsApproval should carry a reason string"
-    );
-    let output = result.tool_output.expect("tool output for needs-approval");
-    assert!(output.is_error, "needs-approval is surfaced as an error");
-    let approval_required = output
-        .approval_required
-        .expect("approval_required metadata populated");
-    assert_eq!(approval_required.tool, "run_command");
-    assert_eq!(approval_required.args_hash, args_hash);
-
-    kernel.grant_approval(agent_id, "run_command", args_hash);
-    assert!(kernel
-        .approval_registry()
-        .contains(agent_id, "run_command", args_hash));
-
-    let proposal2 = ToolProposal::new("tool-use-2", "run_command", args);
-    let tx2 = Transaction::tool_proposal(agent_id, &proposal2).unwrap();
-    let result2 = kernel.process_direct(tx2).await.unwrap();
-
-    let decision2 = result2
-        .tool_decision
-        .expect("tool_decision on second proposal");
-    assert!(
-        matches!(decision2, crate::kernel::ToolDecision::Allowed),
-        "expected Allowed after grant_approval, got {decision2:?}"
-    );
-    assert!(
-        !kernel
-            .approval_registry()
-            .contains(agent_id, "run_command", args_hash),
-        "grant should be consumed exactly once"
-    );
-}
-
-#[tokio::test]
-async fn test_revoke_approval_prevents_consumption() {
-    let db_dir = TempDir::new().unwrap();
-    let ws_dir = TempDir::new().unwrap();
-    let agent_id = AgentId::generate();
-    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
-    let provider: Arc<dyn ModelProvider + Send + Sync> =
-        Arc::new(MockProvider::simple_response("test response"));
-    let executor = ExecutorRouter::new();
-
-    let policy = crate::policy::PolicyConfig::default().with_tool_permission(
-        "run_command",
-        crate::policy::PermissionLevel::RequireApproval,
-    );
-
-    let config = KernelConfig {
-        workspace_base: ws_dir.path().to_path_buf(),
-        policy,
-        ..KernelConfig::default()
-    };
-    let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
-
-    let args = serde_json::json!({ "cmd": "echo revoke" });
-    let args_hash = crate::policy::ApprovalKey::hash_args(&args);
-
-    kernel.grant_approval(agent_id, "run_command", args_hash);
-    assert!(kernel.revoke_approval(agent_id, "run_command", args_hash));
-    assert!(!kernel.revoke_approval(agent_id, "run_command", args_hash));
-
-    let proposal = ToolProposal::new("tool-use-1", "run_command", args);
-    let tx = Transaction::tool_proposal(agent_id, &proposal).unwrap();
-    let result = kernel.process_direct(tx).await.unwrap();
-    let decision = result.tool_decision.expect("tool_decision");
-    assert!(
-        matches!(decision, crate::kernel::ToolDecision::NeedsApproval { .. }),
-        "expected NeedsApproval after revoke, got {decision:?}"
     );
 }
