@@ -53,6 +53,26 @@ pub enum ToolState {
     Ask,
 }
 
+impl ToolState {
+    /// Monotonic permission ordering used for per-agent overrides:
+    /// `off < ask < on`.
+    #[must_use]
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Deny => 0,
+            Self::Ask => 1,
+            Self::Allow => 2,
+        }
+    }
+
+    /// Return whether `self` is no broader than `parent` under
+    /// `off < ask < on`.
+    #[must_use]
+    pub const fn is_subset_of(self, parent: Self) -> bool {
+        self.rank() <= parent.rank()
+    }
+}
+
 /// User-scoped default permissions applied to every agent owned by that user
 /// (subject to optional per-agent overrides).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,8 +6,8 @@ use crate::tool::{builtin_tools, AgentControlHook, AgentReadHook, Tool, ToolCont
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{
-    Action, ActionKind, AgentId, AgentPermissions, Effect, EffectKind, EffectStatus, ToolCall,
-    ToolResult,
+    Action, ActionKind, AgentId, AgentPermissions, AgentToolPermissions, Effect, EffectKind,
+    EffectStatus, ToolCall, ToolResult, UserToolDefaults,
 };
 use aura_kernel::{ExecuteContext, Executor, ExecutorError, SpawnHook};
 use bytes::Bytes;
@@ -31,6 +31,8 @@ pub struct ToolExecutor {
     agent_control_hook: Option<Arc<dyn AgentControlHook>>,
     agent_read_hook: Option<Arc<dyn AgentReadHook>>,
     caller_permissions: Option<AgentPermissions>,
+    caller_tool_permissions: Option<AgentToolPermissions>,
+    user_tool_defaults: UserToolDefaults,
     parent_chain: Vec<AgentId>,
     originating_user_id: Option<String>,
 }
@@ -50,6 +52,8 @@ impl ToolExecutor {
             agent_control_hook: None,
             agent_read_hook: None,
             caller_permissions: None,
+            caller_tool_permissions: None,
+            user_tool_defaults: UserToolDefaults::default(),
             parent_chain: Vec::new(),
             originating_user_id: None,
         }
@@ -83,6 +87,19 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_caller_permissions(mut self, permissions: AgentPermissions) -> Self {
         self.caller_permissions = Some(permissions);
+        self
+    }
+
+    /// Attach the caller's current per-tool override context for
+    /// monotonic child-agent spawn checks.
+    #[must_use]
+    pub fn with_tool_permission_context(
+        mut self,
+        user_default: UserToolDefaults,
+        permissions: Option<AgentToolPermissions>,
+    ) -> Self {
+        self.user_tool_defaults = user_default;
+        self.caller_tool_permissions = permissions;
         self
     }
 
@@ -187,6 +204,8 @@ impl ToolExecutor {
         let mut tool_ctx = ToolContext::new(sandbox, self.config.clone());
         tool_ctx.caller_agent_id = Some(ctx.agent_id);
         tool_ctx.caller_permissions = self.caller_permissions.clone();
+        tool_ctx.caller_tool_permissions = self.caller_tool_permissions.clone();
+        tool_ctx.user_tool_defaults = self.user_tool_defaults.clone();
         tool_ctx.parent_chain = self.parent_chain.clone();
         tool_ctx.originating_user_id = self.originating_user_id.clone();
         tool_ctx.spawn_hook = self.spawn_hook.clone();

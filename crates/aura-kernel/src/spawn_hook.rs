@@ -19,7 +19,10 @@
 //! on `aura-tools`.
 
 use async_trait::async_trait;
-use aura_core::{AgentId, AgentPermissions, Hash, Identity, Transaction, TransactionType};
+use aura_core::{
+    resolve_effective_permission, AgentId, AgentPermissions, AgentToolPermissions, Hash, Identity,
+    ToolState, Transaction, TransactionType, UserToolDefaults,
+};
 use aura_store::Store;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -36,6 +39,12 @@ pub struct ChildAgentSpec {
     /// have been checked to be a strict subset of the caller's permissions
     /// before this hook is invoked.
     pub permissions: AgentPermissions,
+    /// Optional per-tool override to stamp on the child's `Identity`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_permissions: Option<AgentToolPermissions>,
+    /// Parent/session per-tool override used for a final monotonic check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_tool_permissions: Option<AgentToolPermissions>,
     /// Optional system-prompt override for the child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_override: Option<String>,
@@ -139,6 +148,8 @@ struct DelegateSpawnPayload {
     role: String,
     permissions: AgentPermissions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_permissions: Option<AgentToolPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     originating_user_id: Option<String>,
 }
 
@@ -152,10 +163,29 @@ impl SpawnHook for KernelSpawnHook {
     ) -> Result<SpawnOutcome, SpawnError> {
         let child_agent_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
 
+        let user_default = match originating_user_id {
+            Some(user_id) => self
+                .store
+                .get_user_tool_defaults(user_id)
+                .map_err(|e| SpawnError::Store(format!("get_user_tool_defaults: {e}")))?
+                .unwrap_or_default(),
+            None => UserToolDefaults::default(),
+        };
+        let parent_tool_permissions = child.parent_tool_permissions.clone().or_else(|| {
+            self.latest_identity(parent_agent_id)
+                .and_then(|id| id.tool_permissions)
+        });
+        enforce_tool_subset(
+            &user_default,
+            parent_tool_permissions.as_ref(),
+            child.tool_permissions.as_ref(),
+        )?;
+
         let zns_id = format!("0://spawn/{}", child_agent_id.to_hex());
         let mut identity = Identity::new(&zns_id, &child.name);
         identity.agent_id = child_agent_id;
         identity = identity.with_permissions(child.permissions.clone());
+        identity = identity.with_tool_permissions(child.tool_permissions.clone());
 
         let identity_payload = ChildIdentityPayload {
             identity,
@@ -194,6 +224,7 @@ impl SpawnHook for KernelSpawnHook {
             name: child.name.clone(),
             role: child.role.clone(),
             permissions: child.permissions.clone(),
+            tool_permissions: child.tool_permissions.clone(),
             originating_user_id: originating_user_id.map(ToString::to_string),
         };
         let delegate_bytes = serde_json::to_vec(&delegate_payload)
@@ -227,6 +258,54 @@ impl SpawnHook for KernelSpawnHook {
     }
 }
 
+impl KernelSpawnHook {
+    fn latest_identity(&self, agent_id: &AgentId) -> Option<Identity> {
+        let head = self.store.get_head_seq(*agent_id).ok()?;
+        let from_seq = head.saturating_sub(256).saturating_add(1);
+        let entries = self.store.scan_record(*agent_id, from_seq, 256).ok()?;
+        entries
+            .iter()
+            .rev()
+            .find_map(|entry| identity_from_payload(&entry.tx.payload))
+    }
+}
+
+fn identity_from_payload(payload: &[u8]) -> Option<Identity> {
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    value
+        .get("identity")
+        .and_then(|identity| serde_json::from_value(identity.clone()).ok())
+}
+
+fn enforce_tool_subset(
+    user_default: &UserToolDefaults,
+    parent: Option<&AgentToolPermissions>,
+    child: Option<&AgentToolPermissions>,
+) -> Result<(), SpawnError> {
+    let Some(child) = child else {
+        return Ok(());
+    };
+    for (tool, child_state) in &child.per_tool {
+        let parent_state = resolve_effective_permission(user_default, parent, tool);
+        if !child_state.is_subset_of(parent_state) {
+            return Err(SpawnError::Other(format!(
+                "tool permissions: requested '{tool}'={} exceeds parent effective {}",
+                state_label(*child_state),
+                state_label(parent_state)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn state_label(state: ToolState) -> &'static str {
+    match state {
+        ToolState::Allow => "on",
+        ToolState::Deny => "off",
+        ToolState::Ask => "ask",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +323,8 @@ mod tests {
                     name: "c".into(),
                     role: "r".into(),
                     permissions: AgentPermissions::empty(),
+                    tool_permissions: None,
+                    parent_tool_permissions: None,
                     system_prompt_override: None,
                     preassigned_agent_id: None,
                 },
@@ -271,6 +352,8 @@ mod tests {
                     name: "worker".into(),
                     role: "builder".into(),
                     permissions: AgentPermissions::ceo_preset(),
+                    tool_permissions: None,
+                    parent_tool_permissions: None,
                     system_prompt_override: Some("be fast".into()),
                     preassigned_agent_id: None,
                 },
@@ -320,6 +403,8 @@ mod tests {
                     name: "c".into(),
                     role: "r".into(),
                     permissions: AgentPermissions::ceo_preset(),
+                    tool_permissions: None,
+                    parent_tool_permissions: None,
                     system_prompt_override: None,
                     preassigned_agent_id: None,
                 },
@@ -356,6 +441,8 @@ mod tests {
                     name: "c".into(),
                     role: "r".into(),
                     permissions: AgentPermissions::empty(),
+                    tool_permissions: None,
+                    parent_tool_permissions: None,
                     system_prompt_override: None,
                     preassigned_agent_id: Some(pre),
                 },

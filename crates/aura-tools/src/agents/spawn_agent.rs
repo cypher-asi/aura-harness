@@ -21,7 +21,10 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{AgentId, AgentPermissions, ToolDefinition, ToolResult};
+use aura_core::{
+    resolve_effective_permission, AgentId, AgentPermissions, AgentToolPermissions, ToolDefinition,
+    ToolResult,
+};
 use aura_kernel::{ChildAgentSpec, NoopSpawnHook};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -43,6 +46,10 @@ pub struct SpawnAgentInput {
     /// Optional system-prompt override for the child agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
+    /// Optional per-tool override for the child. Explicit entries must be no
+    /// broader than the caller's effective state for the same tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_permissions: Option<AgentToolPermissions>,
 }
 
 /// Structured outcome of a successful `spawn_agent` call. Embedded in the
@@ -106,6 +113,21 @@ impl SpawnAgentTool {
             return Err(ToolError::InvalidArguments(
                 "permissions: requested grants exceed caller (strict subset required)".into(),
             ));
+        }
+
+        if let Some(child_tools) = input.tool_permissions.as_ref() {
+            for (tool, child_state) in &child_tools.per_tool {
+                let parent_state = resolve_effective_permission(
+                    &ctx.user_tool_defaults,
+                    ctx.caller_tool_permissions.as_ref(),
+                    tool,
+                );
+                if !child_state.is_subset_of(parent_state) {
+                    return Err(ToolError::InvalidArguments(format!(
+                        "tool permissions: requested '{tool}'={child_state:?} exceeds parent effective {parent_state:?}"
+                    )));
+                }
+            }
         }
 
         if let Some(requested_id) = input.agent_id.as_deref() {
@@ -194,6 +216,8 @@ impl Tool for SpawnAgentTool {
             name: input.name.clone(),
             role: input.role.clone(),
             permissions: input.permissions.clone(),
+            tool_permissions: input.tool_permissions.clone(),
+            parent_tool_permissions: ctx.caller_tool_permissions.clone(),
             system_prompt_override: input.system_prompt.clone(),
             preassigned_agent_id: preassigned,
         };
@@ -309,6 +333,7 @@ pub(crate) mod tests {
             },
             agent_id: None,
             system_prompt: None,
+            tool_permissions: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -332,6 +357,7 @@ pub(crate) mod tests {
             },
             agent_id: None,
             system_prompt: None,
+            tool_permissions: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -349,6 +375,7 @@ pub(crate) mod tests {
             permissions: AgentPermissions::empty(),
             agent_id: Some(ancestor.to_string()),
             system_prompt: None,
+            tool_permissions: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -369,6 +396,7 @@ pub(crate) mod tests {
             },
             agent_id: None,
             system_prompt: None,
+            tool_permissions: None,
         };
 
         let outcome = SpawnAgentTool::evaluate(&ctx, &input).unwrap();
@@ -389,6 +417,7 @@ pub(crate) mod tests {
             permissions: AgentPermissions::empty(),
             agent_id: None,
             system_prompt: None,
+            tool_permissions: None,
         };
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
         assert!(err.to_string().contains("caller_permissions"), "got: {err}");

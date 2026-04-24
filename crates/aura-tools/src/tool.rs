@@ -8,7 +8,10 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
-use aura_core::{AgentId, AgentPermissions, Capability, ToolDefinition, ToolResult};
+use aura_core::{
+    AgentId, AgentPermissions, AgentToolPermissions, Capability, ToolDefinition, ToolResult,
+    UserToolDefaults,
+};
 use aura_kernel::SpawnHook;
 use std::sync::Arc;
 
@@ -25,6 +28,11 @@ pub struct ToolContext {
     /// Phase 5: caller's scope + capability grants. Cross-agent tools (e.g.
     /// `spawn_agent`) enforce strict-subset semantics against this bundle.
     pub caller_permissions: Option<AgentPermissions>,
+    /// Caller per-agent tool override, when present for this session.
+    pub caller_tool_permissions: Option<AgentToolPermissions>,
+    /// User default used with `caller_tool_permissions` for monotonic spawn
+    /// checks.
+    pub user_tool_defaults: UserToolDefaults,
     /// Phase 5: ancestor chain for the caller (immediate parent first, root
     /// last). Used for cycle prevention in `spawn_agent`.
     pub parent_chain: Vec<AgentId>,
@@ -103,6 +111,8 @@ impl ToolContext {
             config,
             caller_agent_id: None,
             caller_permissions: None,
+            caller_tool_permissions: None,
+            user_tool_defaults: UserToolDefaults::default(),
             parent_chain: Vec::new(),
             originating_user_id: None,
             spawn_hook: None,

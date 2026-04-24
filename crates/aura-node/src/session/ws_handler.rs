@@ -10,7 +10,6 @@ use aura_agent::{
     AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
 };
 use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
-use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -19,30 +18,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 use uuid::Uuid;
-
-fn tool_has_required_integration(
-    session: &Session,
-    required_integration: Option<&aura_core::InstalledToolIntegrationRequirement>,
-) -> bool {
-    let Some(required_integration) = required_integration else {
-        return true;
-    };
-
-    session.installed_integrations.iter().any(|integration| {
-        required_integration
-            .integration_id
-            .as_deref()
-            .map_or(true, |expected| integration.integration_id == expected)
-            && required_integration
-                .provider
-                .as_deref()
-                .map_or(true, |expected| integration.provider == expected)
-            && required_integration
-                .kind
-                .as_deref()
-                .map_or(true, |expected| integration.kind == expected)
-    })
-}
 
 /// State for a turn that is currently being processed in the background.
 enum ActiveTurn {
@@ -315,27 +290,23 @@ async fn dispatch_idle_message(
 }
 
 pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) {
-    session.tool_definitions = ctx
-        .catalog
-        .visible_tools(ToolProfile::Agent, &ctx.tool_config);
-
-    for tool in &session.installed_tools {
-        if !tool_has_required_integration(session, tool.required_integration.as_ref()) {
-            debug!(
-                session_id = %session.session_id,
-                tool_name = %tool.name,
-                "Skipping installed tool because its required integration is not authorized for this session"
-            );
-            continue;
-        }
-        session
-            .tool_definitions
-            .push(aura_reasoner::ToolDefinition::new(
-                &tool.name,
-                &tool.description,
-                tool.input_schema.clone(),
-            ));
-    }
+    let user_default = ctx
+        .store
+        .get_user_tool_defaults(&session.user_id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    session.tool_definitions = crate::tool_permissions::effective_tool_definitions(
+        &ctx.catalog,
+        &ctx.tool_config,
+        &session.installed_tools,
+        &session.installed_integrations,
+        &user_default,
+        session.tool_permissions.as_ref(),
+    )
+    .into_iter()
+    .map(|(definition, _state)| definition)
+    .collect();
 }
 
 /// Prepare and spawn an agent-loop turn as a background task.

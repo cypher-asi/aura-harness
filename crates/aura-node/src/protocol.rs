@@ -5,14 +5,47 @@
 
 pub use aura_protocol::*;
 
-use aura_core::{InstalledIntegrationDefinition, InstalledToolDefinition};
+use aura_core::{
+    AgentToolPermissions, InstalledIntegrationDefinition, InstalledToolDefinition, ToolState,
+};
 use aura_reasoner::ToolDefinition;
 
-/// Convert a reasoner [`ToolDefinition`] into a protocol [`ToolInfo`].
-pub fn tool_info_from_definition(td: &ToolDefinition) -> ToolInfo {
+/// Convert a reasoner [`ToolDefinition`] into a protocol [`ToolInfo`] with
+/// an explicit tri-state permission annotation.
+pub fn tool_info_from_definition_with_state(
+    td: &ToolDefinition,
+    effective_state: ToolState,
+) -> ToolInfo {
     ToolInfo {
         name: td.name.clone(),
         description: td.description.clone(),
+        effective_state: tool_state_to_wire(effective_state),
+    }
+}
+
+pub fn tool_state_to_wire(state: ToolState) -> ToolStateWire {
+    match state {
+        ToolState::Allow => ToolStateWire::On,
+        ToolState::Deny => ToolStateWire::Off,
+        ToolState::Ask => ToolStateWire::Ask,
+    }
+}
+
+pub fn tool_state_from_wire(state: ToolStateWire) -> ToolState {
+    match state {
+        ToolStateWire::On => ToolState::Allow,
+        ToolStateWire::Off => ToolState::Deny,
+        ToolStateWire::Ask => ToolState::Ask,
+    }
+}
+
+pub fn agent_tool_permissions_from_wire(wire: AgentToolPermissionsWire) -> AgentToolPermissions {
+    AgentToolPermissions {
+        per_tool: wire
+            .per_tool
+            .into_iter()
+            .map(|(name, state)| (name, tool_state_from_wire(state)))
+            .collect(),
     }
 }
 
@@ -125,6 +158,7 @@ mod tests {
             "workspace": "/tmp/ws",
             "token": "jwt-abc",
             "project_id": "proj-123",
+            "user_id": "user-test",
             "agent_permissions": {}
         });
         let msg: InboundMessage = serde_json::from_value(json).unwrap();
@@ -145,7 +179,11 @@ mod tests {
 
     #[test]
     fn test_inbound_session_init_minimal() {
-        let json = serde_json::json!({"type": "session_init", "agent_permissions": {}});
+        let json = serde_json::json!({
+            "type": "session_init",
+            "user_id": "user-test",
+            "agent_permissions": {}
+        });
         let msg: InboundMessage = serde_json::from_value(json).unwrap();
         match msg {
             InboundMessage::SessionInit(init) => {
@@ -238,10 +276,12 @@ mod tests {
                 ToolInfo {
                     name: "read_file".to_string(),
                     description: "Read a file".to_string(),
+                    effective_state: ToolStateWire::On,
                 },
                 ToolInfo {
                     name: "write_file".to_string(),
                     description: "Write a file".to_string(),
+                    effective_state: ToolStateWire::On,
                 },
             ],
             skills: vec![],
@@ -442,9 +482,10 @@ mod tests {
             "A test tool",
             serde_json::json!({"type": "object"}),
         );
-        let info = tool_info_from_definition(&td);
+        let info = tool_info_from_definition_with_state(&td, ToolState::Allow);
         assert_eq!(info.name, "test_tool");
         assert_eq!(info.description, "A test tool");
+        assert_eq!(info.effective_state, ToolStateWire::On);
     }
 
     #[test]

@@ -43,12 +43,14 @@ mod files;
 mod memory;
 mod skills;
 mod tool_approval;
+mod tool_permissions;
 mod tx;
 mod ws;
 
 use automaton::*;
 use files::*;
 use tool_approval::{grant_tool_approval_handler, revoke_tool_approval_handler};
+use tool_permissions::*;
 use tx::*;
 use ws::*;
 
@@ -273,6 +275,15 @@ pub fn create_router(state: RouterState) -> Router {
             "/agents/:agent_id/record",
             get(scan_record_handler).route_layer(body_limit_16k),
         )
+        .route(
+            "/users/:user_id/tool-defaults",
+            get(get_user_tool_defaults_handler).put(put_user_tool_defaults_handler),
+        )
+        .route(
+            "/agents/:agent_id/tool-permissions",
+            get(get_agent_tool_permissions_handler).put(put_agent_tool_permissions_handler),
+        )
+        .route("/agents/:agent_id/tools", get(get_agent_tools_handler))
         .route("/ws/terminal", get(terminal_ws_handler))
         .route("/stream", get(ws_upgrade_handler))
         .route("/stream/automaton/:automaton_id", get(automaton_ws_handler))

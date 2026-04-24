@@ -32,12 +32,12 @@ use crate::tool::Tool;
 use crate::ToolConfig;
 use crate::ToolExecutor;
 use async_trait::async_trait;
-use aura_core::ToolDefinition;
 use aura_core::{
     Action, ActionKind, Effect, EffectKind, EffectStatus, InstalledToolDefinition, ToolCall,
     ToolResult,
 };
-use aura_kernel::{ExecuteContext, Executor, ExecutorError};
+use aura_core::{AgentPermissions, AgentToolPermissions, ToolDefinition, UserToolDefaults};
+use aura_kernel::{ExecuteContext, Executor, ExecutorError, SpawnHook};
 use bytes::Bytes;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -126,6 +126,40 @@ impl ToolResolver {
             .into_iter()
             .map(|tool| (tool.name.clone(), tool))
             .collect();
+        self
+    }
+
+    /// Attach cross-agent spawn persistence wiring.
+    #[must_use]
+    pub fn with_spawn_hook(mut self, hook: Arc<dyn SpawnHook>) -> Self {
+        self.inner = self.inner.with_spawn_hook(hook);
+        self
+    }
+
+    /// Attach caller scope/capability grants for cross-agent tools.
+    #[must_use]
+    pub fn with_caller_permissions(mut self, permissions: AgentPermissions) -> Self {
+        self.inner = self.inner.with_caller_permissions(permissions);
+        self
+    }
+
+    /// Attach tri-state tool permission context for child spawn subset checks.
+    #[must_use]
+    pub fn with_tool_permission_context(
+        mut self,
+        user_default: UserToolDefaults,
+        permissions: Option<AgentToolPermissions>,
+    ) -> Self {
+        self.inner = self
+            .inner
+            .with_tool_permission_context(user_default, permissions);
+        self
+    }
+
+    /// Attach originating user id for cross-agent delegate records.
+    #[must_use]
+    pub fn with_originating_user_id(mut self, user: impl Into<String>) -> Self {
+        self.inner = self.inner.with_originating_user_id(user);
         self
     }
 

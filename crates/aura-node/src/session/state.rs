@@ -11,8 +11,8 @@ use crate::protocol::{self, SessionInit};
 use crate::session::ToolApprovalBroker;
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{
-    AgentId, AgentPermissions, AgentScope, Capability, InstalledIntegrationDefinition,
-    InstalledToolDefinition,
+    AgentId, AgentPermissions, AgentScope, AgentToolPermissions, Capability,
+    InstalledIntegrationDefinition, InstalledToolDefinition,
 };
 use aura_protocol::{
     AgentPermissionsWire, CapabilityWire, IntentClassifierSpec, SessionProviderConfig,
@@ -111,7 +111,9 @@ pub struct Session {
     /// enforcement is unconditional.
     pub(crate) agent_permissions: AgentPermissions,
     /// Originating user id for tool-default resolution and forever approvals.
-    pub(crate) user_id: Option<String>,
+    pub(crate) user_id: String,
+    /// Optional per-agent tool override for this session.
+    pub(crate) tool_permissions: Option<AgentToolPermissions>,
     /// Live approval broker attached to this WebSocket connection.
     pub(crate) tool_approval_broker: Option<Arc<ToolApprovalBroker>>,
 }
@@ -153,7 +155,8 @@ impl Session {
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
             agent_permissions: AgentPermissions::empty(),
-            user_id: None,
+            user_id: String::new(),
+            tool_permissions: None,
             tool_approval_broker: None,
         }
     }
@@ -237,7 +240,13 @@ impl Session {
                 AgentId::new(*hash.as_bytes())
             });
         }
+        if init.user_id.trim().is_empty() {
+            return Err("user_id is required".into());
+        }
         self.user_id = init.user_id;
+        self.tool_permissions = init
+            .tool_permissions
+            .map(protocol::agent_tool_permissions_from_wire);
         if let Some(pid) = init.project_id {
             self.project_id = Some(pid);
         }

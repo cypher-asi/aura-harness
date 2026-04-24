@@ -5,15 +5,16 @@ use super::ws_handler::populate_tool_definitions;
 use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
-    self, AssistantMessageEnd, ErrorMsg, FilesChanged, OutboundMessage, SessionInit, SessionReady,
-    SessionUsage, SkillInfo, TextDelta, ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg,
-    ToolUseStart,
+    tool_info_from_definition_with_state, AssistantMessageEnd, ErrorMsg, FilesChanged,
+    OutboundMessage, SessionInit, SessionReady, SessionUsage, SkillInfo, TextDelta, ThinkingDelta,
+    ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
 };
 use crate::runtime_capabilities;
 use async_trait::async_trait;
 use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
 };
+use aura_core::{resolve_effective_permission, ToolState, UserToolDefaults};
 use aura_kernel::{Kernel, KernelConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -41,6 +42,31 @@ fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
     }
 
     (session.workspace.clone(), false)
+}
+
+fn session_user_defaults(
+    session: &Session,
+    ctx: &WsContext,
+) -> Result<UserToolDefaults, aura_kernel::KernelError> {
+    ctx.store
+        .get_user_tool_defaults(&session.user_id)
+        .map_err(|e| aura_kernel::KernelError::Store(format!("get_user_tool_defaults: {e}")))
+        .map(|defaults| defaults.unwrap_or_default())
+}
+
+fn effective_tool_infos(session: &Session, defaults: &UserToolDefaults) -> Vec<ToolInfo> {
+    session
+        .tool_definitions
+        .iter()
+        .filter_map(|tool| {
+            let state = resolve_effective_permission(
+                defaults,
+                session.tool_permissions.as_ref(),
+                &tool.name,
+            );
+            (state != ToolState::Deny).then(|| tool_info_from_definition_with_state(tool, state))
+        })
+        .collect()
 }
 
 pub(super) async fn handle_session_init(
@@ -92,6 +118,22 @@ pub(super) async fn handle_session_init(
             recoverable: true,
         }));
         return;
+    }
+
+    if session.tool_permissions.is_none() {
+        match crate::tool_permissions::load_agent_tool_context(&ctx.store, session.agent_id) {
+            Ok(agent_ctx) => {
+                session.tool_permissions = agent_ctx.tool_permissions;
+            }
+            Err(e) => {
+                let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                    code: "tool_permissions_load_failed".into(),
+                    message: e,
+                    recoverable: true,
+                }));
+                return;
+            }
+        }
     }
 
     if let Some(provider) = resolved_provider_override {
@@ -150,11 +192,18 @@ pub(super) async fn handle_session_init(
         }
     }
 
-    let tools: Vec<ToolInfo> = session
-        .tool_definitions
-        .iter()
-        .map(protocol::tool_info_from_definition)
-        .collect();
+    let defaults = match session_user_defaults(session, ctx) {
+        Ok(defaults) => defaults,
+        Err(e) => {
+            error!(
+                session_id = %session.session_id,
+                error = %e,
+                "Failed to load user tool defaults for SessionReady"
+            );
+            UserToolDefaults::default()
+        }
+    };
+    let tools: Vec<ToolInfo> = effective_tool_infos(session, &defaults);
 
     let skills: Vec<SkillInfo> = match (&ctx.skill_manager, &session.skill_agent_id) {
         (Some(sm), Some(agent_id)) => {
@@ -239,8 +288,6 @@ pub(super) async fn build_kernel_with_config(
         }
     }
 
-    let router = executor_factory::build_executor_router(resolver);
-
     let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
 
     // Fetch per-agent permission overrides from aura-network before
@@ -269,14 +316,10 @@ pub(super) async fn build_kernel_with_config(
     // Permissions are mandatory on every session; wire them into the
     // kernel policy unconditionally so the Delegate gate enforces them.
     policy.agent_permissions = session.agent_permissions.clone();
-    if let Some(ref user_id) = session.user_id {
-        let user_default = ctx
-            .store
-            .get_user_tool_defaults(user_id)
-            .map_err(|e| aura_kernel::KernelError::Store(format!("get_user_tool_defaults: {e}")))?
-            .unwrap_or_default();
-        policy = policy.with_user_default(user_default);
-    }
+    let user_default = session_user_defaults(session, ctx)?;
+    policy = policy
+        .with_user_default(user_default.clone())
+        .with_agent_override(session.tool_permissions.clone());
 
     // Extend `allowed_tools` with every name the session's
     // `DomainToolExecutor` can handle (`create_spec`, `create_task`,
@@ -323,6 +366,16 @@ pub(super) async fn build_kernel_with_config(
     // (`aura-tools/src/git_tool/`); this only flips the policy gate.
     policy.add_allowed_tools(aura_tools::GIT_TOOL_NAMES.iter().map(|s| s.to_string()));
 
+    resolver = resolver
+        .with_spawn_hook(Arc::new(aura_kernel::KernelSpawnHook::new(
+            ctx.store.clone(),
+        )))
+        .with_caller_permissions(session.agent_permissions.clone())
+        .with_tool_permission_context(user_default, session.tool_permissions.clone())
+        .with_originating_user_id(session.user_id.clone());
+
+    let router = executor_factory::build_executor_router(resolver);
+
     let config = KernelConfig {
         workspace_base: workspace,
         use_workspace_base_as_root,
@@ -331,7 +384,7 @@ pub(super) async fn build_kernel_with_config(
             .tool_approval_broker
             .clone()
             .map(|broker| broker as Arc<dyn aura_kernel::ToolApprovalPrompter>),
-        originating_user_id: session.user_id.clone(),
+        originating_user_id: Some(session.user_id.clone()),
         ..KernelConfig::default()
     };
 
@@ -716,7 +769,8 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
-            user_id: None,
+            user_id: "user-test".to_string(),
+            tool_permissions: None,
             provider_config: Some(SessionProviderConfig {
                 provider: "anthropic".to_string(),
                 routing_mode: Some("proxy".to_string()),
@@ -760,7 +814,8 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
-            user_id: None,
+            user_id: "user-test".to_string(),
+            tool_permissions: None,
             provider_config: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
@@ -808,7 +863,8 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
-            user_id: None,
+            user_id: "user-test".to_string(),
+            tool_permissions: None,
             provider_config: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),

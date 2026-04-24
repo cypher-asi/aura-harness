@@ -29,8 +29,8 @@
     clippy::struct_field_names
 )]
 
-pub(crate) mod automaton_bridge;
 pub mod auth;
+pub(crate) mod automaton_bridge;
 mod config;
 pub(crate) mod domain;
 pub(crate) mod executor_factory;
@@ -43,6 +43,7 @@ pub(crate) mod runtime_capabilities;
 pub(crate) mod scheduler;
 pub(crate) mod session;
 pub(crate) mod terminal;
+pub(crate) mod tool_permissions;
 mod worker;
 
 pub use config::NodeConfig;
@@ -52,6 +53,7 @@ pub use aura_protocol::{
     ApprovalResponse, AssistantMessageEnd, AssistantMessageStart, ConversationMessage, ErrorMsg,
     FileOp, FilesChanged, InboundMessage, InstalledTool, OutboundMessage, SessionInit,
     SessionProviderConfig, SessionReady, SessionUsage, TextDelta, ThinkingDelta,
+    ToolApprovalDecision, ToolApprovalPrompt, ToolApprovalRemember, ToolApprovalResponse,
     ToolAuth as ProtocolToolAuth, ToolInfo, ToolResultMsg, ToolUseStart, UserMessage,
 };
 

@@ -532,7 +532,9 @@ async fn test_require_approval_tool_denied_without_grant_then_consumed_after_gra
         .clone()
         .expect("tool_decision on a tool proposal");
     let (reason, args_hash) = match decision {
-        crate::kernel::ToolDecision::NeedsApproval { reason, args_hash } => (reason, args_hash),
+        crate::kernel::ToolDecision::NeedsApproval {
+            reason, args_hash, ..
+        } => (reason, args_hash),
         other => panic!("expected NeedsApproval, got {other:?}"),
     };
     assert!(
