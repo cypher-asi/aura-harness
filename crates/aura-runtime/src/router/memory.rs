@@ -1,7 +1,8 @@
 //! Memory CRUD API endpoints for facts, events, procedures, and aggregates.
 
+use super::ids::parse_agent_id;
 use super::RouterState;
-use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+use aura_core::{AgentEventId, FactId, ProcedureId};
 use aura_memory::{AgentEvent, Fact, FactSource, MemoryStoreApi, Procedure};
 use axum::{
     extract::{Path, Query, State},
@@ -12,18 +13,6 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
-
-fn parse_agent_id(s: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
-    if let Ok(uuid) = uuid::Uuid::parse_str(s) {
-        return Ok(AgentId::from_uuid(uuid));
-    }
-    AgentId::from_hex(s).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("invalid agent_id: {e}") })),
-        )
-    })
-}
 
 fn parse_fact_id(hex: &str) -> Result<FactId, (StatusCode, Json<serde_json::Value>)> {
     FactId::from_hex(hex).map_err(|e| {

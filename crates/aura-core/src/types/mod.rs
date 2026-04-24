@@ -25,11 +25,11 @@ pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
 pub use record::RecordEntry;
 pub use status::AgentStatus;
 pub use tool::{
-    InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
-    InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
-    InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution,
-    RuntimeCapabilityInstall, ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolExecution,
-    ToolProposal, ToolResult,
+    installed_integrations_satisfy, integration_match, InstalledIntegrationDefinition,
+    InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
+    InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
+    InstalledToolRuntimeProviderExecution, RuntimeCapabilityInstall, ToolAuth, ToolCall,
+    ToolCallContext, ToolDecision, ToolExecution, ToolProposal, ToolResult,
 };
 pub use tool_permissions::{
     resolve_effective_permission, AgentToolPermissions, ToolState, UserDefaultMode,

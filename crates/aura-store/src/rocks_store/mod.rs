@@ -140,18 +140,12 @@ impl RocksStore {
         *agent_id.as_bytes()
     }
 
-    fn append_entry_direct_internal(
-        &self,
-        agent_id: AgentId,
-        next_seq: u64,
-        entry: &RecordEntry,
-        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
-        clear_runtime_capabilities: bool,
-    ) -> Result<(), StoreError> {
-        let cf_record = self.cf(cf::RECORD)?;
-        let cf_meta = self.cf(cf::AGENT_META)?;
-        let cf_runtime_capabilities = self.cf(cf::RUNTIME_CAPABILITIES)?;
-
+    /// Assert that `next_seq` is exactly `current_head + 1` for
+    /// `agent_id`, returning [`StoreError::SequenceMismatch`] if not.
+    ///
+    /// Extracted so both `append_entry_direct_internal` and
+    /// `append_entry_atomic_internal` use the same pre-flight check.
+    fn assert_next_seq(&self, agent_id: AgentId, next_seq: u64) -> Result<(), StoreError> {
         let current_head = self.get_head_seq(agent_id)?;
         if next_seq != current_head + 1 {
             return Err(StoreError::SequenceMismatch {
@@ -159,15 +153,51 @@ impl RocksStore {
                 actual: next_seq,
             });
         }
+        Ok(())
+    }
+
+    /// Add the serialized record-entry write and the head-sequence bump
+    /// to `batch` for `(agent_id, next_seq)`.
+    ///
+    /// Extracted so both append paths produce bit-identical byte
+    /// streams for the record + head-seq pair.
+    fn append_record_and_head_to_batch(
+        &self,
+        batch: &mut WriteBatch,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+    ) -> Result<(), StoreError> {
+        let cf_record = self.cf(cf::RECORD)?;
+        let cf_meta = self.cf(cf::AGENT_META)?;
 
         let entry_bytes = serde_json::to_vec(entry)?;
         let record_key = RecordKey::new(agent_id, next_seq);
         let head_seq_key = AgentMetaKey::head_seq(agent_id);
-        let capability_key = Self::runtime_capability_key(agent_id);
 
-        let mut batch = WriteBatch::default();
         batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
         batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
+        Ok(())
+    }
+
+    /// Apply runtime-capability ledger mutations onto `batch`.
+    ///
+    /// When `clear_runtime_capabilities` is `true`, an explicit delete
+    /// is queued. When `runtime_capabilities` is `Some`, the fresh
+    /// payload is serialized and `put`. Ordering matches the original
+    /// inline code: `clear` is added before `put`, so a simultaneous
+    /// clear + set reduces to a single effective `put` (the new value
+    /// wins within the batch — semantics preserved from the original
+    /// `append_entry_*_internal` bodies).
+    fn apply_runtime_capability_ops_to_batch(
+        &self,
+        batch: &mut WriteBatch,
+        agent_id: AgentId,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        let cf_runtime_capabilities = self.cf(cf::RUNTIME_CAPABILITIES)?;
+        let capability_key = Self::runtime_capability_key(agent_id);
 
         if clear_runtime_capabilities {
             batch.delete_cf(&cf_runtime_capabilities, capability_key);
@@ -181,6 +211,27 @@ impl RocksStore {
                 capability_bytes,
             );
         }
+        Ok(())
+    }
+
+    fn append_entry_direct_internal(
+        &self,
+        agent_id: AgentId,
+        next_seq: u64,
+        entry: &RecordEntry,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> Result<(), StoreError> {
+        self.assert_next_seq(agent_id, next_seq)?;
+
+        let mut batch = WriteBatch::default();
+        self.append_record_and_head_to_batch(&mut batch, agent_id, next_seq, entry)?;
+        self.apply_runtime_capability_ops_to_batch(
+            &mut batch,
+            agent_id,
+            runtime_capabilities,
+            clear_runtime_capabilities,
+        )?;
 
         self.db.write_opt(batch, &self.write_opts())?;
         debug!("Record entry committed (direct)");
@@ -196,48 +247,30 @@ impl RocksStore {
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
         clear_runtime_capabilities: bool,
     ) -> Result<(), StoreError> {
-        let cf_record = self.cf(cf::RECORD)?;
         let cf_meta = self.cf(cf::AGENT_META)?;
         let cf_inbox = self.cf(cf::INBOX)?;
-        let cf_runtime_capabilities = self.cf(cf::RUNTIME_CAPABILITIES)?;
 
-        let current_head = self.get_head_seq(agent_id)?;
-        if next_seq != current_head + 1 {
-            return Err(StoreError::SequenceMismatch {
-                expected: current_head + 1,
-                actual: next_seq,
-            });
-        }
+        self.assert_next_seq(agent_id, next_seq)?;
 
-        let entry_bytes = serde_json::to_vec(entry)?;
-        let record_key = RecordKey::new(agent_id, next_seq);
-        let head_seq_key = AgentMetaKey::head_seq(agent_id);
         let inbox_key = InboxKey::new(agent_id, dequeued_inbox_seq);
         let inbox_head_key = AgentMetaKey::inbox_head(agent_id);
-        let capability_key = Self::runtime_capability_key(agent_id);
 
         let mut batch = WriteBatch::default();
-        batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
-        batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
+        self.append_record_and_head_to_batch(&mut batch, agent_id, next_seq, entry)?;
+        // Inbox dequeue is the only operation that differs between the
+        // direct and atomic append paths.
         batch.delete_cf(&cf_inbox, inbox_key.encode());
         batch.put_cf(
             &cf_meta,
             inbox_head_key.encode(),
             (dequeued_inbox_seq + 1).to_be_bytes(),
         );
-
-        if clear_runtime_capabilities {
-            batch.delete_cf(&cf_runtime_capabilities, capability_key);
-        }
-
-        if let Some(runtime_capabilities) = runtime_capabilities {
-            let capability_bytes = serde_json::to_vec(runtime_capabilities)?;
-            batch.put_cf(
-                &cf_runtime_capabilities,
-                Self::runtime_capability_key(agent_id),
-                capability_bytes,
-            );
-        }
+        self.apply_runtime_capability_ops_to_batch(
+            &mut batch,
+            agent_id,
+            runtime_capabilities,
+            clear_runtime_capabilities,
+        )?;
 
         self.db.write_opt(batch, &self.write_opts())?;
 

@@ -1,10 +1,12 @@
+use super::errors::ApiError;
+use super::ids::parse_agent_id;
 use super::*;
 use crate::tool_permissions::{
     append_agent_tool_permissions_entry, effective_tool_infos, enforce_monotonic_update,
     load_agent_tool_context, validate_agent_tool_permissions, validate_user_defaults,
     EffectiveToolInfo,
 };
-use aura_core::{AgentId, AgentToolPermissions, UserToolDefaults};
+use aura_core::{AgentToolPermissions, UserToolDefaults};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AgentToolsQuery {
@@ -51,7 +53,7 @@ pub(super) async fn get_agent_tool_permissions_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = parse_agent_id(&agent_id_hex)?;
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
     let context = load_agent_tool_context(&state.store, agent_id).map_err(storage_string_error)?;
     Ok(Json(AgentToolPermissionsResponse {
         tool_permissions: context.tool_permissions,
@@ -63,7 +65,7 @@ pub(super) async fn put_agent_tool_permissions_handler(
     Path(agent_id_hex): Path<String>,
     Json(next): Json<AgentToolPermissions>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = parse_agent_id(&agent_id_hex)?;
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
     validate_agent_tool_permissions(&next, &state.catalog).map_err(bad_request)?;
 
     let context = load_agent_tool_context(&state.store, agent_id).map_err(storage_string_error)?;
@@ -98,7 +100,7 @@ pub(super) async fn get_agent_tools_handler(
     Path(agent_id_hex): Path<String>,
     Query(query): Query<AgentToolsQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = parse_agent_id(&agent_id_hex)?;
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
     let context = load_agent_tool_context(&state.store, agent_id).map_err(storage_string_error)?;
     let user_id = query.user_id.or(context.originating_user_id);
     let user_default = load_user_default_for_agent(&state, user_id.as_ref())?;
@@ -109,11 +111,6 @@ pub(super) async fn get_agent_tools_handler(
         context.tool_permissions.as_ref(),
     );
     Ok(Json(AgentToolsResponse { tools }))
-}
-
-fn parse_agent_id(agent_id_hex: &str) -> Result<AgentId, (StatusCode, String)> {
-    AgentId::from_hex(agent_id_hex)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))
 }
 
 fn load_user_default_for_agent(

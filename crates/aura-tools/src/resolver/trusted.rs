@@ -425,34 +425,7 @@ impl ToolResolver {
         let response = self
             .provider_json_request(Method::GET, url.as_str(), provider, integration, None)
             .await?;
-        let items = response
-            .pointer(&format!("/{vertical}/results"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|item| {
-                json!({
-                    "title": item.get("title").and_then(Value::as_str).unwrap_or_default(),
-                    "url": item
-                        .get("url")
-                        .or_else(|| item.get("profile"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    "description": item
-                        .get("description")
-                        .or_else(|| item.get("snippet"))
-                        .and_then(Value::as_str),
-                    "age": item.get("age").and_then(Value::as_str),
-                    "source": item.get("source").and_then(Value::as_str),
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({
-            "query": query,
-            "results": items,
-            "more_results_available": response.pointer("/query/more_results_available").and_then(Value::as_bool).unwrap_or(false),
-        }))
+        brave_search_results(&response, vertical, args)
     }
 
     async fn slack_list_channels(
@@ -624,17 +597,10 @@ impl ToolResolver {
                 })),
             )
             .await?;
-        if let Some(errors) = response.get("errors").and_then(Value::as_array) {
-            if !errors.is_empty() {
-                let message = errors
-                    .iter()
-                    .filter_map(|error| error.get("message").and_then(Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                return Err(ToolError::ExternalToolError(format!(
-                    "linear graphql error: {message}"
-                )));
-            }
+        if let Some(message) = graphql_user_errors(&response) {
+            return Err(ToolError::ExternalToolError(format!(
+                "linear graphql error: {message}"
+            )));
         }
         Ok(response)
     }
@@ -647,35 +613,14 @@ impl ToolResolver {
         integration: &InstalledToolRuntimeIntegration,
         body: Option<Value>,
     ) -> Result<Value, ToolError> {
-        let final_url = runtime_url_with_auth(url, integration)?;
-        let mut request = self
-            .http_client
-            .request(method, final_url)
-            // Per-request ceiling on trusted-provider calls so a slow
-            // integration can't stall the whole turn. (Wave 5 / T2.3.)
-            .timeout(TRUSTED_PROVIDER_REQUEST_TIMEOUT);
-        request = apply_runtime_headers(request, &provider.static_headers)?;
-        request = apply_runtime_auth(request, integration);
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ToolError::ExternalToolError(format!("provider request failed: {e}")))?;
-        let status = response.status();
-        let text = response.text().await.map_err(|e| {
-            ToolError::ExternalToolError(format!("reading provider response failed: {e}"))
-        })?;
-        if !status.is_success() {
-            return Err(ToolError::ExternalToolError(format!(
-                "provider request failed with {}: {}",
-                status, text
-            )));
-        }
-        serde_json::from_str(&text).map_err(|e| {
-            ToolError::ExternalToolError(format!("provider returned invalid JSON: {e}"))
-        })
+        self.send_provider_request(
+            method,
+            url,
+            provider,
+            integration,
+            body.map_or(ProviderRequestBody::None, ProviderRequestBody::Json),
+        )
+        .await
     }
 
     async fn provider_form_request(
@@ -686,15 +631,45 @@ impl ToolResolver {
         integration: &InstalledToolRuntimeIntegration,
         body: Vec<(String, String)>,
     ) -> Result<Value, ToolError> {
+        self.send_provider_request(
+            method,
+            url,
+            provider,
+            integration,
+            ProviderRequestBody::Form(body),
+        )
+        .await
+    }
+
+    /// Unified trusted-provider HTTP send.
+    ///
+    /// Builds the URL, applies runtime headers + auth, attaches the
+    /// requested body (JSON, form-encoded, or none), and decodes the
+    /// response as JSON. Identical timeout/error handling for both
+    /// JSON and form bodies — extracted from `provider_json_request`
+    /// and `provider_form_request` (Phase 1 dedup).
+    async fn send_provider_request(
+        &self,
+        method: Method,
+        url: &str,
+        provider: &InstalledToolRuntimeProviderExecution,
+        integration: &InstalledToolRuntimeIntegration,
+        body: ProviderRequestBody,
+    ) -> Result<Value, ToolError> {
         let final_url = runtime_url_with_auth(url, integration)?;
         let mut request = self
             .http_client
             .request(method, final_url)
-            // Per-request ceiling, same rationale as the JSON variant.
+            // Per-request ceiling on trusted-provider calls so a slow
+            // integration can't stall the whole turn. (Wave 5 / T2.3.)
             .timeout(TRUSTED_PROVIDER_REQUEST_TIMEOUT);
         request = apply_runtime_headers(request, &provider.static_headers)?;
         request = apply_runtime_auth(request, integration);
-        request = request.form(&body);
+        request = match body {
+            ProviderRequestBody::None => request,
+            ProviderRequestBody::Json(value) => request.json(&value),
+            ProviderRequestBody::Form(fields) => request.form(&fields),
+        };
         let response = request
             .send()
             .await
@@ -713,6 +688,17 @@ impl ToolResolver {
             ToolError::ExternalToolError(format!("provider returned invalid JSON: {e}"))
         })
     }
+}
+
+/// Body variants accepted by [`TrustedIntegrationResolver::send_provider_request`].
+///
+/// Collapses what used to be two parallel helpers (`provider_json_request`
+/// / `provider_form_request`) into one — the body shape is the only thing
+/// that differs between them.
+enum ProviderRequestBody {
+    None,
+    Json(Value),
+    Form(Vec<(String, String)>),
 }
 
 // ============================================================================
@@ -933,22 +919,35 @@ fn apply_success_guard(
     match guard {
         TrustedIntegrationSuccessGuard::None => Ok(()),
         TrustedIntegrationSuccessGuard::SlackOk => ensure_slack_ok(response),
-        TrustedIntegrationSuccessGuard::GraphqlErrors => {
-            if let Some(errors) = response.get("errors").and_then(Value::as_array) {
-                if !errors.is_empty() {
-                    let message = errors
-                        .iter()
-                        .filter_map(|error| error.get("message").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    return Err(ToolError::ExternalToolError(format!(
-                        "graphql error: {message}"
-                    )));
-                }
-            }
-            Ok(())
-        }
+        TrustedIntegrationSuccessGuard::GraphqlErrors => match graphql_user_errors(response) {
+            Some(message) => Err(ToolError::ExternalToolError(format!(
+                "graphql error: {message}"
+            ))),
+            None => Ok(()),
+        },
     }
+}
+
+/// Extract a GraphQL `errors[].message` summary from `response`.
+///
+/// Returns `Some(joined)` when the response contains a non-empty
+/// `errors` array; `None` otherwise. Messages are joined with `"; "`,
+/// matching the legacy `linear_graphql` and `apply_success_guard`
+/// implementations bit-for-bit. Each caller adds its own prefix
+/// (`"linear graphql error: "` / `"graphql error: "`) so this helper
+/// stays prefix-agnostic.
+fn graphql_user_errors(response: &Value) -> Option<String> {
+    let errors = response.get("errors").and_then(Value::as_array)?;
+    if errors.is_empty() {
+        return None;
+    }
+    Some(
+        errors
+            .iter()
+            .filter_map(|error| error.get("message").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 fn apply_result_transform(
@@ -1004,37 +1003,55 @@ fn apply_result_transform(
             Ok(object_with_entry(key, project_fields(&source, fields)))
         }
         TrustedIntegrationResultTransform::BraveSearch { vertical } => {
-            let query = required_string(args, &["query", "q"])?;
-            let items = response
-                .pointer(&format!("/{vertical}/results"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|item| {
-                    json!({
-                        "title": item.get("title").and_then(Value::as_str).unwrap_or_default(),
-                        "url": item
-                            .get("url")
-                            .or_else(|| item.get("profile"))
-                            .and_then(Value::as_str)
-                            .unwrap_or_default(),
-                        "description": item
-                            .get("description")
-                            .or_else(|| item.get("snippet"))
-                            .and_then(Value::as_str),
-                        "age": item.get("age").and_then(Value::as_str),
-                        "source": item.get("source").and_then(Value::as_str),
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok(json!({
-                "query": query,
-                "results": items,
-                "more_results_available": response.pointer("/query/more_results_available").and_then(Value::as_bool).unwrap_or(false),
-            }))
+            brave_search_results(response, vertical, args)
         }
     }
+}
+
+/// Shape Brave Search responses into the canonical
+/// `{ query, results: [...], more_results_available }` envelope.
+///
+/// Used both by the in-line `brave_search` runtime path and by the
+/// declarative `apply_result_transform::BraveSearch` transform — keeping
+/// one implementation guarantees both code paths produce bit-identical
+/// output for the same Brave response.
+fn brave_search_results(
+    response: &Value,
+    vertical: &str,
+    args: &Value,
+) -> Result<Value, ToolError> {
+    let query = required_string(args, &["query", "q"])?;
+    let items = response
+        .pointer(&format!("/{vertical}/results"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| {
+            json!({
+                "title": item.get("title").and_then(Value::as_str).unwrap_or_default(),
+                "url": item
+                    .get("url")
+                    .or_else(|| item.get("profile"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                "description": item
+                    .get("description")
+                    .or_else(|| item.get("snippet"))
+                    .and_then(Value::as_str),
+                "age": item.get("age").and_then(Value::as_str),
+                "source": item.get("source").and_then(Value::as_str),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "query": query,
+        "results": items,
+        "more_results_available": response
+            .pointer("/query/more_results_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    }))
 }
 
 fn object_with_entry(key: &str, value: Value) -> Value {

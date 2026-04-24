@@ -1,7 +1,7 @@
 //! Skills CRUD API endpoints — list, get, create, activate, and per-agent install/uninstall.
 
+use super::ids::parse_agent_id;
 use super::RouterState;
-use aura_core::AgentId;
 use aura_skills::{
     SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource,
 };
@@ -14,18 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
-
-fn parse_agent_id(s: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
-    if let Ok(uuid) = uuid::Uuid::parse_str(s) {
-        return Ok(AgentId::from_uuid(uuid));
-    }
-    AgentId::from_hex(s).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": format!("invalid agent_id: {e}") })),
-        )
-    })
-}
 
 fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
     let status = if e.is_not_found() {

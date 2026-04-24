@@ -28,8 +28,8 @@ use aura_automaton::{
     AutomatonEvent, AutomatonHandle, AutomatonRuntime, DevLoopAutomaton, TaskRunAutomaton,
 };
 use aura_core::{
-    AgentId, InstalledIntegrationDefinition, InstalledToolDefinition, SystemKind, Transaction,
-    TransactionType,
+    installed_integrations_satisfy, AgentId, InstalledIntegrationDefinition,
+    InstalledToolDefinition, SystemKind, Transaction, TransactionType,
 };
 use aura_kernel::{Kernel, KernelConfig, PolicyConfig};
 use aura_reasoner::ModelProvider;
@@ -223,30 +223,6 @@ impl AutomatonBridge {
         }
     }
 
-    fn tool_has_required_integration(
-        required_integration: Option<&aura_core::InstalledToolIntegrationRequirement>,
-        installed_integrations: &[InstalledIntegrationDefinition],
-    ) -> bool {
-        let Some(required_integration) = required_integration else {
-            return true;
-        };
-
-        installed_integrations.iter().any(|integration| {
-            required_integration
-                .integration_id
-                .as_deref()
-                .map_or(true, |expected| integration.integration_id == expected)
-                && required_integration
-                    .provider
-                    .as_deref()
-                    .map_or(true, |expected| integration.provider == expected)
-                && required_integration
-                    .kind
-                    .as_deref()
-                    .map_or(true, |expected| integration.kind == expected)
-        })
-    }
-
     fn prepare_installed_tools(
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: &[InstalledIntegrationDefinition],
@@ -255,11 +231,9 @@ impl AutomatonBridge {
             .unwrap_or_default()
             .into_iter()
             .map(installed_tool_to_core)
-            .filter(|tool| {
-                Self::tool_has_required_integration(
-                    tool.required_integration.as_ref(),
-                    installed_integrations,
-                )
+            .filter(|tool| match tool.required_integration.as_ref() {
+                Some(req) => installed_integrations_satisfy(req, installed_integrations),
+                None => true,
             })
             .collect()
     }

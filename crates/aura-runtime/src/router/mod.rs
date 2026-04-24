@@ -5,7 +5,7 @@ use crate::config::NodeConfig;
 use crate::scheduler::Scheduler;
 use crate::session::{handle_ws_connection, WsContext};
 use crate::terminal;
-use aura_core::{AgentId, Hash, Transaction, TransactionType};
+use aura_core::{Hash, Transaction, TransactionType};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
 use aura_tools::automaton_tools::AutomatonController;
@@ -39,7 +39,9 @@ use tracing::{error, info, instrument, warn, Level};
 
 mod auth;
 mod automaton;
+mod errors;
 mod files;
+mod ids;
 mod memory;
 mod skills;
 mod tool_permissions;

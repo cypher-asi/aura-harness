@@ -9,8 +9,8 @@
 use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
 use aura_core::{
-    resolve_effective_permission, ActionKind, Proposal, RuntimeCapabilityInstall, ToolCall,
-    ToolState,
+    installed_integrations_satisfy, resolve_effective_permission, ActionKind, Proposal,
+    RuntimeCapabilityInstall, ToolCall, ToolState,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -407,23 +407,10 @@ impl Policy {
 
         let installed = runtime_capabilities.map_or_else(
             || {
-                self.config
-                    .installed_integrations
-                    .iter()
-                    .any(|integration| {
-                        required_integration
-                            .integration_id
-                            .as_deref()
-                            .map_or(true, |expected| integration.integration_id == expected)
-                            && required_integration
-                                .provider
-                                .as_deref()
-                                .map_or(true, |expected| integration.provider == expected)
-                            && required_integration
-                                .kind
-                                .as_deref()
-                                .map_or(true, |expected| integration.kind == expected)
-                    })
+                installed_integrations_satisfy(
+                    required_integration,
+                    &self.config.installed_integrations,
+                )
             },
             |runtime_capabilities| {
                 runtime_capabilities.integration_requirement_satisfied(required_integration)

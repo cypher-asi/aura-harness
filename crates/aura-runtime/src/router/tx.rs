@@ -1,3 +1,5 @@
+use super::errors::ApiError;
+use super::ids::parse_agent_id;
 use super::*;
 
 #[derive(Debug, Deserialize)]
@@ -19,8 +21,7 @@ pub(super) async fn submit_tx_handler(
     State(state): State<RouterState>,
     Json(request): Json<SubmitTxRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = AgentId::from_hex(&request.agent_id)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
+    let agent_id = parse_agent_id(&request.agent_id).map_err(ApiError::into_string_tuple)?;
 
     let tx_type = match request.kind.as_str() {
         "user_prompt" => TransactionType::UserPrompt,
@@ -131,8 +132,7 @@ pub(super) async fn tx_status_handler(
     State(state): State<RouterState>,
     Path((agent_id_hex, tx_id_hex)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = AgentId::from_hex(&agent_id_hex)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
     let tx_hash = Hash::from_hex(&tx_id_hex)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid tx_id: {e}")))?;
 
@@ -194,8 +194,7 @@ pub(super) async fn get_head_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = AgentId::from_hex(&agent_id_hex)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
 
     let head_seq = state.store.get_head_seq(agent_id).map_err(|e| {
         (
@@ -235,8 +234,7 @@ pub(super) async fn scan_record_handler(
     Path(agent_id_hex): Path<String>,
     Query(query): Query<ScanRecordQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let agent_id = AgentId::from_hex(&agent_id_hex)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid agent_id: {e}")))?;
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
 
     let limit = query.limit.min(1000);
 

@@ -1,9 +1,9 @@
 use crate::protocol;
 use crate::scheduler::Scheduler;
 use aura_core::{
-    resolve_effective_permission, AgentId, AgentToolPermissions, Identity,
-    InstalledIntegrationDefinition, InstalledToolDefinition, RecordEntry, ToolState, Transaction,
-    TransactionType, UserDefaultMode, UserToolDefaults,
+    installed_integrations_satisfy, resolve_effective_permission, AgentId, AgentToolPermissions,
+    Identity, InstalledIntegrationDefinition, InstalledToolDefinition, RecordEntry, ToolState,
+    Transaction, TransactionType, UserDefaultMode, UserToolDefaults,
 };
 use aura_reasoner::ToolDefinition;
 use aura_store::Store;
@@ -76,11 +76,10 @@ pub(crate) fn effective_tool_definitions(
         }
     }
     for tool in installed_tools {
-        if !tool_has_required_integration(
-            installed_integrations,
-            tool.required_integration.as_ref(),
-        ) {
-            continue;
+        if let Some(requirement) = tool.required_integration.as_ref() {
+            if !installed_integrations_satisfy(requirement, installed_integrations) {
+                continue;
+            }
         }
         let state = resolve_effective_permission(user_default, agent_override, &tool.name);
         if state != ToolState::Deny && seen.insert(tool.name.clone()) {
@@ -231,29 +230,6 @@ pub(crate) fn enforce_monotonic_update(
         }
     }
     Ok(())
-}
-
-fn tool_has_required_integration(
-    installed_integrations: &[InstalledIntegrationDefinition],
-    requirement: Option<&aura_core::InstalledToolIntegrationRequirement>,
-) -> bool {
-    let Some(requirement) = requirement else {
-        return true;
-    };
-    installed_integrations.iter().any(|integration| {
-        requirement
-            .integration_id
-            .as_deref()
-            .map_or(true, |expected| integration.integration_id == expected)
-            && requirement
-                .provider
-                .as_deref()
-                .map_or(true, |expected| integration.provider == expected)
-            && requirement
-                .kind
-                .as_deref()
-                .map_or(true, |expected| integration.kind == expected)
-    })
 }
 
 fn state_label(state: ToolState) -> &'static str {

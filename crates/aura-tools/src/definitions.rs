@@ -1,19 +1,31 @@
 //! Tool schema definitions for chat, engine, and multi-project agents.
 //!
-//! Ported from the app's `aura-tools` crate. Provides lazily-cached
-//! [`ToolDefinition`] sets for each agent mode.
+//! # Schema sourcing (Phase 1 — dedup)
 //!
-//! NOTE: These definitions encode product-level policy (which tools are available
-//! in chat vs engine vs multi-project modes). Consider migrating mode-specific
-//! tool set composition to the caller (the root `aura` binary, `aura-runtime`, or a
-//! shared session crate) and keeping only individual tool schemas here.
+//! Core filesystem/shell/search tools have a corresponding `impl Tool`
+//! in this crate (see `fs_tools/` and friends) with its own
+//! [`Tool::definition`](crate::tool::Tool::definition) method. Those
+//! `Tool::definition()` impls are the **single source of truth** for the
+//! model-facing schema; [`core_tool_definitions`] simply collects them
+//! from [`builtin_tools`] instead of re-stating each schema inline.
+//!
+//! Domain-management tools (`spec_*`, `task_*`, `orbit_*`, `network_*`,
+//! `dev_loop_*`, `engine_specific_*`) have no `Tool` impl in this
+//! crate — their execution is routed through the `DomainApi` /
+//! automaton surface — so their schemas stay inline in this module
+//! with a `TODO(phase-6): collapse when we confirm no external const
+//! consumers` comment on the relevant groups.
 
+use crate::tool::builtin_tools;
 use aura_core::ToolDefinition;
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
+/// Build an inline tool definition for the domain-management surface
+/// (specs, tasks, projects, engine tools). Used only by entries that
+/// don't have a `Tool` impl in this crate.
 fn tool(name: &str, description: &str, schema: serde_json::Value) -> ToolDefinition {
     ToolDefinition {
         name: name.into(),
@@ -42,9 +54,13 @@ fn compact_tool(name: &str, description: &str, schema: serde_json::Value) -> Too
 /// Anthropic's fine-grained tool streaming makes `input_json_delta` events
 /// arrive as raw partial string bytes while the model writes, instead of
 /// being buffered until the full JSON validates at `content_block_stop`.
+///
+/// This is only used for tools built inline in this module (no `Tool`
+/// impl). Built-in tools set this flag directly in their
+/// [`Tool::definition`](crate::tool::Tool::definition).
 fn eager_input_streaming_for(name: &str) -> Option<bool> {
     match name {
-        "create_spec" | "update_spec" | "write_file" | "edit_file" => Some(true),
+        "create_spec" | "update_spec" => Some(true),
         _ => None,
     }
 }
@@ -60,140 +76,58 @@ fn strip_property_descriptions(mut schema: serde_json::Value) -> serde_json::Val
     schema
 }
 
+/// Names of the built-in tools that form the "core" (filesystem/shell/search)
+/// bundle advertised to every profile.
+///
+/// Kept separate from the `stat_file` + git tools, which are also built-in
+/// but not part of the historical `core_tool_definitions()` surface.
+/// Order matches the inline order used before Phase 1 — stable for any
+/// snapshot tests.
+const CORE_BUILTIN_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "list_files",
+    "run_command",
+    "search_code",
+    "find_files",
+];
+
+/// Collect `Tool::definition()` for each name in `names`, preserving the
+/// order of `names`. Panics in test builds if a name is missing — this
+/// is strictly a refactor-integrity invariant (the hard-coded list in
+/// this module must stay in sync with [`builtin_tools`]), and every
+/// known caller constructs the name list at compile time.
+fn definitions_for_builtin_names(names: &[&str]) -> Vec<ToolDefinition> {
+    let builtins = builtin_tools();
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        if let Some(tool) = builtins.iter().find(|t| t.name() == *name) {
+            out.push(tool.definition());
+        } else {
+            debug_assert!(false, "builtin tool '{name}' missing from builtin_tools()");
+        }
+    }
+    out
+}
+
 // ============================================================================
 // Core tools (filesystem, shell, search)
 // ============================================================================
 
+/// Core tool schemas: filesystem, shell, search. Built from
+/// [`Tool::definition`](crate::tool::Tool::definition) so any schema
+/// change in a built-in tool's impl is the authoritative update.
 pub fn core_tool_definitions() -> Vec<ToolDefinition> {
-    let mut tools = filesystem_tools();
-    tools.extend(shell_tools());
-    tools.extend(search_tools());
-    tools
+    definitions_for_builtin_names(CORE_BUILTIN_TOOL_NAMES)
 }
 
-fn filesystem_tools() -> Vec<ToolDefinition> {
-    let mut tools = file_io_tools();
-    tools.extend(file_management_tools());
-    tools
-}
-
+/// File I/O subset of [`core_tool_definitions`]. Retained for
+/// test-targeted assertions on the streaming flag.
+#[cfg(test)]
 fn file_io_tools() -> Vec<ToolDefinition> {
-    vec![
-        tool(
-            "read_file",
-            "Read the contents of a file relative to the project folder. Optionally read a specific line range (1-indexed) to avoid truncation in large files.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" },
-                    "start_line": { "type": "integer", "description": "First line to read (1-indexed, inclusive). Omit to read from the beginning." },
-                    "end_line": { "type": "integer", "description": "Last line to read (1-indexed, inclusive). Omit to read to the end." }
-                },
-                "required": ["path"]
-            }),
-        ),
-        tool(
-            "write_file",
-            "Write (create or overwrite) a file relative to the project folder. Best for files under ~150 lines. For larger files, write a skeleton first then use edit_file to fill in sections incrementally.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" },
-                    "content": { "type": "string", "description": "Full file content" }
-                },
-                "required": ["path", "content"]
-            }),
-        ),
-        tool(
-            "edit_file",
-            "Make targeted edits to a file by replacing specific text. More efficient than write_file for small changes in large files. The old_text must be an exact match of existing content.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" },
-                    "old_text": { "type": "string", "description": "Exact text to find and replace (must be unique in the file)" },
-                    "new_text": { "type": "string", "description": "Replacement text" },
-                    "replace_all": { "type": "boolean", "description": "If true, replace all occurrences (default: false, first only)" }
-                },
-                "required": ["path", "old_text", "new_text"]
-            }),
-        ),
-    ]
-}
-
-fn file_management_tools() -> Vec<ToolDefinition> {
-    vec![
-        tool(
-            "delete_file",
-            "Delete a file relative to the project folder.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" }
-                },
-                "required": ["path"]
-            }),
-        ),
-        tool(
-            "list_files",
-            "List files and directories in a path relative to the project folder.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative directory path (empty or '.' for project root)" }
-                },
-                "required": []
-            }),
-        ),
-    ]
-}
-
-fn shell_tools() -> Vec<ToolDefinition> {
-    vec![tool(
-        "run_command",
-        "Execute a shell command in the project directory. Use ONLY for build, test, git, and package manager commands. Do NOT use for searching code (use search_code), reading files (use read_file), or finding files (use find_files). Commands time out after 60 seconds by default.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string", "description": "The shell command to execute" },
-                "working_dir": { "type": "string", "description": "Optional relative working directory within the project (default: project root)" },
-                "timeout_secs": { "type": "integer", "description": "Timeout in seconds (default: 60, max: 300)" }
-            },
-            "required": ["command"]
-        }),
-    )]
-}
-
-fn search_tools() -> Vec<ToolDefinition> {
-    vec![
-        tool(
-            "search_code",
-            "Search for a regex pattern across files in the project. Returns matching lines with file paths and line numbers. Use context_lines to include surrounding code (e.g. to see a full struct or function body around a match).",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "Regex pattern to search for" },
-                    "path": { "type": "string", "description": "Optional relative directory or file path to scope the search (default: project root)" },
-                    "include": { "type": "string", "description": "Optional glob to filter files, e.g. '*.rs' or '*.ts'" },
-                    "max_results": { "type": "integer", "description": "Maximum number of matching lines to return (default: 50)" },
-                    "context_lines": { "type": "integer", "description": "Number of lines to include before and after each match (default: 0, max: 10)" }
-                },
-                "required": ["pattern"]
-            }),
-        ),
-        tool(
-            "find_files",
-            "Find files by name or glob pattern in the project directory. Returns matching file paths.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pattern": { "type": "string", "description": "Glob pattern to match file names, e.g. '*.rs', 'Cargo.toml', 'src/**/*.ts'" },
-                    "path": { "type": "string", "description": "Optional relative directory to scope the search (default: project root)" }
-                },
-                "required": ["pattern"]
-            }),
-        ),
-    ]
+    definitions_for_builtin_names(&["read_file", "write_file", "edit_file"])
 }
 
 // ============================================================================
