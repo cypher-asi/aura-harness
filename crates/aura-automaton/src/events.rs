@@ -63,10 +63,22 @@ pub enum AutomatonEvent {
         #[serde(default)]
         snapshot_partial: bool,
     },
+    /// Authoritative "tool call finished" frame carrying the fully-
+    /// parsed input alongside an error flag. Emitted by the harness for
+    /// every `ToolResult`, in addition to the result itself, so the
+    /// `aura-os-server` DoD gate can populate `files_changed` from
+    /// successful `write_file`/`edit_file`/`delete_file` calls without
+    /// having to stitch `tool_call_snapshot` and `tool_result` events
+    /// together by id.
     ToolCallCompleted {
         id: String,
         name: String,
         input: serde_json::Value,
+        /// `false` on a successful tool call. Defaults to `false` on
+        /// the wire for backwards-compatibility with older harnesses
+        /// that emitted this variant without the field.
+        #[serde(default)]
+        is_error: bool,
     },
     ToolResult {
         id: String,

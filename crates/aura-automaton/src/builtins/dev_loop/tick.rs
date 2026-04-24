@@ -184,6 +184,38 @@ impl DevLoopAutomaton {
         task: &TaskDescriptor,
         exec: TaskExecutionResult,
     ) {
+        // Build the DoD aggregate BEFORE we move `exec.notes` into
+        // the work-log entry / `TaskCompleted` summary: after those
+        // moves `exec` is partially dropped and can no longer be
+        // borrowed. The aggregate is the only thing `commit_and_push`
+        // needs from `exec` (see the commit-skip precheck below).
+        let aggregate = TaskAggregate::from_exec(&exec);
+
+        // Chunk-guard safety net: if the agent was short-circuited
+        // on any oversized `write_file` and never followed up with a
+        // successful write for the SAME path, the file on disk is
+        // incomplete. Treating this as success is the exact
+        // task_id=4079e975 regression where `types.rs` landed at ~2 KB
+        // of an ~8 KB intended payload. Route the task to the
+        // failure path so the retry ladder can try again with more
+        // turns / a stricter "finish the chunked write" prompt.
+        if aggregate.has_pending_oversized_writes() {
+            let paths = aggregate.pending_oversized_writes.join(", ");
+            let msg = format!(
+                "oversized write_file short-circuited by the chunk guard never completed \
+                 via edit_file for: {paths}. The file(s) on disk are incomplete; \
+                 refusing to mark the task done."
+            );
+            warn!(
+                task_id = %task.id,
+                pending = %paths,
+                "chunk-guard safety net blocked task_completed"
+            );
+            return self
+                .record_task_failure(ctx, task, AutomatonError::AgentExecution(msg))
+                .await;
+        }
+
         // `safe_transition` guards against the `done → done` rejection
         // observed in production: the agent's `task_done` tool moves the
         // task to `done` server-side first, and this post-execution
@@ -198,13 +230,6 @@ impl DevLoopAutomaton {
 
         let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0) + 1;
         ctx.state.set(STATE_COMPLETED_COUNT, &completed);
-
-        // Build the DoD aggregate BEFORE we move `exec.notes` into
-        // the work-log entry / `TaskCompleted` summary: after those
-        // moves `exec` is partially dropped and can no longer be
-        // borrowed. The aggregate is the only thing `commit_and_push`
-        // needs from `exec` (see the commit-skip precheck below).
-        let aggregate = TaskAggregate::from_exec(&exec);
 
         let mut work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
         work_log.push(format!(

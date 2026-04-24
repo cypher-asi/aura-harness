@@ -205,7 +205,9 @@ fn check_termination_conditions(
         return true;
     }
 
-    if state.consecutive_empty_path_block_iterations >= crate::constants::EMPTY_PATH_BLOCK_LIMIT {
+    if state.consecutive_empty_path_block_iterations
+        >= crate::constants::EMPTY_PATH_BLOCK_LIMIT
+    {
         let msg = format!(
             "CRITICAL: Agent emitted pathless `write_file`/`edit_file` \
              calls for {} consecutive iterations. The `path` argument is \
@@ -356,10 +358,25 @@ fn emit_tool_results(
     tool_calls: &[ToolCallInfo],
 ) {
     for r in all_results {
-        let tool_name = tool_calls
-            .iter()
-            .find(|t| t.id == r.tool_use_id)
-            .map_or_else(String::new, |t| t.name.clone());
+        let info = tool_calls.iter().find(|t| t.id == r.tool_use_id);
+        let tool_name = info.map_or_else(String::new, |t| t.name.clone());
+        // Emit `ToolCallCompleted` FIRST so downstream forwarders (the
+        // aura-os-server dev-loop DoD gate in particular) see the
+        // authoritative `{id, name, input, is_error}` frame before the
+        // result text arrives. Carries the fully-parsed input so
+        // consumers don't have to stitch it together from the earlier
+        // streaming `ToolInputSnapshot` (which may be partial JSON).
+        streaming::emit(
+            event_tx,
+            AgentLoopEvent::ToolCallCompleted {
+                tool_use_id: r.tool_use_id.clone(),
+                tool_name: tool_name.clone(),
+                input: info
+                    .map(|t| t.input.clone())
+                    .unwrap_or(serde_json::Value::Null),
+                is_error: r.is_error,
+            },
+        );
         streaming::emit(
             event_tx,
             AgentLoopEvent::ToolResult {

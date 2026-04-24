@@ -412,6 +412,83 @@ fn task_aggregate_ignores_errored_write_tool_results() {
 }
 
 #[test]
+fn task_aggregate_flags_chunk_guarded_write_without_followup() {
+    // Regression for task_id=4079e975: the agent's `write_file` was
+    // short-circuited by the chunk guard (8 KB content, 6 KB cap),
+    // emitting an `is_error=true` tool_result prefixed with
+    // `[CHUNK_GUARD]`. The agent then wrote ~2 KB via a follow-up
+    // `write_file` but never finished the file with `edit_file`
+    // chunks, yet still signalled `task_completed`. The safety net
+    // scans for the marker, notices the chunk-guarded path was
+    // never written again SUCCESSFULLY, and flags the task as
+    // having pending oversized writes so `record_task_success`
+    // routes it to the failure path.
+    //
+    // `write_file` attempt #2 reuses the SAME path, so the only
+    // successful write is for that same path — and in this fixture
+    // the second write is also errored, simulating the "never
+    // recovered" case.
+    let chunk_guard_msg = "[CHUNK_GUARD] `write_file` content of 8193 bytes exceeds cap";
+    let messages = vec![
+        assistant_tool_use(
+            "call-1",
+            "write_file",
+            json!({
+                "path": "zero-sdk/src/messaging/group/types.rs",
+                "content": "x".repeat(8193),
+            }),
+        ),
+        user_tool_result("call-1", chunk_guard_msg, true),
+    ];
+    let exec = TaskExecutionResult {
+        messages,
+        ..TaskExecutionResult::default()
+    };
+    let agg = TaskAggregate::from_exec(&exec);
+    assert!(
+        agg.has_pending_oversized_writes(),
+        "unresolved chunk-guard must flag the task as pending"
+    );
+    assert_eq!(
+        agg.pending_oversized_writes,
+        vec!["zero-sdk/src/messaging/group/types.rs".to_string()]
+    );
+}
+
+#[test]
+fn task_aggregate_clears_pending_when_chunk_guard_is_recovered() {
+    // The same path that triggered the chunk guard gets a successful
+    // follow-up write: the safety net must NOT block `task_completed`
+    // because the file on disk now matches the agent's intent.
+    let chunk_guard_msg = "[CHUNK_GUARD] `write_file` content of 8193 bytes exceeds cap";
+    let path = "zero-sdk/src/messaging/group/types.rs";
+    let messages = vec![
+        assistant_tool_use(
+            "call-1",
+            "write_file",
+            json!({ "path": path, "content": "x".repeat(8193) }),
+        ),
+        user_tool_result("call-1", chunk_guard_msg, true),
+        assistant_tool_use(
+            "call-2",
+            "write_file",
+            json!({ "path": path, "content": "pub struct Group;" }),
+        ),
+        user_tool_result("call-2", "ok", false),
+    ];
+    let exec = TaskExecutionResult {
+        messages,
+        ..TaskExecutionResult::default()
+    };
+    let agg = TaskAggregate::from_exec(&exec);
+    assert!(
+        !agg.has_pending_oversized_writes(),
+        "recovered chunk-guard path must clear pending set"
+    );
+    assert_eq!(agg.files_changed, 1);
+}
+
+#[test]
 fn task_aggregate_counts_run_command_as_verification_evidence() {
     let messages = vec![
         assistant_tool_use("call-1", "run_command", json!({ "command": "cargo test" })),
@@ -467,6 +544,7 @@ async fn commit_and_push_does_not_skip_when_aggregate_has_file_changes() {
     let aggregate = TaskAggregate {
         files_changed: 1,
         verification_steps: 0,
+        ..Default::default()
     };
     assert!(!aggregate.should_skip_commit());
 
@@ -491,6 +569,7 @@ async fn commit_and_push_does_not_skip_when_aggregate_has_verification_only() {
     let aggregate = TaskAggregate {
         files_changed: 0,
         verification_steps: 1,
+        ..Default::default()
     };
     assert!(!aggregate.should_skip_commit());
 

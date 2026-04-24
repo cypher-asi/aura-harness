@@ -80,6 +80,30 @@ pub enum TurnEvent {
         is_error: bool,
     },
 
+    /// Authoritative "this tool call finished" marker carrying the full
+    /// parsed input alongside the outcome flag.
+    ///
+    /// Emitted alongside `ToolResult` at the moment the tool call
+    /// returns. Unlike `ToolInputSnapshot` (partial JSON during
+    /// streaming) and `ToolResult` (outcome text without input), this
+    /// event is the single frame that carries BOTH the fully-parsed
+    /// `input` AND whether the call succeeded. Downstream forwarders
+    /// (in particular the `aura-os-server` dev-loop gate) rely on this
+    /// to populate `files_changed` from successful
+    /// `write_file`/`edit_file`/`delete_file` calls without having to
+    /// stitch snapshot + result events together.
+    ToolCallCompleted {
+        /// Tool use ID (matches the preceding `ToolStart` /
+        /// `ToolInputSnapshot` / `ToolResult` events).
+        tool_use_id: String,
+        /// Tool name.
+        tool_name: String,
+        /// Fully-parsed tool input JSON (never partial).
+        input: serde_json::Value,
+        /// Whether the call returned an error.
+        is_error: bool,
+    },
+
     /// One iteration (model call + tool execution) completed.
     IterationComplete {
         /// Zero-based iteration index.

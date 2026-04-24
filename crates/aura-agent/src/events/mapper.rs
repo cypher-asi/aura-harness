@@ -60,6 +60,14 @@ pub trait TurnEventSink: Send {
         _is_error: bool,
     ) {
     }
+    async fn on_tool_call_completed(
+        &mut self,
+        _tool_use_id: String,
+        _tool_name: String,
+        _input: serde_json::Value,
+        _is_error: bool,
+    ) {
+    }
     async fn on_iteration_complete(
         &mut self,
         _iteration: usize,
@@ -123,6 +131,15 @@ where
             result,
             is_error,
         } => sink.on_tool_complete(name, args, result, is_error).await,
+        AgentLoopEvent::ToolCallCompleted {
+            tool_use_id,
+            tool_name,
+            input,
+            is_error,
+        } => {
+            sink.on_tool_call_completed(tool_use_id, tool_name, input, is_error)
+                .await;
+        }
         AgentLoopEvent::IterationComplete {
             iteration,
             input_tokens,
