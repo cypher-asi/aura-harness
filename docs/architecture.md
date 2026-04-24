@@ -300,9 +300,8 @@ The invariant core. Builds context from the record, calls the reasoner, enforces
 | `Executor` (trait) | `execute(ctx, action) -> Effect`, `can_handle(action) -> bool` |
 | `ExecuteContext` | Per-action context: `agent_id`, `action_id`, `workspace_root`, `limits` |
 | `ExecuteLimits` | Caps for read/write bytes, command timeout, stdout/stderr |
-| `Policy` | Runtime permission engine with session approval memory |
-| `PolicyConfig` | Allowed action kinds, tool allowlists, per-tool `PermissionLevel` overrides |
-| `PermissionLevel` | `AlwaysAllow`, `AskOnce`, `RequireApproval`, `Deny` |
+| `Policy` | Runtime policy engine for action kinds, capabilities, scope, integrations, and tri-state tool resolution |
+| `PolicyConfig` | Allowed action kinds, capability/scope/integration gates, `UserToolDefaults`, and optional `AgentToolPermissions` |
 | `PolicyResult` | Result of a policy check |
 | `ContextBuilder` | Builds `Context` (context hash + record summaries) from transaction + record window |
 | `decode_tool_effect` | Parses an `Effect` back into human-readable `DecodedToolResult` |
@@ -315,7 +314,7 @@ The invariant core. Builds context from the record, calls the reasoner, enforces
 |--------|----------|
 | `executor` | `Executor` trait, `ExecutorError`, `ExecuteContext`, `ExecuteLimits`, `DecodedToolResult`, `decode_tool_effect` |
 | `router` | `ExecutorRouter` — fan-out dispatch to registered executors |
-| `policy` | `Policy`, `PolicyConfig`, `PolicyResult`, `PermissionLevel`, `default_tool_permission` |
+| `policy` | `Policy`, `PolicyConfig`, `PolicyVerdict`, tri-state tool resolution |
 | `context` | `Context`, `ContextBuilder` |
 | `kernel` | `Kernel`, `KernelConfig`, `ProcessResult`, `ReasonResult`, `ReasonStreamHandle`, `ToolOutput` |
 
@@ -334,7 +333,7 @@ Filesystem, command, search, and domain tools. Sandboxed execution ensures agent
 | `ToolCatalog` | Merged catalog of all tools with profile-based visibility (`Core`, `Agent`, `Engine`) |
 | `Sandbox` | Path validation: canonicalize, prefix-check, symlink guard |
 | `Tool` (trait) | `name()`, `definition()`, `execute(ToolCall, Sandbox) -> ToolResult` — individual tool implementation |
-| `ToolConfig` | Feature flags and size limits |
+| `ToolConfig` | Execution guardrails: command policy, path allowances, byte limits, timeouts, git push retry policy |
 | `ToolError` | Tool execution error enum with `error_code()` and `is_recoverable()` |
 
 #### Built-in Tools (`fs_tools/`)
@@ -755,7 +754,9 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 | `/automaton/:automaton_id/status` | GET | Automaton status |
 | `/automaton/:automaton_id/pause` | POST | Pause automaton |
 | `/automaton/:automaton_id/stop` | POST | Stop automaton |
-| `/tool-approval` | POST / DELETE | Grant or revoke a tool-approval token (strict governor) |
+| `/users/:user_id/tool-defaults` | GET / PUT | Read or replace user-level tri-state tool defaults |
+| `/agents/:agent_id/tool-permissions` | GET / PUT | Read or replace per-agent tri-state tool overrides |
+| `/agents/:agent_id/tools` | GET | Return effective visible tools with `effective_state` |
 | `/memory/:agent_id/facts` | GET / POST | List or create facts for an agent |
 | `/memory/:agent_id/facts/:id` | GET / PUT / DELETE | Read / update / delete a fact by ID |
 | `/memory/:agent_id/facts/by-key/:key` | GET | Read a fact by canonical key |
@@ -779,8 +780,9 @@ Headless server with REST API, WebSocket streaming sessions, per-agent schedulin
 All `/api/*`, `/memory/*`, `/workspace/*`, `/tx`, `/agents/:id/*`,
 `/automaton/*`, and `/stream*` routes sit behind the bearer-token
 middleware (`auth::require_bearer_mw`) when `config.require_auth` is
-set. The mutating subset (`/tx`, `/tool-approval`,
-`/automaton/start`, `/automaton/:id/pause`, `/automaton/:id/stop`)
+set. The mutating subset (`/tx`, `/users/:user_id/tool-defaults`,
+`/agents/:agent_id/tool-permissions`, `/automaton/start`,
+`/automaton/:id/pause`, `/automaton/:id/stop`)
 additionally gets a stricter per-IP governor (5 req/s burst 10) on top
 of the global 30 req/s cap.
 

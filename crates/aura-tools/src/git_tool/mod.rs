@@ -16,12 +16,10 @@
 //!   `rev-parse HEAD` used to implement commit).
 //! - Scrubs credentials from structured tracing output.
 //!
-//! The default `PolicyConfig` treats all three tools as
-//! `PermissionLevel::RequireApproval` (see
-//! `aura_kernel::default_tool_permission`). Trusted orchestrators such
-//! as the dev-loop automaton opt in via
-//! `PolicyConfig::add_allowed_tool` after the operator explicitly
-//! provides a git repo URL + auth token.
+//! Tool availability is resolved by the kernel's tri-state policy
+//! (`UserToolDefaults` plus optional `AgentToolPermissions`). Even when
+//! these tools resolve to `on`, this module still enforces workspace
+//! confinement, subcommand allowlists, timeouts, and credential scrubbing.
 
 use std::time::Duration;
 
@@ -366,6 +364,10 @@ fn push_backoff_for_attempt(attempt_index: u32) -> Duration {
     }
 }
 
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 /// Push the current `HEAD` to `remote_url:branch` using a JWT-auth URL.
 ///
 /// The push is executed with the fully-authenticated URL passed inline
@@ -457,13 +459,13 @@ pub async fn git_push_impl(
                 };
                 let attempts_left = attempts - (attempt + 1);
                 if !transient || attempts_left == 0 {
-                    if !transient {
+                    if transient {
                         warn!(
                             remote = %safe_remote,
                             %branch,
                             attempt = attempt + 1,
                             error = %err,
-                            "git push failed (non-retryable)"
+                            "git push failed after exhausting retry budget"
                         );
                     } else {
                         warn!(
@@ -471,7 +473,7 @@ pub async fn git_push_impl(
                             %branch,
                             attempt = attempt + 1,
                             error = %err,
-                            "git push failed after exhausting retry budget"
+                            "git push failed (non-retryable)"
                         );
                     }
                     last_err = Some(err);
@@ -483,7 +485,7 @@ pub async fn git_push_impl(
                     %branch,
                     attempt = attempt + 1,
                     attempts_left,
-                    backoff_ms = backoff.as_millis() as u64,
+                    backoff_ms = duration_millis_u64(backoff),
                     error = %err,
                     "git push failed transiently; retrying"
                 );
@@ -506,6 +508,7 @@ pub async fn git_push_impl(
 /// so the caller still sees the commit SHA — the task's work is locally
 /// persisted even if Orbit wasn't reachable.
 #[instrument(skip_all, fields(op = "commit_and_push", branch = %branch))]
+#[allow(clippy::too_many_arguments)]
 pub async fn git_commit_push_impl(
     workspace: &std::path::Path,
     message: &str,
@@ -778,7 +781,7 @@ impl Tool for GitPushTool {
             %agent_id,
             target_branch = branch,
             remote = %redact_url(remote_url),
-            per_attempt_timeout_ms = policy.per_attempt_timeout.as_millis() as u64,
+            per_attempt_timeout_ms = duration_millis_u64(policy.per_attempt_timeout),
             attempts = policy.attempts,
             "git tool dispatched"
         );
@@ -857,8 +860,8 @@ impl Tool for GitCommitPushTool {
             %agent_id,
             target_branch = branch,
             remote = %redact_url(remote_url),
-            commit_timeout_ms = commit_timeout.as_millis() as u64,
-            push_per_attempt_timeout_ms = push_policy.per_attempt_timeout.as_millis() as u64,
+            commit_timeout_ms = duration_millis_u64(commit_timeout),
+            push_per_attempt_timeout_ms = duration_millis_u64(push_policy.per_attempt_timeout),
             push_attempts = push_policy.attempts,
             "git tool dispatched"
         );
@@ -942,7 +945,7 @@ impl Tool for GitCommitPushTool {
 }
 
 /// Git tools that operate purely on the local workspace and never
-/// reach a remote. Safe to elevate to `AlwaysAllow` for any automaton
+/// reach a remote. Safe to set `on` for any automaton
 /// that already has write access to the workspace — the mutation is
 /// contained by the `GitExecutor` workspace-escape checks.
 pub const GIT_LOCAL_TOOL_NAMES: &[&str] = &["git_commit"];

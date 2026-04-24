@@ -237,9 +237,11 @@ async fn tool_executes_commit_via_context() {
 
 #[test]
 fn push_policy_from_config_reads_knobs() {
-    let mut cfg = crate::ToolConfig::default();
-    cfg.git_push_timeout_ms = 45_000;
-    cfg.git_push_attempts = 4;
+    let cfg = crate::ToolConfig {
+        git_push_timeout_ms: 45_000,
+        git_push_attempts: 4,
+        ..Default::default()
+    };
     let policy = PushPolicy::from_config(&cfg);
     assert_eq!(policy.per_attempt_timeout, Duration::from_millis(45_000));
     assert_eq!(policy.attempts, 4);
@@ -247,8 +249,10 @@ fn push_policy_from_config_reads_knobs() {
 
 #[test]
 fn push_policy_attempts_clamped_to_at_least_one() {
-    let mut cfg = crate::ToolConfig::default();
-    cfg.git_push_attempts = 0;
+    let cfg = crate::ToolConfig {
+        git_push_attempts: 0,
+        ..Default::default()
+    };
     let policy = PushPolicy::from_config(&cfg);
     assert_eq!(
         policy.attempts, 1,

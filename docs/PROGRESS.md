@@ -225,7 +225,7 @@ Centralized tool definitions with JSON Schema.
 - [ ] JSON schemas for: fs.ls, fs.read, fs.stat, fs.write, fs.edit
 - [ ] JSON schema for: search.code (ripgrep)
 - [ ] JSON schema for: cmd.run (gated)
-- [ ] Permission level mapping
+- [x] Tri-state tool state mapping
 
 ---
 
@@ -250,11 +250,11 @@ Multi-step agentic conversation loop (sole orchestrator).
 
 Approval flow for sensitive operations.
 
-- [ ] Define `PermissionLevel` enum
+- [x] Replace `PermissionLevel` with tri-state `ToolState`
 - [ ] Default permission mapping per tool
 - [ ] Approval request generation
 - [ ] Approval response handling
-- [ ] Session-level permission caching (AskOnce)
+- [x] Session-scoped live ask decisions
 
 ---
 

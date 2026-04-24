@@ -13,14 +13,14 @@ sync with the `Enforcement:` lines under each section.
 | §1 | Sole External Gateway | CI-gated `rg` bands in `scripts/check_invariants.sh` + `.github/workflows/invariants.yml` (ModelProvider `.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/agent_loop/`). Git-mutation surface covered by `crates/aura-tools/src/git_tool/tests.rs` (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by `crates/aura-agent/src/kernel_domain_gateway.rs` tests. |
 | §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-node/src/automaton_bridge.rs::tests::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path). |
 | §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), `crates/aura-kernel/src/kernel/tests.rs::reason_sync_error_records_failed` + `reason_streaming_handshake_error_records_failed` (Phase 1 sync + handshake failure paths), `tests/automaton_reasoning_recording.rs` (automaton spec-gen / dev-loop calls). |
-| §4 | Full Policy Enforcement | `crates/aura-kernel/tests/invariant_policy_matrix.rs` + `crates/aura-kernel/src/policy/tests.rs`. |
+| §4 | Full Policy Enforcement | `crates/aura-core/src/types/tool_permissions.rs` resolver tests, `crates/aura-kernel/src/policy/check.rs` policy tests, `crates/aura-node/src/tool_permissions.rs` validation/monotonic tests, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` command guardrail tests. |
 | §5 | Complete Audit Trail | `crates/aura-kernel/src/kernel/tests.rs` + §4 matrix asserts `decision`/`actions`/`context_hash`. |
 | §6 | Deterministic Context | `crates/aura-kernel/tests/invariant_determinism.rs` (proptest). |
 | §7 | Monotonic Sequencing | `crates/aura-store/tests/invariant_atomicity.rs` + `crates/aura-store/src/rocks_store/tests.rs`. |
 | §8 | Gateway Transparency | `crates/aura-agent/src/agent_loop/parity_tests.rs`. |
 | §9 | AgentLoop Isolation | Architectural / `rg` grep bands (see Untested Invariants) — now CI-gated via `scripts/check_invariants.sh` (aura_store import band scoped to `aura-agent/agent_loop/`). |
 | §10 | Append-Only Record | `crates/aura-store/tests/invariant_atomicity.rs` (`static_assertions` sealed-trait check + atomic-commit fault injection) + `crates/aura-store/tests/invariant_readstore_surface.rs` (Phase 2: pins the `ReadStore` trait surface so record-append methods stay on the sealed `WriteStore`). |
-| §11 | Session-Scoped Approvals | `crates/aura-kernel/src/policy/tests.rs` (`clear_session_approvals`) + §4 matrix's `AskOnce` rows. |
+| §11 | Session-Scoped Tool Decisions | `crates/aura-kernel/src/policy/check.rs` live prompt and session-state tests. |
 | §12 | Single Writer Per Agent | `crates/aura-store/src/rocks_store/tests_concurrent.rs`. |
 
 ---
@@ -103,32 +103,30 @@ The policy pipeline for a `ToolProposal`:
 
 1. Deserialize `ToolProposal` from transaction payload
 2. Build `Proposal` with `ActionKind::Delegate` + serialized `ToolCall`
-3. `Policy::check(&proposal)` evaluates:
+3. `Policy::check(&proposal)` evaluates orthogonal hard-denial layers first:
    - Is `ActionKind::Delegate` in `allowed_action_kinds`?
-   - Is the tool in `allowed_tools`?
-   - What is the `PermissionLevel`?
-     - `AlwaysAllow` — proceed
-     - `AskOnce` — check `session_approvals`; deny if not approved
-     - `RequireApproval` (renamed from `AlwaysAsk` in Phase 6) — deny unless the caller has registered a single-use approval via `Kernel::grant_approval` for the exact `(agent_id, tool, args_hash)` triple
-     - `Deny` — deny
-4. Decision is recorded: accepted action IDs or rejected proposals with reasons
-5. Only approved proposals become `Action`s and are executed
+   - Does the caller hold every capability required by the tool?
+   - Are scoped arguments inside the caller's `AgentScope`?
+   - Are required runtime integrations installed?
+4. The per-tool layer resolves once with `Policy::resolve_tool_state`, using `UserToolDefaults` plus optional `AgentToolPermissions`:
+   - `ToolState::Allow` (`"on"`) — continue to execution guardrails.
+   - `ToolState::Deny` (`"off"`) — reject at the policy gate.
+   - `ToolState::Ask` (`"ask"`) — emit a structured live approval prompt when a `ToolApprovalPrompter` is attached; otherwise deny with a headless ask reason.
+5. Decision is recorded: accepted action IDs or rejected proposals with reasons
+6. Only approved proposals become `Action`s and are executed
 
 **Corollary:** A `Deny`-only check is insufficient. The full `Policy::check()` must run.
 
-### 4.a Default permissions for high-privilege tools
+### 4.a Tool execution guardrails remain orthogonal
 
-The shipped `Policy::with_defaults()` preset (`crates/aura-kernel/src/policy/mod.rs::default_tool_permission`) defaults **`run_command` to `PermissionLevel::RequireApproval`** (Wave 5 / T3, renamed from `AlwaysAsk` in Phase 6 of the security audit). The kernel must never invoke arbitrary binaries without an explicit, single-use per-call approval registered via `Kernel::grant_approval` (or `POST /tool-approval`). Read-only FS inspection (`list_files`, `read_file`, `stat_file`, `search_code`) and in-workspace FS writes (`write_file`, `edit_file`, `delete_file`) remain `AlwaysAllow` because they are sandboxed to the workspace root.
+The tri-state tool layer answers whether a tool is enabled for this agent. It does not authorize unsafe execution shapes. `run_command` still requires explicit `ToolConfig::command.enabled`, and operator-provided command/binary/shell-script guardrails are enforced inside `aura-tools` after policy allows the tool.
 
 Complementary enforcement in `aura-tools`:
 
-- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` / `shell_script` fields unless the caller passes `allow_shell: true`. Once `allow_shell` is granted, `ToolConfig::allowed_shell_scripts` switches between "any script allowed" (empty allowlist, the default matching `command_allowlist` / `binary_allowlist`) and "verbatim match only" (non-empty allowlist).
-- When `ToolConfig::binary_allowlist` is non-empty, `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
+- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` / `shell_script` fields unless the caller passes `allow_shell: true`. Once `allow_shell` is granted, `ToolConfig::command.allowed_shell_scripts` switches between "any script allowed" (empty allowlist) and "verbatim match only" (non-empty allowlist).
+- When `ToolConfig::command.binary_allowlist` is non-empty, `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
 
-**Enforcement:** `crates/aura-kernel/tests/invariant_policy_matrix.rs`
-drives every permission level × tool-listing × action-kind × runtime-
-capability combination through `Kernel::process_direct` and asserts the
-recorded `Decision` (accept vs. reject-with-reason) for each row.
+**Enforcement:** `crates/aura-core/src/types/tool_permissions.rs` covers the resolver truth table and wire spelling, `crates/aura-kernel/src/policy/check.rs` covers policy resolution and live prompt verdicts, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` covers command/shell/binary guardrails.
 
 ---
 
@@ -204,7 +202,7 @@ This boundary also means the harness executes tools from runtime metadata withou
 The AgentLoop must not:
 - Import or reference `Store`, `RocksStore`, or any store type
 - Import or reference `RecordEntry` or `RecordEntryBuilder`
-- Import or reference `Policy` or `PermissionLevel`
+- Import or reference kernel `Policy` internals
 - Call `ModelProvider::complete` on anything other than the provider it receives as a parameter
 - Call `AgentToolExecutor::execute` on anything other than the executor it receives as a parameter
 - Construct `Transaction` objects
@@ -238,13 +236,14 @@ injection rows prove the append path is all-or-nothing.
 
 ---
 
-## 11. Session-Scoped Approvals
+## 11. Session-Scoped Tool Decisions
 
-**`AskOnce` tool approvals are scoped to the current session.**
+**Live `ask` decisions remembered for a session are scoped to the current session.**
 
-- `SessionStart` transaction resets all session approvals via `Policy::clear_session_approvals()`
-- Approvals do not persist across sessions
-- Approvals do not persist across process restarts
+- Session-scoped decisions are held in policy memory via `remember_tool_state_for_session()`
+- `SessionStart` resets session-scoped tool decisions via `Policy::clear_session_approvals()`
+- `remember: session` does not persist across process restarts
+- `remember: forever` is not session-scoped; it is persisted into `UserToolDefaults`
 
 ---
 

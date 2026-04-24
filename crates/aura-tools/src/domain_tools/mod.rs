@@ -29,9 +29,9 @@ use helpers::domain_err;
 // An earlier "unify on DomainApi" plan proposed adding a
 // `domain_tools: Vec<String>` field to `aura_protocol::SessionInit` so
 // aura-os-server could advertise the domain-tool set and the harness would
-// populate `policy.allowed_tools` from that wire-shipped list instead of
-// this slice. That change was evaluated and intentionally skipped. The
-// reasoning, left here so the next person doesn't resurrect the todo:
+// treat that wire-shipped list as the source of truth instead of this slice.
+// That change was evaluated and intentionally skipped. The reasoning, left
+// here so the next person doesn't resurrect the todo:
 //
 // 1. `DOMAIN_TOOL_NAMES` and the `match tool_name` dispatch inside
 //    `DomainToolExecutor::execute` (see below) are co-located in this
@@ -47,13 +47,11 @@ use helpers::domain_err;
 //    worse place and introducing a drift risk between the server's
 //    copy and the harness's dispatch.
 //
-// 3. The fail-closed kernel policy already gets the full set: since
-//    commit 3373d96, `aura-node`'s `build_policy_config` path calls
-//    `policy.add_allowed_tools(domain_exec.tool_names().iter()...)`
-//    on the live `DomainToolExecutor`, which is derived from this
-//    same slice via `tool_names()`. That is exactly the behavior a
-//    wire-shipped `SessionInit.domain_tools` field would have
-//    produced — with no wire coupling.
+// 3. The effective catalog and resolver already get the full set from the
+//    live `DomainToolExecutor`, which is derived from this same slice via
+//    `tool_names()`. That is exactly the behavior a wire-shipped
+//    `SessionInit.domain_tools` field would have produced — with no wire
+//    coupling.
 //
 // If you ever need the server to advertise this list for *diagnostic*
 // purposes (e.g. a debug endpoint that shows "what can this harness

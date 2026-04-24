@@ -18,8 +18,8 @@ use aura_agent::{
 use aura_core::{Identity, Transaction};
 use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
-use aura_tools::ToolConfig;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
+use aura_tools::ToolConfig;
 use clap::Parser;
 use colored::Colorize;
 use std::path::PathBuf;

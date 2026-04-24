@@ -340,20 +340,10 @@ mod tests {
     use super::*;
 
     /// Pinned set of dev-loop tool names the harness registers via
-    /// [`devloop_control_tools`]. `aura-node`'s
-    /// `build_kernel_with_config` collects these names from each
-    /// returned tool and seeds them into `policy.allowed_tools`,
-    /// because the kernel's fail-closed `allow_unlisted = false`
-    /// default denies anything not on the list and
-    /// aura-os-server's `tool_dedupe::HARNESS_NATIVE_TOOL_NAMES`
-    /// strips these names from `installed_tools` (so they never
-    /// reach the policy via the installed-tool extension). If a
-    /// fifth dev-loop tool is added without updating the seed —
-    /// or one of these is renamed — the chat session denies it
-    /// with `"Tool 'X' is not allowed"` even though the resolver
-    /// has it registered. This test pins the canonical name set
-    /// so any drift fails loudly here instead of silently in
-    /// production.
+    /// [`devloop_control_tools`]. These names must stay aligned with
+    /// `ToolCatalog` and aura-os-server's native-tool dedupe list so
+    /// clients validate and display the same automaton control surface
+    /// that the resolver can execute.
     const CANONICAL_DEVLOOP_TOOL_NAMES: &[&str] = &[
         "start_dev_loop",
         "pause_dev_loop",

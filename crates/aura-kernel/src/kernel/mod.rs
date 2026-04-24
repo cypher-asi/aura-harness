@@ -274,11 +274,9 @@ impl Kernel {
 
     /// Read-only accessor for the kernel's `Policy`.
     ///
-    /// Required by the Wave 7 invariant-policy-matrix integration test
-    /// so it can pre-seed `AskOnce` session approvals against a live
-    /// kernel before submitting a tool proposal. Pure observational
-    /// surface — the policy's interior mutable state is still protected
-    /// by its own `Mutex`.
+    /// Exposed for policy-focused tests and diagnostics. Pure observational
+    /// surface — the policy's interior mutable state is still protected by
+    /// its own synchronization.
     #[must_use]
     pub fn policy(&self) -> &Policy {
         &self.policy

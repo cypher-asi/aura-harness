@@ -67,7 +67,7 @@ pub(super) async fn put_agent_tool_permissions_handler(
     validate_agent_tool_permissions(&next, &state.catalog).map_err(bad_request)?;
 
     let context = load_agent_tool_context(&state.store, agent_id).map_err(storage_string_error)?;
-    let user_default = load_user_default_for_agent(&state, &context.originating_user_id)?;
+    let user_default = load_user_default_for_agent(&state, context.originating_user_id.as_ref())?;
     enforce_monotonic_update(&user_default, context.tool_permissions.as_ref(), &next)
         .map_err(|e| (StatusCode::FORBIDDEN, e))?;
 
@@ -100,7 +100,7 @@ pub(super) async fn get_agent_tools_handler(
     let agent_id = parse_agent_id(&agent_id_hex)?;
     let context = load_agent_tool_context(&state.store, agent_id).map_err(storage_string_error)?;
     let user_id = query.user_id.or(context.originating_user_id);
-    let user_default = load_user_default_for_agent(&state, &user_id)?;
+    let user_default = load_user_default_for_agent(&state, user_id.as_ref())?;
     let tools = effective_tool_infos(
         &state.catalog,
         &state.tool_config,
@@ -117,9 +117,9 @@ fn parse_agent_id(agent_id_hex: &str) -> Result<AgentId, (StatusCode, String)> {
 
 fn load_user_default_for_agent(
     state: &RouterState,
-    user_id: &Option<String>,
+    user_id: Option<&String>,
 ) -> Result<UserToolDefaults, (StatusCode, String)> {
-    let Some(user_id) = user_id.as_deref() else {
+    let Some(user_id) = user_id.map(String::as_str) else {
         return Ok(UserToolDefaults::default());
     };
     state

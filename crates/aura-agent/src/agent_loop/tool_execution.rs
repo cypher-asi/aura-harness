@@ -369,9 +369,7 @@ fn emit_tool_results(
             AgentLoopEvent::ToolCallCompleted {
                 tool_use_id: r.tool_use_id.clone(),
                 tool_name: tool_name.clone(),
-                input: info
-                    .map(|t| t.input.clone())
-                    .unwrap_or(serde_json::Value::Null),
+                input: info.map_or(serde_json::Value::Null, |t| t.input.clone()),
                 is_error: r.is_error,
             },
         );

@@ -248,3 +248,66 @@ fn state_label(state: ToolState) -> &'static str {
         ToolState::Ask => "ask",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn defaults(entries: &[(&str, ToolState)], fallback: ToolState) -> UserToolDefaults {
+        UserToolDefaults::default_permissions(
+            entries
+                .iter()
+                .map(|(tool, state)| ((*tool).to_string(), *state))
+                .collect(),
+            fallback,
+        )
+    }
+
+    fn overrides(entries: &[(&str, ToolState)]) -> AgentToolPermissions {
+        AgentToolPermissions {
+            per_tool: entries
+                .iter()
+                .map(|(tool, state)| ((*tool).to_string(), *state))
+                .collect::<BTreeMap<_, _>>(),
+        }
+    }
+
+    #[test]
+    fn validate_user_defaults_rejects_unknown_tool_names() {
+        let catalog = ToolCatalog::new();
+        let unknown = defaults(&[("not_a_real_tool", ToolState::Allow)], ToolState::Deny);
+
+        let err = validate_user_defaults(&unknown, &catalog).expect_err("unknown tool rejected");
+        assert!(err.contains("unknown tool 'not_a_real_tool'"));
+    }
+
+    #[test]
+    fn validate_agent_permissions_accepts_catalog_tool_names() {
+        let catalog = ToolCatalog::new();
+        let permissions = overrides(&[("read_file", ToolState::Ask)]);
+
+        validate_agent_tool_permissions(&permissions, &catalog).expect("known tool accepted");
+    }
+
+    #[test]
+    fn monotonic_update_rejects_widening_and_allows_narrowing() {
+        let user_default = defaults(&[("run_command", ToolState::Ask)], ToolState::Allow);
+        let current = overrides(&[("read_file", ToolState::Ask)]);
+
+        let widening = overrides(&[
+            ("read_file", ToolState::Allow),
+            ("run_command", ToolState::Allow),
+        ]);
+        let err = enforce_monotonic_update(&user_default, Some(&current), &widening)
+            .expect_err("widening should be rejected");
+        assert!(err.contains("cannot be widened"));
+
+        let narrowing = overrides(&[
+            ("read_file", ToolState::Deny),
+            ("run_command", ToolState::Deny),
+        ]);
+        enforce_monotonic_update(&user_default, Some(&current), &narrowing)
+            .expect("narrowing should be accepted");
+    }
+}
