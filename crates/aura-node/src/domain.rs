@@ -105,6 +105,22 @@ impl HttpDomainApi {
         self.os_server_url.as_deref().unwrap_or(&self.storage_url)
     }
 
+    /// Base URL for project GET / PUT routes.
+    ///
+    /// Unlike specs / tasks / logs / stats, `/api/projects/:id` is not
+    /// a route aura-storage exposes — it lives on aura-network (and,
+    /// when the override is set, aura-os-server). Routing the fallback
+    /// through `storage_url` therefore 404s every `get_project` call
+    /// the dev-loop makes before it can run a single task. Keep this
+    /// helper separate from `specs_tasks_base_url` so the project path
+    /// lands on `network_url` when `AURA_OS_SERVER_URL` is unset, which
+    /// is the pre-`feat(domain): route DomainApi writes through
+    /// aura-os-server` behavior that every prior operator setup relied
+    /// on.
+    fn project_base_url(&self) -> &str {
+        self.os_server_url.as_deref().unwrap_or(&self.network_url)
+    }
+
     fn cached_permissions(
         &self,
         agent_id: &str,
@@ -396,9 +412,11 @@ impl DomainApi for HttpDomainApi {
     }
 
     // -- Project (aura-os-server when configured, else aura-network
-    //    legacy fallback — project writes also fire aura-os-server's
-    //    SSE broadcast / JWT billing side effects, so we want them on
-    //    the same base URL as specs/tasks when the override is set) --
+    //    legacy fallback — aura-storage has no `/api/projects/:id`
+    //    GET, only sub-routes, so falling back there 404s every
+    //    `get_project` the dev-loop makes. Both endpoints on the
+    //    override fire aura-os-server's SSE broadcast / JWT billing
+    //    side effects, matching the spec/task write path.) --
 
     async fn get_project(
         &self,
@@ -406,10 +424,7 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!(
-            "{}/api/projects/{project_id}",
-            self.specs_tasks_base_url()
-        );
+        let url = format!("{}/api/projects/{project_id}", self.project_base_url());
         self.api_get(&url, jwt).await
     }
 
@@ -420,10 +435,7 @@ impl DomainApi for HttpDomainApi {
         jwt: Option<&str>,
     ) -> anyhow::Result<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
-        let url = format!(
-            "{}/api/projects/{project_id}",
-            self.specs_tasks_base_url()
-        );
+        let url = format!("{}/api/projects/{project_id}", self.project_base_url());
         let body = serde_json::json!({
             "name": updates.name,
             "description": updates.description,
@@ -726,5 +738,49 @@ mod tests {
         .expect("build HttpDomainApi");
 
         assert_eq!(api.specs_tasks_base_url(), "http://os");
+    }
+
+    /// `project_base_url()` prefers the aura-os-server override when
+    /// set so project GET / PUT writes fire the server's SSE / billing
+    /// side effects alongside specs and tasks.
+    #[test]
+    fn project_base_url_prefers_os_server_when_set() {
+        let api = HttpDomainApi::new(
+            "https://storage.example.com",
+            "https://network.example.com",
+            "https://orbit.example.com",
+            Some("http://os".to_string()),
+        )
+        .expect("build HttpDomainApi");
+
+        assert_eq!(api.project_base_url(), "http://os");
+    }
+
+    /// Without the override, project routes must fall back to
+    /// `aura_network_url` (not `storage_url`). aura-storage has no
+    /// `/api/projects/:id` GET — only `/api/projects/:id/{specs,tasks,
+    /// artifacts,logs}` sub-routes — so a storage fallback 404s every
+    /// `get_project` the dev-loop issues and no task ever runs. This
+    /// test pins the pre-`feat(domain): route DomainApi writes through
+    /// aura-os-server` behavior so a future base-URL refactor can't
+    /// silently reintroduce that regression.
+    #[test]
+    fn project_base_url_falls_back_to_network_when_unset() {
+        let api = HttpDomainApi::new(
+            "https://storage.example.com",
+            "https://network.example.com",
+            "https://orbit.example.com",
+            None,
+        )
+        .expect("build HttpDomainApi");
+
+        assert_eq!(api.project_base_url(), "https://network.example.com");
+
+        let url = format!(
+            "{}/api/projects/{pid}",
+            api.project_base_url(),
+            pid = "proj-1",
+        );
+        assert_eq!(url, "https://network.example.com/api/projects/proj-1");
     }
 }
