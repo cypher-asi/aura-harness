@@ -27,7 +27,8 @@
 
 use crate::policy::{ApprovalRegistry, Policy, PolicyConfig};
 use crate::ExecutorRouter;
-use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall};
+use async_trait::async_trait;
+use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, ToolState};
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
 use std::path::PathBuf;
@@ -65,6 +66,12 @@ pub struct KernelConfig {
     /// a batch is wrapped in a `tokio::time::timeout` with this budget; on
     /// expiration a failed `Effect` is emitted and the batch continues.
     pub tool_timeout_ms: u64,
+    /// Live approval bridge for tri-state `ask` tool calls. When absent,
+    /// `ask` resolves to a headless deny.
+    pub tool_approval_prompter: Option<Arc<dyn ToolApprovalPrompter>>,
+    /// Originating user id used when a live approval response is remembered
+    /// forever into persisted user tool defaults.
+    pub originating_user_id: Option<String>,
 }
 
 impl Default for KernelConfig {
@@ -77,6 +84,8 @@ impl Default for KernelConfig {
             replay_mode: false,
             proposal_timeout_ms: 120_000,
             tool_timeout_ms: 120_000,
+            tool_approval_prompter: None,
+            originating_user_id: None,
         }
     }
 }
@@ -114,6 +123,56 @@ pub struct ApprovalRequiredInfo {
     /// Blake3 hash of the canonical JSON args the agent wanted to run.
     /// Hex-encoded in the API layer.
     pub args_hash: [u8; 32],
+    /// Structured live prompt metadata for tri-state `ask` prompts.
+    pub prompt: Option<PendingToolPrompt>,
+}
+
+/// Scope for remembering a live approval response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolApprovalRemember {
+    /// Do not cache; the next call prompts again.
+    Once,
+    /// Cache for the current session.
+    Session,
+    /// Persist to the originating user's defaults.
+    Forever,
+}
+
+/// Live approval response returned by a [`ToolApprovalPrompter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolApprovalResponse {
+    pub decision: ToolState,
+    pub remember: ToolApprovalRemember,
+}
+
+/// Structured prompt metadata emitted when a tool resolves to `ask`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingToolPrompt {
+    pub request_id: String,
+    pub tool_name: String,
+    pub args: serde_json::Value,
+    pub agent_id: AgentId,
+    pub remember_options: Vec<ToolApprovalRemember>,
+}
+
+/// Error returned by a live approval bridge.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolApprovalError {
+    #[error("approval prompt could not be delivered")]
+    DeliveryFailed,
+    #[error("approval prompt was cancelled")]
+    Cancelled,
+    #[error("{0}")]
+    Internal(String),
+}
+
+/// Bridge from the deterministic kernel to an attached interactive client.
+#[async_trait]
+pub trait ToolApprovalPrompter: Send + Sync + std::fmt::Debug {
+    async fn prompt(
+        &self,
+        prompt: PendingToolPrompt,
+    ) -> Result<ToolApprovalResponse, ToolApprovalError>;
 }
 
 /// Decision produced by [`Kernel::process_tool_proposal`] for a single
@@ -141,6 +200,8 @@ pub enum ToolDecision {
         /// Blake3 hash of the canonical JSON args. Exposed to
         /// authenticated operators in the `423 Locked` response.
         args_hash: [u8; 32],
+        /// Structured live prompt metadata for tri-state `ask` prompts.
+        prompt: Option<PendingToolPrompt>,
     },
 }
 

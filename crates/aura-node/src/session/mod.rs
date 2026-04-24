@@ -21,10 +21,12 @@ mod partial_json;
 mod state;
 #[cfg(test)]
 mod tests;
+mod tool_approval;
 mod ws_handler;
 
 pub(crate) use state::truncate_messages_for_storage;
 pub use state::Session;
+pub(crate) use tool_approval::ToolApprovalBroker;
 pub use ws_handler::handle_ws_connection;
 
 use aura_reasoner::ModelProvider;

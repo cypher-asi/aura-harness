@@ -8,8 +8,12 @@
 //! checks all live here.
 
 use super::config::{default_tool_permission, PermissionLevel, PolicyConfig};
-use aura_core::{ActionKind, Proposal, RuntimeCapabilityInstall, ToolCall};
-use std::collections::HashSet;
+use crate::{PendingToolPrompt, ToolApprovalRemember};
+use aura_core::{
+    resolve_effective_permission, ActionKind, Proposal, RuntimeCapabilityInstall, ToolCall,
+    ToolState,
+};
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use tracing::{debug, warn};
 
@@ -28,6 +32,7 @@ use tracing::{debug, warn};
 pub struct Policy {
     config: PolicyConfig,
     session_approvals: Mutex<HashSet<String>>,
+    session_tool_states: Mutex<HashMap<String, ToolState>>,
 }
 
 /// Distinguishable verdict returned by the tool authorization pipeline.
@@ -48,6 +53,8 @@ pub enum PolicyVerdict {
     RequireApproval {
         /// Human-readable reason, e.g. `"Tool 'run_command' requires approval"`.
         reason: String,
+        /// Structured prompt metadata for live tri-state `ask` prompts.
+        prompt: Option<PendingToolPrompt>,
     },
     /// Permanently denied. No approval will unlock it.
     Deny {
@@ -68,7 +75,7 @@ impl PolicyVerdict {
     pub fn reason(&self) -> Option<&str> {
         match self {
             Self::Allow => None,
-            Self::RequireApproval { reason } | Self::Deny { reason } => Some(reason.as_str()),
+            Self::RequireApproval { reason, .. } | Self::Deny { reason } => Some(reason.as_str()),
         }
     }
 }
@@ -110,6 +117,7 @@ impl Policy {
         Self {
             config,
             session_approvals: Mutex::new(HashSet::new()),
+            session_tool_states: Mutex::new(HashMap::new()),
         }
     }
 
@@ -117,6 +125,24 @@ impl Policy {
     #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(PolicyConfig::default())
+    }
+
+    /// Resolve the tri-state `on` / `off` / `ask` [`ToolState`] for
+    /// `tool` against the two-level permission model (user default +
+    /// per-agent override). This is the single resolution helper the
+    /// kernel gate will consult once the Phase-E teardown lands.
+    ///
+    /// Currently runs **in parallel with** (and does not replace) the
+    /// legacy `allowed_tools` / `tool_permissions` / `allow_unlisted`
+    /// gate in [`Self::check_tool_with_runtime_capabilities_verdict`];
+    /// the legacy gate is still the enforcement path.
+    #[must_use]
+    pub fn resolve_tool_state(&self, tool: &str) -> ToolState {
+        resolve_effective_permission(
+            &self.config.user_default,
+            self.config.agent_override.as_ref(),
+            tool,
+        )
     }
 
     /// Get the permission level for a tool.
@@ -158,6 +184,14 @@ impl Policy {
             .insert(tool.to_string());
     }
 
+    /// Cache a live approval decision for this policy's current session.
+    pub fn remember_tool_state_for_session(&self, tool: &str, state: ToolState) {
+        self.session_tool_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(tool.to_string(), state);
+    }
+
     /// Revoke session approval for a tool.
     ///
     /// Recovers gracefully from mutex poisoning by accessing the inner data.
@@ -176,6 +210,61 @@ impl Policy {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.session_tool_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
+    /// Return the live prompt verdict for the additive tri-state `ask`
+    /// layer. `None` means the new layer has no opinion and the legacy
+    /// verdict remains authoritative for Phase C.
+    #[must_use]
+    pub fn live_tool_prompt_verdict(
+        &self,
+        tool: &str,
+        args: &serde_json::Value,
+        agent_id: aura_core::AgentId,
+        request_id: String,
+        has_live_session: bool,
+        remember_options: Vec<ToolApprovalRemember>,
+    ) -> Option<PolicyVerdict> {
+        if let Some(state) = self
+            .session_tool_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(tool)
+            .copied()
+        {
+            return match state {
+                ToolState::Allow => None,
+                ToolState::Deny => Some(PolicyVerdict::Deny {
+                    reason: format!("Tool '{tool}' was denied for this session"),
+                }),
+                ToolState::Ask => None,
+            };
+        }
+
+        if self.resolve_tool_state(tool) != ToolState::Ask {
+            return None;
+        }
+
+        if !has_live_session {
+            return Some(PolicyVerdict::Deny {
+                reason: format!("tool {tool} is set to ask; no session to prompt"),
+            });
+        }
+
+        Some(PolicyVerdict::RequireApproval {
+            reason: format!("Tool '{tool}' is set to ask"),
+            prompt: Some(PendingToolPrompt {
+                request_id,
+                tool_name: tool.to_string(),
+                args: args.clone(),
+                agent_id,
+                remember_options,
+            }),
+        })
     }
 
     /// Check if a tool call requires approval.
@@ -316,6 +405,7 @@ impl Policy {
             }
             PermissionLevel::RequireApproval => PolicyVerdict::RequireApproval {
                 reason: format!("Tool '{tool}' requires approval for each use"),
+                prompt: None,
             },
         }
     }
@@ -559,6 +649,123 @@ mod permission_tests {
         ));
         assert!(!result.allowed);
         assert!(result.reason.unwrap().contains("out of scope"));
+    }
+
+    #[test]
+    fn resolve_tool_state_default_is_on() {
+        let policy = Policy::with_defaults();
+        assert_eq!(policy.resolve_tool_state("read_file"), ToolState::Allow);
+        assert_eq!(policy.resolve_tool_state("run_command"), ToolState::Allow);
+        assert_eq!(policy.resolve_tool_state("anything"), ToolState::Allow);
+    }
+
+    #[test]
+    fn resolve_tool_state_auto_review_is_ask_for_everything() {
+        let cfg =
+            PolicyConfig::default().with_user_default(aura_core::UserToolDefaults::auto_review());
+        let policy = Policy::new(cfg);
+        assert_eq!(policy.resolve_tool_state("read_file"), ToolState::Ask);
+        assert_eq!(policy.resolve_tool_state("run_command"), ToolState::Ask);
+    }
+
+    #[test]
+    fn resolve_tool_state_default_permissions_mode_is_tri_state_per_tool() {
+        let mut per_tool = std::collections::BTreeMap::new();
+        per_tool.insert("read_file".into(), ToolState::Allow);
+        per_tool.insert("run_command".into(), ToolState::Ask);
+        per_tool.insert("delete_file".into(), ToolState::Deny);
+        let user_default =
+            aura_core::UserToolDefaults::default_permissions(per_tool, ToolState::Deny);
+        let cfg = PolicyConfig::default().with_user_default(user_default);
+        let policy = Policy::new(cfg);
+        assert_eq!(policy.resolve_tool_state("read_file"), ToolState::Allow);
+        assert_eq!(policy.resolve_tool_state("run_command"), ToolState::Ask);
+        assert_eq!(policy.resolve_tool_state("delete_file"), ToolState::Deny);
+        assert_eq!(
+            policy.resolve_tool_state("not_in_map"),
+            ToolState::Deny,
+            "fallback applies to unlisted tools",
+        );
+    }
+
+    #[test]
+    fn resolve_tool_state_agent_override_wins_over_user_default() {
+        let cfg = PolicyConfig::default()
+            .with_user_default(aura_core::UserToolDefaults::full_access())
+            .with_agent_override(Some(
+                aura_core::AgentToolPermissions::new()
+                    .with("run_command", ToolState::Deny)
+                    .with("delete_file", ToolState::Ask),
+            ));
+        let policy = Policy::new(cfg);
+        assert_eq!(
+            policy.resolve_tool_state("run_command"),
+            ToolState::Deny,
+            "override flips user's full_access to off",
+        );
+        assert_eq!(
+            policy.resolve_tool_state("delete_file"),
+            ToolState::Ask,
+            "override flips user's full_access to ask",
+        );
+        assert_eq!(
+            policy.resolve_tool_state("read_file"),
+            ToolState::Allow,
+            "unlisted tool still flows through user default (on)",
+        );
+    }
+
+    #[test]
+    fn live_prompt_verdict_denies_ask_without_session() {
+        let cfg =
+            PolicyConfig::default().with_user_default(aura_core::UserToolDefaults::auto_review());
+        let policy = Policy::new(cfg);
+        let verdict = policy
+            .live_tool_prompt_verdict(
+                "read_file",
+                &serde_json::json!({"path": "a.txt"}),
+                aura_core::AgentId::generate(),
+                "request-1".to_string(),
+                false,
+                vec![ToolApprovalRemember::Once],
+            )
+            .expect("ask state should produce a verdict");
+
+        assert!(
+            matches!(verdict, PolicyVerdict::Deny { ref reason } if reason.contains("no session to prompt"))
+        );
+    }
+
+    #[test]
+    fn live_prompt_verdict_carries_structured_prompt() {
+        let cfg =
+            PolicyConfig::default().with_user_default(aura_core::UserToolDefaults::auto_review());
+        let policy = Policy::new(cfg);
+        let agent_id = aura_core::AgentId::generate();
+        let verdict = policy
+            .live_tool_prompt_verdict(
+                "read_file",
+                &serde_json::json!({"path": "a.txt"}),
+                agent_id,
+                "request-1".to_string(),
+                true,
+                vec![ToolApprovalRemember::Once, ToolApprovalRemember::Session],
+            )
+            .expect("ask state should produce a verdict");
+
+        match verdict {
+            PolicyVerdict::RequireApproval {
+                prompt: Some(prompt),
+                ..
+            } => {
+                assert_eq!(prompt.request_id, "request-1");
+                assert_eq!(prompt.tool_name, "read_file");
+                assert_eq!(prompt.args, serde_json::json!({"path": "a.txt"}));
+                assert_eq!(prompt.agent_id, agent_id);
+                assert_eq!(prompt.remember_options.len(), 2);
+            }
+            other => panic!("expected structured prompt, got {other:?}"),
+        }
     }
 
     #[test]

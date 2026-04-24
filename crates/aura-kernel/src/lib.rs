@@ -38,8 +38,9 @@ pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
 };
 pub use kernel::{
-    ApprovalRequiredInfo, Kernel, KernelConfig, ProcessResult, ReasonResult, ReasonStreamHandle,
-    ToolDecision, ToolOutput,
+    ApprovalRequiredInfo, Kernel, KernelConfig, PendingToolPrompt, ProcessResult, ReasonResult,
+    ReasonStreamHandle, ToolApprovalError, ToolApprovalPrompter, ToolApprovalRemember,
+    ToolApprovalResponse, ToolDecision, ToolOutput,
 };
 pub use policy::{
     default_tool_permission, ApprovalKey, ApprovalRegistry, PermissionLevel, Policy, PolicyConfig,

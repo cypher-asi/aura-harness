@@ -27,12 +27,13 @@ pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, Proces
 pub use permissions::{AgentPermissions, AgentScope, Capability};
 pub use registry::{Registry, RegistryError};
 pub use types::{
-    Action, ActionKind, ActionResultPayload, AgentStatus, CacheControl, ContextHash, Decision,
-    Effect, EffectKind, EffectStatus, Identity, InstalledIntegrationDefinition,
-    InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
-    InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
-    InstalledToolRuntimeProviderExecution, PermissionLevel, ProcessPending, Proposal, ProposalSet,
-    RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind, ToolAuth, ToolCall,
-    ToolCallContext, ToolDecision, ToolDefinition, ToolExecution, ToolProposal, ToolResult,
-    ToolResultContent, Trace, Transaction, TransactionType,
+    resolve_effective_permission, Action, ActionKind, ActionResultPayload, AgentStatus,
+    AgentToolPermissions, CacheControl, ContextHash, Decision, Effect, EffectKind, EffectStatus,
+    Identity, InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
+    InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
+    InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, PermissionLevel,
+    ProcessPending, Proposal, ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall,
+    SystemKind, ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolDefinition, ToolExecution,
+    ToolProposal, ToolResult, ToolResultContent, ToolState, Trace, Transaction, TransactionType,
+    UserDefaultMode, UserToolDefaults,
 };

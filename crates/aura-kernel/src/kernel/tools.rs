@@ -18,14 +18,19 @@
 //! The batch path additionally reserves a contiguous sequence range and
 //! writes all entries via `append_entries_batch` for atomicity.
 
-use super::{ApprovalRequiredInfo, Kernel, ProcessResult, ToolDecision, ToolOutput};
+use super::{
+    ApprovalRequiredInfo, Kernel, PendingToolPrompt, ProcessResult, ToolApprovalRemember,
+    ToolApprovalResponse, ToolDecision, ToolOutput,
+};
 use crate::context::hash_tx_with_window;
 use crate::executor::{decode_tool_effect, ExecuteContext};
 use crate::policy::{ApprovalKey, PolicyVerdict};
 use aura_core::{
     Action, ActionId, ActionKind, ContextHash, Decision, Effect, EffectKind, EffectStatus,
-    Proposal, ProposalSet, RecordEntry, ToolCall, ToolProposal, Transaction,
+    Proposal, ProposalSet, RecordEntry, ToolCall, ToolProposal, ToolState, Transaction,
+    UserDefaultMode, UserToolDefaults,
 };
+use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::instrument;
 
@@ -61,8 +66,12 @@ impl Kernel {
             runtime_capabilities.as_ref(),
         );
 
-        let approval_unlocked = matches!(verdict, PolicyVerdict::RequireApproval { .. })
-            && self.approvals.take(self.agent_id, &tool_name, args_hash);
+        let verdict = self
+            .resolve_live_ask_verdict(&tool_name, &proposal.args, tool_use_id.clone(), verdict)
+            .await?;
+        let approval_unlocked =
+            matches!(verdict, PolicyVerdict::RequireApproval { prompt: None, .. })
+                && self.approvals.take(self.agent_id, &tool_name, args_hash);
         let effective_allowed = verdict.is_allowed() || approval_unlocked;
 
         if effective_allowed {
@@ -134,10 +143,18 @@ impl Kernel {
                     Some(ApprovalRequiredInfo {
                         tool: tool_name.clone(),
                         args_hash,
+                        prompt: match &verdict {
+                            PolicyVerdict::RequireApproval { prompt, .. } => prompt.clone(),
+                            _ => None,
+                        },
                     }),
                     ToolDecision::NeedsApproval {
                         reason: denial_reason.clone(),
                         args_hash,
+                        prompt: match &verdict {
+                            PolicyVerdict::RequireApproval { prompt, .. } => prompt.clone(),
+                            _ => None,
+                        },
                     },
                 )
             } else {
@@ -196,11 +213,20 @@ impl Kernel {
                 &kernel_proposal,
                 runtime_capabilities.as_ref(),
             );
+            let verdict = self
+                .resolve_live_ask_verdict(
+                    &proposal.tool,
+                    &proposal.args,
+                    proposal.tool_use_id.clone(),
+                    verdict,
+                )
+                .await?;
             let args_hash = ApprovalKey::hash_args(&proposal.args);
-            let approval_unlocked = matches!(verdict, PolicyVerdict::RequireApproval { .. })
-                && self
-                    .approvals
-                    .take(self.agent_id, &proposal.tool, args_hash);
+            let approval_unlocked =
+                matches!(verdict, PolicyVerdict::RequireApproval { prompt: None, .. })
+                    && self
+                        .approvals
+                        .take(self.agent_id, &proposal.tool, args_hash);
             verdicts.push((verdict, approval_unlocked));
             args_hashes.push(args_hash);
             kernel_proposals.push(kernel_proposal);
@@ -335,10 +361,18 @@ impl Kernel {
                         Some(ApprovalRequiredInfo {
                             tool: proposal.tool.clone(),
                             args_hash,
+                            prompt: match verdict {
+                                PolicyVerdict::RequireApproval { ref prompt, .. } => prompt.clone(),
+                                _ => None,
+                            },
                         }),
                         ToolDecision::NeedsApproval {
                             reason: denial_reason.clone(),
                             args_hash,
+                            prompt: match verdict {
+                                PolicyVerdict::RequireApproval { ref prompt, .. } => prompt.clone(),
+                                _ => None,
+                            },
                         },
                     )
                 } else {
@@ -373,4 +407,136 @@ impl Kernel {
 
         Ok(results)
     }
+
+    async fn resolve_live_ask_verdict(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        tool_use_id: String,
+        legacy_verdict: PolicyVerdict,
+    ) -> Result<PolicyVerdict, crate::KernelError> {
+        if matches!(legacy_verdict, PolicyVerdict::Deny { .. }) {
+            return Ok(legacy_verdict);
+        }
+        if matches!(
+            legacy_verdict,
+            PolicyVerdict::RequireApproval { prompt: None, .. }
+        ) && self.policy.resolve_tool_state(tool_name) != ToolState::Ask
+        {
+            return Ok(legacy_verdict);
+        }
+        if legacy_verdict.is_allowed()
+            || matches!(
+                legacy_verdict,
+                PolicyVerdict::RequireApproval { prompt: None, .. }
+            )
+        {
+            let request_id = format!("{}:{tool_use_id}", self.agent_id.to_hex());
+            let remember_options = self.live_prompt_remember_options();
+            if let Some(verdict) = self.policy.live_tool_prompt_verdict(
+                tool_name,
+                args,
+                self.agent_id,
+                request_id,
+                self.config.tool_approval_prompter.is_some(),
+                remember_options,
+            ) {
+                return self.resolve_prompt_verdict(verdict).await;
+            }
+        }
+        Ok(legacy_verdict)
+    }
+
+    async fn resolve_prompt_verdict(
+        &self,
+        verdict: PolicyVerdict,
+    ) -> Result<PolicyVerdict, crate::KernelError> {
+        let PolicyVerdict::RequireApproval {
+            reason,
+            prompt: Some(prompt),
+        } = verdict
+        else {
+            return Ok(verdict);
+        };
+
+        let Some(prompter) = self.config.tool_approval_prompter.as_ref() else {
+            return Ok(PolicyVerdict::Deny { reason });
+        };
+
+        let response = prompter.prompt(prompt.clone()).await.map_err(|e| {
+            crate::KernelError::Internal(format!(
+                "tool approval prompt failed for '{}': {e}",
+                prompt.tool_name
+            ))
+        })?;
+
+        self.apply_live_approval_response(&prompt, response)?;
+
+        match response.decision {
+            ToolState::Allow => Ok(PolicyVerdict::Allow),
+            ToolState::Deny => Ok(PolicyVerdict::Deny {
+                reason: format!("Tool '{}' was denied by the user", prompt.tool_name),
+            }),
+            ToolState::Ask => Ok(PolicyVerdict::RequireApproval {
+                reason,
+                prompt: Some(prompt),
+            }),
+        }
+    }
+
+    fn apply_live_approval_response(
+        &self,
+        prompt: &PendingToolPrompt,
+        response: ToolApprovalResponse,
+    ) -> Result<(), crate::KernelError> {
+        match response.remember {
+            ToolApprovalRemember::Once => {}
+            ToolApprovalRemember::Session => self
+                .policy
+                .remember_tool_state_for_session(&prompt.tool_name, response.decision),
+            ToolApprovalRemember::Forever => {
+                let Some(user_id) = self.config.originating_user_id.as_deref() else {
+                    return Err(crate::KernelError::Internal(format!(
+                        "cannot remember tool '{}' forever without an originating user id",
+                        prompt.tool_name
+                    )));
+                };
+                let defaults = fold_tool_state_into_defaults(
+                    &self.config.policy.user_default,
+                    &prompt.tool_name,
+                    response.decision,
+                );
+                self.store
+                    .put_user_tool_defaults(user_id, &defaults)
+                    .map_err(|e| {
+                        crate::KernelError::Store(format!("put_user_tool_defaults: {e}"))
+                    })?;
+                self.policy
+                    .remember_tool_state_for_session(&prompt.tool_name, response.decision);
+            }
+        }
+        Ok(())
+    }
+
+    fn live_prompt_remember_options(&self) -> Vec<ToolApprovalRemember> {
+        let mut options = vec![ToolApprovalRemember::Once, ToolApprovalRemember::Session];
+        if self.config.originating_user_id.is_some() {
+            options.push(ToolApprovalRemember::Forever);
+        }
+        options
+    }
+}
+
+fn fold_tool_state_into_defaults(
+    defaults: &UserToolDefaults,
+    tool_name: &str,
+    state: ToolState,
+) -> UserToolDefaults {
+    let (mut per_tool, fallback): (BTreeMap<String, ToolState>, ToolState) = match &defaults.mode {
+        UserDefaultMode::FullAccess => (BTreeMap::new(), ToolState::Allow),
+        UserDefaultMode::AutoReview => (BTreeMap::new(), ToolState::Ask),
+        UserDefaultMode::DefaultPermissions { per_tool, fallback } => (per_tool.clone(), *fallback),
+    };
+    per_tool.insert(tool_name.to_string(), state);
+    UserToolDefaults::default_permissions(per_tool, fallback)
 }

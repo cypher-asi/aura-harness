@@ -73,7 +73,7 @@ mod tests {
     use super::*;
     use aura_core::{
         AgentStatus, Effect, EffectKind, EffectStatus, RuntimeCapabilityInstall, ToolDecision,
-        Transaction, TransactionType,
+        Transaction, TransactionType, UserToolDefaults,
     };
     use aura_store::{DequeueToken, StoreError};
     use bytes::Bytes;
@@ -163,6 +163,22 @@ mod tests {
         }
         fn get_inbox_depth(&self, _agent_id: AgentId) -> Result<u64, StoreError> {
             Ok(0)
+        }
+        fn get_user_tool_defaults(
+            &self,
+            _user_id: &str,
+        ) -> Result<Option<UserToolDefaults>, StoreError> {
+            Ok(None)
+        }
+        fn put_user_tool_defaults(
+            &self,
+            _user_id: &str,
+            _defaults: &UserToolDefaults,
+        ) -> Result<(), StoreError> {
+            Ok(())
+        }
+        fn delete_user_tool_defaults(&self, _user_id: &str) -> Result<(), StoreError> {
+            Ok(())
         }
     }
 

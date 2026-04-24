@@ -43,4 +43,8 @@ pub mod cf {
     pub const AGENT_SKILLS: &str = "agent_skills";
     /// Persisted runtime capability ledger per agent
     pub const RUNTIME_CAPABILITIES: &str = "runtime_capabilities";
+    /// Per-user tool-permission default policy (full_access /
+    /// auto_review / default_permissions). Keyed by `user_id` bytes;
+    /// value is a JSON-serialised [`aura_core::UserToolDefaults`].
+    pub const USER_TOOL_DEFAULTS: &str = "user_tool_defaults";
 }

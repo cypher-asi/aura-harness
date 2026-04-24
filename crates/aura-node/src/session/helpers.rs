@@ -269,6 +269,14 @@ pub(super) async fn build_kernel_with_config(
     // Permissions are mandatory on every session; wire them into the
     // kernel policy unconditionally so the Delegate gate enforces them.
     policy.agent_permissions = session.agent_permissions.clone();
+    if let Some(ref user_id) = session.user_id {
+        let user_default = ctx
+            .store
+            .get_user_tool_defaults(user_id)
+            .map_err(|e| aura_kernel::KernelError::Store(format!("get_user_tool_defaults: {e}")))?
+            .unwrap_or_default();
+        policy = policy.with_user_default(user_default);
+    }
 
     // Extend `allowed_tools` with every name the session's
     // `DomainToolExecutor` can handle (`create_spec`, `create_task`,
@@ -319,6 +327,11 @@ pub(super) async fn build_kernel_with_config(
         workspace_base: workspace,
         use_workspace_base_as_root,
         policy,
+        tool_approval_prompter: session
+            .tool_approval_broker
+            .clone()
+            .map(|broker| broker as Arc<dyn aura_kernel::ToolApprovalPrompter>),
+        originating_user_id: session.user_id.clone(),
         ..KernelConfig::default()
     };
 
@@ -703,6 +716,7 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
+            user_id: None,
             provider_config: Some(SessionProviderConfig {
                 provider: "anthropic".to_string(),
                 routing_mode: Some("proxy".to_string()),
@@ -746,6 +760,7 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
+            user_id: None,
             provider_config: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
@@ -793,6 +808,7 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
+            user_id: None,
             provider_config: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),

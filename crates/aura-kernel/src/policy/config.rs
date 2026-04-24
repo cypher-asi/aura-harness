@@ -4,8 +4,8 @@
 //! [`super::check`] can focus on the authorization pipeline itself.
 
 use aura_core::{
-    ActionKind, AgentPermissions, Capability, InstalledIntegrationDefinition,
-    InstalledToolIntegrationRequirement,
+    ActionKind, AgentPermissions, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
+    InstalledToolIntegrationRequirement, UserToolDefaults,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -83,6 +83,25 @@ pub struct PolicyConfig {
     /// Mapping from tool name to the [`Capability`] required to use it.
     /// Tools not listed here carry no capability requirement.
     pub tool_capability_requirements: HashMap<String, Capability>,
+    /// User-level tool permission defaults — the originating user's
+    /// "default permissions" / "auto-review" / "full access" mode. Every
+    /// `(agent, tool)` resolves through this plus the optional
+    /// [`Self::agent_override`] via
+    /// [`aura_core::resolve_effective_permission`]. Defaults to
+    /// [`UserToolDefaults::full_access`] to preserve "default ON" for
+    /// callers that do not load a persisted user profile.
+    ///
+    /// Currently parallel to the legacy `allowed_tools` /
+    /// `tool_permissions` / `allow_unlisted` fields; the legacy gate is
+    /// the enforcement path until the Phase-E teardown cutover, at
+    /// which point this becomes the sole tool-permission source.
+    pub user_default: UserToolDefaults,
+    /// Optional per-agent override map stamped on this agent's
+    /// [`aura_core::Identity`]. `None` (or an empty map) means
+    /// "inherit the user default verbatim". Populated entries override
+    /// only that specific tool; anything unlisted still flows through
+    /// [`Self::user_default`].
+    pub agent_override: Option<AgentToolPermissions>,
 }
 
 impl Default for PolicyConfig {
@@ -127,6 +146,8 @@ impl Default for PolicyConfig {
             allow_unlisted: false,
             agent_permissions: AgentPermissions::empty(),
             tool_capability_requirements: HashMap::new(),
+            user_default: UserToolDefaults::full_access(),
+            agent_override: None,
         }
     }
 }
@@ -234,6 +255,25 @@ impl PolicyConfig {
     #[must_use]
     pub fn with_tool_capability(mut self, tool: impl Into<String>, cap: Capability) -> Self {
         self.tool_capability_requirements.insert(tool.into(), cap);
+        self
+    }
+
+    /// Attach the originating user's tool-permission defaults. This is
+    /// the first half of the tri-state (`on`/`off`/`ask`) resolution
+    /// consulted by [`aura_core::resolve_effective_permission`].
+    #[must_use]
+    pub fn with_user_default(mut self, user_default: UserToolDefaults) -> Self {
+        self.user_default = user_default;
+        self
+    }
+
+    /// Attach the per-agent override map. `None` / empty map means
+    /// "inherit the user default verbatim". Populated entries override
+    /// only those specific tools; anything unlisted still flows through
+    /// [`Self::user_default`].
+    #[must_use]
+    pub fn with_agent_override(mut self, agent_override: Option<AgentToolPermissions>) -> Self {
+        self.agent_override = agent_override;
         self
     }
 }

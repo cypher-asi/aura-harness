@@ -13,6 +13,7 @@ mod reasoner_types;
 mod record;
 mod status;
 mod tool;
+mod tool_permissions;
 mod transaction;
 
 pub use action::{Action, ActionKind};
@@ -31,6 +32,10 @@ pub use tool::{
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution,
     RuntimeCapabilityInstall, ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolExecution,
     ToolProposal, ToolResult,
+};
+pub use tool_permissions::{
+    resolve_effective_permission, AgentToolPermissions, ToolState, UserDefaultMode,
+    UserToolDefaults,
 };
 pub use transaction::{SystemKind, Transaction, TransactionType};
 

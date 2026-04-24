@@ -27,7 +27,9 @@
 //! once the workspace has `trybuild` wired into CI.
 
 use crate::error::StoreError;
-use aura_core::{AgentId, AgentStatus, RecordEntry, RuntimeCapabilityInstall, Transaction};
+use aura_core::{
+    AgentId, AgentStatus, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults,
+};
 
 /// Opaque token produced by [`ReadStore::dequeue_tx`] and consumed exactly once
 /// by [`WriteStore::append_entry_atomic`] or [`WriteStore::append_entry_dequeued`].
@@ -145,6 +147,34 @@ pub trait ReadStore: Send + Sync {
     /// # Errors
     /// Returns error if the read fails.
     fn get_inbox_depth(&self, agent_id: AgentId) -> Result<u64, StoreError>;
+
+    /// Load the persisted [`UserToolDefaults`] for a user, if any.
+    ///
+    /// Returns `None` when no entry exists (first-run users); callers
+    /// substitute [`UserToolDefaults::default`] (`FullAccess`) in that
+    /// case so every agent the user owns defaults to "all tools on".
+    ///
+    /// # Errors
+    /// Returns error if the read or deserialisation fails.
+    fn get_user_tool_defaults(&self, user_id: &str)
+        -> Result<Option<UserToolDefaults>, StoreError>;
+
+    /// Replace the persisted [`UserToolDefaults`] for a user.
+    ///
+    /// # Errors
+    /// Returns error if the write fails.
+    fn put_user_tool_defaults(
+        &self,
+        user_id: &str,
+        defaults: &UserToolDefaults,
+    ) -> Result<(), StoreError>;
+
+    /// Delete the persisted [`UserToolDefaults`] for a user. After
+    /// deletion, reads fall back to [`UserToolDefaults::default`].
+    ///
+    /// # Errors
+    /// Returns error if the write fails.
+    fn delete_user_tool_defaults(&self, user_id: &str) -> Result<(), StoreError>;
 }
 
 /// Sealed record-append family (Invariant §10).

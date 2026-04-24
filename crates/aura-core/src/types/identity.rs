@@ -2,6 +2,7 @@
 
 use crate::ids::AgentId;
 use crate::permissions::AgentPermissions;
+use crate::types::tool_permissions::AgentToolPermissions;
 use serde::{Deserialize, Serialize};
 
 /// Agent identity information.
@@ -22,6 +23,15 @@ pub struct Identity {
     /// no grants, or [`AgentPermissions::ceo_preset`] for the bootstrap
     /// super-agent (universe scope + all capabilities).
     pub permissions: AgentPermissions,
+    /// Optional per-tool permission override. `None` (or an empty map)
+    /// means "inherit the originating user's default" — see
+    /// [`crate::resolve_effective_permission`]. Populated entries override
+    /// only that specific tool; anything unlisted still flows through the
+    /// user default. Serde-default + skip_serializing_if so legacy
+    /// identities without this field deserialize unchanged and untouched
+    /// identities don't gain a new wire footprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_permissions: Option<AgentToolPermissions>,
 }
 
 impl Identity {
@@ -41,6 +51,7 @@ impl Identity {
             name,
             identity_hash,
             permissions: AgentPermissions::empty(),
+            tool_permissions: None,
         }
     }
 
@@ -48,6 +59,15 @@ impl Identity {
     #[must_use]
     pub fn with_permissions(mut self, permissions: AgentPermissions) -> Self {
         self.permissions = permissions;
+        self
+    }
+
+    /// Replace this identity's per-agent tool permission override. Pass
+    /// `None` (or an empty [`AgentToolPermissions`]) to fall back to the
+    /// user default for every tool.
+    #[must_use]
+    pub fn with_tool_permissions(mut self, tool_permissions: Option<AgentToolPermissions>) -> Self {
+        self.tool_permissions = tool_permissions;
         self
     }
 }

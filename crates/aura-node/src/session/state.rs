@@ -8,6 +8,7 @@
 //! tiny (declarations + `WsContext` + re-exports).
 
 use crate::protocol::{self, SessionInit};
+use crate::session::ToolApprovalBroker;
 use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
 use aura_core::{
     AgentId, AgentPermissions, AgentScope, Capability, InstalledIntegrationDefinition,
@@ -109,6 +110,10 @@ pub struct Session {
     /// the kernel [`aura_kernel::PolicyConfig`] on kernel construction;
     /// enforcement is unconditional.
     pub(crate) agent_permissions: AgentPermissions,
+    /// Originating user id for tool-default resolution and forever approvals.
+    pub(crate) user_id: Option<String>,
+    /// Live approval broker attached to this WebSocket connection.
+    pub(crate) tool_approval_broker: Option<Arc<ToolApprovalBroker>>,
 }
 
 impl Session {
@@ -148,6 +153,8 @@ impl Session {
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
             agent_permissions: AgentPermissions::empty(),
+            user_id: None,
+            tool_approval_broker: None,
         }
     }
 
@@ -230,6 +237,7 @@ impl Session {
                 AgentId::new(*hash.as_bytes())
             });
         }
+        self.user_id = init.user_id;
         if let Some(pid) = init.project_id {
             self.project_id = Some(pid);
         }

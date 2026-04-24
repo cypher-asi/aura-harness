@@ -40,7 +40,7 @@ use crate::error::StoreError;
 use crate::keys::{AgentMetaKey, InboxKey, KeyCodec, RecordKey};
 use crate::store::ReadStore;
 use aura_core::AgentStatus;
-use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, Transaction};
+use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults};
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,
     Options, WriteBatch, WriteOptions,
@@ -79,6 +79,7 @@ impl RocksStore {
             cf::MEMORY_EVENT_INDEX,
             cf::AGENT_SKILLS,
             cf::RUNTIME_CAPABILITIES,
+            cf::USER_TOOL_DEFAULTS,
         ];
         let cf_descriptors: Vec<_> = cf_names
             .iter()
@@ -438,6 +439,43 @@ impl ReadStore for RocksStore {
         let head = self.read_meta_u64(&AgentMetaKey::inbox_head(agent_id))?;
         let tail = self.read_meta_u64(&AgentMetaKey::inbox_tail(agent_id))?;
         Ok(tail.saturating_sub(head))
+    }
+
+    #[instrument(skip(self), fields(user_id = %user_id))]
+    fn get_user_tool_defaults(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<UserToolDefaults>, StoreError> {
+        let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
+        match self.db.get_cf(&cf, user_id.as_bytes())? {
+            Some(bytes) => {
+                let defaults = serde_json::from_slice::<UserToolDefaults>(&bytes)
+                    .map_err(|e| StoreError::Deserialization(e.to_string()))?;
+                Ok(Some(defaults))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[instrument(skip(self, defaults), fields(user_id = %user_id))]
+    fn put_user_tool_defaults(
+        &self,
+        user_id: &str,
+        defaults: &UserToolDefaults,
+    ) -> Result<(), StoreError> {
+        let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
+        let bytes = serde_json::to_vec(defaults)?;
+        self.db
+            .put_cf_opt(&cf, user_id.as_bytes(), bytes, &self.write_opts())?;
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(user_id = %user_id))]
+    fn delete_user_tool_defaults(&self, user_id: &str) -> Result<(), StoreError> {
+        let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
+        self.db
+            .delete_cf_opt(&cf, user_id.as_bytes(), &self.write_opts())?;
+        Ok(())
     }
 }
 

@@ -2,7 +2,7 @@
 
 use super::generation::{self, GenerationTurn};
 use super::helpers;
-use super::{Session, WsContext};
+use super::{Session, ToolApprovalBroker, WsContext};
 use crate::protocol::{
     AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
@@ -13,6 +13,7 @@ use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
 use aura_tools::catalog::ToolProfile;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -93,6 +94,7 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     let mut session = Session::new(ctx.workspace_base.clone());
     session.auth_token = ctx.auth_token.clone();
     session.project_base = ctx.project_base.clone();
+    session.tool_approval_broker = Some(Arc::new(ToolApprovalBroker::new(outbound_tx.clone())));
     info!(session_id = %session.session_id, "WebSocket connection opened");
 
     let mut active_turn: Option<ActiveTurn> = None;
@@ -195,6 +197,17 @@ fn handle_msg_during_turn(
             info!(session_id = %session.session_id, "Cancelling active turn");
             cancel_token.cancel();
         }
+        Ok(InboundMessage::ToolApprovalResponse(resp)) => {
+            if let Some(ref broker) = session.tool_approval_broker {
+                if let Err(e) = broker.respond(resp) {
+                    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                        code: "approval_response_error".into(),
+                        message: e,
+                        recoverable: true,
+                    }));
+                }
+            }
+        }
         Ok(_) => {
             let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
                 code: "turn_in_progress".into(),
@@ -276,6 +289,18 @@ async fn dispatch_idle_message(
                 approved = resp.approved,
                 "Approval response received (not yet implemented)"
             );
+            IdleAction::Continue
+        }
+        Ok(InboundMessage::ToolApprovalResponse(resp)) => {
+            if let Some(ref broker) = session.tool_approval_broker {
+                if let Err(e) = broker.respond(resp) {
+                    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                        code: "approval_response_error".into(),
+                        message: e,
+                        recoverable: true,
+                    }));
+                }
+            }
             IdleAction::Continue
         }
         Err(e) => {
