@@ -50,7 +50,14 @@ pub const THINKING_TAPER_AFTER: usize = 2;
 pub const THINKING_TAPER_FACTOR: f64 = 0.6;
 
 /// Minimum thinking budget after tapering.
-pub const THINKING_MIN_BUDGET: u32 = 1024;
+///
+/// Floor raised from 1024 to 6144 after harness runs showed the model
+/// hitting `max_tokens` mid-`edit_file` — the partial tool_use JSON
+/// recovered by `aura_reasoner::types::streaming` clocked in at
+/// ~2.5 KB (~1000 tokens), plus preceding thinking/text, which the
+/// previous 1024 floor could not fit. 6144 leaves room for one
+/// full-size tool-call JSON plus a small amount of reasoning.
+pub const THINKING_MIN_BUDGET: u32 = 6144;
 
 /// Maximum full reads of the same file before blocking.
 pub const MAX_READS_PER_FILE: usize = 3;

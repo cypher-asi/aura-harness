@@ -20,7 +20,11 @@ impl ToolResolver {
     /// 2. Domain executor when attached (pure HTTP — no sandbox needed).
     /// 3. Delegate to the inner [`ToolExecutor`](crate::ToolExecutor) for
     ///    built-in tools.
-    #[tracing::instrument(skip(self, ctx), fields(tool = %tool_call.tool))]
+    // `tool_call` is in the skip list so credential-bearing `args`
+    // (e.g. `jwt` on `git_commit_push`) never land in tracing spans.
+    // The tool name is surfaced via `fields(tool = ...)`; `ToolCall`
+    // also has a redacting `Debug` impl as defense in depth.
+    #[tracing::instrument(skip(self, ctx, tool_call), fields(tool = %tool_call.tool))]
     pub(super) async fn execute_tool(
         &self,
         ctx: &ExecuteContext,

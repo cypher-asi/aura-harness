@@ -28,8 +28,10 @@ use crate::schedule::Schedule;
 
 mod finish;
 mod run;
+mod safe_transition;
 mod tick;
 
+pub(crate) use safe_transition::safe_transition;
 pub(crate) use tick::commit_and_push;
 
 /// Reason string attached to `AutomatonEvent::CommitSkipped` when

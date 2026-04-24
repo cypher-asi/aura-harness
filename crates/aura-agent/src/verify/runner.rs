@@ -231,11 +231,22 @@ fn log_build_result(result: &BuildResult, build_command: &str) {
     if result.success {
         info!(command = %build_command, "build verification passed");
     } else {
-        warn!(
+        // Logged at `info!` rather than `warn!` because a failed build
+        // here is *not* a regression on its own — the build-baseline
+        // machinery in `agent_loop::tool_processing::run_auto_build`
+        // and `BuildBaseline::annotate` is what decides whether this
+        // failure represents *new* errors versus matching the
+        // pre-existing baseline. That layer surfaces real regressions
+        // at `warn` level; the runner itself should stay quiet so
+        // workspaces with a known-dirty baseline don't spam a `WARN`
+        // after every write-tool invocation (observed in harness runs
+        // as identical `stderr_len=10212` lines on every tool call).
+        info!(
             command = %build_command,
             exit_code = ?result.exit_code,
             stderr_len = result.stderr.len(),
-            "build verification failed"
+            "build verification returned non-zero \
+             (baseline comparison done by agent_loop::run_auto_build)"
         );
     }
 }

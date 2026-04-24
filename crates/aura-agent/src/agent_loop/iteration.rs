@@ -242,32 +242,20 @@ pub(super) fn handle_max_tokens(
         "MaxTokens with pending tool_use blocks — injecting error results"
     );
 
+    // Signal to `LoopState::begin_iteration` that the next iteration
+    // must NOT taper `thinking_budget` — the model is about to retry
+    // the dropped tool call(s) and needs the full budget to fit the
+    // JSON that just got cut off. Without this reset, a task that
+    // hits `max_tokens` mid-edit on iteration N+1 would retry on
+    // iteration N+2 with an already-tapered budget and truncate
+    // again, producing the observed loop of repeated
+    // `MaxTokens with pending tool_use blocks` warnings.
+    state.restore_budget_next_iteration = true;
+
     let results: Vec<(String, ToolResultContent, bool)> = pending_tools
         .iter()
         .map(|pt| {
-            let text = if pt.name == "write_file" {
-                match pt.path.as_deref() {
-                    Some(path) => format!(
-                        "Error: Response was truncated (max_tokens) mid-`write_file`. \
-                         Target path: `{path}`. Partial content (if any) is NOT on disk. \
-                         Next turn: call `edit_file` on `{path}` with `append_after_eof` to add \
-                         remaining content incrementally, or call `write_file` with only the \
-                         skeleton (module-doc + imports + one stub) and switch to `edit_file` \
-                         appends for the rest."
-                    ),
-                    None => "Error: Response was truncated (max_tokens) mid-`write_file` \
-                         (no target path recovered). Next turn: retry with the skeleton \
-                         (module-doc + imports + one stub) and use `edit_file` \
-                         `append_after_eof` for the rest."
-                        .to_string(),
-                }
-            } else {
-                format!(
-                    "Error: Response was truncated (max_tokens). Tool '{}' was not executed. \
-                     Please try again with a simpler approach or break the task into smaller steps.",
-                    pt.name
-                )
-            };
+            let text = synthetic_truncation_message(pt);
             (pt.id.clone(), ToolResultContent::text(text), true)
         })
         .collect();
@@ -281,6 +269,49 @@ pub(super) fn handle_max_tokens(
     }
 
     true
+}
+
+/// Build the synthetic `tool_result` body injected when a tool call is
+/// recovered from a `max_tokens`-truncated stream. Kept as a free
+/// function so tests can pin the exact wording the model sees, and so
+/// the per-tool branches stay readable.
+fn synthetic_truncation_message(pt: &PendingTool) -> String {
+    match pt.name.as_str() {
+        "write_file" => match pt.path.as_deref() {
+            Some(path) => format!(
+                "Error: Response was truncated (max_tokens) mid-`write_file`. \
+                 Target path: `{path}`. Partial content (if any) is NOT on disk. \
+                 Next turn: call `edit_file` on `{path}` with `append_after_eof` to add \
+                 remaining content incrementally, or call `write_file` with only the \
+                 skeleton (module-doc + imports + one stub) and switch to `edit_file` \
+                 appends for the rest."
+            ),
+            None => "Error: Response was truncated (max_tokens) mid-`write_file` \
+                 (no target path recovered). Next turn: retry with the skeleton \
+                 (module-doc + imports + one stub) and use `edit_file` \
+                 `append_after_eof` for the rest."
+                .to_string(),
+        },
+        "edit_file" => match pt.path.as_deref() {
+            Some(path) => format!(
+                "Error: Response was truncated (max_tokens) mid-`edit_file`. \
+                 Target path: `{path}`. No changes were applied on disk. \
+                 Next turn: split the edit into TWO smaller `edit_file` calls \
+                 (e.g. change one function or block at a time) rather than one \
+                 large diff. Your next `max_tokens` budget is restored to full \
+                 for the retry, but each individual tool call should fit in a \
+                 few hundred lines of diff."
+            ),
+            None => "Error: Response was truncated (max_tokens) mid-`edit_file` \
+                 (no target path recovered). Next turn: retry with a smaller, \
+                 targeted edit scoped to a single function or block."
+                .to_string(),
+        },
+        other => format!(
+            "Error: Response was truncated (max_tokens). Tool '{other}' was not executed. \
+             Please try again with a simpler approach or break the task into smaller steps."
+        ),
+    }
 }
 
 /// Subset of a pending `tool_use` block used to shape the synthetic
@@ -543,6 +574,96 @@ mod max_tokens_tests {
             "non-write tools should not get the append_after_eof hint"
         );
         assert!(texts[0].contains("truncated"));
+    }
+
+    #[test]
+    fn handle_max_tokens_for_edit_file_suggests_splitting_the_edit() {
+        // Regression: previously `edit_file` fell through to the
+        // generic branch ("try a simpler approach"), which gave the
+        // model no concrete recovery path. The harness logs showed
+        // repeated `edit_file` truncations as a result. The hint
+        // must name `edit_file` explicitly and steer toward splitting.
+        let config = AgentLoopConfig::default();
+        let response = tool_use_response("edit_file", Some("crates/foo/src/lib.rs"));
+        let mut state = seed_state_with(&config, &response);
+
+        assert!(handle_max_tokens(&config, &response, &mut state));
+        let texts = find_tool_result_text(&state);
+        assert_eq!(texts.len(), 1);
+        let text = &texts[0];
+        assert!(
+            text.contains("crates/foo/src/lib.rs"),
+            "path must appear in edit_file recovery hint: {text}"
+        );
+        assert!(
+            text.to_ascii_lowercase().contains("split")
+                || text.to_ascii_lowercase().contains("smaller"),
+            "edit_file hint should steer toward splitting the edit: {text}"
+        );
+    }
+
+    #[test]
+    fn handle_max_tokens_sets_budget_restore_flag() {
+        // The flag is the contract between `handle_max_tokens` and
+        // `LoopState::begin_iteration`: truncation implies "next turn
+        // needs full budget". Without this, a tapered budget carries
+        // into the retry and the model hits `max_tokens` again.
+        let config = AgentLoopConfig::default();
+        let response = tool_use_response("edit_file", Some("src/x.rs"));
+        let mut state = seed_state_with(&config, &response);
+        assert!(!state.restore_budget_next_iteration, "precondition");
+
+        assert!(handle_max_tokens(&config, &response, &mut state));
+        assert!(
+            state.restore_budget_next_iteration,
+            "handle_max_tokens must arm the budget-restore flag"
+        );
+    }
+
+    #[test]
+    fn begin_iteration_restores_budget_and_clears_flag() {
+        // Given a tapered budget and the restore flag set,
+        // begin_iteration must lift the budget back to `max_tokens`
+        // and clear the flag so the *next* iteration can taper again.
+        let config = AgentLoopConfig::default();
+        let mut state = LoopState::new(&config, vec![Message::user("go")]);
+        state.thinking_budget = 512;
+        state.restore_budget_next_iteration = true;
+
+        // Iteration number is irrelevant for the restore path — the
+        // flag short-circuits before the taper branch.
+        state.begin_iteration(&config, 99);
+
+        assert_eq!(
+            state.thinking_budget, config.max_tokens,
+            "budget must be restored to max_tokens after truncation"
+        );
+        assert!(
+            !state.restore_budget_next_iteration,
+            "flag must be cleared after a single restore"
+        );
+    }
+
+    #[test]
+    fn begin_iteration_respects_min_budget_floor() {
+        // Even after a long run with aggressive tapering, the budget
+        // must never fall below `thinking_min_budget`. The floor is
+        // what keeps a multi-KB tool-call JSON serializable.
+        let config = AgentLoopConfig {
+            thinking_taper_after: 0,
+            thinking_taper_factor: 0.1,
+            ..AgentLoopConfig::default()
+        };
+        let mut state = LoopState::new(&config, vec![Message::user("go")]);
+
+        for i in 0..50 {
+            state.begin_iteration(&config, i);
+            assert!(
+                state.thinking_budget >= config.thinking_min_budget,
+                "budget dropped below floor at iteration {i}: {}",
+                state.thinking_budget
+            );
+        }
     }
 }
 

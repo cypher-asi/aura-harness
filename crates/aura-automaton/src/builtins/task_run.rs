@@ -15,7 +15,7 @@ use aura_reasoner::ModelProvider;
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::DomainApi;
 
-use super::dev_loop::{commit_and_push, validate_execution, TaskAggregate};
+use super::dev_loop::{commit_and_push, safe_transition, validate_execution, TaskAggregate};
 use super::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
@@ -200,13 +200,12 @@ impl TaskRunAutomaton {
     }
 
     async fn transition_to_in_progress(&self, task: &aura_tools::domain_tools::TaskDescriptor) {
-        if task.status == "pending" {
-            let _ = self.domain.transition_task(&task.id, "ready", None).await;
-        }
-        if let Err(e) = self
-            .domain
-            .transition_task(&task.id, "in_progress", None)
-            .await
+        // `safe_transition` bridges `pending → ready → in_progress` and
+        // `failed → ready → in_progress` (for retries), and skips the
+        // transition entirely if the task is already `in_progress` so
+        // we don't re-emit the `in_progress → in_progress` WARN.
+        if let Err(e) =
+            safe_transition(self.domain.as_ref(), &task.id, "in_progress").await
         {
             warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
         }
@@ -331,8 +330,10 @@ impl TaskRunAutomaton {
     ) -> Result<TickOutcome, AutomatonError> {
         match result {
             Ok(exec) => {
-                self.domain
-                    .transition_task(task_id, "done", None)
+                // `safe_transition` makes the `→ done` call idempotent
+                // when the agent's `task_done` tool has already moved
+                // the task server-side, matching the dev_loop path.
+                safe_transition(self.domain.as_ref(), task_id, "done")
                     .await
                     .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
@@ -358,7 +359,7 @@ impl TaskRunAutomaton {
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");
 
-                if let Err(e) = self.domain.transition_task(task_id, "failed", None).await {
+                if let Err(e) = safe_transition(self.domain.as_ref(), task_id, "failed").await {
                     warn!(task_id, error = %e, "failed to transition task to failed status");
                 }
 

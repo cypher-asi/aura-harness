@@ -76,7 +76,10 @@ fn test_agent_loop_config_defaults() {
     assert_eq!(config.auto_build_cooldown, 2);
     assert_eq!(config.thinking_taper_after, 2);
     assert!((config.thinking_taper_factor - 0.6).abs() < f64::EPSILON);
-    assert_eq!(config.thinking_min_budget, 1024);
+    // Floor raised from 1024 → 6144 to fit a full-size tool-call JSON
+    // (harness observed `edit_file` truncations at ~2.5 KB / ~1000
+    // tokens plus preceding reasoning). See `constants::THINKING_MIN_BUDGET`.
+    assert_eq!(config.thinking_min_budget, 6144);
 }
 
 #[tokio::test]

@@ -488,6 +488,15 @@ pub struct LoopState {
     /// `tool_use` block. Initialized to `true` so the first turn starts
     /// with a budget-clean state.
     pub(crate) last_turn_had_tool_call: bool,
+    /// Set by [`super::iteration::handle_max_tokens`] when the previous
+    /// turn ended with pending tool_use blocks truncated by
+    /// `max_tokens`. The next [`LoopState::begin_iteration`] observes
+    /// this flag and restores `thinking_budget` to `config.max_tokens`
+    /// (skipping the taper for that one iteration) so the retry has
+    /// the full budget it needs to re-emit the dropped tool call.
+    /// Cleared immediately after the restore so subsequent iterations
+    /// resume normal tapering.
+    pub(crate) restore_budget_next_iteration: bool,
 }
 
 impl LoopState {
@@ -513,6 +522,7 @@ impl LoopState {
             consecutive_empty_path_block_iterations: 0,
             consecutive_narration_tokens: 0,
             last_turn_had_tool_call: true,
+            restore_budget_next_iteration: false,
         }
     }
 
@@ -524,6 +534,20 @@ impl LoopState {
     fn begin_iteration(&mut self, config: &AgentLoopConfig, iteration: usize) {
         self.build_cooldown = self.build_cooldown.saturating_sub(1);
         self.blocking_ctx.decrement_cooldowns();
+
+        // If the previous iteration ended with a `MaxTokens` truncation
+        // mid-`tool_use`, restore the budget to the configured maximum
+        // and skip the taper this turn. The model is about to retry
+        // the dropped tool call and needs the full budget to fit the
+        // JSON that previously got cut off. Tapering resumes on the
+        // iteration after (the flag is cleared here so it fires at
+        // most once per truncation).
+        if self.restore_budget_next_iteration {
+            self.thinking_budget = config.max_tokens;
+            self.restore_budget_next_iteration = false;
+            return;
+        }
+
         if iteration >= config.thinking_taper_after {
             self.thinking_budget =
                 (f64::from(self.thinking_budget) * config.thinking_taper_factor) as u32;

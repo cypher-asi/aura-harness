@@ -1,3 +1,4 @@
+use super::safe_transition::safe_transition;
 use super::{
     info, topological_sort, warn, Automaton, AutomatonError, AutomatonEvent, DevLoopAutomaton,
     DevLoopConfig, DomainApi, HashMap, HashSet, Schedule, TaskAggregate, TaskDescriptor,
@@ -183,7 +184,11 @@ impl DevLoopAutomaton {
         task: &TaskDescriptor,
         exec: TaskExecutionResult,
     ) {
-        if let Err(e) = self.domain.transition_task(&task.id, "done", None).await {
+        // `safe_transition` guards against the `done → done` rejection
+        // observed in production: the agent's `task_done` tool moves the
+        // task to `done` server-side first, and this post-execution
+        // sync previously surfaced the redundant POST as a WARN.
+        if let Err(e) = safe_transition(self.domain.as_ref(), &task.id, "done").await {
             warn!(task_id = %task.id, error = %e, "Failed to sync task done status to backend");
         }
 
@@ -230,7 +235,11 @@ impl DevLoopAutomaton {
     ) {
         warn!(task_id = %task.id, error = %e, "Task execution failed");
 
-        if let Err(te) = self.domain.transition_task(&task.id, "failed", None).await {
+        // `safe_transition` bridges `ready → in_progress → failed` when
+        // the task is still in `ready` (storage rejects the direct
+        // `ready → failed` jump; see the note in
+        // `aura-os-server/src/handlers/dev_loop.rs`).
+        if let Err(te) = safe_transition(self.domain.as_ref(), &task.id, "failed").await {
             warn!(task_id = %task.id, error = %te, "Failed to sync task failed status to backend");
         }
 
@@ -266,12 +275,12 @@ fn deps_satisfied(task: &TaskDescriptor, done_set: &HashSet<&str>) -> bool {
 }
 
 async fn transition_to_in_progress(domain: &dyn DomainApi, task: &TaskDescriptor) {
-    if task.status == "pending" {
-        if let Err(e) = domain.transition_task(&task.id, "ready", None).await {
-            warn!(task_id = %task.id, error = %e, "Failed to transition task to ready");
-        }
-    }
-    if let Err(e) = domain.transition_task(&task.id, "in_progress", None).await {
+    // Delegate to `safe_transition` so the `failed → ready →
+    // in_progress` bridge (used when re-running a previously-failed
+    // task) is applied consistently with the success / failure paths.
+    // `safe_transition` also skips the `pending → ready` leg when the
+    // task is already ready or in_progress, avoiding stray WARNs.
+    if let Err(e) = safe_transition(domain, &task.id, "in_progress").await {
         warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
     }
 }

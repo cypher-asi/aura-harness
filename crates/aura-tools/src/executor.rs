@@ -140,7 +140,12 @@ impl ToolExecutor {
     }
 
     /// Execute a tool call with permission checks and sandbox enforcement.
-    #[instrument(skip(self, ctx), fields(tool = %tool_call.tool))]
+    //
+    // `tool_call` is in the skip list to keep credential-bearing `args`
+    // (`jwt`, bearer tokens, etc.) out of span fields. The tool name
+    // is surfaced separately via the `fields(tool = ...)` attribute.
+    // `ToolCall` also has a redacting `Debug` impl as defense in depth.
+    #[instrument(skip(self, ctx, tool_call), fields(tool = %tool_call.tool))]
     pub async fn execute_tool(
         &self,
         ctx: &ExecuteContext,
