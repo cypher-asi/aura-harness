@@ -60,6 +60,16 @@ pub struct NodeConfig {
     pub enable_cmd_tools: bool,
     /// Allowed commands (if cmd tools enabled)
     pub allowed_commands: Vec<String>,
+    /// Allow `run_command` to spawn interpreted shell script invocations
+    /// (`sh`/`bash`/`pwsh`/`cmd`). Independent from [`Self::enable_cmd_tools`]:
+    /// the executor-layer [`aura_tools::ToolConfig::allow_shell`] gate only
+    /// fires once commands are enabled, and defaults closed so a caller
+    /// who flipped `enable_cmd_tools` on without asking for shell does
+    /// not accidentally unlock the historic injection surface.
+    ///
+    /// Flipped on by `AURA_ALLOW_SHELL=1` and by the
+    /// `AURA_AUTONOMOUS_DEV_LOOP=1` short-circuit in [`Self::from_env`].
+    pub allow_shell: bool,
     /// Orbit service URL
     pub orbit_url: String,
     /// Aura Storage service URL
@@ -117,6 +127,7 @@ impl std::fmt::Debug for NodeConfig {
             .field("enable_fs_tools", &self.enable_fs_tools)
             .field("enable_cmd_tools", &self.enable_cmd_tools)
             .field("allowed_commands", &self.allowed_commands)
+            .field("allow_shell", &self.allow_shell)
             .field("orbit_url", &self.orbit_url)
             .field("aura_storage_url", &self.aura_storage_url)
             .field("aura_network_url", &self.aura_network_url)
@@ -138,6 +149,7 @@ impl Default for NodeConfig {
             enable_fs_tools: true,
             enable_cmd_tools: false,
             allowed_commands: vec![],
+            allow_shell: false,
             orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
@@ -146,6 +158,22 @@ impl Default for NodeConfig {
             strict_mode: false,
         }
     }
+}
+
+/// Parse a boolean-ish environment variable.
+///
+/// Accepts `1`, `true`, `yes`, `on` (case-insensitive). Anything else
+/// — including an unset var — is treated as `false`. Matches the
+/// semantics of `aura_agent::session_bootstrap::env_bool` so the two
+/// env contracts cannot drift.
+fn env_bool(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|v| {
+        let v = v.trim();
+        v.eq_ignore_ascii_case("1")
+            || v.eq_ignore_ascii_case("true")
+            || v.eq_ignore_ascii_case("yes")
+            || v.eq_ignore_ascii_case("on")
+    })
 }
 
 fn default_data_dir() -> PathBuf {
@@ -212,6 +240,48 @@ impl NodeConfig {
             let v = val.trim();
             config.strict_mode = v == "1" || v.eq_ignore_ascii_case("true");
         }
+
+        // Autonomous-mode + per-knob permissive envs (Wave-5 alignment
+        // with `aura_agent::session_bootstrap::tool_config_from_env`).
+        //
+        // The desktop-spawned sidecar sets `AURA_AUTONOMOUS_DEV_LOOP=1`
+        // (plus `AURA_ALLOW_RUN_COMMAND=1` / `AURA_ALLOW_SHELL=1` as
+        // belt-and-braces). Before this block those envs were read
+        // nowhere in `aura-node`, so the sidecar ran with the
+        // fail-closed default `enable_cmd_tools=false` and every
+        // `cargo check`/`test`/`fmt`/`clippy` invocation was denied
+        // by the executor's category gate — which is what caused the
+        // "3.0-class" DoD failures even after the TUI-side commits.
+        //
+        // Precedence inside this block mirrors the TUI helper: the
+        // autonomous short-circuit wins over the individual knobs. The
+        // legacy `ENABLE_CMD_TOOLS` / `ALLOWED_COMMANDS` envs above
+        // still take effect in non-autonomous deployments; they just
+        // cannot *tighten* an autonomous preset.
+        if env_bool("AURA_AUTONOMOUS_DEV_LOOP") {
+            config.enable_fs_tools = true;
+            config.enable_cmd_tools = true;
+            config.allowed_commands = vec![];
+            config.allow_shell = true;
+        } else {
+            if env_bool("AURA_ALLOW_RUN_COMMAND") {
+                config.enable_cmd_tools = true;
+            }
+            if let Ok(val) = std::env::var("AURA_ALLOWED_COMMANDS") {
+                let parsed: Vec<String> = val
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !parsed.is_empty() {
+                    config.allowed_commands = parsed;
+                }
+            }
+            if env_bool("AURA_ALLOW_SHELL") {
+                config.allow_shell = true;
+            }
+        }
+
         config
     }
 

@@ -19,6 +19,10 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_NETWORK_URL");
     std::env::remove_var("AURA_PROJECT_BASE");
     std::env::remove_var("AURA_NODE_AUTH_TOKEN");
+    std::env::remove_var("AURA_AUTONOMOUS_DEV_LOOP");
+    std::env::remove_var("AURA_ALLOW_RUN_COMMAND");
+    std::env::remove_var("AURA_ALLOWED_COMMANDS");
+    std::env::remove_var("AURA_ALLOW_SHELL");
 }
 
 #[test]
@@ -33,6 +37,7 @@ fn test_default_config() {
     assert!(config.enable_fs_tools);
     assert!(!config.enable_cmd_tools);
     assert!(config.allowed_commands.is_empty());
+    assert!(!config.allow_shell);
     assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
     assert_eq!(config.aura_storage_url, "https://aura-storage.onrender.com");
     assert_eq!(config.aura_network_url, "https://aura-network.onrender.com");
@@ -293,6 +298,127 @@ fn test_resolve_project_path_without_base() {
         config.resolve_project_path(incoming),
         PathBuf::from("/state/workspaces/my-app")
     );
+}
+
+/// Regression test for the "3.0-class" run_command failure: when the
+/// desktop spawns the bundled sidecar with `AURA_AUTONOMOUS_DEV_LOOP=1`
+/// (per `apps/aura-os-desktop/src/main.rs` L686–691), `aura-node` must
+/// boot fully permissive. Before this was wired, `NodeConfig::from_env`
+/// ignored the env and every `cargo check`/`test`/`fmt`/`clippy`
+/// invocation was denied at the category gate.
+#[test]
+fn test_autonomous_dev_loop_env_enables_commands_and_shell() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", "1");
+    let config = NodeConfig::from_env();
+    assert!(config.enable_fs_tools, "fs tools must be enabled in autonomous mode");
+    assert!(
+        config.enable_cmd_tools,
+        "cmd tools must be enabled in autonomous mode"
+    );
+    assert!(
+        config.allowed_commands.is_empty(),
+        "empty allowlist = all commands allowed in autonomous mode"
+    );
+    assert!(
+        config.allow_shell,
+        "shell fan-out must be enabled in autonomous mode"
+    );
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_autonomous_dev_loop_accepts_truthy_variants() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    for truthy in ["1", "true", "TRUE", "Yes", "on"] {
+        clear_node_env_vars();
+        std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", truthy);
+        let config = NodeConfig::from_env();
+        assert!(
+            config.enable_cmd_tools,
+            "AURA_AUTONOMOUS_DEV_LOOP={truthy} must enable commands"
+        );
+        assert!(
+            config.allow_shell,
+            "AURA_AUTONOMOUS_DEV_LOOP={truthy} must enable shell"
+        );
+    }
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_autonomous_mode_short_circuits_over_explicit_allowlist() {
+    // Autonomous preset is "fully permissive" — an operator who also
+    // sets AURA_ALLOWED_COMMANDS must not end up *more* restricted than
+    // they would be in the pure-autonomous path. The preset wins.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", "1");
+    std::env::set_var("AURA_ALLOWED_COMMANDS", "cargo,git");
+    let config = NodeConfig::from_env();
+    assert!(config.enable_cmd_tools);
+    assert!(
+        config.allowed_commands.is_empty(),
+        "autonomous preset must clear any explicit allowlist"
+    );
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_allow_run_command_env_flips_enable_cmd_tools() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_ALLOW_RUN_COMMAND", "1");
+    let config = NodeConfig::from_env();
+    assert!(config.enable_cmd_tools);
+    assert!(
+        !config.allow_shell,
+        "AURA_ALLOW_RUN_COMMAND alone must not enable shell"
+    );
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_allow_run_command_plus_allowed_commands_and_shell() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_ALLOW_RUN_COMMAND", "1");
+    std::env::set_var("AURA_ALLOWED_COMMANDS", "cargo, git ,ls");
+    std::env::set_var("AURA_ALLOW_SHELL", "1");
+    let config = NodeConfig::from_env();
+    assert!(config.enable_cmd_tools);
+    assert_eq!(config.allowed_commands, vec!["cargo", "git", "ls"]);
+    assert!(config.allow_shell);
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_allow_run_command_does_not_override_legacy_enable_cmd_tools_on() {
+    // `ENABLE_CMD_TOOLS=true` already turns on commands via the legacy
+    // path; the new envs should not disturb that when autonomous mode
+    // is off.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    std::env::set_var("ENABLE_CMD_TOOLS", "true");
+    std::env::set_var("ALLOWED_COMMANDS", "cargo");
+    let config = NodeConfig::from_env();
+    assert!(config.enable_cmd_tools);
+    assert_eq!(config.allowed_commands, vec!["cargo"]);
+    assert!(!config.allow_shell);
+
+    clear_node_env_vars();
 }
 
 #[test]

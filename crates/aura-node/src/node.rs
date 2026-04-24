@@ -87,8 +87,20 @@ impl Node {
             enable_fs: self.config.enable_fs_tools,
             enable_commands: self.config.enable_cmd_tools,
             command_allowlist: self.config.allowed_commands.clone(),
+            allow_shell: self.config.allow_shell,
             ..Default::default()
         };
+        if tool_config.enable_commands {
+            // Empty `command_allowlist` is the ToolConfig contract for
+            // "all commands allowed" — log the effective sidecar policy
+            // so operators can confirm the autonomous-mode short-circuit
+            // resolved, without a UI status pop.
+            info!(
+                allowed_commands = ?tool_config.command_allowlist,
+                allow_shell = tool_config.allow_shell,
+                "aura-node run_command enabled"
+            );
+        }
 
         let catalog = Arc::new(ToolCatalog::new());
         info!(static_tools = catalog.static_count(), "Tool catalog ready");
