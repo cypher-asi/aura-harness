@@ -122,7 +122,7 @@ The shipped `Policy::with_defaults()` preset (`crates/aura-kernel/src/policy/mod
 
 Complementary enforcement in `aura-tools`:
 
-- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` field unless the caller passes `allow_shell: true`.
+- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` / `shell_script` fields unless the caller passes `allow_shell: true`. Once `allow_shell` is granted, `ToolConfig::allowed_shell_scripts` switches between "any script allowed" (empty allowlist, the default matching `command_allowlist` / `binary_allowlist`) and "verbatim match only" (non-empty allowlist).
 - When `ToolConfig::binary_allowlist` is non-empty, `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
 
 **Enforcement:** `crates/aura-kernel/tests/invariant_policy_matrix.rs`

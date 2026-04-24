@@ -629,14 +629,19 @@ fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), To
 /// Callers that genuinely need a shell must:
 /// 1. Enable [`ToolConfig::allow_shell`][crate::ToolConfig::allow_shell]
 ///    (or pass `allow_shell: true` per-call).
-/// 2. Add their script verbatim to
-///    [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts].
-/// 3. Invoke with `shell_script: "<the script>"`.
+/// 2. Invoke with `shell_script: "<the script>"`.
+///
+/// By default
+/// [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts]
+/// is empty, which follows the same "empty allowlist = all allowed"
+/// convention used by `command_allowlist` and `binary_allowlist`:
+/// once `allow_shell == true` is granted, any shell script is
+/// executable. Operators who want to pin a specific set of scripts
+/// populate the list with verbatim entries, which switches the gate
+/// back to strict membership checking.
 ///
 /// The `command` (single shell string) form is retained for backward
-/// compatibility but is treated identically to `shell_script` — it
-/// still requires `allow_shell == true` AND presence in
-/// `allowed_shell_scripts`.
+/// compatibility and is treated identically to `shell_script`.
 pub struct CmdRunTool;
 
 #[async_trait]
@@ -649,7 +654,8 @@ impl Tool for CmdRunTool {
         ToolDefinition {
             name: "run_command".into(),
             description: "Run an external program. Default: pass 'program' + 'args' (no shell). \
-                 Shell scripts require allow_shell=true AND allowed_shell_scripts membership."
+                 Shell scripts require allow_shell=true; the optional allowed_shell_scripts list \
+                 pins a specific set when non-empty (empty = all scripts allowed)."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -665,11 +671,11 @@ impl Tool for CmdRunTool {
                     },
                     "shell_script": {
                         "type": "string",
-                        "description": "Opt-in shell script (sh -c on Unix, cmd.exe /C on Windows). Requires allow_shell=true AND must appear verbatim in ToolConfig::allowed_shell_scripts. Mutually exclusive with 'program'/'args'."
+                        "description": "Opt-in shell script (sh -c on Unix, cmd.exe /C on Windows). Requires allow_shell=true. When ToolConfig::allowed_shell_scripts is non-empty the script must appear verbatim; an empty list permits any script. Mutually exclusive with 'program'/'args'."
                     },
                     "allow_shell": {
                         "type": "boolean",
-                        "description": "Per-call opt-in for the shell_script path. Ignored unless the operator also allow-lists the script."
+                        "description": "Per-call opt-in for the shell_script path."
                     },
                     "cwd": {
                         "type": "string",
@@ -761,11 +767,19 @@ impl Tool for CmdRunTool {
                     "'shell_script' is mutually exclusive with 'program' / 'args'".into(),
                 ));
             }
-            if !ctx
-                .config
-                .allowed_shell_scripts
-                .iter()
-                .any(|s| s == &script)
+            // Empty `allowed_shell_scripts` means "all shell scripts
+            // allowed" once `allow_shell == true` has been granted, to
+            // match the documented empty-allowlist convention shared
+            // with `command_allowlist` and `binary_allowlist`. A
+            // non-empty list switches back to strict verbatim-match
+            // enforcement so operators who pin specific scripts keep
+            // the original behavior.
+            if !ctx.config.allowed_shell_scripts.is_empty()
+                && !ctx
+                    .config
+                    .allowed_shell_scripts
+                    .iter()
+                    .any(|s| s == &script)
             {
                 return Err(ToolError::Forbidden(
                     "shell_script not present in ToolConfig::allowed_shell_scripts; \

@@ -84,17 +84,25 @@ pub struct ToolConfig {
     /// surface that made `command: "git status; rm -rf"` executable.
     /// (Wave 5 / T3.1.)
     pub allow_shell: bool,
-    /// Allow-list of verbatim shell scripts permitted via the
-    /// `shell_script` field of `run_command`. Used together with
-    /// [`Self::allow_shell`] == `true` Ã¢â‚¬â€ the caller explicitly opts into
-    /// a shell interpreter by passing a script, and that script MUST be
-    /// present in this list for the invocation to be accepted.
+    /// Optional allow-list of verbatim shell scripts permitted via
+    /// the `shell_script` field of `run_command`. Only consulted once
+    /// [`Self::allow_shell`] == `true` has opened the shell path.
     ///
-    /// Empty (default) means no shell scripts are permitted, so the
-    /// `shell_script` field is effectively disabled until an operator
-    /// populates it. This guards against the historic shell-injection
-    /// path where an attacker-controlled `program` string was routed
-    /// through `sh -c` / `cmd.exe /C`. (Phase 2 hardening.)
+    /// Follows the same "empty allowlist = all allowed" convention as
+    /// [`Self::command_allowlist`] and [`Self::binary_allowlist`]:
+    ///
+    /// - **Empty (default)**: any shell script is accepted, so the
+    ///   gate reduces to `allow_shell` alone. This is the form
+    ///   Claude-style automatons depend on, because they emit
+    ///   `run_command({ command: "cargo check ..." })` where the
+    ///   exact script text cannot be enumerated up front.
+    /// - **Non-empty**: strict verbatim match. Operators who want to
+    ///   pin a specific set of scripts populate this and every other
+    ///   script is rejected with `ToolError::Forbidden`.
+    ///
+    /// The default remains inert because [`Self::allow_shell`] itself
+    /// defaults to `false`; flipping `allow_shell` on is the deliberate
+    /// security decision, and this field narrows further from there.
     pub allowed_shell_scripts: Vec<String>,
     /// Maximum read bytes
     pub max_read_bytes: usize,

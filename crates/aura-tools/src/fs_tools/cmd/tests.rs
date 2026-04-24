@@ -740,3 +740,78 @@ async fn test_cmd_run_tool_shell_script_runs_when_allowlisted() {
         assert!(stdout.contains("shell_path_ok"), "stdout was: {stdout}");
     }
 }
+
+/// Empty `allowed_shell_scripts` means "all shell scripts allowed"
+/// once `allow_shell == true`, matching the existing empty-allowlist
+/// convention on `command_allowlist` / `binary_allowlist`. Pins the
+/// behavior Claude-style automatons rely on when emitting
+/// `run_command({ command: "cargo check ..." })`: the harness can't
+/// enumerate every script up front, so an empty list must not
+/// degrade to deny-all.
+#[tokio::test]
+async fn test_cmd_run_tool_shell_script_empty_allowlist_is_permissive() {
+    #[cfg(windows)]
+    let (script, allow_binaries) = (
+        "ping -n 1 127.0.0.1",
+        vec!["PING".to_string(), "ping".to_string()],
+    );
+    #[cfg(not(windows))]
+    let (script, allow_binaries) = ("echo empty_allowlist_ok", vec!["echo".to_string()]);
+
+    let config = crate::ToolConfig {
+        enable_commands: true,
+        allow_shell: true,
+        allowed_shell_scripts: vec![],
+        binary_allowlist: allow_binaries,
+        ..crate::ToolConfig::default()
+    };
+    let (ctx, _dir) = tool_ctx(config);
+    let tool = CmdRunTool;
+
+    let result = tool
+        .execute(&ctx, serde_json::json!({ "shell_script": script }))
+        .await
+        .expect("empty allowlist with allow_shell=true must execute any script");
+
+    assert!(result.ok, "expected success, got {result:?}");
+    #[cfg(not(windows))]
+    {
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            stdout.contains("empty_allowlist_ok"),
+            "stdout was: {stdout}"
+        );
+    }
+}
+
+/// The legacy `command` alias must follow the same empty-allowlist =
+/// permissive rule as `shell_script`. This is the shape Claude-style
+/// tool proposals arrive in, so regressing it would re-break the
+/// autonomous dev loop.
+#[tokio::test]
+async fn test_cmd_run_tool_command_alias_empty_allowlist_is_permissive() {
+    #[cfg(windows)]
+    let (script, allow_binaries) = (
+        "ping -n 1 127.0.0.1",
+        vec!["PING".to_string(), "ping".to_string()],
+    );
+    #[cfg(not(windows))]
+    let (script, allow_binaries) = ("echo command_alias_ok", vec!["echo".to_string()]);
+
+    let config = crate::ToolConfig {
+        enable_commands: true,
+        allow_shell: true,
+        allowed_shell_scripts: vec![],
+        binary_allowlist: allow_binaries,
+        ..crate::ToolConfig::default()
+    };
+    let (ctx, _dir) = tool_ctx(config);
+    let tool = CmdRunTool;
+
+    let result = tool
+        .execute(&ctx, serde_json::json!({ "command": script }))
+        .await
+        .expect("empty allowlist with allow_shell=true must accept the `command` alias");
+
+    assert!(result.ok, "expected success, got {result:?}");
+}
