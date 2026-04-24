@@ -149,12 +149,13 @@ async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
     assert_eq!(allowed, vec!["cargo", "git"]);
 }
 
-/// Symmetric negative test: a locked-down external harness must
-/// advertise `run_command_enabled=false` so the desktop's
-/// `--external-harness` check can emit a clear diagnostic instead of
-/// letting the agent hit a silent 20s tool-callback timeout.
+/// Symmetric negative test: a `ToolConfig::default()` — the
+/// `aura-tools` crate's kernel-level fail-closed baseline — must still
+/// report `run_command_enabled=false` over `/health` so operators who
+/// deliberately wire the minimal executor (or who lock down via
+/// `ENABLE_CMD_TOOLS=false`) can observe the narrowed surface.
 #[tokio::test]
-async fn test_health_endpoint_reports_run_command_disabled_on_default_policy() {
+async fn test_health_endpoint_reports_run_command_disabled_on_default_tool_config() {
     let store = create_test_store();
     let state = test_router_state(store); // ToolConfig::default()
     let app = create_router(state);
@@ -170,7 +171,7 @@ async fn test_health_endpoint_reports_run_command_disabled_on_default_policy() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
         json["run_command_enabled"], false,
-        "default ToolConfig must report commands disabled"
+        "aura-tools ToolConfig::default() is the kernel-level fail-closed baseline"
     );
     assert_eq!(json["shell_enabled"], false);
 }

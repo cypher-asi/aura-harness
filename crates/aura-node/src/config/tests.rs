@@ -19,10 +19,10 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_NETWORK_URL");
     std::env::remove_var("AURA_PROJECT_BASE");
     std::env::remove_var("AURA_NODE_AUTH_TOKEN");
-    std::env::remove_var("AURA_AUTONOMOUS_DEV_LOOP");
-    std::env::remove_var("AURA_ALLOW_RUN_COMMAND");
     std::env::remove_var("AURA_ALLOWED_COMMANDS");
     std::env::remove_var("AURA_ALLOW_SHELL");
+    std::env::remove_var("AURA_STRICT_MODE");
+    std::env::remove_var("AURA_NODE_REQUIRE_AUTH");
 }
 
 #[test]
@@ -35,7 +35,10 @@ fn test_default_config() {
     assert!(!config.sync_writes);
     assert_eq!(config.record_window_size, 50);
     assert!(config.enable_fs_tools);
-    assert!(!config.enable_cmd_tools);
+    assert!(
+        config.enable_cmd_tools,
+        "cmd tools must default to on; `run_command` is the baseline for aura-os deployments"
+    );
     assert!(config.allowed_commands.is_empty());
     assert!(!config.allow_shell);
     assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
@@ -175,6 +178,10 @@ fn test_bind_addr_env() {
 
 #[test]
 fn test_enable_cmd_tools_parsing() {
+    // `enable_cmd_tools` defaults to `true` now, so `ENABLE_CMD_TOOLS`
+    // is effectively a runtime kill-switch: setting it to `false` /
+    // `0` force-disables the command tool catalog for callers who want
+    // a narrower surface without going full `AURA_STRICT_MODE=1`.
     let _lock = ENV_LOCK.lock().unwrap();
     clear_node_env_vars();
 
@@ -192,7 +199,10 @@ fn test_enable_cmd_tools_parsing() {
 
     std::env::set_var("ENABLE_CMD_TOOLS", "anything_else");
     let config = NodeConfig::from_env();
-    assert!(!config.enable_cmd_tools);
+    assert!(
+        !config.enable_cmd_tools,
+        "unrecognized values must be treated as an explicit opt-out, matching the pre-existing semantics"
+    );
 
     clear_node_env_vars();
 }
@@ -300,99 +310,14 @@ fn test_resolve_project_path_without_base() {
     );
 }
 
-/// Regression test for the "3.0-class" run_command failure: when the
-/// desktop spawns the bundled sidecar with `AURA_AUTONOMOUS_DEV_LOOP=1`
-/// (per `apps/aura-os-desktop/src/main.rs` L686–691), `aura-node` must
-/// boot fully permissive. Before this was wired, `NodeConfig::from_env`
-/// ignored the env and every `cargo check`/`test`/`fmt`/`clippy`
-/// invocation was denied at the category gate.
 #[test]
-fn test_autonomous_dev_loop_env_enables_commands_and_shell() {
+fn test_allowed_commands_and_shell_envs_still_apply() {
+    // Fine-grained runtime knobs survive the removal of the master
+    // switches: operators who want a narrow allowlist or the shell
+    // fan-out interpreter can still opt in.
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_node_env_vars();
 
-    std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", "1");
-    let config = NodeConfig::from_env();
-    assert!(config.enable_fs_tools, "fs tools must be enabled in autonomous mode");
-    assert!(
-        config.enable_cmd_tools,
-        "cmd tools must be enabled in autonomous mode"
-    );
-    assert!(
-        config.allowed_commands.is_empty(),
-        "empty allowlist = all commands allowed in autonomous mode"
-    );
-    assert!(
-        config.allow_shell,
-        "shell fan-out must be enabled in autonomous mode"
-    );
-
-    clear_node_env_vars();
-}
-
-#[test]
-fn test_autonomous_dev_loop_accepts_truthy_variants() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-    for truthy in ["1", "true", "TRUE", "Yes", "on"] {
-        clear_node_env_vars();
-        std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", truthy);
-        let config = NodeConfig::from_env();
-        assert!(
-            config.enable_cmd_tools,
-            "AURA_AUTONOMOUS_DEV_LOOP={truthy} must enable commands"
-        );
-        assert!(
-            config.allow_shell,
-            "AURA_AUTONOMOUS_DEV_LOOP={truthy} must enable shell"
-        );
-    }
-
-    clear_node_env_vars();
-}
-
-#[test]
-fn test_autonomous_mode_short_circuits_over_explicit_allowlist() {
-    // Autonomous preset is "fully permissive" — an operator who also
-    // sets AURA_ALLOWED_COMMANDS must not end up *more* restricted than
-    // they would be in the pure-autonomous path. The preset wins.
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    clear_node_env_vars();
-
-    std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", "1");
-    std::env::set_var("AURA_ALLOWED_COMMANDS", "cargo,git");
-    let config = NodeConfig::from_env();
-    assert!(config.enable_cmd_tools);
-    assert!(
-        config.allowed_commands.is_empty(),
-        "autonomous preset must clear any explicit allowlist"
-    );
-
-    clear_node_env_vars();
-}
-
-#[test]
-fn test_allow_run_command_env_flips_enable_cmd_tools() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    clear_node_env_vars();
-
-    std::env::set_var("AURA_ALLOW_RUN_COMMAND", "1");
-    let config = NodeConfig::from_env();
-    assert!(config.enable_cmd_tools);
-    assert!(
-        !config.allow_shell,
-        "AURA_ALLOW_RUN_COMMAND alone must not enable shell"
-    );
-
-    clear_node_env_vars();
-}
-
-#[test]
-fn test_allow_run_command_plus_allowed_commands_and_shell() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    clear_node_env_vars();
-
-    std::env::set_var("AURA_ALLOW_RUN_COMMAND", "1");
     std::env::set_var("AURA_ALLOWED_COMMANDS", "cargo, git ,ls");
     std::env::set_var("AURA_ALLOW_SHELL", "1");
     let config = NodeConfig::from_env();
@@ -403,48 +328,19 @@ fn test_allow_run_command_plus_allowed_commands_and_shell() {
     clear_node_env_vars();
 }
 
+/// End-to-end verification that a bare `NodeConfig::from_env()` (no
+/// env flags set) is already permissive enough to expose `run_command`
+/// in the executor catalog. This is the regression gate for the
+/// "Tool 'run_command' is not allowed" failure mode that used to
+/// require `AURA_AUTONOMOUS_DEV_LOOP=1` / `AURA_ALLOW_RUN_COMMAND=1`
+/// on the sidecar.
 #[test]
-fn test_allow_run_command_does_not_override_legacy_enable_cmd_tools_on() {
-    // `ENABLE_CMD_TOOLS=true` already turns on commands via the legacy
-    // path; the new envs should not disturb that when autonomous mode
-    // is off.
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    clear_node_env_vars();
-
-    std::env::set_var("ENABLE_CMD_TOOLS", "true");
-    std::env::set_var("ALLOWED_COMMANDS", "cargo");
-    let config = NodeConfig::from_env();
-    assert!(config.enable_cmd_tools);
-    assert_eq!(config.allowed_commands, vec!["cargo"]);
-    assert!(!config.allow_shell);
-
-    clear_node_env_vars();
-}
-
-/// End-to-end verification that the full chain
-/// `AURA_AUTONOMOUS_DEV_LOOP=1` env → `NodeConfig::from_env()` →
-/// `ToolConfig` (constructed exactly as `node.rs` does at
-/// [`crate::node::Node::run`]) → `ToolCatalog::visible_tools` actually
-/// exposes `run_command` + `run_process` to the executor router.
-///
-/// Before the fix in commit `04dbe56`, `NodeConfig::from_env` silently
-/// dropped the three `AURA_*` env vars the desktop launcher sets at
-/// `apps/aura-os-desktop/src/main.rs` L686–691, so this assertion
-/// failed: the visible tools list was category-filtered down to
-/// fs-only, and every `cargo check`/`test`/`fmt`/`clippy` invocation
-/// the autonomous loop emitted hit the executor's category gate with
-/// "command tools not enabled". This test is the regression gate for
-/// that 3.0-class DoD failure — if it fails, the desktop-spawned
-/// sidecar is once again denying `run_command` despite the UI
-/// proclaiming autonomous mode.
-#[test]
-fn autonomous_env_actually_exposes_run_command_via_tool_catalog() {
+fn run_command_exposed_by_default_via_tool_catalog() {
     use aura_tools::{catalog::ToolProfile, ToolCatalog, ToolConfig};
 
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_node_env_vars();
 
-    std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", "1");
     let config = NodeConfig::from_env();
 
     // Mirror the `ToolConfig` literal in `crate::node::Node::run`
@@ -458,8 +354,7 @@ fn autonomous_env_actually_exposes_run_command_via_tool_catalog() {
         ..Default::default()
     };
 
-    assert!(tool_config.enable_commands, "commands must be enabled");
-    assert!(tool_config.allow_shell, "shell must be allowed");
+    assert!(tool_config.enable_commands, "commands must be enabled by default");
 
     let catalog = ToolCatalog::new();
     let visible = catalog.visible_tools(ToolProfile::Core, &tool_config);
@@ -467,25 +362,22 @@ fn autonomous_env_actually_exposes_run_command_via_tool_catalog() {
 
     assert!(
         visible_names.contains(&"run_command"),
-        "run_command must be visible in autonomous mode; got: {visible_names:?}"
+        "run_command must be visible by default; got: {visible_names:?}"
     );
 
     clear_node_env_vars();
 }
 
-/// Symmetric negative case: with `AURA_AUTONOMOUS_DEV_LOOP` unset and
-/// no legacy / `AURA_ALLOW_RUN_COMMAND` overrides, the sidecar must
-/// stay fail-closed — `run_command` is *not* exposed. This prevents
-/// regressions where someone "helpfully" flips the default to `true`
-/// and quietly turns every non-autonomous deployment into a command
-/// execution surface.
+/// Inverse: `ENABLE_CMD_TOOLS=false` explicitly force-disables the
+/// command tool catalog without needing `AURA_STRICT_MODE=1`.
 #[test]
-fn run_command_hidden_by_default_without_autonomous_env() {
+fn run_command_hidden_when_enable_cmd_tools_force_disabled() {
     use aura_tools::{catalog::ToolProfile, ToolCatalog, ToolConfig};
 
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     clear_node_env_vars();
 
+    std::env::set_var("ENABLE_CMD_TOOLS", "false");
     let config = NodeConfig::from_env();
     let tool_config = ToolConfig {
         enable_fs: config.enable_fs_tools,
@@ -502,7 +394,7 @@ fn run_command_hidden_by_default_without_autonomous_env() {
     let visible_names: Vec<&str> = visible.iter().map(|t| t.name.as_str()).collect();
     assert!(
         !visible_names.contains(&"run_command"),
-        "run_command must be hidden without autonomous mode; got: {visible_names:?}"
+        "run_command must be hidden when ENABLE_CMD_TOOLS=false; got: {visible_names:?}"
     );
 
     clear_node_env_vars();

@@ -164,88 +164,52 @@ fn env_csv(name: &str) -> Vec<String> {
 
 /// Build a [`ToolConfig`] from environment overrides.
 ///
-/// Starts from [`ToolConfig::default`] — the Phase-5 fail-closed
-/// defaults — and only loosens things when the operator opts in:
+/// `run_command` is on by default — `enable_commands = true`, empty
+/// `binary_allowlist` (= all binaries allowed per the [`ToolConfig`]
+/// contract). The remaining env knobs just narrow or widen from there:
 ///
-/// * `AURA_AUTONOMOUS_DEV_LOOP=1` — short-circuits to a fully
-///   permissive config: `enable_fs = true`, `enable_commands = true`,
-///   empty `binary_allowlist` (= all binaries allowed per the
-///   [`ToolConfig`] contract), and `allow_shell = true`. The
-///   `AURA_ALLOW_RUN_COMMAND` / `AURA_ALLOWED_COMMANDS` /
-///   `AURA_ALLOW_SHELL` knobs below are ignored in this mode.
-/// * `AURA_ALLOW_RUN_COMMAND=1` — flips `enable_commands = true`.
 /// * `AURA_ALLOWED_COMMANDS=cargo,git,ls` — comma-separated binary
-///   allowlist. Additive.
-/// * `AURA_ALLOW_SHELL=1` — allow `sh`/`bash`/`pwsh` fan-out.
+///   allowlist. Replaces the "all allowed" default with a narrower set.
+/// * `AURA_ALLOW_SHELL=1` — allow `sh`/`bash`/`pwsh` fan-out. Stays
+///   opt-in; the shell interpreter is a separate blast-radius concern.
+///
+/// Callers that want a fully locked-down surface should use
+/// [`ToolConfig::default`] directly instead of this helper, or set
+/// `AURA_STRICT_MODE=1` on the aura-node side so the kernel policy
+/// rejects `run_command` independently of what this executor config
+/// permits.
 #[must_use]
 pub fn tool_config_from_env() -> ToolConfig {
-    if autonomous_dev_loop_from_env() {
-        return ToolConfig {
-            enable_fs: true,
-            enable_commands: true,
-            binary_allowlist: vec![],
-            allow_shell: true,
-            ..ToolConfig::default()
-        };
+    let mut cfg = ToolConfig {
+        enable_commands: true,
+        ..ToolConfig::default()
+    };
+    let allowlist = env_csv("AURA_ALLOWED_COMMANDS");
+    if !allowlist.is_empty() {
+        cfg.binary_allowlist = allowlist;
     }
-    let mut cfg = ToolConfig::default();
-    if env_bool("AURA_ALLOW_RUN_COMMAND") {
-        cfg.enable_commands = true;
-        let allowlist = env_csv("AURA_ALLOWED_COMMANDS");
-        if !allowlist.is_empty() {
-            cfg.binary_allowlist = allowlist;
-        }
-        if env_bool("AURA_ALLOW_SHELL") {
-            cfg.allow_shell = true;
-        }
+    if env_bool("AURA_ALLOW_SHELL") {
+        cfg.allow_shell = true;
     }
     cfg
 }
 
-/// True when the operator has opted into `run_command` via
-/// `AURA_ALLOW_RUN_COMMAND`.
-#[must_use]
-pub fn allow_run_command_from_env() -> bool {
-    env_bool("AURA_ALLOW_RUN_COMMAND")
-}
-
-/// True when the operator has opted into the autonomous dev-loop
-/// permissive preset via `AURA_AUTONOMOUS_DEV_LOOP`.
+/// Build a [`PolicyConfig`] for env-driven embedders (the standalone
+/// TUI harness, ad-hoc CLI tests).
 ///
-/// Callers in [`tool_config_from_env`] and [`policy_config_from_env`]
-/// branch on this to short-circuit to fully permissive defaults so the
-/// bundled desktop sidecar can run `cargo check`/`test`/`fmt`/`clippy`
-/// without the operator having to enumerate binaries.
-#[must_use]
-pub fn autonomous_dev_loop_from_env() -> bool {
-    env_bool("AURA_AUTONOMOUS_DEV_LOOP")
-}
-
-/// Build a [`PolicyConfig`] with `run_command` elevated when
-/// `AURA_ALLOW_RUN_COMMAND=1` is set.
-///
-/// Precedence:
-///
-/// * `AURA_AUTONOMOUS_DEV_LOOP=1` — short-circuits to
-///   [`PolicyConfig::permissive`] (`allow_unlisted = true` with
-///   `run_command` in `allowed_tools`). All other env knobs are
-///   ignored in this mode.
-/// * With no env flags set this is exactly [`PolicyConfig::default`]
-///   (fail-closed, `run_command` denied).
-/// * With `AURA_ALLOW_RUN_COMMAND=1`, `run_command` joins
-///   `allowed_tools` and is mapped to
-///   [`PermissionLevel::AlwaysAllow`] so embedders without an
-///   approval pump don't permanently deny every shell invocation.
+/// Non-strict mode unconditionally elevates `run_command` to
+/// [`PermissionLevel::AlwaysAllow`] so agents spawned through this
+/// helper can invoke shell commands without per-call approval.
+/// `AURA_STRICT_MODE=1` keeps the fail-closed [`PolicyConfig::default`]
+/// and denies `run_command` until the caller wires in an approval
+/// pump or a per-agent permission override.
 ///
 /// The executor-layer [`ToolConfig`] from [`tool_config_from_env`]
-/// still enforces `binary_allowlist` in the non-autonomous path.
+/// still enforces `binary_allowlist` and `allow_shell` independently.
 #[must_use]
 pub fn policy_config_from_env() -> PolicyConfig {
-    if autonomous_dev_loop_from_env() {
-        return PolicyConfig::permissive();
-    }
     let mut policy = PolicyConfig::default();
-    if allow_run_command_from_env() {
+    if !env_bool("AURA_STRICT_MODE") {
         policy.allowed_tools.insert("run_command".to_string());
         policy
             .tool_permissions
@@ -259,8 +223,7 @@ pub fn policy_config_from_env() -> PolicyConfig {
 /// The plain [`build_executor_router`] hard-codes
 /// `ToolExecutor::with_defaults()` which ignores env overrides; this
 /// variant threads the config through [`ToolExecutor::new`] instead so
-/// `AURA_ALLOW_RUN_COMMAND` / `AURA_ALLOWED_COMMANDS` actually take
-/// effect.
+/// `AURA_ALLOWED_COMMANDS` / `AURA_ALLOW_SHELL` actually take effect.
 #[must_use]
 pub fn build_executor_router_with_config(
     tool_config: &ToolConfig,
@@ -281,12 +244,7 @@ mod env_tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    const ENV_KEYS: &[&str] = &[
-        "AURA_ALLOW_RUN_COMMAND",
-        "AURA_ALLOWED_COMMANDS",
-        "AURA_ALLOW_SHELL",
-        "AURA_AUTONOMOUS_DEV_LOOP",
-    ];
+    const ENV_KEYS: &[&str] = &["AURA_ALLOWED_COMMANDS", "AURA_ALLOW_SHELL", "AURA_STRICT_MODE"];
 
     fn clear_env() {
         for k in ENV_KEYS {
@@ -308,72 +266,62 @@ mod env_tests {
     }
 
     #[test]
-    fn default_policy_still_denies_run_command() {
+    fn default_kernel_policy_still_denies_run_command() {
+        // The kernel baseline stays fail-closed; only the
+        // `policy_config_from_env` / `fetch_agent_permissions_with_default`
+        // wrappers unlock `run_command` in non-strict mode.
         let policy = PolicyConfig::default();
         assert!(!policy.allowed_tools.contains("run_command"));
     }
 
     #[test]
-    fn env_toggles_behave_correctly() {
+    fn default_env_policy_allows_run_command() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
         clear_env();
-        let policy = policy_config_from_env();
-        assert!(!policy.allowed_tools.contains("run_command"));
-        assert!(!policy.tool_permissions.contains_key("run_command"));
 
-        set_env(&[
-            ("AURA_ALLOW_RUN_COMMAND", "1"),
-            ("AURA_ALLOWED_COMMANDS", "cargo, git ,ls"),
-        ]);
         let policy = policy_config_from_env();
         assert!(policy.allowed_tools.contains("run_command"));
         assert_eq!(
             policy.tool_permissions.get("run_command"),
             Some(&PermissionLevel::AlwaysAllow)
         );
-        let cfg = tool_config_from_env();
-        assert!(cfg.enable_commands);
-        assert_eq!(
-            cfg.binary_allowlist,
-            vec!["cargo".to_string(), "git".to_string(), "ls".to_string()]
-        );
-        assert!(!cfg.allow_shell);
-
-        set_env(&[("AURA_ALLOW_SHELL", "1")]);
-        let cfg = tool_config_from_env();
-        assert!(cfg.allow_shell);
-
-        for v in ["1", "true", "TRUE", "Yes", "on"] {
-            clear_env();
-            set_env(&[("AURA_ALLOW_RUN_COMMAND", v)]);
-            assert!(allow_run_command_from_env());
-        }
-
-        clear_env();
-        set_env(&[("AURA_ALLOW_RUN_COMMAND", "1")]);
-        let cfg = tool_config_from_env();
-        assert!(cfg.enable_commands);
-        assert!(cfg.binary_allowlist.is_empty());
 
         clear_env();
     }
 
     #[test]
-    fn autonomous_dev_loop_flag_yields_permissive_tool_and_policy() {
+    fn strict_mode_env_denies_run_command() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_env();
+
+        set_env(&[("AURA_STRICT_MODE", "1")]);
+        let policy = policy_config_from_env();
+        assert!(!policy.allowed_tools.contains("run_command"));
+        assert!(!policy.tool_permissions.contains_key("run_command"));
 
         clear_env();
-        set_env(&[("AURA_AUTONOMOUS_DEV_LOOP", "1")]);
+    }
+
+    #[test]
+    fn tool_config_defaults_allow_commands_with_narrowable_allowlist() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_env();
 
         let cfg = tool_config_from_env();
         assert!(cfg.enable_commands);
         assert!(cfg.binary_allowlist.is_empty());
-        assert!(cfg.allow_shell);
+        assert!(!cfg.allow_shell);
 
-        let policy = policy_config_from_env();
-        assert!(policy.allow_unlisted);
-        assert!(policy.allowed_tools.contains("run_command"));
+        set_env(&[("AURA_ALLOWED_COMMANDS", "cargo, git ,ls")]);
+        let cfg = tool_config_from_env();
+        assert_eq!(
+            cfg.binary_allowlist,
+            vec!["cargo".to_string(), "git".to_string(), "ls".to_string()]
+        );
+
+        set_env(&[("AURA_ALLOW_SHELL", "1")]);
+        let cfg = tool_config_from_env();
+        assert!(cfg.allow_shell);
 
         clear_env();
     }

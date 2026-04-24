@@ -567,15 +567,14 @@ async fn terminal_ws_handler(
 /// Return a liveness/readiness response with version + tool policy.
 ///
 /// The tool-policy fields (`run_command_enabled`, `shell_enabled`,
-/// `allowed_commands`) exist so external consumers — notably the
-/// `aura-os-desktop` `--external-harness` startup check
-/// (`apps/aura-os-desktop/src/main.rs::enforce_external_harness_or_exit`)
-/// — can diff the running harness's effective policy against what they
-/// need, and fail fast with a clear diagnostic when the operator
-/// forgot `AURA_AUTONOMOUS_DEV_LOOP=1` / `AURA_ALLOW_RUN_COMMAND=1`
-/// on the external harness process. Without this, the desktop came up
-/// happily and the first `run_command` invocation surfaced as a
-/// 20-second tool-callback timeout with no explanation.
+/// `allowed_commands`) expose the effective executor config so
+/// external consumers can diff the running harness's policy against
+/// what they need. Historically the `aura-os-desktop` external-harness
+/// probe relied on `run_command_enabled` to fail fast when the
+/// operator forgot `AURA_AUTONOMOUS_DEV_LOOP=1`; `run_command` is now
+/// on by default, so the field is mainly a diagnostic aid for
+/// operators who deliberately locked the harness down via
+/// `ENABLE_CMD_TOOLS=false` or `AURA_STRICT_MODE=1`.
 ///
 /// The response is deliberately unauthenticated (matches the old
 /// minimal-health behaviour) because the information is non-sensitive:

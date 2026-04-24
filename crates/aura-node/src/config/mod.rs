@@ -67,8 +67,7 @@ pub struct NodeConfig {
     /// who flipped `enable_cmd_tools` on without asking for shell does
     /// not accidentally unlock the historic injection surface.
     ///
-    /// Flipped on by `AURA_ALLOW_SHELL=1` and by the
-    /// `AURA_AUTONOMOUS_DEV_LOOP=1` short-circuit in [`Self::from_env`].
+    /// Flipped on by `AURA_ALLOW_SHELL=1`.
     pub allow_shell: bool,
     /// Orbit service URL
     pub orbit_url: String,
@@ -147,7 +146,11 @@ impl Default for NodeConfig {
             sync_writes: false,
             record_window_size: 50,
             enable_fs_tools: true,
-            enable_cmd_tools: false,
+            // `run_command` is on by default. `AURA_STRICT_MODE=1` is
+            // the single operator kill-switch; `ENABLE_CMD_TOOLS=false`
+            // still force-disables the catalog for callers that want a
+            // narrower surface without going full strict-mode.
+            enable_cmd_tools: true,
             allowed_commands: vec![],
             allow_shell: false,
             orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
@@ -241,45 +244,25 @@ impl NodeConfig {
             config.strict_mode = v == "1" || v.eq_ignore_ascii_case("true");
         }
 
-        // Autonomous-mode + per-knob permissive envs (Wave-5 alignment
-        // with `aura_agent::session_bootstrap::tool_config_from_env`).
-        //
-        // The desktop-spawned sidecar sets `AURA_AUTONOMOUS_DEV_LOOP=1`
-        // (plus `AURA_ALLOW_RUN_COMMAND=1` / `AURA_ALLOW_SHELL=1` as
-        // belt-and-braces). Before this block those envs were read
-        // nowhere in `aura-node`, so the sidecar ran with the
-        // fail-closed default `enable_cmd_tools=false` and every
-        // `cargo check`/`test`/`fmt`/`clippy` invocation was denied
-        // by the executor's category gate — which is what caused the
-        // "3.0-class" DoD failures even after the TUI-side commits.
-        //
-        // Precedence inside this block mirrors the TUI helper: the
-        // autonomous short-circuit wins over the individual knobs. The
-        // legacy `ENABLE_CMD_TOOLS` / `ALLOWED_COMMANDS` envs above
-        // still take effect in non-autonomous deployments; they just
-        // cannot *tighten* an autonomous preset.
-        if env_bool("AURA_AUTONOMOUS_DEV_LOOP") {
-            config.enable_fs_tools = true;
-            config.enable_cmd_tools = true;
-            config.allowed_commands = vec![];
+        // Fine-grained runtime overrides. `AURA_STRICT_MODE=1` is the
+        // only master switch; everything below just narrows or widens
+        // the surface within that. Historical `AURA_AUTONOMOUS_DEV_LOOP`
+        // / `AURA_ALLOW_RUN_COMMAND` envs are gone — `enable_cmd_tools`
+        // defaults to `true` now, and non-strict mode unconditionally
+        // surfaces `run_command: AlwaysAllow` via
+        // [`crate::runtime_capabilities::fetch_agent_permissions_with_default`].
+        if let Ok(val) = std::env::var("AURA_ALLOWED_COMMANDS") {
+            let parsed: Vec<String> = val
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !parsed.is_empty() {
+                config.allowed_commands = parsed;
+            }
+        }
+        if env_bool("AURA_ALLOW_SHELL") {
             config.allow_shell = true;
-        } else {
-            if env_bool("AURA_ALLOW_RUN_COMMAND") {
-                config.enable_cmd_tools = true;
-            }
-            if let Ok(val) = std::env::var("AURA_ALLOWED_COMMANDS") {
-                let parsed: Vec<String> = val
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                if !parsed.is_empty() {
-                    config.allowed_commands = parsed;
-                }
-            }
-            if env_bool("AURA_ALLOW_SHELL") {
-                config.allow_shell = true;
-            }
         }
 
         config

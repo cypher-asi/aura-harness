@@ -49,13 +49,20 @@ pub(crate) fn build_policy_config(
 /// Fetch per-agent tool permission overrides with the aura-os fallback
 /// matrix applied.
 ///
-/// The fallback matrix (documented in the security audit) is:
+/// The fallback matrix is:
 ///
-/// | aura-network response | `strict_mode` off (default)                          | `strict_mode` on |
-/// |-----------------------|------------------------------------------------------|------------------|
-/// | `Ok(Some(map))`       | return `map` verbatim                                | filter out anything more permissive than the kernel default (see below) |
-/// | `Ok(None)`            | return `{ "run_command": AlwaysAllow }`              | return empty map |
-/// | `Err(_)`              | log + return empty map (fail closed)                 | log + return empty map (fail closed) |
+/// | aura-network response | `strict_mode` off (default)                                        | `strict_mode` on |
+/// |-----------------------|--------------------------------------------------------------------|------------------|
+/// | `Ok(Some(map))`       | return `map` with permissive defaults merged in (non-destructive)  | filter out anything more permissive than the kernel default (see below) |
+/// | `Ok(None)`            | return permissive defaults                                         | return empty map |
+/// | `Err(_)`              | log + return empty map (fail closed)                               | log + return empty map (fail closed) |
+///
+/// Non-strict mode unconditionally surfaces `run_command: AlwaysAllow`
+/// so aura-os deployments work out of the box without the operator
+/// having to set env opt-ins (historically `AURA_AUTONOMOUS_DEV_LOOP=1`
+/// / `AURA_ALLOW_RUN_COMMAND=1`). If aura-network's profile carries an
+/// explicit entry for `run_command`, that entry wins — the merge is
+/// additive and never overwrites what the domain API returned.
 ///
 /// "More permissive than the default" in strict mode means: any entry
 /// whose kernel default is stricter than what aura-network is asking
@@ -82,6 +89,8 @@ pub(crate) async fn fetch_agent_permissions_with_default(
         Ok(Some(mut map)) => {
             if strict_mode {
                 map.retain(|tool, level| is_tighter_or_equal_to_default(tool, *level));
+            } else {
+                merge_permissive_defaults(&mut map);
             }
             map
         }
@@ -103,16 +112,26 @@ pub(crate) async fn fetch_agent_permissions_with_default(
     }
 }
 
-/// Permissive defaults applied when aura-network has no profile for
-/// this agent and [`strict_mode`](crate::config::NodeConfig::strict_mode)
-/// is off. Keep this minimal — the only elevation here is
-/// `run_command` → `AlwaysAllow` so aura-os spawned agents can execute
-/// shell commands without per-call approval. Everything else continues
-/// to use the kernel's own [`aura_kernel::default_tool_permission`] map.
+/// Permissive defaults applied in non-strict mode.
+///
+/// Keep this minimal — the only elevation here is `run_command` →
+/// `AlwaysAllow` so aura-os spawned agents can execute shell commands
+/// without per-call approval. Everything else continues to use the
+/// kernel's own [`aura_kernel::default_tool_permission`] map.
 fn default_permissive_overrides() -> HashMap<String, PermissionLevel> {
     let mut map = HashMap::new();
     map.insert("run_command".to_string(), PermissionLevel::AlwaysAllow);
     map
+}
+
+/// Merge [`default_permissive_overrides`] into `map`, preserving any
+/// explicit entries the domain API already returned. Only keys missing
+/// from `map` are inserted — an aura-network profile that deliberately
+/// pins `run_command` to something stricter is honored verbatim.
+fn merge_permissive_defaults(map: &mut HashMap<String, PermissionLevel>) {
+    for (tool, level) in default_permissive_overrides() {
+        map.entry(tool).or_insert(level);
+    }
 }
 
 /// True when `level` is no looser than the kernel's built-in default
@@ -494,6 +513,48 @@ mod tests {
         let map =
             fetch_agent_permissions_with_default(Some(&mock), Some("agent-1"), None, false).await;
         assert_eq!(map, response);
+    }
+
+    #[tokio::test]
+    async fn fetch_some_map_non_strict_injects_missing_run_command() {
+        // aura-network returns a profile that says nothing about
+        // `run_command`. Non-strict mode must fill in the permissive
+        // default so the kernel doesn't silently deny every shell
+        // invocation — this is the root-cause fix for the
+        // "Tool 'run_command' is not allowed" regression that used to
+        // require `AURA_AUTONOMOUS_DEV_LOOP=1` on the harness.
+        let mut response = HashMap::new();
+        response.insert("write_file".to_string(), PermissionLevel::Deny);
+        let response_clone = response.clone();
+        let mock: Arc<dyn DomainApi> =
+            Arc::new(MockDomain::new(move || Ok(Some(response_clone.clone()))));
+
+        let map =
+            fetch_agent_permissions_with_default(Some(&mock), Some("agent-1"), None, false).await;
+
+        assert_eq!(map.get("run_command"), Some(&PermissionLevel::AlwaysAllow));
+        assert_eq!(map.get("write_file"), Some(&PermissionLevel::Deny));
+    }
+
+    #[tokio::test]
+    async fn fetch_some_map_non_strict_preserves_explicit_run_command_override() {
+        // If aura-network deliberately pins `run_command` to something
+        // stricter than AlwaysAllow, the merge must not overwrite it.
+        let mut response = HashMap::new();
+        response.insert(
+            "run_command".to_string(),
+            PermissionLevel::RequireApproval,
+        );
+        let response_clone = response.clone();
+        let mock: Arc<dyn DomainApi> =
+            Arc::new(MockDomain::new(move || Ok(Some(response_clone.clone()))));
+
+        let map =
+            fetch_agent_permissions_with_default(Some(&mock), Some("agent-1"), None, false).await;
+        assert_eq!(
+            map.get("run_command"),
+            Some(&PermissionLevel::RequireApproval)
+        );
     }
 
     #[tokio::test]
