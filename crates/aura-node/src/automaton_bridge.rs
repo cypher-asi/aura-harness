@@ -12,7 +12,9 @@
 //! `System` `DomainMutation` pair in the record log (Invariants §2 / §8).
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -44,6 +46,76 @@ use crate::scheduler::Scheduler;
 
 const EVENT_BROADCAST_CAPACITY: usize = 512;
 
+/// Cap on the per-automaton replay buffer used by [`EventChannel::history`].
+/// Mirrors the broadcast ring so an existing subscriber that manages to
+/// keep up and a late subscriber that relies on replay see the same
+/// visible window. Exceeding the cap drops the oldest entries first.
+const EVENT_HISTORY_CAPACITY: usize = EVENT_BROADCAST_CAPACITY;
+
+/// How long an [`EventChannel`] is kept in [`AutomatonBridge::event_channels`]
+/// after the automaton emits `Done`. Provides a grace window for late
+/// WebSocket subscribers (in particular, aura-os-server connects to
+/// `/stream/automaton/:id` *after* `POST /automaton/start` returns, and
+/// a fast-failing automaton can emit all its events before the WS
+/// client even finishes its handshake). During this window
+/// `subscribe_events` still returns the full replay history so the
+/// late subscriber can reconstruct the task's outcome.
+const RETENTION_AFTER_DONE: Duration = Duration::from_secs(300);
+
+/// Per-automaton event bus.
+///
+/// The raw `broadcast::Sender` we used previously had a subtle race:
+/// `tokio::sync::broadcast` only delivers to receivers that existed
+/// when `send` was called. A new subscriber joining after emission
+/// starts at the tail and misses every event already sent, including
+/// `Started` / `TaskStarted` / `TaskFailed` / `TaskCompleted` / `Done`.
+/// For fast-terminating automatons (typical failure paths complete in
+/// &lt;100 ms) the aura-os-server WS client would therefore connect to a
+/// "stream closed before terminal event arrived" - no visible reason,
+/// no task outcome - even though the harness logs showed the automaton
+/// had in fact run and failed.
+///
+/// This wrapper bundles a `broadcast::Sender` with a replay `history`
+/// buffer: `spawn_event_forwarder` appends every event to `history`
+/// before broadcasting, and `subscribe_events` returns the history
+/// snapshot alongside a live receiver. Late subscribers get the full
+/// event sequence regardless of when they joined.
+pub(crate) struct EventChannel {
+    /// Replay history. Capped at [`EVENT_HISTORY_CAPACITY`]; when full,
+    /// the oldest entries are dropped. Cloned on each `subscribe_events`
+    /// call (single-automaton events are small serde-derived values so
+    /// the clone is cheap relative to the ~300s retention window).
+    history: Mutex<Vec<AutomatonEvent>>,
+    /// Live broadcast for in-flight subscribers. Retained inside the
+    /// `Arc<EventChannel>` so the sender outlives the forwarder task
+    /// and late subscribers don't see `RecvError::Closed` before they've
+    /// drained the history.
+    broadcast: broadcast::Sender<AutomatonEvent>,
+    /// Set once the forwarder has observed and forwarded
+    /// `AutomatonEvent::Done`. Lets subscribers skip the live-receive
+    /// loop entirely when the automaton has already finished.
+    done: AtomicBool,
+}
+
+/// Snapshot returned by [`AutomatonBridge::subscribe_events`]. Gives
+/// callers both the replay history (consume first, in order) and a
+/// live receiver (consume next, in order) so they produce the same
+/// ordering any early subscriber would have seen.
+pub struct EventSubscription {
+    /// All events the automaton has emitted so far, in emission order.
+    /// May be empty if the automaton hasn't ticked yet, or capped at
+    /// [`EVENT_HISTORY_CAPACITY`] for long-lived dev-loop automatons.
+    pub history: Vec<AutomatonEvent>,
+    /// Receiver for events emitted after this subscribe call. Will
+    /// yield `RecvError::Closed` once the retention window elapses
+    /// (or immediately, if `already_done` is true and no more events
+    /// will ever be sent).
+    pub live: broadcast::Receiver<AutomatonEvent>,
+    /// True when `Done` is already in `history`. Callers can use this
+    /// to avoid waiting on `live.recv()` after draining history.
+    pub already_done: bool,
+}
+
 /// Bookkeeping for a running automaton so stop/pause paths can emit
 /// `System::AutomatonLifecycle` entries on the correct agent log
 /// without rebuilding the per-agent kernel.
@@ -72,8 +144,10 @@ pub struct AutomatonBridge {
     /// `System::AutomatonLifecycle` transaction to the same agent log
     /// the corresponding start event landed on (Invariant §2 / §8).
     project_handles: Arc<DashMap<String, ProjectHandle>>,
-    /// automaton_id -> broadcast sender for events
-    event_channels: Arc<DashMap<String, broadcast::Sender<AutomatonEvent>>>,
+    /// automaton_id -> replay-aware event channel. See
+    /// [`EventChannel`] for why this wraps the broadcast rather than
+    /// using one directly.
+    event_channels: Arc<DashMap<String, Arc<EventChannel>>>,
     /// Scheduler used to drain the per-agent inbox after a lifecycle
     /// `System` transaction is enqueued. Optional so test harnesses can
     /// construct a bridge without a live scheduler; production wiring
@@ -117,13 +191,29 @@ impl AutomatonBridge {
     }
 
     /// Subscribe to events for a running automaton.
-    pub fn subscribe_events(
-        &self,
-        automaton_id: &str,
-    ) -> Option<broadcast::Receiver<AutomatonEvent>> {
-        self.event_channels
-            .get(automaton_id)
-            .map(|entry| entry.value().subscribe())
+    ///
+    /// Returns an [`EventSubscription`] snapshot that combines the
+    /// replay history (events already emitted before this call) with
+    /// a live receiver (events emitted from now on). See
+    /// [`EventChannel`] for the motivating race: fast-terminating
+    /// automatons can finish emitting every event before the first
+    /// WebSocket client finishes its handshake, so a bare
+    /// `broadcast::Receiver` routinely observed "stream closed with
+    /// no terminal event".
+    pub fn subscribe_events(&self, automaton_id: &str) -> Option<EventSubscription> {
+        self.event_channels.get(automaton_id).map(|entry| {
+            let ch = entry.value();
+            let history = ch
+                .history
+                .lock()
+                .expect("event history mutex poisoned")
+                .clone();
+            EventSubscription {
+                history,
+                live: ch.broadcast.subscribe(),
+                already_done: ch.done.load(Ordering::Acquire),
+            }
+        })
     }
 
     /// Wrap domain API with JWT injection when an auth token is available.
@@ -578,29 +668,68 @@ impl AutomatonBridge {
         }
     }
 
-    /// Spawn a background task that forwards `mpsc` events to a `broadcast` channel.
+    /// Spawn a background task that forwards `mpsc` events from the
+    /// automaton runtime into both the replay `history` buffer and
+    /// the live broadcast. See [`EventChannel`] for why both paths
+    /// are needed.
+    ///
+    /// After `Done` is forwarded the channel entry is kept alive for
+    /// [`RETENTION_AFTER_DONE`] so late subscribers can still pull
+    /// the replay history. The entry is removed from
+    /// [`AutomatonBridge::event_channels`] at the end of that window.
     fn spawn_event_forwarder(
         &self,
         automaton_id: String,
         mut event_rx: tokio::sync::mpsc::Receiver<AutomatonEvent>,
-    ) -> broadcast::Sender<AutomatonEvent> {
+    ) -> Arc<EventChannel> {
         let (broadcast_tx, _) = broadcast::channel(EVENT_BROADCAST_CAPACITY);
+        let channel = Arc::new(EventChannel {
+            history: Mutex::new(Vec::new()),
+            broadcast: broadcast_tx,
+            done: AtomicBool::new(false),
+        });
         let channels = self.event_channels.clone();
-        channels.insert(automaton_id.clone(), broadcast_tx.clone());
+        channels.insert(automaton_id.clone(), channel.clone());
 
-        let tx_for_task = broadcast_tx.clone();
+        let channel_for_task = channel.clone();
+        let id_for_task = automaton_id.clone();
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
                 let is_done = matches!(event, AutomatonEvent::Done);
-                let _ = tx_for_task.send(event);
+                // Append to the replay history BEFORE broadcasting so
+                // a subscriber that manages to subscribe between the
+                // two operations sees the event in its history rather
+                // than missing it entirely. Cap with
+                // EVENT_HISTORY_CAPACITY (oldest-first eviction).
+                {
+                    let mut history = channel_for_task
+                        .history
+                        .lock()
+                        .expect("event history mutex poisoned");
+                    if history.len() >= EVENT_HISTORY_CAPACITY {
+                        let drop_n = history.len() + 1 - EVENT_HISTORY_CAPACITY;
+                        history.drain(..drop_n);
+                    }
+                    history.push(event.clone());
+                }
+                let _ = channel_for_task.broadcast.send(event);
                 if is_done {
+                    channel_for_task.done.store(true, Ordering::Release);
                     break;
                 }
             }
-            channels.remove(&automaton_id);
+
+            // Grace window: keep the channel entry discoverable so
+            // late WebSocket subscribers can still read the replay
+            // history. Holding `channel_for_task` here also keeps the
+            // broadcast sender alive, so any subscriber that joined
+            // mid-retention gets RecvError::Closed only after the
+            // retention elapses (not immediately).
+            tokio::time::sleep(RETENTION_AFTER_DONE).await;
+            channels.remove(&id_for_task);
         });
 
-        broadcast_tx
+        channel
     }
 
     fn build_runner_config(
@@ -1138,5 +1267,226 @@ mod tests {
         );
 
         assert!(filtered.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Event-stream replay tests
+    //
+    // Regression tests for the race described on [`EventChannel`]:
+    // `aura-os-server` connects to `/stream/automaton/:id` *after*
+    // `POST /automaton/start` returns. `tokio::sync::broadcast`
+    // receivers only observe events sent after they subscribe, so a
+    // fast-terminating automaton used to look like "stream closed
+    // without a terminal event" from the server's point of view.
+    //
+    // These tests drive `spawn_event_forwarder` directly via the mpsc
+    // it consumes, then exercise `subscribe_events` as a late
+    // subscriber.
+    // ------------------------------------------------------------------
+
+    fn test_bridge() -> AutomatonBridge {
+        use crate::scheduler::Scheduler;
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> =
+            Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("noop"));
+        let ws_dir = dir.path().join("workspaces");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        let scheduler = Arc::new(Scheduler::new(
+            store.clone(),
+            provider.clone(),
+            vec![],
+            vec![],
+            ws_dir,
+            None,
+        ));
+        let runtime = Arc::new(AutomatonRuntime::new());
+        let catalog = Arc::new(ToolCatalog::new());
+        let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
+        AutomatonBridge::new(
+            runtime,
+            store,
+            domain,
+            provider,
+            catalog,
+            ToolConfig::default(),
+        )
+        .with_scheduler(scheduler)
+    }
+
+    /// A subscriber that joins after every event has been emitted still
+    /// sees the full sequence via [`EventSubscription::history`].
+    #[tokio::test]
+    async fn late_subscriber_sees_replayed_history_after_done() {
+        use aura_automaton::AutomatonEvent;
+
+        let bridge = test_bridge();
+        let automaton_id = "aut-replay".to_string();
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        bridge.spawn_event_forwarder(automaton_id.clone(), rx);
+
+        tx.send(AutomatonEvent::Started {
+            automaton_id: automaton_id.clone(),
+        })
+        .await
+        .unwrap();
+        tx.send(AutomatonEvent::TaskStarted {
+            task_id: "task-1".into(),
+            task_title: "first task".into(),
+        })
+        .await
+        .unwrap();
+        tx.send(AutomatonEvent::TaskFailed {
+            task_id: "task-1".into(),
+            reason: "boom".into(),
+        })
+        .await
+        .unwrap();
+        tx.send(AutomatonEvent::Stopped {
+            automaton_id: automaton_id.clone(),
+            reason: "Failed".into(),
+        })
+        .await
+        .unwrap();
+        tx.send(AutomatonEvent::Done).await.unwrap();
+
+        // Wait for the forwarder to observe Done and set `done=true`.
+        // The forwarder pushes history before toggling the flag, so
+        // once `already_done` is true we know every event is visible.
+        let subscription = loop {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let sub = bridge
+                .subscribe_events(&automaton_id)
+                .expect("channel still in retention window");
+            if sub.already_done {
+                break sub;
+            }
+        };
+
+        let kinds: Vec<&'static str> = subscription
+            .history
+            .iter()
+            .map(|e| match e {
+                AutomatonEvent::Started { .. } => "started",
+                AutomatonEvent::TaskStarted { .. } => "task_started",
+                AutomatonEvent::TaskFailed { .. } => "task_failed",
+                AutomatonEvent::Stopped { .. } => "stopped",
+                AutomatonEvent::Done => "done",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec!["started", "task_started", "task_failed", "stopped", "done"],
+            "late subscriber must see every emitted event in order"
+        );
+        assert!(subscription.already_done);
+    }
+
+    /// A subscriber that joins mid-stream sees the events emitted so
+    /// far through `history` and any later events through `live`, in
+    /// order. This is what would have saved us in the logs the user
+    /// shared: the WS would observe `Started → TaskFailed → Done`
+    /// regardless of whether it subscribed 1 ms or 200 ms after
+    /// `POST /automaton/start` returned.
+    #[tokio::test]
+    async fn mid_stream_subscriber_sees_history_then_live_events() {
+        use aura_automaton::AutomatonEvent;
+
+        let bridge = test_bridge();
+        let automaton_id = "aut-mid".to_string();
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        bridge.spawn_event_forwarder(automaton_id.clone(), rx);
+
+        tx.send(AutomatonEvent::Started {
+            automaton_id: automaton_id.clone(),
+        })
+        .await
+        .unwrap();
+        tx.send(AutomatonEvent::TaskStarted {
+            task_id: "task-1".into(),
+            task_title: "first".into(),
+        })
+        .await
+        .unwrap();
+
+        // Let the forwarder drain the two events above into history.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let mut subscription = bridge
+            .subscribe_events(&automaton_id)
+            .expect("channel present");
+        assert!(!subscription.already_done);
+        assert_eq!(subscription.history.len(), 2);
+        assert!(matches!(
+            subscription.history[0],
+            AutomatonEvent::Started { .. }
+        ));
+        assert!(matches!(
+            subscription.history[1],
+            AutomatonEvent::TaskStarted { .. }
+        ));
+
+        // Emit the remainder after subscribe. These should arrive on
+        // the live receiver, not in history (history was snapshotted).
+        tx.send(AutomatonEvent::TaskCompleted {
+            task_id: "task-1".into(),
+            summary: "ok".into(),
+        })
+        .await
+        .unwrap();
+        tx.send(AutomatonEvent::Done).await.unwrap();
+
+        let first = subscription.live.recv().await.expect("live event");
+        assert!(matches!(first, AutomatonEvent::TaskCompleted { .. }));
+        let second = subscription.live.recv().await.expect("live event");
+        assert!(matches!(second, AutomatonEvent::Done));
+    }
+
+    /// History is capped at [`EVENT_HISTORY_CAPACITY`] so long-lived
+    /// dev-loop automatons don't grow unbounded. The oldest events
+    /// are dropped first; this is consistent with how
+    /// `tokio::sync::broadcast` would have behaved for an early
+    /// subscriber that fell behind.
+    #[tokio::test]
+    async fn history_caps_at_capacity_and_drops_oldest() {
+        use aura_automaton::AutomatonEvent;
+
+        let bridge = test_bridge();
+        let automaton_id = "aut-cap".to_string();
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        bridge.spawn_event_forwarder(automaton_id.clone(), rx);
+
+        let over = super::EVENT_HISTORY_CAPACITY + 5;
+        for i in 0..over {
+            tx.send(AutomatonEvent::LogLine {
+                message: format!("line {i}"),
+            })
+            .await
+            .unwrap();
+        }
+
+        // Drain.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+        let subscription = bridge
+            .subscribe_events(&automaton_id)
+            .expect("channel present");
+        assert_eq!(
+            subscription.history.len(),
+            super::EVENT_HISTORY_CAPACITY,
+            "history must be capped at EVENT_HISTORY_CAPACITY"
+        );
+        // The very first 5 "line 0".."line 4" should have been evicted.
+        match &subscription.history[0] {
+            AutomatonEvent::LogLine { message } => {
+                assert_eq!(
+                    message, "line 5",
+                    "oldest surviving entry should be the 6th emitted event"
+                );
+            }
+            other => panic!("unexpected event kind: {other:?}"),
+        }
     }
 }

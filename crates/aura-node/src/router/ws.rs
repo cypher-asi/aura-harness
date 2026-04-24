@@ -155,16 +155,26 @@ async fn handle_automaton_ws(
         }
     };
 
-    let mut rx = match bridge.subscribe_events(&automaton_id) {
-        Some(rx) => rx,
+    let subscription = match bridge.subscribe_events(&automaton_id) {
+        Some(sub) => sub,
         None => {
             let msg = serde_json::json!({"type": "error", "message": format!("automaton {automaton_id} not found or already finished")}).to_string();
             let _: Result<(), _> = ws_tx.send(WsMessage::Text(msg)).await;
             return;
         }
     };
+    let crate::automaton_bridge::EventSubscription {
+        history,
+        mut live,
+        already_done,
+    } = subscription;
 
-    info!(automaton_id = %automaton_id, "Automaton event stream connected");
+    info!(
+        automaton_id = %automaton_id,
+        history_len = history.len(),
+        already_done,
+        "Automaton event stream connected"
+    );
 
     // Drain the read side so the WebSocket layer can process ping/pong
     // and close frames. Without this the connection may be dropped by
@@ -180,29 +190,64 @@ async fn handle_automaton_ws(
         tracing::debug!(automaton_id = %drain_aid, "Automaton WS read side closed");
     });
 
-    loop {
-        match rx.recv().await {
-            Ok(event) => {
-                let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
-                match serde_json::to_string(&event) {
-                    Ok(json) => {
-                        if ws_tx.send(WsMessage::Text(json)).await.is_err() {
-                            break;
+    // Phase 1: flush the replay history so a late subscriber
+    // (typical: aura-os-server connects after POST /automaton/start
+    // returns, by which point a fast-failing automaton has often
+    // already emitted every event) sees the full, in-order event
+    // sequence any early subscriber would have received. If `Done`
+    // is in the history we're free to return as soon as we've sent
+    // it - no more events will arrive.
+    let mut saw_done_in_history = false;
+    for event in history {
+        let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
+        match serde_json::to_string(&event) {
+            Ok(json) => {
+                if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                    drain_handle.abort();
+                    info!(automaton_id = %automaton_id, "Automaton event stream disconnected");
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize replayed automaton event");
+            }
+        }
+        if is_done {
+            saw_done_in_history = true;
+            break;
+        }
+    }
+
+    // Phase 2: if Done is already past, short-circuit. Otherwise pump
+    // the live broadcast for any events emitted after our subscribe.
+    // Lagged events are reported to the client but do not terminate
+    // the stream; Closed means the retention window elapsed or the
+    // bridge shut down.
+    if !saw_done_in_history && !already_done {
+        loop {
+            match live.recv().await {
+                Ok(event) => {
+                    let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
+                    match serde_json::to_string(&event) {
+                        Ok(json) => {
+                            if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to serialize automaton event");
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to serialize automaton event");
+                    if is_done {
+                        break;
                     }
                 }
-                if is_done {
-                    break;
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
+                    let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
-                let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
     }
 
