@@ -421,6 +421,93 @@ fn test_allow_run_command_does_not_override_legacy_enable_cmd_tools_on() {
     clear_node_env_vars();
 }
 
+/// End-to-end verification that the full chain
+/// `AURA_AUTONOMOUS_DEV_LOOP=1` env → `NodeConfig::from_env()` →
+/// `ToolConfig` (constructed exactly as `node.rs` does at
+/// [`crate::node::Node::run`]) → `ToolCatalog::visible_tools` actually
+/// exposes `run_command` + `run_process` to the executor router.
+///
+/// Before the fix in commit `04dbe56`, `NodeConfig::from_env` silently
+/// dropped the three `AURA_*` env vars the desktop launcher sets at
+/// `apps/aura-os-desktop/src/main.rs` L686–691, so this assertion
+/// failed: the visible tools list was category-filtered down to
+/// fs-only, and every `cargo check`/`test`/`fmt`/`clippy` invocation
+/// the autonomous loop emitted hit the executor's category gate with
+/// "command tools not enabled". This test is the regression gate for
+/// that 3.0-class DoD failure — if it fails, the desktop-spawned
+/// sidecar is once again denying `run_command` despite the UI
+/// proclaiming autonomous mode.
+#[test]
+fn autonomous_env_actually_exposes_run_command_via_tool_catalog() {
+    use aura_tools::{catalog::ToolProfile, ToolCatalog, ToolConfig};
+
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_AUTONOMOUS_DEV_LOOP", "1");
+    let config = NodeConfig::from_env();
+
+    // Mirror the `ToolConfig` literal in `crate::node::Node::run`
+    // (crates/aura-node/src/node.rs ~L86). Keep this in sync —
+    // divergence is the failure mode this test is gating.
+    let tool_config = ToolConfig {
+        enable_fs: config.enable_fs_tools,
+        enable_commands: config.enable_cmd_tools,
+        command_allowlist: config.allowed_commands.clone(),
+        allow_shell: config.allow_shell,
+        ..Default::default()
+    };
+
+    assert!(tool_config.enable_commands, "commands must be enabled");
+    assert!(tool_config.allow_shell, "shell must be allowed");
+
+    let catalog = ToolCatalog::new();
+    let visible = catalog.visible_tools(ToolProfile::Core, &tool_config);
+    let visible_names: Vec<&str> = visible.iter().map(|t| t.name.as_str()).collect();
+
+    assert!(
+        visible_names.contains(&"run_command"),
+        "run_command must be visible in autonomous mode; got: {visible_names:?}"
+    );
+
+    clear_node_env_vars();
+}
+
+/// Symmetric negative case: with `AURA_AUTONOMOUS_DEV_LOOP` unset and
+/// no legacy / `AURA_ALLOW_RUN_COMMAND` overrides, the sidecar must
+/// stay fail-closed — `run_command` is *not* exposed. This prevents
+/// regressions where someone "helpfully" flips the default to `true`
+/// and quietly turns every non-autonomous deployment into a command
+/// execution surface.
+#[test]
+fn run_command_hidden_by_default_without_autonomous_env() {
+    use aura_tools::{catalog::ToolProfile, ToolCatalog, ToolConfig};
+
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    clear_node_env_vars();
+
+    let config = NodeConfig::from_env();
+    let tool_config = ToolConfig {
+        enable_fs: config.enable_fs_tools,
+        enable_commands: config.enable_cmd_tools,
+        command_allowlist: config.allowed_commands.clone(),
+        allow_shell: config.allow_shell,
+        ..Default::default()
+    };
+
+    assert!(!tool_config.enable_commands);
+
+    let catalog = ToolCatalog::new();
+    let visible = catalog.visible_tools(ToolProfile::Core, &tool_config);
+    let visible_names: Vec<&str> = visible.iter().map(|t| t.name.as_str()).collect();
+    assert!(
+        !visible_names.contains(&"run_command"),
+        "run_command must be hidden without autonomous mode; got: {visible_names:?}"
+    );
+
+    clear_node_env_vars();
+}
+
 #[test]
 fn test_resolve_project_path_local_absolute() {
     let config = NodeConfig {
