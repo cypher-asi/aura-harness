@@ -1,5 +1,10 @@
 # aura-harness Requirements
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in this spec
+> refer to the crate that was renamed to `aura-runtime` in Phase 0.5.
+> The compiled binary still ships as `aura-node` for operator
+> compatibility.
+
 Specification for what **aura-harness** needs to support so **aura-app** can fully delegate agent intelligence to it — same runtime binary for local sidecar and cloud microVM execution.
 
 ---

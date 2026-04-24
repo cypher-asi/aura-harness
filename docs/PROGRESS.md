@@ -148,7 +148,7 @@ Deterministic kernel with context building and policy.
 
 ---
 
-### Phase 7: Swarm Runtime (`aura-node`)
+### Phase 7: Swarm Runtime (`aura-runtime`)
 **Status:** 🟢 Complete (code written, requires LLVM to build)
 
 HTTP router, scheduler, and worker management.
@@ -265,7 +265,7 @@ Interactive command-line interface. **The separate `aura-cli` crate
 was never created.** Its intended surface is now delivered by the
 root `aura` binary (`src/`) — interactive TUI, login / logout /
 whoami, and the embedded HTTP server for file / record access. The
-headless server half lives in `aura-node`. See
+headless server half lives in `aura-runtime`. See
 [`README.md`](../README.md) under "Binaries" for the canonical entry
 point.
 
@@ -276,7 +276,7 @@ point.
 - [x] Transaction submission — delivered by `aura run` / the TUI's
   session bootstrap.
 - [x] Record streaming / tailing — delivered by the `/stream`
-  WebSocket in `aura-node`.
+  WebSocket in `aura-runtime`.
 - [x] Slash commands (/status, /history, /approve, /deny) — TUI
   command palette / event loop.
 - [x] Approval prompts inline — TUI approval modal.
@@ -330,7 +330,7 @@ aura_os/
 ├── aura-terminal/       # Ratatui TUI library
 ├── aura-automaton/      # Automaton lifecycle + built-ins
 ├── aura-auth/           # zOS login / credential store
-├── aura-node/           # HTTP router, scheduler
+├── aura-runtime/        # HTTP router, scheduler
 └── src/                 # Root `aura` binary (canonical CLI entry;
                          # supersedes the historical `aura-cli` crate
                          # — see README.md "Binaries").
@@ -339,7 +339,7 @@ aura_os/
 > **Historical note (2026):** this tree previously listed
 > `aura-executor/` and `aura-cli/`. `aura-executor` was dissolved into
 > `aura-core` + `aura-kernel`. `aura-cli` was never created — its
-> surface is the root `aura` binary (`src/`) plus `aura-node` for the
+> surface is the root `aura` binary (`src/`) plus `aura-runtime` for the
 > headless half.
 
 ---

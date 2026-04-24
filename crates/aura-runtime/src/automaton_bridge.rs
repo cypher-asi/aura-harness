@@ -1,7 +1,7 @@
 //! Bridge between `AutomatonController` (defined in `aura-tools`) and the
 //! concrete `AutomatonRuntime` + automaton types (from `aura-automaton`).
 //!
-//! This module lives in `aura-node` because it depends on both crates.
+//! This module lives in `aura-runtime` because it depends on both crates.
 //! It handles: JWT injection, tool executor wiring, event broadcasting,
 //! and non-blocking task execution.
 

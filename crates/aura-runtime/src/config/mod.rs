@@ -382,7 +382,7 @@ pub fn resolve_auth_token(data_dir: &Path) -> std::io::Result<String> {
     // other than `$data_dir/auth_token` — the token is only as strong
     // as its handling.
     eprintln!(
-        "aura-node auth token: {token} (store in client: export AURA_NODE_AUTH_TOKEN={token})"
+        "aura-runtime auth token: {token} (store in client: export AURA_NODE_AUTH_TOKEN={token})"
     );
     Ok(token)
 }

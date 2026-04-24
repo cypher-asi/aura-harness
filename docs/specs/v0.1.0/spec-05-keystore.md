@@ -1,5 +1,10 @@
 # AURA Keystore — Spec 05
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in this spec
+> refer to the crate that was renamed to `aura-runtime` in Phase 0.5.
+> The compiled binary still ships as `aura-node` for operator
+> compatibility.
+
 **Status**: Design-ready  
 **Builds on**: spec-01-aura.md, spec-02-interactive-runtime.md  
 **Goal**: Secure key storage for Swarms to access third-party services

@@ -2,7 +2,7 @@
 //!
 //! Two consumers drive the agent loop today: the TUI's forwarder in
 //! `src/event_loop/agent_events.rs` and the WebSocket session's
-//! `forward_events_to_ws` in `crates/aura-node/src/session/helpers.rs`.
+//! `forward_events_to_ws` in `crates/aura-runtime/src/session/helpers.rs`.
 //! Both used to contain hand-written matches over every [`AgentLoopEvent`]
 //! variant — which is fine until the enum grows a new variant and one
 //! side silently drops it.

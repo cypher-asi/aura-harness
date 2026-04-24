@@ -1,5 +1,5 @@
 //! Shared directory-walking and file-read helpers used by both the
-//! `aura-node` HTTP router and the embedded TUI-mode API server in the
+//! `aura-runtime` HTTP router and the embedded TUI-mode API server in the
 //! `aura` binary crate.
 //!
 //! The two callers had drifted into near-duplicate implementations of
@@ -8,7 +8,7 @@
 //! Phase 3 consolidates that here so a change to the ignore list or
 //! the read cap only needs to land in one place.
 //!
-//! Path resolution is still caller-specific: `aura-node` goes through
+//! Path resolution is still caller-specific: `aura-runtime` goes through
 //! [`crate::config::NodeConfig::resolve_allowed_path`] and serializes
 //! entries with workspace-relative, forward-slash normalized paths;
 //! the TUI server goes through [`aura_tools::Sandbox`] and serializes

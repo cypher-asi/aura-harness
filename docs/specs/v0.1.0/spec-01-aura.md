@@ -1,5 +1,10 @@
 # Aura Swarm MVP Spec (Rust + RocksDB + Tools + Claude Code Reasoner)
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in this spec
+> refer to the crate that was renamed to `aura-runtime` in Phase 0.5.
+> The compiled binary still ships as `aura-node` for operator
+> compatibility.
+
 ## 1) Purpose
 
 Build a Swarm that can run **many deterministic Agents** concurrently, where:

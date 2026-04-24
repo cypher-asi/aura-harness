@@ -55,14 +55,14 @@ sensitive crates after each phase:
 ```bash
 cargo check -p aura-agent   --all-targets
 cargo check -p aura-automaton --all-targets
-cargo check -p aura-node     --all-targets
+cargo check -p aura-runtime  --all-targets
 cargo check -p aura-kernel   --all-targets
 ```
 
 ```bash
 cargo test -p aura-agent
 cargo test -p aura-automaton
-cargo test -p aura-node
+cargo test -p aura-runtime
 cargo test -p aura-kernel
 ```
 
@@ -87,13 +87,13 @@ aura-memory
 aura-skills
 aura-auth
 aura-automaton
-aura-node
+aura-runtime
 aura-protocol    (external, ../aura-os/crates/aura-protocol)
 ```
 
 > **Historical (2026):** earlier drafts of this list named an `aura-cli`
 > crate. That crate was never created; its intended surface is split
-> between the root `aura` binary (interactive TUI) and `aura-node`
+> between the root `aura` binary (interactive TUI) and `aura-runtime`
 > (headless server). See `README.md` → "Binaries" for the canonical
 > entry point.
 
@@ -158,7 +158,7 @@ pub enum AgentError {
 }
 ```
 
-### 3.2 `aura-node`
+### 3.2 `aura-runtime`
 
 **Public modules:**
 
@@ -275,7 +275,7 @@ Archived execution checklist from migration period.
 - [ ] `cargo check --workspace --all-targets` passes
 - [ ] `cargo test --workspace --all-features` passes
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- [ ] Focused checks on `aura-agent`, `aura-automaton`, `aura-node`, `aura-kernel` pass
+- [ ] Focused checks on `aura-agent`, `aura-automaton`, `aura-runtime`, `aura-kernel` pass
 - [ ] API snapshots above match current state
 
 ### Phase 1 — AgentRunner boundary fix
@@ -318,7 +318,7 @@ Archived execution checklist from migration period.
 
 ### Phase 7 — Session lifecycle cleanup
 
-- [ ] `aura-node` session module simplified
+- [ ] `aura-runtime` session module simplified
 - [ ] G1–G5 pass
 - [ ] Focused crate checks pass
 

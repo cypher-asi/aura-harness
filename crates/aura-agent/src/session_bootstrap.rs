@@ -1,4 +1,4 @@
-//! Shared session-bootstrap helpers for `aura-node`, the TUI harness
+//! Shared session-bootstrap helpers for `aura-runtime`, the TUI harness
 //! and any future embedder.
 //!
 //! Phase 3 consolidated the per-binary copies of
@@ -116,7 +116,7 @@ pub fn load_auth_token() -> Option<String> {
 // Phase 3 consolidation: moved from `src/session_helpers.rs`.
 //
 // These helpers used to live next to the TUI binary but were needed by
-// `aura-node` and future embedders too. The remaining bootstrap helpers
+// `aura-runtime` and future embedders too. The remaining bootstrap helpers
 // are configuration-identical across deploys; per-tool enablement is policy
 // state, not environment.
 // ---------------------------------------------------------------------

@@ -23,7 +23,7 @@ fn default_files_depth() -> usize {
 /// frontend can render them unchanged on Windows and Unix. That
 /// contract is the reason this DTO is owned by the router rather than
 /// [`crate::files_api`] — the file-API helper stays on raw absolute
-/// paths and each caller (aura-node vs the TUI embedded server)
+/// paths and each caller (aura-runtime vs the TUI embedded server)
 /// handles its own serialisation shape.
 #[derive(Debug, Serialize)]
 struct FileDirEntry {

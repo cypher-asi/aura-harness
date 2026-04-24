@@ -14,7 +14,7 @@ This document captures all clippy warnings found after removing all `#![allow(..
 | aura-reasoner | 25 | ✅ Fixed |
 | aura-tools | 5 | ✅ Fixed |
 | aura-kernel | 22 | ✅ Fixed |
-| aura-node | 9 | ✅ Fixed |
+| aura-runtime | 9 | ✅ Fixed |
 | **Total** | **82** | **✅ All Fixed** |
 
 **All warnings resolved and tests passing as of January 8, 2026.**
@@ -188,7 +188,7 @@ Technical terms need backticks in documentation.
 
 ---
 
-## aura-node (9 warnings)
+## aura-runtime (9 warnings)
 
 ### `doc_markdown` (3 instances)
 | File | Line | Term |

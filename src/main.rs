@@ -294,9 +294,9 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 async fn run_headless() -> anyhow::Result<()> {
     info!("Starting AURA CLI in headless mode (node server)");
 
-    let config = aura_node::NodeConfig::from_env();
+    let config = aura_runtime::NodeConfig::from_env();
 
-    aura_node::Node::new(config).run().await
+    aura_runtime::Node::new(config).run().await
 }
 
 #[cfg(test)]

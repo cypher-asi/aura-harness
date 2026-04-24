@@ -55,7 +55,7 @@ Core ideas:
   aura-os/        # sibling repo (for aura-protocol and related crates)
 ```
 
-The path dependency is declared in [`Cargo.toml`](Cargo.toml) and [`crates/aura-node/Cargo.toml`](crates/aura-node/Cargo.toml) as `../aura-os/crates/aura-protocol`. RocksDB builds require LLVM/Clang; see [`docs/PROGRESS.md`](docs/PROGRESS.md) for platform notes.
+The path dependency is declared in [`Cargo.toml`](Cargo.toml) and [`crates/aura-runtime/Cargo.toml`](crates/aura-runtime/Cargo.toml) as `../aura-os/crates/aura-protocol`. RocksDB builds require LLVM/Clang; see [`docs/PROGRESS.md`](docs/PROGRESS.md) for platform notes.
 
 On Linux, the `keyring` crate's Secret Service backend links against `libdbus-1`, so the workspace also needs `libdbus-1-dev` and `pkg-config` at build time (e.g. `sudo apt install libdbus-1-dev pkg-config` on Debian/Ubuntu, `sudo dnf install dbus-devel pkgconf-pkg-config` on Fedora). macOS and Windows builds need no extra system packages for keyring.
 
@@ -71,8 +71,8 @@ cargo run
 # Run the same binary headless
 cargo run -- run --ui none
 
-# Run the standalone node server
-cargo run -p aura-node
+# Run the standalone node server (binary name stays `aura-node`)
+cargo run -p aura-runtime --bin aura-node
 ```
 
 Direct Anthropic access:
@@ -100,7 +100,7 @@ This workspace ships two binaries:
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
 | `aura` | [`src/main.rs`](src/main.rs) | **Canonical CLI entry point.** TUI by default; headless node with `run --ui none`; also hosts `login` / `logout` / `whoami` / `hello`. |
-| `aura-node` | [`crates/aura-node/src/main.rs`](crates/aura-node/src/main.rs) | Standalone headless server (HTTP + WebSocket API). |
+| `aura-node` | [`crates/aura-runtime/src/main.rs`](crates/aura-runtime/src/main.rs) | Standalone headless server (HTTP + WebSocket API). Binary name `aura-node` shipped from the `aura-runtime` crate (renamed in Phase 0.5). |
 
 > **Historical:** earlier design drafts and the v0.1.0 specs referred
 > to a separate `aura-cli` crate. That crate was retired in Wave 4 of
@@ -152,7 +152,7 @@ All members are declared in [`Cargo.toml`](Cargo.toml) under `[workspace].member
 | [`aura-auth`](crates/aura-auth) | zOS login client and JWT credential store (`~/.aura/credentials.json`) for proxy mode. |
 | [`aura-terminal`](crates/aura-terminal) | Ratatui-based terminal UI library: themes, components, input handling, layout. |
 | [`aura-automaton`](crates/aura-automaton) | Automaton lifecycle, scheduling, runtime, state, and built-in automatons (chat, dev loop, spec gen, task run). |
-| [`aura-node`](crates/aura-node) | HTTP router, WebSocket sessions, scheduler, and per-agent worker loops with single-writer guarantee. |
+| [`aura-runtime`](crates/aura-runtime) | HTTP router, WebSocket sessions, scheduler, and per-agent worker loops with single-writer guarantee. (Renamed from `aura-node` in Phase 0.5; ships the `aura-node` binary.) |
 
 ### External dependencies
 
@@ -185,7 +185,7 @@ aura-harness/
     aura-auth/              # zOS login, credential store
     aura-terminal/          # ratatui TUI library
     aura-automaton/         # automaton lifecycle and built-ins
-    aura-node/              # HTTP server, scheduler, workers
+    aura-runtime/           # HTTP server, scheduler, workers (ships the `aura-node` binary)
   tests/                    # integration, e2e, proptest, pipeline
   docs/                     # supplementary documentation
     architecture.md         #   full architecture reference
@@ -248,7 +248,7 @@ aura-harness/
 
 ## HTTP / WebSocket API
 
-All routes are defined in `crates/aura-node/src/router/mod.rs` (`create_router`). Names use Axum path-parameter syntax.
+All routes are defined in `crates/aura-runtime/src/router/mod.rs` (`create_router`). Names use Axum path-parameter syntax.
 
 ### Health & workspace
 
@@ -334,7 +334,7 @@ Writes flow through a two-stage pipeline (heuristic extractor + optional LLM ref
 
 ## Configuration
 
-The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-node/src/config/mod.rs`](crates/aura-node/src/config/mod.rs). Copy [`.env.example`](.env.example) as a starting point.
+The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-runtime/src/config/mod.rs`](crates/aura-runtime/src/config/mod.rs). Copy [`.env.example`](.env.example) as a starting point.
 
 ### LLM routing
 
@@ -400,7 +400,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all --all-features
 
 # Fast smoke test: node config
-cargo test -p aura-node config::
+cargo test -p aura-runtime config::
 
 # Check non-RocksDB crates (no LLVM required)
 cargo check -p aura-core -p aura-kernel -p aura-reasoner

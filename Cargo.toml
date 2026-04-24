@@ -18,7 +18,7 @@ aura-tools = { path = "crates/aura-tools" }
 aura-agent = { path = "crates/aura-agent" }
 aura-memory = { path = "crates/aura-memory" }
 aura-auth = { path = "crates/aura-auth" }
-aura-node = { path = "crates/aura-node" }
+aura-runtime = { path = "crates/aura-runtime" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -51,7 +51,7 @@ members = [
     "crates/aura-agent",
     "crates/aura-auth",
     "crates/aura-automaton",
-    "crates/aura-node",
+    "crates/aura-runtime",
     "crates/aura-memory",
     "crates/aura-skills",
 ]
@@ -176,7 +176,7 @@ keyring = { version = "3", default-features = false, features = [
 once_cell = "1.19"
 
 [dev-dependencies]
-aura-node = { path = "crates/aura-node", features = ["test-support"] }
+aura-runtime = { path = "crates/aura-runtime", features = ["test-support"] }
 aura-core = { path = "crates/aura-core" }
 aura-kernel = { path = "crates/aura-kernel" }
 aura-store = { path = "crates/aura-store" }

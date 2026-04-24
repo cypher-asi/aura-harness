@@ -63,7 +63,7 @@ run_band() {
 #   - the agent-side recording seams (kernel_gateway.rs, recording_stream.rs)
 #   - the reasoner provider internals and their mocks
 #   - the automaton runtime (wraps its provider with KernelModelGateway in
-#     aura-node before handing it over)
+#     aura-runtime before handing it over)
 #   - the memory subsystem, which only ever holds an Arc<KernelModelGateway>
 #   - any *test* file (unit, integration, harness shims)
 run_band "§1/§3" "direct ModelProvider::complete call outside the recording seam" \
@@ -107,11 +107,11 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor" \
 #     this allowlist collapses to just the kernel/store crates.
 #
 # Production holders with follow-up TODOs:
-#   - crates/aura-node/src/router/mod.rs      — RouterState field piped into WsContext
-#   - crates/aura-node/src/session/mod.rs     — WsContext handed to Kernel::new
-#   - crates/aura-node/src/scheduler.rs       — Scheduler builds per-agent kernels
-#   - crates/aura-node/src/automaton_bridge.rs — AutomatonBridge builds automaton kernels
-#   - crates/aura-node/src/node.rs            — boots the process-wide store
+#   - crates/aura-runtime/src/router/mod.rs      — RouterState field piped into WsContext
+#   - crates/aura-runtime/src/session/mod.rs     — WsContext handed to Kernel::new
+#   - crates/aura-runtime/src/scheduler.rs       — Scheduler builds per-agent kernels
+#   - crates/aura-runtime/src/automaton_bridge.rs — AutomatonBridge builds automaton kernels
+#   - crates/aura-runtime/src/node.rs            — boots the process-wide store
 #   - src/main.rs                             — top-level binary wiring
 #
 # Test-only holders (filenames that don't match `*test*.rs` but whose hits
@@ -119,10 +119,10 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor" \
 #   - crates/aura-agent/src/kernel_gateway.rs
 #   - crates/aura-agent/src/kernel_domain_gateway.rs
 #   - crates/aura-agent/src/recording_stream.rs
-#   - crates/aura-node/src/worker.rs
+#   - crates/aura-runtime/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store::)?Store>' \
-    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-node/src/scheduler\.rs|crates/aura-node/src/automaton_bridge\.rs|crates/aura-node/src/router/mod\.rs|crates/aura-node/src/session/mod\.rs|crates/aura-node/src/worker\.rs|crates/aura-node/src/node\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-runtime/src/scheduler\.rs|crates/aura-runtime/src/automaton_bridge\.rs|crates/aura-runtime/src/router/mod\.rs|crates/aura-runtime/src/session/mod\.rs|crates/aura-runtime/src/worker\.rs|crates/aura-runtime/src/node\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into aura-store directly. Any code
 # that needs persistence goes through the kernel. Test files in the same

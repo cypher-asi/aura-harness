@@ -1,5 +1,10 @@
 # AURA Terminal UI — Spec 03
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in this spec
+> refer to the crate that was renamed to `aura-runtime` in Phase 0.5.
+> The compiled binary still ships as `aura-node` for operator
+> compatibility.
+
 **Status**: Design-ready  
 **Builds on**: spec-02-interactive-runtime.md  
 **Goal**: Cyber-retro terminal interface that delights developers

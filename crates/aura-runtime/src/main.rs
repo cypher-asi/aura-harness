@@ -1,6 +1,6 @@
 //! Aura Node binary entry point.
 
-use aura_node::{Node, NodeConfig};
+use aura_runtime::{Node, NodeConfig};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[tokio::main]

@@ -40,7 +40,7 @@ use helpers::domain_err;
 //    The handler file IS the source of truth by construction.
 //
 // 2. `aura-os-server` has no `impl DomainApi` of its own — the only
-//    implementation is `HttpDomainApi` in `crates/aura-node/src/domain.rs`.
+//    implementation is `HttpDomainApi` in `crates/aura-runtime/src/domain.rs`.
 //    If the server were to ship a `domain_tools` list over the wire it
 //    would have to duplicate this slice (or fetch it from the harness it
 //    is calling back into), moving the source of truth to a strictly

@@ -1,5 +1,10 @@
 # AURA Remote Machine Wiring - Spec 06
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in this spec
+> refer to the crate that was renamed to `aura-runtime` in Phase 0.5.
+> The compiled binary still ships as `aura-node` for operator
+> compatibility.
+
 **Status**: Design-ready  
 **Builds on**: spec-02-interactive-runtime.md, spec-05-keystore.md  
 **Goal**: Wire agents to remote machines via SSH with unified tool API

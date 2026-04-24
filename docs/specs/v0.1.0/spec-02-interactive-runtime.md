@@ -1,5 +1,10 @@
 # AURA Interactive Coding Runtime (Rust-only) — Spec 02
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in this spec
+> refer to the crate that was renamed to `aura-runtime` in Phase 0.5.
+> The compiled binary still ships as `aura-node` for operator
+> compatibility.
+
 **Status**: Implemented  
 **Builds on**: spec-01-swarm-mvp.md  
 **Goal**: Claude Code–like agentic loop, fully in Rust

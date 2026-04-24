@@ -5,7 +5,7 @@
 //!
 //! NOTE: These definitions encode product-level policy (which tools are available
 //! in chat vs engine vs multi-project modes). Consider migrating mode-specific
-//! tool set composition to the caller (the root `aura` binary, `aura-node`, or a
+//! tool set composition to the caller (the root `aura` binary, `aura-runtime`, or a
 //! shared session crate) and keeping only individual tool schemas here.
 
 use aura_core::ToolDefinition;

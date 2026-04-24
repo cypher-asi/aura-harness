@@ -1,6 +1,6 @@
 //! Shared bearer-token authentication helper.
 //!
-//! Both the `aura-node` HTTP router (`crates/aura-node/src/router/auth.rs`)
+//! Both the `aura-runtime` HTTP router (`crates/aura-runtime/src/router/auth.rs`)
 //! and the embedded TUI API server (`src/api_server.rs`) need a
 //! constant-time `Authorization: Bearer <token>` check against a
 //! configured secret. Previously each site had its own copy — two

@@ -1,5 +1,10 @@
 # v0.1.0 Design Specs — Historical
 
+> **Note (Phase 0.5, 2026):** references to `aura-node` in these specs
+> now refer to the crate that was renamed to `aura-runtime` in
+> Phase 0.5. The compiled binary retains the name `aura-node` so the
+> Dockerfile `CMD` and operator env-vars (`AURA_NODE_*`) are unchanged.
+
 This directory contains the **v0.1.0 design specifications** for the
 Aura harness. These documents describe the architecture as it was
 imagined during the early 2026 design sprint; they are preserved here
@@ -13,13 +18,14 @@ the workspace. In particular:
 
 | Spec reference | Current location |
 |---|---|
-| `aura-cli` crate (interactive REPL, approvals, slash commands, record tailing) | **Never created.** The intended surface is split between the **root `aura` binary** (`src/` — interactive TUI, login/logout/whoami, embedded API server) and **`aura-node`** (headless HTTP + WebSocket server). See `README.md` → "Binaries". |
+| `aura-cli` crate (interactive REPL, approvals, slash commands, record tailing) | **Never created.** The intended surface is split between the **root `aura` binary** (`src/` — interactive TUI, login/logout/whoami, embedded API server) and **`aura-runtime`** (headless HTTP + WebSocket server; previously named `aura-node`). See `README.md` → "Binaries". |
 | `aura-cli/src/main.rs` | `src/main.rs` (root `aura` binary) |
-| `aura-cli/src/session.rs` | `crates/aura-node/src/session/` for the WS-bridged session flow; the TUI session helpers live in `src/session_helpers.rs`. |
+| `aura-cli/src/session.rs` | `crates/aura-runtime/src/session/` for the WS-bridged session flow; the TUI session helpers live in `src/session_helpers.rs`. |
 | `aura-cli/src/bridge.rs` | `src/event_loop/` + `aura-terminal` (TUI command surface). |
 | `aura-executor` crate | Dissolved into `aura-core` + `aura-kernel`. |
 | `aura-gateway-ts` (Node.js sidecar) | Removed; the Rust `aura-reasoner` talks directly to the Anthropic API or to `aura-router` via JWT. |
-| `aura-session` crate | Dissolved into binary-local session helper modules (`src/session_helpers.rs`, `crates/aura-node/src/session/`). |
+| `aura-session` crate | Dissolved into binary-local session helper modules (`src/session_helpers.rs`, `crates/aura-runtime/src/session/`). |
+| `aura-node` crate | Renamed to `aura-runtime` in Phase 0.5. The compiled binary is still called `aura-node`. |
 
 Wherever one of the `v0.1.0/` specs references `aura-cli/src/...`,
 read it as a reference to the equivalent path under `src/...` in the

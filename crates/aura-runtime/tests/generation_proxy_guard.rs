@@ -1,6 +1,6 @@
 //! Regression guard for the **generation-proxy declared exception**.
 //!
-//! The module `crates/aura-node/src/session/generation.rs` is documented in
+//! The module `crates/aura-runtime/src/session/generation.rs` is documented in
 //! `docs/invariants.md` as an explicit exception to the "all LLM calls go
 //! through the kernel gateway" invariant. The exception is narrow: the
 //! module is a pure SSE pass-through that proxies image / 3D generation

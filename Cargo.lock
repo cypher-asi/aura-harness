@@ -132,9 +132,9 @@ dependencies = [
  "aura-core",
  "aura-kernel",
  "aura-memory",
- "aura-node",
  "aura-protocol",
  "aura-reasoner",
+ "aura-runtime",
  "aura-store",
  "aura-terminal",
  "aura-tools",
@@ -292,7 +292,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-node"
+name = "aura-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aura-reasoner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aura-core",
+ "bytes",
+ "futures-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aura-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -334,31 +359,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "which",
-]
-
-[[package]]
-name = "aura-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aura-reasoner"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-core",
- "bytes",
- "futures-util",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
 ]
 
 [[package]]

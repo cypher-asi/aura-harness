@@ -17,7 +17,7 @@ use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 
 // ---------------------------------------------------------------------------
-// Controller trait (implemented in aura-node)
+// Controller trait (implemented in aura-runtime)
 // ---------------------------------------------------------------------------
 
 /// Abstraction over automaton lifecycle so tools don't depend on `aura-automaton`.

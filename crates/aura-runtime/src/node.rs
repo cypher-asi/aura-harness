@@ -73,7 +73,7 @@ impl Node {
         // path that accidentally compares against it fails closed.
         if self.config.require_auth {
             self.config.auth_token = crate::config::resolve_auth_token(&self.config.data_dir)
-                .context("resolving aura-node auth token")?;
+                .context("resolving aura-runtime auth token")?;
         } else {
             self.config.auth_token.clear();
         }
@@ -92,7 +92,7 @@ impl Node {
             info!(
                 allowed_commands = ?tool_config.command.command_allowlist,
                 allow_shell = tool_config.command.allow_shell,
-                "aura-node run_command enabled"
+                "aura-runtime run_command enabled"
             );
         }
 

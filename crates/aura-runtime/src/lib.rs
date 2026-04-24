@@ -1,6 +1,10 @@
-//! # aura-node
+//! # aura-runtime
 //!
-//! Node runtime for Aura.
+//! Runtime crate for Aura (router, scheduler, workers).
+//!
+//! The compiled binary name is declared in `Cargo.toml`'s `[[bin]]`
+//! section and is deliberately decoupled from the crate name to avoid
+//! churn in Dockerfile `CMD` and operator scripts.
 //!
 //! Provides:
 //! - HTTP router for transaction submission
@@ -63,7 +67,7 @@ pub mod test_support {
     pub use crate::scheduler::Scheduler;
 }
 
-/// Top-level error type for the aura-node crate.
+/// Top-level error type for the aura-runtime crate.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
     /// Server bind or runtime error.

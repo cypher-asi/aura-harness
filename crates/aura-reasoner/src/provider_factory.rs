@@ -3,7 +3,7 @@
 //! Historically two parallel factories existed:
 //! - `aura_agent::session_bootstrap::select_provider(name)` — used from the
 //!   root binary to pick a provider by short name (`"anthropic"`, `"mock"`).
-//! - `aura_node::provider_factory` — used from the WebSocket session handler
+//! - `aura_runtime::provider_factory` — used from the WebSocket session handler
 //!   to build a provider from a session-scoped configuration.
 //!
 //! Both ultimately constructed a [`Box<dyn ModelProvider>`]. Wave 4
@@ -61,7 +61,7 @@ pub enum ProviderSpec {
 /// This mirrors the fields carried on the wire-level
 /// `aura_protocol::SessionProviderConfig` but lives inside the reasoner so
 /// `aura-reasoner` does not take a cross-tree dependency on the protocol
-/// crate. Call sites (e.g. `aura-node`) convert the protocol DTO to this
+/// crate. Call sites (e.g. `aura-runtime`) convert the protocol DTO to this
 /// struct at the boundary.
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {

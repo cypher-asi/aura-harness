@@ -71,8 +71,17 @@ policy pipeline. The AgentLoop never knows the difference.
 | `aura-memory` | Per-agent memory: fact/event/procedure store, two-stage write pipeline, deterministic retrieval for prompt injection. |
 | `aura-skills` | Skill system wire-compatible with the Claude Code `SKILL.md` / `AgentSkills` open standard; per-agent install store and activation. |
 | `aura-automaton` | Workflow/automation helpers that drive scripted agent behavior. |
-| `aura-node` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
+| `aura-runtime` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
 | `aura` | Root binary wiring for launch modes, runtime setup, and top-level command entrypoints. |
+
+> **Historical deviation (Phase 0.5):** the runtime crate was previously
+> named `aura-node`. In Phase 0.5 it was renamed to `aura-runtime` to
+> match the layered-architecture vocabulary (the crate is the runtime
+> that hosts the router, scheduler, and workers). The compiled binary
+> keeps the name `aura-node` so that the Dockerfile `CMD` and operator
+> muscle memory (`aura-node.exe`, `AURA_NODE_AUTH_TOKEN`,
+> `AURA_NODE_REQUIRE_AUTH`) do not churn. Older spec text that
+> references the `aura-node` crate now refers to `aura-runtime`.
 
 > **Historical deviation (2026, Wave 4 / Phase 5d):** the v0.1.0 design
 > specs mention a separate `aura-cli` crate. That crate was **never
@@ -151,7 +160,7 @@ additional cross-cutting dependencies.
            │
  L6  Server▼
  ┌──────────────────────────────────────────────────┐
- │                   aura-node                      │
+ │                  aura-runtime                    │
  │  → core, protocol, store, reasoner, kernel,      │
  │    tools, agent, automaton, memory, skills       │
  └────────────────────────┬─────────────────────────┘
@@ -538,7 +547,7 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 
 ### 7. `aura-protocol` — Wire Protocol Types
 
-Serde types for the `/stream` WebSocket API. Consumed by both the harness server (`aura-node`) and external clients. Self-contained — no dependency on any `aura-*` crate (wire-compatible by convention).
+Serde types for the `/stream` WebSocket API. Consumed by both the harness server (`aura-runtime`) and external clients. Self-contained — no dependency on any `aura-*` crate (wire-compatible by convention).
 
 | Type | Direction | Purpose |
 |------|-----------|---------|
@@ -721,7 +730,7 @@ Long-running automaton workflows that drive `AgentLoop` on a schedule.
 
 ---
 
-### 13. `aura-node` — HTTP & WebSocket Server
+### 13. `aura-runtime` — HTTP & WebSocket Server
 
 Headless server with REST API, WebSocket streaming sessions, per-agent scheduling, and a worker loop.
 
@@ -816,7 +825,7 @@ The primary entry point. Supports TUI mode (default) and headless mode.
 | `cli.rs` | Clap definitions: `Cli`, `Commands`, `RunArgs`, `UiMode` (Terminal/None) |
 | `event_loop/` | Terminal event loop: `EventLoopContext`, `run_event_loop` — bridges `UiEvent` ↔ `AgentLoop` ↔ `UiCommand`. Subfiles: `handlers.rs`, `agent_events.rs`, `record_ui.rs` |
 | `session_helpers.rs` | Thin re-export layer over `aura_agent::session_bootstrap` (Phase 3 consolidation). Shared bootstrap helpers such as `default_agent_config` and `build_executor_router_with_config` live in `aura_agent`. |
-| `api_server.rs` | Embedded HTTP server for TUI mode: `/health` plus bearer-gated `/api/files` and `/api/read-file`. File walking / reading logic lives in `aura_node::files_api` (Phase 3 consolidation). |
+| `api_server.rs` | Embedded HTTP server for TUI mode: `/health` plus bearer-gated `/api/files` and `/api/read-file`. File walking / reading logic lives in `aura_runtime::files_api` (Phase 3 consolidation). |
 | `record_loader.rs` | Record loading utilities |
 
 ---
@@ -883,7 +892,7 @@ sequenceDiagram
 
 ---
 
-### Flow 2: WebSocket Session (aura-node)
+### Flow 2: WebSocket Session (aura-runtime)
 
 Used by `aura-os` and other clients connecting over the `/stream` WebSocket endpoint.
 

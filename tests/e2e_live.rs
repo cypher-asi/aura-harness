@@ -1,4 +1,4 @@
-//! End-to-end integration tests against a live aura-node server.
+//! End-to-end integration tests against a live aura-runtime server.
 //!
 //! These tests boot a real node, connect via HTTP and WebSocket, and exercise
 //! health, REST, WebSocket session lifecycle, and LLM/tool flows against live
