@@ -36,21 +36,34 @@ pub enum AutomatonEvent {
 
     // Streaming / LLM
     TextDelta {
-        delta: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        #[serde(alias = "delta")]
+        text: String,
     },
     ThinkingDelta {
-        delta: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        #[serde(alias = "delta")]
+        thinking: String,
     },
     Progress {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         message: String,
     },
 
     // Tool usage
+    #[serde(rename = "tool_use_start")]
     ToolCallStarted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         id: String,
         name: String,
     },
     ToolCallSnapshot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         id: String,
         name: String,
         input: serde_json::Value,
@@ -71,6 +84,8 @@ pub enum AutomatonEvent {
     /// having to stitch `tool_call_snapshot` and `tool_result` events
     /// together by id.
     ToolCallCompleted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         id: String,
         name: String,
         input: serde_json::Value,
@@ -81,6 +96,8 @@ pub enum AutomatonEvent {
         is_error: bool,
     },
     ToolResult {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         id: String,
         name: String,
         result: String,
@@ -208,6 +225,8 @@ pub enum AutomatonEvent {
 
     // Token usage
     TokenUsage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
         input_tokens: u64,
         output_tokens: u64,
     },

@@ -65,7 +65,7 @@ impl DevLoopAutomaton {
     ) -> Result<TickOutcome, AutomatonError> {
         if self.tool_executor.is_none() {
             return Err(AutomatonError::InvalidConfig(
-                "no tool executor configured - the agent cannot perform file or command operations"
+                "no tool executor configured â€” the agent cannot perform file or command operations"
                     .into(),
             ));
         }
@@ -243,6 +243,7 @@ impl DevLoopAutomaton {
             summary: exec.notes,
         });
         ctx.emit(AutomatonEvent::TokenUsage {
+            task_id: Some(task.id.clone()),
             input_tokens: exec.input_tokens,
             output_tokens: exec.output_tokens,
         });

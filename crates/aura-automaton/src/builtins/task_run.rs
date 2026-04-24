@@ -286,9 +286,10 @@ impl TaskRunAutomaton {
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
         let automaton_tx = ctx.event_tx.clone();
+        let task_id = cfg.task_id.clone();
         tokio::spawn(async move {
             while let Some(evt) = event_rx.recv().await {
-                super::dev_loop::forward_agent_event(&automaton_tx, evt);
+                super::dev_loop::forward_agent_event(&automaton_tx, evt, Some(&task_id));
             }
         });
 
@@ -348,6 +349,7 @@ impl TaskRunAutomaton {
                     summary: exec.notes,
                 });
                 ctx.emit(AutomatonEvent::TokenUsage {
+                    task_id: Some(task_id.to_string()),
                     input_tokens: exec.input_tokens,
                     output_tokens: exec.output_tokens,
                 });

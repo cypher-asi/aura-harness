@@ -113,9 +113,10 @@ impl DevLoopAutomaton {
         let cancel = ctx.cancellation_token().clone();
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
         let automaton_tx = ctx.event_tx.clone();
+        let task_id = task.id.clone();
         tokio::spawn(async move {
             while let Some(evt) = event_rx.recv().await {
-                forward_agent_event(&automaton_tx, evt);
+                forward_agent_event(&automaton_tx, evt, Some(&task_id));
             }
         });
 

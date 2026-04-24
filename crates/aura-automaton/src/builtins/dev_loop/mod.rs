@@ -546,12 +546,24 @@ fn truncate_summary(s: &str, max: usize) -> String {
 pub fn forward_agent_event(
     tx: &tokio::sync::mpsc::Sender<AutomatonEvent>,
     evt: aura_agent::AgentLoopEvent,
+    task_id: Option<&str>,
 ) {
     use aura_agent::AgentLoopEvent;
+    let task_id_value = || task_id.map(str::to_owned);
     let automaton_event = match evt {
-        AgentLoopEvent::TextDelta(d) => AutomatonEvent::TextDelta { delta: d },
-        AgentLoopEvent::ThinkingDelta(d) => AutomatonEvent::ThinkingDelta { delta: d },
-        AgentLoopEvent::ToolStart { id, name } => AutomatonEvent::ToolCallStarted { id, name },
+        AgentLoopEvent::TextDelta(text) => AutomatonEvent::TextDelta {
+            task_id: task_id_value(),
+            text,
+        },
+        AgentLoopEvent::ThinkingDelta(thinking) => AutomatonEvent::ThinkingDelta {
+            task_id: task_id_value(),
+            thinking,
+        },
+        AgentLoopEvent::ToolStart { id, name } => AutomatonEvent::ToolCallStarted {
+            task_id: task_id_value(),
+            id,
+            name,
+        },
         AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
             // Partial JSON is expected while a `tool_use` block is
             // still streaming -- forward it with
@@ -563,12 +575,14 @@ pub fn forward_agent_event(
             // blocks can filter.
             match serde_json::from_str::<serde_json::Value>(&input) {
                 Ok(parsed) => AutomatonEvent::ToolCallSnapshot {
+                    task_id: task_id_value(),
                     id,
                     name,
                     input: parsed,
                     snapshot_partial: false,
                 },
                 Err(_) => AutomatonEvent::ToolCallSnapshot {
+                    task_id: task_id_value(),
                     id,
                     name,
                     input: serde_json::Value::String(input),
@@ -582,6 +596,7 @@ pub fn forward_agent_event(
             content,
             is_error,
         } => AutomatonEvent::ToolResult {
+            task_id: task_id_value(),
             id: tool_use_id,
             name: tool_name,
             result: content,
@@ -601,6 +616,7 @@ pub fn forward_agent_event(
             input,
             is_error,
         } => AutomatonEvent::ToolCallCompleted {
+            task_id: task_id_value(),
             id: tool_use_id,
             name: tool_name,
             input,
@@ -611,6 +627,7 @@ pub fn forward_agent_event(
             output_tokens,
             ..
         } => AutomatonEvent::TokenUsage {
+            task_id: task_id_value(),
             input_tokens,
             output_tokens,
         },
@@ -619,10 +636,8 @@ pub fn forward_agent_event(
             automaton_id: String::new(),
             message,
         },
-        // Per-tool-call streaming retry lifecycle. `task_id` is left
-        // empty here because this forwarder is not task-aware; the
-        // surrounding tick.rs / task_run.rs emits TaskStarted with the
-        // id so UI consumers can correlate on the preceding frame.
+        // Per-tool-call streaming retry lifecycle carries the active
+        // task id when this forwarder is used by task-run/dev-loop.
         AgentLoopEvent::ToolCallRetrying {
             tool_use_id,
             tool_name,
@@ -631,7 +646,7 @@ pub fn forward_agent_event(
             delay_ms,
             reason,
         } => AutomatonEvent::ToolCallRetrying {
-            task_id: String::new(),
+            task_id: task_id.unwrap_or_default().to_string(),
             tool_use_id,
             tool_name,
             attempt,
@@ -644,7 +659,7 @@ pub fn forward_agent_event(
             tool_name,
             reason,
         } => AutomatonEvent::ToolCallFailed {
-            task_id: String::new(),
+            task_id: task_id.unwrap_or_default().to_string(),
             tool_use_id,
             tool_name,
             reason,

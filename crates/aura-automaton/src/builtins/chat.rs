@@ -98,6 +98,7 @@ impl Automaton for ChatAutomaton {
         self.save_assistant_reply(ctx, &cfg, &result).await;
 
         ctx.emit(AutomatonEvent::TokenUsage {
+            task_id: None,
             input_tokens: result.total_input_tokens,
             output_tokens: result.total_output_tokens,
         });
@@ -113,6 +114,7 @@ impl ChatAutomaton {
         cfg: &ChatConfig,
     ) -> Result<Vec<MessageDescriptor>, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Loading conversation...".into(),
         });
 
@@ -147,6 +149,7 @@ impl ChatAutomaton {
         AutomatonError,
     > {
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Building context...".into(),
         });
 
@@ -171,6 +174,7 @@ impl ChatAutomaton {
         tools: Vec<aura_reasoner::ToolDefinition>,
     ) -> Result<aura_agent::AgentLoopResult, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Waiting for response...".into(),
         });
 
@@ -186,7 +190,7 @@ impl ChatAutomaton {
         let automaton_tx = ctx.event_tx.clone();
         tokio::spawn(async move {
             while let Some(evt) = event_rx.recv().await {
-                super::dev_loop::forward_agent_event(&automaton_tx, evt);
+                super::dev_loop::forward_agent_event(&automaton_tx, evt, None);
             }
         });
 

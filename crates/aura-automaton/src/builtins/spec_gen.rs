@@ -77,6 +77,7 @@ impl Automaton for SpecGenAutomaton {
         self.save_specs(ctx, &cfg, &specs).await?;
 
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: format!("{} specs generated and saved", specs.len()),
         });
 
@@ -91,6 +92,7 @@ impl SpecGenAutomaton {
         cfg: &SpecGenConfig,
     ) -> Result<String, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Loading project...".into(),
         });
 
@@ -101,6 +103,7 @@ impl SpecGenAutomaton {
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Reading requirements document...".into(),
         });
 
@@ -134,6 +137,7 @@ impl SpecGenAutomaton {
         requirements: &str,
     ) -> Result<Vec<ParsedSpec>, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Generating specifications...".into(),
         });
 
@@ -157,11 +161,13 @@ impl SpecGenAutomaton {
             .map_err(|e| AutomatonError::AgentExecution(format!("LLM call failed: {e}")))?;
 
         ctx.emit(AutomatonEvent::TokenUsage {
+            task_id: None,
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
         });
 
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: "Parsing AI response...".into(),
         });
 
@@ -183,6 +189,7 @@ impl SpecGenAutomaton {
         specs: &[ParsedSpec],
     ) -> Result<(), AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
+            task_id: None,
             message: format!("Saving {} specs...", specs.len()),
         });
 
