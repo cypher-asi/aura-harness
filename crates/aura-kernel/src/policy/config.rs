@@ -184,6 +184,29 @@ impl PolicyConfig {
         }
     }
 
+    /// Add a single tool name to `allowed_tools` **without** forcing a
+    /// permission level. The effective level is whatever
+    /// [`tool_permissions`] already contains for `name`, or
+    /// [`default_tool_permission`] if no override exists — so
+    /// `RequireApproval`-by-default tools like `git_push` stay at
+    /// `RequireApproval` instead of being silently elevated to
+    /// `AlwaysAllow` by the allow-list seed.
+    ///
+    /// Use this when you want the kernel to surface a tool to the LLM
+    /// and route through the dispatcher, but you still want the
+    /// configured approval semantics to govern per-call authorization.
+    pub fn allow_tool_name(&mut self, name: impl Into<String>) {
+        self.allowed_tools.insert(name.into());
+    }
+
+    /// Batched form of [`Self::allow_tool_name`]. Adds every name to
+    /// `allowed_tools` without touching `tool_permissions`.
+    pub fn allow_tool_names(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
+        for name in names {
+            self.allow_tool_name(name);
+        }
+    }
+
     /// Replace the installed integrations set for this runtime.
     pub fn set_installed_integrations(
         &mut self,

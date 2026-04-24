@@ -45,7 +45,10 @@ pub use catalog::ToolCatalog;
 pub use error::ToolError;
 pub use executor::ToolExecutor;
 pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
-pub use git_tool::{GitCommitPushTool, GitCommitTool, GitPushTool, GIT_TOOL_NAMES};
+pub use git_tool::{
+    GitCommitPushTool, GitCommitTool, GitPushTool, GIT_LOCAL_TOOL_NAMES, GIT_REMOTE_TOOL_NAMES,
+    GIT_TOOL_NAMES,
+};
 pub use http_tool::{HttpAuthSource, HttpMethod, HttpToolDefinition, HttpToolDefinitionBuilder};
 pub use intent_classifier::{ClassifierError, IntentClassifier};
 pub use registry::{DefaultToolRegistry, ToolRegistry};

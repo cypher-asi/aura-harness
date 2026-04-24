@@ -942,9 +942,27 @@ impl Tool for GitCommitPushTool {
     }
 }
 
-/// The set of tool names registered by this module. Kept in sync with
-/// the [`aura_kernel::default_tool_permission`] branch that maps them
-/// to [`aura_kernel::PermissionLevel::RequireApproval`].
+/// Git tools that operate purely on the local workspace and never
+/// reach a remote. Safe to elevate to `AlwaysAllow` for any automaton
+/// that already has write access to the workspace — the mutation is
+/// contained by the `GitExecutor` workspace-escape checks.
+pub const GIT_LOCAL_TOOL_NAMES: &[&str] = &["git_commit"];
+
+/// Git tools that talk to a remote (require both a repo URL and an
+/// auth token to be meaningful). Elevating these without a configured
+/// remote would let an automaton silently attempt pushes against a
+/// mis-configured workspace, so callers (see
+/// `aura-node::automaton_bridge::dev_loop_extra_permissions`) only
+/// promote them to `AlwaysAllow` when both are present.
+pub const GIT_REMOTE_TOOL_NAMES: &[&str] = &["git_push", "git_commit_push"];
+
+/// The full set of git tool names registered by this module. Kept in
+/// sync with the [`aura_kernel::default_tool_permission`] branch that
+/// maps them to [`aura_kernel::PermissionLevel::RequireApproval`].
+///
+/// Concatenation of [`GIT_LOCAL_TOOL_NAMES`] and
+/// [`GIT_REMOTE_TOOL_NAMES`]. Use the split constants when a caller
+/// needs to distinguish local from remote elevation semantics.
 pub const GIT_TOOL_NAMES: &[&str] = &["git_commit", "git_push", "git_commit_push"];
 
 #[cfg(test)]

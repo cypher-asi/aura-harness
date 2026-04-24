@@ -606,3 +606,42 @@ fn test_check_denies_require_approval_tool() {
         PolicyVerdict::RequireApproval { .. }
     ));
 }
+
+/// `add_allowed_tools` forces `AlwaysAllow` (it's the "install"
+/// semantic for operator-trusted tools), whereas `allow_tool_names`
+/// must NOT touch `tool_permissions` — the effective level stays at
+/// `default_tool_permission(name)`. This distinction is what lets the
+/// dev-loop automaton allow-list `git_push` for LLM dispatch while
+/// keeping it at `RequireApproval` until the operator supplies remote
+/// credentials. A regression to "allow_tool_names elevates to
+/// AlwaysAllow" would silently let autonomous dev-loops push to
+/// whatever upstream the workspace happens to have configured.
+#[test]
+fn allow_tool_names_preserves_default_permission_unlike_add_allowed_tools() {
+    let mut cfg_with_elevation = PolicyConfig::default();
+    cfg_with_elevation.add_allowed_tools(["git_push"]);
+    assert_eq!(
+        cfg_with_elevation.tool_permissions.get("git_push"),
+        Some(&PermissionLevel::AlwaysAllow),
+        "add_allowed_tools must still force AlwaysAllow (install semantic)"
+    );
+    assert!(cfg_with_elevation.allowed_tools.contains("git_push"));
+
+    let mut cfg_no_elevation = PolicyConfig::default();
+    cfg_no_elevation.allow_tool_names(["git_push"]);
+    assert!(
+        cfg_no_elevation.allowed_tools.contains("git_push"),
+        "allow_tool_names must add to allowed_tools set"
+    );
+    assert!(
+        !cfg_no_elevation.tool_permissions.contains_key("git_push"),
+        "allow_tool_names must NOT override tool_permissions"
+    );
+
+    let policy = Policy::new(cfg_no_elevation);
+    assert_eq!(
+        policy.check_tool_permission("git_push"),
+        PermissionLevel::RequireApproval,
+        "allow_tool_names must preserve default_tool_permission (RequireApproval for git_push)"
+    );
+}

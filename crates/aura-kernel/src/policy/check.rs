@@ -331,6 +331,17 @@ impl Policy {
         self.config.add_allowed_tools(names);
     }
 
+    /// Add tool names to the policy's allowed set **without** forcing
+    /// `AlwaysAllow`. Use this when the allow-list seed must preserve
+    /// the configured (or default) permission level — e.g. a dev-loop
+    /// allow-lists `git_push` so the LLM can see + dispatch it, but
+    /// the permission level stays `RequireApproval` unless the
+    /// operator explicitly elevated it via
+    /// [`PolicyConfig::tool_permissions`].
+    pub fn allow_tool_names(&mut self, names: impl IntoIterator<Item = impl Into<String>>) {
+        self.config.allow_tool_names(names);
+    }
+
     /// Evaluate a [`ToolCall`] against the caller's [`AgentPermissions`].
     /// Returns `None` when the call passes, or `Some(rejection)` when the
     /// call is denied because the caller lacks the required capability or
