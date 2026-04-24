@@ -78,10 +78,7 @@ pub(crate) async fn safe_transition(
     }
 
     if let Some(intermediate) = bridge_for(&current, target) {
-        if let Err(e) = domain
-            .transition_task(task_id, intermediate, None)
-            .await
-        {
+        if let Err(e) = domain.transition_task(task_id, intermediate, None).await {
             // A failed bridge step is not fatal — the server may have
             // moved underneath us, or the bridge may have been made
             // unnecessary by an earlier call. Log and let the final
@@ -131,12 +128,10 @@ fn bridge_for(current: &str, target: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use aura_core::PermissionLevel;
     use aura_tools::domain_tools::{
         CreateSessionParams, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
         SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
     };
-    use std::collections::HashMap;
     use std::sync::Mutex;
 
     /// Minimal `DomainApi` double that records every `transition_task`
@@ -285,11 +280,7 @@ mod tests {
         ) -> anyhow::Result<Option<TaskDescriptor>> {
             unimplemented!()
         }
-        async fn get_task(
-            &self,
-            task_id: &str,
-            _: Option<&str>,
-        ) -> anyhow::Result<TaskDescriptor> {
+        async fn get_task(&self, task_id: &str, _: Option<&str>) -> anyhow::Result<TaskDescriptor> {
             if *self.fail_get.lock().unwrap() {
                 return Err(anyhow::anyhow!("simulated get_task failure"));
             }
@@ -304,11 +295,7 @@ mod tests {
                 order: 0,
             })
         }
-        async fn get_project(
-            &self,
-            _: &str,
-            _: Option<&str>,
-        ) -> anyhow::Result<ProjectDescriptor> {
+        async fn get_project(&self, _: &str, _: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
             unimplemented!()
         }
         async fn update_project(
@@ -346,11 +333,7 @@ mod tests {
         ) -> anyhow::Result<serde_json::Value> {
             unimplemented!()
         }
-        async fn list_messages(
-            &self,
-            _: &str,
-            _: &str,
-        ) -> anyhow::Result<Vec<MessageDescriptor>> {
+        async fn list_messages(&self, _: &str, _: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
             unimplemented!()
         }
         async fn save_message(&self, _: SaveMessageParams) -> anyhow::Result<()> {
@@ -362,10 +345,7 @@ mod tests {
         ) -> anyhow::Result<SessionDescriptor> {
             unimplemented!()
         }
-        async fn get_active_session(
-            &self,
-            _: &str,
-        ) -> anyhow::Result<Option<SessionDescriptor>> {
+        async fn get_active_session(&self, _: &str) -> anyhow::Result<Option<SessionDescriptor>> {
             unimplemented!()
         }
         async fn orbit_api_call(
@@ -385,13 +365,6 @@ mod tests {
             _: Option<&str>,
         ) -> anyhow::Result<String> {
             unimplemented!()
-        }
-        async fn get_agent_permissions(
-            &self,
-            _: &str,
-            _: Option<&str>,
-        ) -> anyhow::Result<Option<HashMap<String, PermissionLevel>>> {
-            Ok(None)
         }
     }
 

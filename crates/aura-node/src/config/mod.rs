@@ -54,21 +54,6 @@ pub struct NodeConfig {
     pub sync_writes: bool,
     /// Record window size for kernel context
     pub record_window_size: usize,
-    /// Enable filesystem tools
-    pub enable_fs_tools: bool,
-    /// Enable command tools
-    pub enable_cmd_tools: bool,
-    /// Allowed commands (if cmd tools enabled)
-    pub allowed_commands: Vec<String>,
-    /// Allow `run_command` to spawn interpreted shell script invocations
-    /// (`sh`/`bash`/`pwsh`/`cmd`). Independent from [`Self::enable_cmd_tools`]:
-    /// the executor-layer [`aura_tools::ToolConfig::allow_shell`] gate only
-    /// fires once commands are enabled, and defaults closed so a caller
-    /// who flipped `enable_cmd_tools` on without asking for shell does
-    /// not accidentally unlock the historic injection surface.
-    ///
-    /// Flipped on by `AURA_ALLOW_SHELL=1`.
-    pub allow_shell: bool,
     /// Orbit service URL
     pub orbit_url: String,
     /// Aura Storage service URL
@@ -117,17 +102,6 @@ pub struct NodeConfig {
     /// listener is a deliberate trust decision; pair it with firewall
     /// or network-level controls.
     pub require_auth: bool,
-    /// When true, per-agent permission overrides fetched from
-    /// aura-network are discarded at session bootstrap and the kernel
-    /// falls back to the fail-closed [`aura_kernel::PolicyConfig::default`]
-    /// matrix.
-    ///
-    /// Default is `false` — aura-os deployments expect `run_command`
-    /// to default to `AlwaysAllow` for agents that don't have an
-    /// explicit profile. Set `AURA_STRICT_MODE=1` in CI / high-trust
-    /// deployments where aura-os must **not** be able to elevate
-    /// permissions out-of-band.
-    pub strict_mode: bool,
 }
 
 impl std::fmt::Debug for NodeConfig {
@@ -138,17 +112,12 @@ impl std::fmt::Debug for NodeConfig {
             .field("bind_addr", &self.bind_addr)
             .field("sync_writes", &self.sync_writes)
             .field("record_window_size", &self.record_window_size)
-            .field("enable_fs_tools", &self.enable_fs_tools)
-            .field("enable_cmd_tools", &self.enable_cmd_tools)
-            .field("allowed_commands", &self.allowed_commands)
-            .field("allow_shell", &self.allow_shell)
             .field("orbit_url", &self.orbit_url)
             .field("aura_storage_url", &self.aura_storage_url)
             .field("aura_network_url", &self.aura_network_url)
             .field("aura_os_server_url", &self.aura_os_server_url)
             .field("auth_token", &"***")
             .field("require_auth", &self.require_auth)
-            .field("strict_mode", &self.strict_mode)
             .finish()
     }
 }
@@ -161,39 +130,14 @@ impl Default for NodeConfig {
             bind_addr: "127.0.0.1:8080".to_string(),
             sync_writes: false,
             record_window_size: 50,
-            enable_fs_tools: true,
-            // `run_command` is on by default. `AURA_STRICT_MODE=1` is
-            // the single operator kill-switch; `ENABLE_CMD_TOOLS=false`
-            // still force-disables the catalog for callers that want a
-            // narrower surface without going full strict-mode.
-            enable_cmd_tools: true,
-            allowed_commands: vec![],
-            allow_shell: false,
             orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
             aura_os_server_url: None,
             auth_token: DEFAULT_TEST_AUTH_TOKEN.to_string(),
             require_auth: false,
-            strict_mode: false,
         }
     }
-}
-
-/// Parse a boolean-ish environment variable.
-///
-/// Accepts `1`, `true`, `yes`, `on` (case-insensitive). Anything else
-/// — including an unset var — is treated as `false`. Matches the
-/// semantics of `aura_agent::session_bootstrap::env_bool` so the two
-/// env contracts cannot drift.
-fn env_bool(name: &str) -> bool {
-    std::env::var(name).ok().is_some_and(|v| {
-        let v = v.trim();
-        v.eq_ignore_ascii_case("1")
-            || v.eq_ignore_ascii_case("true")
-            || v.eq_ignore_ascii_case("yes")
-            || v.eq_ignore_ascii_case("on")
-    })
 }
 
 fn default_data_dir() -> PathBuf {
@@ -222,15 +166,6 @@ impl NodeConfig {
             if let Ok(n) = val.parse() {
                 config.record_window_size = n;
             }
-        }
-        if let Ok(val) = std::env::var("ENABLE_FS_TOOLS") {
-            config.enable_fs_tools = val != "false" && val != "0";
-        }
-        if let Ok(val) = std::env::var("ENABLE_CMD_TOOLS") {
-            config.enable_cmd_tools = val == "true" || val == "1";
-        }
-        if let Ok(val) = std::env::var("ALLOWED_COMMANDS") {
-            config.allowed_commands = val.split(',').map(String::from).collect();
         }
         if let Ok(val) = std::env::var("ORBIT_URL") {
             config.orbit_url = val;
@@ -262,32 +197,6 @@ impl NodeConfig {
             let v = val.trim();
             config.require_auth = v == "1" || v.eq_ignore_ascii_case("true");
         }
-        if let Ok(val) = std::env::var("AURA_STRICT_MODE") {
-            let v = val.trim();
-            config.strict_mode = v == "1" || v.eq_ignore_ascii_case("true");
-        }
-
-        // Fine-grained runtime overrides. `AURA_STRICT_MODE=1` is the
-        // only master switch; everything below just narrows or widens
-        // the surface within that. Historical `AURA_AUTONOMOUS_DEV_LOOP`
-        // / `AURA_ALLOW_RUN_COMMAND` envs are gone — `enable_cmd_tools`
-        // defaults to `true` now, and non-strict mode unconditionally
-        // surfaces `run_command: AlwaysAllow` via
-        // [`crate::runtime_capabilities::fetch_agent_permissions_with_default`].
-        if let Ok(val) = std::env::var("AURA_ALLOWED_COMMANDS") {
-            let parsed: Vec<String> = val
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !parsed.is_empty() {
-                config.allowed_commands = parsed;
-            }
-        }
-        if env_bool("AURA_ALLOW_SHELL") {
-            config.allow_shell = true;
-        }
-
         config
     }
 

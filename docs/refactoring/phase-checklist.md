@@ -211,9 +211,7 @@ pub use tool::{Tool, ToolContext};
 
 ```text
 pub struct ToolConfig {
-    pub enable_fs: bool,
-    pub enable_commands: bool,
-    pub command_allowlist: Vec<String>,
+    pub command: CommandPolicy,
     pub max_read_bytes: usize,
     pub sync_threshold_ms: u64,
     pub max_async_timeout_ms: u64,

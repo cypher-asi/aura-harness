@@ -379,8 +379,12 @@ async fn start_turn(
             if !perms.extra_paths.is_empty() {
                 tool_config.extra_allowed_paths.extend(perms.extra_paths);
             }
-            if !perms.extra_commands.is_empty() && !tool_config.command_allowlist.is_empty() {
-                tool_config.command_allowlist.extend(perms.extra_commands);
+            if !perms.extra_commands.is_empty() && !tool_config.command.command_allowlist.is_empty()
+            {
+                tool_config
+                    .command
+                    .command_allowlist
+                    .extend(perms.extra_commands);
             }
         }
     }

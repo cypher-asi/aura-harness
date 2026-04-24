@@ -356,9 +356,6 @@ The node reads configuration from environment variables via `NodeConfig::from_en
 | `AURA_LISTEN_ADDR` (alias `BIND_ADDR`) | `127.0.0.1:8080` | HTTP server bind address. |
 | `SYNC_WRITES` | `false` | Enable sync writes (`true`/`1` to enable) to RocksDB. |
 | `RECORD_WINDOW_SIZE` | `50` | Kernel context record window. |
-| `ENABLE_FS_TOOLS` | `true` | Disable with `false`/`0`. |
-| `ENABLE_CMD_TOOLS` | `false` | Enable shell command tools with `true`/`1`. |
-| `ALLOWED_COMMANDS` | — | Comma-separated command allowlist when `ENABLE_CMD_TOOLS` is on. |
 | `AURA_PROJECT_BASE` | — | Remaps incoming project paths to `{base}/{slug}` (remote VM mode). |
 | `ORBIT_URL` | `https://orbit-sfvu.onrender.com` | Orbit service URL. |
 | `AURA_STORAGE_URL` | `https://aura-storage.onrender.com` | Aura Storage service URL. |

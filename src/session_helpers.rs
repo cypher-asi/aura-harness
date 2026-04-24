@@ -10,5 +10,5 @@
 #[allow(unused_imports)]
 pub use aura_agent::session_bootstrap::{
     build_executor_router_with_config, default_agent_config, load_auth_token, open_store,
-    policy_config_from_env, resolve_store_path, tool_config_from_env,
+    resolve_store_path,
 };

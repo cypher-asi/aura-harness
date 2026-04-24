@@ -821,7 +821,7 @@ impl AutomatonBridge {
 ///
 /// Mutations still flow through the kernel-mediated executors
 /// (`ToolExecutor` for `run_command`, `GitExecutor` for the git tools),
-/// so the executor-layer `ToolConfig` gates (`enable_commands`,
+/// so the executor-layer `ToolConfig` gates (`command.enabled`,
 /// `binary_allowlist`, `allow_shell`) and the record log remain in
 /// force. Elevation bypasses the approval prompt, not the sandbox.
 /// See `docs/invariants.md` §1.

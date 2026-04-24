@@ -462,9 +462,18 @@ mod tool_call_debug_tests {
             }),
         );
         let rendered = format!("{call:?}");
-        assert!(!rendered.contains("SECRETPAYLOAD"), "raw JWT leaked: {rendered}");
-        assert!(!rendered.contains("eyJhbGciOi"), "JWT prefix leaked: {rendered}");
-        assert!(rendered.contains("\"***\""), "no redaction marker: {rendered}");
+        assert!(
+            !rendered.contains("SECRETPAYLOAD"),
+            "raw JWT leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("eyJhbGciOi"),
+            "JWT prefix leaked: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"***\""),
+            "no redaction marker: {rendered}"
+        );
         // Non-sensitive fields must remain visible for debugging.
         assert!(rendered.contains("main"), "branch missing: {rendered}");
         assert!(
@@ -504,8 +513,14 @@ mod tool_call_debug_tests {
             !rendered.contains("PWDSHOULDNEVERAPPEAR"),
             "array-nested password leaked: {rendered}"
         );
-        assert!(rendered.contains("visible"), "non-sensitive value dropped: {rendered}");
-        assert!(rendered.contains("\"ok\""), "non-sensitive array field dropped: {rendered}");
+        assert!(
+            rendered.contains("visible"),
+            "non-sensitive value dropped: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"ok\""),
+            "non-sensitive array field dropped: {rendered}"
+        );
     }
 
     #[test]
@@ -514,7 +529,10 @@ mod tool_call_debug_tests {
         // needs the real value. Redaction is a Debug-only concern.
         let call = ToolCall::new("t", json!({ "jwt": "real-token-here" }));
         let wire = serde_json::to_string(&call).expect("serialize");
-        assert!(wire.contains("real-token-here"), "serialize was redacted: {wire}");
+        assert!(
+            wire.contains("real-token-here"),
+            "serialize was redacted: {wire}"
+        );
         let round: ToolCall = serde_json::from_str(&wire).expect("deserialize");
         assert_eq!(round, call);
     }

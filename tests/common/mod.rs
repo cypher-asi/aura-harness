@@ -150,9 +150,6 @@ impl TestServer {
 
         let mut config = NodeConfig::from_env();
         config.data_dir = data_dir.path().to_path_buf();
-        config.enable_fs_tools = true;
-        config.enable_cmd_tools = true;
-        config.allowed_commands = vec![];
         // Phase 4 (security audit): the router's bearer middleware now
         // does a constant-time compare against `config.auth_token`.
         // Force the deterministic test value so `http_client()` and
@@ -176,9 +173,10 @@ impl TestServer {
             Arc::new(RocksStore::open(&db_path, false).expect("open rocks"));
 
         let tool_config = ToolConfig {
-            enable_fs: true,
-            enable_commands: true,
-            command_allowlist: vec![],
+            command: aura_tools::CommandPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let catalog = Arc::new(ToolCatalog::new());

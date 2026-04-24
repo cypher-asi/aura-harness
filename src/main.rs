@@ -18,6 +18,7 @@ use aura_agent::{
 use aura_core::{Identity, Transaction};
 use aura_kernel::{Kernel, KernelConfig};
 use aura_reasoner::ModelProvider;
+use aura_tools::ToolConfig;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use clap::Parser;
 use colored::Colorize;
@@ -205,16 +206,16 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
-    let tool_config = session_helpers::tool_config_from_env();
-    if tool_config.enable_commands {
+    let tool_config = ToolConfig::default();
+    if tool_config.command.enabled {
         // Empty `binary_allowlist` is the ToolConfig contract for
         // "all binaries allowed" — log the effective policy so
         // operators can verify what the harness resolved without a
         // UI status pop (which used to incorrectly claim commands
         // were blocked in that case).
         info!(
-            binary_allowlist = ?tool_config.binary_allowlist,
-            allow_shell = tool_config.allow_shell,
+            binary_allowlist = ?tool_config.command.binary_allowlist,
+            allow_shell = tool_config.command.allow_shell,
             "run_command enabled"
         );
     }
@@ -243,7 +244,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
-        policy: session_helpers::policy_config_from_env(),
+        policy: aura_kernel::PolicyConfig::default(),
         ..KernelConfig::default()
     };
     let agent_id = identity.agent_id;

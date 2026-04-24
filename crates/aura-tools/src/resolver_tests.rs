@@ -1328,22 +1328,6 @@ async fn get_project_succeeds_with_inaccessible_workspace() {
     );
 }
 
-#[tokio::test]
-async fn fs_disabled_returns_failed() {
-    let cat = Arc::new(ToolCatalog::new());
-    let config = ToolConfig {
-        enable_fs: false,
-        ..ToolConfig::default()
-    };
-    let resolver = ToolResolver::new(cat, config);
-    let (ctx, _dir) = test_context();
-
-    let tc = ToolCall::fs_read("test.txt", None);
-    let action = Action::delegate_tool(&tc).unwrap();
-    let effect = resolver.execute(&ctx, &action).await.unwrap();
-    assert_eq!(effect.status, EffectStatus::Failed);
-}
-
 #[test]
 fn every_exposed_core_tool_has_handler() {
     let (_cat, resolver) = make_catalog_and_resolver();

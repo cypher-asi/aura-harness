@@ -204,9 +204,7 @@ impl TaskRunAutomaton {
         // `failed → ready → in_progress` (for retries), and skips the
         // transition entirely if the task is already `in_progress` so
         // we don't re-emit the `in_progress → in_progress` WARN.
-        if let Err(e) =
-            safe_transition(self.domain.as_ref(), &task.id, "in_progress").await
-        {
+        if let Err(e) = safe_transition(self.domain.as_ref(), &task.id, "in_progress").await {
             warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
         }
     }

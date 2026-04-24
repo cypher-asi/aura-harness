@@ -272,7 +272,9 @@ fn stderr_looks_transient_matches_network_markers() {
     assert!(!stderr_looks_transient(
         "! [rejected]   main -> main (non-fast-forward)"
     ));
-    assert!(!stderr_looks_transient("fatal: refusing to update checked out branch"));
+    assert!(!stderr_looks_transient(
+        "fatal: refusing to update checked out branch"
+    ));
 }
 
 #[test]
@@ -285,7 +287,9 @@ fn stderr_looks_remote_exhausted_matches_storage_markers() {
     assert!(stderr_looks_remote_exhausted(
         "remote: fatal: write error: No space left on device"
     ));
-    assert!(stderr_looks_remote_exhausted("HTTP 507 Insufficient Storage"));
+    assert!(stderr_looks_remote_exhausted(
+        "HTTP 507 Insufficient Storage"
+    ));
     assert!(stderr_looks_remote_exhausted("fatal: disk quota exceeded"));
     assert!(stderr_looks_remote_exhausted(
         "remote: fatal: write error: no space left"

@@ -122,16 +122,14 @@ impl ToolExecutor {
     /// Create a tool executor with default config.
     ///
     /// **Phase 5 hardening note:** [`ToolConfig::default`] now yields a
-    /// fail-closed configuration — filesystem tools are enabled, but
-    /// `enable_commands` is `false`, `allow_shell` is `false`, and every
-    /// allow-list (`binary_allowlist`, `command_allowlist`,
-    /// `allowed_shell_scripts`) is empty. Any call to `run_command`
-    /// through an executor built with `with_defaults()` will therefore
-    /// be refused with `ToolError::ToolDisabled` at the category gate
-    /// and again with `ToolError::Forbidden` at [`CmdRunTool::execute`].
+    /// fail-closed command configuration — command execution is disabled,
+    /// `allow_shell` is `false`, and every allow-list (`binary_allowlist`,
+    /// `command_allowlist`, `allowed_shell_scripts`) is empty. Any call to
+    /// `run_command` through an executor built with `with_defaults()` will
+    /// therefore be refused by [`CmdRunTool::execute`].
     ///
     /// Callers that genuinely need command execution must construct a
-    /// custom [`ToolConfig`] with `enable_commands: true` **and** a
+    /// custom [`ToolConfig`] with `command.enabled: true` **and** a
     /// populated `binary_allowlist`. There is no helper for this on
     /// purpose — opt-in must be deliberate.
     #[must_use]
@@ -169,26 +167,6 @@ impl ToolExecutor {
         tool_call: &ToolCall,
     ) -> Result<ToolResult, ToolError> {
         let tool_name = &tool_call.tool;
-
-        // Category-level permission checks
-        const FS_TOOLS: &[&str] = &[
-            "read_file",
-            "write_file",
-            "edit_file",
-            "delete_file",
-            "list_files",
-            "find_files",
-            "stat_file",
-            "search_code",
-        ];
-        const CMD_TOOLS: &[&str] = &["run_command"];
-
-        if FS_TOOLS.contains(&tool_name.as_str()) && !self.config.enable_fs {
-            return Err(ToolError::ToolDisabled(tool_name.clone()));
-        }
-        if CMD_TOOLS.contains(&tool_name.as_str()) && !self.config.enable_commands {
-            return Err(ToolError::ToolDisabled(tool_name.clone()));
-        }
 
         let workspace_root = ctx.workspace_root.clone();
         let extra_paths = self.config.extra_allowed_paths.clone();
@@ -344,10 +322,7 @@ mod tests {
     async fn test_cmd_disabled() {
         let (ctx, _dir) = create_test_context();
 
-        let config = ToolConfig {
-            enable_commands: false,
-            ..ToolConfig::default()
-        };
+        let config = ToolConfig::default();
         let executor = ToolExecutor::new(config);
         let tool_call = ToolCall::new("run_command", serde_json::json!({"program": "ls"}));
         let action = Action::delegate_tool(&tool_call).unwrap();

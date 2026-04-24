@@ -523,7 +523,7 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 | `verify/` | Build verification runner, error signatures, test baseline capture |
 | `runtime/process_manager/` | `ProcessManager` — background process tracking with completion callbacks |
 | `agent_runner/` | Higher-level agent run coordination (`AgentRunner`, `AgentRunnerConfig`, task execution) |
-| `session_bootstrap.rs` | Shared embedder bootstrap (Phase 3): `resolve_store_path`, `open_store`, `load_auth_token`, `default_agent_config`, `tool_config_from_env`, `policy_config_from_env`, `build_executor_router`, `build_executor_router_with_config`. `src/session_helpers.rs` is a thin re-export layer over this module. Provider selection moved to `aura_reasoner::provider_factory`. |
+| `session_bootstrap.rs` | Shared embedder bootstrap (Phase 3): `resolve_store_path`, `open_store`, `load_auth_token`, `default_agent_config`, `build_executor_router`, `build_executor_router_with_config`. `src/session_helpers.rs` is a thin re-export layer over this module. Provider selection moved to `aura_reasoner::provider_factory`. |
 | `sanitize.rs` | Message sanitization (malformed tool_use/tool_result repair) |
 | `read_guard.rs` | Tracks which files have been read (full vs range) to prevent redundant reads |
 | `helpers.rs` | `is_write_tool`, `is_exploration_tool`, `append_warning` |
@@ -816,7 +816,7 @@ The primary entry point. Supports TUI mode (default) and headless mode.
 | `main.rs` | CLI parse, auth subcommands (`login`/`logout`/`whoami`), `run_with_args` |
 | `cli.rs` | Clap definitions: `Cli`, `Commands`, `RunArgs`, `UiMode` (Terminal/None) |
 | `event_loop/` | Terminal event loop: `EventLoopContext`, `run_event_loop` — bridges `UiEvent` ↔ `AgentLoop` ↔ `UiCommand`. Subfiles: `handlers.rs`, `agent_events.rs`, `record_ui.rs` |
-| `session_helpers.rs` | Thin re-export layer over `aura_agent::session_bootstrap` (Phase 3 consolidation). All environment-driven bootstrap helpers — `default_agent_config`, `tool_config_from_env`, `policy_config_from_env`, `build_executor_router_with_config` — now live in `aura_agent`. |
+| `session_helpers.rs` | Thin re-export layer over `aura_agent::session_bootstrap` (Phase 3 consolidation). Shared bootstrap helpers such as `default_agent_config` and `build_executor_router_with_config` live in `aura_agent`. |
 | `api_server.rs` | Embedded HTTP server for TUI mode: `/health` plus bearer-gated `/api/files` and `/api/read-file`. File walking / reading logic lives in `aura_node::files_api` (Phase 3 consolidation). |
 | `record_loader.rs` | Record loading utilities |
 

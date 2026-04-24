@@ -120,9 +120,7 @@ impl TaskAggregate {
                     for block in &msg.content {
                         if let ContentBlock::ToolUse { id, name, input } = block {
                             tool_uses.insert(id.clone(), name.clone());
-                            if let Some(path) =
-                                input.get("path").and_then(|v| v.as_str())
-                            {
+                            if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
                                 tool_use_paths.insert(id.clone(), path.to_string());
                             }
                         }
@@ -146,8 +144,7 @@ impl TaskAggregate {
                             // whether the agent actually followed up
                             // with a successful write for the same
                             // file.
-                            if *is_error
-                                && content_starts_with_marker(content, CHUNK_GUARD_MARKER)
+                            if *is_error && content_starts_with_marker(content, CHUNK_GUARD_MARKER)
                             {
                                 if let Some(path) = tool_use_paths.get(tool_use_id) {
                                     chunk_guarded_paths.insert(path.clone());

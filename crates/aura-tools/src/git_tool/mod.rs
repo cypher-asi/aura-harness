@@ -83,10 +83,7 @@ pub enum GitToolError {
         "remote storage exhausted on git {op}; free space on the remote or switch remotes. \
          server reported: {stderr}"
     )]
-    RemoteStorageExhausted {
-        op: &'static str,
-        stderr: String,
-    },
+    RemoteStorageExhausted { op: &'static str, stderr: String },
 }
 
 impl From<GitToolError> for ToolError {
@@ -340,7 +337,10 @@ fn stderr_looks_transient(stderr: &str) -> bool {
     // Storage-exhaustion markers take precedence: a push that
     // reports both `no space left on device` AND `rpc failed` is
     // fundamentally a remote-disk problem, not a network one.
-    if REMOTE_EXHAUSTED_PUSH_STDERR.iter().any(|m| lower.contains(m)) {
+    if REMOTE_EXHAUSTED_PUSH_STDERR
+        .iter()
+        .any(|m| lower.contains(m))
+    {
         return false;
     }
     TRANSIENT_PUSH_STDERR.iter().any(|m| lower.contains(m))
@@ -517,8 +517,7 @@ pub async fn git_commit_push_impl(
     push_policy: PushPolicy,
 ) -> Result<CommitPushOutcome, GitToolError> {
     let commit_sha = git_commit_impl(workspace, message, commit_timeout).await?;
-    let push_result =
-        git_push_impl(workspace, remote_url, branch, jwt, force, push_policy).await;
+    let push_result = git_push_impl(workspace, remote_url, branch, jwt, force, push_policy).await;
     Ok(CommitPushOutcome {
         commit_sha,
         push_result,

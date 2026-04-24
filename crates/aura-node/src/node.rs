@@ -83,21 +83,15 @@ impl Node {
         );
         info!("Store opened");
 
-        let tool_config = ToolConfig {
-            enable_fs: self.config.enable_fs_tools,
-            enable_commands: self.config.enable_cmd_tools,
-            command_allowlist: self.config.allowed_commands.clone(),
-            allow_shell: self.config.allow_shell,
-            ..Default::default()
-        };
-        if tool_config.enable_commands {
+        let tool_config = ToolConfig::default();
+        if tool_config.command.enabled {
             // Empty `command_allowlist` is the ToolConfig contract for
             // "all commands allowed" — log the effective sidecar policy
             // so operators can confirm the autonomous-mode short-circuit
             // resolved, without a UI status pop.
             info!(
-                allowed_commands = ?tool_config.command_allowlist,
-                allow_shell = tool_config.allow_shell,
+                allowed_commands = ?tool_config.command.command_allowlist,
+                allow_shell = tool_config.command.allow_shell,
                 "aura-node run_command enabled"
             );
         }
@@ -272,9 +266,6 @@ mod tests {
     fn test_node_config_propagation() {
         let config = NodeConfig {
             data_dir: std::path::PathBuf::from("/custom/data"),
-            enable_fs_tools: false,
-            enable_cmd_tools: true,
-            allowed_commands: vec!["ls".to_string(), "cat".to_string()],
             ..NodeConfig::default()
         };
         let node = Node::new(config);
@@ -282,9 +273,6 @@ mod tests {
             node.config.data_dir,
             std::path::PathBuf::from("/custom/data")
         );
-        assert!(!node.config.enable_fs_tools);
-        assert!(node.config.enable_cmd_tools);
-        assert_eq!(node.config.allowed_commands.len(), 2);
     }
 
     #[test]

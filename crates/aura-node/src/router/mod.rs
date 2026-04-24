@@ -568,17 +568,15 @@ async fn terminal_ws_handler(
 
 // === Health ===
 
-/// Return a liveness/readiness response with version + tool policy.
+/// Return a liveness/readiness response with version + execution guardrails.
 ///
 /// The tool-policy fields (`run_command_enabled`, `shell_enabled`,
 /// `allowed_commands`) expose the effective executor config so
 /// external consumers can diff the running harness's policy against
 /// what they need. Historically the `aura-os-desktop` external-harness
 /// probe relied on `run_command_enabled` to fail fast when the
-/// operator forgot `AURA_AUTONOMOUS_DEV_LOOP=1`; `run_command` is now
-/// on by default, so the field is mainly a diagnostic aid for
-/// operators who deliberately locked the harness down via
-/// `ENABLE_CMD_TOOLS=false` or `AURA_STRICT_MODE=1`.
+/// operator forgot `AURA_AUTONOMOUS_DEV_LOOP=1`; the fields are now
+/// diagnostics for the command execution guardrails, not catalog visibility.
 ///
 /// The response is deliberately unauthenticated (matches the old
 /// minimal-health behaviour) because the information is non-sensitive:
@@ -591,10 +589,9 @@ async fn health_handler(State(state): State<RouterState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "run_command_enabled": state.tool_config.enable_commands,
-        "shell_enabled": state.tool_config.allow_shell,
-        "allowed_commands": state.tool_config.command_allowlist,
-        "fs_enabled": state.tool_config.enable_fs,
+        "run_command_enabled": state.tool_config.command.enabled,
+        "shell_enabled": state.tool_config.command.allow_shell,
+        "allowed_commands": state.tool_config.command.command_allowlist,
     }))
 }
 

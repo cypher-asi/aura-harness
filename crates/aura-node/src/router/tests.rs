@@ -113,10 +113,12 @@ async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
     let store = create_test_store();
     let mut state = test_router_state(store);
     state.tool_config = ToolConfig {
-        enable_fs: true,
-        enable_commands: true,
-        command_allowlist: vec!["cargo".into(), "git".into()],
-        allow_shell: true,
+        command: aura_tools::CommandPolicy {
+            enabled: true,
+            command_allowlist: vec!["cargo".into(), "git".into()],
+            allow_shell: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let app = create_router(state);
@@ -138,7 +140,6 @@ async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
         "external-harness probe relies on this field"
     );
     assert_eq!(json["shell_enabled"], true);
-    assert_eq!(json["fs_enabled"], true);
     assert!(json["allowed_commands"].is_array());
     let allowed: Vec<String> = json["allowed_commands"]
         .as_array()
@@ -152,8 +153,8 @@ async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
 /// Symmetric negative test: a `ToolConfig::default()` — the
 /// `aura-tools` crate's kernel-level fail-closed baseline — must still
 /// report `run_command_enabled=false` over `/health` so operators who
-/// deliberately wire the minimal executor (or who lock down via
-/// `ENABLE_CMD_TOOLS=false`) can observe the narrowed surface.
+/// deliberately wire the minimal executor can observe the narrowed
+/// execution surface.
 #[tokio::test]
 async fn test_health_endpoint_reports_run_command_disabled_on_default_tool_config() {
     let store = create_test_store();

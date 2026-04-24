@@ -90,7 +90,7 @@ fn validate_program_name(program: &str) -> Result<(), ToolError> {
 ///
 /// Callers that genuinely need a shell (multi-command pipelines, glob
 /// expansion, etc.) must use [`cmd_spawn_shell_script`] and funnel
-/// through `ToolConfig::allowed_shell_scripts`.
+/// through `ToolConfig::command.allowed_shell_scripts`.
 ///
 /// Returns the [`Child`](std::process::Child) and a display-only string
 /// suitable for audit logs. The string is not executable by itself.
@@ -170,7 +170,7 @@ fn apply_plain_output_env(cmd: &mut std::process::Command) {
 ///
 /// This is the ONLY code path that exposes a shell interpreter to
 /// caller-controlled strings. It is gated by the tool layer behind an
-/// explicit [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts]
+/// explicit `ToolConfig::command.allowed_shell_scripts`
 /// allow-list; do not call it from other places without applying the
 /// same gate.
 #[instrument(skip(sandbox), fields(shell_script = %shell_script))]
@@ -278,7 +278,7 @@ pub fn cmd_run(
 /// Run a raw shell script synchronously with a timeout.
 ///
 /// See [`cmd_spawn_shell_script`] — the caller is responsible for
-/// enforcing [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts]
+/// enforcing `ToolConfig::command.allowed_shell_scripts`
 /// before invoking this.
 fn cmd_run_shell_script(
     sandbox: &Sandbox,
@@ -517,29 +517,29 @@ fn expand_env_vars(input: &str) -> String {
 /// compare the **resolved executable file name** rather than whatever the
 /// caller typed. Called *before* [`cmd_spawn`] in `run_command`.
 ///
-/// This function now fails **closed**: when `enable_commands == true`
+/// This function now fails **closed**: when command execution is enabled
 /// and `allowlist` is empty, the caller's config is considered
 /// mis-configured and the call is rejected with
 /// [`ToolError::Forbidden`]. Previously an empty list short-circuited to
 /// "allowed", which left the command-execution tool effectively
 /// unrestricted by default. (Phase 2 hardening.)
 ///
-/// When `enable_commands == false` the allow-list check is skipped
+/// When command execution is disabled the allow-list check is skipped
 /// because the dispatcher will have already refused the tool call at a
 /// higher level.
 fn check_binary_allowlist(
     program: &str,
-    enable_commands: bool,
+    command_enabled: bool,
     allowlist: &[String],
 ) -> Result<(), ToolError> {
-    if !enable_commands {
+    if !command_enabled {
         return Ok(());
     }
 
     if allowlist.is_empty() {
         return Err(ToolError::Forbidden(
             "command execution requires a non-empty binary_allowlist; \
-             configure ToolConfig::binary_allowlist"
+             configure ToolConfig::command.binary_allowlist"
                 .into(),
         ));
     }
@@ -627,12 +627,12 @@ fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), To
 /// spawned.
 ///
 /// Callers that genuinely need a shell must:
-/// 1. Enable [`ToolConfig::allow_shell`][crate::ToolConfig::allow_shell]
+/// 1. Enable `ToolConfig::command.allow_shell`
 ///    (or pass `allow_shell: true` per-call).
 /// 2. Invoke with `shell_script: "<the script>"`.
 ///
 /// By default
-/// [`ToolConfig::allowed_shell_scripts`][crate::ToolConfig::allowed_shell_scripts]
+/// `ToolConfig::command.allowed_shell_scripts`
 /// is empty, which follows the same "empty allowlist = all allowed"
 /// convention used by `command_allowlist` and `binary_allowlist`:
 /// once `allow_shell == true` is granted, any shell script is
@@ -671,7 +671,7 @@ impl Tool for CmdRunTool {
                     },
                     "shell_script": {
                         "type": "string",
-                        "description": "Opt-in shell script (sh -c on Unix, cmd.exe /C on Windows). Requires allow_shell=true. When ToolConfig::allowed_shell_scripts is non-empty the script must appear verbatim; an empty list permits any script. Mutually exclusive with 'program'/'args'."
+                        "description": "Opt-in shell script (sh -c on Unix, cmd.exe /C on Windows). Requires allow_shell=true. When ToolConfig::command.allowed_shell_scripts is non-empty the script must appear verbatim; an empty list permits any script. Mutually exclusive with 'program'/'args'."
                     },
                     "allow_shell": {
                         "type": "boolean",
@@ -707,14 +707,14 @@ impl Tool for CmdRunTool {
     ) -> Result<ToolResult, ToolError> {
         // Phase 5 hardening: even when a caller reaches `CmdRunTool`
         // directly (bypassing `ToolExecutor`'s category-level gate),
-        // `enable_commands = false` must refuse the invocation. The
+        // `command.enabled = false` must refuse the invocation. The
         // downstream `check_binary_allowlist` short-circuits to `Ok`
         // when commands are disabled (so it doesn't second-guess the
         // dispatcher), leaving this check as the only thing between
         // a disabled config and a spawned process.
-        if !ctx.config.enable_commands {
+        if !ctx.config.command.enabled {
             return Err(ToolError::Forbidden(
-                "command execution disabled; set ToolConfig::enable_commands=true \
+                "command execution disabled; set ToolConfig::command.enabled=true \
                  and populate binary_allowlist to opt in"
                     .into(),
             ));
@@ -735,7 +735,7 @@ impl Tool for CmdRunTool {
 
         let allow_shell = args["allow_shell"]
             .as_bool()
-            .unwrap_or(ctx.config.allow_shell);
+            .unwrap_or(ctx.config.command.allow_shell);
 
         // The legacy `command` field is treated as a shell_script alias
         // so the same gate applies. Callers shouldn't rely on it; the
@@ -774,15 +774,16 @@ impl Tool for CmdRunTool {
             // non-empty list switches back to strict verbatim-match
             // enforcement so operators who pin specific scripts keep
             // the original behavior.
-            if !ctx.config.allowed_shell_scripts.is_empty()
+            if !ctx.config.command.allowed_shell_scripts.is_empty()
                 && !ctx
                     .config
+                    .command
                     .allowed_shell_scripts
                     .iter()
                     .any(|s| s == &script)
             {
                 return Err(ToolError::Forbidden(
-                    "shell_script not present in ToolConfig::allowed_shell_scripts; \
+                    "shell_script not present in ToolConfig::command.allowed_shell_scripts; \
                      operator must opt in by listing the script verbatim"
                         .into(),
                 ));
@@ -790,12 +791,12 @@ impl Tool for CmdRunTool {
             // Still run allow-list checks against the first token so
             // an operator who's narrowed `command_allowlist` /
             // `binary_allowlist` sees consistent behavior.
-            check_command_allowlist(&script, &ctx.config.command_allowlist)?;
+            check_command_allowlist(&script, &ctx.config.command.command_allowlist)?;
             if let Some(first) = script.split_whitespace().next() {
                 check_binary_allowlist(
                     first,
-                    ctx.config.enable_commands,
-                    &ctx.config.binary_allowlist,
+                    ctx.config.command.enabled,
+                    &ctx.config.command.binary_allowlist,
                 )?;
             }
 
@@ -819,11 +820,11 @@ impl Tool for CmdRunTool {
         // masquerading as `Forbidden`.
         validate_program_name(&program)?;
 
-        check_command_allowlist(&program, &ctx.config.command_allowlist)?;
+        check_command_allowlist(&program, &ctx.config.command.command_allowlist)?;
         check_binary_allowlist(
             &program,
-            ctx.config.enable_commands,
-            &ctx.config.binary_allowlist,
+            ctx.config.command.enabled,
+            &ctx.config.command.binary_allowlist,
         )?;
 
         let sandbox = ctx.sandbox.clone();

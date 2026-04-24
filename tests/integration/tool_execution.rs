@@ -42,17 +42,20 @@ fn create_executor() -> ExecutorRouter {
 /// tests must supply a non-empty list. `echo`, `dir`, `ls`, `cmd` cover
 /// the shapes used below.
 fn create_cmd_executor() -> ExecutorRouter {
-    // Phase 5 defaults turn `enable_commands` off. Tests that genuinely
+    // Phase 5 defaults turn command execution off. Tests that genuinely
     // exercise the command path must opt-in explicitly.
     let config = ToolConfig {
-        enable_commands: true,
-        binary_allowlist: vec![
-            "echo".to_string(),
-            "dir".to_string(),
-            "ls".to_string(),
-            "cmd".to_string(),
-            "sh".to_string(),
-        ],
+        command: aura_tools::CommandPolicy {
+            enabled: true,
+            binary_allowlist: vec![
+                "echo".to_string(),
+                "dir".to_string(),
+                "ls".to_string(),
+                "cmd".to_string(),
+                "sh".to_string(),
+            ],
+            ..Default::default()
+        },
         ..ToolConfig::default()
     };
     let mut router = ExecutorRouter::new();

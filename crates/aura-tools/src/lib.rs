@@ -57,13 +57,15 @@ pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};
 pub use tool::{AgentControlHook, AgentReadHook, Tool, ToolContext};
 
-/// Tool configuration.
+/// Command execution policy for `run_command`.
+///
+/// This is an execution guardrail, not a catalog visibility or per-tool
+/// permission switch. The kernel decides whether `run_command` is enabled for
+/// an agent; this policy constrains how the tool may execute after that.
 #[derive(Debug, Clone)]
-pub struct ToolConfig {
-    /// Enable filesystem tools
-    pub enable_fs: bool,
-    /// Enable command execution
-    pub enable_commands: bool,
+pub struct CommandPolicy {
+    /// Enable process spawning inside `run_command`.
+    pub enabled: bool,
     /// Allowed commands (empty = all allowed if commands enabled)
     pub command_allowlist: Vec<String>,
     /// Allowed binary names for `run_command`.
@@ -104,6 +106,25 @@ pub struct ToolConfig {
     /// defaults to `false`; flipping `allow_shell` on is the deliberate
     /// security decision, and this field narrows further from there.
     pub allowed_shell_scripts: Vec<String>,
+}
+
+impl Default for CommandPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command_allowlist: vec![],
+            binary_allowlist: vec![],
+            allow_shell: false,
+            allowed_shell_scripts: vec![],
+        }
+    }
+}
+
+/// Tool execution configuration.
+#[derive(Debug, Clone)]
+pub struct ToolConfig {
+    /// Command execution guardrails.
+    pub command: CommandPolicy,
     /// Maximum read bytes
     pub max_read_bytes: usize,
     /// Sync threshold for command execution (milliseconds).
@@ -136,22 +157,17 @@ pub struct ToolConfig {
 }
 
 impl Default for ToolConfig {
-    /// Fail-closed defaults: filesystem tools are on, but command
-    /// execution is off and every shell / script hook is empty. An
-    /// operator who wants `run_command` must set
-    /// `enable_commands: true` **and** populate `binary_allowlist`
-    /// with the specific binaries they trust. Leaving either field
-    /// at the default value keeps `run_command` completely inert,
-    /// even if a delegate proposal reaches [`CmdRunTool::execute`].
+    /// Fail-closed defaults: command execution is off and every shell /
+    /// script hook is empty. Filesystem tool visibility is no longer controlled
+    /// here; the kernel's tri-state policy owns per-tool enablement. An
+    /// operator who wants `run_command` must enable [`Self::command`] and
+    /// populate `binary_allowlist` with the specific binaries they trust.
+    /// Leaving either at the default value keeps `run_command` inert, even if a
+    /// delegate proposal reaches [`CmdRunTool::execute`].
     /// (Phase 5 hardening Ã¢â‚¬â€ closes finding M1.)
     fn default() -> Self {
         Self {
-            enable_fs: true,
-            enable_commands: false,
-            command_allowlist: vec![],
-            binary_allowlist: vec![],
-            allow_shell: false,
-            allowed_shell_scripts: vec![],
+            command: CommandPolicy::default(),
             max_read_bytes: 5 * 1024 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,
@@ -170,23 +186,23 @@ mod default_tests {
     fn default_config_disables_commands() {
         let cfg = ToolConfig::default();
         assert!(
-            !cfg.enable_commands,
+            !cfg.command.enabled,
             "fresh ToolConfig must start with commands disabled"
         );
         assert!(
-            cfg.binary_allowlist.is_empty(),
+            cfg.command.binary_allowlist.is_empty(),
             "fresh ToolConfig must have an empty binary_allowlist"
         );
         assert!(
-            cfg.command_allowlist.is_empty(),
+            cfg.command.command_allowlist.is_empty(),
             "fresh ToolConfig must have an empty command_allowlist"
         );
         assert!(
-            !cfg.allow_shell,
+            !cfg.command.allow_shell,
             "fresh ToolConfig must not allow shell scripts"
         );
         assert!(
-            cfg.allowed_shell_scripts.is_empty(),
+            cfg.command.allowed_shell_scripts.is_empty(),
             "fresh ToolConfig must have an empty allowed_shell_scripts"
         );
     }

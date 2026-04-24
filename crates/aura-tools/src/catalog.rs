@@ -214,29 +214,27 @@ impl ToolCatalog {
         Self { entries }
     }
 
-    /// Get visible tools for a profile, filtered by `ToolConfig` permissions.
+    /// Get visible tools for a profile.
     ///
     /// Equivalent to [`Self::visible_tools_with_permissions`] with
     /// `permissions == None`: capability-gated tools (like `spawn_agent`) are
     /// hidden. Callers that can supply the caller's [`AgentPermissions`]
     /// should prefer the `_with_permissions` variant.
     #[must_use]
-    pub fn visible_tools(&self, profile: ToolProfile, config: &ToolConfig) -> Vec<ToolDefinition> {
-        self.visible_tools_with_permissions(profile, config, None)
+    pub fn visible_tools(&self, profile: ToolProfile, _config: &ToolConfig) -> Vec<ToolDefinition> {
+        self.visible_tools_with_permissions(profile, _config, None)
     }
 
-    /// Phase 5: visible tools for a profile, filtered by `ToolConfig`
-    /// permissions and the caller's capability grants.
+    /// Phase 5: visible tools for a profile, filtered by the caller's
+    /// capability grants.
     #[must_use]
     pub fn visible_tools_with_permissions(
         &self,
         profile: ToolProfile,
-        config: &ToolConfig,
+        _config: &ToolConfig,
         permissions: Option<&AgentPermissions>,
     ) -> Vec<ToolDefinition> {
-        let mut tools = self.tools_for_profile_with_permissions(profile, permissions);
-        apply_config_filter(&mut tools, config);
-        tools
+        self.tools_for_profile_with_permissions(profile, permissions)
     }
 
     /// Agent tools with a required `project_id` parameter (multi-project mode).
@@ -359,29 +357,6 @@ fn entry_visible(entry: &CatalogEntry, permissions: Option<&AgentPermissions>) -
     })
 }
 
-/// Apply `ToolConfig` permission filters in-place.
-fn apply_config_filter(tools: &mut Vec<ToolDefinition>, config: &ToolConfig) {
-    const FS_TOOL_NAMES: &[&str] = &[
-        "read_file",
-        "write_file",
-        "edit_file",
-        "delete_file",
-        "list_files",
-        "find_files",
-        "stat_file",
-        "search_code",
-    ];
-    tools.retain(|t| {
-        if !config.enable_commands && t.name == "run_command" {
-            return false;
-        }
-        if !config.enable_fs && FS_TOOL_NAMES.contains(&t.name.as_str()) {
-            return false;
-        }
-        true
-    });
-}
-
 fn add_project_id_param(mut td: ToolDefinition) -> ToolDefinition {
     if let Some(props) = td
         .input_schema
@@ -463,18 +438,14 @@ mod tests {
     }
 
     #[test]
-    fn visible_tools_filters_by_config() {
+    fn visible_tools_do_not_apply_tool_config_category_gates() {
         let cat = ToolCatalog::new();
-        let config = ToolConfig {
-            enable_commands: false,
-            enable_fs: false,
-            ..ToolConfig::default()
-        };
+        let config = ToolConfig::default();
 
         let tools = cat.visible_tools(ToolProfile::Core, &config);
         let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(!names.contains("run_command"));
-        assert!(!names.contains("read_file"));
+        assert!(names.contains("run_command"));
+        assert!(names.contains("read_file"));
     }
 
     #[test]
