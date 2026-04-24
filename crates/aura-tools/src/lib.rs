@@ -60,7 +60,7 @@ pub use tool::{AgentControlHook, AgentReadHook, Tool, ToolContext};
 /// This is an execution guardrail, not a catalog visibility or per-tool
 /// permission switch. The kernel decides whether `run_command` is enabled for
 /// an agent; this policy constrains how the tool may execute after that.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CommandPolicy {
     /// Enable process spawning inside `run_command`.
     pub enabled: bool,
@@ -106,18 +106,6 @@ pub struct CommandPolicy {
     /// defaults to `false`; flipping `allow_shell` on is the deliberate
     /// security decision, and this field narrows further from there.
     pub allowed_shell_scripts: Vec<String>,
-}
-
-impl Default for CommandPolicy {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            command_allowlist: vec![],
-            binary_allowlist: vec![],
-            allow_shell: false,
-            allowed_shell_scripts: vec![],
-        }
-    }
 }
 
 impl CommandPolicy {

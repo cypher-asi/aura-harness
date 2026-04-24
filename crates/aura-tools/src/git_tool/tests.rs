@@ -5,9 +5,18 @@
 //! failing) so CI runs in environments without git (docker scratch
 //! images, etc.) still pass the rest of the aura-tools suite.
 
-use super::*;
+use super::executor::spawn_git;
+use super::push::{
+    push_backoff_for_attempt, stderr_looks_remote_exhausted, stderr_looks_transient,
+};
+use super::redact::{build_auth_url, redact_url};
+use super::{git_commit_impl, git_push_impl, GitCommitTool, GitToolError, PushPolicy};
+use crate::error::ToolError;
+use crate::tool::{Tool, ToolContext};
 use std::path::Path;
+use std::time::Duration;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 fn git_available() -> bool {
     std::process::Command::new("git")

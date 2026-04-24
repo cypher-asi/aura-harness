@@ -20,6 +20,29 @@
 //! (`UserToolDefaults` plus optional `AgentToolPermissions`). Even when
 //! these tools resolve to `on`, this module still enforces workspace
 //! confinement, subcommand allowlists, timeouts, and credential scrubbing.
+//!
+//! ## Layout (Phase 2b)
+//!
+//! - [`mod@executor`] — every `Command::new("git")` call site lives
+//!   here. Owns the subcommand allowlist + timeout-wrapped `spawn_git`.
+//! - [`mod@redact`] — `build_auth_url` (JWT injection into push URLs)
+//!   and `redact_url` (mask user-info in tracing output).
+//! - [`mod@commit`] — `git_commit_impl` (`add -A`, `diff --cached`,
+//!   `commit`, `rev-parse HEAD`).
+//! - [`mod@push`] — `git_push_impl` plus the retry / transient
+//!   classifier / remote-storage-exhausted short-circuit.
+//! - [`mod@commit_push`] — `git_commit_push_impl` (the transactional
+//!   commit-and-push pair the dev-loop relies on).
+//! - [`mod@sandbox`] — `ToolContext` bridging helpers
+//!   (`workspace_timeout`, `push_policy_for`, `str_arg`, `opt_bool`).
+//! - `tests` — unit tests for the helpers above; declared
+//!   `#[cfg(test)] mod tests;` so the module path matches `super::*`.
+//!
+//! `mod.rs` keeps the public-facing surface: [`GitToolError`],
+//! [`CommitInfo`], [`PushPolicy`], [`CommitPushOutcome`], the three
+//! `Tool` impls, and the `GIT_*_TOOL_NAMES` constants used by the
+//! catalog. `pub use` re-exports the impl functions so the legacy
+//! `aura_tools::git_tool::git_push_impl` paths keep resolving.
 
 use std::time::Duration;
 
@@ -27,11 +50,28 @@ use async_trait::async_trait;
 use aura_core::{ToolDefinition, ToolResult};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::process::Command;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, warn};
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
+
+mod commit;
+mod commit_push;
+mod executor;
+mod push;
+mod redact;
+mod sandbox;
+
+#[cfg(test)]
+mod tests;
+
+pub use commit::git_commit_impl;
+pub use commit_push::git_commit_push_impl;
+pub use push::git_push_impl;
+
+use push::duration_millis_u64;
+use redact::redact_url;
+use sandbox::{opt_bool, push_policy_for, str_arg, workspace_timeout};
 
 // -----------------------------------------------------------------------
 // Error type
@@ -113,76 +153,7 @@ impl From<GitToolError> for ToolError {
 }
 
 // -----------------------------------------------------------------------
-// Allow-list + internal runner
-// -----------------------------------------------------------------------
-
-/// Subcommands the executor is permitted to invoke. Any other value is
-/// rejected with [`GitToolError::DisallowedSubcommand`].
-pub(crate) const ALLOWED_SUBCOMMANDS: &[&str] =
-    &["add", "commit", "push", "diff", "rev-parse", "remote"];
-
-fn ensure_allowed(subcmd: &str) -> Result<(), GitToolError> {
-    if ALLOWED_SUBCOMMANDS.contains(&subcmd) {
-        Ok(())
-    } else {
-        Err(GitToolError::DisallowedSubcommand(subcmd.to_string()))
-    }
-}
-
-/// Spawn `git <subcmd> <args>` under `workspace`, with a hard timeout.
-///
-/// Returns the raw [`std::process::Output`] on completion. Neither the
-/// program (`git`) nor the subcommand set is caller-controlled once
-/// this helper is reached — both are fixed by the calling tool.
-#[instrument(skip_all, fields(op = %op_label, subcmd = %subcmd))]
-pub(crate) async fn spawn_git(
-    workspace: &std::path::Path,
-    subcmd: &str,
-    args: &[&str],
-    timeout: Duration,
-    op_label: &'static str,
-) -> Result<std::process::Output, GitToolError> {
-    ensure_allowed(subcmd)?;
-
-    let mut cmd = Command::new("git");
-    cmd.arg(subcmd)
-        .args(args)
-        .current_dir(workspace)
-        // Never prompt for credentials — we always pre-embed auth into
-        // the URL and rely on the non-interactive push path.
-        .env("GIT_TERMINAL_PROMPT", "0");
-
-    debug!(?workspace, "spawning git");
-
-    let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| GitToolError::Timeout(op_label, timeout))?
-        .map_err(|e| GitToolError::Spawn(op_label, e))?;
-
-    Ok(output)
-}
-
-/// Shortcut that converts a non-zero exit into [`GitToolError::NonZeroExit`].
-async fn run_git_expect_ok(
-    workspace: &std::path::Path,
-    subcmd: &str,
-    args: &[&str],
-    timeout: Duration,
-    op_label: &'static str,
-) -> Result<std::process::Output, GitToolError> {
-    let output = spawn_git(workspace, subcmd, args, timeout, op_label).await?;
-    if !output.status.success() {
-        return Err(GitToolError::NonZeroExit {
-            op: op_label,
-            exit_code: output.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
-    }
-    Ok(output)
-}
-
-// -----------------------------------------------------------------------
-// Operation implementations (shared between tools + orbit)
+// Public types
 // -----------------------------------------------------------------------
 
 /// Metadata recorded for each commit surfaced by `git_push`.
@@ -190,48 +161,6 @@ async fn run_git_expect_ok(
 pub struct CommitInfo {
     pub sha: String,
     pub message: String,
-}
-
-/// Stage every tracked change and create a commit with `message`.
-/// Returns `Ok(None)` when there is nothing to commit (`git diff
-/// --cached --quiet` exits 0 after staging).
-#[instrument(skip_all, fields(op = "commit"))]
-pub async fn git_commit_impl(
-    workspace: &std::path::Path,
-    message: &str,
-    timeout: Duration,
-) -> Result<Option<String>, GitToolError> {
-    if message.trim().is_empty() {
-        return Err(GitToolError::InvalidArg {
-            name: "message",
-            reason: "commit message must not be empty".into(),
-        });
-    }
-
-    run_git_expect_ok(workspace, "add", &["-A"], timeout, "add").await?;
-
-    let diff = spawn_git(
-        workspace,
-        "diff",
-        &["--cached", "--quiet"],
-        timeout,
-        "diff --cached",
-    )
-    .await?;
-    if diff.status.success() {
-        info!("no staged changes; skipping commit");
-        return Ok(None);
-    }
-
-    run_git_expect_ok(workspace, "commit", &["-m", message], timeout, "commit").await?;
-
-    let sha_output =
-        run_git_expect_ok(workspace, "rev-parse", &["HEAD"], timeout, "rev-parse HEAD").await?;
-    let sha = String::from_utf8_lossy(&sha_output.stdout)
-        .trim()
-        .to_string();
-    info!(%sha, "git commit created");
-    Ok(Some(sha))
 }
 
 /// Per-attempt timeout and attempt budget for `git push`.
@@ -294,369 +223,9 @@ pub struct CommitPushOutcome {
     pub push_result: Result<Vec<CommitInfo>, GitToolError>,
 }
 
-/// Transient git push stderr markers that warrant a retry. Non-transient
-/// failures (auth rejected, non-fast-forward without `--force`, malformed
-/// refspec) surface immediately so the agent gets the signal it needs
-/// without spending its retry budget on a dead-letter push.
-const TRANSIENT_PUSH_STDERR: &[&str] = &[
-    "could not read from remote",
-    "fatal: unable to access",
-    "rpc failed",
-    "early eof",
-    "connection reset",
-    "broken pipe",
-    "operation timed out",
-    "unable to connect",
-    "temporary failure in name resolution",
-    "ssl_read",
-    "tls",
-    // Server-side unpack/index failures can have transient roots
-    // (receive-pack sigterm, concurrent writes), so retry them even
-    // though they can also co-occur with remote-storage exhaustion —
-    // we check the storage-exhaustion list first.
-    "unpack failed",
-    "index-pack abnormal exit",
-];
-
-/// Remote-side storage exhaustion markers. Retrying these within the
-/// dev-loop's backoff window cannot heal remote disk; short-circuit
-/// instead so the caller can render an actionable recovery hint and
-/// the dev-loop does not burn ~22s of backoff per push attempt.
-const REMOTE_EXHAUSTED_PUSH_STDERR: &[&str] = &[
-    "no space left on device",
-    "insufficient storage",
-    "http 507",
-    "disk quota exceeded",
-    "write error: no space",
-];
-
-fn stderr_looks_transient(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    // Storage-exhaustion markers take precedence: a push that
-    // reports both `no space left on device` AND `rpc failed` is
-    // fundamentally a remote-disk problem, not a network one.
-    if REMOTE_EXHAUSTED_PUSH_STDERR
-        .iter()
-        .any(|m| lower.contains(m))
-    {
-        return false;
-    }
-    TRANSIENT_PUSH_STDERR.iter().any(|m| lower.contains(m))
-}
-
-fn stderr_looks_remote_exhausted(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    REMOTE_EXHAUSTED_PUSH_STDERR
-        .iter()
-        .any(|m| lower.contains(m))
-}
-
-/// Bounded exponential backoff between push attempts: 2s, 5s, 15s,
-/// then 15s for every subsequent attempt. Keeping the cap low means
-/// a push that fails all attempts still returns within ~22s of extra
-/// wall-clock — small enough that the dev-loop's post-commit handoff
-/// isn't held up for minutes.
-fn push_backoff_for_attempt(attempt_index: u32) -> Duration {
-    match attempt_index {
-        0 => Duration::from_secs(2),
-        1 => Duration::from_secs(5),
-        _ => Duration::from_secs(15),
-    }
-}
-
-fn duration_millis_u64(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-/// Push the current `HEAD` to `remote_url:branch` using a JWT-auth URL.
-///
-/// The push is executed with the fully-authenticated URL passed inline
-/// (rather than registering a named remote) so no credentials survive
-/// in the on-disk `.git/config`. Returns the list of SHAs that were
-/// newly pushed (derived from `git log orbit/branch..HEAD` before the
-/// push — best-effort, empty on failure).
-///
-/// Retries on transient failures (timeouts, `could not read from
-/// remote`, `RPC failed`, etc.) up to `policy.attempts` total attempts
-/// with exponential backoff. Non-transient failures (auth errors,
-/// non-fast-forward without `--force`) short-circuit immediately.
-#[instrument(skip_all, fields(op = "push", branch = %branch))]
-pub async fn git_push_impl(
-    workspace: &std::path::Path,
-    remote_url: &str,
-    branch: &str,
-    jwt: &str,
-    force: bool,
-    policy: PushPolicy,
-) -> Result<Vec<CommitInfo>, GitToolError> {
-    if remote_url.is_empty() {
-        return Err(GitToolError::MissingArg("remote_url"));
-    }
-    if branch.is_empty() {
-        return Err(GitToolError::MissingArg("branch"));
-    }
-    if jwt.is_empty() {
-        return Err(GitToolError::MissingArg("jwt"));
-    }
-
-    let auth_url = build_auth_url(remote_url, jwt)?;
-    let safe_remote = redact_url(remote_url);
-    let per_attempt_timeout = policy.per_attempt_timeout;
-    let attempts = policy.attempts.max(1);
-
-    // Best-effort unpushed commit listing. Missing remote tracking
-    // branches are normal for first-push flows; swallow the error.
-    let refspec = format!("HEAD:refs/heads/{branch}");
-    let commits = list_unpushed_commits(workspace, "HEAD", per_attempt_timeout)
-        .await
-        .unwrap_or_default();
-
-    let mut args: Vec<&str> = vec![auth_url.as_str()];
-    if force {
-        args.push("--force");
-    }
-    args.push(refspec.as_str());
-
-    let mut last_err: Option<GitToolError> = None;
-    for attempt in 0..attempts {
-        match run_git_expect_ok(workspace, "push", &args, per_attempt_timeout, "push").await {
-            Ok(_) => {
-                info!(
-                    remote = %safe_remote,
-                    %branch,
-                    commit_count = commits.len(),
-                    attempt = attempt + 1,
-                    "git push succeeded"
-                );
-                return Ok(commits);
-            }
-            Err(err) => {
-                // Remote storage exhaustion: short-circuit with a
-                // dedicated variant so the dev-loop renders an
-                // actionable recovery hint. Retrying cannot heal
-                // remote disk within our backoff window.
-                if let GitToolError::NonZeroExit { stderr, .. } = &err {
-                    if stderr_looks_remote_exhausted(stderr) {
-                        warn!(
-                            remote = %safe_remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed: remote storage exhausted; not retrying"
-                        );
-                        return Err(GitToolError::RemoteStorageExhausted {
-                            op: "push",
-                            stderr: stderr.clone(),
-                        });
-                    }
-                }
-                let transient = match &err {
-                    GitToolError::Timeout(_, _) => true,
-                    GitToolError::NonZeroExit { stderr, .. } => stderr_looks_transient(stderr),
-                    // Spawn / URL / arg errors never retry — they are
-                    // deterministic misconfigurations.
-                    _ => false,
-                };
-                let attempts_left = attempts - (attempt + 1);
-                if !transient || attempts_left == 0 {
-                    if transient {
-                        warn!(
-                            remote = %safe_remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed after exhausting retry budget"
-                        );
-                    } else {
-                        warn!(
-                            remote = %safe_remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed (non-retryable)"
-                        );
-                    }
-                    last_err = Some(err);
-                    break;
-                }
-                let backoff = push_backoff_for_attempt(attempt);
-                warn!(
-                    remote = %safe_remote,
-                    %branch,
-                    attempt = attempt + 1,
-                    attempts_left,
-                    backoff_ms = duration_millis_u64(backoff),
-                    error = %err,
-                    "git push failed transiently; retrying"
-                );
-                last_err = Some(err);
-                tokio::time::sleep(backoff).await;
-            }
-        }
-    }
-    // Infallible in practice — the loop always records an error before
-    // breaking — but guard against the empty-loop case where
-    // `attempts == 0` was passed (coerced to 1 above, so unreachable).
-    Err(last_err.unwrap_or(GitToolError::Timeout("push", per_attempt_timeout)))
-}
-
-/// Combined `add -A` + `commit` + `push` — the transactional group the
-/// dev-loop relies on.
-///
-/// Commit failures propagate via the outer `Result` (nothing landed).
-/// Push failures are reported inline via [`CommitPushOutcome::push_result`]
-/// so the caller still sees the commit SHA — the task's work is locally
-/// persisted even if Orbit wasn't reachable.
-#[instrument(skip_all, fields(op = "commit_and_push", branch = %branch))]
-#[allow(clippy::too_many_arguments)]
-pub async fn git_commit_push_impl(
-    workspace: &std::path::Path,
-    message: &str,
-    remote_url: &str,
-    branch: &str,
-    jwt: &str,
-    force: bool,
-    commit_timeout: Duration,
-    push_policy: PushPolicy,
-) -> Result<CommitPushOutcome, GitToolError> {
-    let commit_sha = git_commit_impl(workspace, message, commit_timeout).await?;
-    let push_result = git_push_impl(workspace, remote_url, branch, jwt, force, push_policy).await;
-    Ok(CommitPushOutcome {
-        commit_sha,
-        push_result,
-    })
-}
-
-/// Read `git log HEAD --pretty=format:'%H %s'` up to 50 entries. Only
-/// used for audit logging on successful pushes. Missing refs yield an
-/// empty vec rather than an error.
-async fn list_unpushed_commits(
-    workspace: &std::path::Path,
-    git_ref: &str,
-    timeout: Duration,
-) -> Result<Vec<CommitInfo>, GitToolError> {
-    // `log` is a read-only subcommand. The allow-list keeps it close
-    // to `rev-parse` — both are inspection helpers for the mutating
-    // flow and never take caller-controlled args beyond a bounded ref.
-    let mut cmd = Command::new("git");
-    cmd.arg("log")
-        .arg(git_ref)
-        .arg("--pretty=format:%H %s")
-        .arg("-50")
-        .current_dir(workspace)
-        .env("GIT_TERMINAL_PROMPT", "0");
-
-    let output = match tokio::time::timeout(timeout, cmd.output()).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return Err(GitToolError::Spawn("log", e)),
-        Err(_) => return Err(GitToolError::Timeout("log", timeout)),
-    };
-    if !output.status.success() {
-        debug!(
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "git log returned non-zero exit; treating as empty"
-        );
-        return Ok(Vec::new());
-    }
-
-    let commits = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (sha, msg) = line.split_once(' ')?;
-            Some(CommitInfo {
-                sha: sha.to_string(),
-                message: msg.to_string(),
-            })
-        })
-        .collect();
-    Ok(commits)
-}
-
-/// Inject `x-token:<jwt>` into `remote_url`'s user-info component.
-///
-/// Accepts `https://host[:port]/path` URLs. Any other shape — including
-/// ssh://, file://, scp-style `git@host:path` — is rejected with
-/// [`GitToolError::InvalidUrl`]. The caller is responsible for stripping
-/// existing credentials; we do not attempt to merge them.
-fn build_auth_url(remote_url: &str, jwt: &str) -> Result<String, GitToolError> {
-    // Find scheme.
-    let Some((scheme, rest)) = remote_url.split_once("://") else {
-        return Err(GitToolError::InvalidUrl(
-            "remote URL must contain '://'".into(),
-        ));
-    };
-    if scheme != "https" && scheme != "http" {
-        return Err(GitToolError::InvalidUrl(format!(
-            "unsupported scheme '{scheme}' (expected https or http)"
-        )));
-    }
-    if rest.is_empty() {
-        return Err(GitToolError::InvalidUrl("remote URL is empty".into()));
-    }
-    // Strip any pre-existing user-info segment so we don't leak
-    // credentials or end up with `user:token@newuser:newtoken@host`.
-    let without_auth = rest.rsplit_once('@').map_or(rest, |(_, host)| host);
-    if without_auth.is_empty() {
-        return Err(GitToolError::InvalidUrl("remote URL has no host".into()));
-    }
-    // Reject obvious control chars in the JWT. The JWT itself is
-    // user-provided and ends up on the command line, so make sure
-    // no newline / whitespace / shell meta sneaks in — these are not
-    // meaningful in a JWT anyway.
-    for c in jwt.chars() {
-        if c.is_ascii_whitespace() || c == '@' || c == '#' || c.is_control() {
-            return Err(GitToolError::InvalidUrl(format!(
-                "auth token contains disallowed character: {c:?}"
-            )));
-        }
-    }
-    Ok(format!("{scheme}://x-token:{jwt}@{without_auth}"))
-}
-
-fn redact_url(url: &str) -> String {
-    // Collapse any user-info portion to `***` so logs never leak a JWT.
-    if let Some((scheme, rest)) = url.split_once("://") {
-        if let Some((_, host)) = rest.rsplit_once('@') {
-            return format!("{scheme}://***@{host}");
-        }
-        return format!("{scheme}://{rest}");
-    }
-    url.to_string()
-}
-
 // -----------------------------------------------------------------------
-// Tool implementations
+// Tool implementations — thin shims over the impl functions above.
 // -----------------------------------------------------------------------
-
-fn workspace_timeout(ctx: &ToolContext) -> Duration {
-    // Keep this comfortably above the kernel's default command_timeout
-    // (10s) since `git push` over slow networks routinely takes longer.
-    // Tools still respect the hard upper bound via `max_async_timeout_ms`.
-    Duration::from_millis(ctx.config.max_async_timeout_ms.min(120_000))
-}
-
-/// Push-specific policy derived from the tool context.
-///
-/// Separate from [`workspace_timeout`] so slow `git push` calls can
-/// use their own (longer, configurable) per-attempt budget and a
-/// bounded retry loop without dragging the rest of the git tools up
-/// with them. See [`PushPolicy::from_config`] for the knob.
-fn push_policy_for(ctx: &ToolContext) -> PushPolicy {
-    PushPolicy::from_config(&ctx.config)
-}
-
-fn str_arg<'a>(args: &'a serde_json::Value, name: &'static str) -> Result<&'a str, GitToolError> {
-    args.get(name)
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .ok_or(GitToolError::MissingArg(name))
-}
-
-fn opt_bool(args: &serde_json::Value, name: &str) -> bool {
-    args.get(name)
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
 
 /// `git_commit` — stage all changes (`git add -A`) and create a commit.
 pub struct GitCommitTool;
@@ -959,6 +528,3 @@ pub const GIT_REMOTE_TOOL_NAMES: &[&str] = &["git_push", "git_commit_push"];
 
 /// The full set of git tool names registered by this module.
 pub const GIT_TOOL_NAMES: &[&str] = &["git_commit", "git_push", "git_commit_push"];
-
-#[cfg(test)]
-mod tests;
