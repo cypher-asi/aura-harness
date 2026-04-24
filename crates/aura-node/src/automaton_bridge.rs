@@ -13,11 +13,12 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -203,11 +204,7 @@ impl AutomatonBridge {
     pub fn subscribe_events(&self, automaton_id: &str) -> Option<EventSubscription> {
         self.event_channels.get(automaton_id).map(|entry| {
             let ch = entry.value();
-            let history = ch
-                .history
-                .lock()
-                .expect("event history mutex poisoned")
-                .clone();
+            let history = ch.history.lock().clone();
             EventSubscription {
                 history,
                 live: ch.broadcast.subscribe(),
@@ -272,6 +269,12 @@ impl AutomatonBridge {
     /// The returned kernel owns an `ExecutorRouter` wired to the domain API
     /// (with optional JWT + project context) and serves as the single authority
     /// for tool execution and model reasoning recording for this agent.
+    ///
+    /// Returns an error string (propagated verbatim to callers that use
+    /// `Result<String, String>`) when every retry of `Kernel::new` fails. The
+    /// previous implementation panicked via `unreachable!` on exhaustion; a
+    /// panic here would take down the node process, so we surface the final
+    /// error instead and let the caller convert it into an `Err` response.
     #[allow(clippy::too_many_arguments)] // TODO(W4): group inputs into a `BuildKernelParams` struct.
     fn build_kernel(
         &self,
@@ -282,7 +285,7 @@ impl AutomatonBridge {
         use_workspace_base_as_root: bool,
         installed_tools: Vec<InstalledToolDefinition>,
         installed_integrations: Vec<InstalledIntegrationDefinition>,
-    ) -> Arc<Kernel> {
+    ) -> Result<Arc<Kernel>, String> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
             auth_token.map(String::from),
@@ -312,7 +315,7 @@ impl AutomatonBridge {
             config,
             agent_id,
         ) {
-            Ok(k) => Arc::new(k),
+            Ok(k) => Ok(Arc::new(k)),
             Err(e) => {
                 warn!(error = %e, "Kernel::new failed, falling back to fresh agent id");
                 let fallback_router = executor_factory::build_executor_router(
@@ -321,11 +324,7 @@ impl AutomatonBridge {
                 );
                 // Retry with a fresh `AgentId` and the same config; the only
                 // failure mode left for `Kernel::new` is store corruption, in
-                // which case we log and fall through to a second attempt. If
-                // even that fails, there's no coherent recovery path left for
-                // the dev-loop — we log fatally and bail by returning a
-                // kernel constructed against an in-memory cache, to avoid
-                // panicking the node process.
+                // which case we log and fall through to a second attempt.
                 match Kernel::new(
                     self.store.clone(),
                     self.provider.clone(),
@@ -338,7 +337,7 @@ impl AutomatonBridge {
                     },
                     AgentId::generate(),
                 ) {
-                    Ok(k) => Arc::new(k),
+                    Ok(k) => Ok(Arc::new(k)),
                     Err(e) => {
                         warn!(
                             error = %e,
@@ -346,10 +345,8 @@ impl AutomatonBridge {
                         );
                         // Final-resort path: re-run `Kernel::new` with the
                         // already-validated router and the minimum viable
-                        // config, propagating whatever error emerges. If this
-                        // also fails we surface the error via `unreachable!`
-                        // after a structured log — the node's dev-loop wiring
-                        // has exhausted every recoverable configuration.
+                        // config. If this also fails we surface the error to
+                        // the caller instead of panicking the node process.
                         let last_resort = executor_factory::build_executor_router(
                             executor_factory::build_tool_resolver(
                                 &self.catalog,
@@ -364,10 +361,10 @@ impl AutomatonBridge {
                             KernelConfig::default(),
                             AgentId::generate(),
                         ) {
-                            Ok(k) => Arc::new(k),
-                            Err(final_err) => unreachable!(
+                            Ok(k) => Ok(Arc::new(k)),
+                            Err(final_err) => Err(format!(
                                 "Kernel::new failed on default config after two retries: {final_err}"
-                            ),
+                            )),
                         }
                     }
                 }
@@ -412,15 +409,17 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
-        let kernel = self.build_kernel(
-            domain.clone(),
-            auth_token.as_deref(),
-            Some(project_id),
-            ws_path,
-            effective_workspace.is_some(),
-            installed_tools.clone(),
-            installed_integrations.clone(),
-        );
+        let kernel = self
+            .build_kernel(
+                domain.clone(),
+                auth_token.as_deref(),
+                Some(project_id),
+                ws_path,
+                effective_workspace.is_some(),
+                installed_tools.clone(),
+                installed_integrations.clone(),
+            )
+            .map_err(|e| format!("failed to build dev loop kernel: {e}"))?;
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
             &kernel,
             "automaton",
@@ -513,15 +512,17 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
-        let kernel = self.build_kernel(
-            domain.clone(),
-            auth_token.as_deref(),
-            Some(project_id),
-            ws_path,
-            effective_workspace.is_some(),
-            installed_tools.clone(),
-            installed_integrations.clone(),
-        );
+        let kernel = self
+            .build_kernel(
+                domain.clone(),
+                auth_token.as_deref(),
+                Some(project_id),
+                ws_path,
+                effective_workspace.is_some(),
+                installed_tools.clone(),
+                installed_integrations.clone(),
+            )
+            .map_err(|e| format!("failed to build task runtime kernel: {e}"))?;
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
             &kernel,
             "automaton",
@@ -652,10 +653,7 @@ impl AutomatonBridge {
                 // than missing it entirely. Cap with
                 // EVENT_HISTORY_CAPACITY (oldest-first eviction).
                 {
-                    let mut history = channel_for_task
-                        .history
-                        .lock()
-                        .expect("event history mutex poisoned");
+                    let mut history = channel_for_task.history.lock();
                     if history.len() >= EVENT_HISTORY_CAPACITY {
                         let drop_n = history.len() + 1 - EVENT_HISTORY_CAPACITY;
                         history.drain(..drop_n);

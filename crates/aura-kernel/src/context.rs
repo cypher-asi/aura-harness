@@ -82,14 +82,19 @@ impl ContextBuilder {
     }
 
     /// Build the context.
-    #[must_use]
-    pub fn build(self) -> Context {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::KernelError::Internal`] when the canonical
+    /// `hash_tx_with_window` function fails (for example, if transaction
+    /// serialization fails). The previous implementation silently fell back
+    /// to an all-zero context hash, which would have violated Invariant §6
+    /// by producing two distinct transactions with identical context hashes.
+    pub fn build(self) -> Result<Context, crate::KernelError> {
         // Delegate to the canonical `hash_tx_with_window` so every kernel
-        // path agrees on the formula from Invariant §6. `ContextBuilder::new`
-        // pre-validated serialization, so the error branch here cannot fire
-        // in practice — we fall back to an all-zero hash defensively.
+        // path agrees on the formula from Invariant §6.
         let context_hash = hash_tx_with_window(&self.tx, &self.record_window)
-            .unwrap_or_else(|_| ContextHash::zero());
+            .map_err(|e| crate::KernelError::Internal(format!("context hash: {e}")))?;
 
         // Build record summaries for reasoner
         let record_summaries: Vec<RecordSummary> = self
@@ -121,10 +126,10 @@ impl ContextBuilder {
             "Context built"
         );
 
-        Context {
+        Ok(Context {
             context_hash,
             record_summaries,
-        }
+        })
     }
 }
 
@@ -181,8 +186,8 @@ mod tests {
     fn test_context_hash_deterministic() {
         let tx = Transaction::user_prompt(AgentId::generate(), "test");
 
-        let ctx1 = ContextBuilder::new(&tx).unwrap().build();
-        let ctx2 = ContextBuilder::new(&tx).unwrap().build();
+        let ctx1 = ContextBuilder::new(&tx).unwrap().build().unwrap();
+        let ctx2 = ContextBuilder::new(&tx).unwrap().build().unwrap();
 
         assert_eq!(ctx1.context_hash, ctx2.context_hash);
     }
@@ -198,11 +203,12 @@ mod tests {
             .decision(Decision::new())
             .build();
 
-        let ctx1 = ContextBuilder::new(&tx).unwrap().build();
+        let ctx1 = ContextBuilder::new(&tx).unwrap().build().unwrap();
         let ctx2 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry])
-            .build();
+            .build()
+            .unwrap();
 
         assert_ne!(ctx1.context_hash, ctx2.context_hash);
     }
@@ -213,8 +219,8 @@ mod tests {
         let tx1 = Transaction::user_prompt(agent_id, "message 1");
         let tx2 = Transaction::user_prompt(agent_id, "message 2");
 
-        let ctx1 = ContextBuilder::new(&tx1).unwrap().build();
-        let ctx2 = ContextBuilder::new(&tx2).unwrap().build();
+        let ctx1 = ContextBuilder::new(&tx1).unwrap().build().unwrap();
+        let ctx2 = ContextBuilder::new(&tx2).unwrap().build().unwrap();
 
         assert_ne!(ctx1.context_hash, ctx2.context_hash);
     }
@@ -230,12 +236,14 @@ mod tests {
         let ctx_order1 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry1.clone(), entry2.clone()])
-            .build();
+            .build()
+            .unwrap();
 
         let ctx_order2 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry2, entry1])
-            .build();
+            .build()
+            .unwrap();
 
         // Order matters for context hash
         assert_ne!(ctx_order1.context_hash, ctx_order2.context_hash);
@@ -251,7 +259,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry])
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries.len(), 1);
         assert_eq!(ctx.record_summaries[0].seq, 1);
@@ -281,7 +290,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry])
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries[0].action_kinds.len(), 2);
         assert!(ctx.record_summaries[0]
@@ -304,7 +314,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry])
-            .build();
+            .build()
+            .unwrap();
 
         // Payload summaries are now constant-size fingerprints
         // (`blake3:<16-hex>`), not byte-truncated plaintext, so the
@@ -338,7 +349,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(entries)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries.len(), 4);
         assert_eq!(ctx.record_summaries[0].tx_kind, "UserPrompt");
@@ -354,7 +366,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![])
-            .build();
+            .build()
+            .unwrap();
 
         assert!(ctx.record_summaries.is_empty());
         // Context hash should still be valid
@@ -377,12 +390,14 @@ mod tests {
         let ctx1 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry1])
-            .build();
+            .build()
+            .unwrap();
 
         let ctx2 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry2])
-            .build();
+            .build()
+            .unwrap();
 
         // Different window context hashes should produce different overall context hash
         assert_ne!(ctx1.context_hash, ctx2.context_hash);
@@ -408,7 +423,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(entries)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries.len(), 9);
 
@@ -446,7 +462,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(entries)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries.len(), 100);
         assert_eq!(ctx.record_summaries[0].seq, 1);
@@ -467,7 +484,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry])
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries[0].action_kinds.len(), 3);
         assert!(ctx.record_summaries[0]
@@ -488,7 +506,8 @@ mod tests {
         let ctx = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(vec![entry])
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx.record_summaries.len(), 1);
         assert!(ctx.record_summaries[0].payload_summary.is_some());
@@ -507,11 +526,13 @@ mod tests {
         let ctx1 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(entries.clone())
-            .build();
+            .build()
+            .unwrap();
         let ctx2 = ContextBuilder::new(&tx)
             .unwrap()
             .with_record_window(entries)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(ctx1.context_hash, ctx2.context_hash);
         assert_eq!(ctx1.record_summaries.len(), ctx2.record_summaries.len());

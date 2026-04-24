@@ -101,6 +101,18 @@ impl Scheduler {
             .clone()
     }
 
+    /// Acquire the per-agent single-writer mutex (Invariant §12).
+    ///
+    /// Non-scheduler call-sites that need to append to an agent's record
+    /// log (e.g. HTTP handlers writing `agent_tool_permissions` entries)
+    /// acquire this lock to serialize with `schedule_agent`'s inbox drain.
+    /// Returns an owned guard tied to the cloned `Arc<Mutex<()>>` so the
+    /// caller can hold it across an `await` without borrowing `self`.
+    pub async fn agent_lock(&self, agent_id: AgentId) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self.get_lock(agent_id);
+        lock.lock_owned().await
+    }
+
     /// Build an `ExecutorRouter` from the shared executor list.
     fn build_executor_router(&self) -> ExecutorRouter {
         ExecutorRouter::with_executors(self.executors.clone())

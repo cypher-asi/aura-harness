@@ -1,4 +1,5 @@
 use crate::protocol;
+use crate::scheduler::Scheduler;
 use aura_core::{
     resolve_effective_permission, AgentId, AgentToolPermissions, Identity,
     InstalledIntegrationDefinition, InstalledToolDefinition, RecordEntry, ToolState, Transaction,
@@ -160,8 +161,16 @@ fn context_from_entries(entries: Vec<RecordEntry>) -> AgentToolContext {
     }
 }
 
-pub(crate) fn append_agent_tool_permissions_entry(
+/// Append an `agent_tool_permissions` System entry to the agent's log.
+///
+/// Acquires the scheduler's per-agent lock (Invariant §12) before the
+/// `append_entry_direct` call so this HTTP-driven write serializes with
+/// the scheduler's inbox-drain on the same agent. Without this the
+/// single-writer guarantee can be violated if a scheduler tick is
+/// running concurrently.
+pub(crate) async fn append_agent_tool_permissions_entry(
     store: &Arc<dyn Store>,
+    scheduler: &Arc<Scheduler>,
     agent_id: AgentId,
     permissions: &AgentToolPermissions,
 ) -> Result<Transaction, String> {
@@ -177,6 +186,12 @@ pub(crate) fn append_agent_tool_permissions_entry(
         Bytes::from(payload),
         None,
     );
+
+    // Hold the per-agent lock for the entire read-modify-write window so a
+    // concurrent scheduler drain cannot wedge a different entry at the same
+    // seq between our `get_head_seq` and `append_entry_direct`.
+    let _guard = scheduler.agent_lock(agent_id).await;
+
     let head = store
         .get_head_seq(agent_id)
         .map_err(|e| format!("get_head_seq: {e}"))?;

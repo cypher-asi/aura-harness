@@ -78,7 +78,7 @@ impl Kernel {
                 .await
                 .map_err(|e| crate::KernelError::Internal(format!("create workspace: {e}")))?;
             let ctx = ExecuteContext::new(self.agent_id, action_id, workspace);
-            let effect = self.executor.execute(&ctx, &action).await;
+            let effect = self.execute_with_timeout(&ctx, &action).await;
 
             let had_failures = effect.status == EffectStatus::Failed;
             let output_content = decode_tool_effect(&effect).content;
@@ -237,30 +237,10 @@ impl Kernel {
             exec_actions.push(action);
         }
 
-        let tool_timeout = Duration::from_millis(self.config.tool_timeout_ms);
-        let exec_futures =
-            exec_contexts
-                .iter()
-                .zip(exec_actions.iter())
-                .map(|(ctx, action)| async move {
-                    match tokio::time::timeout(tool_timeout, self.executor.execute(ctx, action))
-                        .await
-                    {
-                        Ok(effect) => effect,
-                        Err(_) => {
-                            tracing::warn!(
-                                action_id = %action.action_id,
-                                timeout_ms = self.config.tool_timeout_ms,
-                                "Tool execution timed out"
-                            );
-                            Effect::failed(
-                                action.action_id,
-                                EffectKind::Agreement,
-                                format!("Tool timed out after {}ms", self.config.tool_timeout_ms),
-                            )
-                        }
-                    }
-                });
+        let exec_futures = exec_contexts
+            .iter()
+            .zip(exec_actions.iter())
+            .map(|(ctx, action)| self.execute_with_timeout(ctx, action));
 
         let effects: Vec<Effect> = futures_util::future::join_all(exec_futures).await;
 
@@ -384,6 +364,29 @@ impl Kernel {
             .map_err(|e| crate::KernelError::Store(format!("append_entries_batch: {e}")))?;
 
         Ok(results)
+    }
+
+    /// Run a single tool action under `config.tool_timeout_ms` and convert a
+    /// timeout into a failed `Effect`. Shared by `process_tool_proposal` and
+    /// `process_tools` so both the single-proposal and batch paths apply the
+    /// same per-tool budget (Invariant §1 / rules.md §6.2).
+    async fn execute_with_timeout(&self, ctx: &ExecuteContext, action: &Action) -> Effect {
+        let tool_timeout = Duration::from_millis(self.config.tool_timeout_ms);
+        match tokio::time::timeout(tool_timeout, self.executor.execute(ctx, action)).await {
+            Ok(effect) => effect,
+            Err(_) => {
+                tracing::warn!(
+                    action_id = %action.action_id,
+                    timeout_ms = self.config.tool_timeout_ms,
+                    "Tool execution timed out"
+                );
+                Effect::failed(
+                    action.action_id,
+                    EffectKind::Agreement,
+                    format!("Tool timed out after {}ms", self.config.tool_timeout_ms),
+                )
+            }
+        }
     }
 
     async fn resolve_live_ask_verdict(

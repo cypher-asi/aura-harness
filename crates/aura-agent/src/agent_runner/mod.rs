@@ -446,6 +446,7 @@ pub fn configure_loop_config(
 
     // The thinking_budget from policy feeds into the loop's initial thinking state
     // via max_tokens; the AgentLoop tapers it across iterations.
+    // TODO(phase-6): wire thinking_budget into AgentLoopConfig or delete; see system-audit-refactor plan
     let _ = thinking_budget;
 
     AgentLoopConfig {

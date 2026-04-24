@@ -318,6 +318,7 @@ dependencies = [
  "futures-util",
  "governor",
  "hex",
+ "parking_lot",
  "portable-pty",
  "reqwest",
  "serde",

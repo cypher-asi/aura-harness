@@ -116,7 +116,7 @@ impl SpecGenAutomaton {
             ));
         }
 
-        let requirements = read_requirements(ctx, requirements_path)?;
+        let requirements = read_requirements(ctx, requirements_path).await?;
 
         info!(
             project_id = %cfg.project_id,
@@ -220,7 +220,10 @@ impl SpecGenAutomaton {
     }
 }
 
-fn read_requirements(ctx: &TickContext, requirements_path: &str) -> Result<String, AutomatonError> {
+async fn read_requirements(
+    ctx: &TickContext,
+    requirements_path: &str,
+) -> Result<String, AutomatonError> {
     let workspace_root = ctx
         .workspace_root
         .as_deref()
@@ -239,7 +242,7 @@ fn read_requirements(ctx: &TickContext, requirements_path: &str) -> Result<Strin
             "requirements_path escapes workspace root: {requirements_path}"
         )));
     }
-    std::fs::read_to_string(&canonical).map_err(|e| {
+    tokio::fs::read_to_string(&canonical).await.map_err(|e| {
         AutomatonError::InvalidConfig(format!(
             "failed to read requirements file {requirements_path}: {e}"
         ))

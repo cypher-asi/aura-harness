@@ -38,6 +38,7 @@ tower-http = { workspace = true }
 tower_governor = { workspace = true }
 governor = { workspace = true }
 dashmap = { workspace = true }
+parking_lot = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
 async-trait = { workspace = true }

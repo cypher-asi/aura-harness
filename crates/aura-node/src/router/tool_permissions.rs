@@ -71,7 +71,8 @@ pub(super) async fn put_agent_tool_permissions_handler(
     enforce_monotonic_update(&user_default, context.tool_permissions.as_ref(), &next)
         .map_err(|e| (StatusCode::FORBIDDEN, e))?;
 
-    let tx = append_agent_tool_permissions_entry(&state.store, agent_id, &next)
+    let tx = append_agent_tool_permissions_entry(&state.store, &state.scheduler, agent_id, &next)
+        .await
         .map_err(storage_string_error)?;
     let scheduler = state.scheduler.clone();
     tokio::spawn(async move {
