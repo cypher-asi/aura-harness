@@ -208,7 +208,7 @@ pub(super) async fn build_kernel_with_config(
     });
 
     let mut resolver =
-        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec)
+        executor_factory::build_tool_resolver(&ctx.catalog, tool_config, domain_exec.clone())
             .with_installed_tools(session.installed_tools.clone());
 
     if let Some(ref controller) = ctx.automaton_controller {
@@ -254,6 +254,21 @@ pub(super) async fn build_kernel_with_config(
     // Permissions are mandatory on every session; wire them into the
     // kernel policy unconditionally so the Delegate gate enforces them.
     policy.agent_permissions = session.agent_permissions.clone();
+
+    // Extend `allowed_tools` with every name the session's
+    // `DomainToolExecutor` can handle (`create_spec`, `create_task`,
+    // `list_specs`, etc.). Without this, the kernel's fail-closed
+    // `allow_unlisted = false` default denies domain tools with
+    // `"Tool 'X' is not allowed"` whenever the aura-os-server
+    // capability splice fails to ship them as `installed_tools`
+    // (non-CEO agent with empty `capabilities`, remote harness with
+    // unresolvable base URL, etc.). The DomainApi surface is the
+    // authoritative source for these names — they are always safe
+    // to allow because per-call authorization is re-enforced at the
+    // aura-os-server dispatcher via the session JWT.
+    if let Some(ref exec) = domain_exec {
+        policy.add_allowed_tools(exec.tool_names().iter().map(|s| s.to_string()));
+    }
 
     let config = KernelConfig {
         workspace_base: workspace,
