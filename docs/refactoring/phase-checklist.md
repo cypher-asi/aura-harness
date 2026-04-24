@@ -29,6 +29,22 @@ Every phase **must** pass all of the following before it is considered complete:
 | **I3** | **No hidden state** — Derived state is either replayable from Record or stored as a derived artifact that is also recorded. |
 | **I4** | **Deterministic kernel input** — The Kernel advances only by consuming Transactions and committing RecordEntries. |
 
+
+## 1.1 Simplify Tools And Permissions Progress
+
+Updated: 2026-04-24
+
+| Phase | Status | Notes |
+|---|---|---|
+| A | Complete | Tri-state core types and resolver were already in place. |
+| B | Complete | User default persistence and parallel policy wiring were already in place. |
+| C | Complete | Live WebSocket tool approval prompt flow is implemented and committed. |
+| D | Complete | Tool defaults/agent permissions HTTP APIs, spawn/session wiring, and effective catalog responses are implemented and committed. |
+| E | Complete | Legacy approval registry, `PermissionLevel`, and old per-tool policy fields were removed and committed. |
+| F | Complete | `ToolConfig` was slimmed to execution guardrails and env permission switches were removed; committed as `dbf5ed0`. |
+| G | Complete | `DefaultToolRegistry`/`ToolRegistry` were removed; executor-backed bootstrap callers now use `ToolCatalog`; focused compile checks passed. |
+| H | Pending | Final test sweep and `docs/invariants.md` update remain. |
+
 ---
 
 ## 2. Focused Compile Checks
@@ -190,7 +206,6 @@ pub mod resolver
 
 ```text
 pub(crate) mod fs_tools
-pub(crate) mod registry
 pub(crate) mod tool
 ```
 
@@ -201,7 +216,6 @@ pub use catalog::ToolCatalog;
 pub use error::ToolError;
 pub use executor::ToolExecutor;
 pub use fs_tools::{cmd_run_with_threshold, cmd_spawn, output_to_tool_result, ThresholdResult};
-pub use registry::{DefaultToolRegistry, ToolRegistry};
 pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
 pub use tool::{Tool, ToolContext};

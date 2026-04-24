@@ -1,9 +1,7 @@
 //! Canonical tool catalog — single source of truth for tool metadata.
 //!
 //! Stores all tool entries (internal built-ins and schema-only definitions)
-//! with profile and owner annotations.  Replaces the ad-hoc composition
-//! previously spread across `DefaultToolRegistry` and the static lists in
-//! `definitions.rs`.
+//! with profile and owner annotations.
 
 use crate::definitions;
 use crate::tool::builtin_tools;
@@ -157,6 +155,25 @@ impl ToolCatalog {
             .collect()
     }
 
+    /// Built-in tool definitions backed by [`ToolExecutor`](crate::ToolExecutor).
+    ///
+    /// This follows [`builtin_tools`] order and looks up each definition in the
+    /// catalog so executor bootstrap callers do not advertise schema-only tools
+    /// that their router cannot dispatch.
+    #[must_use]
+    pub fn executor_builtin_tools(&self) -> Vec<ToolDefinition> {
+        builtin_tools()
+            .into_iter()
+            .filter_map(|tool| {
+                let name = tool.name().to_string();
+                self.entries
+                    .iter()
+                    .find(|entry| entry.definition.name == name)
+                    .map(|entry| entry.definition.clone())
+            })
+            .collect()
+    }
+
     /// Phase 5: like [`Self::tools_for_profile`] but additionally includes
     /// capability-gated tools when `permissions` holds every required
     /// capability. When `permissions` is `None` the result matches
@@ -275,8 +292,8 @@ impl Default for ToolCatalog {
 /// and there is no runtime-mutable insert path. The `register` /
 /// `remove` methods therefore return [`RegistryError::Unsupported`] /
 /// `None` respectively. `get` / `iter` / `len` expose the read-only
-/// name → [`CatalogEntry`] view shared with `SkillRegistry`,
-/// `DefaultToolRegistry`, and `AutomatonRuntime`.
+/// name -> [`CatalogEntry`] view shared with `SkillRegistry` and
+/// `AutomatonRuntime`.
 ///
 /// Callers that need profile- or capability-filtered views should
 /// continue to use the inherent [`ToolCatalog::visible_tools`] and
@@ -497,6 +514,18 @@ mod tests {
                 "builtin '{}' missing from core profile",
                 tool.name()
             );
+        }
+    }
+
+    #[test]
+    fn executor_builtin_tools_preserve_builtin_surface() {
+        let cat = ToolCatalog::new();
+        let tools = cat.executor_builtin_tools();
+        let expected = builtin_tools();
+
+        assert_eq!(tools.len(), expected.len());
+        for (definition, tool) in tools.iter().zip(expected) {
+            assert_eq!(definition.name, tool.name());
         }
     }
 

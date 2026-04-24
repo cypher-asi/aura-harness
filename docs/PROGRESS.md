@@ -215,13 +215,13 @@ Direct Anthropic API integration (no TypeScript gateway).
 
 ---
 
-### Phase 12: Tool Registry
-**Status:** 🔴 Not Started
+### Phase 12: Tool Catalog
+**Status:** 🟢 Complete
 
 Centralized tool definitions with JSON Schema.
 
-- [ ] Define `ToolRegistry` trait
-- [ ] Implement `DefaultToolRegistry`
+- [x] Define `ToolCatalog`
+- [x] Use catalog metadata as the tool source of truth
 - [ ] JSON schemas for: fs.ls, fs.read, fs.stat, fs.write, fs.edit
 - [ ] JSON schema for: search.code (ripgrep)
 - [ ] JSON schema for: cmd.run (gated)

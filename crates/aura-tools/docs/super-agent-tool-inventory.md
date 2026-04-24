@@ -23,7 +23,7 @@ one that requires new logic in the harness.
 
 Source of truth for the tool list:
 [`crates/aura-os-super-agent/src/tools/mod.rs`](../../../../aura-os/crates/aura-os-super-agent/src/tools/mod.rs)
-(registered in `ToolRegistry::with_tier1_tools` + `with_all_tools` +
+(registered by aura-os tool list builders such as `with_all_tools` and
 `register_process_tools`).
 
 ## Tier 1 (always exposed)

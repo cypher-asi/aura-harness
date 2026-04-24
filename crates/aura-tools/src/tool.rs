@@ -176,15 +176,3 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(crate::git_tool::GitCommitPushTool),
     ]
 }
-
-/// Returns only read-only built-in tool instances.
-pub fn read_only_builtin_tools() -> Vec<Box<dyn Tool>> {
-    use crate::fs_tools::{FsLsTool, FsReadTool, FsStatTool, SearchCodeTool};
-
-    vec![
-        Box::new(FsLsTool),
-        Box::new(FsReadTool),
-        Box::new(FsStatTool),
-        Box::new(SearchCodeTool),
-    ]
-}

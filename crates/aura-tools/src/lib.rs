@@ -1,9 +1,9 @@
 //! # aura-tools
 //!
-//! Tool executor and registry for filesystem and command operations.
+//! Tool executor and catalog for filesystem and command operations.
 //!
 //! This crate provides:
-//! - `ToolRegistry` trait and `DefaultToolRegistry` implementation
+//! - `ToolCatalog` for canonical tool metadata
 //! - `ToolResolver` for unified tool dispatch (built-in + domain)
 //! - Sandboxed filesystem and command operations
 //! - Threshold-based async command execution
@@ -35,7 +35,6 @@ pub(crate) mod fs_tools;
 pub mod git_tool;
 pub mod http_tool;
 pub mod intent_classifier;
-pub(crate) mod registry;
 pub mod resolver;
 mod sandbox;
 pub mod schema;
@@ -51,7 +50,6 @@ pub use git_tool::{
 };
 pub use http_tool::{HttpAuthSource, HttpMethod, HttpToolDefinition, HttpToolDefinitionBuilder};
 pub use intent_classifier::{ClassifierError, IntentClassifier};
-pub use registry::{DefaultToolRegistry, ToolRegistry};
 pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};

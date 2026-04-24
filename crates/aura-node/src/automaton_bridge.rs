@@ -282,7 +282,6 @@ impl AutomatonBridge {
         use_workspace_base_as_root: bool,
         installed_tools: Vec<InstalledToolDefinition>,
         installed_integrations: Vec<InstalledIntegrationDefinition>,
-        _extra_tool_names: Vec<String>,
     ) -> Arc<Kernel> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -413,25 +412,6 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
-        // Dev-loop authorization model: the automaton runs headless on
-        // behalf of an operator who already approved the workspace
-        // mutation surface, so `run_command` is unconditionally
-        // elevated here (required by the Definition-of-Done gate's
-        // build/test/fmt/lint steps) and local `git_commit` is
-        // unconditionally elevated (required by the post-task
-        // `commit_and_push` precheck in `aura-automaton`). When the
-        // operator ALSO wires a repo URL + auth token, remote
-        // `git_push` / `git_commit_push` are elevated too so the
-        // automaton doesn't stall on `RequireApproval` on every tick;
-        // without credentials those remain at their
-        // `RequireApproval` default so a mis-configured run surfaces
-        // rather than pushes to whatever upstream the workspace
-        // happens to have. See `docs/invariants.md` §1 — mutations
-        // still flow through the kernel-mediated executor and land
-        // in the record log; only the approval prompt is bypassed.
-        let extra_permissions =
-            dev_loop_extra_permissions(git_repo_url.as_deref(), auth_token.as_deref());
-
         let kernel = self.build_kernel(
             domain.clone(),
             auth_token.as_deref(),
@@ -440,7 +420,6 @@ impl AutomatonBridge {
             effective_workspace.is_some(),
             installed_tools.clone(),
             installed_integrations.clone(),
-            extra_permissions,
         );
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
             &kernel,
@@ -534,12 +513,6 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
-        // Same `run_command` + git-tool elevation as
-        // `start_dev_loop_with_capabilities` — see that call-site for
-        // the authorization rationale.
-        let extra_permissions =
-            dev_loop_extra_permissions(git_repo_url.as_deref(), auth_token.as_deref());
-
         let kernel = self.build_kernel(
             domain.clone(),
             auth_token.as_deref(),
@@ -548,7 +521,6 @@ impl AutomatonBridge {
             effective_workspace.is_some(),
             installed_tools.clone(),
             installed_integrations.clone(),
-            extra_permissions,
         );
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
             &kernel,
@@ -782,49 +754,11 @@ impl AutomatonBridge {
     }
 }
 
-/// Build the `extra_permissions` override map for an automaton kernel.
+/// Build automaton kernel policy.
 ///
-/// `run_command` is **unconditionally** elevated to `AlwaysAllow`. The
-/// dev-loop and task-runner automatons are headless agents the operator
-/// has already authorized to mutate the workspace, and their
-/// Definition-of-Done gate (see `apps/aura-os-server` `dev_loop.rs`)
-/// cannot pass without `cargo build` / `cargo test` / `cargo fmt` /
-/// `cargo clippy` — all of which flow through `run_command`. This
-/// mirrors the non-strict default that the interactive WS session
-/// bootstrap path already applies via
-/// [`runtime_capabilities::fetch_agent_permissions_with_default`] +
-/// [`runtime_capabilities::default_permissive_overrides`]; the
-/// automaton HTTP path previously bypassed both and left `run_command`
-/// stuck at `Deny` under the fail-closed `allow_unlisted = false`
-/// default.
-///
-/// Local-only git tools (see [`aura_tools::GIT_LOCAL_TOOL_NAMES`] —
-/// currently `git_commit`) are **unconditionally** elevated to
-/// `AlwaysAllow`. The dev-loop automaton's own `commit_and_push`
-/// precheck (see
-/// `aura-automaton/src/builtins/dev_loop/tick.rs::commit_and_push`)
-/// dispatches `git_commit` after every successful task to produce the
-/// per-task commit — it is the ONLY way a dev-loop can anchor its
-/// work, and it operates purely on the workspace tree. Leaving it at
-/// `RequireApproval` means an autonomous dev-loop (which has no
-/// operator to grant approvals) stalls forever with
-/// `"Tool 'git_commit' is not allowed"` even though the file writes
-/// already landed.
-///
-/// Remote git tools (see [`aura_tools::GIT_REMOTE_TOOL_NAMES`] —
-/// `git_push` and `git_commit_push`) are elevated to `AlwaysAllow`
-/// ONLY when the automaton was launched with BOTH a repo URL and an
-/// auth token. Without a remote configured, silently pushing would
-/// either fail opaquely or target the wrong upstream, so the
-/// automaton correctly hits `RequireApproval` and the run surfaces
-/// the misconfiguration.
-///
-/// Mutations still flow through the kernel-mediated executors
-/// (`ToolExecutor` for `run_command`, `GitExecutor` for the git tools),
-/// so the executor-layer `ToolConfig` gates (`command.enabled`,
-/// `binary_allowlist`, `allow_shell`) and the record log remain in
-/// force. Elevation bypasses the approval prompt, not the sandbox.
-/// See `docs/invariants.md` §1.
+/// Tool availability now comes from the persisted user defaults and optional
+/// agent overrides on [`PolicyConfig`]. This helper only wires runtime
+/// integration requirements for installed tools.
 fn automaton_policy_config(
     installed_tools: &[InstalledToolDefinition],
     installed_integrations: &[InstalledIntegrationDefinition],
@@ -837,19 +771,6 @@ fn automaton_policy_config(
             .map(|requirement| (tool.name.clone(), requirement))
     }));
     policy
-}
-
-fn dev_loop_extra_permissions(git_repo_url: Option<&str>, auth_token: Option<&str>) -> Vec<String> {
-    let mut tools = vec!["run_command".to_string()];
-    for name in aura_tools::GIT_LOCAL_TOOL_NAMES {
-        tools.push((*name).to_string());
-    }
-    if git_repo_url.is_some() && auth_token.is_some() {
-        for name in aura_tools::GIT_REMOTE_TOOL_NAMES {
-            tools.push((*name).to_string());
-        }
-    }
-    tools
 }
 
 #[async_trait]
@@ -1509,133 +1430,6 @@ mod tests {
                 );
             }
             other => panic!("unexpected event kind: {other:?}"),
-        }
-    }
-
-    /// Regression lock: `dev_loop_extra_permissions` must unconditionally
-    /// elevate `run_command` AND local git tools (`git_commit`) to
-    /// `AlwaysAllow`, independent of whether the caller supplied
-    /// remote git credentials. Without this, the dev-loop kernel
-    /// falls back to [`aura_kernel::PolicyConfig::default`], which
-    /// keeps `run_command` out of `allowed_tools` under
-    /// `allow_unlisted = false` and denies every shell invocation with
-    /// "Tool 'run_command' is not allowed" — the exact failure mode the
-    /// DoD gate diagnoses in `apps/aura-os-server/src/handlers/dev_loop.rs`.
-    /// The `git_commit` elevation additionally prevents the
-    /// post-task `commit_and_push` precheck from dying with
-    /// "Tool 'git_commit' is not allowed" (the 4079e975 regression).
-    #[test]
-    fn dev_loop_extra_permissions_always_allow_run_command_and_local_git() {
-        let no_git = super::dev_loop_extra_permissions(None, None);
-        assert!(
-            no_git.contains(&"run_command".to_string()),
-            "run_command must be AlwaysAllow even when no git credentials are supplied"
-        );
-        for name in aura_tools::GIT_LOCAL_TOOL_NAMES {
-            assert!(
-                no_git.contains(&(*name).to_string()),
-                "local git tool {name} must be AlwaysAllow even without remote credentials — \
-                 the dev-loop's commit_and_push depends on it"
-            );
-        }
-        for name in aura_tools::GIT_REMOTE_TOOL_NAMES {
-            assert!(
-                !no_git.contains(&(*name).to_string()),
-                "remote git tool {name} must NOT be elevated without repo URL + auth token"
-            );
-        }
-
-        let with_git =
-            super::dev_loop_extra_permissions(Some("https://orbit.example/repo"), Some("jwt"));
-        assert!(
-            with_git.contains(&"run_command".to_string()),
-            "run_command must remain AlwaysAllow when git credentials are also supplied"
-        );
-        for name in aura_tools::GIT_TOOL_NAMES {
-            assert!(
-                with_git.contains(&(*name).to_string()),
-                "git tool {name} must be elevated when repo URL + auth token are supplied"
-            );
-        }
-    }
-
-    /// End-to-end: a dev-loop automaton launched WITHOUT git
-    /// credentials (the common case for local-only projects) must
-    /// still be able to dispatch `git_commit` without hitting a
-    /// policy `Deny`. Asserts the kernel policy assembled by
-    /// `build_kernel` allow-lists `git_commit` AND elevates it to
-    /// `AlwaysAllow`, guarding against regressions like the 4079e975
-    /// task that silently failed its commit step with
-    /// "Tool 'git_commit' is not allowed".
-    #[tokio::test]
-    async fn build_kernel_always_allows_git_commit_for_dev_loop() {
-        use aura_core::{ActionKind, Proposal, ToolCall, ToolState};
-
-        let bridge = test_bridge();
-        let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
-        let workspace = tempfile::tempdir().expect("create temp workspace");
-        let extra = super::dev_loop_extra_permissions(None, None);
-        let kernel = bridge.build_kernel(
-            domain,
-            None,
-            Some("project-local"),
-            workspace.path(),
-            true,
-            Vec::new(),
-            Vec::new(),
-            extra,
-        );
-
-        let policy = kernel.policy();
-        assert_eq!(
-            policy.resolve_tool_state("git_commit"),
-            ToolState::Allow,
-            "git_commit must be AlwaysAllow for a credential-less dev-loop"
-        );
-
-        let call = ToolCall::new("git_commit", serde_json::json!({"message": "wip"}));
-        let payload = serde_json::to_vec(&call).expect("serialize tool call");
-        let proposal = Proposal::new(ActionKind::Delegate, bytes::Bytes::from(payload));
-        let verdict = policy.check(&proposal);
-        assert!(
-            verdict.allowed,
-            "dev-loop policy must allow git_commit even without a repo URL + token; \
-             got verdict={verdict:?}"
-        );
-    }
-
-    /// End-to-end: a dev-loop automaton launched WITH git credentials
-    /// elevates remote git tools to `AlwaysAllow` on top of the
-    /// always-on local elevation.
-    #[tokio::test]
-    async fn build_kernel_elevates_remote_git_when_credentials_supplied() {
-        use aura_core::ToolState;
-
-        let bridge = test_bridge();
-        let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
-        let workspace = tempfile::tempdir().expect("create temp workspace");
-        let extra = super::dev_loop_extra_permissions(
-            Some("https://orbit.example/repo"),
-            Some("jwt-token"),
-        );
-        let kernel = bridge.build_kernel(
-            domain,
-            Some("jwt-token"),
-            Some("project-remote"),
-            workspace.path(),
-            true,
-            Vec::new(),
-            Vec::new(),
-            extra,
-        );
-
-        let policy = kernel.policy();
-        for name in aura_tools::GIT_TOOL_NAMES {
-            assert_eq!(
-                policy.resolve_tool_state(name),
-                ToolState::Allow,
-                "git tool {name} must be AlwaysAllow when repo URL + auth token are supplied"
-            );
         }
     }
 }

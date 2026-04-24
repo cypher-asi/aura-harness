@@ -329,8 +329,6 @@ Filesystem, command, search, and domain tools. Sandboxed execution ensures agent
 
 | Type | Purpose |
 |------|---------|
-| `ToolRegistry` (trait) | `list() -> Vec<ToolDefinition>`, `get(name) -> Option<ToolDefinition>`, `has(name) -> bool` |
-| `DefaultToolRegistry` | HashMap-backed registry pre-loaded with builtin tools |
 | `ToolExecutor` | Dispatches `ToolCall`s to registered `Tool` impls; implements `Executor` |
 | `ToolResolver` | Catalog-backed visibility + optional domain executor fallback; implements `Executor` |
 | `ToolCatalog` | Merged catalog of all tools with profile-based visibility (`Core`, `Agent`, `Engine`) |
@@ -387,12 +385,11 @@ Dev-loop and task control tools (`start_dev_loop`, `pause_dev_loop`, `stop_dev_l
 
 | Module | Contents |
 |--------|----------|
-| `registry` | `ToolRegistry` trait, `DefaultToolRegistry` |
 | `executor` | `ToolExecutor` — dispatches to `Tool` impls, builds `Sandbox` |
 | `resolver` | `ToolResolver` — catalog + domain executor integration |
 | `catalog` | `ToolCatalog`, `ToolProfile`, `ToolOwner`, `CatalogEntry` |
 | `sandbox` | `Sandbox` — path confinement and validation |
-| `tool` | `Tool` trait, `ToolContext`, `builtin_tools()`, `read_only_builtin_tools()` |
+| `tool` | `Tool` trait, `ToolContext`, `builtin_tools()` |
 | `definitions` | Static `ToolDefinition` sets for catalog profiles |
 | `fs_tools/` | All built-in tool implementations |
 | `git_tool/` | `GitExecutor` — kernel-mediated `git_commit`, `git_push`, `git_commit_push` tools. The single permitted call-site for mutating `Command::new("git")` (Invariant §1). Shared `git_commit_impl` / `git_push_impl` helpers are also re-used by the `orbit_push` domain tool. |

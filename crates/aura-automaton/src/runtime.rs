@@ -278,7 +278,7 @@ impl Default for AutomatonRuntime {
 /// different semantics and invoking them through a generic trait would
 /// hide the async/cancellation contract. The trait impl instead exposes
 /// the read-only name -> metadata view (`get` / `iter` / `len`) shared by
-/// `SkillRegistry` and `DefaultToolRegistry`.
+/// `SkillRegistry` and `ToolCatalog`.
 impl aura_core::Registry for AutomatonRuntime {
     type Id = String;
     type Item = AutomatonInfo;

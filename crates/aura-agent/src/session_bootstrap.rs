@@ -12,7 +12,7 @@ use crate::AgentLoopConfig;
 use aura_kernel::ExecutorRouter;
 use aura_reasoner::ToolDefinition;
 use aura_store::RocksStore;
-use aura_tools::{DefaultToolRegistry, ToolConfig, ToolExecutor, ToolRegistry};
+use aura_tools::{ToolCatalog, ToolConfig, ToolExecutor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -94,8 +94,7 @@ pub fn build_executor_router() -> (ExecutorRouter, Vec<ToolDefinition>) {
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(ToolExecutor::with_defaults()));
 
-    let tool_registry = DefaultToolRegistry::new();
-    let tools = tool_registry.list();
+    let tools = ToolCatalog::new().executor_builtin_tools();
 
     (executor_router, tools)
 }
@@ -146,9 +145,7 @@ pub fn build_executor_router_with_config(
     let mut executor_router = ExecutorRouter::new();
     executor_router.add_executor(Arc::new(ToolExecutor::new(tool_config.clone())));
 
-    let tool_registry = DefaultToolRegistry::new();
-    let tools = tool_registry.list();
+    let tools = ToolCatalog::new().executor_builtin_tools();
 
     (executor_router, tools)
 }
-

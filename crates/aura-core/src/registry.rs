@@ -5,7 +5,6 @@
 //!
 //! - `aura_skills::SkillRegistry` — in-memory map of loaded skills,
 //!   populated from a `SkillLoader`.
-//! - `aura_tools::DefaultToolRegistry` — in-memory map of tool definitions.
 //! - `aura_tools::ToolCatalog` — immutable, compile-time–constructed
 //!   catalog of tool metadata. Implements the read-only slice of
 //!   [`Registry`] (`get` / `iter` / `len`) and reports `Unsupported`
