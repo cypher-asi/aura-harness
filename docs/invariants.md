@@ -123,8 +123,8 @@ The tri-state tool layer answers whether a tool is enabled for this agent. It do
 
 Complementary enforcement in `aura-tools`:
 
-- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` / `shell_script` fields unless the caller passes `allow_shell: true`. Once `allow_shell` is granted, `ToolConfig::command.allowed_shell_scripts` switches between "any script allowed" (empty allowlist) and "verbatim match only" (non-empty allowlist).
-- When `ToolConfig::command.binary_allowlist` is non-empty, `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
+- `run_command` rejects the legacy shell form (`program` set, `args` empty) and the explicit `command` / `shell_script` fields unless the caller passes `allow_shell: true`. Once `allow_shell` is granted, `ToolConfig::command.allowed_shell_scripts` switches between "any script allowed" (empty allowlist, the default matching `command_allowlist`) and "verbatim match only" (non-empty allowlist).
+- When `ToolConfig::command.enabled` is true, `ToolConfig::command.binary_allowlist` must be non-empty. `run_command` resolves `program` with `which` and denies any binary whose file name (stripped of `.exe` on Windows) is not in the allow-list.
 
 **Enforcement:** `crates/aura-core/src/types/tool_permissions.rs` covers the resolver truth table and wire spelling, `crates/aura-kernel/src/policy/check.rs` covers policy resolution and live prompt verdicts, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` covers command/shell/binary guardrails.
 

@@ -60,7 +60,7 @@ pub use tool::{AgentControlHook, AgentReadHook, Tool, ToolContext};
 /// This is an execution guardrail, not a catalog visibility or per-tool
 /// permission switch. The kernel decides whether `run_command` is enabled for
 /// an agent; this policy constrains how the tool may execute after that.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CommandPolicy {
     /// Enable process spawning inside `run_command`.
     pub enabled: bool,
@@ -74,9 +74,11 @@ pub struct CommandPolicy {
     /// shadowing tricks (e.g. a malicious `rg` shim dropped next to
     /// `cargo`).
     ///
-    /// Empty vec = no binary allow-list enforcement (backwards compatible).
-    /// Any non-empty list causes `run_command` to reject programs whose
-    /// resolved file name is not present. (Wave 5 / T3.2.)
+    /// Empty vec is only valid while command execution is disabled. Once
+    /// [`Self::enabled`] is true, an empty list is treated as a
+    /// misconfiguration and `run_command` fails closed. Any non-empty list
+    /// causes `run_command` to reject programs whose resolved file name is not
+    /// present. (Wave 5 / T3.2.)
     pub binary_allowlist: Vec<String>,
     /// When `false` (default), `run_command` refuses the legacy
     /// "empty args treated as shell script" form. Callers must then
@@ -89,7 +91,7 @@ pub struct CommandPolicy {
     /// [`Self::allow_shell`] == `true` has opened the shell path.
     ///
     /// Follows the same "empty allowlist = all allowed" convention as
-    /// [`Self::command_allowlist`] and [`Self::binary_allowlist`]:
+    /// [`Self::command_allowlist`]:
     ///
     /// - **Empty (default)**: any shell script is accepted, so the
     ///   gate reduces to `allow_shell` alone. This is the form
@@ -105,6 +107,71 @@ pub struct CommandPolicy {
     /// security decision, and this field narrows further from there.
     pub allowed_shell_scripts: Vec<String>,
 }
+
+impl Default for CommandPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command_allowlist: vec![],
+            binary_allowlist: vec![],
+            allow_shell: false,
+            allowed_shell_scripts: vec![],
+        }
+    }
+}
+
+impl CommandPolicy {
+    /// Runtime policy for autonomous agent sessions.
+    ///
+    /// Environment-driven command switches were removed from `aura-runtime`;
+    /// production nodes now opt into command execution by selecting this
+    /// explicit policy instead of mutating [`ToolConfig::default`] from env.
+    #[must_use]
+    pub fn autonomous_agent_default() -> Self {
+        Self {
+            enabled: true,
+            command_allowlist: vec![],
+            binary_allowlist: DEFAULT_AUTONOMOUS_AGENT_BINARIES
+                .iter()
+                .map(|binary| (*binary).to_string())
+                .collect(),
+            allow_shell: true,
+            allowed_shell_scripts: vec![],
+        }
+    }
+}
+
+/// Binaries the autonomous dev loop needs for verification and common project
+/// bootstraps. This list replaces the removed env-based command allowlist for
+/// node/runtime startup; callers that need a narrower execution surface can
+/// still build a custom [`ToolConfig`] explicitly.
+pub const DEFAULT_AUTONOMOUS_AGENT_BINARIES: &[&str] = &[
+    "bash",
+    "bun",
+    "cargo",
+    "cargo-clippy",
+    "cargo-fmt",
+    "cmd",
+    "dir",
+    "git",
+    "go",
+    "ls",
+    "node",
+    "npm",
+    "npx",
+    "pip",
+    "pnpm",
+    "pwsh",
+    "pytest",
+    "python",
+    "python3",
+    "rustc",
+    "rustfmt",
+    "sh",
+    "uv",
+    "where",
+    "yarn",
+];
 
 /// Tool execution configuration.
 #[derive(Debug, Clone)]
@@ -164,6 +231,21 @@ impl Default for ToolConfig {
     }
 }
 
+impl ToolConfig {
+    /// Default runtime configuration for autonomous agent sessions.
+    ///
+    /// Keep [`Self::default`] fail-closed for tests and library embedders. The
+    /// node/runtime binaries use this constructor when they are expected to run
+    /// dev-loop verification commands without env-based permission switches.
+    #[must_use]
+    pub fn autonomous_agent_default() -> Self {
+        Self {
+            command: CommandPolicy::autonomous_agent_default(),
+            ..Self::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod default_tests {
     use super::ToolConfig;
@@ -190,6 +272,31 @@ mod default_tests {
         assert!(
             cfg.command.allowed_shell_scripts.is_empty(),
             "fresh ToolConfig must have an empty allowed_shell_scripts"
+        );
+    }
+
+    #[test]
+    fn autonomous_agent_default_enables_command_execution() {
+        let cfg = ToolConfig::autonomous_agent_default();
+        assert!(
+            cfg.command.enabled,
+            "runtime policy must enable command execution"
+        );
+        assert!(
+            cfg.command.allow_shell,
+            "autonomous agents use shell-style run_command payloads"
+        );
+        assert!(
+            cfg.command.binary_allowlist.contains(&"cargo".to_string()),
+            "dev-loop verification needs cargo"
+        );
+        assert!(
+            cfg.command.binary_allowlist.contains(&"git".to_string()),
+            "workspace synchronization needs git"
+        );
+        assert!(
+            !cfg.command.binary_allowlist.is_empty(),
+            "enabled command policy must fail open only through an explicit allowlist"
         );
     }
 }

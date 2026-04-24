@@ -83,14 +83,11 @@ impl Node {
         );
         info!("Store opened");
 
-        let tool_config = ToolConfig::default();
+        let tool_config = ToolConfig::autonomous_agent_default();
         if tool_config.command.enabled {
-            // Empty `command_allowlist` is the ToolConfig contract for
-            // "all commands allowed" — log the effective sidecar policy
-            // so operators can confirm the autonomous-mode short-circuit
-            // resolved, without a UI status pop.
             info!(
                 allowed_commands = ?tool_config.command.command_allowlist,
+                binary_allowlist = ?tool_config.command.binary_allowlist,
                 allow_shell = tool_config.command.allow_shell,
                 "aura-runtime run_command enabled"
             );

@@ -116,6 +116,7 @@ async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
         command: aura_tools::CommandPolicy {
             enabled: true,
             command_allowlist: vec!["cargo".into(), "git".into()],
+            binary_allowlist: vec!["cargo".into(), "git".into()],
             allow_shell: true,
             ..Default::default()
         },
@@ -148,6 +149,14 @@ async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert_eq!(allowed, vec!["cargo", "git"]);
+    assert!(json["binary_allowlist"].is_array());
+    let binaries: Vec<String> = json["binary_allowlist"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(binaries, vec!["cargo", "git"]);
 }
 
 /// Symmetric negative test: a `ToolConfig::default()` — the
@@ -175,6 +184,10 @@ async fn test_health_endpoint_reports_run_command_disabled_on_default_tool_confi
         "aura-tools ToolConfig::default() is the kernel-level fail-closed baseline"
     );
     assert_eq!(json["shell_enabled"], false);
+    assert!(
+        json["binary_allowlist"].as_array().unwrap().is_empty(),
+        "default ToolConfig should report an empty binary allowlist"
+    );
 }
 
 #[tokio::test]

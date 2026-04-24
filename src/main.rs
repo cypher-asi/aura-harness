@@ -206,13 +206,8 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     record_loader::send_initial_agent(&identity, &store, &cmd_tx);
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
-    let tool_config = ToolConfig::default();
+    let tool_config = ToolConfig::autonomous_agent_default();
     if tool_config.command.enabled {
-        // Empty `binary_allowlist` is the ToolConfig contract for
-        // "all binaries allowed" — log the effective policy so
-        // operators can verify what the harness resolved without a
-        // UI status pop (which used to incorrectly claim commands
-        // were blocked in that case).
         info!(
             binary_allowlist = ?tool_config.command.binary_allowlist,
             allow_shell = tool_config.command.allow_shell,

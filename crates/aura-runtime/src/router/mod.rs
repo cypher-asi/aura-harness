@@ -573,7 +573,7 @@ async fn terminal_ws_handler(
 /// Return a liveness/readiness response with version + execution guardrails.
 ///
 /// The tool-policy fields (`run_command_enabled`, `shell_enabled`,
-/// `allowed_commands`) expose the effective executor config so
+/// `allowed_commands`, `binary_allowlist`) expose the effective executor config so
 /// external consumers can diff the running harness's policy against
 /// what they need. Historically the `aura-os-desktop` external-harness
 /// probe relied on `run_command_enabled` to fail fast when the
@@ -594,6 +594,7 @@ async fn health_handler(State(state): State<RouterState>) -> impl IntoResponse {
         "run_command_enabled": state.tool_config.command.enabled,
         "shell_enabled": state.tool_config.command.allow_shell,
         "allowed_commands": state.tool_config.command.command_allowlist,
+        "binary_allowlist": state.tool_config.command.binary_allowlist,
     }))
 }
 

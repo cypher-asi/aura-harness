@@ -634,11 +634,10 @@ fn check_command_allowlist(command: &str, allowlist: &[String]) -> Result<(), To
 /// By default
 /// `ToolConfig::command.allowed_shell_scripts`
 /// is empty, which follows the same "empty allowlist = all allowed"
-/// convention used by `command_allowlist` and `binary_allowlist`:
-/// once `allow_shell == true` is granted, any shell script is
-/// executable. Operators who want to pin a specific set of scripts
-/// populate the list with verbatim entries, which switches the gate
-/// back to strict membership checking.
+/// convention used by `command_allowlist`: once `allow_shell == true`
+/// is granted, any shell script is executable. Operators who want to pin
+/// a specific set of scripts populate the list with verbatim entries,
+/// which switches the gate back to strict membership checking.
 ///
 /// The `command` (single shell string) form is retained for backward
 /// compatibility and is treated identically to `shell_script`.
