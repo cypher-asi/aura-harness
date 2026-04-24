@@ -325,9 +325,15 @@ fn test_stream_accumulator_into_response_propagates_error_with_no_content() {
     );
     // Model and message_id should be threaded into the error so
     // operators can correlate with provider / router logs.
-    assert!(msg.contains("model=claude-sonnet-test"), "missing model: {msg}");
+    assert!(
+        msg.contains("model=claude-sonnet-test"),
+        "missing model: {msg}"
+    );
     assert!(msg.contains("msg_id=msg_01ABC"), "missing msg_id: {msg}");
-    assert!(msg.contains("Internal server error"), "missing raw msg: {msg}");
+    assert!(
+        msg.contains("Internal server error"),
+        "missing raw msg: {msg}"
+    );
 }
 
 #[test]
@@ -362,7 +368,10 @@ fn test_stream_accumulator_into_response_propagates_error_even_with_partial_cont
         msg.contains("stream terminated with error"),
         "partial-content path must still fail, got: {msg}"
     );
-    assert!(msg.contains("overloaded_error"), "error type preserved: {msg}");
+    assert!(
+        msg.contains("overloaded_error"),
+        "error type preserved: {msg}"
+    );
 }
 
 #[test]
@@ -378,8 +387,7 @@ fn test_stream_accumulator_into_response_error_without_message_start() {
     let err = acc.into_response(0, 100).unwrap_err();
     let msg = err.to_string();
     assert_eq!(
-        msg,
-        "stream terminated with error: connection reset by peer",
+        msg, "stream terminated with error: connection reset by peer",
         "no empty context parentheses when metadata unavailable"
     );
 }
@@ -606,6 +614,19 @@ fn test_model_request_builder_with_auth_token() {
         .unwrap();
 
     assert_eq!(request.auth_token, Some("tok_abc".to_string()));
+}
+
+#[test]
+fn test_model_request_builder_with_upstream_provider_family() {
+    let request = ModelRequest::builder("model", "system")
+        .upstream_provider_family(Some("deepseek".to_string()))
+        .try_build()
+        .unwrap();
+
+    assert_eq!(
+        request.upstream_provider_family,
+        Some("deepseek".to_string())
+    );
 }
 
 #[test]

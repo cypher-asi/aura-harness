@@ -337,6 +337,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_parse_deepseek_usage_aliases() {
+        let event = parse_sse_event(
+            r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"deepseek-v4-flash","usage":{"prompt_tokens":100,"prompt_cache_miss_tokens":80,"prompt_cache_hit_tokens":20}}}"#,
+        );
+        assert!(matches!(
+            event,
+            Some(StreamEvent::MessageStart {
+                input_tokens: Some(100),
+                cache_creation_input_tokens: Some(80),
+                cache_read_input_tokens: Some(20),
+                ..
+            })
+        ));
+
+        let event = parse_sse_event(
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"completion_tokens":25}}"#,
+        );
+        assert!(matches!(
+            event,
+            Some(StreamEvent::MessageDelta {
+                output_tokens: 25,
+                ..
+            })
+        ));
+    }
+
     // --- SseStream tests ---
 
     #[tokio::test]

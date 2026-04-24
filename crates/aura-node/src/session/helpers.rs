@@ -616,6 +616,28 @@ mod tests {
         assert!(!use_workspace_base_as_root);
     }
 
+    #[test]
+    fn agent_loop_config_preserves_upstream_provider_family() {
+        let mut session = Session::new(PathBuf::from("/tmp/aura"));
+        session.provider_config = Some(SessionProviderConfig {
+            provider: "anthropic".to_string(),
+            routing_mode: Some("proxy".to_string()),
+            upstream_provider_family: Some("deepseek".to_string()),
+            api_key: None,
+            base_url: None,
+            default_model: Some("deepseek-v4-flash".to_string()),
+            fallback_model: None,
+            prompt_caching_enabled: Some(true),
+        });
+
+        let config = session.agent_loop_config();
+
+        assert_eq!(
+            config.upstream_provider_family,
+            Some("deepseek".to_string())
+        );
+    }
+
     #[tokio::test]
     async fn failed_init_does_not_leave_provider_override_state() {
         let ctx = test_context();
