@@ -22,6 +22,43 @@ use tracing::warn;
 
 use helpers::domain_err;
 
+// ---------------------------------------------------------------------------
+// Why this list lives here (and is NOT shipped over the wire from the server)
+// ---------------------------------------------------------------------------
+//
+// An earlier "unify on DomainApi" plan proposed adding a
+// `domain_tools: Vec<String>` field to `aura_protocol::SessionInit` so
+// aura-os-server could advertise the domain-tool set and the harness would
+// populate `policy.allowed_tools` from that wire-shipped list instead of
+// this slice. That change was evaluated and intentionally skipped. The
+// reasoning, left here so the next person doesn't resurrect the todo:
+//
+// 1. `DOMAIN_TOOL_NAMES` and the `match tool_name` dispatch inside
+//    `DomainToolExecutor::execute` (see below) are co-located in this
+//    file by design. Adding a name without a matching handler arm (or
+//    vice versa) is a single-file review diff, not a cross-crate hunt.
+//    The handler file IS the source of truth by construction.
+//
+// 2. `aura-os-server` has no `impl DomainApi` of its own — the only
+//    implementation is `HttpDomainApi` in `crates/aura-node/src/domain.rs`.
+//    If the server were to ship a `domain_tools` list over the wire it
+//    would have to duplicate this slice (or fetch it from the harness it
+//    is calling back into), moving the source of truth to a strictly
+//    worse place and introducing a drift risk between the server's
+//    copy and the harness's dispatch.
+//
+// 3. The fail-closed kernel policy already gets the full set: since
+//    commit 3373d96, `aura-node`'s `build_policy_config` path calls
+//    `policy.add_allowed_tools(domain_exec.tool_names().iter()...)`
+//    on the live `DomainToolExecutor`, which is derived from this
+//    same slice via `tool_names()`. That is exactly the behavior a
+//    wire-shipped `SessionInit.domain_tools` field would have
+//    produced — with no wire coupling.
+//
+// If you ever need the server to advertise this list for *diagnostic*
+// purposes (e.g. a debug endpoint that shows "what can this harness
+// handle?"), drive it from the harness via `SessionReady` rather than
+// reintroducing it on `SessionInit`. See `DomainToolExecutor::tool_names`.
 const DOMAIN_TOOL_NAMES: &[&str] = &[
     "list_specs",
     "get_spec",
