@@ -102,6 +102,79 @@ async fn test_health_endpoint() {
     assert!(json["version"].is_string());
 }
 
+/// Verify that `/health` exposes the effective tool policy so the
+/// `aura-os-desktop` `--external-harness` startup check can detect a
+/// misconfigured external harness (the 3.0-class `run_command`
+/// regression) without any authenticated probe. The test builds a
+/// `RouterState` with a permissive `ToolConfig` and asserts each
+/// policy field lands on the response with the same value.
+#[tokio::test]
+async fn test_health_endpoint_exposes_tool_policy_for_external_harness_probe() {
+    let store = create_test_store();
+    let mut state = test_router_state(store);
+    state.tool_config = ToolConfig {
+        enable_fs: true,
+        enable_commands: true,
+        command_allowlist: vec!["cargo".into(), "git".into()],
+        allow_shell: true,
+        ..Default::default()
+    };
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "ok");
+    assert_eq!(
+        json["run_command_enabled"], true,
+        "external-harness probe relies on this field"
+    );
+    assert_eq!(json["shell_enabled"], true);
+    assert_eq!(json["fs_enabled"], true);
+    assert!(json["allowed_commands"].is_array());
+    let allowed: Vec<String> = json["allowed_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(allowed, vec!["cargo", "git"]);
+}
+
+/// Symmetric negative test: a locked-down external harness must
+/// advertise `run_command_enabled=false` so the desktop's
+/// `--external-harness` check can emit a clear diagnostic instead of
+/// letting the agent hit a silent 20s tool-callback timeout.
+#[tokio::test]
+async fn test_health_endpoint_reports_run_command_disabled_on_default_policy() {
+    let store = create_test_store();
+    let state = test_router_state(store); // ToolConfig::default()
+    let app = create_router(state);
+
+    let req = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["run_command_enabled"], false,
+        "default ToolConfig must report commands disabled"
+    );
+    assert_eq!(json["shell_enabled"], false);
+}
+
 #[tokio::test]
 async fn test_submit_tx_valid() {
     let store = create_test_store();

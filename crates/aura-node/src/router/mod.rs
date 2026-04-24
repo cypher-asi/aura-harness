@@ -564,11 +564,34 @@ async fn terminal_ws_handler(
 
 // === Health ===
 
-/// Return a simple health-check response with version info.
-async fn health_handler() -> impl IntoResponse {
+/// Return a liveness/readiness response with version + tool policy.
+///
+/// The tool-policy fields (`run_command_enabled`, `shell_enabled`,
+/// `allowed_commands`) exist so external consumers — notably the
+/// `aura-os-desktop` `--external-harness` startup check
+/// (`apps/aura-os-desktop/src/main.rs::enforce_external_harness_or_exit`)
+/// — can diff the running harness's effective policy against what they
+/// need, and fail fast with a clear diagnostic when the operator
+/// forgot `AURA_AUTONOMOUS_DEV_LOOP=1` / `AURA_ALLOW_RUN_COMMAND=1`
+/// on the external harness process. Without this, the desktop came up
+/// happily and the first `run_command` invocation surfaced as a
+/// 20-second tool-callback timeout with no explanation.
+///
+/// The response is deliberately unauthenticated (matches the old
+/// minimal-health behaviour) because the information is non-sensitive:
+/// anyone who can already reach the health port can trivially discover
+/// the same facts by sending any tool invocation and observing the
+/// denial. Fields are additive — a missing field in older harness
+/// versions means "unknown", and the desktop treats unknown as a warn
+/// (not a hard-fail) so mixed-version fleets keep working.
+async fn health_handler(State(state): State<RouterState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION")
+        "version": env!("CARGO_PKG_VERSION"),
+        "run_command_enabled": state.tool_config.enable_commands,
+        "shell_enabled": state.tool_config.allow_shell,
+        "allowed_commands": state.tool_config.command_allowlist,
+        "fs_enabled": state.tool_config.enable_fs,
     }))
 }
 
