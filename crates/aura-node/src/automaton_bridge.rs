@@ -444,16 +444,20 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
-        // Dev-loop authorization model: when the operator explicitly
-        // wires a repo URL + auth token into the automaton's config,
-        // the session-level approval for `git_commit`, `git_push`, and
-        // `git_commit_push` has already been granted. Elevate those
-        // three tools to `AlwaysAllow` for this kernel so the
-        // automaton doesn't stall on `RequireApproval` on every tick.
-        // See `docs/invariants.md` §1 — mutations still flow through
-        // the kernel-mediated executor and land in the record log.
+        // Dev-loop authorization model: the automaton runs headless on
+        // behalf of an operator who already approved the workspace
+        // mutation surface, so `run_command` is unconditionally
+        // elevated here (required by the Definition-of-Done gate's
+        // build/test/fmt/lint steps). When the operator ALSO wires a
+        // repo URL + auth token into the automaton's config, the
+        // session-level approval for `git_commit`, `git_push`, and
+        // `git_commit_push` has been granted — elevate those three
+        // too so the automaton doesn't stall on `RequireApproval` on
+        // every tick. See `docs/invariants.md` §1 — mutations still
+        // flow through the kernel-mediated executor and land in the
+        // record log; only the approval prompt is bypassed.
         let extra_permissions =
-            dev_loop_git_permissions(git_repo_url.as_deref(), auth_token.as_deref());
+            dev_loop_extra_permissions(git_repo_url.as_deref(), auth_token.as_deref());
 
         let kernel = self.build_kernel(
             domain.clone(),
@@ -557,10 +561,11 @@ impl AutomatonBridge {
         let installed_tools =
             Self::prepare_installed_tools(installed_tools, &installed_integrations);
 
-        // Same git-tool elevation as `start_dev_loop_with_capabilities`
-        // — see that call-site for the authorization rationale.
+        // Same `run_command` + git-tool elevation as
+        // `start_dev_loop_with_capabilities` — see that call-site for
+        // the authorization rationale.
         let extra_permissions =
-            dev_loop_git_permissions(git_repo_url.as_deref(), auth_token.as_deref());
+            dev_loop_extra_permissions(git_repo_url.as_deref(), auth_token.as_deref());
 
         let kernel = self.build_kernel(
             domain.clone(),
@@ -806,22 +811,41 @@ impl AutomatonBridge {
 
 /// Build the `extra_permissions` override map for an automaton kernel.
 ///
-/// When the dev-loop / task-runner automatons are launched with BOTH a
-/// git repo URL and an auth token, the operator has already approved
-/// pushing to that remote at the session level — the kernel's default
-/// `RequireApproval` on `git_commit` / `git_push` / `git_commit_push`
-/// would stall the automaton forever. We elevate those three tools
-/// here. All other kernels (interactive agents, workers) continue to
-/// use the conservative `RequireApproval` default.
+/// `run_command` is **unconditionally** elevated to `AlwaysAllow`. The
+/// dev-loop and task-runner automatons are headless agents the operator
+/// has already authorized to mutate the workspace, and their
+/// Definition-of-Done gate (see `apps/aura-os-server` `dev_loop.rs`)
+/// cannot pass without `cargo build` / `cargo test` / `cargo fmt` /
+/// `cargo clippy` — all of which flow through `run_command`. This
+/// mirrors the non-strict default that the interactive WS session
+/// bootstrap path already applies via
+/// [`runtime_capabilities::fetch_agent_permissions_with_default`] +
+/// [`runtime_capabilities::default_permissive_overrides`]; the
+/// automaton HTTP path previously bypassed both and left `run_command`
+/// stuck at `Deny` under the fail-closed `allow_unlisted = false`
+/// default.
 ///
-/// Mutations still flow through the kernel-mediated `GitExecutor` in
-/// `aura-tools/src/git_tool/`; elevation only bypasses the prompt, not
-/// the record log or the sandbox. See `docs/invariants.md` §1.
-fn dev_loop_git_permissions(
+/// When the automaton is launched with BOTH a git repo URL and an auth
+/// token, the operator has also already approved pushing to that
+/// remote, so `git_commit` / `git_push` / `git_commit_push` are
+/// additionally elevated from their default `RequireApproval` —
+/// otherwise the automaton would stall on every commit/push cycle.
+///
+/// Mutations still flow through the kernel-mediated executors
+/// (`ToolExecutor` for `run_command`, `GitExecutor` for the git tools),
+/// so the executor-layer `ToolConfig` gates (`enable_commands`,
+/// `binary_allowlist`, `allow_shell`) and the record log remain in
+/// force. Elevation bypasses the approval prompt, not the sandbox.
+/// See `docs/invariants.md` §1.
+fn dev_loop_extra_permissions(
     git_repo_url: Option<&str>,
     auth_token: Option<&str>,
 ) -> std::collections::HashMap<String, aura_core::PermissionLevel> {
     let mut map = std::collections::HashMap::new();
+    map.insert(
+        "run_command".to_string(),
+        aura_core::PermissionLevel::AlwaysAllow,
+    );
     if git_repo_url.is_some() && auth_token.is_some() {
         for name in aura_tools::GIT_TOOL_NAMES {
             map.insert((*name).to_string(), aura_core::PermissionLevel::AlwaysAllow);
@@ -1487,6 +1511,47 @@ mod tests {
                 );
             }
             other => panic!("unexpected event kind: {other:?}"),
+        }
+    }
+
+    /// Regression lock: `dev_loop_extra_permissions` must unconditionally
+    /// elevate `run_command` to `AlwaysAllow`, independent of whether
+    /// the caller supplied git credentials. Without this, the dev-loop
+    /// kernel falls back to [`aura_kernel::PolicyConfig::default`],
+    /// which keeps `run_command` out of `allowed_tools` under
+    /// `allow_unlisted = false` and denies every shell invocation with
+    /// "Tool 'run_command' is not allowed" — the exact failure mode the
+    /// DoD gate diagnoses in `apps/aura-os-server/src/handlers/dev_loop.rs`.
+    #[test]
+    fn dev_loop_extra_permissions_always_allow_run_command() {
+        use aura_core::PermissionLevel;
+
+        let no_git = super::dev_loop_extra_permissions(None, None);
+        assert_eq!(
+            no_git.get("run_command"),
+            Some(&PermissionLevel::AlwaysAllow),
+            "run_command must be AlwaysAllow even when no git credentials are supplied"
+        );
+        for name in aura_tools::GIT_TOOL_NAMES {
+            assert!(
+                !no_git.contains_key(*name),
+                "git tool {name} must not be elevated without repo URL + auth token"
+            );
+        }
+
+        let with_git =
+            super::dev_loop_extra_permissions(Some("https://orbit.example/repo"), Some("jwt"));
+        assert_eq!(
+            with_git.get("run_command"),
+            Some(&PermissionLevel::AlwaysAllow),
+            "run_command must remain AlwaysAllow when git credentials are also supplied"
+        );
+        for name in aura_tools::GIT_TOOL_NAMES {
+            assert_eq!(
+                with_git.get(*name),
+                Some(&PermissionLevel::AlwaysAllow),
+                "git tool {name} must be elevated when repo URL + auth token are supplied"
+            );
         }
     }
 }
