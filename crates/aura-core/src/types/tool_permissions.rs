@@ -188,14 +188,12 @@ pub fn is_effectively_full_access(
     agent_override: Option<&AgentToolPermissions>,
 ) -> bool {
     matches!(user_default.mode, UserDefaultMode::FullAccess)
-        && agent_override
-            .map(|override_permissions| {
-                override_permissions
-                    .per_tool
-                    .values()
-                    .all(|state| *state == ToolState::Allow)
-            })
-            .unwrap_or(true)
+        && agent_override.map_or(true, |override_permissions| {
+            override_permissions
+                .per_tool
+                .values()
+                .all(|state| *state == ToolState::Allow)
+        })
 }
 
 #[cfg(test)]

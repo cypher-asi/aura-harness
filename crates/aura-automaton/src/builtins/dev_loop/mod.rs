@@ -4,11 +4,25 @@
 //! topologically sorts them by dependencies, and executes them one at a
 //! time. Task status transitions are handled internally and synced back
 //! to the domain API as a best-effort side-effect.
+//!
+//! `mod.rs` is intentionally kept thin: it owns the [`DevLoopAutomaton`]
+//! façade, the per-loop `STATE_*` keys, and the orchestration helpers
+//! (`topological_sort`, `extract_shell_command`). Heavier subsystems
+//! live in dedicated siblings:
+//!
+//! - [`aggregate`] — `TaskAggregate` + commit/chunk-guard markers.
+//! - [`validation`] — `validate_execution` + `DecompositionHint`.
+//! - [`forward_event`] — `aura_agent::AgentLoopEvent` → `AutomatonEvent`
+//!   translation used by `tick.rs`, `task_run.rs`, and `chat.rs`.
+//!
+//! The blanket `use` block below is preserved verbatim from the
+//! pre-split file so sibling modules that pull names via `super::{...}`
+//! (e.g. `tick.rs`, `run.rs`, `finish.rs`, `tests.rs`) continue to
+//! resolve everything without any churn outside this directory.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use aura_agent::agent_runner::{
@@ -16,7 +30,7 @@ use aura_agent::agent_runner::{
     TaskTrackingConfig,
 };
 use aura_agent::prompts::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
-use aura_reasoner::{ContentBlock, Message, ModelProvider, Role, ToolResultContent};
+use aura_reasoner::ModelProvider;
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::{DomainApi, TaskDescriptor};
 
@@ -26,247 +40,38 @@ use crate::events::AutomatonEvent;
 use crate::runtime::{Automaton, TickOutcome};
 use crate::schedule::Schedule;
 
+mod aggregate;
 mod finish;
+mod forward_event;
 mod run;
 mod safe_transition;
 mod tick;
-
-pub(crate) use safe_transition::safe_transition;
-pub(crate) use tick::commit_and_push;
-
-/// Reason string attached to `AutomatonEvent::CommitSkipped` when
-/// the DoD precheck trips. Kept as a module constant so the tick.rs
-/// skip path and any future task-run callers stay in lockstep.
-pub(crate) const COMMIT_SKIPPED_NO_CHANGES: &str =
-    "no file changes or verification evidence; skipping commit to avoid orphan commits";
-
-/// Marker the pre-dispatch chunk guard stamps onto every synthetic
-/// `tool_result` when a `write_file` is short-circuited for exceeding
-/// [`aura_agent::constants::WRITE_FILE_CHUNK_BYTES`]. Scanning for
-/// this marker in `TaskAggregate::from_exec` is how the safety net
-/// recovers the set of paths the agent was told to fall back to
-/// chunked `edit_file` appends on — see the docstring on
-/// [`TaskAggregate::pending_oversized_writes`] for why this is
-/// promoted from an opaque log marker into a gate-blocking signal.
-pub(crate) const CHUNK_GUARD_MARKER: &str = "[CHUNK_GUARD]";
-
-/// Per-task aggregate the automaton consults before dispatching
-/// `git_commit` / `git_commit_push`. The canonical server-side
-/// `CachedTaskOutput` lives in `aura-os-server` and is not visible
-/// from this crate, so we derive an equivalent shape locally from
-/// the `TaskExecutionResult` the runner hands back:
-///
-/// * `files_changed` counts the file-mutation evidence we can see
-///   without talking to the server: `exec.file_ops` (the canonical
-///   list of writes the runner actually applied) plus the set of
-///   unique `path`s from successful `write_file` / `edit_file` /
-///   `delete_file` `tool_result`s in the task's message log. Using
-///   the max of the two is a belt-and-braces signal: `file_ops`
-///   may lag when the runner abandoned a partially-applied batch,
-///   and the message scan catches successful tool calls whose side
-///   effects never made it into `file_ops`.
-///
-/// * `verification_steps` counts successful `run_command`
-///   `tool_result`s. `run_command` is the only generic shell tool
-///   in the catalog (see `aura_agent::constants::COMMAND_TOOLS`)
-///   so build / test / fmt / lint invocations all flow through it;
-///   a single non-error result is treated as verification evidence.
-///
-/// `should_skip_commit` trips only when both counters are zero,
-/// matching the plan's "no file changes AND no verification
-/// evidence" trigger for the commit-skip DoD precheck.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TaskAggregate {
-    pub files_changed: usize,
-    pub verification_steps: usize,
-    /// Paths whose initial `write_file` was rejected by the
-    /// pre-dispatch chunk guard (see `aura-agent`'s
-    /// `partition_oversized_writes`) and for which no subsequent
-    /// successful write has been observed for the SAME path.
-    ///
-    /// Populated by scanning `exec.messages` for `tool_result` blocks
-    /// whose content starts with the [`CHUNK_GUARD_MARKER`], resolving
-    /// the originating `tool_use`'s `path` input, and then checking
-    /// whether a later non-error `write_file`/`edit_file` tool_result
-    /// for that same path appears in the log.
-    ///
-    /// A non-empty list means the agent was told "write a small stub
-    /// now and fill the rest with `edit_file` chunks" but ran out of
-    /// turns / context before finishing. Treating `task_completed`
-    /// as success in that state is the exact bug that left
-    /// `zero-sdk/src/messaging/group/types.rs` at ~2 KB of an
-    /// 8 KB intended payload; the safety net trips on this list and
-    /// routes the task to `record_task_failure` instead.
-    pub pending_oversized_writes: Vec<String>,
-}
-
-impl TaskAggregate {
-    /// Derive the aggregate from a completed `TaskExecutionResult`.
-    pub(crate) fn from_exec(exec: &TaskExecutionResult) -> Self {
-        let mut tool_uses: HashMap<String, String> = HashMap::new();
-        let mut tool_use_paths: HashMap<String, String> = HashMap::new();
-        let mut successful_file_paths: HashSet<String> = HashSet::new();
-        let mut chunk_guarded_paths: HashSet<String> = HashSet::new();
-        let mut verification_steps: usize = 0;
-
-        // First pass: index tool_use ids -> tool name so we can
-        // classify the matching tool_result blocks in the second
-        // pass. The assistant always emits the tool_use before the
-        // user-side tool_result, so a single forward pass over the
-        // message log is sufficient.
-        for msg in &exec.messages {
-            match msg.role {
-                Role::Assistant => {
-                    for block in &msg.content {
-                        if let ContentBlock::ToolUse { id, name, input } = block {
-                            tool_uses.insert(id.clone(), name.clone());
-                            if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
-                                tool_use_paths.insert(id.clone(), path.to_string());
-                            }
-                        }
-                    }
-                }
-                Role::User => {
-                    for block in &msg.content {
-                        if let ContentBlock::ToolResult {
-                            tool_use_id,
-                            is_error,
-                            content,
-                            ..
-                        } = block
-                        {
-                            // Chunk-guard safety net: every short-
-                            // circuited oversized `write_file` fires
-                            // an `is_error=true` tool_result whose
-                            // content is prefixed with
-                            // `[CHUNK_GUARD]`. Record the target path
-                            // so the post-scan below can check
-                            // whether the agent actually followed up
-                            // with a successful write for the same
-                            // file.
-                            if *is_error && content_starts_with_marker(content, CHUNK_GUARD_MARKER)
-                            {
-                                if let Some(path) = tool_use_paths.get(tool_use_id) {
-                                    chunk_guarded_paths.insert(path.clone());
-                                }
-                            }
-                            if *is_error {
-                                continue;
-                            }
-                            let Some(tool_name) = tool_uses.get(tool_use_id) else {
-                                continue;
-                            };
-                            match tool_name.as_str() {
-                                "write_file" | "edit_file" | "delete_file" => {
-                                    // Recover the path argument from
-                                    // the originating tool_use to
-                                    // dedupe repeated writes to the
-                                    // same file. Tool_uses without a
-                                    // `path` field still count via
-                                    // their id (rare: malformed
-                                    // input).
-                                    let path_key = exec
-                                        .messages
-                                        .iter()
-                                        .flat_map(|m| m.content.iter())
-                                        .find_map(|b| match b {
-                                            ContentBlock::ToolUse { id, input, .. }
-                                                if id == tool_use_id =>
-                                            {
-                                                input
-                                                    .get("path")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(str::to_string)
-                                            }
-                                            _ => None,
-                                        })
-                                        .unwrap_or_else(|| format!("<id:{tool_use_id}>"));
-                                    successful_file_paths.insert(path_key);
-                                }
-                                "run_command" => {
-                                    verification_steps += 1;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Prefer the max of the runner-reported `file_ops` count and
-        // the message-derived count (see struct docs).
-        let files_changed = exec.file_ops.len().max(successful_file_paths.len());
-
-        // Resolve the chunk-guard safety net: any CHUNK_GUARDed path
-        // that DOES have a successful write later in the log is
-        // considered recovered. The agent may have followed the
-        // recovery hint ("write stub + edit_file appends") to
-        // completion, in which case we must NOT block the task.
-        // Anything still unresolved pins the task into the pending-
-        // oversized-writes failure path in `record_task_success`.
-        let mut pending_oversized_writes: Vec<String> = chunk_guarded_paths
-            .into_iter()
-            .filter(|path| !successful_file_paths.contains(path))
-            .collect();
-        pending_oversized_writes.sort();
-
-        Self {
-            files_changed,
-            verification_steps,
-            pending_oversized_writes,
-        }
-    }
-
-    /// DoD precheck: skip the commit only when we have neither any
-    /// observed file changes nor any verification-step evidence.
-    pub(crate) fn should_skip_commit(&self) -> bool {
-        self.files_changed == 0 && self.verification_steps == 0
-    }
-
-    /// Chunk-guard safety net: the agent was short-circuited on at
-    /// least one oversized `write_file` (see the pre-dispatch
-    /// `partition_oversized_writes` in `aura-agent`) and never
-    /// followed up with a successful write for that path. Treating
-    /// the task as "done" in this state is how the original
-    /// task_id=4079e975 regression left
-    /// `zero-sdk/src/messaging/group/types.rs` at ~2 KB of an
-    /// 8 KB intended payload. Callers (see `tick::record_task_success`)
-    /// route the task to `record_task_failure` instead so the retry
-    /// ladder gets another shot at finishing the chunked writes.
-    pub(crate) fn has_pending_oversized_writes(&self) -> bool {
-        !self.pending_oversized_writes.is_empty()
-    }
-}
-
-fn content_starts_with_marker(content: &ToolResultContent, marker: &str) -> bool {
-    match content {
-        ToolResultContent::Text(t) => t.trim_start().starts_with(marker),
-        // The chunk guard only ever stamps plain-text marker strings
-        // (see `partition_oversized_writes`), so a JSON payload can't
-        // be a chunk-guard result by construction.
-        ToolResultContent::Json(_) => false,
-    }
-}
+mod validation;
 
 #[cfg(test)]
 mod tests;
 
-/// Structured hint attached to a `NeedsDecomposition` outcome so the
-/// orchestrator (Phase 3, in aura-os) can auto-split a task that reached
-/// implementation phase but produced no file operations. Empty/None fields
-/// are expected when the validator cannot reliably recover the context.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DecompositionHint {
-    /// Unique paths the agent attempted to `write_file` / `edit_file`
-    /// without ever producing a non-error `tool_result`.
-    pub failed_paths: Vec<String>,
-    /// Name of the most recent assistant-side tool_use block, if any.
-    pub last_pending_tool_name: Option<String>,
-    /// Short JSON summary of that tool_use's input (via
-    /// `aura_agent::helpers::summarize_write_input` when applicable).
-    pub last_pending_tool_input_summary: Option<String>,
-}
+// ---------------------------------------------------------------------------
+// Re-exports
+// ---------------------------------------------------------------------------
+//
+// Sibling modules (`tick.rs`, `run.rs`, `tests.rs`) and the cross-builtin
+// callers in `task_run.rs` / `chat.rs` import everything via
+// `super::dev_loop::{...}` or `super::{...}`. Re-exporting from `mod.rs`
+// keeps those import paths stable so the diff stays scoped to this
+// directory.
+
+pub(crate) use aggregate::{TaskAggregate, COMMIT_SKIPPED_NO_CHANGES};
+pub(crate) use safe_transition::safe_transition;
+pub(crate) use tick::commit_and_push;
+pub(crate) use validation::validate_execution;
+
+pub use forward_event::forward_agent_event;
+pub use validation::DecompositionHint;
+
+// ---------------------------------------------------------------------------
+// Per-automaton state keys + retry policy
+// ---------------------------------------------------------------------------
 
 const STATE_COMPLETED_COUNT: &str = "completed_count";
 const STATE_FAILED_COUNT: &str = "failed_count";
@@ -280,6 +85,10 @@ const STATE_FAILURE_REASONS: &str = "failure_reasons";
 const STATE_INITIALIZED: &str = "initialized";
 
 const MAX_RETRIES_PER_TASK: u32 = 2;
+
+// ---------------------------------------------------------------------------
+// Config + automaton façade
+// ---------------------------------------------------------------------------
 
 struct DevLoopConfig {
     project_id: String,
@@ -350,6 +159,10 @@ impl DevLoopAutomaton {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Topological sort + free-form helpers
+// ---------------------------------------------------------------------------
+
 /// Topologically sort tasks by dependencies. Returns task IDs in execution
 /// order. Tasks with no dependencies come first.
 fn topological_sort(tasks: &[TaskDescriptor]) -> Vec<String> {
@@ -413,264 +226,4 @@ pub fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
         }
     }
     None
-}
-
-/// Validate an agent-task execution result. Returns:
-/// - `Ok(exec)` when the task produced file ops or explicitly declared
-///   no-changes-needed.
-/// - `Err(AutomatonError::NeedsDecomposition { hint })` when the task
-///   reached the implementing phase but produced no file ops — the caller
-///   (or the Phase 3 orchestrator in aura-os) can consume the hint to
-///   auto-split and retry.
-/// - `Err(AutomatonError::AgentExecution(..))` for the classic
-///   "completed-without-changes" case that never reached implementing.
-pub(crate) fn validate_execution(
-    exec: TaskExecutionResult,
-) -> Result<TaskExecutionResult, AutomatonError> {
-    if !exec.file_ops.is_empty() || exec.no_changes_needed {
-        return Ok(exec);
-    }
-
-    if exec.reached_implementing {
-        let hint = build_decomposition_hint(&exec.messages);
-        return Err(AutomatonError::NeedsDecomposition { hint });
-    }
-
-    Err(AutomatonError::AgentExecution(
-        "task completed without any file operations — completion not verified".into(),
-    ))
-}
-
-/// Extract a best-effort `DecompositionHint` from the final message history
-/// of a task that reached implementation phase without any file ops.
-///
-/// `failed_paths` = unique paths from write_file/edit_file tool_use blocks
-/// whose tool_use id never produced a non-error tool_result.
-/// `last_pending_tool_name` = name of the last ToolUse in the most recent
-/// assistant message.
-/// `last_pending_tool_input_summary` = short summary via
-/// `aura_agent::helpers::summarize_write_input` (when it applies) or the
-/// raw JSON truncated to a reasonable length.
-pub(crate) fn build_decomposition_hint(messages: &[Message]) -> DecompositionHint {
-    if messages.is_empty() {
-        return DecompositionHint::default();
-    }
-
-    let mut tool_uses: HashMap<String, (String, serde_json::Value)> = HashMap::new();
-    let mut successful_ids: HashSet<String> = HashSet::new();
-
-    for msg in messages {
-        match msg.role {
-            Role::Assistant => {
-                for block in &msg.content {
-                    if let ContentBlock::ToolUse { id, name, input } = block {
-                        tool_uses.insert(id.clone(), (name.clone(), input.clone()));
-                    }
-                }
-            }
-            Role::User => {
-                for block in &msg.content {
-                    if let ContentBlock::ToolResult {
-                        tool_use_id,
-                        is_error,
-                        ..
-                    } = block
-                    {
-                        if !*is_error {
-                            successful_ids.insert(tool_use_id.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut failed_paths: Vec<String> = Vec::new();
-    let mut seen_paths: HashSet<String> = HashSet::new();
-    for (id, (name, input)) in &tool_uses {
-        if successful_ids.contains(id) {
-            continue;
-        }
-        if !matches!(name.as_str(), "write_file" | "edit_file") {
-            continue;
-        }
-        if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
-            if seen_paths.insert(path.to_string()) {
-                failed_paths.push(path.to_string());
-            }
-        }
-    }
-
-    let (last_pending_tool_name, last_pending_tool_input_summary) = last_pending_tool_use(messages);
-
-    DecompositionHint {
-        failed_paths,
-        last_pending_tool_name,
-        last_pending_tool_input_summary,
-    }
-}
-
-fn last_pending_tool_use(messages: &[Message]) -> (Option<String>, Option<String>) {
-    let last_assistant = messages.iter().rev().find(|m| m.role == Role::Assistant);
-    let Some(msg) = last_assistant else {
-        return (None, None);
-    };
-    let last_tool_use = msg.content.iter().rev().find_map(|b| match b {
-        ContentBlock::ToolUse { name, input, .. } => Some((name.clone(), input.clone())),
-        _ => None,
-    });
-    let Some((name, input)) = last_tool_use else {
-        return (None, None);
-    };
-
-    let summary = aura_agent::helpers::summarize_write_input(&name, &input)
-        .and_then(|v| serde_json::to_string(&v).ok())
-        .or_else(|| serde_json::to_string(&input).ok())
-        .map(|s| truncate_summary(&s, 240));
-
-    (Some(name), summary)
-}
-
-fn truncate_summary(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let mut cut = max;
-        while !s.is_char_boundary(cut) && cut > 0 {
-            cut -= 1;
-        }
-        format!("{}…", &s[..cut])
-    }
-}
-
-pub fn forward_agent_event(
-    tx: &tokio::sync::mpsc::Sender<AutomatonEvent>,
-    evt: aura_agent::AgentLoopEvent,
-    task_id: Option<&str>,
-) {
-    use aura_agent::AgentLoopEvent;
-    let task_id_value = || task_id.map(str::to_owned);
-    let automaton_event = match evt {
-        AgentLoopEvent::TextDelta(text) => AutomatonEvent::TextDelta {
-            task_id: task_id_value(),
-            text,
-        },
-        AgentLoopEvent::ThinkingDelta(thinking) => AutomatonEvent::ThinkingDelta {
-            task_id: task_id_value(),
-            thinking,
-        },
-        AgentLoopEvent::ToolStart { id, name } => AutomatonEvent::ToolCallStarted {
-            task_id: task_id_value(),
-            id,
-            name,
-        },
-        AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
-            // Partial JSON is expected while a `tool_use` block is
-            // still streaming -- forward it with
-            // `snapshot_partial: true` so the UI can render an
-            // "in flight…" card instead of dropping the event
-            // entirely and leaving the card empty. When the JSON
-            // parses cleanly we still emit `snapshot_partial: false`
-            // so downstream consumers that only care about finished
-            // blocks can filter.
-            match serde_json::from_str::<serde_json::Value>(&input) {
-                Ok(parsed) => AutomatonEvent::ToolCallSnapshot {
-                    task_id: task_id_value(),
-                    id,
-                    name,
-                    input: parsed,
-                    snapshot_partial: false,
-                },
-                Err(_) => AutomatonEvent::ToolCallSnapshot {
-                    task_id: task_id_value(),
-                    id,
-                    name,
-                    input: serde_json::Value::String(input),
-                    snapshot_partial: true,
-                },
-            }
-        }
-        AgentLoopEvent::ToolResult {
-            tool_use_id,
-            tool_name,
-            content,
-            is_error,
-        } => AutomatonEvent::ToolResult {
-            task_id: task_id_value(),
-            id: tool_use_id,
-            name: tool_name,
-            result: content,
-            is_error,
-        },
-        // 1:1 projection of the harness's authoritative completion
-        // frame. The server's DoD gate in
-        // `apps/aura-os-server/src/handlers/dev_loop.rs`
-        // (`successful_write_event_path`) counts
-        // `tool_call_completed` events with `is_error=false` as file
-        // change evidence when populating
-        // `CachedTaskOutput::files_changed`. Without this mapping the
-        // gate rejects every pure-edit task with "files 0".
-        AgentLoopEvent::ToolCallCompleted {
-            tool_use_id,
-            tool_name,
-            input,
-            is_error,
-        } => AutomatonEvent::ToolCallCompleted {
-            task_id: task_id_value(),
-            id: tool_use_id,
-            name: tool_name,
-            input,
-            is_error,
-        },
-        AgentLoopEvent::IterationComplete {
-            input_tokens,
-            output_tokens,
-            ..
-        } => AutomatonEvent::TokenUsage {
-            task_id: task_id_value(),
-            input_tokens,
-            output_tokens,
-        },
-        AgentLoopEvent::Warning(msg) => AutomatonEvent::LogLine { message: msg },
-        AgentLoopEvent::Error { message, .. } => AutomatonEvent::Error {
-            automaton_id: String::new(),
-            message,
-        },
-        // Per-tool-call streaming retry lifecycle carries the active
-        // task id when this forwarder is used by task-run/dev-loop.
-        AgentLoopEvent::ToolCallRetrying {
-            tool_use_id,
-            tool_name,
-            attempt,
-            max_attempts,
-            delay_ms,
-            reason,
-        } => AutomatonEvent::ToolCallRetrying {
-            task_id: task_id.unwrap_or_default().to_string(),
-            tool_use_id,
-            tool_name,
-            attempt,
-            max_attempts,
-            delay_ms,
-            reason,
-        },
-        AgentLoopEvent::ToolCallFailed {
-            tool_use_id,
-            tool_name,
-            reason,
-        } => AutomatonEvent::ToolCallFailed {
-            task_id: task_id.unwrap_or_default().to_string(),
-            tool_use_id,
-            tool_name,
-            reason,
-        },
-        // `debug.*` observability frames pass through verbatim; the
-        // `From<DebugEvent>` impl preserves the exact JSON shape the
-        // aura-os forwarder routes on (`type: "debug.<kind>"`).
-        AgentLoopEvent::Debug(ev) => AutomatonEvent::from(ev),
-        _ => return,
-    };
-    if let Err(e) = tx.try_send(automaton_event) {
-        tracing::warn!("automaton event channel full or closed: {e}");
-    }
 }

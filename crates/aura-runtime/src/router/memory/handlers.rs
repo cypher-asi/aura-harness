@@ -1,7 +1,10 @@
-//! Memory CRUD API endpoints for facts, events, procedures, and aggregates.
+//! HTTP handlers for the memory CRUD surface.
+//!
+//! Wire types (`CreateFactBody`, `CreateEventBody`, …) live in
+//! [`super::wire`]; the handlers here convert those into the
+//! `aura_memory` domain types and dispatch to
+//! [`aura_memory::MemoryStoreApi`].
 
-use super::ids::parse_agent_id;
-use super::RouterState;
 use aura_core::{AgentEventId, FactId, ProcedureId};
 use aura_memory::{AgentEvent, Fact, FactSource, MemoryStoreApi, Procedure};
 use axum::{
@@ -9,8 +12,15 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use chrono::Utc;
+
+use crate::router::ids::parse_agent_id;
+use crate::router::RouterState;
+
+use super::wire::{
+    BulkDeleteEventsBody, CreateEventBody, CreateFactBody, CreateProcedureBody,
+    ProcedureListParams, UpdateProcedureBody,
+};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
@@ -70,7 +80,7 @@ fn store_err(e: aura_memory::MemoryError) -> (StatusCode, Json<serde_json::Value
 // Facts
 // ============================================================================
 
-pub(super) async fn list_facts(
+pub(in crate::router) async fn list_facts(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> ApiResult<Vec<Fact>> {
@@ -79,7 +89,7 @@ pub(super) async fn list_facts(
     store.list_facts(agent_id).map(Json).map_err(store_err)
 }
 
-pub(super) async fn get_fact(
+pub(in crate::router) async fn get_fact(
     State(state): State<RouterState>,
     Path((agent_hex, fact_hex)): Path<(String, String)>,
 ) -> ApiResult<Fact> {
@@ -92,7 +102,7 @@ pub(super) async fn get_fact(
         .map_err(store_err)
 }
 
-pub(super) async fn get_fact_by_key(
+pub(in crate::router) async fn get_fact_by_key(
     State(state): State<RouterState>,
     Path((agent_hex, key)): Path<(String, String)>,
 ) -> ApiResult<serde_json::Value> {
@@ -108,26 +118,7 @@ pub(super) async fn get_fact_by_key(
     }
 }
 
-#[derive(Deserialize)]
-pub(super) struct CreateFactBody {
-    pub key: String,
-    pub value: serde_json::Value,
-    #[serde(default = "default_confidence")]
-    pub confidence: f32,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default = "default_importance")]
-    pub importance: f32,
-}
-
-fn default_confidence() -> f32 {
-    1.0
-}
-fn default_importance() -> f32 {
-    0.5
-}
-
-pub(super) async fn create_fact(
+pub(in crate::router) async fn create_fact(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
     Json(body): Json<CreateFactBody>,
@@ -157,7 +148,7 @@ pub(super) async fn create_fact(
     Ok(Json(fact))
 }
 
-pub(super) async fn update_fact(
+pub(in crate::router) async fn update_fact(
     State(state): State<RouterState>,
     Path((agent_hex, fact_hex)): Path<(String, String)>,
     Json(body): Json<CreateFactBody>,
@@ -182,7 +173,7 @@ pub(super) async fn update_fact(
     Ok(Json(fact))
 }
 
-pub(super) async fn delete_fact(
+pub(in crate::router) async fn delete_fact(
     State(state): State<RouterState>,
     Path((agent_hex, fact_hex)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
@@ -197,7 +188,7 @@ pub(super) async fn delete_fact(
 // Events
 // ============================================================================
 
-pub(super) async fn list_events(
+pub(in crate::router) async fn list_events(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> ApiResult<Vec<AgentEvent>> {
@@ -209,17 +200,7 @@ pub(super) async fn list_events(
         .map_err(store_err)
 }
 
-#[derive(Deserialize)]
-pub(super) struct CreateEventBody {
-    pub event_type: String,
-    pub summary: String,
-    #[serde(default)]
-    pub metadata: serde_json::Value,
-    #[serde(default = "default_importance")]
-    pub importance: f32,
-}
-
-pub(super) async fn create_event(
+pub(in crate::router) async fn create_event(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
     Json(body): Json<CreateEventBody>,
@@ -242,7 +223,7 @@ pub(super) async fn create_event(
     Ok(Json(event))
 }
 
-pub(super) async fn delete_event(
+pub(in crate::router) async fn delete_event(
     State(state): State<RouterState>,
     Path((agent_hex, event_hex)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
@@ -253,12 +234,7 @@ pub(super) async fn delete_event(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Deserialize)]
-pub(super) struct BulkDeleteEventsBody {
-    pub before: DateTime<Utc>,
-}
-
-pub(super) async fn bulk_delete_events(
+pub(in crate::router) async fn bulk_delete_events(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
     Json(body): Json<BulkDeleteEventsBody>,
@@ -275,13 +251,7 @@ pub(super) async fn bulk_delete_events(
 // Procedures
 // ============================================================================
 
-#[derive(Deserialize, Default)]
-pub(super) struct ProcedureListParams {
-    pub skill: Option<String>,
-    pub min_relevance: Option<f32>,
-}
-
-pub(super) async fn list_procedures(
+pub(in crate::router) async fn list_procedures(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
     Query(params): Query<ProcedureListParams>,
@@ -300,7 +270,7 @@ pub(super) async fn list_procedures(
     Ok(Json(procs))
 }
 
-pub(super) async fn get_procedure(
+pub(in crate::router) async fn get_procedure(
     State(state): State<RouterState>,
     Path((agent_hex, proc_hex)): Path<(String, String)>,
 ) -> ApiResult<Procedure> {
@@ -313,21 +283,7 @@ pub(super) async fn get_procedure(
         .map_err(store_err)
 }
 
-#[derive(Deserialize)]
-pub(super) struct CreateProcedureBody {
-    pub name: String,
-    pub trigger: String,
-    #[serde(default)]
-    pub steps: Vec<String>,
-    #[serde(default)]
-    pub context_constraints: serde_json::Value,
-    #[serde(default)]
-    pub skill_name: Option<String>,
-    #[serde(default)]
-    pub skill_relevance: Option<f32>,
-}
-
-pub(super) async fn create_procedure(
+pub(in crate::router) async fn create_procedure(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
     Json(body): Json<CreateProcedureBody>,
@@ -354,19 +310,7 @@ pub(super) async fn create_procedure(
     Ok(Json(proc))
 }
 
-#[derive(Deserialize)]
-pub(super) struct UpdateProcedureBody {
-    pub name: String,
-    pub trigger: String,
-    #[serde(default)]
-    pub steps: Vec<String>,
-    #[serde(default)]
-    pub context_constraints: serde_json::Value,
-    pub skill_name: Option<String>,
-    pub skill_relevance: Option<f32>,
-}
-
-pub(super) async fn update_procedure(
+pub(in crate::router) async fn update_procedure(
     State(state): State<RouterState>,
     Path((agent_hex, proc_hex)): Path<(String, String)>,
     Json(body): Json<UpdateProcedureBody>,
@@ -388,7 +332,7 @@ pub(super) async fn update_procedure(
     Ok(Json(proc))
 }
 
-pub(super) async fn delete_procedure(
+pub(in crate::router) async fn delete_procedure(
     State(state): State<RouterState>,
     Path((agent_hex, proc_hex)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
@@ -405,7 +349,7 @@ pub(super) async fn delete_procedure(
 // Aggregates
 // ============================================================================
 
-pub(super) async fn snapshot(
+pub(in crate::router) async fn snapshot(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> ApiResult<aura_memory::MemoryPacket> {
@@ -421,7 +365,7 @@ pub(super) async fn snapshot(
     }))
 }
 
-pub(super) async fn wipe(
+pub(in crate::router) async fn wipe(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
@@ -431,7 +375,7 @@ pub(super) async fn wipe(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn stats(
+pub(in crate::router) async fn stats(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> ApiResult<aura_memory::MemoryStats> {
@@ -444,7 +388,7 @@ pub(super) async fn stats(
 // Consolidation
 // ============================================================================
 
-pub(super) async fn consolidate(
+pub(in crate::router) async fn consolidate(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> ApiResult<aura_memory::ConsolidationReport> {
