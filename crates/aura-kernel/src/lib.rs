@@ -53,8 +53,18 @@ pub use spawn_hook::{
 pub enum KernelError {
     #[error("store error: {0}")]
     Store(String),
+    /// Provider-side reasoning failure. The inner
+    /// [`aura_reasoner::ReasonerError`] is preserved (instead of being
+    /// flattened to a string) so callers — notably
+    /// `aura_agent::KernelModelGateway` — can branch on the variant
+    /// (`RateLimited`, `InsufficientCredits`, `Api { status }`, …)
+    /// rather than string-matching the formatted message. The kernel's
+    /// own audit-log writers stringify this via
+    /// [`std::error::Error::source`] / [`std::fmt::Display`] before
+    /// recording, so the `Reasoning` record payload format is
+    /// unchanged.
     #[error("reasoner error: {0}")]
-    Reasoner(String),
+    Reasoner(#[from] aura_reasoner::ReasonerError),
     #[error("timeout: {0}")]
     Timeout(String),
     #[error("serialization error: {0}")]

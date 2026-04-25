@@ -412,10 +412,13 @@ fn stream_error_is_retryable(err: &ReasonerError) -> bool {
     }
     match err {
         ReasonerError::InsufficientCredits(_)
-        | ReasonerError::RateLimited(_)
+        | ReasonerError::RateLimited { .. }
         | ReasonerError::Timeout
         | ReasonerError::Parse(_)
         | ReasonerError::Request(_) => false,
+        // `Transient` is the structured "retryable upstream 5xx"
+        // classification — by definition retryable.
+        ReasonerError::Transient { .. } => true,
         ReasonerError::Api { status, .. } => matches!(status, 500 | 502 | 503 | 504),
         ReasonerError::Internal(message) => looks_like_transient_stream_error(message),
         // `StreamAbortedWithPartial` is handled by the dedicated
@@ -679,8 +682,21 @@ mod retry_classifier_tests {
 
     #[test]
     fn rate_limited_is_not_retryable_here() {
-        let err = ReasonerError::RateLimited("429 too many requests".to_string());
+        let err = ReasonerError::RateLimited {
+            message: "429 too many requests".to_string(),
+            retry_after: None,
+        };
         assert!(!stream_error_is_retryable(&err));
+    }
+
+    #[test]
+    fn transient_is_retryable() {
+        let err = ReasonerError::Transient {
+            status: 502,
+            message: "bad gateway".to_string(),
+            retry_after: None,
+        };
+        assert!(stream_error_is_retryable(&err));
     }
 
     #[test]

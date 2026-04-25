@@ -100,7 +100,15 @@ impl MemoryManager {
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to retrieve memory for prompt injection");
+                // Phase 5 (error-handling polish): keep this best-effort
+                // (memory retrieval is non-critical for the agent loop)
+                // but include `agent_id` so operators can correlate
+                // prompt-injection misses with the affected agent.
+                tracing::warn!(
+                    error = %e,
+                    agent_id = ?agent_id,
+                    "Failed to retrieve memory for prompt injection"
+                );
             }
         }
     }
@@ -267,7 +275,16 @@ impl aura_agent::TurnObserver for MemoryTurnObserver {
             )
             .await
         {
-            tracing::warn!(error = %e, "Memory ingestion failed after turn");
+            // Phase 5 (error-handling polish): the observer is
+            // intentionally best-effort — a failed memory write must
+            // not abort the conversation — but the warning gains an
+            // `agent_id` field so a flapping ingest pipeline is
+            // greppable in the structured-log stream.
+            tracing::warn!(
+                error = %e,
+                agent_id = ?self.agent_id,
+                "Memory ingestion failed after turn"
+            );
         }
     }
 }

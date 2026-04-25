@@ -408,9 +408,10 @@ fn classify_retry_action(
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = sleep.as_millis() as u64;
             warn!(model = %model, attempt, backoff_ms, "Cloudflare block, will retry");
-            *last_err = Some(ReasonerError::Api {
+            *last_err = Some(ReasonerError::Transient {
                 status: 403,
                 message: msg.clone(),
+                retry_after: None,
             });
             RetryAction::Retry { sleep }
         }
@@ -430,9 +431,10 @@ fn classify_retry_action(
                 retry_after_s = ?retry_after.map(|d| d.as_secs()),
                 "API overloaded, will retry"
             );
-            *last_err = Some(ReasonerError::RateLimited(
-                super::format_rate_limited_message(message, *retry_after),
-            ));
+            *last_err = Some(ReasonerError::RateLimited {
+                message: super::format_rate_limited_message(message, *retry_after),
+                retry_after: *retry_after,
+            });
             RetryAction::Retry { sleep }
         }
         ApiError::Overloaded {
@@ -440,9 +442,10 @@ fn classify_retry_action(
             retry_after,
         } if model_idx < model_count - 1 => {
             warn!(model = %model, "Retries exhausted, falling back to next model");
-            *last_err = Some(ReasonerError::RateLimited(
-                super::format_rate_limited_message(message, *retry_after),
-            ));
+            *last_err = Some(ReasonerError::RateLimited {
+                message: super::format_rate_limited_message(message, *retry_after),
+                retry_after: *retry_after,
+            });
             RetryAction::FallbackModel
         }
         // Axis 2: retry generic 5xx just like Cloudflare cold-starts,
@@ -461,9 +464,10 @@ fn classify_retry_action(
                 backoff_ms,
                 "Upstream 5xx, will retry"
             );
-            *last_err = Some(ReasonerError::Api {
+            *last_err = Some(ReasonerError::Transient {
                 status: *status,
                 message: message.clone(),
+                retry_after: None,
             });
             RetryAction::Retry { sleep }
         }
@@ -476,9 +480,10 @@ fn classify_retry_action(
                 status = *status,
                 "5xx retries exhausted, falling back to next model"
             );
-            *last_err = Some(ReasonerError::Api {
+            *last_err = Some(ReasonerError::Transient {
                 status: *status,
                 message: message.clone(),
+                retry_after: None,
             });
             RetryAction::FallbackModel
         }
@@ -937,13 +942,21 @@ mod retry_tests {
             other => panic!("expected Retry, got {:?}", other),
         }
         match last_err {
-            Some(ReasonerError::RateLimited(msg)) => {
+            Some(ReasonerError::RateLimited {
+                ref message,
+                retry_after,
+            }) => {
                 assert!(
-                    msg.to_ascii_lowercase().contains("retry after"),
-                    "last_err should surface the retry-after hint: {msg}"
+                    message.to_ascii_lowercase().contains("retry after"),
+                    "last_err should surface the retry-after hint: {message}"
+                );
+                assert_eq!(
+                    retry_after,
+                    Some(Duration::from_secs(7)),
+                    "structured retry_after should match the upstream hint"
                 );
             }
-            other => panic!("expected RateLimited, got {:?}", other),
+            ref other => panic!("expected RateLimited, got {:?}", other),
         }
     }
 
@@ -958,7 +971,7 @@ mod retry_tests {
         let action =
             classify_retry_action(&err, 2, 2, 1000, 30_000, 0, 2, "primary", &mut last_err);
         assert!(matches!(action, RetryAction::FallbackModel));
-        assert!(matches!(last_err, Some(ReasonerError::RateLimited(_))));
+        assert!(matches!(last_err, Some(ReasonerError::RateLimited { .. })));
     }
 
     #[test]
@@ -1007,8 +1020,8 @@ mod retry_tests {
             other => panic!("expected Retry on 5xx, got {other:?}"),
         }
         match last_err {
-            Some(ReasonerError::Api { status, .. }) => assert_eq!(status, 500),
-            other => panic!("expected ReasonerError::Api last_err, got {other:?}"),
+            Some(ReasonerError::Transient { status, .. }) => assert_eq!(status, 500),
+            other => panic!("expected ReasonerError::Transient last_err, got {other:?}"),
         }
     }
 
@@ -1026,8 +1039,8 @@ mod retry_tests {
             "expected FallbackModel after 5xx retries are used up"
         );
         match last_err {
-            Some(ReasonerError::Api { status, .. }) => assert_eq!(status, 502),
-            other => panic!("expected ReasonerError::Api last_err, got {other:?}"),
+            Some(ReasonerError::Transient { status, .. }) => assert_eq!(status, 502),
+            other => panic!("expected ReasonerError::Transient last_err, got {other:?}"),
         }
     }
 

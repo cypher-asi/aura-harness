@@ -234,7 +234,16 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "unknown provider name, falling back to mock");
-            aura_reasoner::provider_from_name("mock").expect("mock provider is always available")
+            // Phase 5 (error-handling polish): the previous
+            // `.expect("mock provider is always available")` would
+            // panic the CLI if the provider registry ever stopped
+            // recognising "mock". Surface a structured error so
+            // bootstrap exits non-zero with an actionable message.
+            aura_reasoner::provider_from_name("mock").map_err(|mock_err| {
+                anyhow::anyhow!(
+                    "failed to construct fallback mock reasoner provider: {mock_err}"
+                )
+            })?
         }
     };
     if selection.name != "anthropic" {
@@ -282,7 +291,27 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     terminal.run(&mut app)?;
 
-    processor_handle.abort();
+    // Phase 5 (error-handling polish): we used to call
+    // `processor_handle.abort()` and return `Ok(())` unconditionally,
+    // which masked any panic / structured error inside the agent
+    // loop. Surface the failure when the loop has already terminated
+    // (so the CLI exits non-zero), and only fall back to `abort` for
+    // the ordinary case where the user quit the UI while the loop
+    // was still running.
+    if processor_handle.is_finished() {
+        match processor_handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e.context("agent event loop failed")),
+            Err(join_err) if join_err.is_cancelled() => {}
+            Err(join_err) => {
+                return Err(anyhow::anyhow!(
+                    "agent event loop task did not join cleanly: {join_err}"
+                ));
+            }
+        }
+    } else {
+        processor_handle.abort();
+    }
 
     Ok(())
 }

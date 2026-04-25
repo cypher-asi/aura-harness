@@ -31,7 +31,12 @@ impl Kernel {
             Ok(Err(e)) => {
                 // Invariant §3 strict: every LLM call is recorded, even
                 // on failure. Record a Reasoning entry with an error
-                // indicator before bubbling the error up.
+                // indicator before bubbling the error up. The audit log
+                // captures the formatted message; the typed
+                // `ReasonerError` is then preserved in
+                // `KernelError::Reasoner` so callers can branch on the
+                // variant (rate limit, transient, bad request, …)
+                // instead of string-matching.
                 let reason_str = e.to_string();
                 let seq = self.next_seq()?;
                 if let Err(record_err) = self.record_reasoning_failure(seq, "complete", &reason_str)
@@ -43,7 +48,7 @@ impl Kernel {
                         "failed to record reasoning failure entry"
                     );
                 }
-                return Err(crate::KernelError::Reasoner(reason_str));
+                return Err(crate::KernelError::Reasoner(e));
             }
             Err(_) => {
                 let reason_str = format!(
@@ -136,7 +141,10 @@ impl Kernel {
                 // A stream never materialized, so there is no
                 // `ReasonStreamHandle::finalize` seam to catch this.
                 // Invariant §3 strict: record the handshake failure
-                // directly.
+                // directly. The audit log keeps the formatted message;
+                // the typed `ReasonerError` is preserved through
+                // `KernelError::Reasoner` so the agent loop can keep
+                // its variant-based retry classification.
                 let seq = self.next_seq()?;
                 if let Err(record_err) =
                     self.record_reasoning_failure(seq, "streaming_handshake", &reason_str)
@@ -148,7 +156,7 @@ impl Kernel {
                         "failed to record streaming handshake failure entry"
                     );
                 }
-                return Err(crate::KernelError::Reasoner(reason_str));
+                return Err(crate::KernelError::Reasoner(e));
             }
             Err(_) => {
                 let reason_str = format!(

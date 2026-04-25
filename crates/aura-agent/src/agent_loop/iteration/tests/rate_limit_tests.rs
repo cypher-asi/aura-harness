@@ -2,15 +2,34 @@ use crate::agent_loop::iteration::{looks_like_rate_limited, LlmCallError};
 
 #[test]
 fn from_reasoner_error_maps_rate_limited_variant() {
-    let err = aura_reasoner::ReasonerError::RateLimited(
-        "429 too many requests (retry after 7 seconds)".to_string(),
-    );
+    let err = aura_reasoner::ReasonerError::RateLimited {
+        message: "429 too many requests (retry after 7 seconds)".to_string(),
+        retry_after: Some(std::time::Duration::from_secs(7)),
+    };
     match LlmCallError::from_reasoner_error(&err) {
         LlmCallError::RateLimited(msg) => {
             assert!(msg.contains("retry after 7 seconds"), "message: {msg}");
         }
         _ => panic!("expected RateLimited"),
     }
+}
+
+#[test]
+fn from_reasoner_error_classifies_transient_5xx_as_fatal() {
+    // After the provider exhausts its own retry/fallback chain a
+    // `Transient` reaches the agent loop. The loop has nowhere left to
+    // retry to, so we still surface it as `Fatal` (`llm_error: ...`)
+    // rather than `RateLimited` — the latter would falsely signal
+    // "client should wait and retry" to SSE consumers.
+    let err = aura_reasoner::ReasonerError::Transient {
+        status: 502,
+        message: "bad gateway".to_string(),
+        retry_after: None,
+    };
+    assert!(matches!(
+        LlmCallError::from_reasoner_error(&err),
+        LlmCallError::Fatal(_)
+    ));
 }
 
 #[test]

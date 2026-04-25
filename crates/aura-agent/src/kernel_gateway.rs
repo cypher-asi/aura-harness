@@ -9,10 +9,33 @@ use crate::helpers;
 use crate::recording_stream::RecordingStream;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
-use aura_kernel::Kernel;
+use aura_kernel::{Kernel, KernelError};
 use aura_reasoner::{ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream};
 use std::sync::Arc;
 use tracing::warn;
+
+/// Translate a [`KernelError`] returned by `Kernel::reason*` back into
+/// the [`ReasonerError`] expected by the [`ModelProvider`] trait.
+///
+/// `KernelError::Reasoner` now carries the original `ReasonerError`
+/// (rather than a stringified copy), so retry classification in the
+/// agent loop can keep matching on `RateLimited`, `InsufficientCredits`,
+/// `Api { status }`, etc. without parsing the formatted message. Other
+/// kernel-side failure modes (`Timeout`, `Store`, `Serialization`,
+/// `Internal`) are mapped to the closest `ReasonerError` variant — they
+/// are not provider-side failures and should not be re-classified as
+/// rate limits.
+fn kernel_error_to_reasoner_error(e: KernelError) -> ReasonerError {
+    match e {
+        KernelError::Reasoner(inner) => inner,
+        KernelError::Timeout(_) => ReasonerError::Timeout,
+        other @ (KernelError::Store(_)
+        | KernelError::Serialization(_)
+        | KernelError::Internal(_)) => {
+            ReasonerError::Internal(format!("kernel reason error: {other}"))
+        }
+    }
+}
 
 // ============================================================================
 // KernelToolGateway
@@ -133,7 +156,7 @@ impl ModelProvider for KernelModelGateway {
             .kernel
             .reason(request)
             .await
-            .map_err(|e| ReasonerError::Internal(format!("kernel reason error: {e}")))?;
+            .map_err(kernel_error_to_reasoner_error)?;
         Ok(result.response)
     }
 
@@ -141,10 +164,11 @@ impl ModelProvider for KernelModelGateway {
         &self,
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
-        let (handle, stream) =
-            self.kernel.reason_streaming(request).await.map_err(|e| {
-                ReasonerError::Internal(format!("kernel reason_streaming error: {e}"))
-            })?;
+        let (handle, stream) = self
+            .kernel
+            .reason_streaming(request)
+            .await
+            .map_err(kernel_error_to_reasoner_error)?;
 
         // Wrap the raw provider stream in a `RecordingStream` so the
         // `ReasonStreamHandle` is always finalized exactly once —

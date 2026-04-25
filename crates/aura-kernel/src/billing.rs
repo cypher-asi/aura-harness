@@ -45,12 +45,49 @@ pub fn walk_parent_chain(agent_id: &AgentId, store: &dyn ReadStore) -> Vec<Agent
 }
 
 fn latest_parent(agent_id: &AgentId, store: &dyn ReadStore) -> Option<AgentId> {
-    let head = store.get_head_seq(*agent_id).ok()?;
+    // Phase 5 (error-handling polish): the walker is best-effort —
+    // billing rollup must never panic the caller — but silent
+    // `.ok()?`s used to throw away store-error context, leaving us
+    // with no signal that a chain terminated because of a corrupt
+    // record. Promote each swallow to a `tracing::warn!` so
+    // operators can see chain truncations in the audit trail.
+    let head = match store.get_head_seq(*agent_id) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                agent_id = ?agent_id,
+                "billing.walk_parent_chain: get_head_seq failed; truncating chain"
+            );
+            return None;
+        }
+    };
     if head == 0 {
         return None;
     }
-    let limit: usize = head.try_into().ok()?;
-    let entries = store.scan_record(*agent_id, 1, limit).ok()?;
+    let limit: usize = match head.try_into() {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                agent_id = ?agent_id,
+                head,
+                "billing.walk_parent_chain: head_seq does not fit in usize; truncating chain"
+            );
+            return None;
+        }
+    };
+    let entries = match store.scan_record(*agent_id, 1, limit) {
+        Ok(es) => es,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                agent_id = ?agent_id,
+                "billing.walk_parent_chain: scan_record failed; truncating chain"
+            );
+            return None;
+        }
+    };
     for entry in entries.iter().rev() {
         if let Some(parent) = parent_from_entry(entry) {
             return Some(parent);

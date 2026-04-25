@@ -33,10 +33,13 @@ impl From<aura_reasoner::ReasonerError> for RuntimeError {
             aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
                 Self::Model(format!("insufficient credits: {msg}"))
             }
-            aura_reasoner::ReasonerError::RateLimited(msg) => {
-                Self::Model(format!("rate limited: {msg}"))
+            aura_reasoner::ReasonerError::RateLimited { message, .. } => {
+                Self::Model(format!("rate limited: {message}"))
             }
-            aura_reasoner::ReasonerError::Api { status, message } => {
+            aura_reasoner::ReasonerError::Transient {
+                status, message, ..
+            }
+            | aura_reasoner::ReasonerError::Api { status, message } => {
                 Self::Model(format!("api error ({status}): {message}"))
             }
             aura_reasoner::ReasonerError::Request(msg) => {

@@ -5,23 +5,56 @@
 //! codes embedded in the error message.
 
 use crate::types::PartialToolUse;
+use std::time::Duration;
 
 /// Classified model-provider error.
 ///
 /// Returned from [`ModelProvider::complete`](crate::ModelProvider::complete) and
 /// other provider implementations. Consumers can match on the variant directly.
+///
+/// ## Phase 5 polish
+///
+/// `RateLimited` now carries a structured `retry_after: Option<Duration>`
+/// (lifted out of the previously-stringified message) and a new
+/// [`Self::Transient`] variant captures retryable upstream 5xx so that
+/// callers don't have to re-derive retry classification by matching on
+/// HTTP status integers or parsing a free-form message. The [`std::fmt::Display`]
+/// rendering of `RateLimited` is unchanged (`"Rate limited: {message}"`)
+/// so log-parsing tooling that greps for that literal still works.
 #[derive(Debug, thiserror::Error)]
 pub enum ReasonerError {
     /// 429 / 529 — the provider is rate-limiting or overloaded.
-    /// Eligible for exponential backoff and model fallback.
-    #[error("Rate limited: {0}")]
-    RateLimited(String),
+    /// Eligible for exponential backoff and model fallback. The
+    /// optional `retry_after` is the duration the provider asked us to
+    /// wait (via the `Retry-After` header or a parsed body field) and
+    /// is also embedded in `message` for human-readable logging.
+    #[error("Rate limited: {message}")]
+    RateLimited {
+        message: String,
+        retry_after: Option<Duration>,
+    },
 
     /// 402 — insufficient credits. Must stop immediately.
     #[error("Insufficient credits: {0}")]
     InsufficientCredits(String),
 
-    /// HTTP-level API error with status code.
+    /// Retryable upstream 5xx (500/502/503/504, plus Cloudflare cold
+    /// starts). Distinguished from [`Self::Api`] so retry/backoff
+    /// helpers can match on a single variant rather than predicating
+    /// over a status range. `retry_after` mirrors `RateLimited` and
+    /// captures any `Retry-After` hint the upstream sent.
+    #[error("API error (status {status}): {message}")]
+    Transient {
+        status: u16,
+        message: String,
+        retry_after: Option<Duration>,
+    },
+
+    /// HTTP-level API error with status code (catch-all for
+    /// non-retryable 4xx and unclassified failures). Typed retry logic
+    /// should prefer [`Self::Transient`] for retryable codes — leaving
+    /// this variant for terminal "bad request" / "auth" / "not found"
+    /// classes.
     #[error("API error (status {status}): {message}")]
     Api { status: u16, message: String },
 
@@ -73,7 +106,7 @@ impl ReasonerError {
     #[must_use]
     pub fn is_context_overflow(&self) -> bool {
         match self {
-            Self::Api { status, message } => {
+            Self::Api { status, message } | Self::Transient { status, message, .. } => {
                 *status == 413
                     || ((*status == 400 || *status == 422)
                         && message_indicates_context_overflow(message))
@@ -81,11 +114,33 @@ impl ReasonerError {
             Self::Request(message) | Self::Parse(message) | Self::Internal(message) => {
                 message_indicates_context_overflow(message)
             }
-            Self::RateLimited(_)
+            Self::RateLimited { .. }
             | Self::InsufficientCredits(_)
             | Self::Timeout
             | Self::StreamAbortedWithPartial { .. } => false,
         }
+    }
+
+    /// Hint at how long the caller should wait before retrying. Set
+    /// for [`Self::RateLimited`] and [`Self::Transient`] when the
+    /// upstream supplied a `Retry-After` value; `None` otherwise.
+    #[must_use]
+    pub const fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::RateLimited { retry_after, .. } | Self::Transient { retry_after, .. } => {
+                *retry_after
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns true if the error is in a class that the agent loop /
+    /// retry helper should treat as transient (rate-limit, overloaded,
+    /// retryable upstream 5xx). Centralises the classification so
+    /// callers don't string-match HTTP status codes.
+    #[must_use]
+    pub const fn is_retryable_transient(&self) -> bool {
+        matches!(self, Self::RateLimited { .. } | Self::Transient { .. })
     }
 }
 
@@ -116,9 +171,43 @@ mod tests {
 
     #[test]
     fn test_rate_limited_display() {
-        let err = ReasonerError::RateLimited("429 too many requests".to_string());
+        let err = ReasonerError::RateLimited {
+            message: "429 too many requests".to_string(),
+            retry_after: None,
+        };
         let msg = format!("{err}");
         assert_eq!(msg, "Rate limited: 429 too many requests");
+    }
+
+    #[test]
+    fn test_rate_limited_retry_after_field_preserved() {
+        let err = ReasonerError::RateLimited {
+            message: "rate limit: retry after 7 seconds".to_string(),
+            retry_after: Some(Duration::from_secs(7)),
+        };
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+        assert!(err.is_retryable_transient());
+    }
+
+    #[test]
+    fn test_transient_classification() {
+        let err = ReasonerError::Transient {
+            status: 502,
+            message: "bad gateway".to_string(),
+            retry_after: None,
+        };
+        assert!(err.is_retryable_transient());
+        assert_eq!(format!("{err}"), "API error (status 502): bad gateway");
+    }
+
+    #[test]
+    fn test_api_error_not_retryable_transient() {
+        let err = ReasonerError::Api {
+            status: 401,
+            message: "unauthorized".to_string(),
+        };
+        assert!(!err.is_retryable_transient());
+        assert_eq!(err.retry_after(), None);
     }
 
     #[test]
@@ -164,10 +253,17 @@ mod tests {
 
     #[test]
     fn test_downcast_from_anyhow() {
-        let err: anyhow::Error = ReasonerError::RateLimited("429".to_string()).into();
+        let err: anyhow::Error = ReasonerError::RateLimited {
+            message: "429".to_string(),
+            retry_after: None,
+        }
+        .into();
         let downcasted = err.downcast_ref::<ReasonerError>();
         assert!(downcasted.is_some());
-        assert!(matches!(downcasted.unwrap(), ReasonerError::RateLimited(_)));
+        assert!(matches!(
+            downcasted.unwrap(),
+            ReasonerError::RateLimited { .. }
+        ));
     }
 
     #[test]

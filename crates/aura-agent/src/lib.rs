@@ -84,8 +84,38 @@ pub use types::{
 };
 
 /// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).
+///
+/// Phase 5 (error-handling polish) reshaped this enum so that
+/// [`aura_reasoner::ReasonerError`] and [`aura_kernel::KernelError`]
+/// are preserved end-to-end instead of being flattened to a `String`
+/// inside [`AgentError::Internal`]. Callers (and tests) can now match
+/// on the underlying variant — for example
+/// `AgentError::Reason(ReasonerError::RateLimited { .. })` — to
+/// implement variant-specific retry / billing / surfacing behaviour
+/// without parsing the formatted message.
+///
+/// `Display` for [`Reason`] and [`Kernel`] is `transparent`: the
+/// rendered text is exactly the inner error's `Display`, so log output
+/// never double-wraps as `"Internal: Reason: ..."`.
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
+    /// Provider-side failure surfaced through the kernel gateway. The
+    /// inner [`aura_reasoner::ReasonerError`] keeps its variant
+    /// (`RateLimited`, `InsufficientCredits`, `Api { status }`,
+    /// `StreamAbortedWithPartial`, …) so the agent loop and CLI can
+    /// branch on it.
+    #[error(transparent)]
+    Reason(#[from] aura_reasoner::ReasonerError),
+    /// Non-reasoner kernel failure (store, serialization, internal
+    /// invariants, kernel-level timeout). Reasoner failures wrapped
+    /// in [`aura_kernel::KernelError::Reasoner`] are unwrapped into
+    /// [`AgentError::Reason`] via [`From<KernelError>`] below.
+    #[error(transparent)]
+    Kernel(aura_kernel::KernelError),
+    /// `tokio::spawn_blocking` join failure — the worker panicked or
+    /// was cancelled by the runtime.
+    #[error("background task failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
     #[error("model error: {0}")]
     Model(String),
     #[error("tool execution error: {0}")]
@@ -98,33 +128,17 @@ pub enum AgentError {
     Internal(String),
 }
 
-impl From<aura_reasoner::ReasonerError> for AgentError {
-    fn from(e: aura_reasoner::ReasonerError) -> Self {
+impl From<aura_kernel::KernelError> for AgentError {
+    /// Flatten `KernelError::Reasoner(inner)` into
+    /// [`AgentError::Reason`] so the typed `ReasonerError` survives a
+    /// trip through the kernel gateway and a `?` in the agent runner
+    /// without being wrapped twice (which would render as
+    /// `"reasoner error: <ReasonerError display>"`). All other kernel
+    /// failure modes flow through [`AgentError::Kernel`] unchanged.
+    fn from(e: aura_kernel::KernelError) -> Self {
         match e {
-            aura_reasoner::ReasonerError::Timeout => {
-                Self::Timeout("model request timed out".to_string())
-            }
-            aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
-                Self::Model(format!("insufficient credits: {msg}"))
-            }
-            aura_reasoner::ReasonerError::RateLimited(msg) => {
-                Self::Model(format!("rate limited: {msg}"))
-            }
-            aura_reasoner::ReasonerError::Api { status, message } => {
-                Self::Model(format!("api error ({status}): {message}"))
-            }
-            aura_reasoner::ReasonerError::Request(msg) => {
-                Self::Model(format!("request error: {msg}"))
-            }
-            aura_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
-            aura_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
-            // Exhausted per-tool-call streaming retries: surface the
-            // classified reason through `Model(..)` so the outer
-            // loop / server treats it the same as any other
-            // provider error (credit accounting, task retry, etc.).
-            aura_reasoner::ReasonerError::StreamAbortedWithPartial { reason, .. } => {
-                Self::Model(reason)
-            }
+            aura_kernel::KernelError::Reasoner(inner) => Self::Reason(inner),
+            other => Self::Kernel(other),
         }
     }
 }

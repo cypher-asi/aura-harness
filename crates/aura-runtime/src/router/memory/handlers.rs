@@ -109,7 +109,30 @@ pub(in crate::router) async fn get_fact_by_key(
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
     match store.get_fact_by_key(agent_id, &key) {
-        Ok(Some(fact)) => Ok(Json(serde_json::to_value(fact).unwrap_or_default())),
+        Ok(Some(fact)) => {
+            // Phase 5 (error-handling polish): the previous
+            // `.unwrap_or_default()` quietly returned an empty
+            // `serde_json::Value::Null` to the caller if `Fact`
+            // serialization ever failed (e.g. a non-string map key
+            // sneaks into a future schema). Surface the error as a
+            // 500 so the misbehaviour is visible instead of looking
+            // like a successful empty response.
+            let value = serde_json::to_value(&fact).map_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    agent_id = %agent_hex,
+                    key,
+                    "memory router: serialising Fact for get_fact_by_key failed"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("failed to serialize fact: {e}"),
+                    })),
+                )
+            })?;
+            Ok(Json(value))
+        }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "fact not found for key" })),

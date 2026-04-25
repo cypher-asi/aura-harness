@@ -41,10 +41,11 @@ enum ApiError {
     /// Generic transient upstream 5xx — 500 / 502 / 503 (non-Cloudflare) /
     /// 504. Mapped to a retryable class so a single provider blip doesn't
     /// immediately surface a terminal `LLM error: ...` to the dev loop.
-    /// When retries are exhausted this falls back to `ReasonerError::Api
-    /// { status, message }` via the `From<ApiError>` impl, preserving the
-    /// pre-Axis-2 behaviour for callers that don't care about the retry
-    /// classification.
+    /// When retries are exhausted this falls back to
+    /// [`ReasonerError::Transient`] via the `From<ApiError>` impl —
+    /// callers that branch on retry classification can match the
+    /// dedicated variant rather than predicating over the status range,
+    /// while existing `Display` text is unchanged.
     TransientServer { status: u16, message: String },
     /// Any other failure.
     Other(ReasonerError),
@@ -56,13 +57,24 @@ impl From<ApiError> for ReasonerError {
             ApiError::Overloaded {
                 message,
                 retry_after,
-            } => Self::RateLimited(format_rate_limited_message(&message, retry_after)),
+            } => Self::RateLimited {
+                message: format_rate_limited_message(&message, retry_after),
+                retry_after,
+            },
             ApiError::InsufficientCredits(msg) => Self::InsufficientCredits(msg),
-            ApiError::CloudflareBlock(msg) => Self::Api {
+            // Cloudflare cold-start blocks are transient — encode that
+            // classification in the variant rather than expecting
+            // downstream code to special-case status 403 messages.
+            ApiError::CloudflareBlock(msg) => Self::Transient {
                 status: 403,
                 message: msg,
+                retry_after: None,
             },
-            ApiError::TransientServer { status, message } => Self::Api { status, message },
+            ApiError::TransientServer { status, message } => Self::Transient {
+                status,
+                message,
+                retry_after: None,
+            },
             ApiError::Other(e) => e,
         }
     }

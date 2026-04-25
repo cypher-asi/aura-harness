@@ -168,10 +168,27 @@ pub(super) async fn tx_status_handler(
         }));
     }
 
-    let status = if state.store.has_pending_tx(agent_id).unwrap_or(false) {
-        "pending"
-    } else {
-        "unknown"
+    // Phase 5 (error-handling polish): we used to fall back to
+    // `"unknown"` on `has_pending_tx` errors via `.unwrap_or(false)`,
+    // which silently mapped storage failures to a generic status the
+    // WS client could not distinguish from "tx never submitted".
+    // Surface the error to the caller (and trace it) so a misbehaving
+    // store does not get hidden behind a benign-looking status code.
+    let status = match state.store.has_pending_tx(agent_id) {
+        Ok(true) => "pending",
+        Ok(false) => "unknown",
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                agent_id = %agent_id_hex,
+                tx_id = %tx_id_hex,
+                "tx_status: store.has_pending_tx failed"
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Storage error: {e}"),
+            ));
+        }
     };
 
     Ok(Json(TxStatusResponse {

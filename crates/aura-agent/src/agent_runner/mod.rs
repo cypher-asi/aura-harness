@@ -234,8 +234,7 @@ impl AgentRunner {
                 event_tx,
                 cancel,
             )
-            .await
-            .map_err(|e| crate::AgentError::Internal(e.to_string()))?;
+            .await?;
 
         if let Some(ref llm_err) = result.llm_error {
             return Err(crate::AgentError::Internal(format!("LLM error: {llm_err}")));
@@ -317,8 +316,7 @@ impl AgentRunner {
                 };
                 build_chat_system_prompt(&p, &custom)
             })
-            .await
-            .map_err(|e| crate::AgentError::Internal(e.to_string()))?
+            .await?
         };
         let config = AgentLoopConfig {
             system_prompt,
@@ -333,7 +331,6 @@ impl AgentRunner {
         agent_loop
             .run_with_events(provider, executor, messages, tools, event_tx, cancel)
             .await
-            .map_err(|e| crate::AgentError::Internal(e.to_string()))
     }
 
     /// Execute a shell task with automatic retry on failure.

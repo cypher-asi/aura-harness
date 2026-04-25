@@ -101,12 +101,17 @@ impl LlmCallError {
             aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
                 Self::InsufficientCredits(msg.clone())
             }
-            aura_reasoner::ReasonerError::RateLimited(msg) => Self::RateLimited(msg.clone()),
-            // The kernel gateway stringifies errors into `ReasonerError::Internal`
-            // (see `kernel_gateway.rs::complete_streaming`), which loses the
-            // `RateLimited` variant. Recover the classification from the
-            // message text so the SSE error still carries the
-            // `rate_limit` code downstream.
+            aura_reasoner::ReasonerError::RateLimited { message, .. } => {
+                Self::RateLimited(message.clone())
+            }
+            // Defensive fallback: foreign providers (mock, test
+            // harnesses, third-party `ModelProvider` impls) sometimes
+            // report rate-limit conditions as `Internal(..)` /
+            // `Api { .. }` / `Request(..)` rather than the dedicated
+            // `RateLimited` variant. Phase 5 made the kernel gateway
+            // preserve the typed `ReasonerError` end-to-end, but we
+            // keep this string check so those out-of-band errors still
+            // surface as `rate_limit` to SSE consumers.
             other if looks_like_rate_limited(&other.to_string()) => {
                 Self::RateLimited(other.to_string())
             }
@@ -116,8 +121,10 @@ impl LlmCallError {
     }
 }
 
-/// Detect a rate-limit error from free-form message text, used when a
-/// wrapped error has lost its original variant across a crate boundary.
+/// Detect a rate-limit error from free-form message text. See
+/// [`LlmCallError::from_reasoner_error`] for the rationale — this is a
+/// defensive fallback for provider implementations that lose the
+/// typed `ReasonerError::RateLimited` variant.
 fn looks_like_rate_limited(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("rate limited")
