@@ -162,49 +162,7 @@ pub(super) async fn handle_session_init(
 
     populate_tool_definitions(session, ctx);
 
-    match build_kernel_with_config(session, ctx, &ctx.tool_config).await {
-        Ok(kernel) => {
-            // Invariant §2 (Every State Change Is a Transaction) +
-            // §11 (Session-Scoped Approvals): the session start is itself
-            // a state change that must be recorded and that resets the
-            // kernel's session-scoped approval cache. Emit the transaction
-            // before anything else on this kernel so the record reflects
-            // session boundaries for replay.
-            if let Err(e) = kernel
-                .process_direct(aura_core::Transaction::session_start(session.agent_id))
-                .await
-            {
-                error!(
-                    session_id = %session.session_id,
-                    error = %e,
-                    "Failed to record SessionStart transaction through kernel"
-                );
-            }
-
-            if let Err(e) = runtime_capabilities::record_runtime_capabilities(
-                &kernel,
-                "session",
-                Some(&session.session_id),
-                &session.installed_tools,
-                &session.installed_integrations,
-            )
-            .await
-            {
-                error!(
-                    session_id = %session.session_id,
-                    error = %e,
-                    "Failed to record runtime capability install through kernel during session init"
-                );
-            }
-        }
-        Err(e) => {
-            error!(
-                session_id = %session.session_id,
-                error = %e,
-                "Failed to build kernel for session capability recording"
-            );
-        }
-    }
+    bootstrap_session(session, ctx).await;
 
     let defaults = match session_user_defaults(session, ctx) {
         Ok(defaults) => defaults,
@@ -250,6 +208,65 @@ pub(super) async fn handle_session_init(
         tools,
         skills,
     }));
+}
+
+/// Build the per-session kernel and emit its bootstrap transactions.
+///
+/// Two side-effecting steps are performed (and three error paths logged
+/// via the original `error!` strings so operators don't see message
+/// drift):
+/// 1. `Transaction::session_start` — Invariant §2 (Every State Change
+///    Is a Transaction) + §11 (Session-Scoped Approvals): the session
+///    start is itself a state change that must be recorded and that
+///    resets the kernel's session-scoped approval cache. Emit the
+///    transaction before anything else on this kernel so the record
+///    reflects session boundaries for replay.
+/// 2. `record_runtime_capabilities` — bundles the `installed_tools` /
+///    `installed_integrations` snapshot into a single `System` record
+///    entry so downstream replay knows what surface the LLM was given.
+///
+/// Failures only log; we deliberately don't surface them to the caller
+/// because a kernel build / capability-recording failure must NOT
+/// prevent us from sending `SessionReady` (the UI would otherwise spin
+/// forever waiting on a session that already loaded).
+async fn bootstrap_session(session: &Session, ctx: &WsContext) {
+    match build_kernel_with_config(session, ctx, &ctx.tool_config).await {
+        Ok(kernel) => {
+            if let Err(e) = kernel
+                .process_direct(aura_core::Transaction::session_start(session.agent_id))
+                .await
+            {
+                error!(
+                    session_id = %session.session_id,
+                    error = %e,
+                    "Failed to record SessionStart transaction through kernel"
+                );
+            }
+
+            if let Err(e) = runtime_capabilities::record_runtime_capabilities(
+                &kernel,
+                "session",
+                Some(&session.session_id),
+                &session.installed_tools,
+                &session.installed_integrations,
+            )
+            .await
+            {
+                error!(
+                    session_id = %session.session_id,
+                    error = %e,
+                    "Failed to record runtime capability install through kernel during session init"
+                );
+            }
+        }
+        Err(e) => {
+            error!(
+                session_id = %session.session_id,
+                error = %e,
+                "Failed to build kernel for session capability recording"
+            );
+        }
+    }
 }
 
 pub(super) async fn build_kernel_with_config(

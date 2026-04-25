@@ -518,6 +518,72 @@ fn emit_retry_observation(err: &ApiError, sleep: Duration, attempt_that_failed: 
     emit_retry(info);
 }
 
+/// Drive an attempt closure across the provider's model fallback chain
+/// with the retry / backoff schedule set by [`super::AnthropicConfig`].
+///
+/// `attempt(model_idx, model)` performs one full request → response
+/// round-trip for the given model and returns either `Ok(T)` (success,
+/// returned immediately to the caller) or `Err(ApiError)` (consumed by
+/// [`classify_retry_action`] to decide between sleeping + retrying,
+/// dropping to the next model in the chain, or propagating). The
+/// classification, exponential-backoff schedule, and `last_err`
+/// surfacing logic stay in one place so the streaming and
+/// non-streaming `ModelProvider` impls below differ only in the
+/// per-attempt body — see the bullet on "Anthropic retry loops" in
+/// the system-audit refactor plan.
+///
+/// Errors are surfaced as `ReasonerError` (the trait error type); the
+/// classifier converts the underlying `ApiError` so callers don't have
+/// to handle the internal variant.
+type AttemptFuture<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, ApiError>> + Send + 'a>>;
+
+async fn run_model_chain_with_retries<'env, T, F>(
+    config: &super::AnthropicConfig,
+    models: &[String],
+    mut attempt: F,
+) -> Result<T, ReasonerError>
+where
+    F: FnMut(usize, String) -> AttemptFuture<'env, T> + 'env,
+{
+    let mut last_err: Option<ReasonerError> = None;
+
+    'outer: for (model_idx, model) in models.iter().enumerate() {
+        let mut pending_sleep: Option<Duration> = None;
+        for try_n in 0..=config.max_retries {
+            if let Some(sleep) = pending_sleep.take() {
+                tokio::time::sleep(sleep).await;
+            }
+
+            match attempt(model_idx, model.clone()).await {
+                Ok(value) => return Ok(value),
+                Err(e) => match classify_retry_action(
+                    &e,
+                    try_n,
+                    config.max_retries,
+                    config.backoff_initial_ms,
+                    config.backoff_cap_ms,
+                    model_idx,
+                    models.len(),
+                    model,
+                    &mut last_err,
+                ) {
+                    RetryAction::Retry { sleep } => {
+                        emit_retry_observation(&e, sleep, try_n, model);
+                        pending_sleep = Some(sleep);
+                    }
+                    RetryAction::FallbackModel => continue 'outer,
+                    RetryAction::Propagate => return Err(e.into()),
+                },
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        ReasonerError::Internal("All models in fallback chain exhausted".into())
+    }))
+}
+
 /// Pure exponential backoff with small jitter for non-overloaded retries
 /// (e.g. Cloudflare cold-starts, per-tool-call streaming retries in
 /// `aura_agent::agent_loop::streaming`).
@@ -585,90 +651,60 @@ impl ModelProvider for AnthropicProvider {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
         let start = Instant::now();
         let models = self.model_chain(request.model.as_ref());
-        let mut last_err: Option<ReasonerError> = None;
+        let request_ref = &request;
 
-        for (model_idx, model) in models.iter().enumerate() {
-            let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
-            let anthropic_features_enabled =
-                self.anthropic_request_features_enabled(&request, model);
-            let system = build_system_block(&request.system, prompt_caching_enabled);
-            let api_request = build_api_request(
-                &request,
-                model,
-                &system,
-                prompt_caching_enabled,
-                anthropic_features_enabled,
-            );
+        run_model_chain_with_retries(&self.config, &models, |model_idx, model| {
+            Box::pin(async move {
+                let prompt_caching_enabled =
+                    self.prompt_caching_enabled_for_model(request_ref, &model);
+                let anthropic_features_enabled =
+                    self.anthropic_request_features_enabled(request_ref, &model);
+                let system = build_system_block(&request_ref.system, prompt_caching_enabled);
+                let api_request = build_api_request(
+                    request_ref,
+                    &model,
+                    &system,
+                    prompt_caching_enabled,
+                    anthropic_features_enabled,
+                );
 
-            debug!(
-                model = %model,
-                messages = api_request.messages.len(),
-                tools = api_request.tools.as_ref().map_or(0, Vec::len),
-                "Sending request to Anthropic"
-            );
+                debug!(
+                    model = %model,
+                    messages = api_request.messages.len(),
+                    tools = api_request.tools.as_ref().map_or(0, Vec::len),
+                    "Sending request to Anthropic"
+                );
 
-            let mut pending_sleep: Option<Duration> = None;
-            for attempt in 0..=self.config.max_retries {
-                if let Some(sleep) = pending_sleep.take() {
-                    tokio::time::sleep(sleep).await;
-                }
-
-                match self.send_checked(&request, model, &api_request).await {
-                    Ok(response) => {
-                        let latency_ms =
-                            u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        // Capture x-request-id before `.json()`
-                        // consumes the response body — otherwise the
-                        // headers are gone by the time we build the
-                        // `ProviderTrace`. Mirrors the streaming
-                        // capture above; both paths feed into the
-                        // same `ProviderTrace.provider_request_id`.
-                        let provider_request_id = response
-                            .headers()
-                            .get("x-request-id")
-                            .or_else(|| response.headers().get("request-id"))
-                            .and_then(|v| v.to_str().ok())
-                            .map(str::to_string);
-                        let api_response: ApiResponse = response.json().await.map_err(|e| {
-                            error!(error = %e, "Failed to parse Anthropic response");
-                            ReasonerError::Parse(format!("Failed to parse Anthropic response: {e}"))
-                        })?;
-                        return Ok(parse_complete_response(
-                            api_response,
-                            model_idx,
-                            request.model.as_ref(),
-                            model,
-                            latency_ms,
-                            provider_request_id,
-                        ));
-                    }
-                    Err(e) => {
-                        match classify_retry_action(
-                            &e,
-                            attempt,
-                            self.config.max_retries,
-                            self.config.backoff_initial_ms,
-                            self.config.backoff_cap_ms,
-                            model_idx,
-                            models.len(),
-                            model,
-                            &mut last_err,
-                        ) {
-                            RetryAction::Retry { sleep } => {
-                                emit_retry_observation(&e, sleep, attempt, model);
-                                pending_sleep = Some(sleep);
-                            }
-                            RetryAction::FallbackModel => break,
-                            RetryAction::Propagate => return Err(e.into()),
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_err.unwrap_or_else(|| {
-            ReasonerError::Internal("All models in fallback chain exhausted".into())
-        }))
+                let response = self.send_checked(request_ref, &model, &api_request).await?;
+                let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                // Capture x-request-id before `.json()` consumes the
+                // response body — otherwise the headers are gone by
+                // the time we build the `ProviderTrace`. Mirrors the
+                // streaming capture below; both paths feed into the
+                // same `ProviderTrace.provider_request_id`.
+                let provider_request_id = response
+                    .headers()
+                    .get("x-request-id")
+                    .or_else(|| response.headers().get("request-id"))
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let api_response: ApiResponse = response.json().await.map_err(|e| {
+                    error!(error = %e, "Failed to parse Anthropic response");
+                    ApiError::Other(ReasonerError::Parse(format!(
+                        "Failed to parse Anthropic response: {e}"
+                    )))
+                })?;
+                Ok(parse_complete_response(
+                    api_response,
+                    model_idx,
+                    request_ref.model.as_ref(),
+                    &model,
+                    latency_ms,
+                    provider_request_id,
+                ))
+            })
+        })
+        .await
     }
 
     async fn health_check(&self) -> bool {
@@ -685,121 +721,98 @@ impl ModelProvider for AnthropicProvider {
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
         let models = self.model_chain(request.model.as_ref());
-        let mut last_err: Option<ReasonerError> = None;
+        let request_ref = &request;
 
-        for (model_idx, model) in models.iter().enumerate() {
-            if self.config.routing_mode == super::RoutingMode::Proxy
-                && !Self::supports_anthropic_proxy_features(&request, model)
-            {
+        run_model_chain_with_retries(&self.config, &models, |model_idx, model| {
+            Box::pin(async move {
+                if self.config.routing_mode == super::RoutingMode::Proxy
+                    && !Self::supports_anthropic_proxy_features(request_ref, &model)
+                {
+                    debug!(
+                        model = %model,
+                        "Proxy-backed fallback model does not support Anthropic SSE; buffering completion"
+                    );
+                    let mut buffered_request = request_ref.clone();
+                    buffered_request.model = crate::ModelName::from(model.as_str());
+                    let response = self
+                        .complete(buffered_request)
+                        .await
+                        .map_err(ApiError::Other)?;
+                    return Ok(stream_from_response(response));
+                }
+
+                let prompt_caching_enabled =
+                    self.prompt_caching_enabled_for_model(request_ref, &model);
+                let anthropic_features_enabled =
+                    self.anthropic_request_features_enabled(request_ref, &model);
+                let system = build_system_block(&request_ref.system, prompt_caching_enabled);
+                let thinking = anthropic_features_enabled
+                    .then(|| resolve_thinking(request_ref, &model))
+                    .flatten();
+                let output_config = anthropic_features_enabled
+                    .then(|| resolve_output_config(request_ref, &model))
+                    .flatten();
+                let api_request = StreamingApiRequest {
+                    model: model.clone(),
+                    system: system.clone(),
+                    messages: convert_messages_to_api(
+                        &request_ref.messages,
+                        prompt_caching_enabled,
+                    ),
+                    tools: if request_ref.tools.is_empty() {
+                        None
+                    } else {
+                        Some(convert_tools_to_api(
+                            &request_ref.tools,
+                            prompt_caching_enabled,
+                        ))
+                    },
+                    tool_choice: convert_tool_choice(&request_ref.tool_choice),
+                    max_tokens: request_ref.max_tokens.get(),
+                    temperature: if thinking.is_some() {
+                        Some(1.0)
+                    } else {
+                        request_ref.temperature.map(f32::from)
+                    },
+                    stream: true,
+                    thinking,
+                    output_config,
+                };
+
                 debug!(
                     model = %model,
-                    "Proxy-backed fallback model does not support Anthropic SSE; buffering completion"
+                    messages = api_request.messages.len(),
+                    tools = api_request.tools.as_ref().map_or(0, Vec::len),
+                    "Sending streaming request to Anthropic"
                 );
-                let mut buffered_request = request.clone();
-                buffered_request.model = crate::ModelName::from(model.as_str());
-                let response = self.complete(buffered_request).await?;
-                return Ok(stream_from_response(response));
-            }
 
-            let prompt_caching_enabled = self.prompt_caching_enabled_for_model(&request, model);
-            let anthropic_features_enabled =
-                self.anthropic_request_features_enabled(&request, model);
-            let system = build_system_block(&request.system, prompt_caching_enabled);
-            let thinking = anthropic_features_enabled
-                .then(|| resolve_thinking(&request, model))
-                .flatten();
-            let output_config = anthropic_features_enabled
-                .then(|| resolve_output_config(&request, model))
-                .flatten();
-            let api_request = StreamingApiRequest {
-                model: model.clone(),
-                system: system.clone(),
-                messages: convert_messages_to_api(&request.messages, prompt_caching_enabled),
-                tools: if request.tools.is_empty() {
-                    None
-                } else {
-                    Some(convert_tools_to_api(&request.tools, prompt_caching_enabled))
-                },
-                tool_choice: convert_tool_choice(&request.tool_choice),
-                max_tokens: request.max_tokens.get(),
-                temperature: if thinking.is_some() {
-                    Some(1.0)
-                } else {
-                    request.temperature.map(f32::from)
-                },
-                stream: true,
-                thinking,
-                output_config,
-            };
-
-            debug!(
-                model = %model,
-                messages = api_request.messages.len(),
-                tools = api_request.tools.as_ref().map_or(0, Vec::len),
-                "Sending streaming request to Anthropic"
-            );
-
-            let mut pending_sleep: Option<Duration> = None;
-            for attempt in 0..=self.config.max_retries {
-                if let Some(sleep) = pending_sleep.take() {
-                    tokio::time::sleep(sleep).await;
+                let response = self.send_checked(request_ref, &model, &api_request).await?;
+                if model_idx > 0 {
+                    info!(
+                        primary = %request_ref.model,
+                        fallback = %model,
+                        "Streaming with fallback model"
+                    );
                 }
-
-                match self.send_checked(&request, model, &api_request).await {
-                    Ok(response) => {
-                        if model_idx > 0 {
-                            info!(
-                                primary = %request.model,
-                                fallback = %model,
-                                "Streaming with fallback model"
-                            );
-                        }
-                        // Capture x-request-id BEFORE `bytes_stream()`
-                        // consumes the response. Once the body is
-                        // drained, the response headers are gone, and
-                        // a mid-stream SSE error would otherwise
-                        // surface with no correlatable id — see the
-                        // `diagnose-single-retry-llm-500` plan, F1.
-                        // Fall back to the non-standard `request-id`
-                        // header for proxies that rewrite the name.
-                        let provider_request_id = response
-                            .headers()
-                            .get("x-request-id")
-                            .or_else(|| response.headers().get("request-id"))
-                            .and_then(|v| v.to_str().ok())
-                            .map(str::to_string);
-                        let byte_stream = response.bytes_stream();
-                        let sse_stream =
-                            SseStream::with_request_id(byte_stream, provider_request_id);
-                        return Ok(Box::pin(sse_stream));
-                    }
-                    Err(e) => {
-                        match classify_retry_action(
-                            &e,
-                            attempt,
-                            self.config.max_retries,
-                            self.config.backoff_initial_ms,
-                            self.config.backoff_cap_ms,
-                            model_idx,
-                            models.len(),
-                            model,
-                            &mut last_err,
-                        ) {
-                            RetryAction::Retry { sleep } => {
-                                emit_retry_observation(&e, sleep, attempt, model);
-                                pending_sleep = Some(sleep);
-                            }
-                            RetryAction::FallbackModel => break,
-                            RetryAction::Propagate => return Err(e.into()),
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(last_err.unwrap_or_else(|| {
-            ReasonerError::Internal("All models in fallback chain exhausted".into())
-        }))
+                // Capture x-request-id BEFORE `bytes_stream()` consumes
+                // the response. Once the body is drained, the response
+                // headers are gone, and a mid-stream SSE error would
+                // otherwise surface with no correlatable id — see the
+                // `diagnose-single-retry-llm-500` plan, F1. Fall back
+                // to the non-standard `request-id` header for proxies
+                // that rewrite the name.
+                let provider_request_id = response
+                    .headers()
+                    .get("x-request-id")
+                    .or_else(|| response.headers().get("request-id"))
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let byte_stream = response.bytes_stream();
+                let sse_stream = SseStream::with_request_id(byte_stream, provider_request_id);
+                Ok(Box::pin(sse_stream) as StreamEventStream)
+            })
+        })
+        .await
     }
 }
 

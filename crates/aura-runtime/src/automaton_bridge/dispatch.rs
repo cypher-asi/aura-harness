@@ -17,9 +17,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
+use aura_kernel::Kernel;
 use aura_reasoner::ModelProvider;
+use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
 use tracing::info;
 
@@ -28,7 +31,126 @@ use crate::runtime_capabilities;
 
 use super::{AutomatonBridge, ProjectHandle};
 
+/// Bootstrapping artefacts shared by every automaton kickoff path
+/// (`start_dev_loop_with_capabilities`, `run_task_with_capabilities`,
+/// future entry-points). Populated by [`AutomatonBridge::prepare_automaton_run`].
+struct AutomatonRunContext {
+    kernel: Arc<Kernel>,
+    model_gw: Arc<dyn ModelProvider>,
+    tool_gw: Arc<dyn aura_agent::AgentToolExecutor>,
+    gateway_domain: Arc<dyn DomainApi>,
+    runner_config: AgentRunnerConfig,
+    catalog: Arc<ToolCatalog>,
+    effective_workspace: Option<PathBuf>,
+}
+
+/// Operator-facing labels embedded in the bootstrap error messages.
+///
+/// Held as a small struct so we can pass two string slices through one
+/// argument without growing [`AutomatonBridge::prepare_automaton_run`]
+/// past the existing `too_many_arguments` allow. The labels are spliced
+/// into the same error templates the original two functions used,
+/// preserving log/observability strings character-for-character.
+struct AutomatonKindLabels {
+    /// Inserted into `failed to build {} kernel`. Uses different wording
+    /// per kind: `"dev loop"` (so the message ends `... dev loop kernel`)
+    /// vs `"task runtime"` (`... task runtime kernel`).
+    kernel: &'static str,
+    /// Inserted into `failed to record {} runtime capabilities`.
+    /// `"dev loop"` for the long-running dev loop, plain `"task"` for
+    /// one-shot task runs.
+    capabilities: &'static str,
+}
+
 impl AutomatonBridge {
+    /// Run the bootstrap pipeline shared by every automaton kickoff
+    /// path: build the per-project kernel, record its runtime
+    /// capabilities, then assemble the model/tool/domain gateways and
+    /// per-run config the automaton constructors require.
+    ///
+    /// `labels` controls only the operator-facing error strings so the
+    /// original `failed to build dev loop kernel` /
+    /// `failed to build task runtime kernel` (and the matching
+    /// capabilities error) messages remain identical to the pre-refactor
+    /// implementation.
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_automaton_run(
+        &self,
+        project_id: &str,
+        workspace_root: Option<PathBuf>,
+        auth_token: Option<&str>,
+        model: Option<&str>,
+        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        labels: AutomatonKindLabels,
+    ) -> Result<AutomatonRunContext, String> {
+        let domain = self.domain_with_jwt(auth_token);
+        let effective_workspace = workspace_root.clone();
+        let ws_path = effective_workspace
+            .as_deref()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let installed_integrations = installed_integrations
+            .unwrap_or_default()
+            .into_iter()
+            .map(installed_integration_to_core)
+            .collect::<Vec<_>>();
+        let installed_tools =
+            Self::prepare_installed_tools(installed_tools, &installed_integrations);
+
+        let kernel = self
+            .build_kernel(
+                domain.clone(),
+                auth_token,
+                Some(project_id),
+                ws_path,
+                effective_workspace.is_some(),
+                installed_tools.clone(),
+                installed_integrations.clone(),
+            )
+            .map_err(|e| format!("failed to build {} kernel: {e}", labels.kernel))?;
+        if let Err(e) = runtime_capabilities::record_runtime_capabilities(
+            &kernel,
+            "automaton",
+            None,
+            &installed_tools,
+            &installed_integrations,
+        )
+        .await
+        {
+            return Err(format!(
+                "failed to record {} runtime capabilities: {e}",
+                labels.capabilities
+            ));
+        }
+        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
+        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
+            Arc::new(KernelToolGateway::new(kernel.clone()));
+        // Wrap the domain so mutations driven by automaton orchestration
+        // (not the LLM tool loop) route through `kernel.process_direct`
+        // and produce `SystemKind::DomainMutation` record entries. The
+        // raw `domain` is still used inside `build_kernel` for the
+        // `DomainToolExecutor`, whose mutations are captured via
+        // `ToolExecution` entries by the kernel itself.
+        let gateway_domain: Arc<dyn DomainApi> =
+            Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
+
+        let runner_config = self.build_runner_config(model, auth_token);
+        let catalog = Arc::new(
+            self.catalog
+                .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
+        );
+
+        Ok(AutomatonRunContext {
+            kernel,
+            model_gw,
+            tool_gw,
+            gateway_domain,
+            runner_config,
+            catalog,
+            effective_workspace,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)] // TODO(W4): collapse dev-loop kickoff args.
     pub(crate) async fn start_dev_loop_with_capabilities(
         &self,
@@ -53,63 +175,24 @@ impl AutomatonBridge {
             self.project_handles.remove(project_id);
         }
 
-        let domain = self.domain_with_jwt(auth_token.as_deref());
-        let effective_workspace = workspace_root.clone();
-        let ws_path = effective_workspace
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let installed_integrations = installed_integrations
-            .unwrap_or_default()
-            .into_iter()
-            .map(installed_integration_to_core)
-            .collect::<Vec<_>>();
-        let installed_tools =
-            Self::prepare_installed_tools(installed_tools, &installed_integrations);
-
-        let kernel = self
-            .build_kernel(
-                domain.clone(),
+        let ctx = self
+            .prepare_automaton_run(
+                project_id,
+                workspace_root,
                 auth_token.as_deref(),
-                Some(project_id),
-                ws_path,
-                effective_workspace.is_some(),
-                installed_tools.clone(),
-                installed_integrations.clone(),
+                model.as_deref(),
+                installed_tools,
+                installed_integrations,
+                AutomatonKindLabels {
+                    kernel: "dev loop",
+                    capabilities: "dev loop",
+                },
             )
-            .map_err(|e| format!("failed to build dev loop kernel: {e}"))?;
-        if let Err(e) = runtime_capabilities::record_runtime_capabilities(
-            &kernel,
-            "automaton",
-            None,
-            &installed_tools,
-            &installed_integrations,
-        )
-        .await
-        {
-            return Err(format!(
-                "failed to record dev loop runtime capabilities: {e}"
-            ));
-        }
-        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
-        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
-            Arc::new(KernelToolGateway::new(kernel.clone()));
-        // Wrap the domain so mutations driven by automaton orchestration
-        // (not the LLM tool loop) route through `kernel.process_direct`
-        // and produce `SystemKind::DomainMutation` record entries. The
-        // raw `domain` is still used inside `build_kernel` for the
-        // `DomainToolExecutor`, whose mutations are captured via
-        // `ToolExecution` entries by the kernel itself.
-        let gateway_domain: Arc<dyn DomainApi> =
-            Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
+            .await?;
 
-        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
-        let catalog = Arc::new(
-            self.catalog
-                .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
-        );
-
-        let automaton = DevLoopAutomaton::new(gateway_domain, model_gw, runner_config, catalog)
-            .with_tool_executor(tool_gw);
+        let automaton =
+            DevLoopAutomaton::new(ctx.gateway_domain, ctx.model_gw, ctx.runner_config, ctx.catalog)
+                .with_tool_executor(ctx.tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,
@@ -120,12 +203,12 @@ impl AutomatonBridge {
 
         let (handle, event_rx) = self
             .runtime
-            .install(Box::new(automaton), config, effective_workspace)
+            .install(Box::new(automaton), config, ctx.effective_workspace)
             .await
             .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
 
         let automaton_id = handle.id().as_str().to_string();
-        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_dev_loop")
+        self.record_lifecycle_event(ctx.kernel.agent_id, &automaton_id, "start_dev_loop")
             .await;
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
@@ -134,7 +217,7 @@ impl AutomatonBridge {
             project_id.to_string(),
             ProjectHandle {
                 automaton_id: automaton_id.clone(),
-                agent_id: kernel.agent_id,
+                agent_id: ctx.kernel.agent_id,
                 handle,
             },
         );
@@ -156,55 +239,28 @@ impl AutomatonBridge {
         prior_failure: Option<String>,
         work_log: Vec<String>,
     ) -> Result<String, String> {
-        let domain = self.domain_with_jwt(auth_token.as_deref());
-        let effective_workspace = workspace_root.clone();
-        let ws_path = effective_workspace
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let installed_integrations = installed_integrations
-            .unwrap_or_default()
-            .into_iter()
-            .map(installed_integration_to_core)
-            .collect::<Vec<_>>();
-        let installed_tools =
-            Self::prepare_installed_tools(installed_tools, &installed_integrations);
-
-        let kernel = self
-            .build_kernel(
-                domain.clone(),
+        let ctx = self
+            .prepare_automaton_run(
+                project_id,
+                workspace_root,
                 auth_token.as_deref(),
-                Some(project_id),
-                ws_path,
-                effective_workspace.is_some(),
-                installed_tools.clone(),
-                installed_integrations.clone(),
+                model.as_deref(),
+                installed_tools,
+                installed_integrations,
+                AutomatonKindLabels {
+                    kernel: "task runtime",
+                    capabilities: "task",
+                },
             )
-            .map_err(|e| format!("failed to build task runtime kernel: {e}"))?;
-        if let Err(e) = runtime_capabilities::record_runtime_capabilities(
-            &kernel,
-            "automaton",
-            None,
-            &installed_tools,
-            &installed_integrations,
+            .await?;
+
+        let automaton = TaskRunAutomaton::new(
+            ctx.gateway_domain,
+            ctx.model_gw,
+            ctx.runner_config,
+            ctx.catalog,
         )
-        .await
-        {
-            return Err(format!("failed to record task runtime capabilities: {e}"));
-        }
-        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
-        let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
-            Arc::new(KernelToolGateway::new(kernel.clone()));
-        let gateway_domain: Arc<dyn DomainApi> =
-            Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
-
-        let runner_config = self.build_runner_config(model.as_deref(), auth_token.as_deref());
-        let catalog = Arc::new(
-            self.catalog
-                .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
-        );
-
-        let automaton = TaskRunAutomaton::new(gateway_domain, model_gw, runner_config, catalog)
-            .with_tool_executor(tool_gw);
+        .with_tool_executor(ctx.tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,
@@ -218,12 +274,12 @@ impl AutomatonBridge {
 
         let (handle, event_rx) = self
             .runtime
-            .install(Box::new(automaton), config, effective_workspace)
+            .install(Box::new(automaton), config, ctx.effective_workspace)
             .await
             .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
 
         let automaton_id = handle.id().as_str().to_string();
-        self.record_lifecycle_event(kernel.agent_id, &automaton_id, "start_task_run")
+        self.record_lifecycle_event(ctx.kernel.agent_id, &automaton_id, "start_task_run")
             .await;
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 

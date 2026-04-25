@@ -412,103 +412,157 @@ impl Tool for GitCommitPushTool {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
-        let message = str_arg(&args, "message").map_err(ToolError::from)?;
-        let remote_url = str_arg(&args, "remote_url").map_err(ToolError::from)?;
-        let branch = str_arg(&args, "branch").map_err(ToolError::from)?;
-        let jwt = str_arg(&args, "jwt").map_err(ToolError::from)?;
-        let force = opt_bool(&args, "force");
-        let workspace = ctx.sandbox.root().to_path_buf();
-        let commit_timeout = workspace_timeout(ctx);
-        let push_policy = push_policy_for(ctx);
-
-        let agent_id = ctx
-            .caller_agent_id
-            .map_or_else(|| "unknown".to_string(), |id| id.to_string());
-        info!(
-            op = "git_commit_push",
-            %agent_id,
-            target_branch = branch,
-            remote = %redact_url(remote_url),
-            commit_timeout_ms = duration_millis_u64(commit_timeout),
-            push_per_attempt_timeout_ms = duration_millis_u64(push_policy.per_attempt_timeout),
-            push_attempts = push_policy.attempts,
-            "git tool dispatched"
-        );
+        let parsed = parse_commit_push_args(&args, ctx)?;
+        log_commit_push_dispatch(ctx, &parsed);
 
         match git_commit_push_impl(
-            &workspace,
-            message,
-            remote_url,
-            branch,
-            jwt,
-            force,
-            commit_timeout,
-            push_policy,
+            &parsed.workspace,
+            &parsed.message,
+            &parsed.remote_url,
+            &parsed.branch,
+            &parsed.jwt,
+            parsed.force,
+            parsed.commit_timeout,
+            parsed.push_policy,
         )
         .await
         {
-            Ok(outcome) => {
-                let CommitPushOutcome {
-                    commit_sha,
-                    push_result,
-                } = outcome;
-                match push_result {
-                    Ok(commits) => Ok(ToolResult::success(
-                        "git_commit_push",
-                        serde_json::to_string(&serde_json::json!({
-                            "sha": commit_sha,
-                            "committed": commit_sha.is_some(),
-                            "pushed": true,
-                            "commits": commits
-                                .iter()
-                                .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
-                                .collect::<Vec<_>>(),
-                        }))
-                        .unwrap_or_else(|_| {
-                            format!(
-                                "committed+pushed {}",
-                                commit_sha.as_deref().unwrap_or("(none)")
-                            )
-                        }),
-                    )),
-                    Err(push_err) => {
-                        // Commit landed locally; push did not. Surface
-                        // this as a success-with-warning so callers
-                        // (the dev-loop automaton) can preserve the
-                        // commit SHA in their event stream instead of
-                        // dropping the work. The tool-level result
-                        // reports `pushed: false` + `push_error` so
-                        // the agent can see what happened and the
-                        // automaton dispatcher can emit both
-                        // `GitCommitted` and `GitPushFailed`.
-                        warn!(
-                            error = %push_err,
-                            commit_sha = ?commit_sha,
-                            "git_commit_push: commit succeeded but push failed"
-                        );
-                        Ok(ToolResult::success(
-                            "git_commit_push",
-                            serde_json::to_string(&serde_json::json!({
-                                "sha": commit_sha,
-                                "committed": commit_sha.is_some(),
-                                "pushed": false,
-                                "push_error": push_err.to_string(),
-                                "commits": Vec::<serde_json::Value>::new(),
-                            }))
-                            .unwrap_or_else(|_| {
-                                format!(
-                                    "committed {} but push failed: {push_err}",
-                                    commit_sha.as_deref().unwrap_or("(none)")
-                                )
-                            }),
-                        ))
-                    }
-                }
-            }
+            Ok(outcome) => Ok(assemble_commit_push_result(outcome)),
             Err(e) => {
                 warn!(error = %e, "git_commit_push failed before commit");
                 Err(e.into())
             }
+        }
+    }
+}
+
+/// Parsed-and-validated `git_commit_push` inputs plus the workspace /
+/// timeout / push-policy fields the impl needs.
+///
+/// Owns its strings so the calling [`Tool::execute`] can use it across
+/// `await` boundaries and across the dispatcher log + impl call without
+/// re-borrowing `args` or `ctx`.
+struct CommitPushArgs {
+    message: String,
+    remote_url: String,
+    branch: String,
+    jwt: String,
+    force: bool,
+    workspace: std::path::PathBuf,
+    commit_timeout: Duration,
+    push_policy: PushPolicy,
+}
+
+/// Validate and parse the JSON arguments for `git_commit_push`, also
+/// pulling the workspace/timeout/push-policy from the [`ToolContext`].
+///
+/// Mirrors the original inline parse step exactly: the same `str_arg` /
+/// `opt_bool` calls in the same order, so any malformed-input error
+/// message keeps its pre-refactor wording.
+fn parse_commit_push_args(
+    args: &serde_json::Value,
+    ctx: &ToolContext,
+) -> Result<CommitPushArgs, ToolError> {
+    let message = str_arg(args, "message").map_err(ToolError::from)?;
+    let remote_url = str_arg(args, "remote_url").map_err(ToolError::from)?;
+    let branch = str_arg(args, "branch").map_err(ToolError::from)?;
+    let jwt = str_arg(args, "jwt").map_err(ToolError::from)?;
+    let force = opt_bool(args, "force");
+    let workspace = ctx.sandbox.root().to_path_buf();
+    let commit_timeout = workspace_timeout(ctx);
+    let push_policy = push_policy_for(ctx);
+    Ok(CommitPushArgs {
+        message: message.to_string(),
+        remote_url: remote_url.to_string(),
+        branch: branch.to_string(),
+        jwt: jwt.to_string(),
+        force,
+        workspace,
+        commit_timeout,
+        push_policy,
+    })
+}
+
+/// Emit the `git tool dispatched` info line before
+/// [`git_commit_push_impl`] runs. Kept as a separate function so the
+/// orchestrator stays short; the field set / order matches the
+/// pre-refactor `info!` call exactly so log consumers / dashboards do
+/// not see drift.
+fn log_commit_push_dispatch(ctx: &ToolContext, parsed: &CommitPushArgs) {
+    let agent_id = ctx
+        .caller_agent_id
+        .map_or_else(|| "unknown".to_string(), |id| id.to_string());
+    info!(
+        op = "git_commit_push",
+        %agent_id,
+        target_branch = parsed.branch,
+        remote = %redact_url(&parsed.remote_url),
+        commit_timeout_ms = duration_millis_u64(parsed.commit_timeout),
+        push_per_attempt_timeout_ms = duration_millis_u64(parsed.push_policy.per_attempt_timeout),
+        push_attempts = parsed.push_policy.attempts,
+        "git tool dispatched"
+    );
+}
+
+/// Build the `ToolResult` from a successful [`git_commit_push_impl`]
+/// outcome.
+///
+/// Two branches:
+/// * `push_result == Ok` — the happy path. Report the commit SHA and
+///   the post-push commits the remote acknowledged.
+/// * `push_result == Err` — commit landed locally; push did not.
+///   Surface this as a success-with-warning so callers (the dev-loop
+///   automaton) can preserve the commit SHA in their event stream
+///   instead of dropping the work. The tool-level result reports
+///   `pushed: false` + `push_error` so the agent can see what happened
+///   and the automaton dispatcher can emit both `GitCommitted` and
+///   `GitPushFailed`.
+fn assemble_commit_push_result(outcome: CommitPushOutcome) -> ToolResult {
+    let CommitPushOutcome {
+        commit_sha,
+        push_result,
+    } = outcome;
+    match push_result {
+        Ok(commits) => ToolResult::success(
+            "git_commit_push",
+            serde_json::to_string(&serde_json::json!({
+                "sha": commit_sha,
+                "committed": commit_sha.is_some(),
+                "pushed": true,
+                "commits": commits
+                    .iter()
+                    .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
+                    .collect::<Vec<_>>(),
+            }))
+            .unwrap_or_else(|_| {
+                format!(
+                    "committed+pushed {}",
+                    commit_sha.as_deref().unwrap_or("(none)")
+                )
+            }),
+        ),
+        Err(push_err) => {
+            warn!(
+                error = %push_err,
+                commit_sha = ?commit_sha,
+                "git_commit_push: commit succeeded but push failed"
+            );
+            ToolResult::success(
+                "git_commit_push",
+                serde_json::to_string(&serde_json::json!({
+                    "sha": commit_sha,
+                    "committed": commit_sha.is_some(),
+                    "pushed": false,
+                    "push_error": push_err.to_string(),
+                    "commits": Vec::<serde_json::Value>::new(),
+                }))
+                .unwrap_or_else(|_| {
+                    format!(
+                        "committed {} but push failed: {push_err}",
+                        commit_sha.as_deref().unwrap_or("(none)")
+                    )
+                }),
+            )
         }
     }
 }

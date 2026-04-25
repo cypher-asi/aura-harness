@@ -410,19 +410,86 @@ pub(crate) async fn commit_and_push(
     // cheaper (one policy gate, one record entry) and atomic for the
     // dev-loop's happy path. When either is missing we still attempt
     // a local commit so in-workspace history is preserved.
-    if let (Some(repo), Some(jwt)) = (git_repo_url, auth_token) {
-        let message = format!("task({task_id}): completed");
-        let input = serde_json::json!({
-            "message": message,
-            "remote_url": &repo,
-            "branch": &git_branch,
-            "jwt": jwt,
-        });
-        dispatch_git_commit_push(ctx, executor.as_ref(), task_id, &repo, &git_branch, input).await;
-    } else {
-        let message = format!("task({task_id}): completed");
-        let input = serde_json::json!({ "message": message });
-        dispatch_git_commit(ctx, executor.as_ref(), task_id, input).await;
+    let intent = build_dev_loop_git_intent(task_id, &git_branch, git_repo_url, auth_token);
+    dispatch_git_intent(ctx, executor.as_ref(), task_id, intent).await;
+}
+
+/// What the dev loop wants the kernel-mediated git tooling to do at the
+/// end of a task run.
+///
+/// `Commit` is the local-only fallback when the operator did not provide
+/// both a remote URL and a JWT — in-workspace history is preserved but
+/// nothing is pushed. `CommitPush` is the happy-path variant: a single
+/// `git_commit_push` tool call atomically commits and pushes through
+/// the kernel policy gate, producing a single record entry.
+///
+/// Held as a separate enum (rather than an inline `if let (Some,Some)`)
+/// so the same shape can be reused by other dev-loop entry-points
+/// (e.g. forced re-pushes after a recovered failure) and so unit tests
+/// can assert the variant without spinning up a tool executor.
+enum DevLoopGitIntent {
+    Commit {
+        message: String,
+    },
+    CommitPush {
+        message: String,
+        repo: String,
+        branch: String,
+        jwt: String,
+    },
+}
+
+/// Decide which git intent to emit at end-of-task based on the operator's
+/// configuration. Mirrors the pre-refactor inline logic exactly: a
+/// `(Some(repo), Some(jwt))` pair triggers the bundled commit+push
+/// happy path, anything else falls back to a local-only commit.
+fn build_dev_loop_git_intent(
+    task_id: &str,
+    git_branch: &str,
+    git_repo_url: Option<String>,
+    auth_token: Option<String>,
+) -> DevLoopGitIntent {
+    let message = format!("task({task_id}): completed");
+    match (git_repo_url, auth_token) {
+        (Some(repo), Some(jwt)) => DevLoopGitIntent::CommitPush {
+            message,
+            repo,
+            branch: git_branch.to_string(),
+            jwt,
+        },
+        _ => DevLoopGitIntent::Commit { message },
+    }
+}
+
+/// Dispatch a [`DevLoopGitIntent`] through the appropriate kernel-mediated
+/// tool helper, threading the original `ctx` / `executor` / `task_id`
+/// borrows so the success and failure branches keep emitting the same
+/// `GitCommitted` / `GitPushed` / `Git*Failed` events as before.
+async fn dispatch_git_intent(
+    ctx: &mut TickContext,
+    executor: &dyn aura_agent::types::AgentToolExecutor,
+    task_id: &str,
+    intent: DevLoopGitIntent,
+) {
+    match intent {
+        DevLoopGitIntent::Commit { message } => {
+            let input = serde_json::json!({ "message": message });
+            dispatch_git_commit(ctx, executor, task_id, input).await;
+        }
+        DevLoopGitIntent::CommitPush {
+            message,
+            repo,
+            branch,
+            jwt,
+        } => {
+            let input = serde_json::json!({
+                "message": message,
+                "remote_url": &repo,
+                "branch": &branch,
+                "jwt": jwt,
+            });
+            dispatch_git_commit_push(ctx, executor, task_id, &repo, &branch, input).await;
+        }
     }
 }
 

@@ -309,6 +309,18 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
     .collect();
 }
 
+/// Prepared turn-context — the raw materials [`dispatch_turn_to_agent`]
+/// needs to spawn the agent loop. `model_gateway` and `tool_gateway` are
+/// already wired to the per-turn kernel; `messages` and `tools` are
+/// owned snapshots so the spawned task does not borrow `Session`.
+struct PreparedTurn {
+    model_gateway: KernelModelGateway,
+    tool_gateway: KernelToolGateway,
+    config: aura_agent::AgentLoopConfig,
+    messages: Vec<Message>,
+    tools: Vec<aura_reasoner::ToolDefinition>,
+}
+
 /// Prepare and spawn an agent-loop turn as a background task.
 async fn start_turn(
     session: &mut Session,
@@ -332,6 +344,44 @@ async fn start_turn(
         },
     ));
 
+    let prepared = match prepare_turn_context(session, msg, ctx).await {
+        Ok(p) => p,
+        Err(err) => {
+            let _ = outbound_tx.try_send(OutboundMessage::Error(err));
+            return None;
+        }
+    };
+
+    Some(dispatch_turn_to_agent(
+        prepared,
+        outbound_tx,
+        message_id,
+    ))
+}
+
+/// Build everything the agent loop needs for a single turn:
+/// the user `Message` (with optional image attachments), a session-scoped
+/// `tool_config` extended with skill grants, the per-turn kernel and its
+/// gateways, and the populated `AgentLoopConfig` (system prompt, skills,
+/// memory observer).
+///
+/// Side-effects, in the order the original inline code performed them:
+/// 1. `session.messages.push(user_msg)` — append before any potential
+///    failure, so the conversation log reflects the user's intent even
+///    if the kernel build subsequently errors.
+/// 2. `Transaction::user_prompt` — Invariant §2: every user-visible
+///    state change must be a transaction committed through the kernel.
+///    Record the prompt before the agent loop runs so the record log
+///    reflects the turn boundary even if the loop aborts mid-stream.
+///
+/// Returns `Err(ErrorMsg)` for the two failure modes the caller surfaces
+/// over the WebSocket: kernel build failure and user-prompt recording
+/// failure. Error codes / messages match the pre-refactor strings exactly.
+async fn prepare_turn_context(
+    session: &mut Session,
+    msg: UserMessage,
+    ctx: &WsContext,
+) -> Result<PreparedTurn, ErrorMsg> {
     let user_msg = if let Some(ref attachments) = msg.attachments {
         let image_atts: Vec<_> = attachments.iter().filter(|a| a.type_ == "image").collect();
         if image_atts.is_empty() {
@@ -393,19 +443,14 @@ async fn start_turn(
         Ok(k) => k,
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Failed to build kernel");
-            let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+            return Err(ErrorMsg {
                 code: "kernel_error".into(),
                 message: format!("Failed to build kernel: {e}"),
                 recoverable: true,
-            }));
-            return None;
+            });
         }
     };
 
-    // Invariant §2: every user-visible state change must be a transaction
-    // committed through the kernel. Record the UserPrompt before the agent
-    // loop runs so the record log reflects the turn boundary even if the
-    // loop aborts mid-stream.
     if let Err(e) = kernel
         .process_direct(aura_core::Transaction::user_prompt(
             session.agent_id,
@@ -418,12 +463,11 @@ async fn start_turn(
             error = %e,
             "Failed to record UserPrompt transaction through kernel"
         );
-        let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+        return Err(ErrorMsg {
             code: "kernel_error".into(),
             message: format!("Failed to record user prompt: {e}"),
             recoverable: true,
-        }));
-        return None;
+        });
     }
 
     let model_gateway = KernelModelGateway::new(kernel.clone());
@@ -457,10 +501,40 @@ async fn start_turn(
             active_skill_names,
         ));
     }
-    let agent_loop = AgentLoop::new(config);
 
     let tools = session.tool_definitions.clone();
     let messages = session.messages.clone();
+
+    Ok(PreparedTurn {
+        model_gateway,
+        tool_gateway,
+        config,
+        messages,
+        tools,
+    })
+}
+
+/// Spawn the agent-loop background task and the matching event-forwarder
+/// task, returning the [`AgentTurn`] handle the WebSocket loop polls on.
+///
+/// Cancellation: a single `CancellationToken` is cloned three times —
+/// the original (returned in `AgentTurn`), one moved into the loop
+/// future (so cooperative cancellation reaches the model call), and one
+/// kept for the post-loop check that flips `timed_out = true` when the
+/// run was cancelled rather than completing on its own.
+fn dispatch_turn_to_agent(
+    prepared: PreparedTurn,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
+    message_id: String,
+) -> AgentTurn {
+    let PreparedTurn {
+        model_gateway,
+        tool_gateway,
+        config,
+        messages,
+        tools,
+    } = prepared;
+    let agent_loop = AgentLoop::new(config);
 
     let cancel_token = CancellationToken::new();
     let cancel_for_loop = cancel_token.clone();
@@ -493,12 +567,12 @@ async fn start_turn(
     let stream_forward_handle =
         tokio::spawn(helpers::forward_events_to_ws(event_rx, outbound_for_stream));
 
-    Some(AgentTurn {
+    AgentTurn {
         cancel_token,
         join_handle,
         stream_forward_handle,
         message_id,
-    })
+    }
 }
 
 #[cfg(test)]

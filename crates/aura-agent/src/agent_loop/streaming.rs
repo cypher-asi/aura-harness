@@ -7,7 +7,7 @@ use std::time::Duration;
 use aura_reasoner::anthropic::exp_backoff_with_jitter;
 use aura_reasoner::{
     ModelProvider, ModelRequest, ModelResponse, PartialToolUse, ReasonerError, StreamAccumulator,
-    StreamContentType, StreamEvent,
+    StreamContentType, StreamEvent, StreamEventStream,
 };
 use chrono::Utc;
 use futures_util::StreamExt;
@@ -159,6 +159,101 @@ fn emit_stream_event(
     }
 }
 
+/// Outcome of [`drain_remaining_stream`].
+///
+/// The pump separates "the stream finished cleanly" (the caller now
+/// classifies the accumulated response) from "transport blew up" (the
+/// caller may want to fall back to non-streaming) and "the user
+/// cancelled" (terminal). Returning a typed outcome instead of a
+/// `Result<(), Err>` keeps the per-attempt loop callers (the main
+/// `complete_with_streaming` orchestrator and the per-tool-call retry
+/// path in [`AgentLoop::drive_streaming_once`]) sharing one
+/// definition without forcing them to share a single error type.
+enum DrainOutcome {
+    /// Boxed because [`StreamAccumulator`] is ~320 bytes (vs 96 for
+    /// `Transport(ReasonerError)`); the large-variant clippy lint
+    /// fires hard for an enum dispatched as a single `match` per
+    /// attempt. Indirection here is essentially free — the accumulator
+    /// is consumed once via `*acc` at the call site.
+    Completed(Box<StreamAccumulator>),
+    Cancelled,
+    Transport(ReasonerError),
+}
+
+/// Pump every event from `stream` into a [`StreamAccumulator`], emitting
+/// the corresponding wire deltas as they arrive.
+///
+/// Honours `cancellation_token` so a Ctrl-C does not have to wait out
+/// the full stream. Returns the populated accumulator on clean stream
+/// termination; transport errors and cancellation surface as their own
+/// [`DrainOutcome`] variants so callers can decide whether to fall
+/// back to the non-streaming path or propagate the failure.
+async fn drain_remaining_stream(
+    mut stream: StreamEventStream,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    cancellation_token: Option<&CancellationToken>,
+) -> DrainOutcome {
+    let mut accumulator = StreamAccumulator::new();
+
+    loop {
+        let next = if let Some(token) = cancellation_token {
+            tokio::select! {
+                () = token.cancelled() => {
+                    return DrainOutcome::Cancelled;
+                }
+                item = stream.next() => item,
+            }
+        } else {
+            stream.next().await
+        };
+
+        match next {
+            Some(Ok(event)) => {
+                accumulator.process(&event);
+                emit_stream_event(event_tx, &event, &accumulator);
+            }
+            Some(Err(e)) => return DrainOutcome::Transport(e),
+            None => return DrainOutcome::Completed(Box::new(accumulator)),
+        }
+    }
+}
+
+/// Run the non-streaming `provider.complete()` path and replay every
+/// textual content block as a delta event.
+///
+/// Used by both fallback branches in [`AgentLoop::complete_with_streaming`]:
+/// the transport-error fallback (mid-stream connection blew up before any
+/// usable event arrived) and the mid-stream-SSE-error fallback (stream
+/// terminated with a retryable `error` frame). Consumers see incremental
+/// deltas even though the request was buffered server-side.
+async fn complete_and_emit_as_deltas(
+    provider: &dyn ModelProvider,
+    request: ModelRequest,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    provider_name: &str,
+    model_name: &str,
+) -> Result<ModelResponse, LlmCallError> {
+    let fallback_start = Instant::now();
+    let response = provider
+        .complete(request)
+        .await
+        .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
+    for block in &response.message.content {
+        match block {
+            aura_reasoner::ContentBlock::Text { text } => {
+                emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+            }
+            aura_reasoner::ContentBlock::Thinking { thinking, .. } => {
+                emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+            }
+            _ => {}
+        }
+    }
+    let duration_ms = u64::try_from(fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    emit_debug_llm_call(event_tx, provider_name, model_name, &response, duration_ms);
+    Ok(response)
+}
+
 impl AgentLoop {
     /// Perform a model completion using streaming, emitting events as they arrive.
     ///
@@ -178,73 +273,72 @@ impl AgentLoop {
         let provider_name = provider.name();
         let model_name = request.model.as_ref().to_string();
 
-        let mut stream = provider
+        let stream = provider
             .complete_streaming(request.clone())
             .await
             .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
 
-        let mut accumulator = StreamAccumulator::new();
-
-        loop {
-            let next = if let Some(token) = cancellation_token {
-                tokio::select! {
-                    () = token.cancelled() => {
-                        return Err(LlmCallError::Fatal("Cancelled".to_string()));
-                    }
-                    item = stream.next() => item,
-                }
-            } else {
-                stream.next().await
-            };
-
-            match next {
-                Some(Ok(event)) => {
-                    accumulator.process(&event);
-                    emit_stream_event(event_tx, &event, &accumulator);
-                }
-                Some(Err(e)) => {
-                    debug!("Stream error, falling back to non-streaming: {e}");
-                    emit(
-                        event_tx,
-                        AgentLoopEvent::StreamReset {
-                            reason: format!("Stream error, retrying without streaming: {e}"),
-                        },
-                    );
-                    let fallback_start = Instant::now();
-                    let response = provider
-                        .complete(request)
-                        .await
-                        .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
-                    for block in &response.message.content {
-                        match block {
-                            aura_reasoner::ContentBlock::Text { text } => {
-                                emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
-                            }
-                            aura_reasoner::ContentBlock::Thinking { thinking, .. } => {
-                                emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
-                            }
-                            _ => {}
-                        }
-                    }
-                    let duration_ms =
-                        u64::try_from(fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    emit_debug_llm_call(
-                        event_tx,
-                        provider_name,
-                        &model_name,
-                        &response,
-                        duration_ms,
-                    );
-                    return Ok(response);
-                }
-                None => break,
+        match drain_remaining_stream(stream, event_tx, cancellation_token).await {
+            DrainOutcome::Cancelled => Err(LlmCallError::Fatal("Cancelled".to_string())),
+            DrainOutcome::Transport(e) => {
+                debug!("Stream error, falling back to non-streaming: {e}");
+                emit(
+                    event_tx,
+                    AgentLoopEvent::StreamReset {
+                        reason: format!("Stream error, retrying without streaming: {e}"),
+                    },
+                );
+                complete_and_emit_as_deltas(
+                    provider,
+                    request,
+                    event_tx,
+                    provider_name,
+                    &model_name,
+                )
+                .await
+            }
+            DrainOutcome::Completed(accumulator) => {
+                self.finalize_after_stream(
+                    provider,
+                    request,
+                    event_tx,
+                    cancellation_token,
+                    *accumulator,
+                    start,
+                    provider_name,
+                    &model_name,
+                )
+                .await
             }
         }
+    }
 
+    /// Classify the post-pump accumulator into the next action.
+    ///
+    /// Three buckets:
+    /// 1. `Ok(response)` — emit the debug-llm-call frame and return.
+    /// 2. `Err(StreamAbortedWithPartial)` — re-issue the streaming
+    ///    request via [`Self::retry_streaming_for_partial_tool_use`]
+    ///    so the in-flight tool call is preserved across the retry.
+    /// 3. `Err(retryable)` — fall back to the non-streaming
+    ///    `provider.complete()` path via [`complete_and_emit_as_deltas`].
+    /// 4. Anything else — propagate as a fatal LLM call error.
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
+    async fn finalize_after_stream(
+        &self,
+        provider: &dyn ModelProvider,
+        request: ModelRequest,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
+        cancellation_token: Option<&CancellationToken>,
+        accumulator: StreamAccumulator,
+        start: Instant,
+        provider_name: &str,
+        model_name: &str,
+    ) -> Result<ModelResponse, LlmCallError> {
         let latency_ms = start.elapsed().as_millis() as u64;
         match accumulator.into_response(0, latency_ms) {
             Ok(response) => {
-                emit_debug_llm_call(event_tx, provider_name, &model_name, &response, latency_ms);
+                emit_debug_llm_call(event_tx, provider_name, model_name, &response, latency_ms);
                 Ok(response)
             }
             Err(ReasonerError::StreamAbortedWithPartial {
@@ -287,26 +381,8 @@ impl AgentLoop {
                         reason: format!("Mid-stream SSE error, retrying without streaming: {e}"),
                     },
                 );
-                let fallback_start = Instant::now();
-                let response = provider
-                    .complete(request)
+                complete_and_emit_as_deltas(provider, request, event_tx, provider_name, model_name)
                     .await
-                    .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
-                for block in &response.message.content {
-                    match block {
-                        aura_reasoner::ContentBlock::Text { text } => {
-                            emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
-                        }
-                        aura_reasoner::ContentBlock::Thinking { thinking, .. } => {
-                            emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
-                        }
-                        _ => {}
-                    }
-                }
-                let duration_ms =
-                    u64::try_from(fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                emit_debug_llm_call(event_tx, provider_name, &model_name, &response, duration_ms);
-                Ok(response)
             }
             Err(e) => Err(LlmCallError::from_reasoner_error(&e)),
         }
@@ -510,44 +586,28 @@ impl super::AgentLoop {
         let provider_name = provider.name();
         let model_name = request.model.as_ref().to_string();
 
-        let mut stream = provider
+        let stream = provider
             .complete_streaming(request)
             .await
             .map_err(|e| DriveStreamingError::Other(LlmCallError::from_reasoner_error(&e)))?;
 
-        let mut accumulator = StreamAccumulator::new();
-
-        loop {
-            let next = if let Some(token) = cancellation_token {
-                tokio::select! {
-                    () = token.cancelled() => {
-                        return Err(DriveStreamingError::Other(
-                            LlmCallError::Fatal("Cancelled".to_string()),
-                        ));
-                    }
-                    item = futures_util::StreamExt::next(&mut stream) => item,
-                }
-            } else {
-                futures_util::StreamExt::next(&mut stream).await
-            };
-
-            match next {
-                Some(Ok(event)) => {
-                    accumulator.process(&event);
-                    emit_stream_event(event_tx, &event, &accumulator);
-                }
-                Some(Err(e)) => {
-                    // Transport-level error on the retry attempt. Don't
-                    // recurse into another non-streaming fallback here —
-                    // the outer retry loop will decide whether to try
-                    // again based on classification.
-                    return Err(DriveStreamingError::Other(
-                        LlmCallError::from_reasoner_error(&e),
-                    ));
-                }
-                None => break,
+        let accumulator = match drain_remaining_stream(stream, event_tx, cancellation_token).await {
+            DrainOutcome::Completed(acc) => *acc,
+            DrainOutcome::Cancelled => {
+                return Err(DriveStreamingError::Other(LlmCallError::Fatal(
+                    "Cancelled".to_string(),
+                )));
             }
-        }
+            // Transport-level error on the retry attempt. Don't recurse
+            // into another non-streaming fallback here — the outer retry
+            // loop will decide whether to try again based on
+            // classification.
+            DrainOutcome::Transport(e) => {
+                return Err(DriveStreamingError::Other(
+                    LlmCallError::from_reasoner_error(&e),
+                ));
+            }
+        };
 
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         match accumulator.into_response(0, latency_ms) {
