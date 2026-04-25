@@ -253,7 +253,7 @@ pub(super) fn handle_max_tokens(
     // iteration N+2 with an already-tapered budget and truncate
     // again, producing the observed loop of repeated
     // `MaxTokens with pending tool_use blocks` warnings.
-    state.restore_budget_next_iteration = true;
+    state.thinking.restore_next_iteration = true;
 
     let results: Vec<(String, ToolResultContent, bool)> = pending_tools
         .iter()
@@ -359,25 +359,28 @@ pub(super) fn update_narration_budget(
         .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
 
     if had_tool_call {
-        state.last_turn_had_tool_call = true;
-        state.consecutive_narration_tokens = 0;
+        state.counters.last_turn_had_tool_call = true;
+        state.counters.consecutive_narration_tokens = 0;
         return false;
     }
 
-    state.last_turn_had_tool_call = false;
+    state.counters.last_turn_had_tool_call = false;
     let added = usize::try_from(response.usage.output_tokens).unwrap_or(usize::MAX);
-    state.consecutive_narration_tokens = state.consecutive_narration_tokens.saturating_add(added);
+    state.counters.consecutive_narration_tokens = state
+        .counters
+        .consecutive_narration_tokens
+        .saturating_add(added);
 
     // Hard budget takes precedence: we do not want to inject a steering
     // message on a turn we are already aborting.
-    if state.consecutive_narration_tokens >= NARRATION_TOKEN_HARD_BUDGET {
+    if state.counters.consecutive_narration_tokens >= NARRATION_TOKEN_HARD_BUDGET {
         let msg = format!(
             "[harness steering] Narration budget exhausted after {} tokens without a tool call. \
              Stopping the turn so the orchestrator can decompose the task.",
-            state.consecutive_narration_tokens
+            state.counters.consecutive_narration_tokens
         );
         warn!(
-            tokens = state.consecutive_narration_tokens,
+            tokens = state.counters.consecutive_narration_tokens,
             "narration hard budget exhausted, forcing stop_reason_override"
         );
         super::streaming::emit(
@@ -393,15 +396,15 @@ pub(super) fn update_narration_budget(
         return true;
     }
 
-    if state.consecutive_narration_tokens >= NARRATION_TOKEN_SOFT_BUDGET {
-        let steer = narration_steering_message(state.consecutive_narration_tokens);
+    if state.counters.consecutive_narration_tokens >= NARRATION_TOKEN_SOFT_BUDGET {
+        let steer = narration_steering_message(state.counters.consecutive_narration_tokens);
         info!(
-            tokens = state.consecutive_narration_tokens,
+            tokens = state.counters.consecutive_narration_tokens,
             "narration soft budget crossed, injecting steering user message"
         );
         state.messages.push(Message::user(steer.clone()));
         super::streaming::emit(event_tx, AgentLoopEvent::Warning(steer));
-        state.consecutive_narration_tokens = 0;
+        state.counters.consecutive_narration_tokens = 0;
     }
 
     false

@@ -134,12 +134,24 @@ pub struct DevLoopAutomaton {
 }
 
 impl DevLoopAutomaton {
-    pub fn new(
+    /// Construct a dev-loop automaton bound to a kernel-mediated model
+    /// provider.
+    ///
+    /// The `RecordingModelProvider` bound (sealed in `aura-agent`,
+    /// Invariant §1 / §3) means external crates can satisfy this only
+    /// by passing an `Arc<aura_agent::KernelModelGateway>`, so a raw
+    /// HTTP provider can never reach the dev loop without going through
+    /// `Kernel::reason_streaming` first.
+    pub fn new<P>(
         domain: Arc<dyn DomainApi>,
-        provider: Arc<dyn ModelProvider>,
+        provider: Arc<P>,
         config: AgentRunnerConfig,
         catalog: Arc<ToolCatalog>,
-    ) -> Self {
+    ) -> Self
+    where
+        P: aura_agent::RecordingModelProvider + Send + Sync + 'static,
+    {
+        let provider: Arc<dyn ModelProvider> = provider;
         Self {
             domain,
             provider,

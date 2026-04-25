@@ -122,11 +122,11 @@ fn handle_max_tokens_sets_budget_restore_flag() {
     let config = AgentLoopConfig::default();
     let response = tool_use_response("edit_file", Some("src/x.rs"));
     let mut state = seed_state_with(&config, &response);
-    assert!(!state.restore_budget_next_iteration, "precondition");
+    assert!(!state.thinking.restore_next_iteration, "precondition");
 
     assert!(handle_max_tokens(&config, &response, &mut state));
     assert!(
-        state.restore_budget_next_iteration,
+        state.thinking.restore_next_iteration,
         "handle_max_tokens must arm the budget-restore flag"
     );
 }
@@ -138,19 +138,19 @@ fn begin_iteration_restores_budget_and_clears_flag() {
     // and clear the flag so the *next* iteration can taper again.
     let config = AgentLoopConfig::default();
     let mut state = LoopState::new(&config, vec![Message::user("go")]);
-    state.thinking_budget = 512;
-    state.restore_budget_next_iteration = true;
+    state.thinking.budget = 512;
+    state.thinking.restore_next_iteration = true;
 
     // Iteration number is irrelevant for the restore path — the
     // flag short-circuits before the taper branch.
     state.begin_iteration(&config, 99);
 
     assert_eq!(
-        state.thinking_budget, config.max_tokens,
+        state.thinking.budget, config.max_tokens,
         "budget must be restored to max_tokens after truncation"
     );
     assert!(
-        !state.restore_budget_next_iteration,
+        !state.thinking.restore_next_iteration,
         "flag must be cleared after a single restore"
     );
 }
@@ -170,9 +170,9 @@ fn begin_iteration_respects_min_budget_floor() {
     for i in 0..50 {
         state.begin_iteration(&config, i);
         assert!(
-            state.thinking_budget >= config.thinking_min_budget,
+            state.thinking.budget >= config.thinking_min_budget,
             "budget dropped below floor at iteration {i}: {}",
-            state.thinking_budget
+            state.thinking.budget
         );
     }
 }

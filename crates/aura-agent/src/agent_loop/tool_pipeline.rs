@@ -1,4 +1,21 @@
-//! Core tool result processing: blocking, execution, effect tracking, build.
+//! Inner tool-execution pipeline.
+//!
+//! `super::tool_execution::handle_tool_use` is the outer dispatch step
+//! for `StopReason::ToolUse` (cache lookup, event emission, termination
+//! checks). When that step has tool calls left to actually run, it
+//! delegates here, to [`AgentLoop::process_tool_results`], which is the
+//! pipeline that:
+//!
+//! 1. Pre-dispatch chunk guard for oversized `write_file` calls.
+//! 2. Blocking detection (`detect_all_blocked`) + read-guard limits.
+//! 3. Hands the survivors to the [`AgentToolExecutor`].
+//! 4. Tracks effects (writes / exploration / blocking_ctx) and stalls.
+//! 5. Optional auto-build after a successful write.
+//!
+//! Renamed from `tool_processing` in Phase 4: the old name was
+//! confusingly close to `tool_execution`, even though this module sits
+//! inside that one. "Pipeline" makes the multi-stage flow explicit and
+//! preserves the outer/inner split between the two files.
 
 use std::collections::HashSet;
 

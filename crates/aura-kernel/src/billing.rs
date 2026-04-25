@@ -72,7 +72,7 @@ fn parent_from_entry(entry: &RecordEntry) -> Option<AgentId> {
 mod tests {
     use super::*;
     use aura_core::{
-        AgentStatus, Effect, EffectKind, EffectStatus, RuntimeCapabilityInstall, ToolDecision,
+        AgentStatus, Effect, EffectKind, EffectStatus, RuntimeCapabilityInstall, ToolGateVerdict,
         Transaction, TransactionType, UserToolDefaults,
     };
     use aura_store::{DequeueToken, StoreError};
@@ -193,7 +193,7 @@ mod tests {
             tool_use_id: "spawn".into(),
             tool: "spawn_agent".into(),
             args: serde_json::json!({}),
-            decision: ToolDecision::Approved,
+            decision: ToolGateVerdict::Approved,
             reason: None,
             result: None,
             is_error: false,

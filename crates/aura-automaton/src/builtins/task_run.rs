@@ -32,12 +32,24 @@ pub struct TaskRunAutomaton {
 }
 
 impl TaskRunAutomaton {
-    pub fn new(
+    /// Construct a task-run automaton bound to a kernel-mediated model
+    /// provider.
+    ///
+    /// The `RecordingModelProvider` bound (sealed in `aura-agent`,
+    /// Invariant §1 / §3) means external crates can only satisfy this by
+    /// passing an `Arc<aura_agent::KernelModelGateway>`, so a raw
+    /// `dyn ModelProvider` cannot reach the task runner without first
+    /// being wrapped to flow through `Kernel::reason_streaming`.
+    pub fn new<P>(
         domain: Arc<dyn DomainApi>,
-        provider: Arc<dyn ModelProvider>,
+        provider: Arc<P>,
         config: AgentRunnerConfig,
         catalog: Arc<ToolCatalog>,
-    ) -> Self {
+    ) -> Self
+    where
+        P: aura_agent::RecordingModelProvider + Send + Sync + 'static,
+    {
+        let provider: Arc<dyn ModelProvider> = provider;
         Self {
             domain,
             provider,

@@ -26,6 +26,8 @@ pub use error::{AuraError, Result};
 pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId, TxId};
 pub use permissions::{AgentPermissions, AgentScope, Capability};
 pub use registry::{Registry, RegistryError};
+#[allow(deprecated)]
+pub use types::ToolDecision;
 pub use types::{
     installed_integrations_satisfy, integration_match, is_effectively_full_access,
     resolve_effective_permission, Action, ActionKind, ActionResultPayload, AgentStatus,
@@ -34,7 +36,7 @@ pub use types::{
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, ProcessPending,
     Proposal, ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind,
-    ToolAuth, ToolCall, ToolCallContext, ToolDecision, ToolDefinition, ToolExecution, ToolProposal,
-    ToolResult, ToolResultContent, ToolState, Trace, Transaction, TransactionType, UserDefaultMode,
-    UserToolDefaults,
+    ToolAuth, ToolCall, ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict,
+    ToolProposal, ToolResult, ToolResultContent, ToolState, Trace, Transaction, TransactionType,
+    UserDefaultMode, UserToolDefaults,
 };

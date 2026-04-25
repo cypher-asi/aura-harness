@@ -262,8 +262,12 @@ async fn spec_gen_via_kernel_model_gateway_records_reasoning_entry() {
     std::fs::write(&req_path, "A product requirements document.").unwrap();
 
     // The SpecGen automaton receives a KernelModelGateway, not the raw
-    // provider — this is the §1/§3 invariant we're pinning.
-    let gateway: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
+    // provider — this is the §1/§3 invariant we're pinning. The
+    // `RecordingModelProvider` seal in `aura-agent` enforces this:
+    // SpecGenAutomaton::new will only accept an `Arc<P>` where `P`
+    // implements the sealed marker trait, and `KernelModelGateway`
+    // is the only public implementor.
+    let gateway: Arc<KernelModelGateway> = Arc::new(KernelModelGateway::new(kernel.clone()));
     let domain: Arc<dyn DomainApi> = Arc::new(DummyDomain);
     let automaton = aura_automaton::SpecGenAutomaton::new(domain, gateway);
 

@@ -5,7 +5,8 @@
 //! continue to import them via `aura_core::types::tool::Item` exactly
 //! as before the Phase 2a split.
 //!
-//! - [`proposal`] — `ToolProposal`, `ToolDecision` (audit-log enum).
+//! - [`proposal`] — `ToolProposal`, `ToolGateVerdict` (audit-log enum;
+//!   exported with a deprecated `ToolDecision` alias for back-compat).
 //! - [`execution`] — `ToolExecution`, `ToolCallContext`.
 //! - [`installed`] — `InstalledToolDefinition` and the catalog shapes.
 //! - [`runtime_capability`] — `RuntimeCapabilityInstall` plus the
@@ -28,7 +29,9 @@ pub use installed::{
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, ToolAuth,
 };
-pub use proposal::{ToolDecision, ToolProposal};
+#[allow(deprecated)]
+pub use proposal::ToolDecision;
+pub use proposal::{ToolGateVerdict, ToolProposal};
 pub use result::ToolResult;
 pub use runtime_capability::{
     installed_integrations_satisfy, integration_match, RuntimeCapabilityInstall,

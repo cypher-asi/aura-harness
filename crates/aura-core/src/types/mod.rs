@@ -24,12 +24,14 @@ pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
 pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
 pub use record::RecordEntry;
 pub use status::AgentStatus;
+#[allow(deprecated)]
+pub use tool::ToolDecision;
 pub use tool::{
     installed_integrations_satisfy, integration_match, InstalledIntegrationDefinition,
     InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
     InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
     InstalledToolRuntimeProviderExecution, RuntimeCapabilityInstall, ToolAuth, ToolCall,
-    ToolCallContext, ToolDecision, ToolExecution, ToolProposal, ToolResult,
+    ToolCallContext, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
 };
 pub use tool_permissions::{
     is_effectively_full_access, resolve_effective_permission, AgentToolPermissions, ToolState,
@@ -277,7 +279,7 @@ mod tests {
             tool_use_id: "use-1".into(),
             tool: "spawn_agent".into(),
             args: serde_json::json!({"name":"child"}),
-            decision: ToolDecision::Approved,
+            decision: ToolGateVerdict::Approved,
             reason: None,
             result: Some("ok".into()),
             is_error: false,
@@ -298,7 +300,7 @@ mod tests {
             tool_use_id: "use-2".into(),
             tool: "read_file".into(),
             args: serde_json::json!({"path":"a.txt"}),
-            decision: ToolDecision::Approved,
+            decision: ToolGateVerdict::Approved,
             reason: None,
             result: None,
             is_error: false,

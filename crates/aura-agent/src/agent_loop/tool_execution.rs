@@ -75,8 +75,11 @@ async fn execute_and_cache_tools(
         );
     }
 
-    let (cached_results, uncached_calls) =
-        split_cached(&tool_calls, &state.tool_cache, &state.fuzzy_tool_cache);
+    let (cached_results, uncached_calls) = split_cached(
+        &tool_calls,
+        &state.tool_cache.exact,
+        &state.tool_cache.fuzzy,
+    );
     let cached_ids: HashSet<String> = cached_results
         .iter()
         .map(|r| r.tool_use_id.clone())
@@ -97,8 +100,8 @@ async fn execute_and_cache_tools(
         };
 
     update_cache(
-        &mut state.tool_cache,
-        &mut state.fuzzy_tool_cache,
+        &mut state.tool_cache.exact,
+        &mut state.tool_cache.fuzzy,
         &uncached_calls,
         &executed_results,
     );
@@ -172,15 +175,15 @@ fn check_termination_conditions(
 
     let all_errors = !tools.all_results.is_empty() && tools.all_results.iter().all(|r| r.is_error);
     if all_errors {
-        state.consecutive_all_error_iterations += 1;
+        state.counters.consecutive_all_error_iterations += 1;
     } else {
-        state.consecutive_all_error_iterations = 0;
+        state.counters.consecutive_all_error_iterations = 0;
     }
 
     if tools.saw_empty_path_block {
-        state.consecutive_empty_path_block_iterations += 1;
+        state.counters.consecutive_empty_path_block_iterations += 1;
     } else {
-        state.consecutive_empty_path_block_iterations = 0;
+        state.counters.consecutive_empty_path_block_iterations = 0;
     }
 
     push_tool_result_message_with_context(
@@ -205,25 +208,27 @@ fn check_termination_conditions(
         return true;
     }
 
-    if state.consecutive_empty_path_block_iterations >= crate::constants::EMPTY_PATH_BLOCK_LIMIT {
+    if state.counters.consecutive_empty_path_block_iterations
+        >= crate::constants::EMPTY_PATH_BLOCK_LIMIT
+    {
         let msg = format!(
             "CRITICAL: Agent emitted pathless `write_file`/`edit_file` \
              calls for {} consecutive iterations. The `path` argument is \
              required; retrying without one cannot recover. Stopping so \
              the dev loop can retry with a fresh plan.",
-            state.consecutive_empty_path_block_iterations
+            state.counters.consecutive_empty_path_block_iterations
         );
         emit_stop_error(event_tx, state, "empty_path_blocks", &msg);
         return true;
     }
 
-    if state.consecutive_all_error_iterations
+    if state.counters.consecutive_all_error_iterations
         >= crate::constants::CONSECUTIVE_ERROR_ITERATIONS_LIMIT
     {
         let msg = format!(
             "CRITICAL: All tool calls have returned errors for {} consecutive iterations. \
              The agent appears stuck. Stopping to prevent waste.",
-            state.consecutive_all_error_iterations
+            state.counters.consecutive_all_error_iterations
         );
         emit_stop_error(event_tx, state, "consecutive_errors", &msg);
         return true;

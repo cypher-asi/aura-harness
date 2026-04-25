@@ -11,7 +11,7 @@ mod streaming;
 mod tool_execution;
 #[cfg(test)]
 mod tool_execution_tests;
-mod tool_processing;
+mod tool_pipeline;
 
 #[cfg(test)]
 mod contract_tests;
@@ -422,8 +422,8 @@ impl AgentLoop {
                 continue;
             }
 
-            state.thinking_budget =
-                (state.thinking_budget / 2).max(self.config.thinking_min_budget);
+            state.thinking.budget =
+                (state.thinking.budget / 2).max(self.config.thinking_min_budget);
             streaming::emit(event_tx, AgentLoopEvent::Warning(warning.to_string()));
 
             let request = state
@@ -445,30 +445,59 @@ impl AgentLoop {
     }
 }
 
-/// Mutable state carried across iterations of the agent loop.
-pub struct LoopState {
-    pub(crate) result: AgentLoopResult,
-    pub(crate) tool_cache: HashMap<String, String>,
+/// Tool-result memoization shared by [`super::tool_execution`] and the
+/// fuzzy-search lookup in [`super::search_cache`].
+///
+/// Both maps are invalidated together whenever any successful write
+/// tool runs; pulling them out of [`LoopState`] makes that invariant
+/// visible at the type level (`update_cache` can take `&mut ToolResultCache`
+/// directly) and lets the rest of the loop ignore the cache plumbing.
+#[derive(Default)]
+pub(crate) struct ToolResultCache {
+    /// Exact-key cache: `tool_name + canonical_input_json`.
+    pub(crate) exact: HashMap<String, String>,
     /// Secondary, normalized index for `search_code` / `find_files`
     /// that collapses alternation-order and trivial whitespace
-    /// variants. Populated alongside `tool_cache` in `update_cache`;
+    /// variants. Populated alongside `exact` in `update_cache`;
     /// consulted only on a miss of the exact key. Cleared together
-    /// with `tool_cache` on any successful write so the "write
+    /// with `exact` on any successful write so the "write
     /// invalidates cache" invariant is preserved.
-    pub(crate) fuzzy_tool_cache: HashMap<String, String>,
-    pub(crate) blocking_ctx: BlockingContext,
-    pub(crate) read_guard: ReadGuardState,
-    pub(crate) exploration_state: ExplorationState,
-    pub(crate) stall_detector: StallDetector,
-    pub(crate) budget_state: BudgetState,
-    pub(crate) had_any_write: bool,
-    pub(crate) checkpoint_emitted: bool,
-    pub(crate) exploration_compaction_done: bool,
-    pub(crate) build_cooldown: usize,
-    pub(crate) thinking_budget: u32,
-    pub(crate) last_context_tokens_estimate: Option<u64>,
-    pub(crate) messages: Vec<Message>,
-    pub(crate) build_baseline: Option<BuildBaseline>,
+    pub(crate) fuzzy: HashMap<String, String>,
+}
+
+/// Per-iteration response-token budget and the one-shot "skip the
+/// taper next iteration" override.
+///
+/// Held as its own struct so [`super::iteration::handle_max_tokens`]
+/// only has to mutate `state.thinking.restore_next_iteration` (a
+/// single boolean) without taking a `&mut LoopState` that grants
+/// access to message lists, caches, etc.
+pub(crate) struct ThinkingBudget {
+    /// Tokens the loop allows for the next streaming response. Taper
+    /// applies in [`LoopState::begin_iteration`] once the iteration
+    /// counter passes [`AgentLoopConfig::thinking_taper_after`].
+    pub(crate) budget: u32,
+    /// Set by [`super::iteration::handle_max_tokens`] when the previous
+    /// turn ended with pending tool_use blocks truncated by
+    /// `max_tokens`. The next [`LoopState::begin_iteration`] observes
+    /// this flag and restores `budget` to `config.max_tokens`
+    /// (skipping the taper for that one iteration) so the retry has
+    /// the full budget it needs to re-emit the dropped tool call.
+    /// Cleared immediately after the restore so subsequent iterations
+    /// resume normal tapering.
+    pub(crate) restore_next_iteration: bool,
+}
+
+/// Consecutive-iteration counters driving the loop's degraded-pattern
+/// abort policies (all-error streak, pathless-write streak, narration
+/// streak) and the narration-budget steering injections.
+///
+/// All four fields move and reset together — typically as a single
+/// "the model just produced a useful turn" signal — so grouping them
+/// keeps the related resets co-located and lets helpers in
+/// [`super::iteration`] / [`super::tool_execution`] receive a focused
+/// `&mut IterCounters` slice.
+pub(crate) struct IterCounters {
     /// Consecutive iterations where every tool call returned an error.
     pub(crate) consecutive_all_error_iterations: usize,
     /// Consecutive iterations that contained at least one pathless
@@ -488,23 +517,33 @@ pub struct LoopState {
     /// `tool_use` block. Initialized to `true` so the first turn starts
     /// with a budget-clean state.
     pub(crate) last_turn_had_tool_call: bool,
-    /// Set by [`super::iteration::handle_max_tokens`] when the previous
-    /// turn ended with pending tool_use blocks truncated by
-    /// `max_tokens`. The next [`LoopState::begin_iteration`] observes
-    /// this flag and restores `thinking_budget` to `config.max_tokens`
-    /// (skipping the taper for that one iteration) so the retry has
-    /// the full budget it needs to re-emit the dropped tool call.
-    /// Cleared immediately after the restore so subsequent iterations
-    /// resume normal tapering.
-    pub(crate) restore_budget_next_iteration: bool,
+}
+
+/// Mutable state carried across iterations of the agent loop.
+pub struct LoopState {
+    pub(crate) result: AgentLoopResult,
+    pub(crate) tool_cache: ToolResultCache,
+    pub(crate) blocking_ctx: BlockingContext,
+    pub(crate) read_guard: ReadGuardState,
+    pub(crate) exploration_state: ExplorationState,
+    pub(crate) stall_detector: StallDetector,
+    pub(crate) budget_state: BudgetState,
+    pub(crate) had_any_write: bool,
+    pub(crate) checkpoint_emitted: bool,
+    pub(crate) exploration_compaction_done: bool,
+    pub(crate) build_cooldown: usize,
+    pub(crate) thinking: ThinkingBudget,
+    pub(crate) last_context_tokens_estimate: Option<u64>,
+    pub(crate) messages: Vec<Message>,
+    pub(crate) build_baseline: Option<BuildBaseline>,
+    pub(crate) counters: IterCounters,
 }
 
 impl LoopState {
     fn new(config: &AgentLoopConfig, messages: Vec<Message>) -> Self {
         Self {
             result: AgentLoopResult::default(),
-            tool_cache: HashMap::new(),
-            fuzzy_tool_cache: HashMap::new(),
+            tool_cache: ToolResultCache::default(),
             blocking_ctx: BlockingContext::new(config.exploration_allowance),
             read_guard: ReadGuardState::default(),
             exploration_state: ExplorationState::default(),
@@ -514,15 +553,19 @@ impl LoopState {
             checkpoint_emitted: false,
             exploration_compaction_done: false,
             build_cooldown: 0,
-            thinking_budget: config.max_tokens,
+            thinking: ThinkingBudget {
+                budget: config.max_tokens,
+                restore_next_iteration: false,
+            },
             last_context_tokens_estimate: None,
             messages,
             build_baseline: None,
-            consecutive_all_error_iterations: 0,
-            consecutive_empty_path_block_iterations: 0,
-            consecutive_narration_tokens: 0,
-            last_turn_had_tool_call: true,
-            restore_budget_next_iteration: false,
+            counters: IterCounters {
+                consecutive_all_error_iterations: 0,
+                consecutive_empty_path_block_iterations: 0,
+                consecutive_narration_tokens: 0,
+                last_turn_had_tool_call: true,
+            },
         }
     }
 
@@ -542,16 +585,16 @@ impl LoopState {
         // JSON that previously got cut off. Tapering resumes on the
         // iteration after (the flag is cleared here so it fires at
         // most once per truncation).
-        if self.restore_budget_next_iteration {
-            self.thinking_budget = config.max_tokens;
-            self.restore_budget_next_iteration = false;
+        if self.thinking.restore_next_iteration {
+            self.thinking.budget = config.max_tokens;
+            self.thinking.restore_next_iteration = false;
             return;
         }
 
         if iteration >= config.thinking_taper_after {
-            self.thinking_budget =
-                (f64::from(self.thinking_budget) * config.thinking_taper_factor) as u32;
-            self.thinking_budget = self.thinking_budget.max(config.thinking_min_budget);
+            self.thinking.budget =
+                (f64::from(self.thinking.budget) * config.thinking_taper_factor) as u32;
+            self.thinking.budget = self.thinking.budget.max(config.thinking_min_budget);
         }
     }
 
@@ -598,7 +641,7 @@ impl LoopState {
             .messages(self.messages.clone())
             .tools(effective_tools)
             .tool_choice(tool_choice)
-            .max_tokens(self.thinking_budget)
+            .max_tokens(self.thinking.budget)
             .auth_token(config.auth_token.clone())
             .aura_project_id(config.aura_project_id.clone())
             .aura_agent_id(config.aura_agent_id.clone())

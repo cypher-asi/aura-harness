@@ -514,7 +514,7 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 
 | Module | Contents |
 |--------|----------|
-| `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration.rs` (model calls), `streaming.rs` (event emission), `tool_execution.rs` (cache/execute/emit), `tool_processing.rs` (blocking/stall/build), `context.rs` (compaction), `search_cache.rs` (cached `search_code` results shared across iterations) |
+| `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration.rs` (model calls), `streaming.rs` (event emission), `tool_execution.rs` (outer dispatch on `StopReason::ToolUse`: cache split / emit / termination), `tool_pipeline.rs` (inner pipeline: chunk guard / blocking / executor / effects / stall / auto-build), `context.rs` (compaction), `search_cache.rs` (cached `search_code` results shared across iterations) |
 | `kernel_gateway.rs` | `KernelToolGateway`, `KernelModelGateway` — kernel bridge implementations |
 | `kernel_domain_gateway.rs` | `KernelDomainGateway` (Phase 1): the sole `DomainApi` wrapper that routes every domain mutation through `Kernel::process_direct`, producing a `System/DomainMutation` `RecordEntry` per Invariant §1. |
 | `events/` | `mod.rs` re-exports; `mapper.rs` hosts the `TurnEventSink` trait and `map_agent_loop_event` dispatch (Phase 3 — shared by the TUI `UiCommandSink` and the node `OutboundMessageSink`). |

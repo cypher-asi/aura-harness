@@ -96,6 +96,32 @@ impl KernelModelGateway {
     }
 }
 
+mod sealed {
+    /// Crate-private seal: only types in `aura-agent` can implement
+    /// [`super::RecordingModelProvider`]. External crates cannot satisfy
+    /// this bound by hand-rolling a `ModelProvider` impl.
+    pub trait Sealed {}
+}
+
+/// Marker trait for [`ModelProvider`] impls that route every model call
+/// through `Kernel::reason` / `Kernel::reason_streaming` (Invariant §1
+/// "Sole External Gateway" / §3 "Every LLM Call Is Recorded").
+///
+/// Sealed: external crates cannot implement this. The only public
+/// implementation today is [`KernelModelGateway`], so any function that
+/// requires `RecordingModelProvider` is structurally guaranteed to
+/// receive a kernel-mediated provider — not a raw HTTP client.
+///
+/// Production-side automaton constructors in `aura-automaton`
+/// (`DevLoopAutomaton::new`, `TaskRunAutomaton::new`,
+/// `SpecGenAutomaton::new`, `ChatAutomaton::new`) take an
+/// `Arc<P: RecordingModelProvider>` rather than `Arc<dyn ModelProvider>`
+/// so the type system enforces this invariant.
+pub trait RecordingModelProvider: ModelProvider + sealed::Sealed {}
+
+impl sealed::Sealed for KernelModelGateway {}
+impl RecordingModelProvider for KernelModelGateway {}
+
 #[async_trait]
 impl ModelProvider for KernelModelGateway {
     fn name(&self) -> &'static str {

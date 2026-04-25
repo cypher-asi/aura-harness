@@ -70,13 +70,13 @@ fn last_user_text(state: &LoopState) -> Option<String> {
 #[test]
 fn narration_counter_resets_on_tool_use() {
     let mut state = fresh_state();
-    state.consecutive_narration_tokens = 900;
-    state.last_turn_had_tool_call = false;
+    state.counters.consecutive_narration_tokens = 900;
+    state.counters.last_turn_had_tool_call = false;
 
     let response = tool_use_response(300);
     assert!(!update_narration_budget(None, &mut state, &response));
-    assert_eq!(state.consecutive_narration_tokens, 0);
-    assert!(state.last_turn_had_tool_call);
+    assert_eq!(state.counters.consecutive_narration_tokens, 0);
+    assert!(state.counters.last_turn_had_tool_call);
     assert!(state.result.stop_reason_override.is_none());
 }
 
@@ -86,13 +86,13 @@ fn narration_counter_accumulates_across_toolfree_turns() {
 
     let first = text_only_response(400);
     assert!(!update_narration_budget(None, &mut state, &first));
-    assert_eq!(state.consecutive_narration_tokens, 400);
-    assert!(!state.last_turn_had_tool_call);
+    assert_eq!(state.counters.consecutive_narration_tokens, 400);
+    assert!(!state.counters.last_turn_had_tool_call);
 
     let second = text_only_response(500);
     assert!(!update_narration_budget(None, &mut state, &second));
-    assert_eq!(state.consecutive_narration_tokens, 900);
-    assert!(!state.last_turn_had_tool_call);
+    assert_eq!(state.counters.consecutive_narration_tokens, 900);
+    assert!(!state.counters.last_turn_had_tool_call);
     assert!(state.result.stop_reason_override.is_none());
 }
 
@@ -105,7 +105,7 @@ fn soft_budget_injects_steering_message() {
     assert!(!update_narration_budget(None, &mut state, &big));
 
     assert_eq!(
-        state.consecutive_narration_tokens, 0,
+        state.counters.consecutive_narration_tokens, 0,
         "soft budget should reset the counter after injection"
     );
     assert_eq!(

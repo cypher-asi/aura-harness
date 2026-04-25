@@ -21,7 +21,6 @@ use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
 use aura_kernel::Kernel;
-use aura_reasoner::ModelProvider;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
 use tracing::info;
@@ -36,7 +35,13 @@ use super::{AutomatonBridge, ProjectHandle};
 /// future entry-points). Populated by [`AutomatonBridge::prepare_automaton_run`].
 struct AutomatonRunContext {
     kernel: Arc<Kernel>,
-    model_gw: Arc<dyn ModelProvider>,
+    /// Held as the concrete [`KernelModelGateway`] type (rather than
+    /// `Arc<dyn ModelProvider>`) so the automaton constructors'
+    /// sealed [`aura_agent::RecordingModelProvider`] bound is satisfied
+    /// at the call site. This makes the §1 "Sole External Gateway"
+    /// invariant a structural property of the dispatch path: nothing
+    /// in this file can hand a raw HTTP provider to an automaton.
+    model_gw: Arc<KernelModelGateway>,
     tool_gw: Arc<dyn aura_agent::AgentToolExecutor>,
     gateway_domain: Arc<dyn DomainApi>,
     runner_config: AgentRunnerConfig,
@@ -122,7 +127,7 @@ impl AutomatonBridge {
                 labels.capabilities
             ));
         }
-        let model_gw: Arc<dyn ModelProvider> = Arc::new(KernelModelGateway::new(kernel.clone()));
+        let model_gw: Arc<KernelModelGateway> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
         // Wrap the domain so mutations driven by automaton orchestration

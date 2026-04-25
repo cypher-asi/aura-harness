@@ -1,6 +1,6 @@
 //! Recorded tool executions and the per-call execution context.
 
-use super::proposal::ToolDecision;
+use super::proposal::ToolGateVerdict;
 use crate::ids::AgentId;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ pub struct ToolExecution {
     /// Tool arguments (copied from proposal for auditability)
     pub args: serde_json::Value,
     /// Kernel's decision
-    pub decision: ToolDecision,
+    pub decision: ToolGateVerdict,
     /// Reason for the decision (especially for denials)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

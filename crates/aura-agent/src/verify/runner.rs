@@ -233,7 +233,7 @@ fn log_build_result(result: &BuildResult, build_command: &str) {
     } else {
         // Logged at `info!` rather than `warn!` because a failed build
         // here is *not* a regression on its own — the build-baseline
-        // machinery in `agent_loop::tool_processing::run_auto_build`
+        // machinery in `agent_loop::tool_pipeline::run_auto_build`
         // and `BuildBaseline::annotate` is what decides whether this
         // failure represents *new* errors versus matching the
         // pre-existing baseline. That layer surfaces real regressions

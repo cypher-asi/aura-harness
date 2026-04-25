@@ -43,10 +43,17 @@ impl ToolProposal {
     }
 }
 
-/// The kernel's decision on a tool proposal.
+/// The kernel's verdict on a tool proposal, emitted into the audit log.
+///
+/// This is the persisted, serde-stable verdict attached to every
+/// `ToolExecution` record. The on-the-wire variant strings (
+/// `"approved"`, `"denied"`, `"pending_approval"`) are pinned by
+/// `#[serde(rename_all = "snake_case")]` and must not change — the
+/// Rust type name is independent of the wire format, so renaming the
+/// type itself is byte-compatible with previously persisted records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolDecision {
+pub enum ToolGateVerdict {
     /// Approved and executed
     Approved,
     /// Denied by policy
@@ -54,3 +61,11 @@ pub enum ToolDecision {
     /// Requires user approval (pending)
     PendingApproval,
 }
+
+/// Deprecated alias for [`ToolGateVerdict`].
+///
+/// Kept so external test code and downstream crates that referenced
+/// the old kernel-decision name keep compiling during Phase 4. Prefer
+/// `ToolGateVerdict` for new code.
+#[deprecated(since = "0.1.4", note = "use ToolGateVerdict")]
+pub type ToolDecision = ToolGateVerdict;

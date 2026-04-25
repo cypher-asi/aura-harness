@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use tracing::{error, info};
 
+use aura_agent::RecordingModelProvider;
 use aura_reasoner::ModelProvider;
 use aura_tools::domain_tools::DomainApi;
 
@@ -23,7 +24,19 @@ pub struct SpecGenAutomaton {
 }
 
 impl SpecGenAutomaton {
-    pub fn new(domain: Arc<dyn DomainApi>, provider: Arc<dyn ModelProvider>) -> Self {
+    /// Construct a spec-generation automaton bound to a kernel-mediated
+    /// model provider.
+    ///
+    /// The `RecordingModelProvider` bound is sealed in `aura-agent`
+    /// (Invariant §1 / §3): the only public way to satisfy it is to
+    /// pass an `Arc<aura_agent::KernelModelGateway>`. External callers
+    /// therefore cannot hand a raw HTTP `ModelProvider` directly to the
+    /// automaton and bypass kernel-side recording.
+    pub fn new<P>(domain: Arc<dyn DomainApi>, provider: Arc<P>) -> Self
+    where
+        P: RecordingModelProvider + Send + Sync + 'static,
+    {
+        let provider: Arc<dyn ModelProvider> = provider;
         Self { domain, provider }
     }
 }
