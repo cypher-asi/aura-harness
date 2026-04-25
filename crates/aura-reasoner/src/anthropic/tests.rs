@@ -821,6 +821,74 @@ async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
 }
 
 #[tokio::test]
+async fn test_proxy_deepseek_family_uses_provider_hint_and_usage_aliases() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"deepseek-v4-flash","stop_reason":"end_turn","usage":{"prompt_tokens":100,"completion_tokens":25,"prompt_cache_miss_tokens":80,"prompt_cache_hit_tokens":20}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        api_key: String::new(),
+        default_model: "deepseek-v4-flash".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        backoff_initial_ms: 250,
+        backoff_cap_ms: 30_000,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        routing_mode: RoutingMode::Proxy,
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("deepseek-v4-flash", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .upstream_provider_family(Some("deepseek".to_string()))
+        .try_build()
+        .unwrap();
+
+    let response = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        captured
+            .to_ascii_lowercase()
+            .contains("x-aura-upstream-provider-family: deepseek"),
+        "Proxy DeepSeek requests should carry the upstream provider family hint.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("anthropic-beta"),
+        "Proxy DeepSeek requests should omit Anthropic beta headers.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        !captured.contains("cache_control"),
+        "Proxy DeepSeek requests should omit Anthropic cache_control fields.\nCaptured request:\n{captured}"
+    );
+    assert_eq!(response.usage.input_tokens, 100);
+    assert_eq!(response.usage.output_tokens, 25);
+    assert_eq!(response.usage.cache_creation_input_tokens, Some(80));
+    assert_eq!(response.usage.cache_read_input_tokens, Some(20));
+}
+
+#[tokio::test]
 async fn test_proxy_hint_prefers_anthropic_family_over_model_heuristics() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

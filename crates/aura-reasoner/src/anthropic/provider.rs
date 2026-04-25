@@ -150,6 +150,12 @@ impl AnthropicProvider {
                 if let Some(ref v) = request_ctx.aura_org_id {
                     req_builder = req_builder.header("X-Aura-Org-Id", v);
                 }
+                if let Some(ref family) = request_ctx.upstream_provider_family {
+                    let family = family.trim();
+                    if !family.is_empty() {
+                        req_builder = req_builder.header("X-Aura-Upstream-Provider-Family", family);
+                    }
+                }
             }
         }
 

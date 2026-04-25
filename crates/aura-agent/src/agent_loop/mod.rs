@@ -100,6 +100,8 @@ pub struct AgentLoopConfig {
     pub model: String,
     /// JWT auth token for proxy routing.
     pub auth_token: Option<String>,
+    /// Optional upstream provider family hint for managed proxy routing.
+    pub upstream_provider_family: Option<String>,
     /// Tool names the user wants prioritized for the current turn.
     /// On the first iteration, tools are filtered to this set and
     /// `tool_choice` is set to force tool usage.
@@ -176,6 +178,7 @@ impl Default for AgentLoopConfig {
             system_prompt: String::new(),
             model: crate::constants::DEFAULT_MODEL.to_string(),
             auth_token: None,
+            upstream_provider_family: None,
             tool_hints: None,
             aura_project_id: None,
             aura_agent_id: None,
@@ -657,6 +660,7 @@ impl LoopState {
             .tool_choice(tool_choice)
             .max_tokens(self.thinking.budget)
             .auth_token(config.auth_token.clone())
+            .upstream_provider_family(config.upstream_provider_family.clone())
             .aura_project_id(config.aura_project_id.clone())
             .aura_agent_id(config.aura_agent_id.clone())
             .aura_session_id(config.aura_session_id.clone())

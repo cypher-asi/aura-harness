@@ -103,11 +103,13 @@ pub(super) struct ApiResponse {
 #[derive(Debug, Deserialize)]
 #[allow(clippy::struct_field_names)]
 pub(super) struct ApiUsage {
+    #[serde(alias = "prompt_tokens")]
     pub input_tokens: u64,
+    #[serde(alias = "completion_tokens")]
     pub output_tokens: u64,
-    #[serde(default)]
+    #[serde(default, alias = "prompt_cache_miss_tokens")]
     pub cache_creation_input_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "prompt_cache_hit_tokens")]
     pub cache_read_input_tokens: Option<u64>,
 }
 
@@ -198,10 +200,11 @@ pub(super) struct SseMessageStart {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code, clippy::struct_field_names)]
 pub(super) struct SseUsageStart {
+    #[serde(alias = "prompt_tokens")]
     pub input_tokens: u64,
-    #[serde(default)]
+    #[serde(default, alias = "prompt_cache_miss_tokens")]
     pub cache_creation_input_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "prompt_cache_hit_tokens")]
     pub cache_read_input_tokens: Option<u64>,
 }
 
@@ -243,6 +246,7 @@ pub(super) struct SseMessageDeltaContent {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SseUsageDelta {
+    #[serde(alias = "completion_tokens")]
     pub output_tokens: u64,
 }
 

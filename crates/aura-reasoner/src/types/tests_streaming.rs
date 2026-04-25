@@ -779,6 +779,19 @@ fn test_model_request_builder_with_auth_token() {
 }
 
 #[test]
+fn test_model_request_builder_with_upstream_provider_family() {
+    let request = ModelRequest::builder("model", "system")
+        .upstream_provider_family(Some("deepseek".to_string()))
+        .try_build()
+        .unwrap();
+
+    assert_eq!(
+        request.upstream_provider_family,
+        Some("deepseek".to_string())
+    );
+}
+
+#[test]
 fn test_model_request_builder_multiple_messages() {
     let request = ModelRequest::builder("model", "system")
         .message(Message::user("first"))
