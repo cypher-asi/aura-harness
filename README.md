@@ -248,7 +248,7 @@ aura-harness/
 
 ## HTTP / WebSocket API
 
-All routes are defined in `crates/aura-runtime/src/router/mod.rs` (`create_router`). Names use Axum path-parameter syntax.
+All routes are defined in `crates/aura-runtime/src/router/build.rs` (`create_router`); the shared `RouterState` lives in `crates/aura-runtime/src/router/state.rs`. Names use Axum path-parameter syntax.
 
 ### Health & workspace
 

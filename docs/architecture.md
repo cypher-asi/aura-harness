@@ -214,7 +214,7 @@ The foundation crate. Zero internal dependencies. Defines all shared domain type
 | Module | Contents |
 |--------|----------|
 | `ids` | `AgentId`, `TxId`, `ActionId`, `ProcessId`, `Hash` — macro-generated newtypes with hex serde |
-| `types` | All domain structs/enums — barrel re-export from `action`, `effect`, `identity`, `process`, `proposal`, `reasoner_types`, `record`, `status`, `tool`, `transaction` |
+| `types` | All domain structs/enums — barrel re-export from `action`, `effect`, `identity`, `process`, `proposal`, `reasoner_types`, `record`, `status`, `tool/`, `transaction`. The `tool` module itself is a directory after the Phase 2a split: `types/tool/{mod,proposal,execution,installed,runtime_capability,call,result}.rs`. |
 | `hash` | BLAKE3 helpers: `hash_bytes`, `hash_many`, `compute_context_hash`, `Hasher` |
 | `time` | `now_ms` timestamp helper |
 | `error` | `AuraError` with `thiserror` and `From` impls |
@@ -284,7 +284,7 @@ Provider-agnostic interface for LLM completions. Defines normalized message type
 | Module | Contents |
 |--------|----------|
 | `types/` | `Message`, `ContentBlock`, `Role`, `ImageSource`, `ModelRequest`, `ModelRequestBuilder`, `ThinkingConfig`, `ModelResponse`, `Usage`, `ProviderTrace`, `StopReason`, `StreamEvent`, `StreamContentType`, `StreamAccumulator`, `AccumulatedToolUse`, `ToolChoice` |
-| `anthropic/` | `AnthropicProvider`, `AnthropicConfig`, `RoutingMode`, SSE parser, API type conversion |
+| `anthropic/` | `AnthropicProvider`, `AnthropicConfig`, `RoutingMode`, SSE parser, API type conversion. The Phase 2b refactor split `anthropic/sse.rs` into `anthropic/sse/{mod,parse,event,state,tests}.rs` so the parser, event-shape, and accumulator state each get their own module. |
 | `mock` | `MockProvider`, `MockResponse` |
 | `request` | `ProposeRequest`, `RecordSummary`, `ProposeLimits` (kernel propose flow) |
 | `error` | `ReasonerError` |
@@ -322,10 +322,10 @@ The invariant core. Builds context from the record, calls the reasoner, enforces
 | Module | Contents |
 |--------|----------|
 | `executor` | `Executor` trait, `ExecutorError`, `ExecuteContext`, `ExecuteLimits`, `DecodedToolResult`, `decode_tool_effect` |
-| `router` | `ExecutorRouter` — fan-out dispatch to registered executors |
-| `policy` | `Policy`, `PolicyConfig`, `PolicyVerdict`, tri-state tool resolution |
-| `context` | `Context`, `ContextBuilder` |
-| `kernel` | `Kernel`, `KernelConfig`, `ProcessResult`, `ReasonResult`, `ReasonStreamHandle`, `ToolOutput` |
+| `router` | `ExecutorRouter` — fan-out dispatch to registered executors. **Phase 6:** ambiguous routing (multiple executors `can_handle` the same action) panics in debug builds and returns `Effect::Failed("ambiguous executor routing")` in release; previously it warned and silently picked the first registered match. |
+| `policy` | `Policy`, `PolicyConfig`, `PolicyVerdict`, tri-state tool resolution. The `policy/check.rs` god-module was split (Phase 2a) into `policy/check/{mod,delegate_gate,agent_permissions,integration_gate,scope,verdict,tests}.rs`; `Policy` is now a thin orchestrator over the per-gate helpers. |
+| `context` | `Context`, `ContextBuilder` — split (Phase 2a) into `context/{mod,tests}.rs` so the ~400 lines of `#[cfg(test)]` no longer live next to production code. |
+| `kernel` | `Kernel`, `KernelConfig`, `ProcessResult`, `ReasonResult`, `ReasonStreamHandle`, `ToolOutput`. The `kernel/tools.rs` proposal pipeline was split (Phase 2a) into `kernel/tools/{mod,single,batch,shared}.rs`. The kernel-internal `ToolDecision` was renamed to **`ToolGateVerdict`** (Phase 4) so it no longer collides with the `aura_core::types::tool::ToolDecision` audit-log enum. |
 
 ---
 
@@ -394,13 +394,13 @@ Dev-loop and task control tools (`start_dev_loop`, `pause_dev_loop`, `stop_dev_l
 | Module | Contents |
 |--------|----------|
 | `executor` | `ToolExecutor` — dispatches to `Tool` impls, builds `Sandbox` |
-| `resolver` | `ToolResolver` — catalog + domain executor integration |
+| `resolver` | `ToolResolver` — catalog + domain executor integration. The Phase 2b refactor split `resolver/trusted.rs` into `resolver/trusted/{mod,http,transforms,guards,integrations/}.rs`, with each provider (`github`, `linear`, `slack`, `resend`, `brave`) getting its own file under `integrations/`. |
 | `catalog` | `ToolCatalog`, `ToolProfile`, `ToolOwner`, `CatalogEntry` |
 | `sandbox` | `Sandbox` — path confinement and validation |
 | `tool` | `Tool` trait, `ToolContext`, `builtin_tools()` |
 | `definitions` | Static `ToolDefinition` sets for catalog profiles |
 | `fs_tools/` | All built-in tool implementations |
-| `git_tool/` | `GitExecutor` — kernel-mediated `git_commit`, `git_push`, `git_commit_push` tools. The single permitted call-site for mutating `Command::new("git")` (Invariant §1). Shared `git_commit_impl` / `git_push_impl` helpers are also re-used by the `orbit_push` domain tool. |
+| `git_tool/` | `GitExecutor` — kernel-mediated `git_commit`, `git_push`, `git_commit_push` tools. The single permitted call-site for mutating `Command::new("git")` (Invariant §1). The Phase 2b refactor split `git_tool/mod.rs` into `git_tool/{mod,executor,sandbox,commit,push,commit_push,redact,tests}.rs`; the shared helpers are re-used by the `orbit_push` domain tool. |
 | `domain_tools/` | `DomainToolExecutor`, `DomainApi` trait, per-area handlers (orbit, network, specs, tasks, project, storage) |
 | `automaton_tools` | `AutomatonController` trait and dev-loop/task tools |
 
@@ -514,10 +514,10 @@ The heart of the runtime. `AgentLoop` is the **sole orchestrator** — it drives
 
 | Module | Contents |
 |--------|----------|
-| `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration.rs` (model calls), `streaming.rs` (event emission), `tool_execution.rs` (outer dispatch on `StopReason::ToolUse`: cache split / emit / termination), `tool_pipeline.rs` (inner pipeline: chunk guard / blocking / executor / effects / stall / auto-build), `context.rs` (compaction), `search_cache.rs` (cached `search_code` results shared across iterations) |
-| `kernel_gateway.rs` | `KernelToolGateway`, `KernelModelGateway` — kernel bridge implementations |
-| `kernel_domain_gateway.rs` | `KernelDomainGateway` (Phase 1): the sole `DomainApi` wrapper that routes every domain mutation through `Kernel::process_direct`, producing a `System/DomainMutation` `RecordEntry` per Invariant §1. |
-| `events/` | `mod.rs` re-exports; `mapper.rs` hosts the `TurnEventSink` trait and `map_agent_loop_event` dispatch (Phase 3 — shared by the TUI `UiCommandSink` and the node `OutboundMessageSink`). |
+| `agent_loop/` | Core loop: `mod.rs` (AgentLoop, config, state), `iteration/` (model calls — split Phase 4 into `iteration/{mod,truncation,counters,response,reasoning,scheduling}.rs`; `IterCounters` and `ThinkingBudget` live here), `streaming.rs` (event emission), `tool_execution.rs` (outer dispatch on `StopReason::ToolUse`: cache split / emit / termination), `tool_pipeline.rs` (inner pipeline: chunk guard / blocking / executor / effects / stall / auto-build — renamed Phase 4 from `tool_processing.rs`), `tool_result_cache.rs` (`ToolResultCache` — cached tool results shared across iterations), `context.rs` (compaction), `search_cache.rs` (cached `search_code` results shared across iterations). **Phase 6:** `AgentLoopConfig` gained an `Option<u32>` `thinking_budget` field that seeds `LoopState::thinking.budget`; the runner forwards the policy-derived value capped at `max_tokens`. |
+| `kernel_gateway.rs` | `KernelToolGateway`, `KernelModelGateway` — kernel bridge implementations. The agent loop is *only* allowed to take a `ModelProvider` via the new sealed `RecordingModelProvider` marker (Phase 4); see `recording_stream.rs` and §1 in `docs/invariants.md`. |
+| `kernel_domain_gateway/` | `KernelDomainGateway` (Phase 1; split Phase 2c into `kernel_domain_gateway/{mod,specs,project,storage,orbit,network,tasks,tests}.rs`): the sole `DomainApi` wrapper that routes every domain mutation through `Kernel::process_direct`, producing a `System/DomainMutation` `RecordEntry` per Invariant §1. |
+| `events/` | Phase 4 split: `events/{mod,types,wire,mapper,tests}.rs`. `types.rs` carries `TurnEventSink` plus the agent-loop event enum, `wire.rs` the protocol marshalling, and `mapper.rs` the `map_agent_loop_event` dispatch shared by the TUI `UiCommandSink` and the node `OutboundMessageSink`. |
 | `types.rs` | `AgentToolExecutor` trait, `ToolCallInfo`, `ToolCallResult`, `AgentLoopResult`, `BuildBaseline`, `AutoBuildResult` |
 | `blocking/` | `detection/` (write-failure tracking, read-guard), `stall.rs` (repeated-target detection) |
 | `budget.rs` | `BudgetState`, `ExplorationState` — token and exploration tracking |
@@ -710,7 +710,7 @@ Long-running automaton workflows that drive `AgentLoop` on a schedule.
 | Automaton | Module | Description |
 |-----------|--------|-------------|
 | `ChatAutomaton` | `builtins/chat.rs` | Interactive chat sessions |
-| `DevLoopAutomaton` | `builtins/dev_loop/` | Iterative development loop with commit-and-push support |
+| `DevLoopAutomaton` | `builtins/dev_loop/` | Iterative development loop with commit-and-push support. Phase 4 split: `dev_loop/{mod,aggregate,forward_event,validation}.rs` — `aggregate.rs` collects per-iteration results, `forward_event.rs` translates agent-loop events to automaton events, `validation.rs` drives the post-iteration build/test gate. |
 | `SpecGenAutomaton` | `builtins/spec_gen.rs` | Specification generation |
 | `TaskRunAutomaton` | `builtins/task_run.rs` | Task execution |
 
@@ -801,13 +801,14 @@ of the global 30 req/s cap.
 |--------|----------|
 | `node.rs` | `Node` struct and `run` |
 | `config/` | `NodeConfig`, env loading |
-| `router/` | Axum router, `RouterState`, route handlers (`tx`, `ws`, `files`, `automaton`) |
+| `router/` | Phase 4 split. `router/state.rs` owns `RouterState` and the (now type-narrowed) `Arc<dyn Store>` field; `router/build.rs` constructs the Axum router from a `RouterState` (the single executor source of truth — see Invariant §10 and Phase 6 ambiguity fix); `router/memory/` is the memory-API surface, split Phase 4 into `router/memory/{mod,handlers,wire,tests}.rs` (`handlers.rs` holds the async axum handlers; `wire.rs` carries the request/response shapes). Other route handlers (`tx`, `ws`, `files`, `automaton`) live alongside in submodules. |
 | `scheduler.rs` | `Scheduler` — per-agent locking and dispatch |
+| `tool_permissions.rs` | HTTP-driven permission writes (Phase 0). The single sanctioned non-kernel/store call-site for `append_entry_*` and the only non-router runtime holder of `Arc<dyn Store>`; both are guarded by the per-agent scheduler lock. See Invariants §2 and §10. |
 | `worker.rs` | `process_agent` — dequeue + `AgentLoop` execution |
 | `session/` | `Session` state, `handle_ws_connection`. `TurnEvent` → `OutboundMessage` mapping goes through `aura_agent::TurnEventSink` (Phase 3) via the local `OutboundMessageSink`. |
 | `files_api.rs` | Shared workspace walker + capped file reader (Phase 3). Used by both the node's own `/api/files` / `/api/read-file` handlers and the TUI-embedded `src/api_server.rs`. |
 | `terminal.rs` | Terminal WebSocket handler |
-| `automaton_bridge.rs` | Bridge between automaton runtime and node sessions |
+| `automaton_bridge/` | Phase 2c split: `automaton_bridge/{mod,build,event_channel,dispatch,tests}.rs`. `event_channel.rs` owns the per-automaton MPSC fan-out; `build.rs` wires the bridge into the runtime; `dispatch.rs` translates automaton events to outbound messages. |
 | `domain.rs` | `HttpDomainApi` — HTTP-backed `DomainApi` implementation |
 | `jwt_domain.rs` | `JwtDomainApi` — JWT-authenticated domain API |
 | `executor_factory.rs` | `build_tool_resolver`, `build_executor_router` |
@@ -815,7 +816,7 @@ of the global 30 req/s cap.
 
 ---
 
-### 13. `aura` (Root Binary)
+### 14. `aura` (Root Binary)
 
 The primary entry point. Supports TUI mode (default) and headless mode.
 

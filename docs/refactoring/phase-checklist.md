@@ -268,76 +268,197 @@ pub enum RuntimeError {
 
 ## 4. Historical Phase-by-Phase Checklist
 
-Archived execution checklist from migration period.
+Archived execution checklist from the original migration period (Phases 0–10).
+All items below were closed out in the 2026-Q1 refactor and are kept here for
+historical reference. The newer **System-Audit Refactor (2026-04-24)** has its
+own checklist in §5.
 
 ### Phase 0 — Baseline verified green
 
-- [ ] `cargo check --workspace --all-targets` passes
-- [ ] `cargo test --workspace --all-features` passes
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- [ ] Focused checks on `aura-agent`, `aura-automaton`, `aura-runtime`, `aura-kernel` pass
-- [ ] API snapshots above match current state
+- [x] `cargo check --workspace --all-targets` passes
+- [x] `cargo test --workspace --all-features` passes
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [x] Focused checks on `aura-agent`, `aura-automaton`, `aura-runtime`, `aura-kernel` pass
+- [x] API snapshots above match current state
 
 ### Phase 1 — AgentRunner boundary fix
 
-- [ ] `AgentRunner` moved or re-bounded as designed
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
-- [ ] No public API removals without snapshot update
+- [x] `AgentRunner` moved or re-bounded as designed
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
+- [x] No public API removals without snapshot update
 
 ### Phase 2 — Tighten `aura-agent` API
 
-- [ ] Non-essential `pub mod` items made `pub(crate)` or removed
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
-- [ ] Snapshot updated to reflect narrowed API
+- [x] Non-essential `pub mod` items made `pub(crate)` or removed
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
+- [x] Snapshot updated to reflect narrowed API
 
 ### Phase 3 — Extract `aura-agent-fileops` wiring
 
-- [ ] File-ops integration verified end-to-end
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] File-ops integration verified end-to-end
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 4 — Wire `AgentLoop` into runtime
 
-- [ ] `AgentLoop` is callable from `aura-runtime` turn processor
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] `AgentLoop` is callable from `aura-runtime` turn processor
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 5 — Consolidate error types
 
-- [ ] `AgentError` / `RuntimeError` unified or bridged cleanly
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] `AgentError` / `RuntimeError` unified or bridged cleanly
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 6 — Process manager integration
 
-- [ ] Async processes tracked end-to-end through agent loop
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] Async processes tracked end-to-end through agent loop
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 7 — Session lifecycle cleanup
 
-- [ ] `aura-runtime` session module simplified
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] `aura-runtime` session module simplified
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 8 — Automaton bridge stabilization
 
-- [ ] `automaton_bridge` API finalized
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] `automaton_bridge` API finalized
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 9 — Tool resolver unification
 
-- [ ] Single `ToolResolver` path for built-in + domain tools
-- [ ] G1–G5 pass
-- [ ] Focused crate checks pass
+- [x] Single `ToolResolver` path for built-in + domain tools
+- [x] G1–G5 pass
+- [x] Focused crate checks pass
 
 ### Phase 10 — Final cleanup & documentation
 
-- [ ] Dead code removed
-- [ ] `#![allow(dead_code)]` annotations removed where possible
-- [ ] G1–G5 pass
-- [ ] All snapshots updated to reflect final public API
-- [ ] PROGRESS.md updated
+- [x] Dead code removed
+- [x] `#![allow(dead_code)]` annotations removed where possible
+- [x] G1–G5 pass
+- [x] All snapshots updated to reflect final public API
+- [x] PROGRESS.md updated
+
+---
+
+## 5. System-Audit Refactor (2026-04-24)
+
+A second, narrower refactor pass covering invariant drift, god-modules, and
+type-system tightening. See `C:\Users\n3o\.cursor\plans\system-audit-refactor_c3234749.plan.md`
+for the full plan. Status as of Phase 6 close-out:
+
+### Phase 0 — Invariant gating + `aura-node` rename
+
+- [x] HTTP `tool_permissions` permission writes routed under the per-agent
+      scheduler lock (Phase 0 fix; pinned by the §2 allowlist in
+      `scripts/check_invariants.sh`).
+- [x] `aura-node` crate renamed to `aura-runtime`; binary name kept as
+      `aura-node` to avoid operator churn.
+- [x] `scripts/check_invariants.sh` enabled in CI via
+      `.github/workflows/invariants.yml`.
+
+### Phase 1 — Sole external gateway hardening
+
+- [x] `KernelDomainGateway` introduced; every automaton/agent domain
+      mutation routes through `Kernel::process_direct` and produces a
+      `System/DomainMutation` `RecordEntry`.
+- [x] `AutomatonBridge::record_lifecycle_event` `.await`s
+      `scheduler.schedule_agent` so lifecycle entries always commit.
+- [x] Sync + handshake reasoning failure paths now record a `Reasoning`
+      `RecordEntry` (Invariant §3).
+
+### Phase 2a — God-module splits in `aura-core` / `aura-kernel`
+
+- [x] `aura_core::types::tool` split into the `tool/` directory.
+- [x] `aura_kernel::policy::check` split into the `check/` directory
+      (`delegate_gate`, `agent_permissions`, `integration_gate`,
+      `scope`, `verdict`, `tests`).
+- [x] `aura_kernel::context` split into `context/{mod,tests}.rs`.
+- [x] `aura_kernel::kernel::tools` split into
+      `kernel/tools/{mod,single,batch,shared}.rs`.
+
+### Phase 2b — God-module splits in `aura-tools` / `aura-reasoner`
+
+- [x] `aura_tools::resolver::trusted` split into
+      `resolver/trusted/{mod,http,transforms,guards,integrations/}`.
+- [x] `aura_tools::git_tool` split into per-subcommand modules
+      (`executor`, `sandbox`, `commit`, `push`, `commit_push`,
+      `redact`, `tests`).
+- [x] `aura_reasoner::anthropic::sse` split into
+      `anthropic/sse/{mod,parse,event,state,tests}.rs`.
+
+### Phase 2c — God-module splits in `aura-runtime` / `aura-agent`
+
+- [x] `aura_runtime::automaton_bridge` split into the `automaton_bridge/`
+      directory (`mod`, `build`, `event_channel`, `dispatch`, `tests`).
+- [x] `aura_agent::kernel_domain_gateway` split into the
+      `kernel_domain_gateway/` directory (`specs`, `project`, `storage`,
+      `orbit`, `network`, `tasks`, `tests`).
+
+### Phase 3 — Shared embedder bootstrap + event mapping
+
+- [x] `aura_agent::session_bootstrap` consolidates store opening, auth
+      token loading, default config, and executor-router construction;
+      `src/session_helpers.rs` is now a thin re-export layer.
+- [x] `aura_agent::events::TurnEventSink` + `map_agent_loop_event`
+      shared by the TUI `UiCommandSink` and the node `OutboundMessageSink`.
+- [x] `aura_runtime::files_api` shared by both the node `/api/files` /
+      `/api/read-file` handlers and the TUI-embedded `src/api_server.rs`.
+
+### Phase 4 — Type-state seal + mid-loop refactor
+
+- [x] `aura_agent::RecordingModelProvider` sealed marker trait introduced;
+      automatons take `P: RecordingModelProvider` instead of
+      `Arc<dyn ModelProvider>`. Locks Invariant §1 into the type system.
+- [x] `aura_kernel`-internal `ToolDecision` renamed to
+      `ToolGateVerdict` to disambiguate from the `aura_core`
+      audit-log enum.
+- [x] `agent_loop::iteration` split into the `iteration/` directory
+      (`truncation`, `counters`, `response`, `reasoning`,
+      `scheduling`); `IterCounters` and `ThinkingBudget` introduced.
+- [x] `agent_loop::tool_processing` renamed to `tool_pipeline`.
+- [x] `agent_loop::tool_result_cache::ToolResultCache` extracted.
+- [x] `aura_agent::events` split into
+      `events/{mod,types,wire,mapper,tests}.rs`.
+- [x] `aura_runtime::router::memory` split into
+      `router/memory/{mod,handlers,wire,tests}.rs`.
+- [x] `dev_loop` split into
+      `builtins/dev_loop/{mod,aggregate,forward_event,validation}.rs`.
+
+### Phase 5 — Test-only reachability cleanup
+
+- [x] Test-only constructors gated behind `#[cfg(test)]` consistently.
+- [x] Zero unused-import / dead-code warnings under
+      `--all-features --all-targets`.
+
+### Phase 6 — Finish & document (this phase)
+
+- [x] **Bullet 1:** `thinking_budget` wired into
+      `AgentLoopConfig::thinking_budget` and seeded into
+      `LoopState::thinking.budget` (capped at `max_tokens` so
+      truncation-recovery still restores to the per-request ceiling).
+      Test: `agent_runner::tests::configure_loop_config_seeds_thinking_budget`.
+- [x] **Bullet 2:** Router executor-ambiguity in
+      `aura_kernel::router::ExecutorRouter::execute` now `error!`-logs,
+      panics under `debug_assert!` in debug/test builds, and returns
+      `Effect::Failed("ambiguous executor routing")` in release.
+      Tests: `ambiguous_routing_panics_in_debug_builds`,
+      `single_match_dispatches_normally`.
+- [x] **Bullet 3:** `scripts/check_invariants.sh` §2 and §10 allowlists
+      refreshed for the Phase 2c module layout (`automaton_bridge/`,
+      `router/state.rs`, `kernel_domain_gateway/`) and the Phase 0
+      `tool_permissions.rs` direct-append site. `docs/invariants.md`
+      §10 prose tracks the new allowlist verbatim.
+- [x] **Bullet 4:** `docs/architecture.md`, `docs/invariants.md`,
+      `docs/PROGRESS.md`, `docs/refactoring/phase-checklist.md`,
+      and `README.md` refreshed for the new module layout, type
+      renames, and the `RecordingModelProvider` seal.
+- [x] G1–G3 + invariants script all green (workspace `cargo check`
+      passes; clippy-clean on the touched bands; `rg` bands re-run
+      manually since `bash` is unavailable on the Windows host).

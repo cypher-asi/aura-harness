@@ -72,9 +72,14 @@ run_band "§1/§3" "direct ModelProvider::complete call outside the recording se
 
 # §2 — direct store append functions bypass the kernel's seq/context-hash
 # pipeline unless they are inside aura-kernel, aura-store, or tests.
+#
+# Sanctioned non-kernel/store call-sites:
+#   * `crates/aura-runtime/src/tool_permissions.rs` — HTTP-driven tool-
+#     permissions append guarded by the per-agent scheduler lock (Phase 0
+#     of the system-audit refactor; see `append_agent_tool_permissions_entry`).
 run_band "§2" "append_entry_* used outside aura-kernel / aura-store / tests" \
     'append_entry_(atomic|dequeued|direct|entries_batch)' \
-    '^(crates/aura-kernel/|crates/aura-store/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-runtime/src/tool_permissions\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — raw `git` processes must live in a kernel-mediated executor.
 #
@@ -107,22 +112,27 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor" \
 #     this allowlist collapses to just the kernel/store crates.
 #
 # Production holders with follow-up TODOs:
-#   - crates/aura-runtime/src/router/mod.rs      — RouterState field piped into WsContext
+#   - crates/aura-runtime/src/router/state.rs    — RouterState field piped into WsContext
+#                                                  (was router/mod.rs before the Phase 2c split)
 #   - crates/aura-runtime/src/session/mod.rs     — WsContext handed to Kernel::new
 #   - crates/aura-runtime/src/scheduler.rs       — Scheduler builds per-agent kernels
-#   - crates/aura-runtime/src/automaton_bridge.rs — AutomatonBridge builds automaton kernels
+#   - crates/aura-runtime/src/automaton_bridge/  — AutomatonBridge builds automaton kernels
+#                                                  (was automaton_bridge.rs before the Phase 2c split;
+#                                                   now mod.rs + build.rs + dispatch.rs + event_channel.rs)
 #   - crates/aura-runtime/src/node.rs            — boots the process-wide store
-#   - src/main.rs                             — top-level binary wiring
+#   - crates/aura-runtime/src/tool_permissions.rs — HTTP-driven tool-permissions
+#                                                  append serialized via the scheduler lock
+#   - src/main.rs                                — top-level binary wiring
 #
 # Test-only holders (filenames that don't match `*test*.rs` but whose hits
 # are inside `#[cfg(test)] mod tests`):
 #   - crates/aura-agent/src/kernel_gateway.rs
-#   - crates/aura-agent/src/kernel_domain_gateway.rs
+#   - crates/aura-agent/src/kernel_domain_gateway/  (was kernel_domain_gateway.rs pre-Phase-2c)
 #   - crates/aura-agent/src/recording_stream.rs
 #   - crates/aura-runtime/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store::)?Store>' \
-    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-runtime/src/scheduler\.rs|crates/aura-runtime/src/automaton_bridge\.rs|crates/aura-runtime/src/router/mod\.rs|crates/aura-runtime/src/session/mod\.rs|crates/aura-runtime/src/worker\.rs|crates/aura-runtime/src/node\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-runtime/src/scheduler\.rs|crates/aura-runtime/src/automaton_bridge/|crates/aura-runtime/src/router/state\.rs|crates/aura-runtime/src/session/mod\.rs|crates/aura-runtime/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into aura-store directly. Any code
 # that needs persistence goes through the kernel. Test files in the same

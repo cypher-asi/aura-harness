@@ -10,8 +10,8 @@ sync with the `Enforcement:` lines under each section.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| §1 | Sole External Gateway | CI-gated `rg` bands in `scripts/check_invariants.sh` + `.github/workflows/invariants.yml` (ModelProvider `.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/agent_loop/`). Git-mutation surface covered by `crates/aura-tools/src/git_tool/tests.rs` (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by `crates/aura-agent/src/kernel_domain_gateway.rs` tests. |
-| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-runtime/src/automaton_bridge.rs::tests::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path). |
+| §1 | Sole External Gateway | CI-gated `rg` bands in `scripts/check_invariants.sh` + `.github/workflows/invariants.yml` (ModelProvider `.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/agent_loop/`). Type-level seal: `aura_agent::RecordingModelProvider` (Phase 4 of the system-audit refactor) is a crate-sealed marker trait — automatons take `P: RecordingModelProvider`, so only `KernelModelGateway` (the recording wrapper) can be plugged in. External `dyn ModelProvider` cannot satisfy the seal. Git-mutation surface covered by `crates/aura-tools/src/git_tool/tests.rs` (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by `crates/aura-agent/src/kernel_domain_gateway/` tests. |
+| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-runtime/src/automaton_bridge/tests.rs::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path). |
 | §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), `crates/aura-kernel/src/kernel/tests.rs::reason_sync_error_records_failed` + `reason_streaming_handshake_error_records_failed` (Phase 1 sync + handshake failure paths), `tests/automaton_reasoning_recording.rs` (automaton spec-gen / dev-loop calls). |
 | §4 | Full Policy Enforcement | `crates/aura-core/src/types/tool_permissions.rs` resolver/full-access tests, `crates/aura-kernel/src/policy/check.rs` policy tests, `crates/aura-runtime/src/tool_permissions.rs` validation/monotonic tests, `crates/aura-runtime/src/session/helpers.rs` session tool-config composition tests, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` command guardrail tests. |
 | §5 | Complete Audit Trail | `crates/aura-kernel/src/kernel/tests.rs` + §4 matrix asserts `decision`/`actions`/`context_hash`. |
@@ -47,6 +47,19 @@ All external interactions are mediated through `Kernel::process()` or `Kernel::r
 The harness is the runtime authorization and execution boundary, not the credential authority.
 Org-level credential persistence and canonical secret retrieval must remain outside the harness.
 
+### Type-level enforcement: sealed `RecordingModelProvider`
+
+In addition to the `rg`-band CI gate on `.complete(`, automatons (`SpecGenAutomaton`,
+`DevLoopAutomaton`, `TaskRunAutomaton`, `ChatAutomaton`) accept their `ModelProvider`
+parameter as `P: aura_agent::RecordingModelProvider` rather than `Arc<dyn ModelProvider>`.
+The `RecordingModelProvider` trait is sealed via a crate-private marker module so the
+*only* type that can satisfy the bound from outside `aura-agent` is `KernelModelGateway`
+(the recording wrapper that funnels every call through `Kernel::reason`). External crates
+— including tests — cannot smuggle a raw `dyn ModelProvider` into an automaton without
+opting in through the `#[cfg(test)]`-gated test-double constructor. This is a Phase 4
+addition that locks §1 into the type system instead of leaving the rule purely as a
+linter rule.
+
 ### Verification
 
 ```bash
@@ -56,6 +69,11 @@ rg "append_entry_atomic" --type rust # Store writes
 rg "enqueue_tx" --type rust          # Store inbox writes
 rg "Command::new.*git" --type rust   # Git subprocess spawning
 ```
+
+The `scripts/check_invariants.sh` allowlists encode the legitimate call sites for each
+band; the §10 allowlist in particular covers the post-Phase-2c module layout (e.g.
+`crates/aura-runtime/src/automaton_bridge/` as a directory prefix and
+`crates/aura-runtime/src/router/state.rs` for the `RouterState` field).
 
 ---
 
@@ -243,6 +261,25 @@ a `static_assertions::assert_impl_all!(RocksStore: WriteStore, Store)`
 check pins the sealed-trait surface at compile time, and the fault-
 injection rows prove the append path is all-or-nothing.
 
+**`Arc<dyn Store>` allowlist** (CI gate in `scripts/check_invariants.sh` §10
+band; updated for the Phase 2c splits):
+
+- Production holders: `crates/aura-runtime/src/router/state.rs` (was
+  `router/mod.rs` pre-split — the `RouterState.store` field), the
+  `crates/aura-runtime/src/automaton_bridge/` directory (was
+  `automaton_bridge.rs`; now `mod.rs` + `build.rs` + `dispatch.rs` +
+  `event_channel.rs`), `crates/aura-runtime/src/scheduler.rs`,
+  `crates/aura-runtime/src/session/mod.rs`,
+  `crates/aura-runtime/src/node.rs`,
+  `crates/aura-runtime/src/tool_permissions.rs` (HTTP-driven append
+  serialized via the scheduler lock, Phase 0), and `src/main.rs`.
+- Test-only holders (filenames don't match `*test*.rs` but hits live
+  inside `#[cfg(test)] mod tests`): `crates/aura-agent/src/kernel_gateway.rs`,
+  the `crates/aura-agent/src/kernel_domain_gateway/` directory (was
+  `kernel_domain_gateway.rs`), `crates/aura-agent/src/recording_stream.rs`,
+  `crates/aura-runtime/src/worker.rs`, and
+  `crates/aura-memory/src/test_kernel.rs`.
+
 ---
 
 ## 11. Session-Scoped Tool Decisions
@@ -280,6 +317,7 @@ The following operations intentionally do NOT route through the kernel:
 | Tool sandbox setup (`sandbox.rs` directory creation) | Infrastructure for the kernel-managed tool pipeline. |
 | Read-only git operations (`git diff`, `git status`, `git log`) in `aura-agent/src/git.rs` | No external side effect. The `is_git_repo` filesystem probe and `list_unpushed_commits` (`git log` scan) stay in `aura-agent` as read-only helpers. Every mutating `git` subprocess (`add`, `commit`, `push`) lives behind the `GitExecutor` in `crates/aura-tools/src/git_tool/` and routes through the kernel's `ToolExecutor`. |
 | `git init` bootstrap in `crates/aura-automaton/src/builtins/dev_loop/tick.rs` | One-time creation of a local `.git/` directory when a fresh workspace is first driven by the dev-loop automaton. Has no remote, cannot leak state across agents, and is strictly analogous to `RocksStore::open`. The call-site is pinned by the `Command::new("git")` band in `scripts/check_invariants.sh`; any second `git init` anywhere else is a CI failure. |
+| HTTP-driven `append_entry_direct` in `crates/aura-runtime/src/tool_permissions.rs` | Tool-permissions PUT handler appends a `System` record entry directly so the operator's UI write is durable on the response. Runs *under* the per-agent scheduler lock (Phase 0 of the system-audit refactor), so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in `scripts/check_invariants.sh`; any other non-kernel/non-store `append_entry_*` call is a CI failure. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
 | Generation proxy (`session/generation.rs`) for image/3D requests | Pure SSE proxy to `aura-router`; the session does not mutate local state or consume LLM credits. All remote calls use bounded `reqwest` connect/read timeouts. When this surface starts spending credits or persisting artifacts locally it **must** move behind a `KernelGenerationGateway`. **Regression guard:** `crates/aura-runtime/tests/generation_proxy_guard.rs` reads `session/generation.rs` from disk and fails if `RecordEntry`, `Kernel`, `ModelProvider`, or any `append_entry_*` helper appears in the source — any of those would mean the module has crossed the line and the exception must either be removed or the module re-routed through the kernel gateway. |
 

@@ -3,7 +3,7 @@
 use crate::executor::{ExecuteContext, Executor};
 use aura_core::{Action, Effect, EffectKind, EffectStatus};
 use std::sync::Arc;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, instrument};
 
 /// Router that dispatches actions to the appropriate executor.
 #[derive(Clone)]
@@ -32,27 +32,52 @@ impl ExecutorRouter {
     }
 
     /// Execute an action by finding and invoking the appropriate executor.
+    ///
+    /// # Routing contract
+    ///
+    /// A well-formed router has *at most one* executor whose
+    /// [`Executor::can_handle`] returns `true` for any given action.
+    /// When two or more executors match, the registry is mis-configured
+    /// — silently dispatching to the first registered match was a
+    /// foot-gun (Phase 6 of the system-audit refactor): the resolution
+    /// depended on registration order, which is invisible at the call
+    /// site.
+    ///
+    /// In `debug_assertions` builds (and therefore tests) this now
+    /// **panics** so the misconfiguration is caught immediately. In
+    /// release builds we surface a structured
+    /// `EffectStatus::Failed("ambiguous executor routing: ...")`
+    /// instead of letting registration order silently win.
     #[instrument(skip(self, ctx, action), fields(action_id = %action.action_id, kind = ?action.kind))]
     pub async fn execute(&self, ctx: &ExecuteContext, action: &Action) -> Effect {
-        let mut matched_count = 0usize;
-        let mut selected: Option<&Arc<dyn Executor>> = None;
-        for executor in &self.executors {
-            if executor.can_handle(action) {
-                matched_count += 1;
-                if selected.is_none() {
-                    selected = Some(executor);
-                }
-            }
-        }
+        let matches: Vec<&Arc<dyn Executor>> = self
+            .executors
+            .iter()
+            .filter(|e| e.can_handle(action))
+            .collect();
 
-        if matched_count > 1 {
-            warn!(
-                matched_count,
-                "Multiple executors can handle action; dispatching first registered match"
+        if matches.len() > 1 {
+            let names: Vec<&str> = matches.iter().map(|e| e.name()).collect();
+            // Always loud — operators must notice this.
+            error!(
+                matched = matches.len(),
+                executors = ?names,
+                "Multiple executors can handle action; routing is ambiguous"
+            );
+            debug_assert!(
+                matches.len() <= 1,
+                "ambiguous executor routing: {names:?} all match action {:?}",
+                action.action_id
+            );
+            return Effect::new(
+                action.action_id,
+                EffectKind::Agreement,
+                EffectStatus::Failed,
+                format!("ambiguous executor routing: {} executors match", matches.len()),
             );
         }
 
-        if let Some(executor) = selected {
+        if let Some(executor) = matches.first() {
             debug!(executor = executor.name(), "Dispatching action to executor");
             match executor.execute(ctx, action).await {
                 Ok(effect) => {
@@ -84,5 +109,80 @@ impl ExecutorRouter {
 impl Default for ExecutorRouter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::executor::{ExecuteContext, Executor, ExecutorError};
+    use aura_core::{ActionId, ActionKind, AgentId};
+    use async_trait::async_trait;
+
+    /// Test executor that always claims to handle the action.
+    struct AlwaysMatch {
+        name: &'static str,
+    }
+
+    #[async_trait]
+    impl Executor for AlwaysMatch {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn can_handle(&self, _action: &Action) -> bool {
+            true
+        }
+
+        async fn execute(
+            &self,
+            _ctx: &ExecuteContext,
+            action: &Action,
+        ) -> Result<Effect, ExecutorError> {
+            Ok(Effect::new(
+                action.action_id,
+                EffectKind::Agreement,
+                EffectStatus::Committed,
+                format!("ok from {}", self.name),
+            ))
+        }
+    }
+
+    fn dummy_action() -> Action {
+        Action::new(
+            ActionId::new([0xAA; 16]),
+            ActionKind::Reason,
+            bytes::Bytes::new(),
+        )
+    }
+
+    fn dummy_ctx() -> ExecuteContext {
+        ExecuteContext::new(
+            AgentId::new([0u8; 32]),
+            ActionId::new([0xAA; 16]),
+            std::path::PathBuf::from("."),
+        )
+    }
+
+    /// Two executors both match → ambiguous routing must blow up
+    /// rather than silently picking the first registered match. In
+    /// debug builds (which `cargo test` runs by default) the
+    /// `debug_assert!` panics; that's the contract this test pins.
+    #[tokio::test]
+    #[should_panic(expected = "ambiguous executor routing")]
+    async fn ambiguous_routing_panics_in_debug_builds() {
+        let router = ExecutorRouter::with_executors(vec![
+            Arc::new(AlwaysMatch { name: "first" }),
+            Arc::new(AlwaysMatch { name: "second" }),
+        ]);
+        let _ = router.execute(&dummy_ctx(), &dummy_action()).await;
+    }
+
+    /// Single matching executor → normal dispatch.
+    #[tokio::test]
+    async fn single_match_dispatches_normally() {
+        let router = ExecutorRouter::with_executors(vec![Arc::new(AlwaysMatch { name: "only" })]);
+        let effect = router.execute(&dummy_ctx(), &dummy_action()).await;
+        assert!(matches!(effect.status, EffectStatus::Committed));
     }
 }

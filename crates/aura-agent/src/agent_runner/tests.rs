@@ -29,6 +29,28 @@ fn configure_loop_config_maps_all_fields() {
 }
 
 #[test]
+fn configure_loop_config_seeds_thinking_budget() {
+    // The runner derives a complexity-adjusted `thinking_budget` and
+    // wires it through `AgentLoopConfig::thinking_budget` so the
+    // agent-loop's `LoopState::thinking.budget` starts there (rather
+    // than at `max_tokens`). Without this, the per-task tuning in
+    // `compute_thinking_budget` would silently no-op.
+    let config = AgentRunnerConfig {
+        thinking_budget: 4_000,
+        task_execution_max_tokens: 16_384,
+        ..AgentRunnerConfig::default()
+    };
+    let standard =
+        configure_loop_config(TaskComplexity::Standard, &config, 12, 3, "system".into());
+    assert_eq!(standard.thinking_budget, Some(4_000));
+
+    let simple = configure_loop_config(TaskComplexity::Simple, &config, 8, 3, "system".into());
+    let simple_budget = simple.thinking_budget.expect("seeded");
+    assert!(simple_budget <= simple.max_tokens, "must respect max_tokens ceiling");
+    assert!(simple_budget <= 4_000);
+}
+
+#[test]
 fn check_repeated_error_returns_none_on_first() {
     let result = check_repeated_error(&[], "sig1", 1, "cargo build");
     assert!(result.is_none());

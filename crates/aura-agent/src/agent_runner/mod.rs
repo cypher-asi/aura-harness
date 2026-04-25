@@ -441,14 +441,18 @@ pub fn configure_loop_config(
         _ => config.default_model.clone(),
     };
 
-    // The thinking_budget from policy feeds into the loop's initial thinking state
-    // via max_tokens; the AgentLoop tapers it across iterations.
-    // TODO(phase-6): wire thinking_budget into AgentLoopConfig or delete; see system-audit-refactor plan
-    let _ = thinking_budget;
+    // Phase 6: the policy-derived `thinking_budget` is the *starting*
+    // per-iteration response budget for `LoopState::thinking.budget`.
+    // The agent loop tapers it across iterations and the on-truncation
+    // recovery path lifts back to `max_tokens`. We forward it via
+    // `AgentLoopConfig::thinking_budget` (capped at `max_tokens` so the
+    // ceiling invariant in `LoopState::build_request` still holds).
+    let initial_thinking_budget = thinking_budget.min(max_tokens);
 
     AgentLoopConfig {
         max_iterations,
         max_tokens,
+        thinking_budget: Some(initial_thinking_budget),
         stream_timeout: Duration::from_secs(config.stream_timeout_secs),
         billing_reason: "aura_task".to_string(),
         max_context_tokens: Some(config.max_context_tokens),

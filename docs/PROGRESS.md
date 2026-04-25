@@ -346,6 +346,90 @@ aura_os/
 
 ## Notes
 
+### 2026-04-24: System-Audit Refactor (Phases 0-6)
+
+Second pass over the codebase, narrower than the original
+`aura-executor` dissolution. Driven by the plan in
+`C:\Users\n3o\.cursor\plans\system-audit-refactor_c3234749.plan.md`.
+The full close-out checklist is in
+[`docs/refactoring/phase-checklist.md`](refactoring/phase-checklist.md) §5.
+One-paragraph summary per phase:
+
+- **Phase 0 — Invariant gating + crate rename.** Routed the HTTP
+  `tool_permissions` PUT handler under the per-agent scheduler lock so
+  its `append_entry_direct` call is correctly serialized with the
+  kernel's own writes. Renamed the `aura-node` crate to `aura-runtime`
+  to match the layered-architecture vocabulary while keeping the
+  binary name (`aura-node.exe`) stable for operators. Wired
+  `scripts/check_invariants.sh` into CI via
+  `.github/workflows/invariants.yml` so future drift fails review.
+- **Phase 1 — Sole external gateway hardening.** Introduced
+  `KernelDomainGateway` (in `aura-agent`) so every automaton/agent
+  domain mutation routes through `Kernel::process_direct` and produces
+  a `System/DomainMutation` `RecordEntry`. Added the `await` on
+  `scheduler.schedule_agent` inside `AutomatonBridge::record_lifecycle_event`
+  so lifecycle entries reliably commit instead of sitting in the
+  inbox. Closed the §3 gap on sync + handshake reasoning failures —
+  both now record a `Reasoning` `RecordEntry`.
+- **Phase 2a — God-module splits in `aura-core` / `aura-kernel`.**
+  `types/tool.rs` → `types/tool/` (proposal, execution, installed,
+  runtime_capability, call, result). `policy/check.rs` →
+  `policy/check/` (delegate_gate, agent_permissions, integration_gate,
+  scope, verdict, tests). `kernel/tools.rs` → `kernel/tools/`
+  (single, batch, shared). `context.rs` → `context/` to lift the
+  ~400 lines of `#[cfg(test)]` out of the production module.
+- **Phase 2b — God-module splits in `aura-tools` / `aura-reasoner`.**
+  `resolver/trusted.rs` → `resolver/trusted/` with
+  `integrations/{github,linear,slack,resend,brave}.rs`.
+  `git_tool/mod.rs` → per-subcommand modules (`executor`, `sandbox`,
+  `commit`, `push`, `commit_push`, `redact`, `tests`).
+  `anthropic/sse.rs` → `anthropic/sse/{parse,event,state,tests}.rs`.
+- **Phase 2c — God-module splits in `aura-runtime` / `aura-agent`.**
+  `automaton_bridge.rs` → `automaton_bridge/` (`mod`, `build`,
+  `event_channel`, `dispatch`, `tests`). `kernel_domain_gateway.rs`
+  → `kernel_domain_gateway/` (`specs`, `project`, `storage`, `orbit`,
+  `network`, `tasks`, `tests`).
+- **Phase 3 — Shared embedder bootstrap + event mapping.** Pulled
+  the duplicated TUI / node startup glue into
+  `aura_agent::session_bootstrap`; `src/session_helpers.rs` is now a
+  thin re-export. Introduced `aura_agent::events::TurnEventSink` plus
+  `map_agent_loop_event` so the TUI `UiCommandSink` and the node
+  `OutboundMessageSink` share one mapping. Pulled the workspace
+  walker / capped reader into `aura_runtime::files_api` so both the
+  node `/api/files` handlers and the TUI-embedded `src/api_server.rs`
+  go through the same code.
+- **Phase 4 — Type-state seal + mid-loop refactor.** Introduced the
+  sealed `aura_agent::RecordingModelProvider` marker so automatons
+  take `P: RecordingModelProvider` rather than
+  `Arc<dyn ModelProvider>`; this locks Invariant §1 ("Sole External
+  Gateway") into the type system. Renamed the kernel-internal
+  `ToolDecision` to `ToolGateVerdict` to disambiguate it from the
+  `aura_core` audit-log enum. Split `agent_loop/iteration.rs` into
+  the `iteration/` directory and introduced `IterCounters` /
+  `ThinkingBudget`. Renamed `tool_processing` → `tool_pipeline` and
+  extracted `ToolResultCache`. Split `aura_agent::events` and
+  `aura_runtime::router::memory` along the `types`/`wire`/`handlers`/
+  `tests` axis. Split `dev_loop` into `aggregate.rs`,
+  `forward_event.rs`, and `validation.rs`.
+- **Phase 5 — Test-only reachability cleanup.** Gated
+  test-only constructors and helpers behind `#[cfg(test)]`
+  consistently and reduced unused-import / dead-code warnings to
+  zero under `--all-features --all-targets`.
+- **Phase 6 — Finish & document (this checkpoint).** Wired the
+  policy-derived `thinking_budget` through
+  `AgentLoopConfig::thinking_budget` into `LoopState::thinking.budget`
+  (capped at `max_tokens`). Tightened `aura_kernel::router::ExecutorRouter::execute`:
+  multiple matching executors now `error!`-log, panic under
+  `debug_assert!` in debug/test builds, and return
+  `Effect::Failed("ambiguous executor routing")` in release. Refreshed
+  `scripts/check_invariants.sh` §2 + §10 allowlists for the Phase 2c
+  module layout (directory-prefix forms for `automaton_bridge/` and
+  `kernel_domain_gateway/`, `router/state.rs` for the `Arc<dyn Store>`
+  RouterState field, and `tool_permissions.rs` as the sanctioned
+  HTTP-driven append site). Updated `docs/architecture.md`,
+  `docs/invariants.md`, `docs/refactoring/phase-checklist.md`,
+  `README.md`, and this file accordingly.
+
 ### 2026-01-08: Initial Implementation
 
 - Created full workspace structure with 7 Rust crates
