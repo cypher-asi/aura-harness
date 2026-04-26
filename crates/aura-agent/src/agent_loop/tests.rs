@@ -71,7 +71,13 @@ impl ModelProvider for OverflowThenSuccessProvider {
 #[test]
 fn test_agent_loop_config_defaults() {
     let config = AgentLoopConfig::default();
-    assert_eq!(config.max_iterations, 25);
+    // Default is `usize::MAX` (unlimited). Termination is driven by
+    // `EndTurn`, the credit budget, or cooperative cancellation. The
+    // 25-iteration cap was raised because it silently truncated
+    // long-running batch workflows (e.g. multi-`create_task`
+    // extraction) with `stop_reason: "cancelled"`. See
+    // `constants::MAX_ITERATIONS`.
+    assert_eq!(config.max_iterations, usize::MAX);
     assert_eq!(config.exploration_allowance, 12);
     assert_eq!(config.auto_build_cooldown, 2);
     assert_eq!(config.thinking_taper_after, 2);

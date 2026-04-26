@@ -35,7 +35,18 @@ pub fn tool_result_cache_key(tool_name: &str, input: &serde_json::Value) -> Stri
 // ---------------------------------------------------------------------------
 
 /// Maximum tool-use iterations before the loop terminates.
-pub const MAX_ITERATIONS: usize = 25;
+///
+/// Defaults to `usize::MAX` (effectively unlimited). Termination is
+/// driven by `EndTurn` from the model, the credit/token budget,
+/// cooperative cancellation, or an explicit caller-supplied
+/// `SessionInit.max_turns` override (see
+/// `aura_runtime::session::state::Session::apply_init`). Raised from
+/// 25 because long-running batch workflows (e.g. task extraction
+/// emitting many `create_task` calls) were silently terminated
+/// mid-run with `stop_reason: "cancelled"` after hitting the cap, and
+/// the wire format gives the UI no way to distinguish that case from
+/// a user-initiated cancel.
+pub const MAX_ITERATIONS: usize = usize::MAX;
 
 /// Default exploration allowance (read-only tool calls before warnings).
 pub const DEFAULT_EXPLORATION_ALLOWANCE: usize = 12;

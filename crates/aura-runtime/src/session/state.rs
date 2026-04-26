@@ -52,6 +52,13 @@ pub struct Session {
     /// Sampling temperature.
     pub(crate) temperature: Option<f32>,
     /// Maximum agentic steps per turn.
+    ///
+    /// Defaults to `u32::MAX` (effectively unlimited). The runtime maps
+    /// `u32::MAX` to `usize::MAX` in [`Session::agent_loop_config`] so
+    /// the agent loop's iteration check short-circuits and termination
+    /// is driven by `EndTurn` from the model, the credit/token budget,
+    /// or cooperative cancellation. Callers wanting bounded turns must
+    /// pass an explicit `SessionInit.max_turns`.
     pub(crate) max_turns: u32,
     /// Installed tools registered for this session.
     pub(crate) installed_tools: Vec<InstalledToolDefinition>,
@@ -131,7 +138,9 @@ impl Session {
             provider_override: None,
             max_tokens: 16384,
             temperature: None,
-            max_turns: 25,
+            // Effectively unlimited. See the field doc on `max_turns`
+            // for rationale and termination signals.
+            max_turns: u32::MAX,
             installed_tools: Vec::new(),
             installed_integrations: Vec::new(),
             messages: Vec::new(),
@@ -321,8 +330,20 @@ impl Session {
             base_prompt
         };
 
+        // Wire-protocol `max_turns` is `u32`; map the `u32::MAX`
+        // sentinel to `usize::MAX` so the agent loop's unlimited-mode
+        // short-circuit (see `aura_agent::budget::should_stop_for_budget`
+        // and `aura_agent::agent_loop::context::check_budget_warnings`)
+        // engages and we don't accidentally stop at ~4.29B iterations
+        // or emit spurious utilization-based warnings.
+        let max_iterations = if self.max_turns == u32::MAX {
+            usize::MAX
+        } else {
+            self.max_turns as usize
+        };
+
         AgentLoopConfig {
-            max_iterations: self.max_turns as usize,
+            max_iterations,
             model: self.model.clone(),
             system_prompt,
             max_tokens: self.max_tokens,

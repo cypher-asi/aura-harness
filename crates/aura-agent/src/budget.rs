@@ -93,6 +93,12 @@ pub fn check_exploration_warning(state: &mut ExplorationState, allowance: usize)
 }
 
 /// Check if the budget has been exceeded and the loop should stop.
+///
+/// `max_iterations == usize::MAX` is treated as "unlimited" — the
+/// iteration check short-circuits and termination is driven solely by
+/// the credit budget (when set). Callers using a wire-protocol u32
+/// (e.g. `aura_runtime::session::state::Session::max_turns`) should
+/// map `u32::MAX` → `usize::MAX` before reaching this function.
 pub const fn should_stop_for_budget(
     iteration: usize,
     max_iterations: usize,
@@ -104,6 +110,10 @@ pub const fn should_stop_for_budget(
         if total_tokens + avg_tokens_per_iteration > budget {
             return true;
         }
+    }
+
+    if max_iterations == usize::MAX {
+        return false;
     }
 
     iteration >= max_iterations.saturating_sub(1)
@@ -204,6 +214,39 @@ mod tests {
     fn test_should_stop_no_budget_only_iterations() {
         assert!(!should_stop_for_budget(0, 25, 0, 0, None));
         assert!(should_stop_for_budget(24, 25, 0, 999_999, None));
+    }
+
+    #[test]
+    fn test_unlimited_max_iterations_never_stops_for_iterations() {
+        // `usize::MAX` is the sentinel for "unlimited iterations" set
+        // by `aura_agent::constants::MAX_ITERATIONS` (default) and by
+        // `aura_runtime` when the wire-protocol `max_turns == u32::MAX`.
+        // The function must never report a stop based on the iteration
+        // counter alone — even at very high iteration values.
+        assert!(!should_stop_for_budget(0, usize::MAX, 0, 0, None));
+        assert!(!should_stop_for_budget(1_000, usize::MAX, 0, 0, None));
+        assert!(!should_stop_for_budget(
+            usize::MAX - 2,
+            usize::MAX,
+            0,
+            0,
+            None
+        ));
+        // The credit budget still terminates the loop in unlimited mode.
+        assert!(should_stop_for_budget(
+            42,
+            usize::MAX,
+            500,
+            9_600,
+            Some(10_000)
+        ));
+        assert!(!should_stop_for_budget(
+            42,
+            usize::MAX,
+            500,
+            9_400,
+            Some(10_000)
+        ));
     }
 
     #[test]

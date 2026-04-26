@@ -127,6 +127,14 @@ pub(super) fn compact_exploration_if_needed(config: &AgentLoopConfig, state: &mu
 }
 
 /// Check and emit budget and exploration warnings.
+///
+/// In unlimited-iteration mode (`max_iterations == usize::MAX`), the
+/// iteration-utilization warnings are skipped — utilization would
+/// round to ~0 and the warnings would never fire anyway, but the
+/// short-circuit makes the intent explicit and avoids any cast-related
+/// precision surprises. Exploration warnings still run because they
+/// key off `exploration_allowance`, which is independent of the
+/// per-turn iteration cap.
 #[allow(clippy::cast_precision_loss)]
 pub(super) fn check_budget_warnings(
     config: &AgentLoopConfig,
@@ -134,12 +142,14 @@ pub(super) fn check_budget_warnings(
     state: &mut LoopState,
     iteration: usize,
 ) {
-    let utilization = (iteration + 1) as f64 / config.max_iterations as f64;
-    if let Some(warning) =
-        budget::check_budget_warning(&mut state.budget_state, utilization, state.had_any_write)
-    {
-        helpers::append_warning(&mut state.messages, &warning);
-        streaming::emit(event_tx, AgentLoopEvent::Warning(warning));
+    if config.max_iterations != usize::MAX {
+        let utilization = (iteration + 1) as f64 / config.max_iterations as f64;
+        if let Some(warning) =
+            budget::check_budget_warning(&mut state.budget_state, utilization, state.had_any_write)
+        {
+            helpers::append_warning(&mut state.messages, &warning);
+            streaming::emit(event_tx, AgentLoopEvent::Warning(warning));
+        }
     }
 
     if let Some(warning) = budget::check_exploration_warning(

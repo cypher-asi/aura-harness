@@ -53,7 +53,17 @@ use crate::types::{AgentLoopResult, AgentToolExecutor, BuildBaseline, TurnObserv
 /// Configuration for the agent loop.
 #[derive(Clone)]
 pub struct AgentLoopConfig {
-    /// Maximum iterations (model calls).
+    /// Maximum iterations (model calls) per turn.
+    ///
+    /// Defaults to [`crate::constants::MAX_ITERATIONS`] (`usize::MAX`,
+    /// effectively unlimited). The agent loop short-circuits the
+    /// iteration check and the utilization-based budget warnings when
+    /// this is `usize::MAX`, so the turn ends only on `EndTurn` from
+    /// the model, exhaustion of [`Self::credit_budget`], stall
+    /// detection, or cooperative cancellation. Callers (e.g.
+    /// `aura_runtime::session::state::Session::agent_loop_config`)
+    /// that bridge a wire-protocol `u32` should map `u32::MAX` →
+    /// `usize::MAX` to engage the unlimited-mode short-circuits.
     pub max_iterations: usize,
     /// Maximum tokens per response.
     pub max_tokens: u32,
