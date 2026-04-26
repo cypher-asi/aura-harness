@@ -1,9 +1,9 @@
 use crate::protocol;
 use crate::scheduler::Scheduler;
 use aura_core::{
-    installed_integrations_satisfy, resolve_effective_permission, AgentId, AgentToolPermissions,
-    Identity, InstalledIntegrationDefinition, InstalledToolDefinition, RecordEntry, ToolState,
-    Transaction, TransactionType, UserDefaultMode, UserToolDefaults,
+    installed_integrations_satisfy, resolve_effective_permission, AgentId, AgentPermissions,
+    AgentToolPermissions, Identity, InstalledIntegrationDefinition, InstalledToolDefinition,
+    RecordEntry, ToolState, Transaction, TransactionType, UserDefaultMode, UserToolDefaults,
 };
 use aura_reasoner::ToolDefinition;
 use aura_store::Store;
@@ -15,6 +15,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub(crate) struct AgentToolContext {
     pub tool_permissions: Option<AgentToolPermissions>,
+    pub agent_permissions: AgentPermissions,
     pub originating_user_id: Option<String>,
 }
 
@@ -66,10 +67,13 @@ pub(crate) fn effective_tool_definitions(
     installed_integrations: &[InstalledIntegrationDefinition],
     user_default: &UserToolDefaults,
     agent_override: Option<&AgentToolPermissions>,
+    agent_permissions: Option<&AgentPermissions>,
 ) -> Vec<(ToolDefinition, ToolState)> {
     let mut seen = HashSet::new();
     let mut tools = Vec::new();
-    for tool in catalog.visible_tools(ToolProfile::Agent, tool_config) {
+    for tool in
+        catalog.visible_tools_with_permissions(ToolProfile::Agent, tool_config, agent_permissions)
+    {
         let state = resolve_effective_permission(user_default, agent_override, &tool.name);
         if state != ToolState::Deny && seen.insert(tool.name.clone()) {
             tools.push((tool, state));
@@ -97,9 +101,10 @@ pub(crate) fn effective_tool_infos(
     tool_config: &ToolConfig,
     user_default: &UserToolDefaults,
     agent_override: Option<&AgentToolPermissions>,
+    agent_permissions: Option<&AgentPermissions>,
 ) -> Vec<EffectiveToolInfo> {
     catalog
-        .visible_tools(ToolProfile::Agent, tool_config)
+        .visible_tools_with_permissions(ToolProfile::Agent, tool_config, agent_permissions)
         .into_iter()
         .filter_map(|tool| {
             let state = resolve_effective_permission(user_default, agent_override, &tool.name);
@@ -122,6 +127,7 @@ pub(crate) fn load_agent_tool_context(
     if head == 0 {
         return Ok(AgentToolContext {
             tool_permissions: None,
+            agent_permissions: AgentPermissions::empty(),
             originating_user_id: None,
         });
     }
@@ -135,6 +141,7 @@ pub(crate) fn load_agent_tool_context(
 fn context_from_entries(entries: Vec<RecordEntry>) -> AgentToolContext {
     let mut originating_user_id = None;
     let mut tool_permissions = None;
+    let mut agent_permissions = AgentPermissions::empty();
     for entry in entries {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(&entry.tx.payload) else {
             continue;
@@ -144,6 +151,7 @@ fn context_from_entries(entries: Vec<RecordEntry>) -> AgentToolContext {
             .and_then(|v| serde_json::from_value::<Identity>(v.clone()).ok())
         {
             tool_permissions = parsed.tool_permissions.clone();
+            agent_permissions = parsed.permissions;
         }
         if let Some(user_id) = value.get("originating_user_id").and_then(|v| v.as_str()) {
             originating_user_id = Some(user_id.to_string());
@@ -156,6 +164,7 @@ fn context_from_entries(entries: Vec<RecordEntry>) -> AgentToolContext {
     }
     AgentToolContext {
         tool_permissions,
+        agent_permissions,
         originating_user_id,
     }
 }
@@ -243,6 +252,7 @@ fn state_label(state: ToolState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_core::Capability;
     use std::collections::BTreeMap;
 
     fn defaults(entries: &[(&str, ToolState)], fallback: ToolState) -> UserToolDefaults {
@@ -300,5 +310,41 @@ mod tests {
         ]);
         enforce_monotonic_update(&user_default, Some(&current), &narrowing)
             .expect("narrowing should be accepted");
+    }
+
+    #[test]
+    fn context_from_entries_recovers_identity_agent_permissions() {
+        let agent_id = AgentId::new([7; 32]);
+        let permissions = AgentPermissions {
+            scope: Default::default(),
+            capabilities: vec![Capability::ControlAgent],
+        };
+        let identity = Identity::new("0://Agent07", "Agent07")
+            .with_permissions(permissions.clone())
+            .with_tool_permissions(Some(overrides(&[("read_file", ToolState::Ask)])));
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "identity": identity,
+            "originating_user_id": "user-1",
+        }))
+        .expect("serialize identity payload");
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::System,
+            Bytes::from(payload),
+            None,
+        );
+        let entry = RecordEntry::builder(1, tx).build();
+
+        let context = context_from_entries(vec![entry]);
+
+        assert_eq!(context.agent_permissions, permissions);
+        assert_eq!(context.originating_user_id.as_deref(), Some("user-1"));
+        assert_eq!(
+            context
+                .tool_permissions
+                .as_ref()
+                .and_then(|perms| perms.per_tool.get("read_file")),
+            Some(&ToolState::Ask)
+        );
     }
 }

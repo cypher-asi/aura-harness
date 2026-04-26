@@ -303,6 +303,7 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
         &session.installed_integrations,
         &user_default,
         session.tool_permissions.as_ref(),
+        Some(&session.agent_permissions),
     )
     .into_iter()
     .map(|(definition, _state)| definition)
@@ -352,11 +353,7 @@ async fn start_turn(
         }
     };
 
-    Some(dispatch_turn_to_agent(
-        prepared,
-        outbound_tx,
-        message_id,
-    ))
+    Some(dispatch_turn_to_agent(prepared, outbound_tx, message_id))
 }
 
 /// Build everything the agent loop needs for a single turn:
@@ -580,7 +577,7 @@ mod tests {
     use super::*;
     use crate::scheduler::Scheduler;
     use aura_core::{
-        InstalledIntegrationDefinition, InstalledToolDefinition,
+        AgentPermissions, Capability, InstalledIntegrationDefinition, InstalledToolDefinition,
         InstalledToolIntegrationRequirement, ToolAuth,
     };
     use aura_reasoner::MockProvider;
@@ -657,6 +654,35 @@ mod tests {
         }
     }
 
+    const CROSS_AGENT_TOOLS: [&str; 6] = [
+        "send_to_agent",
+        "spawn_agent",
+        "agent_lifecycle",
+        "get_agent_state",
+        "delegate_task",
+        "task",
+    ];
+
+    fn cross_agent_tool_names(session: &Session) -> Vec<String> {
+        session
+            .tool_definitions
+            .iter()
+            .filter(|tool| CROSS_AGENT_TOOLS.contains(&tool.name.as_str()))
+            .map(|tool| tool.name.clone())
+            .collect()
+    }
+
+    fn assert_cross_agent_tools(session: &Session, expected: &[&str]) {
+        let mut actual = cross_agent_tool_names(session);
+        actual.sort();
+        let mut expected = expected
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn populate_tool_definitions_hides_integration_backed_tool_without_install() {
         let ctx = test_context();
@@ -684,5 +710,61 @@ mod tests {
             .tool_definitions
             .iter()
             .any(|tool| tool.name == "brave_search_web"));
+    }
+
+    #[test]
+    fn populate_tool_definitions_includes_ceo_cross_agent_tools() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.agent_permissions = AgentPermissions::ceo_preset();
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert_cross_agent_tools(&session, &CROSS_AGENT_TOOLS);
+    }
+
+    #[test]
+    fn populate_tool_definitions_filters_cross_agent_tools_for_control_agent() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.agent_permissions = AgentPermissions {
+            scope: Default::default(),
+            capabilities: vec![Capability::ControlAgent],
+        };
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert_cross_agent_tools(
+            &session,
+            &["send_to_agent", "agent_lifecycle", "delegate_task"],
+        );
+    }
+
+    #[test]
+    fn populate_tool_definitions_filters_cross_agent_tools_for_spawn_agent() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.agent_permissions = AgentPermissions {
+            scope: Default::default(),
+            capabilities: vec![Capability::SpawnAgent],
+        };
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert_cross_agent_tools(&session, &["spawn_agent", "task"]);
+    }
+
+    #[test]
+    fn populate_tool_definitions_filters_cross_agent_tools_for_read_agent() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.agent_permissions = AgentPermissions {
+            scope: Default::default(),
+            capabilities: vec![Capability::ReadAgent],
+        };
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert_cross_agent_tools(&session, &["get_agent_state"]);
     }
 }

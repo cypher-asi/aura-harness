@@ -109,6 +109,7 @@ pub(super) async fn get_agent_tools_handler(
         &state.tool_config,
         &user_default,
         context.tool_permissions.as_ref(),
+        Some(&context.agent_permissions),
     );
     Ok(Json(AgentToolsResponse { tools }))
 }
