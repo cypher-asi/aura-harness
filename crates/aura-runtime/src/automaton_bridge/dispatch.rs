@@ -20,6 +20,7 @@ use std::sync::Arc;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
+use aura_core::AgentPermissions;
 use aura_kernel::Kernel;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
@@ -87,6 +88,7 @@ impl AutomatonBridge {
         model: Option<&str>,
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        agent_permissions: AgentPermissions,
         labels: AutomatonKindLabels,
     ) -> Result<AutomatonRunContext, String> {
         let domain = self.domain_with_jwt(auth_token);
@@ -111,6 +113,7 @@ impl AutomatonBridge {
                 effective_workspace.is_some(),
                 installed_tools.clone(),
                 installed_integrations.clone(),
+                agent_permissions,
             )
             .map_err(|e| format!("failed to build {} kernel: {e}", labels.kernel))?;
         if let Err(e) = runtime_capabilities::record_runtime_capabilities(
@@ -167,6 +170,7 @@ impl AutomatonBridge {
         git_branch: Option<String>,
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        agent_permissions: AgentPermissions,
     ) -> Result<String, String> {
         if let Some(entry) = self.project_handles.get(project_id) {
             let tracked = entry.value();
@@ -188,6 +192,7 @@ impl AutomatonBridge {
                 model.as_deref(),
                 installed_tools,
                 installed_integrations,
+                agent_permissions,
                 AutomatonKindLabels {
                     kernel: "dev loop",
                     capabilities: "dev loop",
@@ -245,6 +250,7 @@ impl AutomatonBridge {
         git_branch: Option<String>,
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        agent_permissions: AgentPermissions,
         prior_failure: Option<String>,
         work_log: Vec<String>,
     ) -> Result<String, String> {
@@ -256,6 +262,7 @@ impl AutomatonBridge {
                 model.as_deref(),
                 installed_tools,
                 installed_integrations,
+                agent_permissions,
                 AutomatonKindLabels {
                     kernel: "task runtime",
                     capabilities: "task",

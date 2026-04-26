@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use aura_core::{
-    installed_integrations_satisfy, AgentId, InstalledIntegrationDefinition,
+    installed_integrations_satisfy, AgentId, AgentPermissions, InstalledIntegrationDefinition,
     InstalledToolDefinition,
 };
 use aura_kernel::{Kernel, KernelConfig, PolicyConfig};
@@ -60,6 +60,7 @@ impl AutomatonBridge {
         use_workspace_base_as_root: bool,
         installed_tools: Vec<InstalledToolDefinition>,
         installed_integrations: Vec<InstalledIntegrationDefinition>,
+        agent_permissions: AgentPermissions,
     ) -> Result<Arc<Kernel>, String> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
             domain,
@@ -75,7 +76,11 @@ impl AutomatonBridge {
         .with_installed_tools(installed_tools.clone());
         let router = executor_factory::build_executor_router(resolver);
         let agent_id = AgentId::generate();
-        let policy = automaton_policy_config(&installed_tools, &installed_integrations);
+        let policy = automaton_policy_config(
+            &installed_tools,
+            &installed_integrations,
+            agent_permissions.clone(),
+        );
         let config = KernelConfig {
             workspace_base: workspace.to_path_buf(),
             use_workspace_base_as_root,
@@ -107,7 +112,11 @@ impl AutomatonBridge {
                     KernelConfig {
                         workspace_base: workspace.to_path_buf(),
                         use_workspace_base_as_root,
-                        policy: automaton_policy_config(&installed_tools, &installed_integrations),
+                        policy: automaton_policy_config(
+                            &installed_tools,
+                            &installed_integrations,
+                            agent_permissions,
+                        ),
                         ..KernelConfig::default()
                     },
                     AgentId::generate(),
@@ -156,8 +165,9 @@ impl AutomatonBridge {
 fn automaton_policy_config(
     installed_tools: &[InstalledToolDefinition],
     installed_integrations: &[InstalledIntegrationDefinition],
+    agent_permissions: AgentPermissions,
 ) -> PolicyConfig {
-    let mut policy = PolicyConfig::default();
+    let mut policy = PolicyConfig::default().with_agent_permissions(agent_permissions);
     policy.set_installed_integrations(installed_integrations.iter().cloned());
     policy.set_tool_integration_requirements(installed_tools.iter().filter_map(|tool| {
         tool.required_integration
@@ -165,4 +175,23 @@ fn automaton_policy_config(
             .map(|requirement| (tool.name.clone(), requirement))
     }));
     policy
+}
+
+#[cfg(test)]
+mod tests {
+    use aura_core::{AgentPermissions, Capability};
+
+    use super::automaton_policy_config;
+
+    #[test]
+    fn automaton_policy_carries_agent_permissions() {
+        let permissions = AgentPermissions {
+            scope: Default::default(),
+            capabilities: vec![Capability::InvokeProcess],
+        };
+
+        let policy = automaton_policy_config(&[], &[], permissions.clone());
+
+        assert_eq!(policy.agent_permissions, permissions);
+    }
 }

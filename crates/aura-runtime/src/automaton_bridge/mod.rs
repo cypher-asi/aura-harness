@@ -301,6 +301,7 @@ impl AutomatonController for AutomatonBridge {
             git_branch,
             None,
             None,
+            aura_core::AgentPermissions::empty(),
         )
         .await
     }
@@ -362,6 +363,7 @@ impl AutomatonController for AutomatonBridge {
             git_branch,
             None,
             None,
+            aura_core::AgentPermissions::empty(),
             None,
             Vec::new(),
         )

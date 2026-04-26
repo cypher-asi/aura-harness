@@ -1,5 +1,5 @@
 use super::*;
-use aura_protocol::{InstalledIntegration, InstalledTool};
+use aura_protocol::{AgentPermissionsWire, InstalledIntegration, InstalledTool};
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AutomatonStartRequest {
@@ -20,6 +20,11 @@ pub(super) struct AutomatonStartRequest {
     installed_tools: Option<Vec<InstalledTool>>,
     #[serde(default)]
     installed_integrations: Option<Vec<InstalledIntegration>>,
+    /// Capability + scope bundle for the agent driving this automaton.
+    /// Defaults to empty for older callers, preserving the strict policy
+    /// behavior until aura-os sends the real agent bundle.
+    #[serde(default)]
+    agent_permissions: AgentPermissionsWire,
     /// Retry-warm-up: the reason text persisted on the previous
     /// attempt's `task_failed` record. Threaded into the task-run
     /// automaton config as `prior_failure`, which the automaton folds
@@ -68,6 +73,7 @@ pub(super) async fn automaton_start_handler(
         let path = std::path::PathBuf::from(s);
         state.config.resolve_project_path(&path)
     });
+    let agent_permissions = crate::session::agent_permissions_from_wire(req.agent_permissions);
 
     let automaton_id = if let Some(task_id) = req.task_id {
         bridge
@@ -81,6 +87,7 @@ pub(super) async fn automaton_start_handler(
                 req.git_branch,
                 req.installed_tools,
                 req.installed_integrations,
+                agent_permissions,
                 req.prior_failure,
                 req.work_log,
             )
@@ -96,6 +103,7 @@ pub(super) async fn automaton_start_handler(
                 req.git_branch,
                 req.installed_tools,
                 req.installed_integrations,
+                agent_permissions,
             )
             .await
     }
