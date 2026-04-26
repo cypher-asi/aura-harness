@@ -21,6 +21,11 @@ pub struct SubagentRegistry {
 
 impl SubagentRegistry {
     #[must_use]
+    pub fn from_specs(kinds: Vec<SubagentKindSpec>) -> Self {
+        Self { kinds }
+    }
+
+    #[must_use]
     pub fn bundled() -> Self {
         Self {
             kinds: vec![general_purpose(), explore(), shell(), code_reviewer()],

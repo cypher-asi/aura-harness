@@ -95,6 +95,16 @@ impl SubagentDispatchHook for RuntimeSubagentDispatch {
 
         let loop_config = loop_config_for(&kind);
         let policy = policy_for(child_permissions, child_tool_permissions, &request);
+        if kind.budget.timeout_ms == 0 {
+            return Ok(SubagentResult {
+                child_agent_id: Some(child_agent_id),
+                final_message: String::new(),
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                files_changed: Vec::new(),
+                exit: SubagentExit::Timeout,
+            });
+        }
         let processed = match tokio::time::timeout(
             Duration::from_millis(kind.budget.timeout_ms),
             self.scheduler
@@ -225,7 +235,11 @@ fn system_prompt_for(kind: &SubagentKindSpec, request: &SubagentDispatchRequest)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::Scheduler;
     use aura_core::{AgentId, AgentScope, Capability};
+    use aura_reasoner::MockProvider;
+    use aura_store::{ReadStore, RocksStore};
+    use aura_tools::ToolCatalog;
 
     #[test]
     fn narrow_permissions_keeps_only_kind_allowed_caps() {
@@ -279,5 +293,102 @@ mod tests {
             ),
             ToolState::Allow
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_runs_child_and_records_parent_and_child_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let store = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider = Arc::new(MockProvider::simple_response("child done"));
+        let catalog = ToolCatalog::default();
+        let scheduler = Arc::new(Scheduler::new(
+            store.clone(),
+            provider,
+            Vec::new(),
+            catalog.executor_builtin_tools(),
+            workspace.path().to_path_buf(),
+            None,
+        ));
+        let dispatch = RuntimeSubagentDispatch::new(store.clone(), scheduler);
+        let parent_agent_id = AgentId::generate();
+
+        let result = dispatch
+            .dispatch(SubagentDispatchRequest {
+                parent_agent_id,
+                subagent_type: "explore".into(),
+                prompt: "summarize".into(),
+                originating_user_id: Some("user".into()),
+                parent_chain: Vec::new(),
+                model_override: None,
+                system_prompt_addendum: None,
+                parent_permissions: AgentPermissions {
+                    scope: AgentScope::default(),
+                    capabilities: vec![Capability::SpawnAgent],
+                },
+                parent_tool_permissions: None,
+                user_tool_defaults: UserToolDefaults::full_access(),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(result.exit, SubagentExit::Completed));
+        assert_eq!(result.final_message, "child done");
+        let child_id = result.child_agent_id.expect("child id");
+        assert!(
+            !store.scan_record(parent_agent_id, 1, 10).unwrap().is_empty(),
+            "spawn should record parent delegation"
+        );
+        let child_entries = store.scan_record(child_id, 1, 10).unwrap();
+        assert!(
+            child_entries
+                .iter()
+                .any(|entry| entry.tx.tx_type == TransactionType::AgentMsg),
+            "child should record final assistant message"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_returns_timeout_for_exhausted_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let store = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider = Arc::new(MockProvider::simple_response("late"));
+        let catalog = ToolCatalog::default();
+        let scheduler = Arc::new(Scheduler::new(
+            store.clone(),
+            provider,
+            Vec::new(),
+            catalog.executor_builtin_tools(),
+            workspace.path().to_path_buf(),
+            None,
+        ));
+        let registry = SubagentRegistry::bundled();
+        let mut kind = registry.get("explore").unwrap().clone();
+        kind.name = "instant_timeout".into();
+        kind.budget.timeout_ms = 0;
+        let registry = SubagentRegistry::from_specs(vec![kind]);
+        let dispatch = RuntimeSubagentDispatch::new(store, scheduler).with_registry(registry);
+
+        let result = dispatch
+            .dispatch(SubagentDispatchRequest {
+                parent_agent_id: AgentId::generate(),
+                subagent_type: "instant_timeout".into(),
+                prompt: "summarize".into(),
+                originating_user_id: Some("user".into()),
+                parent_chain: Vec::new(),
+                model_override: None,
+                system_prompt_addendum: None,
+                parent_permissions: AgentPermissions {
+                    scope: AgentScope::default(),
+                    capabilities: vec![Capability::SpawnAgent],
+                },
+                parent_tool_permissions: None,
+                user_tool_defaults: UserToolDefaults::full_access(),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(result.exit, SubagentExit::Timeout));
     }
 }
