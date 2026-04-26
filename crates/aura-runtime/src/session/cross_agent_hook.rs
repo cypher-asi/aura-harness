@@ -2,8 +2,12 @@ use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::time::Duration;
 
+use aura_core::AgentId;
+use aura_kernel::{ChildAgentSpec, KernelSpawnHook, SpawnError, SpawnHook, SpawnOutcome};
+use aura_store::Store;
 use aura_tools::{AgentControlHook, AgentReadHook};
 
 const CHAT_PERSISTED_HEADER: &str = "x-aura-chat-persisted";
@@ -18,6 +22,14 @@ pub(crate) struct AuraServerAgentHook {
     base_url: String,
     auth_token: Option<String>,
     client: reqwest::Client,
+}
+
+pub(crate) struct AuraServerSpawnHook {
+    base_url: String,
+    auth_token: Option<String>,
+    org_id: Option<String>,
+    client: reqwest::Client,
+    kernel: KernelSpawnHook,
 }
 
 impl AuraServerAgentHook {
@@ -61,6 +73,104 @@ impl AuraServerAgentHook {
     }
 }
 
+impl AuraServerSpawnHook {
+    pub(crate) fn new(
+        base_url: impl Into<String>,
+        auth_token: Option<String>,
+        org_id: Option<String>,
+        store: Arc<dyn Store>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            auth_token,
+            org_id,
+            client: reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            kernel: KernelSpawnHook::new(store),
+        }
+    }
+
+    fn bearer(&self) -> Result<&str, SpawnError> {
+        self.auth_token
+            .as_deref()
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| {
+                SpawnError::Other("missing bearer token for aura-os-server callback".into())
+            })
+    }
+
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    async fn create_aura_os_agent(&self, child: &ChildAgentSpec) -> Result<String, SpawnError> {
+        let response = self
+            .client
+            .post(self.endpoint("/api/agents"))
+            .bearer_auth(self.bearer()?)
+            .json(&json!({
+                "org_id": self.org_id,
+                "name": child.name,
+                "role": child.role,
+                "personality": "",
+                "system_prompt": child.system_prompt_override.clone().unwrap_or_default(),
+                "skills": [],
+                "icon": null,
+                "machine_type": "swarm",
+                "adapter_type": "aura_harness",
+                "permissions": child.permissions,
+            }))
+            .send()
+            .await
+            .map_err(|e| {
+                SpawnError::Other(format!("spawn_agent: aura-os-server callback failed: {e}"))
+            })?;
+        if !response.status().is_success() {
+            let message = AuraServerAgentHook {
+                base_url: self.base_url.clone(),
+                auth_token: self.auth_token.clone(),
+                client: self.client.clone(),
+            }
+            .error_from_response("spawn_agent", response)
+            .await;
+            return Err(SpawnError::Other(message));
+        }
+        let body = response.json::<Value>().await.map_err(|e| {
+            SpawnError::Other(format!("spawn_agent: invalid aura-os-server JSON: {e}"))
+        })?;
+        body.get("agent_id")
+            .or_else(|| body.get("agentId"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                SpawnError::Other("spawn_agent: aura-os-server response missing agent_id".into())
+            })
+    }
+}
+
+#[async_trait]
+impl SpawnHook for AuraServerSpawnHook {
+    async fn spawn_child(
+        &self,
+        parent_agent_id: &AgentId,
+        originating_user_id: Option<&str>,
+        mut child: ChildAgentSpec,
+    ) -> Result<SpawnOutcome, SpawnError> {
+        let external_agent_id = self.create_aura_os_agent(&child).await?;
+        if let Ok(uuid) = uuid::Uuid::parse_str(&external_agent_id) {
+            child.preassigned_agent_id = Some(AgentId::from_uuid(uuid));
+        }
+        let mut outcome = self
+            .kernel
+            .spawn_child(parent_agent_id, originating_user_id, child)
+            .await?;
+        outcome.external_agent_id = Some(external_agent_id);
+        Ok(outcome)
+    }
+}
+
 #[async_trait]
 impl AgentControlHook for AuraServerAgentHook {
     async fn deliver_message(
@@ -99,30 +209,71 @@ impl AgentControlHook for AuraServerAgentHook {
 
     async fn lifecycle(
         &self,
-        _target_agent_id: &str,
+        target_agent_id: &str,
         _parent_agent_id: Option<&str>,
         _originating_user_id: Option<&str>,
-        _action: &str,
+        action: &str,
     ) -> Result<(), String> {
-        Err("agent_lifecycle: aura-os-server lifecycle callback is not wired".to_string())
+        let actual_action = match action {
+            "pause" => "hibernate",
+            "resume" => "wake",
+            other => other,
+        };
+        let url = self.endpoint(&format!(
+            "/api/agents/{target_agent_id}/remote_agent/{actual_action}"
+        ));
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(self.bearer()?)
+            .send()
+            .await
+            .map_err(|e| format!("agent_lifecycle: aura-os-server callback failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(self.error_from_response("agent_lifecycle", response).await);
+        }
+        Ok(())
     }
 
     async fn delegate_task(
         &self,
-        _target_agent_id: &str,
+        target_agent_id: &str,
         _parent_agent_id: Option<&str>,
         _originating_user_id: Option<&str>,
-        _task: &str,
-        _context: Option<&Value>,
+        task: &str,
+        context: Option<&Value>,
     ) -> Result<(), String> {
-        Err("delegate_task: aura-os-server delegate callback is not wired".to_string())
+        let url = self.endpoint(&format!("/api/agents/{target_agent_id}/delegate_task"));
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(self.bearer()?)
+            .json(&json!({
+                "task": task,
+                "context": context
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("delegate_task: aura-os-server callback failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(self.error_from_response("delegate_task", response).await);
+        }
+
+        self.deliver_message(
+            target_agent_id,
+            None,
+            None,
+            &format!("Delegated task:\n\n{task}"),
+            context.cloned(),
+        )
+        .await
     }
 }
 
 #[async_trait]
 impl AgentReadHook for AuraServerAgentHook {
     async fn snapshot(&self, target_agent_id: &str) -> Result<Value, String> {
-        let url = self.endpoint(&format!("/api/agents/{target_agent_id}/remote_agent/state"));
+        let url = self.endpoint(&format!("/api/agents/{target_agent_id}/state_snapshot"));
         let response = self
             .client
             .get(url)

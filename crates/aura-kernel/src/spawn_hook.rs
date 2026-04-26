@@ -58,6 +58,11 @@ pub struct ChildAgentSpec {
 pub struct SpawnOutcome {
     /// The (fresh or pre-assigned) id of the new child agent.
     pub child_agent_id: AgentId,
+    /// Optional host-application id for the created child. When present,
+    /// callers should surface this id to users because it is the id accepted
+    /// by product APIs such as aura-os `send_to_agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent_id: Option<String>,
     /// Hash of the `Delegate` transaction appended to the caller's log.
     pub delegate_tx_hash: Hash,
 }
@@ -107,6 +112,7 @@ impl SpawnHook for NoopSpawnHook {
         let child_agent_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
         Ok(SpawnOutcome {
             child_agent_id,
+            external_agent_id: None,
             delegate_tx_hash: Hash::default(),
         })
     }
@@ -253,6 +259,7 @@ impl SpawnHook for KernelSpawnHook {
 
         Ok(SpawnOutcome {
             child_agent_id,
+            external_agent_id: None,
             delegate_tx_hash: delegate_hash,
         })
     }

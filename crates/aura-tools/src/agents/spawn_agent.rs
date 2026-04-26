@@ -227,7 +227,9 @@ impl Tool for SpawnAgentTool {
             .await
         {
             Ok(hook_outcome) => {
-                outcome.child_agent_id = hook_outcome.child_agent_id.to_string();
+                outcome.child_agent_id = hook_outcome
+                    .external_agent_id
+                    .unwrap_or_else(|| hook_outcome.child_agent_id.to_string());
             }
             Err(err) => {
                 return Ok(ToolResult::failure(
@@ -277,6 +279,7 @@ pub(crate) mod tests {
             ));
             Ok(SpawnOutcome {
                 child_agent_id,
+                external_agent_id: None,
                 delegate_tx_hash: Hash::default(),
             })
         }

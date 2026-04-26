@@ -2,8 +2,8 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::ToolDefinition;
 use aura_core::ToolResult;
+use aura_core::{Capability, ToolDefinition};
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -710,6 +710,10 @@ impl Tool for CmdRunTool {
             cache_control: None,
             eager_input_streaming: None,
         }
+    }
+
+    fn required_capabilities(&self) -> Vec<Capability> {
+        vec![Capability::InvokeProcess]
     }
 
     async fn execute(

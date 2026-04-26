@@ -66,6 +66,10 @@ impl Default for PolicyConfig {
             .insert("agent_lifecycle".to_string(), Capability::ControlAgent);
         tool_capability_requirements.insert("delegate_task".to_string(), Capability::ControlAgent);
         tool_capability_requirements.insert("get_agent_state".to_string(), Capability::ReadAgent);
+        tool_capability_requirements.insert("run_command".to_string(), Capability::InvokeProcess);
+        tool_capability_requirements.insert("post_to_feed".to_string(), Capability::PostToFeed);
+        tool_capability_requirements.insert("check_budget".to_string(), Capability::ManageBilling);
+        tool_capability_requirements.insert("record_usage".to_string(), Capability::ManageBilling);
 
         Self {
             allowed_action_kinds,

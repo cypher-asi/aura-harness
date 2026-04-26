@@ -10,7 +10,7 @@ use crate::protocol::{
     ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
 };
 use crate::runtime_capabilities;
-use crate::session::cross_agent_hook::AuraServerAgentHook;
+use crate::session::cross_agent_hook::{AuraServerAgentHook, AuraServerSpawnHook};
 use crate::subagent_dispatch::RuntimeSubagentDispatch;
 use async_trait::async_trait;
 use aura_agent::{
@@ -332,19 +332,21 @@ pub(super) async fn build_kernel_with_config(
         .with_user_default(user_default.clone())
         .with_agent_override(session.tool_permissions.clone());
 
-    resolver = resolver
-        .with_spawn_hook(Arc::new(aura_kernel::KernelSpawnHook::new(
-            ctx.store.clone(),
-        )))
-        .with_subagent_dispatch_hook(Arc::new(RuntimeSubagentDispatch::new(
-            ctx.store.clone(),
-            ctx.scheduler.clone(),
-        )));
+    resolver = resolver.with_subagent_dispatch_hook(Arc::new(RuntimeSubagentDispatch::new(
+        ctx.store.clone(),
+        ctx.scheduler.clone(),
+    )));
     if let Some(base_url) = ctx
         .aura_os_server_url
         .as_deref()
         .filter(|url| !url.is_empty())
     {
+        resolver = resolver.with_spawn_hook(Arc::new(AuraServerSpawnHook::new(
+            base_url.to_string(),
+            session.auth_token.clone(),
+            session.aura_org_id.clone(),
+            ctx.store.clone(),
+        )));
         let hook = Arc::new(AuraServerAgentHook::new(
             base_url.to_string(),
             session.auth_token.clone(),
@@ -352,6 +354,10 @@ pub(super) async fn build_kernel_with_config(
         resolver = resolver
             .with_agent_control_hook(hook.clone())
             .with_agent_read_hook(hook);
+    } else {
+        resolver = resolver.with_spawn_hook(Arc::new(aura_kernel::KernelSpawnHook::new(
+            ctx.store.clone(),
+        )));
     }
     resolver = resolver
         .with_caller_permissions(session.agent_permissions.clone())

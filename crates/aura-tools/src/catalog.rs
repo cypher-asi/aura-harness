@@ -116,12 +116,13 @@ impl ToolCatalog {
 
         // Agent-only management tools (spec, task, project, dev-loop).
         for def in definitions::chat_management_tools() {
+            let required_capabilities = domain_tool_required_capabilities(&def.name);
             seen.insert(def.name.clone());
             entries.push(CatalogEntry {
                 definition: def,
                 owner: ToolOwner::Internal,
                 profiles: vec![ToolProfile::Agent],
-                required_capabilities: Vec::new(),
+                required_capabilities,
             });
         }
 
@@ -276,6 +277,14 @@ impl ToolCatalog {
             .iter()
             .any(|e| e.definition.name == name)
             .then_some(ToolOwner::Internal)
+    }
+}
+
+fn domain_tool_required_capabilities(name: &str) -> Vec<Capability> {
+    match name {
+        "post_to_feed" => vec![Capability::PostToFeed],
+        "check_budget" | "record_usage" => vec![Capability::ManageBilling],
+        _ => Vec::new(),
     }
 }
 
