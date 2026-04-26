@@ -104,6 +104,7 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 use async_trait::async_trait;
+use tracing::debug;
 
 // ============================================================================
 // ModelProvider Trait (New in Spec-02)
@@ -113,12 +114,45 @@ use async_trait::async_trait;
 pub type StreamEventStream =
     Pin<Box<dyn Stream<Item = Result<StreamEvent, ReasonerError>> + Send + 'static>>;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ResponseOutputShape {
+    pub content_block_count: usize,
+    pub text_bytes: usize,
+    pub thinking_bytes: usize,
+    pub tool_use_count: usize,
+}
+
+pub(crate) fn response_output_shape(response: &ModelResponse) -> ResponseOutputShape {
+    let mut shape = ResponseOutputShape {
+        content_block_count: response.message.content.len(),
+        ..ResponseOutputShape::default()
+    };
+
+    for block in &response.message.content {
+        match block {
+            ContentBlock::Text { text } => shape.text_bytes += text.len(),
+            ContentBlock::Thinking { thinking, .. } => shape.thinking_bytes += thinking.len(),
+            ContentBlock::ToolUse { .. } => shape.tool_use_count += 1,
+            ContentBlock::Image { .. } | ContentBlock::ToolResult { .. } => {}
+        }
+    }
+
+    shape
+}
+
 // The body clones each field separately; passing by value matches the
 // call sites where `response` is their last use of the value. TODO(W5):
 // refactor callers to pass `&ModelResponse` once the streaming
 // adapter is split out per the Wave 6 plan.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream {
+    let content_block_count = response.message.content.len();
+    let mut text_delta_count = 0usize;
+    let mut thinking_delta_count = 0usize;
+    let mut tool_use_count = 0usize;
+    let mut text_bytes = 0usize;
+    let mut thinking_bytes = 0usize;
+
     // Prepend the synthetic `HttpMeta` frame so consumers that
     // uniformly seed their accumulator from this event (streaming +
     // non-streaming fallback + mock paths) always see a single,
@@ -143,6 +177,8 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
         let idx = index as u32;
         match block {
             ContentBlock::Text { text } => {
+                text_delta_count += 1;
+                text_bytes += text.len();
                 events.push(Ok(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_type: StreamContentType::Text,
@@ -154,6 +190,8 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
                 thinking,
                 signature,
             } => {
+                thinking_delta_count += 1;
+                thinking_bytes += thinking.len();
                 events.push(Ok(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_type: StreamContentType::Thinking,
@@ -169,6 +207,7 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
                 events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
             }
             ContentBlock::ToolUse { id, name, input } => {
+                tool_use_count += 1;
                 events.push(Ok(StreamEvent::ContentBlockStart {
                     index: idx,
                     content_type: StreamContentType::ToolUse {
@@ -191,7 +230,59 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
     }));
     events.push(Ok(StreamEvent::MessageStop));
 
+    debug!(
+        model = %response.trace.model,
+        content_block_count,
+        text_delta_count,
+        thinking_delta_count,
+        tool_use_count,
+        text_bytes,
+        thinking_bytes,
+        "Synthesized stream events from buffered model response"
+    );
+
     Box::pin(futures_util::stream::iter(events))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_output_shape_counts_blocks_without_content() {
+        let response = ModelResponse::new(
+            StopReason::ToolUse,
+            Message::new(
+                Role::Assistant,
+                vec![
+                    ContentBlock::Text {
+                        text: "hello".into(),
+                    },
+                    ContentBlock::Thinking {
+                        thinking: "hidden".into(),
+                        signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        input: serde_json::json!({ "path": "x" }),
+                    },
+                ],
+            ),
+            Usage::new(1, 2),
+            ProviderTrace::new("test-model", 10),
+        );
+
+        assert_eq!(
+            response_output_shape(&response),
+            ResponseOutputShape {
+                content_block_count: 3,
+                text_bytes: 5,
+                thinking_bytes: 6,
+                tool_use_count: 1,
+            }
+        );
+    }
 }
 
 /// Provider-agnostic interface for model completions.

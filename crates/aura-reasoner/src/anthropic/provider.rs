@@ -8,8 +8,8 @@ use super::{AnthropicProvider, ApiError};
 
 use crate::error::ReasonerError;
 use crate::{
-    emit_retry, stream_from_response, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
-    RetryInfo, StopReason, StreamEventStream, Usage,
+    emit_retry, response_output_shape, stream_from_response, ModelProvider, ModelRequest,
+    ModelResponse, ProviderTrace, RetryInfo, StopReason, StreamEventStream, Usage,
 };
 use async_trait::async_trait;
 use serde::Serialize;
@@ -749,6 +749,18 @@ impl ModelProvider for AnthropicProvider {
                         .complete(buffered_request)
                         .await
                         .map_err(ApiError::Other)?;
+                    let shape = response_output_shape(&response);
+                    debug!(
+                        model = %model,
+                        response_model = %response.model_used,
+                        content_block_count = shape.content_block_count,
+                        aggregate_text_bytes = shape.text_bytes,
+                        thinking_bytes = shape.thinking_bytes,
+                        tool_use_count = shape.tool_use_count,
+                        stop_reason = ?response.stop_reason,
+                        provider_request_id = ?response.trace.provider_request_id,
+                        "Buffered proxy completion returned response shape"
+                    );
                     return Ok(stream_from_response(response));
                 }
 
