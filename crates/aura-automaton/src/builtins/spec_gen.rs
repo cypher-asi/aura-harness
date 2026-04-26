@@ -92,7 +92,7 @@ impl Automaton for SpecGenAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: format!("{} specs generated and saved", specs.len()),
-        });
+        })?;
 
         Ok(TickOutcome::Done)
     }
@@ -107,7 +107,7 @@ impl SpecGenAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Loading project...".into(),
-        });
+        })?;
 
         let _project = self
             .domain
@@ -118,7 +118,7 @@ impl SpecGenAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Reading requirements document...".into(),
-        });
+        })?;
 
         let requirements_path = ctx
             .config
@@ -152,7 +152,7 @@ impl SpecGenAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Generating specifications...".into(),
-        });
+        })?;
 
         let model = ctx
             .config
@@ -177,12 +177,12 @@ impl SpecGenAutomaton {
             task_id: None,
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
-        });
+        })?;
 
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Parsing AI response...".into(),
-        });
+        })?;
 
         let response_text = response.message.text_content();
         let specs = parse_spec_response(&response_text)?;
@@ -204,7 +204,7 @@ impl SpecGenAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: format!("Saving {} specs...", specs.len()),
-        });
+        })?;
 
         let existing = self
             .domain
@@ -233,7 +233,7 @@ impl SpecGenAutomaton {
             ctx.emit(AutomatonEvent::SpecSaved {
                 spec_id: saved.id,
                 title: saved.title,
-            });
+            })?;
         }
 
         Ok(())

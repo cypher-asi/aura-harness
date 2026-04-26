@@ -591,7 +591,9 @@ async fn commit_and_push_emits_commit_skipped_when_aggregate_is_empty() {
     let aggregate = TaskAggregate::default();
     assert!(aggregate.should_skip_commit());
 
-    commit_and_push(&mut ctx, None, "task-42", &aggregate).await;
+    commit_and_push(&mut ctx, None, "task-42", &aggregate)
+        .await
+        .expect("commit precheck emits skip event");
 
     let events = drain(&mut rx);
     assert_eq!(
@@ -623,7 +625,9 @@ async fn commit_and_push_does_not_skip_when_aggregate_has_file_changes() {
     };
     assert!(!aggregate.should_skip_commit());
 
-    commit_and_push(&mut ctx, None, "task-42", &aggregate).await;
+    commit_and_push(&mut ctx, None, "task-42", &aggregate)
+        .await
+        .expect("commit precheck with missing workspace succeeds");
 
     let events = drain(&mut rx);
     assert!(
@@ -648,7 +652,9 @@ async fn commit_and_push_does_not_skip_when_aggregate_has_verification_only() {
     };
     assert!(!aggregate.should_skip_commit());
 
-    commit_and_push(&mut ctx, None, "task-42", &aggregate).await;
+    commit_and_push(&mut ctx, None, "task-42", &aggregate)
+        .await
+        .expect("commit precheck with non-git workspace succeeds");
 
     let events = drain(&mut rx);
     assert!(

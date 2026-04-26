@@ -21,7 +21,7 @@ impl DevLoopAutomaton {
             outcome: outcome.into(),
             completed_count: completed,
             failed_count: failed,
-        });
+        })?;
         ctx.state.set(STATE_LOOP_FINISHED, &true);
 
         Ok(TickOutcome::Done)

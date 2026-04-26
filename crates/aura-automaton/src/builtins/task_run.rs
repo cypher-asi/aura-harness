@@ -156,7 +156,7 @@ impl Automaton for TaskRunAutomaton {
         ctx.emit(AutomatonEvent::TaskStarted {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
-        });
+        })?;
 
         self.transition_to_in_progress(&task).await;
 
@@ -359,14 +359,14 @@ impl TaskRunAutomaton {
                 ctx.emit(AutomatonEvent::TaskCompleted {
                     task_id: task_id.to_string(),
                     summary: exec.notes,
-                });
+                })?;
                 ctx.emit(AutomatonEvent::TokenUsage {
                     task_id: Some(task_id.to_string()),
                     input_tokens: exec.input_tokens,
                     output_tokens: exec.output_tokens,
-                });
+                })?;
 
-                commit_and_push(ctx, self.tool_executor.as_ref(), task_id, &aggregate).await;
+                commit_and_push(ctx, self.tool_executor.as_ref(), task_id, &aggregate).await?;
             }
             Err(e) => {
                 error!(task_id, error = %e, "task execution failed");
@@ -378,7 +378,7 @@ impl TaskRunAutomaton {
                 ctx.emit(AutomatonEvent::TaskFailed {
                     task_id: task_id.to_string(),
                     reason: e.to_string(),
-                });
+                })?;
             }
         }
 

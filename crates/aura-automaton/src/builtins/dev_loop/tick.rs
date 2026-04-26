@@ -23,7 +23,7 @@ impl Automaton for DevLoopAutomaton {
         info!(project_id = %cfg.project_id, "Dev loop automaton installed");
         ctx.emit(AutomatonEvent::LogLine {
             message: format!("dev loop starting for project {}", cfg.project_id),
-        });
+        })?;
         Ok(())
     }
 
@@ -51,7 +51,7 @@ impl Automaton for DevLoopAutomaton {
                 outcome: "stopped".into(),
                 completed_count: completed,
                 failed_count: failed,
-            });
+            })?;
         }
         Ok(())
     }
@@ -110,7 +110,7 @@ impl DevLoopAutomaton {
                 sorted.len(),
                 already_done.len()
             ),
-        });
+        })?;
 
         Ok(TickOutcome::Continue)
     }
@@ -166,13 +166,13 @@ impl DevLoopAutomaton {
         ctx.emit(AutomatonEvent::TaskStarted {
             task_id: task.id.clone(),
             task_title: task.title.clone(),
-        });
+        })?;
 
         let result = self.execute_task(ctx, cfg, task).await;
 
         match result {
-            Ok(exec) => self.record_task_success(ctx, task, exec).await,
-            Err(e) => self.record_task_failure(ctx, task, e).await,
+            Ok(exec) => self.record_task_success(ctx, task, exec).await?,
+            Err(e) => self.record_task_failure(ctx, task, e).await?,
         }
 
         Ok(TickOutcome::Continue)
@@ -183,7 +183,7 @@ impl DevLoopAutomaton {
         ctx: &mut TickContext,
         task: &TaskDescriptor,
         exec: TaskExecutionResult,
-    ) {
+    ) -> Result<(), AutomatonError> {
         // Build the DoD aggregate BEFORE we move `exec.notes` into
         // the work-log entry / `TaskCompleted` summary: after those
         // moves `exec` is partially dropped and can no longer be
@@ -241,16 +241,17 @@ impl DevLoopAutomaton {
         ctx.emit(AutomatonEvent::TaskCompleted {
             task_id: task.id.clone(),
             summary: exec.notes,
-        });
+        })?;
         ctx.emit(AutomatonEvent::TokenUsage {
             task_id: Some(task.id.clone()),
             input_tokens: exec.input_tokens,
             output_tokens: exec.output_tokens,
-        });
+        })?;
 
-        commit_and_push(ctx, self.tool_executor.as_ref(), &task.id, &aggregate).await;
+        commit_and_push(ctx, self.tool_executor.as_ref(), &task.id, &aggregate).await?;
 
         info!(task_id = %task.id, title = %task.title, "Task completed successfully");
+        Ok(())
     }
 
     async fn record_task_failure(
@@ -258,7 +259,7 @@ impl DevLoopAutomaton {
         ctx: &mut TickContext,
         task: &TaskDescriptor,
         e: AutomatonError,
-    ) {
+    ) -> Result<(), AutomatonError> {
         warn!(task_id = %task.id, error = %e, "Task execution failed");
 
         // `safe_transition` bridges `ready → in_progress → failed` when
@@ -288,7 +289,8 @@ impl DevLoopAutomaton {
         ctx.emit(AutomatonEvent::TaskFailed {
             task_id: task.id.clone(),
             reason: e.to_string(),
-        });
+        })?;
+        Ok(())
     }
 }
 
@@ -345,7 +347,7 @@ pub(crate) async fn commit_and_push(
     tool_executor: Option<&std::sync::Arc<dyn aura_agent::types::AgentToolExecutor>>,
     task_id: &str,
     aggregate: &TaskAggregate,
-) {
+) -> Result<(), AutomatonError> {
     // DoD precheck: when the per-task aggregate shows zero file
     // changes AND zero verification steps, skip both git_commit and
     // git_commit_push entirely. Runs BEFORE the workspace / git-init
@@ -364,17 +366,17 @@ pub(crate) async fn commit_and_push(
         ctx.emit(AutomatonEvent::CommitSkipped {
             task_id: task_id.to_string(),
             reason: COMMIT_SKIPPED_NO_CHANGES.to_string(),
-        });
-        return;
+        })?;
+        return Ok(());
     }
 
     let workspace = match ctx.workspace_root.as_ref() {
         Some(ws) => ws.to_string_lossy().to_string(),
-        None => return,
+        None => return Ok(()),
     };
 
     if !aura_agent::git::is_git_repo(&workspace) && !init_git_repo(&workspace, task_id).await {
-        return;
+        return Ok(());
     }
 
     let Some(executor) = tool_executor else {
@@ -382,7 +384,7 @@ pub(crate) async fn commit_and_push(
             task_id,
             "dev-loop has no tool executor; skipping commit/push"
         );
-        return;
+        return Ok(());
     };
 
     // Copy config values out before we reborrow `ctx` mutably to emit
@@ -411,7 +413,7 @@ pub(crate) async fn commit_and_push(
     // dev-loop's happy path. When either is missing we still attempt
     // a local commit so in-workspace history is preserved.
     let intent = build_dev_loop_git_intent(task_id, &git_branch, git_repo_url, auth_token);
-    dispatch_git_intent(ctx, executor.as_ref(), task_id, intent).await;
+    dispatch_git_intent(ctx, executor.as_ref(), task_id, intent).await
 }
 
 /// What the dev loop wants the kernel-mediated git tooling to do at the
@@ -470,11 +472,11 @@ async fn dispatch_git_intent(
     executor: &dyn aura_agent::types::AgentToolExecutor,
     task_id: &str,
     intent: DevLoopGitIntent,
-) {
+) -> Result<(), AutomatonError> {
     match intent {
         DevLoopGitIntent::Commit { message } => {
             let input = serde_json::json!({ "message": message });
-            dispatch_git_commit(ctx, executor, task_id, input).await;
+            dispatch_git_commit(ctx, executor, task_id, input).await
         }
         DevLoopGitIntent::CommitPush {
             message,
@@ -488,7 +490,7 @@ async fn dispatch_git_intent(
                 "branch": &branch,
                 "jwt": jwt,
             });
-            dispatch_git_commit_push(ctx, executor, task_id, &repo, &branch, input).await;
+            dispatch_git_commit_push(ctx, executor, task_id, &repo, &branch, input).await
         }
     }
 }
@@ -498,7 +500,7 @@ async fn dispatch_git_commit(
     executor: &dyn aura_agent::types::AgentToolExecutor,
     task_id: &str,
     input: serde_json::Value,
-) {
+) -> Result<(), AutomatonError> {
     let tool_use_id = format!("devloop-git-commit-{task_id}");
     let call = aura_agent::types::ToolCallInfo {
         id: tool_use_id,
@@ -513,12 +515,12 @@ async fn dispatch_git_commit(
                 ctx.emit(AutomatonEvent::GitCommitted {
                     task_id: task_id.to_string(),
                     commit_sha: sha,
-                });
+                })?;
             } else {
                 ctx.emit(AutomatonEvent::GitCommitFailed {
                     task_id: task_id.to_string(),
                     reason: "No changes to commit".to_string(),
-                });
+                })?;
             }
         }
         Some(res) => {
@@ -526,12 +528,13 @@ async fn dispatch_git_commit(
             ctx.emit(AutomatonEvent::GitCommitFailed {
                 task_id: task_id.to_string(),
                 reason: format!("Commit failed: {}", res.content),
-            });
+            })?;
         }
         None => {
             warn!(task_id, "git_commit returned no result");
         }
     }
+    Ok(())
 }
 
 async fn dispatch_git_commit_push(
@@ -541,7 +544,7 @@ async fn dispatch_git_commit_push(
     repo: &str,
     branch: &str,
     input: serde_json::Value,
-) {
+) -> Result<(), AutomatonError> {
     let tool_use_id = format!("devloop-git-commit-push-{task_id}");
     let call = aura_agent::types::ToolCallInfo {
         id: tool_use_id,
@@ -562,12 +565,12 @@ async fn dispatch_git_commit_push(
                 ctx.emit(AutomatonEvent::GitCommitted {
                     task_id: task_id.to_string(),
                     commit_sha: sha,
-                });
+                })?;
             } else {
                 ctx.emit(AutomatonEvent::GitCommitFailed {
                     task_id: task_id.to_string(),
                     reason: "No changes to commit".to_string(),
-                });
+                })?;
             }
             if parsed.pushed {
                 ctx.emit(AutomatonEvent::GitPushed {
@@ -575,7 +578,7 @@ async fn dispatch_git_commit_push(
                     repo: repo.to_string(),
                     branch: branch.to_string(),
                     commits: parsed.commits,
-                });
+                })?;
                 info!(
                     task_id,
                     branch = branch,
@@ -594,7 +597,7 @@ async fn dispatch_git_commit_push(
                 ctx.emit(AutomatonEvent::GitPushFailed {
                     task_id: task_id.to_string(),
                     reason: format!("Commit+push failed: {reason}"),
-                });
+                })?;
             }
         }
         Some(res) => {
@@ -602,12 +605,13 @@ async fn dispatch_git_commit_push(
             ctx.emit(AutomatonEvent::GitPushFailed {
                 task_id: task_id.to_string(),
                 reason: format!("Commit+push failed: {}", res.content),
-            });
+            })?;
         }
         None => {
             warn!(task_id, "git_commit_push returned no result");
         }
     }
+    Ok(())
 }
 
 fn parse_sha(content: &str) -> Option<String> {

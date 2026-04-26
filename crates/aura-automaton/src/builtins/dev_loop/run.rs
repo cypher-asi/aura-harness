@@ -173,7 +173,7 @@ impl DevLoopAutomaton {
             &mut retry_counts,
             &failed_ids,
         )
-        .await;
+        .await?;
 
         Ok(true)
     }
@@ -185,7 +185,7 @@ async fn enqueue_retries(
     retryable: &[String],
     retry_counts: &mut HashMap<String, u32>,
     failed_ids: &[String],
-) {
+) -> Result<(), AutomatonError> {
     let mut queue: Vec<String> = ctx.state.get(STATE_TASK_QUEUE).unwrap_or_default();
     let new_failed: Vec<String> = failed_ids
         .iter()
@@ -207,12 +207,13 @@ async fn enqueue_retries(
             task_id: id.clone(),
             attempt: *count,
             reason: "automatic retry after failure".into(),
-        });
+        })?;
     }
 
     ctx.state.set(STATE_TASK_QUEUE, &queue);
     ctx.state.set(STATE_FAILED_IDS, &new_failed);
     ctx.state.set(STATE_RETRY_COUNTS, retry_counts);
+    Ok(())
 }
 
 fn effective_project_path(

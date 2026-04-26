@@ -23,6 +23,9 @@ pub enum AutomatonError {
     #[error("agent execution error: {0}")]
     AgentExecution(String),
 
+    #[error("automaton event delivery failed: {0}")]
+    EventDelivery(String),
+
     /// Task reached the implementing phase but produced no file operations
     /// — likely truncated by `max_tokens` or interrupted. Carries a
     /// structured `DecompositionHint` so the orchestrator can auto-split

@@ -107,13 +107,13 @@ impl Automaton for ChatAutomaton {
         let result = self
             .run_chat_loop(ctx, &project_info, &cfg, api_messages, tools)
             .await?;
-        self.save_assistant_reply(ctx, &cfg, &result).await;
+        self.save_assistant_reply(ctx, &cfg, &result).await?;
 
         ctx.emit(AutomatonEvent::TokenUsage {
             task_id: None,
             input_tokens: result.total_input_tokens,
             output_tokens: result.total_output_tokens,
-        });
+        })?;
 
         Ok(TickOutcome::Done)
     }
@@ -128,7 +128,7 @@ impl ChatAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Loading conversation...".into(),
-        });
+        })?;
 
         let stored = self
             .domain
@@ -140,7 +140,7 @@ impl ChatAutomaton {
             ctx.emit(AutomatonEvent::Error {
                 automaton_id: ctx.automaton_id.to_string(),
                 message: "No messages to process".into(),
-            });
+            })?;
             return Err(AutomatonError::DomainApi("No messages to process".into()));
         }
 
@@ -163,7 +163,7 @@ impl ChatAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Building context...".into(),
-        });
+        })?;
 
         let project = self
             .domain
@@ -188,7 +188,7 @@ impl ChatAutomaton {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
             message: "Waiting for response...".into(),
-        });
+        })?;
 
         let project_info = ProjectInfo {
             name: &project.name,
@@ -239,9 +239,9 @@ impl ChatAutomaton {
         ctx: &mut TickContext,
         cfg: &ChatConfig,
         result: &aura_agent::AgentLoopResult,
-    ) {
+    ) -> Result<(), AutomatonError> {
         if result.total_text.is_empty() {
-            return;
+            return Ok(());
         }
 
         let session = self
@@ -268,7 +268,8 @@ impl ChatAutomaton {
 
         ctx.emit(AutomatonEvent::MessageSaved {
             message_id: String::new(),
-        });
+        })?;
+        Ok(())
     }
 }
 
