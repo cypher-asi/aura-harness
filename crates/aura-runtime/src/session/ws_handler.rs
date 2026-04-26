@@ -578,6 +578,7 @@ fn dispatch_turn_to_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scheduler::Scheduler;
     use aura_core::{
         InstalledIntegrationDefinition, InstalledToolDefinition,
         InstalledToolIntegrationRequirement, ToolAuth,
@@ -591,18 +592,29 @@ mod tests {
     fn test_context() -> WsContext {
         let workspace = tempfile::tempdir().expect("temp workspace");
         let db_dir = tempfile::tempdir().expect("temp db");
-        let store = RocksStore::open(db_dir.path(), false).expect("open rocks store");
+        let store = Arc::new(RocksStore::open(db_dir.path(), false).expect("open rocks store"));
+        let provider = Arc::new(MockProvider::simple_response("ok"));
         let workspace_base = workspace.path().to_path_buf();
+        let catalog = Arc::new(ToolCatalog::default());
+        let scheduler = Arc::new(Scheduler::new(
+            store.clone(),
+            provider.clone(),
+            Vec::new(),
+            catalog.executor_builtin_tools(),
+            workspace_base.clone(),
+            None,
+        ));
         std::mem::forget(workspace);
         std::mem::forget(db_dir);
 
         WsContext {
             workspace_base,
-            provider: Arc::new(MockProvider::simple_response("ok")),
-            store: Arc::new(store),
+            provider,
+            store,
+            scheduler,
             tool_config: ToolConfig::default(),
             auth_token: None,
-            catalog: Arc::new(ToolCatalog::default()),
+            catalog,
             domain_api: None,
             automaton_controller: None,
             project_base: None,

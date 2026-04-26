@@ -15,6 +15,7 @@ use aura_tools::SubagentDispatchHook;
 use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// Foreground `task` dispatcher backed by the local scheduler.
@@ -94,11 +95,25 @@ impl SubagentDispatchHook for RuntimeSubagentDispatch {
 
         let loop_config = loop_config_for(&kind);
         let policy = policy_for(child_permissions, child_tool_permissions, &request);
-        let processed = self
-            .scheduler
-            .schedule_agent_with_overrides(child_agent_id, Some(loop_config), Some(policy))
-            .await
-            .map_err(|e| format!("schedule child: {e}"))?;
+        let processed = match tokio::time::timeout(
+            Duration::from_millis(kind.budget.timeout_ms),
+            self.scheduler
+                .schedule_agent_with_overrides(child_agent_id, Some(loop_config), Some(policy)),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(|e| format!("schedule child: {e}"))?,
+            Err(_) => {
+                return Ok(SubagentResult {
+                    child_agent_id: Some(child_agent_id),
+                    final_message: String::new(),
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    files_changed: Vec::new(),
+                    exit: SubagentExit::Timeout,
+                });
+            }
+        };
 
         let Some(result) = processed.last_result else {
             return Ok(SubagentResult {

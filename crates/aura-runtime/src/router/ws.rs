@@ -64,6 +64,7 @@ pub(super) async fn ws_upgrade_handler(
         workspace_base: state.config.workspaces_path(),
         provider: state.provider.clone(),
         store: state.store.clone(),
+        scheduler: state.scheduler.clone(),
         tool_config: state.tool_config.clone(),
         auth_token,
         catalog: state.catalog.clone(),

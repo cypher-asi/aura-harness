@@ -38,6 +38,8 @@ use aura_tools::{ToolCatalog, ToolConfig};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use crate::scheduler::Scheduler;
+
 // ============================================================================
 // WebSocket Handler Context
 // ============================================================================
@@ -59,6 +61,8 @@ pub struct WsContext {
     /// introducing a `WriteHook` seam so the session can bind to the
     /// narrower read surface.
     pub(crate) store: Arc<dyn Store>,
+    /// Local scheduler used for foreground subagent dispatch.
+    pub(crate) scheduler: Arc<Scheduler>,
     /// Tool configuration (fs/cmd permissions).
     pub(crate) tool_config: ToolConfig,
     /// JWT auth token from the WebSocket upgrade request.
