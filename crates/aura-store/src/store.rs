@@ -107,6 +107,36 @@ pub trait ReadStore: Send + Sync {
         limit: usize,
     ) -> Result<Vec<RecordEntry>, StoreError>;
 
+    /// Scan record entries for an agent in descending sequence order.
+    ///
+    /// Returns entries starting at `from_seq` and walking backwards up to
+    /// `limit` entries. Implementations may override this with a native
+    /// reverse iterator; the default preserves a bounded read path by issuing
+    /// at most `limit` point lookups.
+    ///
+    /// # Errors
+    /// Returns error if any bounded lookup fails.
+    fn scan_record_descending(
+        &self,
+        agent_id: AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, StoreError> {
+        if from_seq == 0 || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let window = u64::try_from(limit).unwrap_or(u64::MAX);
+        let min_seq = from_seq.saturating_sub(window.saturating_sub(1)).max(1);
+        let mut entries = Vec::with_capacity(limit);
+
+        for seq in (min_seq..=from_seq).rev() {
+            entries.push(self.get_record_entry(agent_id, seq)?);
+        }
+
+        Ok(entries)
+    }
+
     /// Get a single record entry.
     ///
     /// # Errors

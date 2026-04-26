@@ -9,6 +9,8 @@
 use aura_core::{AgentId, RecordEntry, ToolExecution};
 use aura_store::ReadStore;
 
+const LATEST_PARENT_LOOKBACK_LIMIT: usize = 10_000;
+
 /// Walk the parent chain of `agent_id` in child → root order by scanning
 /// each agent's record log for the most recent `ToolExecution` carrying a
 /// `parent_agent_id`.
@@ -65,33 +67,34 @@ fn latest_parent(agent_id: &AgentId, store: &dyn ReadStore) -> Option<AgentId> {
     if head == 0 {
         return None;
     }
-    let limit: usize = match head.try_into() {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                agent_id = ?agent_id,
-                head,
-                "billing.walk_parent_chain: head_seq does not fit in usize; truncating chain"
-            );
-            return None;
-        }
-    };
-    let entries = match store.scan_record(*agent_id, 1, limit) {
+    let entries = match store.scan_record_descending(*agent_id, head, LATEST_PARENT_LOOKBACK_LIMIT)
+    {
         Ok(es) => es,
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 agent_id = ?agent_id,
-                "billing.walk_parent_chain: scan_record failed; truncating chain"
+                head,
+                limit = LATEST_PARENT_LOOKBACK_LIMIT,
+                "billing.walk_parent_chain: descending record scan failed; truncating chain"
             );
             return None;
         }
     };
-    for entry in entries.iter().rev() {
+    for entry in &entries {
         if let Some(parent) = parent_from_entry(entry) {
             return Some(parent);
         }
+    }
+    if head > u64::try_from(LATEST_PARENT_LOOKBACK_LIMIT).unwrap_or(u64::MAX) {
+        // TODO(parent_index): persist child -> latest parent metadata so very
+        // old parent markers are found without scanning unbounded history.
+        tracing::warn!(
+            agent_id = ?agent_id,
+            head,
+            limit = LATEST_PARENT_LOOKBACK_LIMIT,
+            "billing.walk_parent_chain: no parent marker in bounded tail scan; truncating chain"
+        );
     }
     None
 }
@@ -125,6 +128,8 @@ mod tests {
     struct MemStore {
         heads: Mutex<HashMap<AgentId, u64>>,
         records: Mutex<HashMap<(AgentId, u64), RecordEntry>>,
+        scan_calls: Mutex<Vec<(AgentId, u64, usize)>>,
+        descending_scan_calls: Mutex<Vec<(AgentId, u64, usize)>>,
     }
 
     impl MemStore {
@@ -159,6 +164,10 @@ mod tests {
             from_seq: u64,
             limit: usize,
         ) -> Result<Vec<RecordEntry>, StoreError> {
+            self.scan_calls
+                .lock()
+                .unwrap()
+                .push((agent_id, from_seq, limit));
             let head = self.get_head_seq(agent_id)?;
             let mut out = Vec::new();
             for seq in from_seq..=head {
@@ -166,6 +175,31 @@ mod tests {
                     break;
                 }
                 if let Some(entry) = self.records.lock().unwrap().get(&(agent_id, seq)) {
+                    out.push(entry.clone());
+                }
+            }
+            Ok(out)
+        }
+        fn scan_record_descending(
+            &self,
+            agent_id: AgentId,
+            from_seq: u64,
+            limit: usize,
+        ) -> Result<Vec<RecordEntry>, StoreError> {
+            self.descending_scan_calls
+                .lock()
+                .unwrap()
+                .push((agent_id, from_seq, limit));
+            if from_seq == 0 || limit == 0 {
+                return Ok(Vec::new());
+            }
+
+            let window = u64::try_from(limit).unwrap_or(u64::MAX);
+            let min_seq = from_seq.saturating_sub(window.saturating_sub(1)).max(1);
+            let records = self.records.lock().unwrap();
+            let mut out = Vec::new();
+            for seq in (min_seq..=from_seq).rev() {
+                if let Some(entry) = records.get(&(agent_id, seq)) {
                     out.push(entry.clone());
                 }
             }
@@ -292,5 +326,26 @@ mod tests {
         store.insert(b, 1, parent_entry(1, b, a));
         let chain = walk_parent_chain(&a, &store);
         assert_eq!(chain, vec![a, b]);
+    }
+
+    #[test]
+    fn latest_parent_uses_bounded_tail_lookup_for_large_heads() {
+        let store = MemStore::default();
+        let child = AgentId::generate();
+        let parent = AgentId::generate();
+        let large_head = 1_000_000;
+
+        store.insert(child, large_head, parent_entry(large_head, child, parent));
+
+        let chain = walk_parent_chain(&child, &store);
+        assert_eq!(chain, vec![child, parent]);
+        assert!(
+            store.scan_calls.lock().unwrap().is_empty(),
+            "billing should use descending tail lookup instead of full forward scans"
+        );
+        assert_eq!(
+            store.descending_scan_calls.lock().unwrap().as_slice(),
+            &[(child, large_head, LATEST_PARENT_LOOKBACK_LIMIT)]
+        );
     }
 }

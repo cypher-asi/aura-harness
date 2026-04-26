@@ -120,6 +120,34 @@ fn test_scan_record() {
 }
 
 #[test]
+fn test_scan_record_descending() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    for i in 1..=5 {
+        let tx = create_test_tx(agent_id);
+        store.enqueue_tx(&tx).unwrap();
+        let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+
+        let entry = RecordEntry::builder(i, tx)
+            .context_hash([i as u8; 32])
+            .build();
+
+        store
+            .append_entry_atomic(agent_id, i, &entry, token.inbox_seq())
+            .unwrap();
+    }
+
+    let entries = store.scan_record_descending(agent_id, 5, 3).unwrap();
+    let seqs: Vec<_> = entries.iter().map(|entry| entry.seq).collect();
+    assert_eq!(seqs, vec![5, 4, 3]);
+
+    let entries = store.scan_record_descending(agent_id, 3, 10).unwrap();
+    let seqs: Vec<_> = entries.iter().map(|entry| entry.seq).collect();
+    assert_eq!(seqs, vec![3, 2, 1]);
+}
+
+#[test]
 fn test_agent_status() {
     let (store, _dir) = create_test_store();
     let agent_id = AgentId::generate();

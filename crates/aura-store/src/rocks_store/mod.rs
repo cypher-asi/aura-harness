@@ -42,8 +42,8 @@ use crate::store::ReadStore;
 use aura_core::AgentStatus;
 use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults};
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,
-    Options, WriteBatch, WriteOptions,
+    BlockBasedOptions, BoundColumnFamily, Cache, ColumnFamilyDescriptor, DBCompressionType,
+    DBWithThreadMode, Direction, IteratorMode, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -57,6 +57,8 @@ pub struct RocksStore {
 }
 
 impl RocksStore {
+    const BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
+
     /// Open or create a `RocksDB` store at the given path.
     ///
     /// # Errors
@@ -82,10 +84,11 @@ impl RocksStore {
             cf::RUNTIME_CAPABILITIES,
             cf::USER_TOOL_DEFAULTS,
         ];
+        let block_cache = Cache::new_lru_cache(Self::BLOCK_CACHE_BYTES);
         let cf_descriptors: Vec<_> = cf_names
             .iter()
             .map(|name| {
-                let cf_opts = Options::default();
+                let cf_opts = Self::column_family_options(name, &block_cache);
                 ColumnFamilyDescriptor::new(*name, cf_opts)
             })
             .collect();
@@ -119,6 +122,41 @@ impl RocksStore {
         let mut opts = WriteOptions::default();
         opts.set_sync(self.sync_writes);
         opts
+    }
+
+    fn column_family_options(name: &str, block_cache: &Cache) -> Options {
+        let mut opts = Options::default();
+        opts.set_block_based_table_factory(&Self::block_based_table_options(block_cache));
+
+        if Self::should_compress_column_family(name) {
+            opts.set_compression_type(DBCompressionType::Lz4);
+        }
+
+        opts
+    }
+
+    fn block_based_table_options(block_cache: &Cache) -> BlockBasedOptions {
+        let mut block_opts = BlockBasedOptions::default();
+        block_opts.set_block_cache(block_cache);
+        block_opts.set_bloom_filter(10.0, false);
+        block_opts.set_whole_key_filtering(true);
+        block_opts.set_cache_index_and_filter_blocks(true);
+        block_opts.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        block_opts
+    }
+
+    fn should_compress_column_family(name: &str) -> bool {
+        matches!(
+            name,
+            cf::RECORD
+                | cf::INBOX
+                | cf::MEMORY_FACTS
+                | cf::MEMORY_EVENTS
+                | cf::MEMORY_PROCEDURES
+                | cf::AGENT_SKILLS
+                | cf::RUNTIME_CAPABILITIES
+                | cf::USER_TOOL_DEFAULTS
+        )
     }
 
     /// Read a u64 value from agent metadata.
@@ -372,10 +410,9 @@ impl ReadStore for RocksStore {
         let start_key = RecordKey::scan_from(agent_id, from_seq);
         let end_key = RecordKey::scan_end(agent_id);
 
-        let iter = self.db.iterator_cf(
-            &cf,
-            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&start_key, Direction::Forward));
 
         let mut entries = Vec::with_capacity(limit);
 
@@ -403,6 +440,52 @@ impl ReadStore for RocksStore {
         }
 
         debug!(count = entries.len(), "Record scan complete");
+        Ok(entries)
+    }
+
+    #[instrument(skip(self), fields(agent_id = %agent_id, from_seq, limit))]
+    fn scan_record_descending(
+        &self,
+        agent_id: AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, StoreError> {
+        if from_seq == 0 || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let cf = self.cf(cf::RECORD)?;
+        let start_key = RecordKey::scan_from(agent_id, from_seq);
+        let agent_start_key = RecordKey::scan_from(agent_id, 1);
+
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&start_key, Direction::Reverse));
+        let mut entries = Vec::with_capacity(limit);
+
+        for item in iter {
+            let (key, value) = item?;
+
+            if key.as_ref() < agent_start_key.as_slice() {
+                break;
+            }
+
+            let record_key = RecordKey::decode(&key)?;
+            if record_key.agent_id != agent_id {
+                break;
+            }
+
+            let entry = serde_json::from_slice::<RecordEntry>(&value).map_err(|e| {
+                StoreError::Deserialization(format!("record seq={}: {e}", record_key.seq))
+            })?;
+            entries.push(entry);
+
+            if entries.len() >= limit {
+                break;
+            }
+        }
+
+        debug!(count = entries.len(), "Descending record scan complete");
         Ok(entries)
     }
 
