@@ -26,9 +26,9 @@ pub struct PolicyConfig {
     pub tool_integration_requirements: HashMap<String, InstalledToolIntegrationRequirement>,
     /// Scope + capability bundle for the agent this policy governs.
     /// Always consulted on `Delegate` proposals â€” the check is
-    /// unconditional and cannot be disabled. [`AgentPermissions::empty`]
-    /// denies every capability-gated tool; [`AgentPermissions::ceo_preset`]
-    /// grants everything.
+    /// unconditional and cannot be disabled. [`AgentPermissions::full_access`]
+    /// grants everything; callers that need a locked-down agent must pass an
+    /// explicit narrower bundle.
     pub agent_permissions: AgentPermissions,
     /// Mapping from tool name to the [`Capability`] required to use it.
     /// Tools not listed here carry no capability requirement.
@@ -77,7 +77,7 @@ impl Default for PolicyConfig {
             max_proposals: 8,
             installed_integrations: Vec::new(),
             tool_integration_requirements: HashMap::new(),
-            agent_permissions: AgentPermissions::empty(),
+            agent_permissions: AgentPermissions::full_access(),
             tool_capability_requirements,
             user_default: UserToolDefaults::full_access(),
             agent_override: None,

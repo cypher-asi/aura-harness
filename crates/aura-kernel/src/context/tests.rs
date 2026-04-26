@@ -139,8 +139,7 @@ fn test_record_summaries_basic() {
         .expect("payload_summary must be set");
     assert!(summary.starts_with("blake3:"), "unexpected: {summary}");
     assert_eq!(summary.len(), "blake3:".len() + 16);
-    let expected = format!("blake3:{}", &blake3::hash(b"hello world").to_hex()[..16]);
-    assert_eq!(*summary, expected);
+    assert_eq!(*summary, "blake3:d74981efa70a0c88");
 }
 
 #[test]
@@ -189,11 +188,7 @@ fn test_record_summaries_payload_truncation() {
         .payload_summary
         .as_ref()
         .expect("payload_summary must be set");
-    let expected = format!(
-        "blake3:{}",
-        &blake3::hash(long_payload.as_bytes()).to_hex()[..16]
-    );
-    assert_eq!(*summary, expected);
+    assert_eq!(*summary, "blake3:d6a76d0cf6468a02");
     assert!(summary.len() < 250);
 }
 

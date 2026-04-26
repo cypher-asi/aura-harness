@@ -163,7 +163,7 @@ impl Session {
             skill_agent_id: None,
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
-            agent_permissions: AgentPermissions::empty(),
+            agent_permissions: AgentPermissions::full_access(),
             user_id: String::new(),
             tool_permissions: None,
             tool_approval_broker: None,
@@ -277,12 +277,9 @@ impl Session {
             self.intent_classifier_manifest = manifest;
         }
 
-        // Agent permissions are a required field on `SessionInit` and are
-        // applied verbatim to the session — there is no role-based
-        // fallback, no named preset, and no legacy off-switch. Mid-session
-        // changes are rejected at the `/tx` layer; `apply_init` is only
-        // called once per session (see `initialized` guard in
-        // `handle_session_init`).
+        // Agent permissions are applied once at session init. The canonical
+        // default is full access; callers that need restrictions must send a
+        // narrower non-default bundle.
         self.agent_permissions = agent_permissions_from_wire(init.agent_permissions);
         if let Some(msgs) = init.conversation_messages {
             for msg in msgs {
@@ -491,13 +488,18 @@ pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPe
             CapabilityWire::Unknown => None,
         })
         .collect();
-    AgentPermissions {
+    let permissions = AgentPermissions {
         scope: AgentScope {
             orgs: wire.scope.orgs,
             projects: wire.scope.projects,
             agent_ids: wire.scope.agent_ids,
         },
         capabilities,
+    };
+    if permissions.capabilities.is_empty() && permissions.scope.is_universe() {
+        AgentPermissions::full_access()
+    } else {
+        permissions
     }
 }
 

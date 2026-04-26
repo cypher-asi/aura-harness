@@ -232,10 +232,10 @@ fn blank_session_init() -> SessionInit {
 }
 
 #[test]
-fn apply_init_applies_empty_permissions_by_default() {
+fn apply_init_applies_full_access_permissions_by_default() {
     let mut session = test_session(None);
     session.apply_init(blank_session_init()).unwrap();
-    assert_eq!(session.agent_permissions, AgentPermissions::empty());
+    assert_eq!(session.agent_permissions, AgentPermissions::full_access());
 }
 
 #[test]

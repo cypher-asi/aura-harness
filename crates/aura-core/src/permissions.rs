@@ -13,9 +13,11 @@
 //!   the agent may perform.
 //! - [`AgentPermissions::scope`] — an [`AgentScope`] narrowing which orgs,
 //!   projects, and agents the caller may touch.
-//! - [`AgentPermissions::ceo_preset`] grants every capability plus universe
-//!   scope (the bootstrap super-agent).
-//! - [`AgentPermissions::empty`] grants nothing (regular agents).
+//! - [`AgentPermissions::full_access`] grants every capability plus universe
+//!   scope (the default for agents unless explicitly narrowed).
+//! - [`AgentPermissions::ceo_preset`] is the historical bootstrap
+//!   super-agent name for the same full-access bundle.
+//! - [`AgentPermissions::empty`] grants nothing (explicitly restricted agents).
 //! - Spawned children must receive a **strict subset** of their parent's
 //!   permissions — enforced via [`AgentPermissions::contains`].
 //!
@@ -177,12 +179,10 @@ pub struct AgentPermissions {
 }
 
 impl AgentPermissions {
-    /// Fully permissive preset used for "CEO" agents in phase 6. Universe
-    /// scope plus every variant of [`Capability`] (with a single illustrative
-    /// project-scoped grant when applicable — no project-scoped variant is
-    /// included here because project ids are host-specific).
+    /// Fully permissive agent bundle: universe scope plus every capability
+    /// variant that does not require a host-specific id.
     #[must_use]
-    pub fn ceo_preset() -> Self {
+    pub fn full_access() -> Self {
         Self {
             scope: AgentScope::default(),
             capabilities: vec![
@@ -207,11 +207,19 @@ impl AgentPermissions {
         }
     }
 
+    /// Historical name for the bootstrap super-agent bundle. Kept as an alias
+    /// so CEO-specific call sites keep compiling while the canonical default is
+    /// expressed as [`Self::full_access`].
+    #[must_use]
+    pub fn ceo_preset() -> Self {
+        Self::full_access()
+    }
+
     /// Legacy default applied by the phase 6 migrator to existing
-    /// `role == "super_agent"` records: identical to [`Self::ceo_preset`].
+    /// `role == "super_agent"` records: identical to [`Self::full_access`].
     #[must_use]
     pub fn legacy_default() -> Self {
-        Self::ceo_preset()
+        Self::full_access()
     }
 
     /// Empty permissions: universe scope (vacuously), zero capabilities.

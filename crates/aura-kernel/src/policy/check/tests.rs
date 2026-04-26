@@ -15,10 +15,18 @@ fn delegate_proposal(tool: &str, args: serde_json::Value) -> Proposal {
 }
 
 #[test]
-fn default_empty_permissions_allow_unrestricted_tools() {
-    // A tool that carries no capability requirement and no scope
-    // target keys passes against the default `AgentPermissions::empty()`.
+fn default_permissions_allow_capability_gated_tools() {
     let policy = Policy::with_defaults();
+    let proposal = delegate_proposal("run_command", serde_json::json!({"program":"git"}));
+    assert!(policy.check(&proposal).allowed);
+}
+
+#[test]
+fn explicit_empty_permissions_allow_unrestricted_tools() {
+    // A tool that carries no capability requirement and no scope
+    // target keys passes even against an explicit empty bundle.
+    let policy =
+        Policy::new(PolicyConfig::default().with_agent_permissions(AgentPermissions::empty()));
     let proposal = delegate_proposal("read_file", serde_json::json!({"path":"a.txt"}));
     assert!(policy.check(&proposal).allowed);
 }

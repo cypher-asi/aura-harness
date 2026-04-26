@@ -19,9 +19,9 @@ pub struct Identity {
     pub identity_hash: [u8; 32],
     /// Scope + capability bundle attached to this agent. Required on
     /// every `Identity`; there is no "legacy, unknown" fallback and no
-    /// serde default. Use [`AgentPermissions::empty`] for an agent with
-    /// no grants, or [`AgentPermissions::ceo_preset`] for the bootstrap
-    /// super-agent (universe scope + all capabilities).
+    /// serde default. Use [`AgentPermissions::full_access`] for the default
+    /// agent grant, or [`AgentPermissions::empty`] for an explicitly
+    /// restricted agent with no grants.
     pub permissions: AgentPermissions,
     /// Optional per-tool permission override. `None` (or an empty map)
     /// means "inherit the originating user's default" — see
@@ -35,8 +35,9 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Create a new identity with empty permissions (no grants). Callers
-    /// that need a non-empty grant should chain [`Self::with_permissions`].
+    /// Create a new identity with the default full-access permission bundle.
+    /// Callers that need a narrower grant should chain
+    /// [`Self::with_permissions`].
     #[must_use]
     pub fn new(zns_id: impl Into<String>, name: impl Into<String>) -> Self {
         let zns_id = zns_id.into();
@@ -50,7 +51,7 @@ impl Identity {
             zns_id,
             name,
             identity_hash,
-            permissions: AgentPermissions::empty(),
+            permissions: AgentPermissions::full_access(),
             tool_permissions: None,
         }
     }

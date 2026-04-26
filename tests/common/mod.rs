@@ -23,16 +23,24 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 
-/// Minimal `agent_permissions` payload for `session_init` messages.
-///
-/// Wave 0 (Apr 2026): `aura_protocol::SessionInit` made `agent_permissions`
-/// a required field. Tests don't actually exercise capability gating today,
-/// so we inject the empty (no-capability) preset to keep the wire payload
-/// valid.
+/// Default full-access `agent_permissions` payload for `session_init`
+/// messages.
 pub(crate) fn default_agent_permissions_payload() -> Value {
     json!({
         "scope": { "orgs": [], "projects": [], "agent_ids": [] },
-        "capabilities": []
+        "capabilities": [
+            { "type": "spawnAgent" },
+            { "type": "controlAgent" },
+            { "type": "readAgent" },
+            { "type": "listAgents" },
+            { "type": "manageOrgMembers" },
+            { "type": "manageBilling" },
+            { "type": "invokeProcess" },
+            { "type": "postToFeed" },
+            { "type": "generateMedia" },
+            { "type": "readAllProjects" },
+            { "type": "writeAllProjects" }
+        ]
     })
 }
 

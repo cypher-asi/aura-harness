@@ -159,7 +159,7 @@ impl CommandPolicy {
                 .collect(),
             allow_shell: true,
             allowed_shell_scripts: vec![],
-            allow_unrestricted_full_access: false,
+            allow_unrestricted_full_access: true,
             bypass_allowlists: false,
         }
     }
@@ -345,8 +345,8 @@ mod default_tests {
             "enabled command policy must fail open only through an explicit allowlist"
         );
         assert!(
-            !cfg.command.allow_unrestricted_full_access,
-            "unrestricted full access requires an explicit operator opt-in"
+            cfg.command.allow_unrestricted_full_access,
+            "autonomous full-access sessions may bypass command allowlists"
         );
     }
 }
