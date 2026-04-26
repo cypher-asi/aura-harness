@@ -43,6 +43,7 @@ pub struct SpecDescriptor {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDescriptor {
+    #[serde(alias = "task_id", alias = "taskId")]
     pub id: String,
     #[serde(
         alias = "specId",
@@ -71,6 +72,38 @@ pub struct TaskDescriptor {
         deserialize_with = "super::helpers::deser_u32_or_default"
     )]
     pub order: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskDescriptor;
+
+    #[test]
+    fn task_descriptor_accepts_aura_os_task_shape() {
+        let task: TaskDescriptor = serde_json::from_value(serde_json::json!({
+            "task_id": "6b502ffa-9da7-4631-9090-388415fa8ddb",
+            "project_id": "2a7f56ff-48c5-4e58-90c0-f62a69084568",
+            "spec_id": "69a95f6f-28c6-4ce8-9cf9-e1c7cc6dff0a",
+            "title": "Wire up live output",
+            "description": "Make automation frames appear in the UI",
+            "status": "pending",
+            "order_index": 3,
+            "dependency_ids": [
+                "dc0fb195-9a6c-4b33-8514-f15e011285f8"
+            ]
+        }))
+        .expect("aura-os Task should deserialize as TaskDescriptor");
+
+        assert_eq!(task.id, "6b502ffa-9da7-4631-9090-388415fa8ddb");
+        assert_eq!(task.project_id, "2a7f56ff-48c5-4e58-90c0-f62a69084568");
+        assert_eq!(task.spec_id, "69a95f6f-28c6-4ce8-9cf9-e1c7cc6dff0a");
+        assert_eq!(task.status, "pending");
+        assert_eq!(task.order, 3);
+        assert_eq!(
+            task.dependencies,
+            vec!["dc0fb195-9a6c-4b33-8514-f15e011285f8".to_string()]
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
