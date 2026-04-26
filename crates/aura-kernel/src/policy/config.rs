@@ -58,13 +58,22 @@ impl Default for PolicyConfig {
         allowed_action_kinds.insert(ActionKind::Decide);
         allowed_action_kinds.insert(ActionKind::Delegate);
 
+        let mut tool_capability_requirements = HashMap::new();
+        tool_capability_requirements.insert("spawn_agent".to_string(), Capability::SpawnAgent);
+        tool_capability_requirements.insert("task".to_string(), Capability::SpawnAgent);
+        tool_capability_requirements.insert("send_to_agent".to_string(), Capability::ControlAgent);
+        tool_capability_requirements
+            .insert("agent_lifecycle".to_string(), Capability::ControlAgent);
+        tool_capability_requirements.insert("delegate_task".to_string(), Capability::ControlAgent);
+        tool_capability_requirements.insert("get_agent_state".to_string(), Capability::ReadAgent);
+
         Self {
             allowed_action_kinds,
             max_proposals: 8,
             installed_integrations: Vec::new(),
             tool_integration_requirements: HashMap::new(),
             agent_permissions: AgentPermissions::empty(),
-            tool_capability_requirements: HashMap::new(),
+            tool_capability_requirements,
             user_default: UserToolDefaults::full_access(),
             agent_override: None,
         }

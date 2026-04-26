@@ -540,6 +540,7 @@ mod tests {
         assert!(!names.contains("agent_lifecycle"));
         assert!(!names.contains("get_agent_state"));
         assert!(!names.contains("delegate_task"));
+        assert!(!names.contains("task"));
     }
 
     #[test]
@@ -562,6 +563,7 @@ mod tests {
         assert!(!names.contains("send_to_agent"));
         assert!(!names.contains("agent_lifecycle"));
         assert!(!names.contains("delegate_task"));
+        assert!(!names.contains("task"));
     }
 
     #[test]
@@ -579,6 +581,7 @@ mod tests {
         assert!(names.contains("agent_lifecycle"));
         assert!(names.contains("get_agent_state"));
         assert!(names.contains("delegate_task"));
+        assert!(names.contains("task"));
     }
 
     #[test]

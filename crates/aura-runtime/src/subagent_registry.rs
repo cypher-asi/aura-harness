@@ -1,0 +1,163 @@
+//! Bundled foreground subagent registry.
+//!
+//! V1 intentionally uses fixed Rust data. Custom file-backed agents can layer
+//! on this API later without changing the `task` tool contract.
+
+use aura_core::{Capability, SubagentBudget, SubagentKindSpec};
+
+const READ_TOOLS: &[&str] = &[
+    "list_files",
+    "read_file",
+    "stat_file",
+    "find_files",
+    "search_code",
+];
+
+/// Lookup table for bundled subagent kinds.
+#[derive(Debug, Clone)]
+pub struct SubagentRegistry {
+    kinds: Vec<SubagentKindSpec>,
+}
+
+impl SubagentRegistry {
+    #[must_use]
+    pub fn bundled() -> Self {
+        Self {
+            kinds: vec![general_purpose(), explore(), shell(), code_reviewer()],
+        }
+    }
+
+    #[must_use]
+    pub fn all(&self) -> &[SubagentKindSpec] {
+        &self.kinds
+    }
+
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&SubagentKindSpec> {
+        self.kinds.iter().find(|kind| kind.name == name)
+    }
+}
+
+impl Default for SubagentRegistry {
+    fn default() -> Self {
+        Self::bundled()
+    }
+}
+
+fn general_purpose() -> SubagentKindSpec {
+    SubagentKindSpec {
+        name: "general_purpose".into(),
+        description: "General-purpose subagent for multi-step codebase work.".into(),
+        system_prompt: "You are a focused coding subagent. Complete the delegated task and return a concise final summary.".into(),
+        allowed_tools: vec![
+            "list_files".into(),
+            "read_file".into(),
+            "stat_file".into(),
+            "find_files".into(),
+            "search_code".into(),
+            "edit_file".into(),
+            "write_file".into(),
+            "delete_file".into(),
+            "run_command".into(),
+        ],
+        allowed_capabilities: vec![Capability::ReadAgent],
+        readonly: false,
+        default_model: None,
+        budget: SubagentBudget {
+            max_iterations: 20,
+            max_tokens: None,
+            timeout_ms: 300_000,
+        },
+    }
+}
+
+fn explore() -> SubagentKindSpec {
+    readonly_kind(
+        "explore",
+        "Read-only codebase exploration subagent.",
+        "Explore the codebase using read/search tools only. Return relevant files, symbols, and conclusions.",
+    )
+}
+
+fn code_reviewer() -> SubagentKindSpec {
+    readonly_kind(
+        "code_reviewer",
+        "Read-only code review subagent focused on bugs, regressions, and missing tests.",
+        "Review the requested code for correctness risks. Lead with findings and cite concrete files.",
+    )
+}
+
+fn shell() -> SubagentKindSpec {
+    SubagentKindSpec {
+        name: "shell".into(),
+        description: "Command-focused subagent with tightly configured shell access.".into(),
+        system_prompt:
+            "Run only the requested safe shell/read operations and summarize the result.".into(),
+        allowed_tools: READ_TOOLS
+            .iter()
+            .copied()
+            .chain(std::iter::once("run_command"))
+            .map(str::to_string)
+            .collect(),
+        allowed_capabilities: Vec::new(),
+        readonly: false,
+        default_model: None,
+        budget: SubagentBudget {
+            max_iterations: 8,
+            max_tokens: None,
+            timeout_ms: 180_000,
+        },
+    }
+}
+
+fn readonly_kind(name: &str, description: &str, system_prompt: &str) -> SubagentKindSpec {
+    SubagentKindSpec {
+        name: name.into(),
+        description: description.into(),
+        system_prompt: system_prompt.into(),
+        allowed_tools: READ_TOOLS.iter().map(|tool| (*tool).to_string()).collect(),
+        allowed_capabilities: Vec::new(),
+        readonly: true,
+        default_model: None,
+        budget: SubagentBudget {
+            max_iterations: 12,
+            max_tokens: None,
+            timeout_ms: 180_000,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_registry_contains_expected_kinds() {
+        let registry = SubagentRegistry::bundled();
+        for name in ["general_purpose", "explore", "shell", "code_reviewer"] {
+            assert!(registry.get(name).is_some(), "missing {name}");
+        }
+        assert_eq!(registry.all().len(), 4);
+    }
+
+    #[test]
+    fn unknown_kind_is_denied_by_lookup() {
+        let registry = SubagentRegistry::bundled();
+        assert!(registry.get("made_up").is_none());
+    }
+
+    #[test]
+    fn readonly_kinds_have_no_mutating_tools() {
+        let registry = SubagentRegistry::bundled();
+        for name in ["explore", "code_reviewer"] {
+            let kind = registry.get(name).unwrap();
+            assert!(kind.readonly);
+            for denied in ["write_file", "edit_file", "delete_file", "run_command"] {
+                assert!(
+                    !kind.allowed_tools.iter().any(|tool| tool == denied),
+                    "{name} unexpectedly allows {denied}"
+                );
+            }
+        }
+    }
+}

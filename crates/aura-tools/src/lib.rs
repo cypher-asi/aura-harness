@@ -53,7 +53,7 @@ pub use intent_classifier::{ClassifierError, IntentClassifier};
 pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};
-pub use tool::{AgentControlHook, AgentReadHook, Tool, ToolContext};
+pub use tool::{AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool, ToolContext};
 
 /// Command execution policy for `run_command`.
 ///

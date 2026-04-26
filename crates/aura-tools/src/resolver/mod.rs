@@ -28,7 +28,7 @@
 use crate::catalog::ToolCatalog;
 use crate::catalog::ToolProfile;
 use crate::domain_tools::DomainToolExecutor;
-use crate::tool::Tool;
+use crate::tool::{SubagentDispatchHook, Tool};
 use crate::ToolConfig;
 use crate::ToolExecutor;
 use async_trait::async_trait;
@@ -133,6 +133,13 @@ impl ToolResolver {
     #[must_use]
     pub fn with_spawn_hook(mut self, hook: Arc<dyn SpawnHook>) -> Self {
         self.inner = self.inner.with_spawn_hook(hook);
+        self
+    }
+
+    /// Attach foreground subagent dispatch wiring.
+    #[must_use]
+    pub fn with_subagent_dispatch_hook(mut self, hook: Arc<dyn SubagentDispatchHook>) -> Self {
+        self.inner = self.inner.with_subagent_dispatch_hook(hook);
         self
     }
 

@@ -11,6 +11,7 @@ mod proposal;
 mod reasoner_types;
 mod record;
 mod status;
+mod subagent;
 mod tool;
 mod tool_permissions;
 mod transaction;
@@ -24,6 +25,10 @@ pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
 pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
 pub use record::RecordEntry;
 pub use status::AgentStatus;
+pub use subagent::{
+    SubagentBudget, SubagentDispatchRequest, SubagentExit, SubagentKindSpec, SubagentResult,
+    DEFAULT_SUBAGENT_TIMEOUT_MS,
+};
 #[allow(deprecated)]
 pub use tool::ToolDecision;
 pub use tool::{

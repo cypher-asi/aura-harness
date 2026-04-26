@@ -35,8 +35,9 @@ pub use types::{
     Identity, InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, ProcessPending,
-    Proposal, ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SystemKind,
-    ToolAuth, ToolCall, ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict,
-    ToolProposal, ToolResult, ToolResultContent, ToolState, Trace, Transaction, TransactionType,
-    UserDefaultMode, UserToolDefaults,
+    Proposal, ProposalSet, RecordEntry, RejectedProposal, RuntimeCapabilityInstall, SubagentBudget,
+    SubagentDispatchRequest, SubagentExit, SubagentKindSpec, SubagentResult, SystemKind, ToolAuth,
+    ToolCall, ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal,
+    ToolResult, ToolResultContent, ToolState, Trace, Transaction, TransactionType, UserDefaultMode,
+    UserToolDefaults, DEFAULT_SUBAGENT_TIMEOUT_MS,
 };

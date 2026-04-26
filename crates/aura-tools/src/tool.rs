@@ -9,8 +9,8 @@ use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{
-    AgentId, AgentPermissions, AgentToolPermissions, Capability, ToolDefinition, ToolResult,
-    UserToolDefaults,
+    AgentId, AgentPermissions, AgentToolPermissions, Capability, SubagentDispatchRequest,
+    SubagentResult, ToolDefinition, ToolResult, UserToolDefaults,
 };
 use aura_kernel::SpawnHook;
 use std::sync::Arc;
@@ -52,6 +52,9 @@ pub struct ToolContext {
     /// Phase 5 part 2: optional read hook used by `get_agent_state` to
     /// fetch a snapshot of a target agent's record log.
     pub agent_read_hook: Option<Arc<dyn AgentReadHook>>,
+    /// Optional runtime dispatch hook for foreground `task` subagents.
+    /// `None` means the `task` tool fails closed.
+    pub subagent_dispatch: Option<Arc<dyn SubagentDispatchHook>>,
 }
 
 /// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
@@ -101,6 +104,16 @@ pub trait AgentReadHook: Send + Sync {
     async fn snapshot(&self, target: &AgentId) -> Result<serde_json::Value, String>;
 }
 
+/// Hook invoked by the `task` tool to run a foreground subagent.
+///
+/// The trait intentionally uses only `aura-core` data types so `aura-tools`
+/// remains independent from `aura-runtime`, `aura-agent` event types, and
+/// transport protocols.
+#[async_trait]
+pub trait SubagentDispatchHook: Send + Sync {
+    async fn dispatch(&self, request: SubagentDispatchRequest) -> Result<SubagentResult, String>;
+}
+
 impl ToolContext {
     /// Construct a minimal context with only the fields required pre-phase-5.
     /// All new cross-agent fields default to `None` / empty.
@@ -118,6 +131,7 @@ impl ToolContext {
             spawn_hook: None,
             agent_control_hook: None,
             agent_read_hook: None,
+            subagent_dispatch: None,
         }
     }
 }

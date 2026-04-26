@@ -2,7 +2,9 @@
 
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
-use crate::tool::{builtin_tools, AgentControlHook, AgentReadHook, Tool, ToolContext};
+use crate::tool::{
+    builtin_tools, AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool, ToolContext,
+};
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core::{
@@ -30,6 +32,7 @@ pub struct ToolExecutor {
     spawn_hook: Option<Arc<dyn SpawnHook>>,
     agent_control_hook: Option<Arc<dyn AgentControlHook>>,
     agent_read_hook: Option<Arc<dyn AgentReadHook>>,
+    subagent_dispatch: Option<Arc<dyn SubagentDispatchHook>>,
     caller_permissions: Option<AgentPermissions>,
     caller_tool_permissions: Option<AgentToolPermissions>,
     user_tool_defaults: UserToolDefaults,
@@ -45,12 +48,16 @@ impl ToolExecutor {
         for tool in builtin_tools() {
             tools.insert(tool.name().to_string(), tool);
         }
+        for (tool, _definition, _required) in crate::agents::cross_agent_catalog_entries() {
+            tools.insert(tool.name().to_string(), tool);
+        }
         Self {
             config,
             tools,
             spawn_hook: None,
             agent_control_hook: None,
             agent_read_hook: None,
+            subagent_dispatch: None,
             caller_permissions: None,
             caller_tool_permissions: None,
             user_tool_defaults: UserToolDefaults::default(),
@@ -79,6 +86,13 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_agent_read_hook(mut self, hook: Arc<dyn AgentReadHook>) -> Self {
         self.agent_read_hook = Some(hook);
+        self
+    }
+
+    /// Attach a foreground subagent dispatcher for the `task` tool.
+    #[must_use]
+    pub fn with_subagent_dispatch_hook(mut self, hook: Arc<dyn SubagentDispatchHook>) -> Self {
+        self.subagent_dispatch = Some(hook);
         self
     }
 
@@ -189,6 +203,7 @@ impl ToolExecutor {
         tool_ctx.spawn_hook = self.spawn_hook.clone();
         tool_ctx.agent_control_hook = self.agent_control_hook.clone();
         tool_ctx.agent_read_hook = self.agent_read_hook.clone();
+        tool_ctx.subagent_dispatch = self.subagent_dispatch.clone();
 
         match self.tools.get(tool_name.as_str()) {
             Some(tool) => tool.execute(&tool_ctx, tool_call.args.clone()).await,

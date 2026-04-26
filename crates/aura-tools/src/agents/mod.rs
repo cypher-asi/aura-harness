@@ -23,12 +23,14 @@ pub mod delegate_task;
 pub mod get_agent_state;
 pub mod send_to_agent;
 pub mod spawn_agent;
+pub mod task;
 
 pub use agent_lifecycle::{AgentLifecycleInput, AgentLifecycleTool};
 pub use delegate_task::{DelegateTaskInput, DelegateTaskTool};
 pub use get_agent_state::{GetAgentStateInput, GetAgentStateTool};
 pub use send_to_agent::{SendToAgentInput, SendToAgentTool};
 pub use spawn_agent::{SpawnAgentInput, SpawnAgentOutcome, SpawnAgentTool};
+pub use task::{TaskInput, TaskTool};
 
 use crate::tool::Tool;
 use aura_core::{Capability, ToolDefinition};
@@ -63,6 +65,11 @@ pub fn cross_agent_catalog_entries() -> Vec<(Box<dyn Tool>, ToolDefinition, Vec<
             Box::new(DelegateTaskTool),
             DelegateTaskTool::definition(),
             vec![Capability::ControlAgent],
+        ),
+        (
+            Box::new(TaskTool),
+            TaskTool::definition(),
+            vec![Capability::SpawnAgent],
         ),
     ]
 }
