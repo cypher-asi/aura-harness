@@ -35,10 +35,10 @@
 //!   For long-running swarms with many transient agents, this could accumulate
 //!   memory.  A periodic eviction sweep is a potential future improvement.
 
-use crate::worker::process_agent;
+use crate::worker::{process_agent_detailed, ProcessedAgent};
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_core::{AgentId, AgentStatus};
-use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
+use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
 use aura_reasoner::{ModelProvider, ToolDefinition};
 use aura_store::Store;
 use dashmap::DashMap;
@@ -124,15 +124,31 @@ impl Scheduler {
     /// kernel-mediated processing.
     #[instrument(skip(self), fields(agent_id = %agent_id))]
     pub async fn schedule_agent(&self, agent_id: AgentId) -> anyhow::Result<u64> {
+        self.schedule_agent_with_overrides(agent_id, None, None)
+            .await
+            .map(|processed| processed.processed)
+    }
+
+    /// Schedule processing and return the last loop result.
+    ///
+    /// Subagent dispatch uses this to run a child with narrowed policy and a
+    /// per-kind loop configuration while preserving the single-writer lock.
+    #[instrument(skip(self, agent_loop_config, policy), fields(agent_id = %agent_id))]
+    pub async fn schedule_agent_with_overrides(
+        &self,
+        agent_id: AgentId,
+        agent_loop_config: Option<AgentLoopConfig>,
+        policy: Option<PolicyConfig>,
+    ) -> anyhow::Result<ProcessedAgent> {
         let status = self.store.get_agent_status(agent_id)?;
         if status != AgentStatus::Active {
             debug!(?status, "Agent not active, skipping");
-            return Ok(0);
+            return Ok(ProcessedAgent::default());
         }
 
         if !self.store.has_pending_tx(agent_id)? {
             debug!("No pending transactions");
-            return Ok(0);
+            return Ok(ProcessedAgent::default());
         }
 
         let lock = self.get_lock(agent_id);
@@ -141,27 +157,31 @@ impl Scheduler {
         debug!("Lock acquired, constructing kernel for agent");
 
         let router = self.build_executor_router();
+        let mut kernel_config = self.kernel_config.clone();
+        if let Some(policy) = policy {
+            kernel_config.policy = policy;
+        }
         let kernel = Arc::new(
             Kernel::new(
                 self.store.clone(),
                 self.provider.clone(),
                 router,
-                self.kernel_config.clone(),
+                kernel_config,
                 agent_id,
             )
             .map_err(|e| anyhow::anyhow!("kernel construction failed: {e}"))?,
         );
 
-        let mut config = self.agent_loop_config.clone();
+        let mut config = agent_loop_config.unwrap_or_else(|| self.agent_loop_config.clone());
         if let Some(ref mm) = self.memory_manager {
             config.observers.push(mm.turn_observer(agent_id, None));
         }
         let agent_loop = AgentLoop::new(config);
 
-        match process_agent(agent_id, kernel, &agent_loop, &self.tools).await {
-            Ok(count) => {
-                info!(processed = count, "Agent processing complete");
-                Ok(count)
+        match process_agent_detailed(agent_id, kernel, &agent_loop, &self.tools).await {
+            Ok(processed) => {
+                info!(processed = processed.processed, "Agent processing complete");
+                Ok(processed)
             }
             Err(e) => {
                 error!(error = %e, "Agent processing failed");

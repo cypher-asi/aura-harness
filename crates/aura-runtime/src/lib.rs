@@ -46,6 +46,7 @@ pub(crate) mod router;
 pub(crate) mod runtime_capabilities;
 pub(crate) mod scheduler;
 pub(crate) mod session;
+pub mod subagent_dispatch;
 pub mod subagent_registry;
 pub(crate) mod terminal;
 pub(crate) mod tool_permissions;

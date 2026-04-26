@@ -1,6 +1,6 @@
 //! Worker for processing agent transactions via kernel-mediated `AgentLoop`.
 
-use aura_agent::{AgentLoop, KernelModelGateway, KernelToolGateway};
+use aura_agent::{AgentLoop, AgentLoopResult, KernelModelGateway, KernelToolGateway};
 use aura_core::AgentId;
 use aura_kernel::Kernel;
 use aura_reasoner::{Message, ToolDefinition};
@@ -10,22 +10,25 @@ use tracing::{debug, info, instrument, warn};
 
 const AGENT_LOOP_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Process all pending transactions for an agent using kernel-mediated `AgentLoop`.
-///
-/// Each dequeued transaction is routed through the kernel for recording and
-/// context-hash computation, then run through the agent loop with
-/// kernel-backed model and tool gateways so every interaction is captured
-/// in the append-only record.
-///
-/// This function should be called while holding the agent lock.
+/// Summary returned after draining an agent inbox.
+#[derive(Debug, Default)]
+pub struct ProcessedAgent {
+    pub processed: u64,
+    pub last_result: Option<AgentLoopResult>,
+}
+
+/// Detailed variant used by foreground subagent dispatch to retrieve the
+/// final child result while preserving the normal worker path for callers that
+/// only need a processed-count.
 #[instrument(skip(kernel, agent_loop, tools), fields(agent_id = %agent_id))]
-pub async fn process_agent(
+pub async fn process_agent_detailed(
     agent_id: AgentId,
     kernel: Arc<Kernel>,
     agent_loop: &AgentLoop,
     tools: &[ToolDefinition],
-) -> anyhow::Result<u64> {
+) -> anyhow::Result<ProcessedAgent> {
     let mut processed = 0u64;
+    let mut last_result = None;
     let store = kernel.store().clone();
 
     let model_gateway = KernelModelGateway::new(kernel.clone());
@@ -80,9 +83,13 @@ pub async fn process_agent(
         }
 
         processed += 1;
+        last_result = Some(result);
     }
 
-    Ok(processed)
+    Ok(ProcessedAgent {
+        processed,
+        last_result,
+    })
 }
 
 #[cfg(test)]
@@ -115,9 +122,10 @@ mod tests {
         let kernel = create_test_kernel(dir.path(), agent_id);
         let agent_loop = AgentLoop::new(aura_agent::AgentLoopConfig::default());
 
-        let count = process_agent(agent_id, kernel, &agent_loop, &[])
+        let count = process_agent_detailed(agent_id, kernel, &agent_loop, &[])
             .await
-            .unwrap();
+            .unwrap()
+            .processed;
 
         assert_eq!(count, 0, "Empty inbox should process 0 transactions");
     }
@@ -150,9 +158,10 @@ mod tests {
             Arc::new(Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap());
         let agent_loop = AgentLoop::new(aura_agent::AgentLoopConfig::default());
 
-        let count = process_agent(agent_id, kernel, &agent_loop, &[])
+        let count = process_agent_detailed(agent_id, kernel, &agent_loop, &[])
             .await
-            .unwrap();
+            .unwrap()
+            .processed;
 
         assert_eq!(count, 1, "Should process exactly 1 transaction");
         assert!(
