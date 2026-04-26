@@ -474,6 +474,7 @@ pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPe
             CapabilityWire::SpawnAgent => Some(Capability::SpawnAgent),
             CapabilityWire::ControlAgent => Some(Capability::ControlAgent),
             CapabilityWire::ReadAgent => Some(Capability::ReadAgent),
+            CapabilityWire::ListAgents => Some(Capability::ListAgents),
             CapabilityWire::ManageOrgMembers => Some(Capability::ManageOrgMembers),
             CapabilityWire::ManageBilling => Some(Capability::ManageBilling),
             CapabilityWire::InvokeProcess => Some(Capability::InvokeProcess),

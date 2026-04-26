@@ -548,6 +548,7 @@ mod tests {
         assert!(!names.contains("send_to_agent"));
         assert!(!names.contains("agent_lifecycle"));
         assert!(!names.contains("get_agent_state"));
+        assert!(!names.contains("list_agents"));
         assert!(!names.contains("delegate_task"));
         assert!(!names.contains("task"));
     }
@@ -567,6 +568,7 @@ mod tests {
         let names: HashSet<_> = tools.iter().map(|t| t.name.as_str()).collect();
         // ReadAgent is held → get_agent_state visible.
         assert!(names.contains("get_agent_state"));
+        assert!(!names.contains("list_agents"));
         // ControlAgent / SpawnAgent not held → hidden.
         assert!(!names.contains("spawn_agent"));
         assert!(!names.contains("send_to_agent"));
@@ -589,6 +591,7 @@ mod tests {
         assert!(names.contains("send_to_agent"));
         assert!(names.contains("agent_lifecycle"));
         assert!(names.contains("get_agent_state"));
+        assert!(names.contains("list_agents"));
         assert!(names.contains("delegate_task"));
         assert!(names.contains("task"));
     }

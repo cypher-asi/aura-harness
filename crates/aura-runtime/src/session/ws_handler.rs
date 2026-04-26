@@ -655,11 +655,12 @@ mod tests {
         }
     }
 
-    const CROSS_AGENT_TOOLS: [&str; 6] = [
+    const CROSS_AGENT_TOOLS: [&str; 7] = [
         "send_to_agent",
         "spawn_agent",
         "agent_lifecycle",
         "get_agent_state",
+        "list_agents",
         "delegate_task",
         "task",
     ];
@@ -767,5 +768,19 @@ mod tests {
         populate_tool_definitions(&mut session, &ctx);
 
         assert_cross_agent_tools(&session, &["get_agent_state"]);
+    }
+
+    #[test]
+    fn populate_tool_definitions_filters_cross_agent_tools_for_list_agents() {
+        let ctx = test_context();
+        let mut session = Session::new(ctx.workspace_base.clone());
+        session.agent_permissions = AgentPermissions {
+            scope: Default::default(),
+            capabilities: vec![Capability::ListAgents],
+        };
+
+        populate_tool_definitions(&mut session, &ctx);
+
+        assert_cross_agent_tools(&session, &["list_agents"]);
     }
 }

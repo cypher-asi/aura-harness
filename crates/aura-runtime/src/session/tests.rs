@@ -272,6 +272,7 @@ fn apply_init_applies_ceo_preset_when_wired_explicitly() {
             CapabilityWire::SpawnAgent,
             CapabilityWire::ControlAgent,
             CapabilityWire::ReadAgent,
+            CapabilityWire::ListAgents,
             CapabilityWire::ManageOrgMembers,
             CapabilityWire::ManageBilling,
             CapabilityWire::InvokeProcess,

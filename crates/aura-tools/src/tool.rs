@@ -48,8 +48,8 @@ pub struct ToolContext {
     /// effects to the target agent. `None` means the tool fails closed after
     /// the permission gate instead of reporting a fake no-op success.
     pub agent_control_hook: Option<Arc<dyn AgentControlHook>>,
-    /// Phase 5 part 2: optional read hook used by `get_agent_state` to
-    /// fetch a snapshot of a target agent's record log.
+    /// Phase 5 part 2: optional read hook used by `get_agent_state` and
+    /// `list_agents` to fetch read-only agent data.
     pub agent_read_hook: Option<Arc<dyn AgentReadHook>>,
     /// Optional runtime dispatch hook for foreground `task` subagents.
     /// `None` means the `task` tool fails closed.
@@ -91,13 +91,16 @@ pub trait AgentControlHook: Send + Sync {
     ) -> Result<(), String>;
 }
 
-/// Hook used by `get_agent_state` to fetch a read-only snapshot of a
-/// target agent. Kept as a trait so the gate is testable without a kernel.
+/// Hook used by read-only cross-agent tools. Kept as a trait so the gate is
+/// testable without a kernel.
 #[async_trait]
 pub trait AgentReadHook: Send + Sync {
     /// Return the latest `session_ready` / `assistant_message_end`
     /// snapshot for `target`, plus the agent's `Identity` + `permissions`.
     async fn snapshot(&self, target_agent_id: &str) -> Result<serde_json::Value, String>;
+
+    /// Return agents visible to the current caller, optionally narrowed by org.
+    async fn list_agents(&self, org_id: Option<&str>) -> Result<serde_json::Value, String>;
 }
 
 /// Hook invoked by the `task` tool to run a foreground subagent.

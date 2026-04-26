@@ -272,6 +272,25 @@ impl AgentControlHook for AuraServerAgentHook {
 
 #[async_trait]
 impl AgentReadHook for AuraServerAgentHook {
+    async fn list_agents(&self, org_id: Option<&str>) -> Result<Value, String> {
+        let url = self.endpoint("/api/agents");
+        let mut request = self.client.get(url).bearer_auth(self.bearer()?);
+        if let Some(org_id) = org_id {
+            request = request.query(&[("org_id", org_id)]);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("list_agents: aura-os-server callback failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(self.error_from_response("list_agents", response).await);
+        }
+        response
+            .json::<Value>()
+            .await
+            .map_err(|e| format!("list_agents: invalid aura-os-server JSON: {e}"))
+    }
+
     async fn snapshot(&self, target_agent_id: &str) -> Result<Value, String> {
         let url = self.endpoint(&format!("/api/agents/{target_agent_id}/state_snapshot"));
         let response = self

@@ -44,6 +44,8 @@ pub enum Capability {
     ControlAgent,
     /// May call `get_agent_state` on agents within scope.
     ReadAgent,
+    /// May call `list_agents` to discover agents within scope.
+    ListAgents,
     /// May add / remove org members.
     ManageOrgMembers,
     /// May mutate billing plans / invoices.
@@ -187,6 +189,7 @@ impl AgentPermissions {
                 Capability::SpawnAgent,
                 Capability::ControlAgent,
                 Capability::ReadAgent,
+                Capability::ListAgents,
                 Capability::ManageOrgMembers,
                 Capability::ManageBilling,
                 Capability::InvokeProcess,

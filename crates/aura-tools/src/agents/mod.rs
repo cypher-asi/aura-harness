@@ -1,7 +1,7 @@
 //! Cross-agent tools.
 //!
-//! All five tools (`spawn_agent`, `send_to_agent`, `agent_lifecycle`,
-//! `get_agent_state`, `delegate_task`) are always compiled. Their
+//! All cross-agent tools (`spawn_agent`, `send_to_agent`, `agent_lifecycle`,
+//! `get_agent_state`, `list_agents`, `delegate_task`, `task`) are always compiled. Their
 //! registration in `ToolCatalog` is unconditional; what gates them at the
 //! surface is [`crate::ToolCatalog::visible_tools_with_permissions`] — a
 //! caller that lacks the matching `Capability` never sees the tool names
@@ -13,7 +13,8 @@
 //!
 //! Production side-effects for `send_to_agent` / `agent_lifecycle` /
 //! `delegate_task` flow through [`crate::AgentControlHook`]; production
-//! reads for `get_agent_state` flow through [`crate::AgentReadHook`]. When
+//! reads for `get_agent_state` / `list_agents` flow through
+//! [`crate::AgentReadHook`]. When
 //! the hooks are absent the tools still run the permission gate and emit a
 //! descriptive outcome payload so the runtime effect can be filled in later
 //! without changing the gate contract.
@@ -21,6 +22,7 @@
 pub mod agent_lifecycle;
 pub mod delegate_task;
 pub mod get_agent_state;
+pub mod list_agents;
 pub mod send_to_agent;
 pub mod spawn_agent;
 pub mod task;
@@ -28,6 +30,7 @@ pub mod task;
 pub use agent_lifecycle::{AgentLifecycleInput, AgentLifecycleTool};
 pub use delegate_task::{DelegateTaskInput, DelegateTaskTool};
 pub use get_agent_state::{GetAgentStateInput, GetAgentStateTool};
+pub use list_agents::{ListAgentsInput, ListAgentsTool};
 pub use send_to_agent::{SendToAgentInput, SendToAgentTool};
 pub use spawn_agent::{SpawnAgentInput, SpawnAgentOutcome, SpawnAgentTool};
 pub use task::{TaskInput, TaskTool};
@@ -60,6 +63,11 @@ pub fn cross_agent_catalog_entries() -> Vec<(Box<dyn Tool>, ToolDefinition, Vec<
             Box::new(GetAgentStateTool),
             GetAgentStateTool::definition(),
             vec![Capability::ReadAgent],
+        ),
+        (
+            Box::new(ListAgentsTool),
+            ListAgentsTool::definition(),
+            vec![Capability::ListAgents],
         ),
         (
             Box::new(DelegateTaskTool),
