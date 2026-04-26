@@ -46,13 +46,14 @@ use rocksdb::{
     Options, WriteBatch, WriteOptions,
 };
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, instrument};
 
 /// `RocksDB`-based store implementation.
 pub struct RocksStore {
     db: Arc<DBWithThreadMode<MultiThreaded>>,
     sync_writes: bool,
+    processing_claim_lock: Mutex<()>,
 }
 
 impl RocksStore {
@@ -95,6 +96,7 @@ impl RocksStore {
         Ok(Self {
             db: Arc::new(db),
             sync_writes,
+            processing_claim_lock: Mutex::new(()),
         })
     }
 
@@ -276,6 +278,10 @@ impl RocksStore {
 
         debug!("Record entry committed atomically");
         Ok(())
+    }
+
+    fn processing_claim_key(agent_id: AgentId) -> Vec<u8> {
+        AgentMetaKey::processing_claim(agent_id).encode()
     }
 }
 
@@ -509,6 +515,42 @@ impl ReadStore for RocksStore {
         self.db
             .delete_cf_opt(&cf, user_id.as_bytes(), &self.write_opts())?;
         Ok(())
+    }
+
+    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    fn try_claim_agent_processing(&self, agent_id: AgentId) -> Result<bool, StoreError> {
+        let _guard = self
+            .processing_claim_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cf = self.cf(cf::AGENT_META)?;
+        let key = Self::processing_claim_key(agent_id);
+
+        if self.db.get_cf(&cf, &key)?.is_some() {
+            return Ok(false);
+        }
+
+        self.db.put_cf_opt(&cf, key, [1_u8], &self.write_opts())?;
+        Ok(true)
+    }
+
+    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    fn release_agent_processing(&self, agent_id: AgentId) -> Result<(), StoreError> {
+        let _guard = self
+            .processing_claim_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cf = self.cf(cf::AGENT_META)?;
+        let key = Self::processing_claim_key(agent_id);
+        self.db.delete_cf_opt(&cf, key, &self.write_opts())?;
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    fn is_agent_processing(&self, agent_id: AgentId) -> Result<bool, StoreError> {
+        let cf = self.cf(cf::AGENT_META)?;
+        let key = Self::processing_claim_key(agent_id);
+        Ok(self.db.get_cf(&cf, key)?.is_some())
     }
 }
 

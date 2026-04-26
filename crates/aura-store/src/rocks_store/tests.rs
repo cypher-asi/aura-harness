@@ -135,6 +135,22 @@ fn test_agent_status() {
 }
 
 #[test]
+fn test_processing_claim_lifecycle() {
+    let (store, _dir) = create_test_store();
+    let agent_id = AgentId::generate();
+
+    assert!(!store.is_agent_processing(agent_id).unwrap());
+    assert!(store.try_claim_agent_processing(agent_id).unwrap());
+    assert!(store.is_agent_processing(agent_id).unwrap());
+    assert!(!store.try_claim_agent_processing(agent_id).unwrap());
+
+    store.release_agent_processing(agent_id).unwrap();
+    assert!(!store.is_agent_processing(agent_id).unwrap());
+    assert!(store.try_claim_agent_processing(agent_id).unwrap());
+    store.release_agent_processing(agent_id).unwrap();
+}
+
+#[test]
 fn test_sequence_mismatch() {
     let (store, _dir) = create_test_store();
     let agent_id = AgentId::generate();

@@ -171,7 +171,7 @@ fn context_from_entries(entries: Vec<RecordEntry>) -> AgentToolContext {
 
 /// Append an `agent_tool_permissions` System entry to the agent's log.
 ///
-/// Acquires the scheduler's per-agent lock (Invariant §12) before the
+/// Acquires the scheduler's store-backed processing claim before the
 /// `append_entry_direct` call so this HTTP-driven write serializes with
 /// the scheduler's inbox-drain on the same agent. Without this the
 /// single-writer guarantee can be violated if a scheduler tick is
@@ -195,10 +195,13 @@ pub(crate) async fn append_agent_tool_permissions_entry(
         None,
     );
 
-    // Hold the per-agent lock for the entire read-modify-write window so a
+    // Hold the processing claim for the entire read-modify-write window so a
     // concurrent scheduler drain cannot wedge a different entry at the same
     // seq between our `get_head_seq` and `append_entry_direct`.
-    let _guard = scheduler.agent_lock(agent_id).await;
+    let _claim = scheduler
+        .processing_claim(agent_id)
+        .await
+        .map_err(|e| format!("claim agent processing: {e}"))?;
 
     let head = store
         .get_head_seq(agent_id)

@@ -25,7 +25,8 @@
 //! - **Record** (`R`): Append-only log of `RecordEntry` values, keyed by
 //!   `(agent_id, seq)`.  Entries are never deleted.
 //! - **Metadata** (`M`): Per-agent scalars (`head_seq`, `inbox_head`,
-//!   `inbox_tail`, `status`, `schema_version`).  Updated in-place.
+//!   `inbox_tail`, `status`, `processing_claim`, `schema_version`). Updated
+//!   in-place.
 //! - **Inbox** (`Q`): FIFO queue of pending `Transaction` values.  Entries are
 //!   deleted after being committed to the record via `append_entry_atomic`.
 //!
@@ -64,6 +65,8 @@ pub enum MetaField {
     /// Schema version
     #[deprecated(note = "reserved for future use")]
     SchemaVersion = 4,
+    /// Store-backed single-processing claim
+    ProcessingClaim = 5,
 }
 
 impl MetaField {
@@ -83,6 +86,7 @@ impl MetaField {
             2 => Some(Self::InboxTail),
             3 => Some(Self::Status),
             4 => Some(Self::SchemaVersion),
+            5 => Some(Self::ProcessingClaim),
             _ => None,
         }
     }
@@ -201,6 +205,12 @@ impl AgentMetaKey {
     #[must_use]
     pub const fn status(agent_id: AgentId) -> Self {
         Self::new(agent_id, MetaField::Status)
+    }
+
+    /// Create a processing-claim key.
+    #[must_use]
+    pub const fn processing_claim(agent_id: AgentId) -> Self {
+        Self::new(agent_id, MetaField::ProcessingClaim)
     }
 }
 

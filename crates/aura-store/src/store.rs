@@ -175,6 +175,29 @@ pub trait ReadStore: Send + Sync {
     /// # Errors
     /// Returns error if the write fails.
     fn delete_user_tool_defaults(&self, user_id: &str) -> Result<(), StoreError>;
+
+    /// Attempt to claim exclusive processing rights for an agent.
+    ///
+    /// Returns `Ok(true)` only when the claim transitioned from absent to
+    /// present. Returns `Ok(false)` when another worker already owns the claim.
+    ///
+    /// # Errors
+    /// Returns error if the compare-and-set read/write fails.
+    fn try_claim_agent_processing(&self, agent_id: AgentId) -> Result<bool, StoreError>;
+
+    /// Release a previously acquired processing claim for an agent.
+    ///
+    /// This operation is idempotent: releasing an absent claim succeeds.
+    ///
+    /// # Errors
+    /// Returns error if the delete fails.
+    fn release_agent_processing(&self, agent_id: AgentId) -> Result<(), StoreError>;
+
+    /// Check whether an agent currently has a processing claim.
+    ///
+    /// # Errors
+    /// Returns error if the read fails.
+    fn is_agent_processing(&self, agent_id: AgentId) -> Result<bool, StoreError>;
 }
 
 /// Sealed record-append family (Invariant §10).

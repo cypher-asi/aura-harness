@@ -217,6 +217,15 @@ mod tests {
         fn delete_user_tool_defaults(&self, _user_id: &str) -> Result<(), StoreError> {
             Ok(())
         }
+        fn try_claim_agent_processing(&self, _agent_id: AgentId) -> Result<bool, StoreError> {
+            Ok(true)
+        }
+        fn release_agent_processing(&self, _agent_id: AgentId) -> Result<(), StoreError> {
+            Ok(())
+        }
+        fn is_agent_processing(&self, _agent_id: AgentId) -> Result<bool, StoreError> {
+            Ok(false)
+        }
     }
 
     fn parent_entry(seq: u64, agent: AgentId, parent: AgentId) -> RecordEntry {

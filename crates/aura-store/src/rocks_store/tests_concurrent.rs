@@ -130,6 +130,32 @@ async fn test_concurrent_writes_different_agents() {
 }
 
 #[tokio::test]
+async fn test_concurrent_processing_claim_only_one_wins() {
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(RocksStore::open(dir.path(), false).unwrap());
+    let agent_id = AgentId::generate();
+
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        let store = Arc::clone(&store);
+        handles.push(tokio::spawn(async move {
+            store.try_claim_agent_processing(agent_id).unwrap()
+        }));
+    }
+
+    let wins = futures_util::future::join_all(handles)
+        .await
+        .into_iter()
+        .filter(|result| result.as_ref().unwrap() == &true)
+        .count();
+
+    assert_eq!(wins, 1);
+    assert!(store.is_agent_processing(agent_id).unwrap());
+    store.release_agent_processing(agent_id).unwrap();
+    assert!(!store.is_agent_processing(agent_id).unwrap());
+}
+
+#[tokio::test]
 async fn test_concurrent_reads_and_writes() {
     let dir = TempDir::new().unwrap();
     let store = Arc::new(RocksStore::open(dir.path(), false).unwrap());
