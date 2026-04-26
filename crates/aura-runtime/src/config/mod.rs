@@ -12,6 +12,15 @@ use std::path::{Path, PathBuf};
 /// production.
 const DEFAULT_TEST_AUTH_TOKEN: &str = "test";
 
+/// Loopback aura-os-server URL the harness defaults to when its
+/// listener is bound to loopback and no explicit `AURA_OS_SERVER_URL`
+/// is set. Mirrors `PREFERRED_PORT` in
+/// `aura-os-desktop/src/net/server.rs`, which is the port the desktop
+/// always tries first for its embedded aura-os-server. Kept as a
+/// module-private constant so the auto-default in [`NodeConfig::from_env`]
+/// and the unit tests pinning that behavior reference the same value.
+const DESKTOP_LOOPBACK_OS_SERVER_URL: &str = "http://127.0.0.1:19847";
+
 /// Errors returned by [`NodeConfig::resolve_allowed_path`].
 ///
 /// The variants map onto distinct HTTP statuses so the file handlers can
@@ -69,12 +78,21 @@ pub struct NodeConfig {
     /// mirroring spec markdown to
     /// `<workspace_root>/spec/<slug>.md` on disk, broadcasting the
     /// change to the project's SSE stream, and attaching JWT billing
-    /// headers on the outbound storage call.
+    /// headers on the outbound storage call. The same URL is also what
+    /// powers the cross-agent `send_to_agent` runtime hook
+    /// (see `session::cross_agent_hook::AuraServerAgentHook`); when
+    /// `None` the resolver wires no `agent_control_hook`, so every
+    /// `send_to_agent` call falls through to `missing_runtime_hook`.
     ///
     /// Populated from `AURA_OS_SERVER_URL` (or the legacy
-    /// `AURA_SERVER_BASE_URL`). When `None` the harness falls back to
-    /// [`Self::aura_storage_url`] for those routes, which preserves the
-    /// pre-`aura-os-server` behavior. Opt-in / additive.
+    /// `AURA_SERVER_BASE_URL`). [`NodeConfig::from_env`] additionally
+    /// auto-fills this with `http://127.0.0.1:19847` when the env var
+    /// is unset *and* `bind_addr` is loopback, which is the
+    /// aura-os-desktop local-dev case (the desktop's embedded
+    /// aura-os-server always binds `PREFERRED_PORT = 19847`). Swarm
+    /// pods bind `0.0.0.0` and therefore keep the historical `None`
+    /// fallback to `aura-storage` direct. [`Default::default`] stays
+    /// `None` so hand-built configs / tests are unaffected.
     pub aura_os_server_url: Option<String>,
     /// Shared-secret bearer token required by every protected route.
     ///
@@ -160,6 +178,28 @@ fn default_data_dir() -> PathBuf {
     )
 }
 
+/// Classify a `host:port` bind string as loopback.
+///
+/// Used by [`NodeConfig::from_env`] to decide whether the
+/// `aura-os-desktop` loopback default for `aura_os_server_url` should
+/// fire. Conservative on purpose: only the canonical IPv4 / IPv6
+/// loopback literals and the textual `localhost` count. `0.0.0.0` and
+/// `::` (the wildcard binds Docker / swarm pods use) intentionally do
+/// not match — those deployments need an explicit `AURA_OS_SERVER_URL`
+/// pointing at a public URL.
+fn bind_addr_is_loopback(addr: &str) -> bool {
+    let trimmed = addr.trim();
+    if let Ok(socket) = trimmed.parse::<std::net::SocketAddr>() {
+        return socket.ip().is_loopback();
+    }
+    // Hostname:port form (e.g. `localhost:8080`) doesn't parse as
+    // `SocketAddr` so handle it manually.
+    if let Some((host, _)) = trimmed.rsplit_once(':') {
+        return host.eq_ignore_ascii_case("localhost");
+    }
+    false
+}
+
 impl NodeConfig {
     /// Load configuration from environment variables.
     #[must_use]
@@ -196,6 +236,22 @@ impl NodeConfig {
             if !trimmed.is_empty() {
                 config.aura_os_server_url = Some(trimmed.to_string());
             }
+        }
+        // Local-desktop convenience default: aura-os-desktop's embedded
+        // aura-os-server always binds `PREFERRED_PORT = 19847` on
+        // loopback, so when the harness is also bound to loopback (the
+        // sidecar case) we can wire the `send_to_agent` runtime hook
+        // and the HttpDomainApi spec/task overrides without making the
+        // operator set `AURA_OS_SERVER_URL` by hand. Skipped for
+        // non-loopback binds (Docker / swarm pods on 0.0.0.0) so the
+        // historical "post directly to aura-storage" fallback in
+        // `HttpDomainApi::specs_tasks_base_url` stays intact for
+        // remote deployments — those operators continue to set
+        // `AURA_OS_SERVER_URL` explicitly to a public URL, and any
+        // explicit value still wins because this only runs when
+        // `is_none()`.
+        if config.aura_os_server_url.is_none() && bind_addr_is_loopback(&config.bind_addr) {
+            config.aura_os_server_url = Some(DESKTOP_LOOPBACK_OS_SERVER_URL.to_string());
         }
         if let Ok(val) = std::env::var("AURA_PROJECT_BASE") {
             if !val.is_empty() {
