@@ -27,6 +27,10 @@ const CODE_EXTENSIONS: &[&str] = &[
     "rs", "js", "ts", "tsx", "jsx", "c", "cpp", "h", "java", "go", "cs", "swift", "kt",
 ];
 
+fn is_elided_write_placeholder(content: &str) -> bool {
+    content.starts_with("<<<AURA_ELIDED_CONTENT::") && content.ends_with(">>>")
+}
+
 fn is_code_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -80,6 +84,15 @@ pub fn fs_write(
     content: &str,
     create_dirs: bool,
 ) -> Result<ToolResult, ToolError> {
+    if is_elided_write_placeholder(content) {
+        return Err(ToolError::InvalidArguments(
+            "content is an elided history placeholder; supply the real file content. \
+             Prior turns redact write_file/edit_file inputs to save context; never copy \
+             the placeholder verbatim. Re-emit the full intended content here."
+                .to_string(),
+        ));
+    }
+
     let _ = create_dirs; // kept for API compat; always creates dirs
     let resolved = sandbox.resolve_new(path)?;
     debug!(?resolved, "Writing file");
@@ -234,6 +247,25 @@ mod tests {
 
         let content = fs::read_to_string(dir.path().join("new.txt")).unwrap();
         assert_eq!(content, "Hello, world!");
+    }
+
+    #[test]
+    fn test_fs_write_rejects_elided_history_placeholder() {
+        let (sandbox, dir) = create_test_sandbox();
+
+        let result = fs_write(
+            &sandbox,
+            "placeholder.txt",
+            "<<<AURA_ELIDED_CONTENT::42_bytes>>>",
+            false,
+        );
+
+        assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+        if let Err(ToolError::InvalidArguments(msg)) = result {
+            assert!(msg.contains("elided history placeholder"));
+            assert!(msg.contains("supply the real file content"));
+        }
+        assert!(!dir.path().join("placeholder.txt").exists());
     }
 
     #[test]

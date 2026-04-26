@@ -114,6 +114,10 @@ fn agentic_prompt_includes_tool_call_discipline_section() {
         prompt.contains("If your last two turns produced no tool calls, the next turn MUST be a single tool call"),
         "two-turns-no-tool rule missing"
     );
+    assert!(
+        prompt.contains("Never copy these placeholders verbatim into a new tool call"),
+        "elided write/edit placeholder rule missing"
+    );
 }
 
 #[test]
@@ -123,6 +127,7 @@ fn tool_call_discipline_constant_matches_golden_wording() {
     assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("append_after_eof"));
     assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("alternation term"));
     assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("MUST be a single tool call"));
+    assert!(TOOL_CALL_DISCIPLINE_SECTION.contains("<<<AURA_ELIDED_*::N_bytes>>>"));
 }
 
 #[test]

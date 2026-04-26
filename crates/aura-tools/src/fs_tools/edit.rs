@@ -60,6 +60,21 @@ struct ValidatedEdit {
     new_text_norm: String,
 }
 
+fn is_elided_edit_placeholder(value: &str) -> bool {
+    value.starts_with("<<<AURA_ELIDED_OLD::") || value.starts_with("<<<AURA_ELIDED_NEW::")
+}
+
+fn reject_elided_edit_placeholder(field: &str, value: &str) -> Result<(), ToolError> {
+    if is_elided_edit_placeholder(value) && value.ends_with(">>>") {
+        return Err(ToolError::InvalidArguments(format!(
+            "{field} is an elided history placeholder; supply the real edit text. \
+             Prior turns redact write_file/edit_file inputs to save context; never copy \
+             the placeholder verbatim. Re-derive the intended old_text/new_text here."
+        )));
+    }
+    Ok(())
+}
+
 fn validate_edit_input(
     sandbox: &Sandbox,
     path: &str,
@@ -187,6 +202,9 @@ pub fn fs_edit(
     new_text: &str,
     replace_all: bool,
 ) -> Result<ToolResult, ToolError> {
+    reject_elided_edit_placeholder("old_text", old_text)?;
+    reject_elided_edit_placeholder("new_text", new_text)?;
+
     let edit = validate_edit_input(sandbox, path, old_text, new_text)?;
     let (new_content, replacements) = find_match_in_content(
         &edit.content,

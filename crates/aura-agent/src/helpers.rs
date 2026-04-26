@@ -53,8 +53,11 @@ pub fn is_exploration_tool(name: &str) -> bool {
 
 /// Summarize write tool inputs to save context tokens.
 ///
-/// For `write_file`: replaces content with path + byte size.
-/// For `edit_file`: replaces `old_text/new_text` with path + edit description.
+/// For `write_file`: replaces content with a sentinel under the real `content`
+/// key. For `edit_file`: replaces `old_text/new_text` (or string aliases) with
+/// sentinels under the real keys. Keeping the schema-shaped keys prevents the
+/// model from learning invalid `_summarized` argument shapes from its own
+/// history while still avoiding full-content replay in context.
 /// For other tools: returns `None` (input unchanged).
 #[must_use]
 pub fn summarize_write_input(
@@ -73,7 +76,7 @@ pub fn summarize_write_input(
                 .map_or(0, str::len);
             Some(serde_json::json!({
                 "path": path,
-                "_summarized": format!("Content: {} bytes written", content_len)
+                "content": format!("<<<AURA_ELIDED_CONTENT::{content_len}_bytes>>>")
             }))
         }
         "edit_file" => {
@@ -81,20 +84,35 @@ pub fn summarize_write_input(
                 .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
+            let old_key = if input.get("old_string").is_some() {
+                "old_string"
+            } else {
+                "old_text"
+            };
+            let new_key = if input.get("new_string").is_some() {
+                "new_string"
+            } else {
+                "new_text"
+            };
             let old_len = input
-                .get("old_text")
-                .or_else(|| input.get("old_string"))
+                .get(old_key)
                 .and_then(|v| v.as_str())
                 .map_or(0, str::len);
             let new_len = input
-                .get("new_text")
-                .or_else(|| input.get("new_string"))
+                .get(new_key)
                 .and_then(|v| v.as_str())
                 .map_or(0, str::len);
-            Some(serde_json::json!({
-                "path": path,
-                "_summarized": format!("Edit: replaced {} chars with {} chars", old_len, new_len)
-            }))
+            let mut summarized = serde_json::Map::new();
+            summarized.insert("path".to_string(), serde_json::json!(path));
+            summarized.insert(
+                old_key.to_string(),
+                serde_json::json!(format!("<<<AURA_ELIDED_OLD::{old_len}_chars>>>")),
+            );
+            summarized.insert(
+                new_key.to_string(),
+                serde_json::json!(format!("<<<AURA_ELIDED_NEW::{new_len}_chars>>>")),
+            );
+            Some(serde_json::Value::Object(summarized))
         }
         _ => None,
     }
@@ -253,17 +271,15 @@ mod tests {
         });
         let result = summarize_write_input("write_file", &input).unwrap();
         assert_eq!(result["path"], "src/main.rs");
-        assert!(result["_summarized"]
-            .as_str()
-            .unwrap()
-            .contains("32 bytes written"));
+        assert_eq!(result["content"], "<<<AURA_ELIDED_CONTENT::32_bytes>>>");
+        assert!(result.get("_summarized").is_none());
 
         let result2 = summarize_write_input("write_file", &input).unwrap();
         assert_eq!(result2["path"], "src/main.rs");
-        assert!(result2["_summarized"]
+        assert!(result2["content"]
             .as_str()
             .unwrap()
-            .contains("bytes written"));
+            .contains("AURA_ELIDED_CONTENT"));
     }
 
     #[test]
@@ -275,8 +291,9 @@ mod tests {
         });
         let result = summarize_write_input("edit_file", &input).unwrap();
         assert_eq!(result["path"], "src/lib.rs");
-        let summary = result["_summarized"].as_str().unwrap();
-        assert!(summary.contains("replaced 16 chars with 3 chars"));
+        assert_eq!(result["old_text"], "<<<AURA_ELIDED_OLD::16_chars>>>");
+        assert_eq!(result["new_text"], "<<<AURA_ELIDED_NEW::3_chars>>>");
+        assert!(result.get("_summarized").is_none());
 
         let input_alt = serde_json::json!({
             "path": "src/lib.rs",
@@ -284,8 +301,10 @@ mod tests {
             "new_string": "defgh"
         });
         let result2 = summarize_write_input("edit_file", &input_alt).unwrap();
-        let summary2 = result2["_summarized"].as_str().unwrap();
-        assert!(summary2.contains("replaced 3 chars with 5 chars"));
+        assert_eq!(result2["old_string"], "<<<AURA_ELIDED_OLD::3_chars>>>");
+        assert_eq!(result2["new_string"], "<<<AURA_ELIDED_NEW::5_chars>>>");
+        assert!(result2.get("old_text").is_none());
+        assert!(result2.get("new_text").is_none());
     }
 
     #[test]

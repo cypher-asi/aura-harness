@@ -22,6 +22,56 @@ fn test_fs_edit_single_replacement() {
 }
 
 #[test]
+fn test_fs_edit_rejects_elided_old_text_placeholder() {
+    let (sandbox, dir) = create_test_sandbox();
+
+    fs::write(dir.path().join("edit.txt"), "Hello, World!").unwrap();
+
+    let result = fs_edit(
+        &sandbox,
+        "edit.txt",
+        "<<<AURA_ELIDED_OLD::13_chars>>>",
+        "Aura",
+        false,
+    );
+
+    assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    if let Err(ToolError::InvalidArguments(msg)) = result {
+        assert!(msg.contains("old_text is an elided history placeholder"));
+        assert!(msg.contains("supply the real edit text"));
+    }
+    assert_eq!(
+        fs::read_to_string(dir.path().join("edit.txt")).unwrap(),
+        "Hello, World!"
+    );
+}
+
+#[test]
+fn test_fs_edit_rejects_elided_new_text_placeholder() {
+    let (sandbox, dir) = create_test_sandbox();
+
+    fs::write(dir.path().join("edit.txt"), "Hello, World!").unwrap();
+
+    let result = fs_edit(
+        &sandbox,
+        "edit.txt",
+        "World",
+        "<<<AURA_ELIDED_NEW::4_chars>>>",
+        false,
+    );
+
+    assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    if let Err(ToolError::InvalidArguments(msg)) = result {
+        assert!(msg.contains("new_text is an elided history placeholder"));
+        assert!(msg.contains("supply the real edit text"));
+    }
+    assert_eq!(
+        fs::read_to_string(dir.path().join("edit.txt")).unwrap(),
+        "Hello, World!"
+    );
+}
+
+#[test]
 fn test_fs_edit_replace_all() {
     let (sandbox, dir) = create_test_sandbox();
 

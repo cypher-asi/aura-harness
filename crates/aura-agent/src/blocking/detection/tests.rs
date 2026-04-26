@@ -23,7 +23,9 @@ fn test_detect_blocked_writes_blocks_second_write() {
     let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_writes(&tool, &ctx).unwrap();
     assert!(result.blocked);
-    assert!(result.recovery_message.unwrap().contains("already wrote"));
+    let recovery = result.recovery_message.unwrap();
+    assert!(recovery.contains("already wrote"));
+    assert!(recovery.contains("AURA_ELIDED"));
 }
 
 #[test]
