@@ -37,7 +37,10 @@ pub mod utils;
 pub use error_types::{parse_error_references, BuildFixAttemptRecord};
 pub use runner::run_build_command;
 pub use signatures::normalize_error_signature;
-pub use utils::{auto_correct_build_command, infer_default_build_command};
+pub use test::{run_full_test_suite, TestSuiteOutcome};
+pub use utils::{
+    auto_correct_build_command, infer_default_build_command, infer_default_test_command,
+};
 
 // ---------------------------------------------------------------------------
 // Configuration

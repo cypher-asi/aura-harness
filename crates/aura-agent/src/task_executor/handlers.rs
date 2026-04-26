@@ -1,9 +1,27 @@
 use super::{
     build_stub_fix_prompt, classify_build_errors, error_category_guidance, file_ops,
-    format_tool_arg_hint, looks_like_compiler_errors, AgentLoopEvent, FileOp, FollowUpSuggestion,
-    Path, TaskPhase, TaskPlan, TaskToolExecutor, ToolCallInfo, ToolCallResult,
-    MAX_STUB_FIX_ATTEMPTS,
+    format_tool_arg_hint, infer_default_test_command, looks_like_compiler_errors, AgentLoopEvent,
+    FileOp, FollowUpSuggestion, Path, TaskPhase, TaskPlan, TaskToolExecutor, ToolCallInfo,
+    ToolCallResult, DISABLE_TEST_GATE_ENV, MAX_STUB_FIX_ATTEMPTS, MAX_TASK_DONE_TEST_RETRIES,
 };
+
+/// Outcome of the `task_done` test-suite hard gate.
+#[derive(Debug)]
+pub(super) enum TestGateOutcome {
+    /// Suite passed (or no failures were detected and exit code was zero).
+    Passed,
+    /// Gate was skipped because there is no test command and no default could
+    /// be inferred, or the operator opted out via [`DISABLE_TEST_GATE_ENV`].
+    /// Skipping is logged at WARN to keep the operator honest.
+    Skipped,
+    /// Suite failed and the retry budget still has room. `prompt` is the
+    /// rejection message routed back to the agent so it can fix the failures
+    /// and call `task_done` again.
+    Failed { prompt: String },
+    /// Suite failed AND the retry budget is exhausted. The loop stops; the
+    /// `dod_test_gate_exhausted` flag is set on `TaskExecutionResult`.
+    Exhausted { prompt: String },
+}
 
 pub(super) fn enrich_compiler_output_sync(project_folder: &str, raw_output: &str) -> String {
     if !looks_like_compiler_errors(raw_output) {
@@ -111,15 +129,45 @@ impl TaskToolExecutor {
                 stop_loop: false,
                 file_changes: Vec::new(),
             });
-        } else {
-            results.push(ToolCallResult {
-                tool_use_id: tc.id.clone(),
-                content: r#"{"status":"completed"}"#.to_string(),
-                is_error: false,
-                stop_loop: true,
-                file_changes: Vec::new(),
-            });
-            *stop = true;
+            return;
+        }
+
+        // Final gate: the full project test suite must be green. Pre-existing
+        // failures count — the agent owns them as part of this task. The
+        // `check_all_tests_pass` helper handles its own retry budget, the
+        // env-var escape hatch, and emits status text on failure.
+        match self.check_all_tests_pass().await {
+            TestGateOutcome::Passed | TestGateOutcome::Skipped => {
+                results.push(ToolCallResult {
+                    tool_use_id: tc.id.clone(),
+                    content: r#"{"status":"completed"}"#.to_string(),
+                    is_error: false,
+                    stop_loop: true,
+                    file_changes: Vec::new(),
+                });
+                *stop = true;
+            }
+            TestGateOutcome::Failed { prompt } => {
+                results.push(ToolCallResult {
+                    tool_use_id: tc.id.clone(),
+                    content: prompt,
+                    is_error: true,
+                    stop_loop: false,
+                    file_changes: Vec::new(),
+                });
+            }
+            TestGateOutcome::Exhausted { prompt } => {
+                // Budget exhausted: stop the loop and let the automaton see
+                // the dod_test_gate_exhausted flag on the merged result.
+                results.push(ToolCallResult {
+                    tool_use_id: tc.id.clone(),
+                    content: prompt,
+                    is_error: true,
+                    stop_loop: true,
+                    file_changes: Vec::new(),
+                });
+                *stop = true;
+            }
         }
     }
 
@@ -236,6 +284,120 @@ impl TaskToolExecutor {
         )
     }
 
+    /// Run the full project test suite and translate the outcome into a
+    /// [`TestGateOutcome`] for `handle_task_done`.
+    pub(super) async fn check_all_tests_pass(&self) -> TestGateOutcome {
+        if self.disable_test_gate {
+            tracing::warn!(
+                "{DISABLE_TEST_GATE_ENV}=1 — skipping task_done test gate (operator opt-out)"
+            );
+            return TestGateOutcome::Skipped;
+        }
+
+        let project_root = Path::new(&self.project_folder);
+        let cmd = self
+            .test_command
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(String::from)
+            .or_else(|| infer_default_test_command(project_root));
+        let Some(cmd) = cmd else {
+            tracing::warn!(
+                project = %self.project_folder,
+                "no test_command configured and no default could be inferred — skipping task_done test gate"
+            );
+            return TestGateOutcome::Skipped;
+        };
+
+        self.emit_text(format!("\n[task_done test gate: {cmd}]\n"));
+
+        let outcome = match self.test_runner.run_tests(project_root, &cmd).await {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                let attempt = {
+                    let mut a = self.test_gate_attempts.lock().await;
+                    *a += 1;
+                    *a
+                };
+                let prompt = format!(
+                    "ERROR: task_done test gate failed to execute `{cmd}`: {e}. \
+                     Fix the test command or your project setup, then call task_done \
+                     again. (gate attempt {attempt}/{MAX_TASK_DONE_TEST_RETRIES})"
+                );
+                if attempt >= MAX_TASK_DONE_TEST_RETRIES {
+                    *self.dod_test_gate_exhausted.lock().await = true;
+                    return TestGateOutcome::Exhausted { prompt };
+                }
+                return TestGateOutcome::Failed { prompt };
+            }
+        };
+
+        if outcome.passed {
+            self.emit_text(format!(
+                "\n[task_done test gate: PASSED in {ms}ms — {summary}]\n",
+                ms = outcome.duration_ms,
+                summary = outcome.summary,
+            ));
+            return TestGateOutcome::Passed;
+        }
+
+        let attempt = {
+            let mut a = self.test_gate_attempts.lock().await;
+            *a += 1;
+            *a
+        };
+
+        let failures_block = if outcome.failed_tests.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from("\n\nFailing tests:\n");
+            for name in outcome.failed_tests.iter().take(20) {
+                s.push_str("- ");
+                s.push_str(name);
+                s.push('\n');
+            }
+            if outcome.failed_tests.len() > 20 {
+                s.push_str(&format!(
+                    "... and {} more\n",
+                    outcome.failed_tests.len() - 20
+                ));
+            }
+            s
+        };
+
+        let stderr_tail = tail(&outcome.raw_stderr, 4_000);
+        let stderr_block = if stderr_tail.is_empty() {
+            String::new()
+        } else {
+            format!("\n\nLast stderr:\n{stderr_tail}")
+        };
+
+        let header = format!(
+            "ERROR: task_done blocked by Definition-of-Done test gate. \
+             Running `{cmd}` reported failures (gate attempt {attempt}/{MAX_TASK_DONE_TEST_RETRIES}). \
+             Fix EVERY failing test in the project — including tests that were already broken before \
+             your task — then call task_done again.\n\nSummary: {summary}",
+            summary = outcome.summary,
+        );
+
+        let prompt = format!("{header}{failures_block}{stderr_block}");
+
+        if attempt >= MAX_TASK_DONE_TEST_RETRIES {
+            *self.dod_test_gate_exhausted.lock().await = true;
+            let exhausted_prompt = format!(
+                "{prompt}\n\nThis is attempt {attempt}/{MAX_TASK_DONE_TEST_RETRIES}. The \
+                 test gate retry budget is exhausted; the task is being marked as failed \
+                 with dod_test_gate_exhausted=true so the orchestrator can decide how to \
+                 proceed."
+            );
+            return TestGateOutcome::Exhausted {
+                prompt: exhausted_prompt,
+            };
+        }
+
+        TestGateOutcome::Failed { prompt }
+    }
+
     async fn check_stubs_and_reject(&self) -> Option<String> {
         let mut attempts = self.stub_fix_attempts.lock().await;
         if *attempts >= MAX_STUB_FIX_ATTEMPTS {
@@ -341,6 +503,7 @@ impl TaskToolExecutor {
         }
         exec.follow_up_tasks = self.follow_ups.lock().await.clone();
         exec.no_changes_needed = *self.no_changes_needed.lock().await;
+        exec.dod_test_gate_exhausted = *self.dod_test_gate_exhausted.lock().await;
         let phase = self.task_phase.lock().await;
         exec.reached_implementing =
             matches!(*phase, crate::planning::TaskPhase::Implementing { .. });
@@ -353,4 +516,20 @@ impl TaskToolExecutor {
             }
         }
     }
+}
+
+/// Return at most `max_bytes` of the trailing portion of `s`, preferring a
+/// newline boundary and prefixing a `[truncated …]` marker when content was
+/// dropped. Used to keep the test-gate rejection prompt under the agent's
+/// context window.
+fn tail(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let start = s.len() - max_bytes;
+    let cut = s[start..]
+        .char_indices()
+        .find_map(|(i, c)| if c == '\n' { Some(start + i + 1) } else { None })
+        .unwrap_or(start);
+    format!("[truncated; showing last {} bytes]\n{}", s.len() - cut, &s[cut..])
 }

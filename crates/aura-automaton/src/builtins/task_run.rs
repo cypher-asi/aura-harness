@@ -315,6 +315,7 @@ impl TaskRunAutomaton {
             inner_executor,
             project_folder: effective_path.clone(),
             build_command: project.build_command.clone(),
+            test_command: project.test_command.clone(),
         };
 
         let result = self

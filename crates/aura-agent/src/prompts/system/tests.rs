@@ -53,6 +53,41 @@ fn agentic_prompt_includes_workspace_context() {
 }
 
 #[test]
+fn agentic_prompt_includes_definition_of_done_hard_gate() {
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+    assert!(
+        prompt.contains("DEFINITION OF DONE (HARD GATE)"),
+        "DoD hard-gate section header missing"
+    );
+    assert!(
+        prompt.contains("ALL tests must pass"),
+        "all-tests-must-pass language missing"
+    );
+    assert!(
+        prompt.contains("rejected while any test is failing"),
+        "rejection language missing"
+    );
+}
+
+#[test]
+fn agentic_prompt_no_longer_tells_agent_to_ignore_pre_existing_failures() {
+    // Regression guard: this exact phrasing previously instructed
+    // agents to skip pre-existing failures, which contradicts the
+    // hard gate.
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+    assert!(
+        !prompt.contains("IGNORE them"),
+        "system prompt still tells agent to IGNORE pre-existing failures"
+    );
+    assert!(
+        !prompt.contains("If they are pre-existing and unrelated to your changes"),
+        "system prompt still contains the old pre-existing-failure escape hatch"
+    );
+}
+
+#[test]
 fn chat_system_prompt_uses_base_when_custom_empty() {
     let project = test_project("/nonexistent/path");
     let prompt = build_chat_system_prompt(&project, "");

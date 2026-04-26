@@ -101,6 +101,26 @@ pub fn infer_default_build_command(project_root: &Path) -> Option<String> {
     None
 }
 
+/// Infer a default full-suite test command from project manifest files.
+///
+/// Returns `None` when no recognised manifest is present; the caller should
+/// then decide whether to skip the test gate (analysis-only project) or
+/// abort with a configuration error.
+pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
+    if project_root.join("Cargo.toml").is_file() {
+        return Some("cargo test --workspace --all-features".to_string());
+    }
+    if project_root.join("package.json").is_file() {
+        return Some("npm test --silent --if-present".to_string());
+    }
+    if project_root.join("pyproject.toml").is_file()
+        || project_root.join("requirements.txt").is_file()
+    {
+        return Some("python -m pytest -q".to_string());
+    }
+    None
+}
+
 /// Build a codebase snapshot for a build-fix prompt by reading error source
 /// files fresh from disk and supplementing with relevant project files.
 pub fn build_error_context_snapshot(

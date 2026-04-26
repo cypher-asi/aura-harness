@@ -129,6 +129,7 @@ impl DevLoopAutomaton {
             inner_executor,
             project_folder: effective_path.to_string(),
             build_command: project.build_command.clone(),
+            test_command: project.test_command.clone(),
         };
 
         self.runner

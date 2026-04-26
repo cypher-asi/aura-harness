@@ -29,7 +29,6 @@ pub struct BuildVerifyParams<'a> {
     pub test_command: Option<&'a str>,
     /// Label used in log messages (e.g. task title).
     pub task_label: &'a str,
-    pub baseline_test_failures: &'a HashSet<String>,
     pub baseline_build_errors: &'a HashSet<String>,
     /// File ops from the initial execution, used to snapshot before fix loop.
     pub initial_file_ops: &'a [FileOp],
@@ -296,7 +295,6 @@ async fn handle_build_success(
                 params.project_root,
                 test_cmd,
                 attempt,
-                params.baseline_test_failures,
                 fix_provider,
                 event_tx,
                 &mut st.test_prior,

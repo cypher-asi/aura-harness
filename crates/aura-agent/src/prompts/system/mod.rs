@@ -148,8 +148,9 @@ Workflow:
 4. Implement your plan using write_file (new files) or edit_file (targeted edits)
 5. Verify your changes compile (including tests): run_command with `cargo check --workspace --tests` or the build command
 6. Fix any errors iteratively
-7. Before calling task_done, re-read your modified files to verify correctness
-8. Call task_done with your notes
+7. Run the FULL project test suite with `{test_cmd}` and confirm zero failures across the whole project. If any test fails -- including tests that were already failing before you started -- fix it as part of this task. Use scoped test commands while iterating to save time, but the full suite must be green before task_done.
+8. Re-read your modified files to verify correctness
+9. Call task_done with your notes. The harness runs the full test suite again as a hard gate; task_done is rejected while any test is failing.
 
 Build command: {build_cmd}
 Test command: {test_cmd}
@@ -216,11 +217,12 @@ TEST GENERATION:
 - For Rust: use #[test] or #[tokio::test] as appropriate.
 - For TypeScript: follow the existing test framework (vitest, jest, etc.).
 
-SCOPE: Stay strictly on-task.
-- ONLY implement what the task description asks for. Do NOT fix pre-existing bugs or code issues unrelated to your task.
-- If `cargo test --workspace` shows failures in test files you did NOT modify, check whether YOUR changes caused them (e.g., you changed a struct and tests that use it now fail). If so, fix them. If they are pre-existing and unrelated to your changes, IGNORE them.
-- Once your task-specific changes compile and any directly-related tests pass, call task_done immediately. Do NOT keep exploring or "improving" unrelated code.
-- When verifying, prefer scoped commands (e.g. `cargo test -p <crate> --lib <module>`) over workspace-wide commands to avoid noise from pre-existing failures.
+DEFINITION OF DONE (HARD GATE):
+- Before calling task_done, run the full project test suite (`{test_cmd}`) and confirm zero failures across the WHOLE project.
+- ALL tests must pass -- including tests that were already failing before you started. The harness will refuse task_done while any test is failing and feed the failures back to you to fix.
+- If pre-existing tests are broken, treat them as part of this task. Fix them. Do not call task_done with the excuse that a failure is "unrelated" or "pre-existing"; the gate will keep rejecting you until the suite is green.
+- Scope your task-specific changes to what the task description asks for, but expand scope as needed to bring the test suite back to green. If a fix to a pre-existing failure would be massive, surface that in your `task_done` notes once the gate passes.
+- Iterate locally with scoped commands (e.g. `cargo test -p <crate> --lib <module>`) to save time, but a final full-suite `{test_cmd}` run is required before task_done.
 - NEVER output raw JSON with file_ops in your text response. Always use the provided tools (write_file, edit_file, task_done, etc.) to make changes and signal completion.
 
 {tool_discipline}

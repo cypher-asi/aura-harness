@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent_runner::TaskExecutionResult;
+use crate::verify::TestSuiteOutcome;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -15,24 +16,94 @@ impl AgentToolExecutor for NoOpInner {
     }
 }
 
-fn make_executor() -> TaskToolExecutor {
+/// Test [`TaskTestRunner`] that returns a queue of pre-canned outcomes.
+///
+/// Each call pops the next outcome; the queue is intentionally finite so a
+/// runaway gate-loop in tests fails loudly with a panic instead of silently
+/// reusing the last outcome.
+#[derive(Debug, Default)]
+struct MockTestRunner {
+    queue: Mutex<Vec<anyhow::Result<TestSuiteOutcome>>>,
+    calls: Mutex<u32>,
+}
+
+impl MockTestRunner {
+    fn always_pass() -> Self {
+        let mut q = Vec::new();
+        for _ in 0..16 {
+            q.push(Ok(TestSuiteOutcome {
+                passed: true,
+                summary: "10 passed, 0 failed".to_string(),
+                ..Default::default()
+            }));
+        }
+        Self {
+            queue: Mutex::new(q),
+            calls: Mutex::new(0),
+        }
+    }
+
+    fn always_fail() -> Self {
+        let mut q = Vec::new();
+        for _ in 0..(MAX_TASK_DONE_TEST_RETRIES + 4) {
+            q.push(Ok(TestSuiteOutcome {
+                passed: false,
+                summary: "9 passed, 1 failed".to_string(),
+                failed_tests: vec!["my_crate::tests::it_works".to_string()],
+                raw_stderr: "thread 'it_works' panicked at 'assertion failed'".to_string(),
+                ..Default::default()
+            }));
+        }
+        Self {
+            queue: Mutex::new(q),
+            calls: Mutex::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskTestRunner for MockTestRunner {
+    async fn run_tests(
+        &self,
+        _project_root: &std::path::Path,
+        _command: &str,
+    ) -> anyhow::Result<TestSuiteOutcome> {
+        *self.calls.lock().await += 1;
+        let mut q = self.queue.lock().await;
+        if q.is_empty() {
+            anyhow::bail!("MockTestRunner queue exhausted");
+        }
+        q.remove(0)
+    }
+}
+
+fn make_executor_with_runner(runner: Arc<dyn TaskTestRunner>) -> TaskToolExecutor {
     TaskToolExecutor {
         inner: Arc::new(NoOpInner),
         project_folder: "/tmp/test".to_string(),
         build_command: None,
+        test_command: Some("cargo test --workspace".to_string()),
         task_context: String::new(),
         tracked_file_ops: Default::default(),
         notes: Default::default(),
         follow_ups: Default::default(),
         stub_fix_attempts: Default::default(),
+        test_gate_attempts: Default::default(),
+        test_runner: runner,
+        disable_test_gate: false,
         task_phase: Arc::new(Mutex::new(TaskPhase::Implementing {
             plan: crate::planning::TaskPlan::empty(),
         })),
         self_review: Default::default(),
         event_tx: None,
         no_changes_needed: Default::default(),
+        dod_test_gate_exhausted: Default::default(),
         recent_tool_outcomes: Default::default(),
     }
+}
+
+fn make_executor() -> TaskToolExecutor {
+    make_executor_with_runner(Arc::new(MockTestRunner::always_pass()))
 }
 
 fn task_done_call(notes: &str) -> ToolCallInfo {
@@ -342,15 +413,20 @@ async fn submit_plan_resets_outcome_window() {
         inner: Arc::new(NoOpInner),
         project_folder: "/tmp/test".to_string(),
         build_command: None,
+        test_command: Some("cargo test --workspace".to_string()),
         task_context: String::new(),
         tracked_file_ops: Default::default(),
         notes: Default::default(),
         follow_ups: Default::default(),
         stub_fix_attempts: Default::default(),
+        test_gate_attempts: Default::default(),
+        test_runner: Arc::new(MockTestRunner::always_pass()),
+        disable_test_gate: false,
         task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
         self_review: Default::default(),
         event_tx: None,
         no_changes_needed: Default::default(),
+        dod_test_gate_exhausted: Default::default(),
         recent_tool_outcomes: Default::default(),
     };
     // Simulate a noisy exploration phase: 10 errors accumulated.
@@ -404,4 +480,192 @@ async fn extract_parses_no_changes_needed_flag() {
 
     assert!(*executor.no_changes_needed.lock().await);
     assert_eq!(*executor.notes.lock().await, "just an analysis");
+}
+
+// ------------------------------------------------------------------
+// task_done test gate (Definition-of-Done) tests
+// ------------------------------------------------------------------
+
+async fn seed_with_file_op(executor: &TaskToolExecutor) {
+    let mut ops = executor.tracked_file_ops.lock().await;
+    ops.push(FileOp::Create {
+        path: "src/main.rs".to_string(),
+        content: "fn main() {}".to_string(),
+    });
+    drop(ops);
+    let mut sr = executor.self_review.lock().await;
+    sr.record_write("src/main.rs");
+    sr.record_read("src/main.rs");
+}
+
+#[tokio::test]
+async fn task_done_passes_gate_when_tests_pass() {
+    let runner = Arc::new(MockTestRunner::always_pass());
+    let executor = make_executor_with_runner(runner.clone());
+    seed_with_file_op(&executor).await;
+
+    let calls = [task_done_call("done")];
+    let results = executor.execute(&calls).await;
+
+    assert_eq!(results.len(), 1);
+    assert!(
+        !results[0].is_error,
+        "task_done should pass when tests pass: {}",
+        results[0].content
+    );
+    assert!(results[0].stop_loop);
+    assert_eq!(*runner.calls.lock().await, 1, "test runner should be invoked exactly once");
+    assert!(!*executor.dod_test_gate_exhausted.lock().await);
+}
+
+#[tokio::test]
+async fn task_done_rejects_when_tests_fail_within_budget() {
+    let runner = Arc::new(MockTestRunner::always_fail());
+    let executor = make_executor_with_runner(runner.clone());
+    seed_with_file_op(&executor).await;
+
+    let calls = [task_done_call("done")];
+    let results = executor.execute(&calls).await;
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_error);
+    assert!(!results[0].stop_loop, "must keep iterating within budget");
+    assert!(
+        results[0]
+            .content
+            .contains("Definition-of-Done test gate"),
+        "rejection prompt missing DoD framing: {}",
+        results[0].content
+    );
+    assert!(
+        results[0].content.contains("my_crate::tests::it_works"),
+        "rejection prompt should list failing test names"
+    );
+    assert!(!*executor.dod_test_gate_exhausted.lock().await);
+    assert_eq!(*executor.test_gate_attempts.lock().await, 1);
+}
+
+#[tokio::test]
+async fn task_done_test_gate_marks_exhausted_after_budget() {
+    let runner = Arc::new(MockTestRunner::always_fail());
+    let executor = make_executor_with_runner(runner.clone());
+    seed_with_file_op(&executor).await;
+
+    // Hammer the gate. Each call increments test_gate_attempts; once it
+    // reaches MAX_TASK_DONE_TEST_RETRIES the gate must flip to Exhausted
+    // (stop_loop=true, dod_test_gate_exhausted=true).
+    let mut last = None;
+    for _ in 0..MAX_TASK_DONE_TEST_RETRIES {
+        let results = executor.execute(&[task_done_call("done")]).await;
+        last = Some(results);
+    }
+
+    let last = last.expect("at least one iteration");
+    assert!(last[0].is_error);
+    assert!(
+        last[0].stop_loop,
+        "exhausted budget must stop the agent loop"
+    );
+    assert!(
+        last[0].content.contains("retry budget is exhausted"),
+        "exhaustion prompt missing budget language: {}",
+        last[0].content
+    );
+    assert!(
+        *executor.dod_test_gate_exhausted.lock().await,
+        "dod_test_gate_exhausted flag must be set"
+    );
+    assert_eq!(
+        *executor.test_gate_attempts.lock().await,
+        MAX_TASK_DONE_TEST_RETRIES
+    );
+
+    let mut result = TaskExecutionResult::default();
+    executor.merge_into_result(&mut result).await;
+    assert!(
+        result.dod_test_gate_exhausted,
+        "merge_into_result must propagate the exhausted flag"
+    );
+}
+
+#[tokio::test]
+async fn task_done_test_gate_skipped_when_no_command_or_default() {
+    // /tmp/test isn't a real project root, so infer_default_test_command
+    // returns None. With test_command also None the gate must skip rather
+    // than block.
+    let runner = Arc::new(MockTestRunner::always_pass());
+    let executor = TaskToolExecutor {
+        inner: Arc::new(NoOpInner),
+        project_folder: "/this/path/definitely/does/not/exist".to_string(),
+        build_command: None,
+        test_command: None,
+        task_context: String::new(),
+        tracked_file_ops: Default::default(),
+        notes: Default::default(),
+        follow_ups: Default::default(),
+        stub_fix_attempts: Default::default(),
+        test_gate_attempts: Default::default(),
+        test_runner: runner.clone(),
+        disable_test_gate: false,
+        task_phase: Arc::new(Mutex::new(TaskPhase::Implementing {
+            plan: crate::planning::TaskPlan::empty(),
+        })),
+        self_review: Default::default(),
+        event_tx: None,
+        no_changes_needed: Default::default(),
+        dod_test_gate_exhausted: Default::default(),
+        recent_tool_outcomes: Default::default(),
+    };
+    seed_with_file_op(&executor).await;
+
+    let results = executor.execute(&[task_done_call("done")]).await;
+    assert!(!results[0].is_error);
+    assert!(results[0].stop_loop);
+    assert_eq!(
+        *runner.calls.lock().await,
+        0,
+        "test runner must not be called when gate is skipped"
+    );
+}
+
+#[tokio::test]
+async fn task_done_test_gate_honors_disable_flag() {
+    // The `disable_test_gate` field captures the env var at construction
+    // time so the runtime gate check is just a struct read. Simulating
+    // the operator opt-out is therefore a per-executor toggle rather than
+    // a global env mutation that would race other tests.
+    let runner = Arc::new(MockTestRunner::always_fail());
+    let mut executor = make_executor_with_runner(runner.clone());
+    executor.disable_test_gate = true;
+    seed_with_file_op(&executor).await;
+
+    let results = executor.execute(&[task_done_call("done")]).await;
+    assert!(!results[0].is_error, "{}", results[0].content);
+    assert!(results[0].stop_loop);
+    assert_eq!(
+        *runner.calls.lock().await,
+        0,
+        "test runner must not be called when the disable flag is set"
+    );
+}
+
+#[test]
+fn read_disable_test_gate_env_only_matches_one() {
+    // Defence-in-depth on the env reader: only the literal "1" disables
+    // the gate. Anything else (empty, "0", "true", "yes", typos) keeps
+    // the gate live. This guards against an operator setting the var to
+    // a truthy-looking value and being silently surprised.
+    let prev = std::env::var(DISABLE_TEST_GATE_ENV).ok();
+    for (val, expected) in [("1", true), ("0", false), ("true", false), ("", false)] {
+        std::env::set_var(DISABLE_TEST_GATE_ENV, val);
+        assert_eq!(
+            super::read_disable_test_gate_env(),
+            expected,
+            "value {val:?} should map to {expected}"
+        );
+    }
+    match prev {
+        Some(v) => std::env::set_var(DISABLE_TEST_GATE_ENV, v),
+        None => std::env::remove_var(DISABLE_TEST_GATE_ENV),
+    }
 }
