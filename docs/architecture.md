@@ -55,15 +55,36 @@ The bridge between the two layers is a set of **gateway** types
 AgentLoop expects while routing calls through the kernel's recording and
 policy pipeline. The AgentLoop never knows the difference.
 
+### Foreground Subagents
+
+The v1 subagent model is foreground and local to one harness instance. A
+parent agent calls the `task` tool, which validates `Capability::SpawnAgent`
+and hands an `aura-core::SubagentDispatchRequest` to a
+`SubagentDispatchHook`. The tool is fail-closed when that hook is absent.
+
+`aura-runtime` owns the concrete dispatcher. It looks up a fixed bundled
+subagent kind (`general_purpose`, `explore`, `shell`, or `code_reviewer`),
+creates a full child agent through `KernelSpawnHook`, enqueues the child
+prompt, and runs that child through `Scheduler::schedule_agent_with_overrides`.
+The child therefore uses the same `KernelModelGateway` and `KernelToolGateway`
+path as every other agent: LLM calls, tool proposals, policy decisions, and
+final assistant messages are recorded on the child record log. Parent
+delegation is serialized before the parent tool batch commits, avoiding races
+between parallel `task` tool calls.
+
+Subagent protocol events deliberately reuse existing tool-result and text
+surfaces in v1. Dedicated `OutboundMessage` variants are deferred until the
+wire protocol has capability negotiation.
+
 ### Crate Summary
 
 | Crate | Role |
 |------|------|
-| `aura-core` | Foundational domain types, IDs, hashing, time, and shared errors used across all crates. |
+| `aura-core` | Foundational domain types, IDs, hashing, time, shared subagent data shapes, and shared errors used across all crates. |
 | `aura-store` | Durable RocksDB-backed storage for agent records, metadata, and inbox queues. |
 | `aura-reasoner` | Model-provider abstraction for completion and streaming APIs. |
 | `aura-kernel` | Deterministic execution kernel with router, policies, sandboxing, and scheduler primitives. |
-| `aura-tools` | Tool catalog, built-in/external tool execution, sandboxed filesystem and command tools. |
+| `aura-tools` | Tool catalog, built-in/external tool execution, sandboxed filesystem and command tools, plus the fail-closed `task` dispatch surface. |
 | `aura-agent` | Main agent orchestration loop: model calls, tool execution, streaming, budgets, and compaction. |
 | `aura-protocol` | Wire-level request/response/event types for transport boundaries. |
 | `aura-auth` | Auth token extraction/validation utilities for node and agent startup. |
@@ -71,7 +92,7 @@ policy pipeline. The AgentLoop never knows the difference.
 | `aura-memory` | Per-agent memory: fact/event/procedure store, two-stage write pipeline, deterministic retrieval for prompt injection. |
 | `aura-skills` | Skill system wire-compatible with the Claude Code `SKILL.md` / `AgentSkills` open standard; per-agent install store and activation. |
 | `aura-automaton` | Workflow/automation helpers that drive scripted agent behavior. |
-| `aura-runtime` | HTTP/WebSocket server runtime, session management, and scheduler-backed processing. |
+| `aura-runtime` | HTTP/WebSocket server runtime, session management, scheduler-backed processing, and bundled subagent dispatch. |
 | `aura` | Root binary wiring for launch modes, runtime setup, and top-level command entrypoints. |
 
 > **Historical deviation (Phase 0.5):** the runtime crate was previously

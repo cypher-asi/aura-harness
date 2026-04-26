@@ -119,6 +119,8 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor" \
 #   - crates/aura-runtime/src/automaton_bridge/  — AutomatonBridge builds automaton kernels
 #                                                  (was automaton_bridge.rs before the Phase 2c split;
 #                                                   now mod.rs + build.rs + dispatch.rs + event_channel.rs)
+#   - crates/aura-runtime/src/subagent_dispatch.rs — RuntimeSubagentDispatch
+#                                                    creates child kernels through the scheduler
 #   - crates/aura-runtime/src/node.rs            — boots the process-wide store
 #   - crates/aura-runtime/src/tool_permissions.rs — HTTP-driven tool-permissions
 #                                                  append serialized via the scheduler lock
@@ -132,7 +134,7 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor" \
 #   - crates/aura-runtime/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store::)?Store>' \
-    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-runtime/src/scheduler\.rs|crates/aura-runtime/src/automaton_bridge/|crates/aura-runtime/src/router/state\.rs|crates/aura-runtime/src/session/mod\.rs|crates/aura-runtime/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-kernel/|crates/aura-store/|crates/aura-runtime/src/scheduler\.rs|crates/aura-runtime/src/automaton_bridge/|crates/aura-runtime/src/router/state\.rs|crates/aura-runtime/src/session/mod\.rs|crates/aura-runtime/src/subagent_dispatch\.rs|crates/aura-runtime/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|src/main\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into aura-store directly. Any code
 # that needs persistence goes through the kernel. Test files in the same

@@ -11,9 +11,9 @@ sync with the `Enforcement:` lines under each section.
 | # | Invariant | Enforcement |
 |---|---|---|
 | §1 | Sole External Gateway | CI-gated `rg` bands in `scripts/check_invariants.sh` + `.github/workflows/invariants.yml` (ModelProvider `.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/agent_loop/`). Type-level seal: `aura_agent::RecordingModelProvider` (Phase 4 of the system-audit refactor) is a crate-sealed marker trait — automatons take `P: RecordingModelProvider`, so only `KernelModelGateway` (the recording wrapper) can be plugged in. External `dyn ModelProvider` cannot satisfy the seal. Git-mutation surface covered by `crates/aura-tools/src/git_tool/tests.rs` (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by `crates/aura-agent/src/kernel_domain_gateway/` tests. |
-| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-runtime/src/automaton_bridge/tests.rs::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path). |
+| §2 | Every State Change Is a Transaction | `tests/pipeline_tests.rs`, `tests/kernel_integration.rs`, `crates/aura-kernel/src/kernel/tests.rs`, `crates/aura-runtime/src/automaton_bridge/tests.rs::start_then_stop_records_two_automaton_lifecycle_entries` (Phase 1 lifecycle path), and `crates/aura-runtime/src/subagent_dispatch.rs::tests::dispatch_runs_child_and_records_parent_and_child_logs`. |
 | §3 | Every LLM Call Is Recorded | `crates/aura-agent/src/recording_stream.rs` tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), `crates/aura-kernel/src/kernel/tests.rs::reason_sync_error_records_failed` + `reason_streaming_handshake_error_records_failed` (Phase 1 sync + handshake failure paths), `tests/automaton_reasoning_recording.rs` (automaton spec-gen / dev-loop calls). |
-| §4 | Full Policy Enforcement | `crates/aura-core/src/types/tool_permissions.rs` resolver/full-access tests, `crates/aura-kernel/src/policy/check.rs` policy tests, `crates/aura-runtime/src/tool_permissions.rs` validation/monotonic tests, `crates/aura-runtime/src/session/helpers.rs` session tool-config composition tests, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` command guardrail tests. |
+| §4 | Full Policy Enforcement | `crates/aura-core/src/types/tool_permissions.rs` resolver/full-access tests, `crates/aura-kernel/src/policy/check.rs` policy tests, `crates/aura-runtime/src/tool_permissions.rs` validation/monotonic tests, `crates/aura-runtime/src/session/helpers.rs` session tool-config composition tests, `crates/aura-runtime/src/subagent_dispatch.rs` policy narrowing tests, and `crates/aura-tools/src/fs_tools/cmd/tests.rs` command guardrail tests. |
 | §5 | Complete Audit Trail | `crates/aura-kernel/src/kernel/tests.rs` + §4 matrix asserts `decision`/`actions`/`context_hash`. |
 | §6 | Deterministic Context | `crates/aura-kernel/tests/invariant_determinism.rs` (proptest). |
 | §7 | Monotonic Sequencing | `crates/aura-store/tests/invariant_atomicity.rs` + `crates/aura-store/src/rocks_store/tests.rs`. |
@@ -21,7 +21,7 @@ sync with the `Enforcement:` lines under each section.
 | §9 | AgentLoop Isolation | Architectural / `rg` grep bands (see Untested Invariants) — now CI-gated via `scripts/check_invariants.sh` (aura_store import band scoped to `aura-agent/agent_loop/`). |
 | §10 | Append-Only Record | `crates/aura-store/tests/invariant_atomicity.rs` (`static_assertions` sealed-trait check + atomic-commit fault injection) + `crates/aura-store/tests/invariant_readstore_surface.rs` (Phase 2: pins the `ReadStore` trait surface so record-append methods stay on the sealed `WriteStore`). |
 | §11 | Session-Scoped Tool Decisions | `crates/aura-kernel/src/policy/check.rs` live prompt and session-state tests. |
-| §12 | Single Writer Per Agent | `crates/aura-store/src/rocks_store/tests_concurrent.rs`. |
+| §12 | Single Writer Per Agent | `crates/aura-store/src/rocks_store/tests_concurrent.rs` plus subagent dispatch coverage that runs child agents through `Scheduler::schedule_agent_with_overrides`. |
 
 ---
 
@@ -270,6 +270,7 @@ band; updated for the Phase 2c splits):
   `automaton_bridge.rs`; now `mod.rs` + `build.rs` + `dispatch.rs` +
   `event_channel.rs`), `crates/aura-runtime/src/scheduler.rs`,
   `crates/aura-runtime/src/session/mod.rs`,
+  `crates/aura-runtime/src/subagent_dispatch.rs`,
   `crates/aura-runtime/src/node.rs`,
   `crates/aura-runtime/src/tool_permissions.rs` (HTTP-driven append
   serialized via the scheduler lock, Phase 0), and `src/main.rs`.
@@ -300,6 +301,14 @@ band; updated for the Phase 2c splits):
 - Enforced by per-agent `Mutex` in the `Scheduler`
 - Different agents are fully independent and process concurrently
 - The lock is held for the entire drain of the agent's inbox
+
+Foreground subagents do not create an alternate execution lane. The runtime
+dispatch hook creates a full child agent, enqueues a child `UserPrompt`, and
+then invokes `Scheduler::schedule_agent_with_overrides`, so child work inherits
+the same per-agent mutex and record pipeline as ordinary scheduled work. The
+parent-side delegation marker is serialized inside the runtime dispatcher
+before the parent tool batch writes its `ToolExecution` effects, so parallel
+`task` calls cannot race each other on the parent record head.
 
 ---
 
