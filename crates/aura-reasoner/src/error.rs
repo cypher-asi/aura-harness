@@ -106,7 +106,10 @@ impl ReasonerError {
     #[must_use]
     pub fn is_context_overflow(&self) -> bool {
         match self {
-            Self::Api { status, message } | Self::Transient { status, message, .. } => {
+            Self::Api { status, message }
+            | Self::Transient {
+                status, message, ..
+            } => {
                 *status == 413
                     || ((*status == 400 || *status == 422)
                         && message_indicates_context_overflow(message))

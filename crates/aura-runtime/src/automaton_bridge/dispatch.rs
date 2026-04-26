@@ -195,9 +195,13 @@ impl AutomatonBridge {
             )
             .await?;
 
-        let automaton =
-            DevLoopAutomaton::new(ctx.gateway_domain, ctx.model_gw, ctx.runner_config, ctx.catalog)
-                .with_tool_executor(ctx.tool_gw);
+        let automaton = DevLoopAutomaton::new(
+            ctx.gateway_domain,
+            ctx.model_gw,
+            ctx.runner_config,
+            ctx.catalog,
+        )
+        .with_tool_executor(ctx.tool_gw);
 
         let config = serde_json::json!({
             "project_id": project_id,

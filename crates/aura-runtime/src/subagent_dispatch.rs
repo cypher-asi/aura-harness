@@ -107,8 +107,11 @@ impl SubagentDispatchHook for RuntimeSubagentDispatch {
         }
         let processed = match tokio::time::timeout(
             Duration::from_millis(kind.budget.timeout_ms),
-            self.scheduler
-                .schedule_agent_with_overrides(child_agent_id, Some(loop_config), Some(policy)),
+            self.scheduler.schedule_agent_with_overrides(
+                child_agent_id,
+                Some(loop_config),
+                Some(policy),
+            ),
         )
         .await
         {
@@ -336,7 +339,10 @@ mod tests {
         assert_eq!(result.final_message, "child done");
         let child_id = result.child_agent_id.expect("child id");
         assert!(
-            !store.scan_record(parent_agent_id, 1, 10).unwrap().is_empty(),
+            !store
+                .scan_record(parent_agent_id, 1, 10)
+                .unwrap()
+                .is_empty(),
             "spawn should record parent delegation"
         );
         let child_entries = store.scan_record(child_id, 1, 10).unwrap();

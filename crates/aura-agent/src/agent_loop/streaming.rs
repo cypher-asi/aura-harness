@@ -288,14 +288,8 @@ impl AgentLoop {
                         reason: format!("Stream error, retrying without streaming: {e}"),
                     },
                 );
-                complete_and_emit_as_deltas(
-                    provider,
-                    request,
-                    event_tx,
-                    provider_name,
-                    &model_name,
-                )
-                .await
+                complete_and_emit_as_deltas(provider, request, event_tx, provider_name, &model_name)
+                    .await
             }
             DrainOutcome::Completed(accumulator) => {
                 self.finalize_after_stream(

@@ -55,8 +55,8 @@ use aura_tools::ToolConfig;
 use crate::jwt_domain::JwtDomainApi;
 use crate::scheduler::Scheduler;
 
-pub use event_channel::EventSubscription;
 pub(crate) use event_channel::EventChannel;
+pub use event_channel::EventSubscription;
 
 /// Bookkeeping for a running automaton so stop/pause paths can emit
 /// `System::AutomatonLifecycle` entries on the correct agent log

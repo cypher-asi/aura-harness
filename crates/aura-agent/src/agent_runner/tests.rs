@@ -40,13 +40,15 @@ fn configure_loop_config_seeds_thinking_budget() {
         task_execution_max_tokens: 16_384,
         ..AgentRunnerConfig::default()
     };
-    let standard =
-        configure_loop_config(TaskComplexity::Standard, &config, 12, 3, "system".into());
+    let standard = configure_loop_config(TaskComplexity::Standard, &config, 12, 3, "system".into());
     assert_eq!(standard.thinking_budget, Some(4_000));
 
     let simple = configure_loop_config(TaskComplexity::Simple, &config, 8, 3, "system".into());
     let simple_budget = simple.thinking_budget.expect("seeded");
-    assert!(simple_budget <= simple.max_tokens, "must respect max_tokens ceiling");
+    assert!(
+        simple_budget <= simple.max_tokens,
+        "must respect max_tokens ceiling"
+    );
     assert!(simple_budget <= 4_000);
 }
 

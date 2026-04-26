@@ -44,11 +44,7 @@ impl DomainApi for UnusedDomain {
     ) -> anyhow::Result<Vec<SpecDescriptor>> {
         unimplemented!("UnusedDomain")
     }
-    async fn get_spec(
-        &self,
-        _spec_id: &str,
-        _jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn create_spec(
@@ -123,11 +119,7 @@ impl DomainApi for UnusedDomain {
     async fn get_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<TaskDescriptor> {
         unimplemented!("UnusedDomain")
     }
-    async fn get_project(
-        &self,
-        _p: &str,
-        _j: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    async fn get_project(&self, _p: &str, _j: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn update_project(
@@ -165,20 +157,13 @@ impl DomainApi for UnusedDomain {
     ) -> anyhow::Result<serde_json::Value> {
         unimplemented!("UnusedDomain")
     }
-    async fn list_messages(
-        &self,
-        _p: &str,
-        _i: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>> {
+    async fn list_messages(&self, _p: &str, _i: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
         unimplemented!("UnusedDomain")
     }
     async fn save_message(&self, _p: SaveMessageParams) -> anyhow::Result<()> {
         unimplemented!("UnusedDomain")
     }
-    async fn create_session(
-        &self,
-        _p: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, _p: CreateSessionParams) -> anyhow::Result<SessionDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
@@ -233,8 +218,7 @@ fn count_lifecycle_entries(store: &Arc<dyn Store>, agent_id: AgentId) -> usize {
 #[tokio::test]
 async fn start_then_stop_records_two_automaton_lifecycle_entries() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn Store> =
-        Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
     let provider: Arc<dyn ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("noop"));
     let ws_dir = dir.path().join("workspaces");
@@ -294,13 +278,11 @@ fn prepare_installed_tools_filters_by_required_integration() {
                 auth: aura_protocol::ToolAuth::None,
                 timeout_ms: None,
                 namespace: None,
-                required_integration: Some(
-                    aura_protocol::InstalledToolIntegrationRequirement {
-                        integration_id: None,
-                        provider: Some("brave_search".to_string()),
-                        kind: Some("workspace_integration".to_string()),
-                    },
-                ),
+                required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
+                    integration_id: None,
+                    provider: Some("brave_search".to_string()),
+                    kind: Some("workspace_integration".to_string()),
+                }),
                 runtime_execution: None,
                 metadata: Default::default(),
             },
@@ -381,8 +363,7 @@ fn prepare_installed_tools_filters_by_required_integration() {
 fn test_bridge() -> AutomatonBridge {
     use crate::scheduler::Scheduler;
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn Store> =
-        Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
     let provider: Arc<dyn ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("noop"));
     let ws_dir = dir.path().join("workspaces");

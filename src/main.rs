@@ -240,9 +240,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
             // recognising "mock". Surface a structured error so
             // bootstrap exits non-zero with an actionable message.
             aura_reasoner::provider_from_name("mock").map_err(|mock_err| {
-                anyhow::anyhow!(
-                    "failed to construct fallback mock reasoner provider: {mock_err}"
-                )
+                anyhow::anyhow!("failed to construct fallback mock reasoner provider: {mock_err}")
             })?
         }
     };

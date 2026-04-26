@@ -12,9 +12,9 @@ use std::time::Duration;
 
 use aura_auth::CredentialStore;
 use aura_kernel::Executor;
+use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_runtime::test_support::{create_router, RouterState, RouterStateConfig, Scheduler};
 use aura_runtime::NodeConfig;
-use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_store::RocksStore;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::{ToolCatalog, ToolConfig, ToolResolver};

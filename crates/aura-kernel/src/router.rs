@@ -73,7 +73,10 @@ impl ExecutorRouter {
                 action.action_id,
                 EffectKind::Agreement,
                 EffectStatus::Failed,
-                format!("ambiguous executor routing: {} executors match", matches.len()),
+                format!(
+                    "ambiguous executor routing: {} executors match",
+                    matches.len()
+                ),
             );
         }
 
@@ -116,8 +119,8 @@ impl Default for ExecutorRouter {
 mod tests {
     use super::*;
     use crate::executor::{ExecuteContext, Executor, ExecutorError};
-    use aura_core::{ActionId, ActionKind, AgentId};
     use async_trait::async_trait;
+    use aura_core::{ActionId, ActionKind, AgentId};
 
     /// Test executor that always claims to handle the action.
     struct AlwaysMatch {
