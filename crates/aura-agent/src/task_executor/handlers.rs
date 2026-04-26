@@ -286,6 +286,20 @@ impl TaskToolExecutor {
 
     /// Run the full project test suite and translate the outcome into a
     /// [`TestGateOutcome`] for `handle_task_done`.
+    ///
+    /// The command actually executed is resolved at gate time, in priority
+    /// order:
+    ///   1. [`Self::test_command_override`] — operator-supplied via
+    ///      [`TEST_COMMAND_OVERRIDE_ENV`] at executor construction.
+    ///   2. [`Self::test_command`] — per-project configuration.
+    ///   3. [`infer_default_test_command`] — manifest-driven auto-detect
+    ///      (cargo, npm/pnpm/yarn/bun, deno, pytest, go, rspec/rake,
+    ///      maven, gradle, dotnet — chained with `&&` for polyglot
+    ///      monorepos).
+    ///
+    /// When all three return nothing the gate skips with a warning; this
+    /// is intentional so analysis-only or doc-only projects don't get
+    /// permanently jammed by the DoD requirement.
     pub(super) async fn check_all_tests_pass(&self) -> TestGateOutcome {
         if self.disable_test_gate {
             tracing::warn!(
@@ -295,21 +309,21 @@ impl TaskToolExecutor {
         }
 
         let project_root = Path::new(&self.project_folder);
-        let cmd = self
-            .test_command
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from)
-            .or_else(|| infer_default_test_command(project_root));
-        let Some(cmd) = cmd else {
-            tracing::warn!(
-                project = %self.project_folder,
-                "no test_command configured and no default could be inferred — skipping task_done test gate"
-            );
-            return TestGateOutcome::Skipped;
+        let (cmd, source) = match self.resolve_test_command(project_root) {
+            Some(resolved) => resolved,
+            None => {
+                tracing::warn!(
+                    project = %self.project_folder,
+                    "no test_command configured (no override, no project value, no inferable default) \
+                     — skipping task_done test gate"
+                );
+                return TestGateOutcome::Skipped;
+            }
         };
 
-        self.emit_text(format!("\n[task_done test gate: {cmd}]\n"));
+        self.emit_text(format!(
+            "\n[task_done test gate: {cmd} (source: {source})]\n"
+        ));
 
         let outcome = match self.test_runner.run_tests(project_root, &cmd).await {
             Ok(outcome) => outcome,
@@ -396,6 +410,39 @@ impl TaskToolExecutor {
         }
 
         TestGateOutcome::Failed { prompt }
+    }
+
+    /// Resolve which test command the gate should run, returning the
+    /// command string and a short label describing where it came from
+    /// (rendered in the gate's status line so logs make the resolution
+    /// transparent to the operator).
+    ///
+    /// Splitting this out from [`Self::check_all_tests_pass`] keeps the
+    /// priority logic in one place and lets unit tests assert it without
+    /// invoking the runner.
+    pub(super) fn resolve_test_command(
+        &self,
+        project_root: &Path,
+    ) -> Option<(String, &'static str)> {
+        if let Some(cmd) = self
+            .test_command_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some((cmd.to_string(), "env override"));
+        }
+
+        if let Some(cmd) = self
+            .test_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some((cmd.to_string(), "project config"));
+        }
+
+        infer_default_test_command(project_root).map(|cmd| (cmd, "manifest auto-detect"))
     }
 
     async fn check_stubs_and_reject(&self) -> Option<String> {

@@ -87,6 +87,34 @@ fn agentic_prompt_no_longer_tells_agent_to_ignore_pre_existing_failures() {
     );
 }
 
+/// When the operator has set `AURA_DOD_TEST_COMMAND`, the prompt's
+/// rendered test command must match the override so the agent sees the
+/// exact command the gate is going to run. Otherwise the agent would
+/// keep mentally validating against the project default while the gate
+/// silently runs something else.
+///
+/// We mutate the global env in-test, which can race other tests reading
+/// the same var. Save/restore around the assertion keeps it isolated.
+#[test]
+fn agentic_prompt_uses_test_command_env_override_when_set() {
+    use crate::task_executor::TEST_COMMAND_OVERRIDE_ENV;
+    let prev = std::env::var(TEST_COMMAND_OVERRIDE_ENV).ok();
+
+    std::env::set_var(TEST_COMMAND_OVERRIDE_ENV, "pytest -q -k smoke");
+
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+    assert!(
+        prompt.contains("pytest -q -k smoke"),
+        "env override must surface in the prompt"
+    );
+
+    match prev {
+        Some(v) => std::env::set_var(TEST_COMMAND_OVERRIDE_ENV, v),
+        None => std::env::remove_var(TEST_COMMAND_OVERRIDE_ENV),
+    }
+}
+
 #[test]
 fn chat_system_prompt_uses_base_when_custom_empty() {
     let project = test_project("/nonexistent/path");

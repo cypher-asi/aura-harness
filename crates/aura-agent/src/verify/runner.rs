@@ -253,8 +253,18 @@ fn log_build_result(result: &BuildResult, build_command: &str) {
 
 /// Parse test runner output into individual test results and a summary line.
 ///
-/// Supports cargo test and Jest/npm test formats. Falls back to a single
-/// aggregate result derived from the exit code when the format is unrecognised.
+/// Recognises cargo test, Jest/Vitest/Mocha-style JS runners, pytest, Go
+/// `go test`, and RSpec. Each parser returns an empty vec when its format
+/// signature isn't present, so the chain falls through to the next one. If
+/// nothing matches, a single aggregate result is synthesised from the exit
+/// code so unparseable output still flows through the DoD test gate.
+///
+/// The DoD hard gate combines this parser with the runner's exit code: a
+/// suite is considered passing only when `success == true` AND no parsed
+/// failure is present. That means a runner whose output we don't recognise
+/// still gates correctly via its exit code, while runners we *do* recognise
+/// also surface failing test names back to the agent so it can fix the
+/// right thing.
 pub fn parse_test_output(
     stdout: &str,
     stderr: &str,
@@ -262,30 +272,17 @@ pub fn parse_test_output(
 ) -> (Vec<IndividualTestResult>, String) {
     let combined = format!("{stdout}\n{stderr}");
 
-    let cargo_results = parse_cargo_test(&combined);
-    if !cargo_results.is_empty() {
-        let passed = cargo_results
-            .iter()
-            .filter(|r| r.status == "passed")
-            .count();
-        let failed = cargo_results
-            .iter()
-            .filter(|r| r.status == "failed")
-            .count();
-        let ignored = cargo_results
-            .iter()
-            .filter(|r| r.status == "skipped")
-            .count();
-        let summary = format!("{passed} passed, {failed} failed, {ignored} ignored");
-        return (cargo_results, summary);
-    }
-
-    let jest_results = parse_jest_output(&combined);
-    if !jest_results.is_empty() {
-        let passed = jest_results.iter().filter(|r| r.status == "passed").count();
-        let failed = jest_results.iter().filter(|r| r.status == "failed").count();
-        let summary = format!("{passed} passed, {failed} failed");
-        return (jest_results, summary);
+    for parser in [
+        parse_cargo_test as fn(&str) -> Vec<IndividualTestResult>,
+        parse_jest_output,
+        parse_pytest_output,
+        parse_go_test_output,
+        parse_rspec_output,
+    ] {
+        let results = parser(&combined);
+        if !results.is_empty() {
+            return (results.clone(), tally_summary(&results));
+        }
     }
 
     let status = if success { "passed" } else { "failed" };
@@ -304,6 +301,17 @@ pub fn parse_test_output(
         },
     };
     (vec![result], summary)
+}
+
+fn tally_summary(results: &[IndividualTestResult]) -> String {
+    let passed = results.iter().filter(|r| r.status == "passed").count();
+    let failed = results.iter().filter(|r| r.status == "failed").count();
+    let skipped = results.iter().filter(|r| r.status == "skipped").count();
+    if skipped > 0 {
+        format!("{passed} passed, {failed} failed, {skipped} skipped")
+    } else {
+        format!("{passed} passed, {failed} failed")
+    }
 }
 
 fn parse_cargo_test(output: &str) -> Vec<IndividualTestResult> {
@@ -374,6 +382,274 @@ fn parse_jest_output(output: &str) -> Vec<IndividualTestResult> {
     results
 }
 
+/// Parse pytest output. Pytest emits two relevant formats:
+///
+/// * Verbose live output (`pytest -v`):
+///   `tests/foo.py::test_x PASSED                          [ 25%]`
+///   — the test ID is *first*, the status word is in the middle.
+/// * Short-form summary block (`pytest -q` and the trailing summary
+///   of any verbose run):
+///   `FAILED tests/foo.py::test_x - AssertionError: ...`
+///   — the status word is *first*, the test ID follows.
+///
+/// We try both shapes per line and dedupe by test ID so a verbose run
+/// that emits the same failure in both the live log and the summary
+/// block still counts as one failure. Lines that don't contain a
+/// `pytest::node` style ID are ignored to avoid grabbing unrelated
+/// `FAILED to load shared lib` chatter from build noise.
+fn parse_pytest_output(output: &str) -> Vec<IndividualTestResult> {
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let Some((status, name)) = parse_pytest_line(trimmed) else {
+            continue;
+        };
+        if !looks_like_pytest_node(&name) {
+            continue;
+        }
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        results.push(IndividualTestResult {
+            name,
+            status: status.to_string(),
+            message: None,
+        });
+    }
+
+    results
+}
+
+fn parse_pytest_line(line: &str) -> Option<(&'static str, String)> {
+    // Shape 1: status keyword at the start. Used in pytest's tail
+    // summary block and by `pytest -rf` style flag rendering.
+    if let Some((status, rest)) = strip_pytest_status_prefix(line) {
+        let name = rest.split(" - ").next().unwrap_or(rest).trim().to_string();
+        if !name.is_empty() {
+            return Some((status, name));
+        }
+    }
+
+    // Shape 2: status keyword at the end of the line (possibly
+    // followed by `[ NN% ]`). Used by `pytest -v`.
+    if let Some((status, name)) = strip_pytest_status_suffix(line) {
+        return Some((status, name));
+    }
+
+    None
+}
+
+fn strip_pytest_status_prefix(line: &str) -> Option<(&'static str, &str)> {
+    for (kw, status) in PYTEST_KEYWORDS {
+        if let Some(rest) = line.strip_prefix(kw).and_then(|r| r.strip_prefix(' ')) {
+            return Some((status, rest));
+        }
+    }
+    None
+}
+
+fn strip_pytest_status_suffix(line: &str) -> Option<(&'static str, String)> {
+    // Drop the trailing percent indicator if present: `... PASSED [ 25%]`.
+    let body = if let Some(idx) = line.rfind('[') {
+        let trailing = line[idx..].trim();
+        if trailing.ends_with("%]") {
+            line[..idx].trim_end()
+        } else {
+            line
+        }
+    } else {
+        line
+    };
+
+    for (kw, status) in PYTEST_KEYWORDS {
+        if let Some(prefix) = body.strip_suffix(kw) {
+            if prefix.ends_with(char::is_whitespace) {
+                let name = prefix.trim().to_string();
+                if !name.is_empty() {
+                    return Some((status, name));
+                }
+            }
+        }
+    }
+    None
+}
+
+const PYTEST_KEYWORDS: &[(&str, &str)] = &[
+    ("PASSED", "passed"),
+    ("FAILED", "failed"),
+    ("SKIPPED", "skipped"),
+    ("ERROR", "failed"),
+    ("XFAIL", "skipped"),
+    ("XPASS", "passed"),
+];
+
+/// Pytest test IDs always contain `::` (e.g. `tests/foo.py::test_x` or
+/// `tests/foo.py::Class::test_x`). Filter on this so we don't snag
+/// unrelated `FAILED ...` lines from non-pytest log output.
+fn looks_like_pytest_node(name: &str) -> bool {
+    name.contains("::")
+}
+
+/// Parse `go test` output. Recognises the `--- PASS:`, `--- FAIL:`,
+/// `--- SKIP:` summary lines emitted by the standard testing package, plus
+/// the per-package `FAIL\tpkg/...` lines that surface when a package fails
+/// to build before any test runs.
+fn parse_go_test_output(output: &str) -> Vec<IndividualTestResult> {
+    const GO_PREFIXES: &[(&str, &str)] = &[
+        ("--- PASS: ", "passed"),
+        ("--- FAIL: ", "failed"),
+        ("--- SKIP: ", "skipped"),
+    ];
+
+    let mut results = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        let parsed = GO_PREFIXES
+            .iter()
+            .find_map(|(prefix, status)| trimmed.strip_prefix(prefix).map(|rest| (*status, rest)));
+
+        if let Some((status, rest)) = parsed {
+            // `--- FAIL: TestName (0.12s)` → keep just `TestName`.
+            let name = rest.split_whitespace().next().unwrap_or("").to_string();
+            if !name.is_empty() {
+                results.push(IndividualTestResult {
+                    name,
+                    status: status.to_string(),
+                    message: None,
+                });
+            }
+            continue;
+        }
+
+        // Build-time / package-level failures look like:
+        //   `FAIL\tgithub.com/example/pkg [build failed]`
+        // No individual test names available, but we still want the run
+        // to register as failing.
+        if let Some(rest) = trimmed.strip_prefix("FAIL\t") {
+            let name = rest.split_whitespace().next().unwrap_or(rest);
+            if !name.is_empty() {
+                results.push(IndividualTestResult {
+                    name: format!("{name} (package)"),
+                    status: "failed".to_string(),
+                    message: None,
+                });
+            }
+        }
+    }
+    results
+}
+
+/// Parse RSpec's progress output. Looks for the failure summary block
+/// (`Failures:` followed by `1) <full description>`) and counts examples
+/// from the trailing `N examples, M failures, K pending` line.
+fn parse_rspec_output(output: &str) -> Vec<IndividualTestResult> {
+    let mut results = Vec::new();
+    let mut in_failures_block = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "Failures:" {
+            in_failures_block = true;
+            continue;
+        }
+        if in_failures_block {
+            if let Some(rest) = trimmed
+                .strip_prefix(|c: char| c.is_ascii_digit())
+                .and_then(|r| r.strip_prefix(')'))
+            {
+                let name = rest.trim().to_string();
+                if !name.is_empty() {
+                    results.push(IndividualTestResult {
+                        name,
+                        status: "failed".to_string(),
+                        message: None,
+                    });
+                }
+            }
+            // The failures block ends when we hit a line starting with a
+            // summary marker (`Finished in`, `N examples`, etc.).
+            if trimmed.starts_with("Finished in") || trimmed.contains(" examples,") {
+                in_failures_block = false;
+            }
+        }
+    }
+
+    // Synthesise pass entries from the summary line so a green RSpec run
+    // also produces a non-empty parse result. Without this, an all-green
+    // RSpec invocation would fall through to the aggregate-only branch.
+    if let Some(stats) = rspec_summary_counts(output) {
+        let already_failed = results.len();
+        let passes = stats.examples.saturating_sub(stats.failures + stats.pending);
+        for i in 0..passes {
+            results.push(IndividualTestResult {
+                name: format!("(rspec example #{idx})", idx = i + 1),
+                status: "passed".to_string(),
+                message: None,
+            });
+        }
+        for i in 0..stats.pending {
+            results.push(IndividualTestResult {
+                name: format!("(rspec pending #{idx})", idx = i + 1),
+                status: "skipped".to_string(),
+                message: None,
+            });
+        }
+        // Reconcile: if the summary reports more failures than the named
+        // ones we captured, top up with anonymous entries so the gate
+        // surfaces the right *count* even when failure descriptions
+        // weren't parseable.
+        let extra_fail = stats.failures.saturating_sub(already_failed);
+        for i in 0..extra_fail {
+            results.push(IndividualTestResult {
+                name: format!("(rspec failure #{idx})", idx = already_failed + i + 1),
+                status: "failed".to_string(),
+                message: None,
+            });
+        }
+    }
+
+    results
+}
+
+#[derive(Default)]
+struct RspecStats {
+    examples: usize,
+    failures: usize,
+    pending: usize,
+}
+
+fn rspec_summary_counts(output: &str) -> Option<RspecStats> {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        // Looking for: `12 examples, 3 failures, 1 pending` (pending is
+        // optional). Be lenient on whitespace.
+        if !trimmed.contains(" examples,") {
+            continue;
+        }
+        let mut stats = RspecStats::default();
+        for chunk in trimmed.split(',') {
+            let chunk = chunk.trim();
+            let mut parts = chunk.split_whitespace();
+            let Some(num) = parts.next().and_then(|s| s.parse::<usize>().ok()) else {
+                continue;
+            };
+            match parts.next() {
+                Some("examples") | Some("example") => stats.examples = num,
+                Some("failures") | Some("failure") => stats.failures = num,
+                Some("pending") => stats.pending = num,
+                _ => {}
+            }
+        }
+        if stats.examples > 0 || stats.failures > 0 {
+            return Some(stats);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,7 +669,7 @@ test utils::tests::test_skip ... ignored
         assert_eq!(results[2].status, "skipped");
         assert!(summary.contains("1 passed"));
         assert!(summary.contains("1 failed"));
-        assert!(summary.contains("1 ignored"));
+        assert!(summary.contains("1 skipped"));
     }
 
     #[test]
@@ -453,5 +729,125 @@ PASS src/hooks.test.ts
     #[test]
     fn needs_shell_simple_command() {
         assert!(!needs_shell("cargo build --release"));
+    }
+
+    #[test]
+    fn parse_pytest_output_short_form() {
+        let stdout = "\
+============================= test session starts ==============================
+collected 4 items
+
+tests/test_a.py::test_one PASSED
+tests/test_a.py::test_two FAILED
+tests/test_b.py::TestX::test_three PASSED
+tests/test_c.py::test_four SKIPPED
+
+=========================== short test summary info ============================
+FAILED tests/test_a.py::test_two - AssertionError: expected 1 got 2
+==================== 2 passed, 1 failed, 1 skipped in 0.12s ====================
+";
+        let (results, summary) = parse_test_output(stdout, "", false);
+        let failed: Vec<_> = results.iter().filter(|r| r.status == "failed").collect();
+        let passed: Vec<_> = results.iter().filter(|r| r.status == "passed").collect();
+        let skipped: Vec<_> = results.iter().filter(|r| r.status == "skipped").collect();
+        assert_eq!(passed.len(), 2);
+        assert_eq!(failed.len(), 1, "summary block must not double-count");
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(failed[0].name, "tests/test_a.py::test_two");
+        assert!(summary.contains("1 failed"));
+    }
+
+    #[test]
+    fn parse_go_test_output_pass_fail_skip() {
+        let stdout = "\
+=== RUN   TestAlpha
+--- PASS: TestAlpha (0.01s)
+=== RUN   TestBeta
+--- FAIL: TestBeta (0.02s)
+    foo_test.go:42: expected 5, got 4
+=== RUN   TestGamma
+--- SKIP: TestGamma (0.00s)
+FAIL\tgithub.com/example/broken [build failed]
+ok  \tgithub.com/example/ok\t0.123s
+";
+        let (results, summary) = parse_test_output(stdout, "", false);
+        let names_failed: Vec<_> = results
+            .iter()
+            .filter(|r| r.status == "failed")
+            .map(|r| r.name.clone())
+            .collect();
+        assert!(names_failed.iter().any(|n| n == "TestBeta"));
+        assert!(
+            names_failed
+                .iter()
+                .any(|n| n.contains("github.com/example/broken")),
+            "package-level FAIL line should be captured: got {names_failed:?}"
+        );
+        assert!(results.iter().any(|r| r.name == "TestAlpha" && r.status == "passed"));
+        assert!(results.iter().any(|r| r.name == "TestGamma" && r.status == "skipped"));
+        assert!(summary.contains("failed"));
+    }
+
+    #[test]
+    fn parse_rspec_output_with_failures() {
+        let stdout = "\
+Failures:
+
+  1) UserModel#full_name returns first and last name
+     Failure/Error: expect(user.full_name).to eq('Jane Doe')
+
+  2) UserModel#email validates format
+     Failure/Error: expect(user.errors).to be_empty
+
+Finished in 0.234 seconds
+12 examples, 2 failures, 1 pending
+";
+        let (results, summary) = parse_test_output(stdout, "", false);
+        let failed: Vec<_> = results.iter().filter(|r| r.status == "failed").collect();
+        let passed: Vec<_> = results.iter().filter(|r| r.status == "passed").collect();
+        let skipped: Vec<_> = results.iter().filter(|r| r.status == "skipped").collect();
+        assert_eq!(failed.len(), 2);
+        assert_eq!(passed.len(), 12 - 2 - 1, "passes derived from summary line");
+        assert_eq!(skipped.len(), 1);
+        assert!(summary.contains("2 failed"));
+    }
+
+    #[test]
+    fn parse_rspec_output_all_green() {
+        let stdout = "\
+Finished in 0.05 seconds
+4 examples, 0 failures
+";
+        let (results, summary) = parse_test_output(stdout, "", true);
+        assert_eq!(results.len(), 4);
+        assert!(results.iter().all(|r| r.status == "passed"));
+        assert!(summary.contains("4 passed"));
+    }
+
+    #[test]
+    fn parse_unknown_format_falls_back_to_exit_code() {
+        let (results, _summary) = parse_test_output(
+            "running tests with custom-runner v0.3 ...\nall green\n",
+            "",
+            true,
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "(aggregate)");
+        assert_eq!(results[0].status, "passed");
+
+        let (results, _summary) =
+            parse_test_output("custom-runner: failure!", "trace...", false);
+        assert_eq!(results[0].status, "failed");
+    }
+
+    #[test]
+    fn parse_pytest_does_not_eat_unrelated_failed_lines() {
+        let stdout = "\
+some build noise about FAILED to load shared lib
+no test markers here
+";
+        let (results, _summary) = parse_test_output(stdout, "", true);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "(aggregate)");
     }
 }

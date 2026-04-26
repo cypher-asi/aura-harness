@@ -16,15 +16,19 @@ impl AgentToolExecutor for NoOpInner {
     }
 }
 
-/// Test [`TaskTestRunner`] that returns a queue of pre-canned outcomes.
+/// Test [`TaskTestRunner`] that returns a queue of pre-canned outcomes and
+/// records every command it was invoked with.
 ///
 /// Each call pops the next outcome; the queue is intentionally finite so a
 /// runaway gate-loop in tests fails loudly with a panic instead of silently
-/// reusing the last outcome.
+/// reusing the last outcome. The `commands` log lets tests assert the gate
+/// resolved the right test command (project config vs env override vs
+/// inferred default).
 #[derive(Debug, Default)]
 struct MockTestRunner {
     queue: Mutex<Vec<anyhow::Result<TestSuiteOutcome>>>,
     calls: Mutex<u32>,
+    commands: Mutex<Vec<String>>,
 }
 
 impl MockTestRunner {
@@ -40,6 +44,7 @@ impl MockTestRunner {
         Self {
             queue: Mutex::new(q),
             calls: Mutex::new(0),
+            commands: Mutex::new(Vec::new()),
         }
     }
 
@@ -57,6 +62,7 @@ impl MockTestRunner {
         Self {
             queue: Mutex::new(q),
             calls: Mutex::new(0),
+            commands: Mutex::new(Vec::new()),
         }
     }
 }
@@ -66,9 +72,10 @@ impl TaskTestRunner for MockTestRunner {
     async fn run_tests(
         &self,
         _project_root: &std::path::Path,
-        _command: &str,
+        command: &str,
     ) -> anyhow::Result<TestSuiteOutcome> {
         *self.calls.lock().await += 1;
+        self.commands.lock().await.push(command.to_string());
         let mut q = self.queue.lock().await;
         if q.is_empty() {
             anyhow::bail!("MockTestRunner queue exhausted");
@@ -83,6 +90,7 @@ fn make_executor_with_runner(runner: Arc<dyn TaskTestRunner>) -> TaskToolExecuto
         project_folder: "/tmp/test".to_string(),
         build_command: None,
         test_command: Some("cargo test --workspace".to_string()),
+        test_command_override: None,
         task_context: String::new(),
         tracked_file_ops: Default::default(),
         notes: Default::default(),
@@ -414,6 +422,7 @@ async fn submit_plan_resets_outcome_window() {
         project_folder: "/tmp/test".to_string(),
         build_command: None,
         test_command: Some("cargo test --workspace".to_string()),
+        test_command_override: None,
         task_context: String::new(),
         tracked_file_ops: Default::default(),
         notes: Default::default(),
@@ -599,6 +608,7 @@ async fn task_done_test_gate_skipped_when_no_command_or_default() {
         project_folder: "/this/path/definitely/does/not/exist".to_string(),
         build_command: None,
         test_command: None,
+        test_command_override: None,
         task_context: String::new(),
         tracked_file_ops: Default::default(),
         notes: Default::default(),
@@ -668,4 +678,109 @@ fn read_disable_test_gate_env_only_matches_one() {
         Some(v) => std::env::set_var(DISABLE_TEST_GATE_ENV, v),
         None => std::env::remove_var(DISABLE_TEST_GATE_ENV),
     }
+}
+
+#[test]
+fn read_test_command_override_env_treats_blank_as_unset() {
+    // Same defence-in-depth idea as for the disable flag: an operator
+    // exporting `AURA_DOD_TEST_COMMAND=` to "clear" the override must
+    // not get an empty string handed back as if it were a real command.
+    let prev = std::env::var(TEST_COMMAND_OVERRIDE_ENV).ok();
+
+    std::env::set_var(TEST_COMMAND_OVERRIDE_ENV, "  cargo test --workspace  ");
+    assert_eq!(
+        super::read_test_command_override_env(),
+        Some("cargo test --workspace".to_string()),
+        "non-empty value with surrounding whitespace must be trimmed"
+    );
+
+    std::env::set_var(TEST_COMMAND_OVERRIDE_ENV, "");
+    assert_eq!(
+        super::read_test_command_override_env(),
+        None,
+        "empty string must read as unset"
+    );
+
+    std::env::set_var(TEST_COMMAND_OVERRIDE_ENV, "   ");
+    assert_eq!(
+        super::read_test_command_override_env(),
+        None,
+        "whitespace-only must read as unset"
+    );
+
+    match prev {
+        Some(v) => std::env::set_var(TEST_COMMAND_OVERRIDE_ENV, v),
+        None => std::env::remove_var(TEST_COMMAND_OVERRIDE_ENV),
+    }
+}
+
+#[tokio::test]
+async fn resolve_test_command_prefers_env_override_over_project_config() {
+    // The override field is captured at construction time, so this
+    // test doesn't touch the global env — it exercises the resolution
+    // priority directly. The env reader itself is covered above.
+    let mut executor = make_executor();
+    executor.test_command = Some("cargo test --workspace".to_string());
+    executor.test_command_override = Some("pytest -q tests/smoke/".to_string());
+
+    let (cmd, source) = executor
+        .resolve_test_command(std::path::Path::new("/tmp/test"))
+        .expect("override should resolve");
+    assert_eq!(cmd, "pytest -q tests/smoke/");
+    assert_eq!(source, "env override");
+}
+
+#[tokio::test]
+async fn resolve_test_command_falls_back_to_project_config_when_no_override() {
+    let mut executor = make_executor();
+    executor.test_command = Some("npm test --silent".to_string());
+    executor.test_command_override = None;
+
+    let (cmd, source) = executor
+        .resolve_test_command(std::path::Path::new("/tmp/test"))
+        .expect("project config should resolve");
+    assert_eq!(cmd, "npm test --silent");
+    assert_eq!(source, "project config");
+}
+
+#[tokio::test]
+async fn resolve_test_command_falls_back_to_inferred_default() {
+    // Build a real on-disk Cargo project so the auto-detect path has
+    // something to match. Using a temp dir keeps the test hermetic.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+
+    let mut executor = make_executor();
+    executor.test_command = None;
+    executor.test_command_override = None;
+
+    let (cmd, source) = executor
+        .resolve_test_command(dir.path())
+        .expect("auto-detect should resolve from Cargo.toml");
+    assert!(cmd.starts_with("cargo test"), "got {cmd}");
+    assert_eq!(source, "manifest auto-detect");
+}
+
+#[tokio::test]
+async fn task_done_gate_uses_env_override_command() {
+    // End-to-end: when the override is set, the gate must hand THAT
+    // command to the runner, not the project's configured one. This
+    // is the contract operators rely on to redirect the gate without
+    // editing the project record.
+    let runner = Arc::new(MockTestRunner::always_pass());
+    let mut executor = make_executor_with_runner(runner.clone());
+    executor.test_command = Some("cargo test --workspace".to_string());
+    executor.test_command_override = Some("custom-runner --smoke".to_string());
+    seed_with_file_op(&executor).await;
+
+    let results = executor.execute(&[task_done_call("done")]).await;
+    assert!(!results[0].is_error, "{}", results[0].content);
+    assert!(results[0].stop_loop);
+
+    let cmds = runner.commands.lock().await;
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(
+        cmds[0], "custom-runner --smoke",
+        "gate must run the override, not the project config"
+    );
 }

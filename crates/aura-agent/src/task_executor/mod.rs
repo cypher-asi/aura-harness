@@ -49,12 +49,41 @@ pub const MAX_TASK_DONE_TEST_RETRIES: u32 = 8;
 /// default can be inferred from the project manifest.
 pub const DISABLE_TEST_GATE_ENV: &str = "AURA_DOD_DISABLE_TEST_GATE";
 
+/// Environment variable that overrides the project-configured test command
+/// for the `task_done` hard gate. Useful when an operator wants to point the
+/// gate at a different test runner than the project default — e.g. running
+/// `pytest -q -k smoke` inside a debugging session, or chaining
+/// `cargo test --workspace && npm test --silent` for a polyglot repo —
+/// without editing the project record. Empty string is treated as unset so
+/// callers can clear the override per-shell.
+///
+/// Resolution order at gate time, highest precedence first:
+///   1. `AURA_DOD_TEST_COMMAND` (this env var, captured at executor construction)
+///   2. `Project.test_command` (per-project config)
+///   3. `infer_default_test_command(project_root)` (manifest auto-detect)
+pub const TEST_COMMAND_OVERRIDE_ENV: &str = "AURA_DOD_TEST_COMMAND";
+
 /// Read the [`DISABLE_TEST_GATE_ENV`] env var at construction time. Returns
 /// `true` only when explicitly set to `"1"`. Captured once per executor so
 /// concurrent tests that mutate the global env cannot race the gate.
 #[must_use]
 pub fn read_disable_test_gate_env() -> bool {
     std::env::var(DISABLE_TEST_GATE_ENV).ok().as_deref() == Some("1")
+}
+
+/// Read the [`TEST_COMMAND_OVERRIDE_ENV`] env var at construction time.
+/// Returns the override string when present and non-empty, otherwise `None`.
+/// Captured once per executor so concurrent tests that mutate the global env
+/// cannot race the gate.
+#[must_use]
+pub fn read_test_command_override_env() -> Option<String> {
+    let raw = std::env::var(TEST_COMMAND_OVERRIDE_ENV).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Pluggable test runner used by the `task_done` hard gate.
@@ -109,6 +138,12 @@ pub struct TaskToolExecutor {
     /// tries to infer one from the project manifest and otherwise no-ops with
     /// a warning. Configured per project via `Project.test_command`.
     pub test_command: Option<String>,
+    /// Operator override for the project test command, captured at executor
+    /// construction from [`TEST_COMMAND_OVERRIDE_ENV`]. When `Some`, this
+    /// wins over [`Self::test_command`] and any inferred default. Captured
+    /// once so concurrent tests that mutate the global env don't race the
+    /// gate.
+    pub test_command_override: Option<String>,
     /// Pre-built task context for `get_task_context` handler.
     pub task_context: String,
     /// Tracked file operations for stub detection.

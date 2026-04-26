@@ -275,6 +275,7 @@ impl AgentRunner {
             project_folder: tracking.project_folder,
             build_command: tracking.build_command,
             test_command: tracking.test_command,
+            test_command_override: crate::task_executor::read_test_command_override_env(),
             task_context: String::new(),
             tracked_file_ops: Arc::default(),
             notes: Arc::default(),

@@ -130,7 +130,19 @@ pub fn agentic_execution_system_prompt(
     exploration_allowance: usize,
 ) -> String {
     let build_cmd = project.build_command.unwrap_or("(not configured)");
-    let test_cmd = project.test_command.unwrap_or("(not configured)");
+    // Prefer the operator's env override so the prompt shows the agent the
+    // exact command the DoD gate will actually run. This keeps the agent's
+    // mental model in sync with the gate when an operator has redirected
+    // it (e.g. `AURA_DOD_TEST_COMMAND="pytest -q -k smoke"`). When no
+    // override is set, fall back to the project config or the placeholder.
+    let resolved_test_cmd = std::env::var(crate::task_executor::TEST_COMMAND_OVERRIDE_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let test_cmd = resolved_test_cmd
+        .as_deref()
+        .or(project.test_command)
+        .unwrap_or("(not configured)");
 
     let preamble = build_agent_preamble(agent);
     let platform_info = platform_info_string();
