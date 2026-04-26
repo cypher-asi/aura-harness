@@ -71,9 +71,10 @@ pub struct NodeConfig {
     /// change to the project's SSE stream, and attaching JWT billing
     /// headers on the outbound storage call.
     ///
-    /// Populated from `AURA_OS_SERVER_URL`. When `None` the harness
-    /// falls back to [`Self::aura_storage_url`] for those routes, which
-    /// preserves the pre-`aura-os-server` behavior. Opt-in / additive.
+    /// Populated from `AURA_OS_SERVER_URL` (or the legacy
+    /// `AURA_SERVER_BASE_URL`). When `None` the harness falls back to
+    /// [`Self::aura_storage_url`] for those routes, which preserves the
+    /// pre-`aura-os-server` behavior. Opt-in / additive.
     pub aura_os_server_url: Option<String>,
     /// Shared-secret bearer token required by every protected route.
     ///
@@ -188,7 +189,9 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
             config.aura_network_url = val;
         }
-        if let Ok(val) = std::env::var("AURA_OS_SERVER_URL") {
+        if let Ok(val) =
+            std::env::var("AURA_OS_SERVER_URL").or_else(|_| std::env::var("AURA_SERVER_BASE_URL"))
+        {
             let trimmed = val.trim();
             if !trimmed.is_empty() {
                 config.aura_os_server_url = Some(trimmed.to_string());

@@ -28,7 +28,7 @@
 use crate::catalog::ToolCatalog;
 use crate::catalog::ToolProfile;
 use crate::domain_tools::DomainToolExecutor;
-use crate::tool::{SubagentDispatchHook, Tool};
+use crate::tool::{AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool};
 use crate::ToolConfig;
 use crate::ToolExecutor;
 use async_trait::async_trait;
@@ -133,6 +133,20 @@ impl ToolResolver {
     #[must_use]
     pub fn with_spawn_hook(mut self, hook: Arc<dyn SpawnHook>) -> Self {
         self.inner = self.inner.with_spawn_hook(hook);
+        self
+    }
+
+    /// Attach cross-agent control wiring for `send_to_agent` and related tools.
+    #[must_use]
+    pub fn with_agent_control_hook(mut self, hook: Arc<dyn AgentControlHook>) -> Self {
+        self.inner = self.inner.with_agent_control_hook(hook);
+        self
+    }
+
+    /// Attach cross-agent read wiring for `get_agent_state`.
+    #[must_use]
+    pub fn with_agent_read_hook(mut self, hook: Arc<dyn AgentReadHook>) -> Self {
+        self.inner = self.inner.with_agent_read_hook(hook);
         self
     }
 

@@ -5,7 +5,7 @@
 //!
 //! Read logic is delegated to [`crate::AgentReadHook::snapshot`] when wired.
 
-use crate::agents::send_to_agent::{evaluate_read_gate, parse_agent_id};
+use crate::agents::send_to_agent::{evaluate_read_gate, missing_runtime_hook};
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
@@ -98,16 +98,17 @@ impl Tool for GetAgentStateTool {
             }
         };
 
-        if let Some(hook) = ctx.agent_read_hook.as_ref() {
-            let target = parse_agent_id(&input.agent_id, "get_agent_state")?;
-            match hook.snapshot(&target).await {
-                Ok(value) => outcome.snapshot = Some(value),
-                Err(err) => {
-                    return Ok(ToolResult::failure(
-                        GET_AGENT_STATE_TOOL_NAME,
-                        Bytes::from(format!("get_agent_state hook: {err}").into_bytes()),
-                    ));
-                }
+        let Some(hook) = ctx.agent_read_hook.as_ref() else {
+            return Ok(missing_runtime_hook(GET_AGENT_STATE_TOOL_NAME));
+        };
+
+        match hook.snapshot(&input.agent_id).await {
+            Ok(value) => outcome.snapshot = Some(value),
+            Err(err) => {
+                return Ok(ToolResult::failure(
+                    GET_AGENT_STATE_TOOL_NAME,
+                    Bytes::from(format!("get_agent_state hook: {err}").into_bytes()),
+                ));
             }
         }
 

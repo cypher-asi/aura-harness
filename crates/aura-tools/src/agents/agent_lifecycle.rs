@@ -7,11 +7,11 @@
 //! Runtime effect is delegated to
 //! [`crate::AgentControlHook::lifecycle`] when wired.
 
-use crate::agents::send_to_agent::{evaluate_control_gate, parse_agent_id};
+use crate::agents::send_to_agent::{evaluate_control_gate, missing_runtime_hook};
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{AgentId, Capability, ToolDefinition, ToolResult};
+use aura_core::{Capability, ToolDefinition, ToolResult};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -113,25 +113,26 @@ impl Tool for AgentLifecycleTool {
             }
         };
 
-        if let Some(hook) = ctx.agent_control_hook.as_ref() {
-            let target = parse_agent_id(&input.agent_id, "agent_lifecycle")?;
-            let parent = ctx.caller_agent_id.unwrap_or_else(AgentId::generate);
-            match hook
-                .lifecycle(
-                    &target,
-                    &parent,
-                    ctx.originating_user_id.as_deref(),
-                    &input.action,
-                )
-                .await
-            {
-                Ok(()) => outcome.applied = true,
-                Err(err) => {
-                    return Ok(ToolResult::failure(
-                        AGENT_LIFECYCLE_TOOL_NAME,
-                        Bytes::from(format!("agent_lifecycle hook: {err}").into_bytes()),
-                    ));
-                }
+        let Some(hook) = ctx.agent_control_hook.as_ref() else {
+            return Ok(missing_runtime_hook(AGENT_LIFECYCLE_TOOL_NAME));
+        };
+
+        let parent = ctx.caller_agent_id.map(|id| id.to_string());
+        match hook
+            .lifecycle(
+                &input.agent_id,
+                parent.as_deref(),
+                ctx.originating_user_id.as_deref(),
+                &input.action,
+            )
+            .await
+        {
+            Ok(()) => outcome.applied = true,
+            Err(err) => {
+                return Ok(ToolResult::failure(
+                    AGENT_LIFECYCLE_TOOL_NAME,
+                    Bytes::from(format!("agent_lifecycle hook: {err}").into_bytes()),
+                ));
             }
         }
 
@@ -148,7 +149,7 @@ mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
-    use aura_core::{AgentPermissions, AgentScope};
+    use aura_core::{AgentId, AgentPermissions, AgentScope};
 
     fn ctx(caller: AgentPermissions) -> ToolContext {
         let dir = std::env::temp_dir();

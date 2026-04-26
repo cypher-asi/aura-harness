@@ -9,11 +9,11 @@
 //! billing chain remains intact downstream (see
 //! `aura_kernel::billing::walk_parent_chain`).
 
-use crate::agents::send_to_agent::{evaluate_control_gate, parse_agent_id};
+use crate::agents::send_to_agent::{evaluate_control_gate, missing_runtime_hook};
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{AgentId, Capability, ToolDefinition, ToolResult};
+use aura_core::{Capability, ToolDefinition, ToolResult};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -107,26 +107,27 @@ impl Tool for DelegateTaskTool {
             }
         };
 
-        if let Some(hook) = ctx.agent_control_hook.as_ref() {
-            let target = parse_agent_id(&input.agent_id, "delegate_task")?;
-            let parent = ctx.caller_agent_id.unwrap_or_else(AgentId::generate);
-            match hook
-                .delegate_task(
-                    &target,
-                    &parent,
-                    ctx.originating_user_id.as_deref(),
-                    &input.task,
-                    input.context.as_ref(),
-                )
-                .await
-            {
-                Ok(()) => outcome.dispatched = true,
-                Err(err) => {
-                    return Ok(ToolResult::failure(
-                        DELEGATE_TASK_TOOL_NAME,
-                        Bytes::from(format!("delegate_task hook: {err}").into_bytes()),
-                    ));
-                }
+        let Some(hook) = ctx.agent_control_hook.as_ref() else {
+            return Ok(missing_runtime_hook(DELEGATE_TASK_TOOL_NAME));
+        };
+
+        let parent = ctx.caller_agent_id.map(|id| id.to_string());
+        match hook
+            .delegate_task(
+                &input.agent_id,
+                parent.as_deref(),
+                ctx.originating_user_id.as_deref(),
+                &input.task,
+                input.context.as_ref(),
+            )
+            .await
+        {
+            Ok(()) => outcome.dispatched = true,
+            Err(err) => {
+                return Ok(ToolResult::failure(
+                    DELEGATE_TASK_TOOL_NAME,
+                    Bytes::from(format!("delegate_task hook: {err}").into_bytes()),
+                ));
             }
         }
 
@@ -142,7 +143,7 @@ mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
-    use aura_core::{AgentPermissions, AgentScope};
+    use aura_core::{AgentId, AgentPermissions, AgentScope};
 
     fn ctx(caller: AgentPermissions) -> ToolContext {
         let dir = std::env::temp_dir();

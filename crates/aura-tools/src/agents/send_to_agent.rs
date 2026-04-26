@@ -12,7 +12,7 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{AgentId, Capability, ToolDefinition, ToolResult};
+use aura_core::{Capability, ToolDefinition, ToolResult};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -41,6 +41,13 @@ pub struct SendToAgentOutcome {
 }
 
 pub struct SendToAgentTool;
+
+pub(crate) fn missing_runtime_hook(tool_name: &str) -> ToolResult {
+    ToolResult::failure(
+        tool_name,
+        format!("{tool_name}: runtime hook not wired; configure AURA_OS_SERVER_URL on aura-node"),
+    )
+}
 
 impl SendToAgentTool {
     #[must_use]
@@ -109,26 +116,27 @@ impl Tool for SendToAgentTool {
             }
         };
 
-        if let Some(hook) = ctx.agent_control_hook.as_ref() {
-            let target = parse_agent_id(&input.agent_id, "send_to_agent")?;
-            let parent = ctx.caller_agent_id.unwrap_or_else(AgentId::generate);
-            match hook
-                .deliver_message(
-                    &target,
-                    &parent,
-                    ctx.originating_user_id.as_deref(),
-                    &input.content,
-                    input.attachments.clone(),
-                )
-                .await
-            {
-                Ok(()) => outcome.delivered = true,
-                Err(err) => {
-                    return Ok(ToolResult::failure(
-                        SEND_TO_AGENT_TOOL_NAME,
-                        Bytes::from(format!("send_to_agent hook: {err}").into_bytes()),
-                    ));
-                }
+        let Some(hook) = ctx.agent_control_hook.as_ref() else {
+            return Ok(missing_runtime_hook(SEND_TO_AGENT_TOOL_NAME));
+        };
+
+        let parent = ctx.caller_agent_id.map(|id| id.to_string());
+        match hook
+            .deliver_message(
+                &input.agent_id,
+                parent.as_deref(),
+                ctx.originating_user_id.as_deref(),
+                &input.content,
+                input.attachments.clone(),
+            )
+            .await
+        {
+            Ok(()) => outcome.delivered = true,
+            Err(err) => {
+                return Ok(ToolResult::failure(
+                    SEND_TO_AGENT_TOOL_NAME,
+                    Bytes::from(format!("send_to_agent hook: {err}").into_bytes()),
+                ));
             }
         }
 
@@ -188,18 +196,12 @@ fn evaluate_gate(
     Ok(())
 }
 
-pub(crate) fn parse_agent_id(s: &str, tool_name: &str) -> Result<AgentId, ToolError> {
-    AgentId::from_hex(s).map_err(|e| {
-        ToolError::InvalidArguments(format!("{tool_name}: invalid agent_id '{s}': {e}"))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
-    use aura_core::{AgentPermissions, AgentScope};
+    use aura_core::{AgentId, AgentPermissions, AgentScope};
 
     fn ctx(caller: AgentPermissions) -> ToolContext {
         let dir = std::env::temp_dir();

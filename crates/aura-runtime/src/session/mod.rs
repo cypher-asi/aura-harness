@@ -15,6 +15,7 @@
 //! - [`ws_handler`] — top-level WebSocket handler and turn orchestration.
 //! - [`tests`] — unit tests extracted alongside the state split.
 
+mod cross_agent_hook;
 mod generation;
 mod helpers;
 mod partial_json;
@@ -81,4 +82,6 @@ pub struct WsContext {
     pub(crate) skill_manager: Option<Arc<RwLock<SkillManager>>>,
     /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
     pub(crate) router_url: Option<String>,
+    /// aura-os-server base URL used by cross-agent callbacks.
+    pub(crate) aura_os_server_url: Option<String>,
 }

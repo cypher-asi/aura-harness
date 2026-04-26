@@ -45,9 +45,8 @@ pub struct ToolContext {
     pub spawn_hook: Option<Arc<dyn SpawnHook>>,
     /// Phase 5 part 2: optional cross-agent control hook used by
     /// `send_to_agent`, `agent_lifecycle`, and `delegate_task` to deliver
-    /// effects to the target agent's record log. `None` means the tool
-    /// short-circuits into a permission-checked outcome with no runtime
-    /// side-effect (the production wiring is a `TODO(phase5-runtime)`).
+    /// effects to the target agent. `None` means the tool fails closed after
+    /// the permission gate instead of reporting a fake no-op success.
     pub agent_control_hook: Option<Arc<dyn AgentControlHook>>,
     /// Phase 5 part 2: optional read hook used by `get_agent_state` to
     /// fetch a snapshot of a target agent's record log.
@@ -60,16 +59,13 @@ pub struct ToolContext {
 /// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
 /// tools to actually affect the target agent. Kept as a trait so the
 /// permission gate can be tested without wiring a real kernel writer.
-///
-/// Production wiring of this hook is deferred â€” see
-/// `TODO(phase5-runtime)` in `agents/` for the runtime effects.
 #[async_trait]
 pub trait AgentControlHook: Send + Sync {
     /// Deliver a user-message-shaped payload to `target`.
     async fn deliver_message(
         &self,
-        target: &AgentId,
-        parent: &AgentId,
+        target_agent_id: &str,
+        parent_agent_id: Option<&str>,
         originating_user_id: Option<&str>,
         content: &str,
         attachments: Option<serde_json::Value>,
@@ -78,8 +74,8 @@ pub trait AgentControlHook: Send + Sync {
     /// Apply a lifecycle transition to `target`.
     async fn lifecycle(
         &self,
-        target: &AgentId,
-        parent: &AgentId,
+        target_agent_id: &str,
+        parent_agent_id: Option<&str>,
         originating_user_id: Option<&str>,
         action: &str,
     ) -> Result<(), String>;
@@ -87,8 +83,8 @@ pub trait AgentControlHook: Send + Sync {
     /// Emit a Delegate-tagged task to `target`.
     async fn delegate_task(
         &self,
-        target: &AgentId,
-        parent: &AgentId,
+        target_agent_id: &str,
+        parent_agent_id: Option<&str>,
         originating_user_id: Option<&str>,
         task: &str,
         context: Option<&serde_json::Value>,
@@ -101,7 +97,7 @@ pub trait AgentControlHook: Send + Sync {
 pub trait AgentReadHook: Send + Sync {
     /// Return the latest `session_ready` / `assistant_message_end`
     /// snapshot for `target`, plus the agent's `Identity` + `permissions`.
-    async fn snapshot(&self, target: &AgentId) -> Result<serde_json::Value, String>;
+    async fn snapshot(&self, target_agent_id: &str) -> Result<serde_json::Value, String>;
 }
 
 /// Hook invoked by the `task` tool to run a foreground subagent.

@@ -15,6 +15,7 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_STORAGE_URL");
     std::env::remove_var("AURA_NETWORK_URL");
     std::env::remove_var("AURA_OS_SERVER_URL");
+    std::env::remove_var("AURA_SERVER_BASE_URL");
     std::env::remove_var("AURA_PROJECT_BASE");
     std::env::remove_var("AURA_NODE_AUTH_TOKEN");
     std::env::remove_var("AURA_NODE_REQUIRE_AUTH");
@@ -51,6 +52,21 @@ fn test_aura_os_server_url_env() {
     assert_eq!(
         config.aura_os_server_url.as_deref(),
         Some("https://os.example.com")
+    );
+
+    clear_node_env_vars();
+}
+
+#[test]
+fn test_aura_server_base_url_legacy_env() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    clear_node_env_vars();
+
+    std::env::set_var("AURA_SERVER_BASE_URL", "https://legacy-os.example.com");
+    let config = NodeConfig::from_env();
+    assert_eq!(
+        config.aura_os_server_url.as_deref(),
+        Some("https://legacy-os.example.com")
     );
 
     clear_node_env_vars();

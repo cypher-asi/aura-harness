@@ -618,6 +618,7 @@ mod tests {
             memory_manager: None,
             skill_manager: None,
             router_url: None,
+            aura_os_server_url: None,
         }
     }
 

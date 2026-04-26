@@ -10,6 +10,7 @@ use crate::protocol::{
     ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
 };
 use crate::runtime_capabilities;
+use crate::session::cross_agent_hook::AuraServerAgentHook;
 use crate::subagent_dispatch::RuntimeSubagentDispatch;
 use async_trait::async_trait;
 use aura_agent::{
@@ -338,7 +339,21 @@ pub(super) async fn build_kernel_with_config(
         .with_subagent_dispatch_hook(Arc::new(RuntimeSubagentDispatch::new(
             ctx.store.clone(),
             ctx.scheduler.clone(),
-        )))
+        )));
+    if let Some(base_url) = ctx
+        .aura_os_server_url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+    {
+        let hook = Arc::new(AuraServerAgentHook::new(
+            base_url.to_string(),
+            session.auth_token.clone(),
+        ));
+        resolver = resolver
+            .with_agent_control_hook(hook.clone())
+            .with_agent_read_hook(hook);
+    }
+    resolver = resolver
         .with_caller_permissions(session.agent_permissions.clone())
         .with_tool_permission_context(user_default, session.tool_permissions.clone())
         .with_originating_user_id(session.user_id.clone());
@@ -665,6 +680,7 @@ mod tests {
             memory_manager: None,
             skill_manager: None,
             router_url: None,
+            aura_os_server_url: None,
         }
     }
 
