@@ -17,16 +17,25 @@ pub fn fs_delete(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError>
         return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
     }
 
+    // Read pre-content for line counting before the file is gone.
+    // Best-effort: a non-UTF-8 binary file silently maps to 0 lines
+    // removed (the dashboard treats it as "unknown"), which is the
+    // honest signal — we'd rather under-report than fabricate a
+    // byte-count proxy that doesn't represent lines.
+    let lines_removed = fs::read_to_string(&resolved)
+        .ok()
+        .map_or(0, |content| super::diff::count_lines(&content));
+
     fs::remove_file(&resolved).map_err(|e| {
         ToolError::Io(std::io::Error::new(
             e.kind(),
             format!("remove_file({}): {e}", resolved.display()),
         ))
     })?;
-    Ok(ToolResult::success(
-        "delete_file",
-        format!("Deleted {path}"),
-    ))
+    Ok(
+        ToolResult::success("delete_file", format!("Deleted {path}"))
+            .with_line_diff(0, lines_removed),
+    )
 }
 
 /// `fs_delete` tool: delete a file.
@@ -108,5 +117,44 @@ mod tests {
 
         let result = fs_delete(&sandbox, "subdir");
         assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    }
+
+    // ====================================================================
+    // line_diff coverage — verifies fs_delete reports the deleted file's
+    // line count as lines_removed (lines_added always 0).
+    // ====================================================================
+
+    #[test]
+    fn fs_delete_reports_removed_line_count() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("five.txt"), "1\n2\n3\n4\n5\n").unwrap();
+        let result = fs_delete(&sandbox, "five.txt").unwrap();
+        let line_diff = result
+            .line_diff
+            .expect("delete should report a line diff with lines_removed");
+        assert_eq!(line_diff.lines_added, 0);
+        assert_eq!(line_diff.lines_removed, 5);
+    }
+
+    #[test]
+    fn fs_delete_empty_file_reports_zero_lines_removed() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("empty.txt"), "").unwrap();
+        let result = fs_delete(&sandbox, "empty.txt").unwrap();
+        let line_diff = result.line_diff.expect("delete always reports a diff");
+        assert_eq!(line_diff.lines_added, 0);
+        assert_eq!(line_diff.lines_removed, 0);
+    }
+
+    #[test]
+    fn fs_delete_non_utf8_file_reports_zero_rather_than_panic() {
+        let (sandbox, dir) = create_test_sandbox();
+        // Random binary bytes that are guaranteed invalid UTF-8.
+        fs::write(dir.path().join("bin"), [0xff_u8, 0xfe, 0xfd, 0x00, 0xff]).unwrap();
+        let result = fs_delete(&sandbox, "bin").unwrap();
+        let line_diff = result
+            .line_diff
+            .expect("delete still reports a diff for binary files");
+        assert_eq!(line_diff.lines_removed, 0);
     }
 }

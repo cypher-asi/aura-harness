@@ -130,6 +130,11 @@ pub struct DecodedToolResult {
     pub is_error: bool,
     /// Additional metadata from the tool result, if available.
     pub metadata: HashMap<String, String>,
+    /// Optional line diff for file-mutating tools (`fs_write` /
+    /// `fs_edit` / `fs_delete`). `None` when the tool didn't compute
+    /// counts (every other tool, plus tool failures); consumers must
+    /// not interpret `None` as "zero lines changed".
+    pub line_diff: Option<aura_core::LineDiff>,
 }
 
 /// Decode a tool execution [`Effect`] into text content, error status, and metadata.
@@ -156,6 +161,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
                     content,
                     is_error: !tool_result.ok,
                     metadata: tool_result.metadata,
+                    line_diff: tool_result.line_diff,
                 }
             }
             Err(e) => {
@@ -169,6 +175,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
                     content: format!("Tool result could not be parsed: {e}. Raw: {raw}"),
                     is_error: true,
                     metadata: HashMap::new(),
+                    line_diff: None,
                 }
             }
         }
@@ -188,6 +195,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
             content,
             is_error: true,
             metadata: HashMap::new(),
+            line_diff: None,
         }
     }
 }

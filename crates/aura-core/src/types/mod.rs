@@ -35,7 +35,7 @@ pub use tool::{
     installed_integrations_satisfy, integration_match, InstalledIntegrationDefinition,
     InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
     InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
-    InstalledToolRuntimeProviderExecution, RuntimeCapabilityInstall, ToolAuth, ToolCall,
+    InstalledToolRuntimeProviderExecution, LineDiff, RuntimeCapabilityInstall, ToolAuth, ToolCall,
     ToolCallContext, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
 };
 pub use tool_permissions::{

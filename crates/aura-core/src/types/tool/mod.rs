@@ -32,7 +32,7 @@ pub use installed::{
 #[allow(deprecated)]
 pub use proposal::ToolDecision;
 pub use proposal::{ToolGateVerdict, ToolProposal};
-pub use result::ToolResult;
+pub use result::{LineDiff, ToolResult};
 pub use runtime_capability::{
     installed_integrations_satisfy, integration_match, RuntimeCapabilityInstall,
 };

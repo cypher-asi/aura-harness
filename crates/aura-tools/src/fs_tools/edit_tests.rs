@@ -309,3 +309,61 @@ fn test_fs_edit_multiline_replacement_preserves_context() {
     assert!(updated.ends_with("footer\n"));
     assert!(updated.contains("fn new()"));
 }
+
+// ====================================================================
+// line_diff coverage — verifies fs_edit attaches line counts computed
+// over the *whole-file* pre/post pair (not just the substring args), so
+// the agent loop sees the same numbers a `git diff --numstat` would.
+// ====================================================================
+
+#[test]
+fn fs_edit_single_line_replacement_reports_one_in_one_out() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(
+        dir.path().join("lib.rs"),
+        "fn header() {}\nfn old() {}\nfn footer() {}\n",
+    )
+    .unwrap();
+
+    let result = fs_edit(&sandbox, "lib.rs", "fn old() {}", "fn new() {}", false).unwrap();
+    let line_diff = result.line_diff.expect("edit always reports a line diff");
+    assert_eq!(line_diff.lines_added, 1);
+    assert_eq!(line_diff.lines_removed, 1);
+}
+
+#[test]
+fn fs_edit_multi_line_expansion_reports_correct_diff() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(
+        dir.path().join("lib.rs"),
+        "header\nfn old() {\n    body();\n}\nfooter\n",
+    )
+    .unwrap();
+
+    // 3-line block -> 4-line block (added one line, replaced one).
+    let result = fs_edit(
+        &sandbox,
+        "lib.rs",
+        "fn old() {\n    body();\n}",
+        "fn new() {\n    new_body();\n    extra();\n}",
+        false,
+    )
+    .unwrap();
+    let line_diff = result.line_diff.expect("edit always reports a line diff");
+    // body() -> new_body() is one swap; extra() is a pure insert; the
+    // `fn old()` -> `fn new()` swap is another paired insert/delete.
+    assert_eq!(line_diff.lines_added, 3);
+    assert_eq!(line_diff.lines_removed, 2);
+}
+
+#[test]
+fn fs_edit_replace_all_reports_aggregated_diff() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(dir.path().join("lib.rs"), "x = 1\nx = 2\nx = 3\n").unwrap();
+
+    let result = fs_edit(&sandbox, "lib.rs", "x", "y", true).unwrap();
+    let line_diff = result.line_diff.expect("edit always reports a line diff");
+    // All three lines change: 3 inserts + 3 deletes.
+    assert_eq!(line_diff.lines_added, 3);
+    assert_eq!(line_diff.lines_removed, 3);
+}

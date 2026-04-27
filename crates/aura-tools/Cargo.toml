@@ -21,6 +21,7 @@ async-trait = { workspace = true }
 glob = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+similar = "2"
 toml = { workspace = true }
 walkdir = { workspace = true }
 which = { workspace = true }

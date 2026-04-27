@@ -243,7 +243,9 @@ pub(super) fn record_entry_for_tool_outcome(inputs: ToolOutcomeInputs<'_>) -> Pr
 
     if let Some((action, effect)) = executed {
         let had_failures = effect.status == EffectStatus::Failed;
-        let output_content = decode_tool_effect(&effect).content;
+        let decoded = decode_tool_effect(&effect);
+        let line_diff = decoded.line_diff;
+        let output_content = decoded.content;
 
         let mut decision = Decision::new();
         decision.accept(action.action_id);
@@ -263,6 +265,7 @@ pub(super) fn record_entry_for_tool_outcome(inputs: ToolOutcomeInputs<'_>) -> Pr
                 content: output_content,
                 is_error: had_failures,
                 approval_required: None,
+                line_diff,
             }),
             had_failures,
             runtime_capability_update: None,
@@ -315,6 +318,7 @@ pub(super) fn record_entry_for_tool_outcome(inputs: ToolOutcomeInputs<'_>) -> Pr
                 content: denial_reason,
                 is_error: true,
                 approval_required,
+                line_diff: None,
             }),
             had_failures: false,
             runtime_capability_update: None,
