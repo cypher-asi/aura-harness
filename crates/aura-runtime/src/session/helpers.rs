@@ -697,14 +697,20 @@ mod tests {
                 FileChange {
                     path: "src/new.rs".into(),
                     kind: FileChangeKind::Create,
+                    lines_added: 0,
+                    lines_removed: 0,
                 },
                 FileChange {
                     path: "src/lib.rs".into(),
                     kind: FileChangeKind::Modify,
+                    lines_added: 0,
+                    lines_removed: 0,
                 },
                 FileChange {
                     path: "src/old.rs".into(),
                     kind: FileChangeKind::Delete,
+                    lines_added: 0,
+                    lines_removed: 0,
                 },
             ],
             ..AgentLoopResult::default()

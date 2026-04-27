@@ -184,7 +184,36 @@ fn cached_tool_descriptor(input: &Value) -> String {
     }
 }
 
+/// Compute (`lines_added`, `lines_removed`) between two strings using a
+/// line-wise diff.
+///
+/// Returns `(added, removed)`. Both counts are clamped to `u32` —
+/// realistic file edits never approach 4B lines so saturating cast is
+/// safe; even pathological inputs are bounded by `usize::MAX` and we
+/// just lose precision past `u32::MAX` rather than panic.
+fn diff_line_counts(old_text: &str, new_text: &str) -> (u32, u32) {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old_text, new_text);
+    let mut added: u32 = 0;
+    let mut removed: u32 = 0;
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Insert => added = added.saturating_add(1),
+            ChangeTag::Delete => removed = removed.saturating_add(1),
+            ChangeTag::Equal => {}
+        }
+    }
+    (added, removed)
+}
+
 /// Infer file mutations for a successful write tool call.
+///
+/// `lines_added` / `lines_removed` are populated for `edit_file` (which
+/// carries both `old_text` and `new_text` in its input). For
+/// `write_file` and `delete_file` the counts stay at 0 because the
+/// pre-mutation file content is not available at this layer — by the
+/// time the tool result reaches us the write has already happened or
+/// the file is gone. Downstream consumers must treat 0 as "unknown".
 #[must_use]
 pub fn infer_file_changes(
     tool_name: &str,
@@ -214,9 +243,19 @@ pub fn infer_file_changes(
         _ => return Vec::new(),
     };
 
+    let (lines_added, lines_removed) = if tool_name == "edit_file" {
+        let old_text = input.get("old_text").and_then(|v| v.as_str()).unwrap_or("");
+        let new_text = input.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
+        diff_line_counts(old_text, new_text)
+    } else {
+        (0, 0)
+    };
+
     vec![FileChange {
         path: path.to_string(),
         kind,
+        lines_added,
+        lines_removed,
     }]
 }
 
@@ -415,5 +454,69 @@ mod tests {
         let changes = infer_file_changes("write_file", &input, None);
         assert_eq!(changes.len(), 1);
         assert!(matches!(changes[0].kind, FileChangeKind::Modify));
+    }
+
+    #[test]
+    fn diff_line_counts_pure_insert() {
+        let (added, removed) = diff_line_counts("a\nb\n", "a\nb\nc\nd\n");
+        assert_eq!(added, 2);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn diff_line_counts_pure_delete() {
+        let (added, removed) = diff_line_counts("a\nb\nc\nd\n", "a\nb\n");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn diff_line_counts_mixed_replace() {
+        // Replacing a single line counts as one insert + one delete.
+        let (added, removed) = diff_line_counts("a\nold\nc\n", "a\nnew\nc\n");
+        assert_eq!(added, 1);
+        assert_eq!(removed, 1);
+    }
+
+    #[test]
+    fn diff_line_counts_identical_strings() {
+        let (added, removed) = diff_line_counts("same\nlines\n", "same\nlines\n");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_infer_file_changes_edit_populates_line_counts() {
+        let input = serde_json::json!({
+            "path": "src/lib.rs",
+            "old_text": "fn old() {}\n",
+            "new_text": "fn new() {}\nfn extra() {}\n",
+        });
+        let changes = infer_file_changes("edit_file", &input, None);
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0].kind, FileChangeKind::Modify));
+        // One line replaced + one new line appended → 2 inserts, 1 delete.
+        assert_eq!(changes[0].lines_added, 2);
+        assert_eq!(changes[0].lines_removed, 1);
+    }
+
+    #[test]
+    fn test_infer_file_changes_edit_missing_inputs_yields_zero() {
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let changes = infer_file_changes("edit_file", &input, None);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].lines_added, 0);
+        assert_eq!(changes[0].lines_removed, 0);
+    }
+
+    #[test]
+    fn test_infer_file_changes_write_leaves_line_counts_zero() {
+        // write_file can't compute pre-content from input alone; counts
+        // stay at 0 so downstream consumers know the diff is unknown.
+        let input = serde_json::json!({"path": "src/new.rs", "content": "a\nb\nc\n"});
+        let changes = infer_file_changes("write_file", &input, None);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].lines_added, 0);
+        assert_eq!(changes[0].lines_removed, 0);
     }
 }
