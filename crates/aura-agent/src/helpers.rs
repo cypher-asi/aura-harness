@@ -1,5 +1,6 @@
 //! Helper functions for the agent loop.
 
+use aura_core::LineDiff;
 use aura_reasoner::{ContentBlock, Message, Role};
 use serde_json::Value;
 use std::path::Path;
@@ -184,41 +185,21 @@ fn cached_tool_descriptor(input: &Value) -> String {
     }
 }
 
-/// Compute (`lines_added`, `lines_removed`) between two strings using a
-/// line-wise diff.
-///
-/// Returns `(added, removed)`. Both counts are clamped to `u32` —
-/// realistic file edits never approach 4B lines so saturating cast is
-/// safe; even pathological inputs are bounded by `usize::MAX` and we
-/// just lose precision past `u32::MAX` rather than panic.
-fn diff_line_counts(old_text: &str, new_text: &str) -> (u32, u32) {
-    use similar::{ChangeTag, TextDiff};
-    let diff = TextDiff::from_lines(old_text, new_text);
-    let mut added: u32 = 0;
-    let mut removed: u32 = 0;
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Insert => added = added.saturating_add(1),
-            ChangeTag::Delete => removed = removed.saturating_add(1),
-            ChangeTag::Equal => {}
-        }
-    }
-    (added, removed)
-}
-
 /// Infer file mutations for a successful write tool call.
 ///
-/// `lines_added` / `lines_removed` are populated for `edit_file` (which
-/// carries both `old_text` and `new_text` in its input). For
-/// `write_file` and `delete_file` the counts stay at 0 because the
-/// pre-mutation file content is not available at this layer — by the
-/// time the tool result reaches us the write has already happened or
-/// the file is gone. Downstream consumers must treat 0 as "unknown".
+/// `lines_added` / `lines_removed` are populated from `line_diff` when
+/// the tool layer attached one (the `fs_write` / `fs_edit` /
+/// `fs_delete` tools all do; see
+/// [`aura_core::ToolResult::with_line_diff`]). When `line_diff` is
+/// `None` — e.g. a custom tool that mutates files but doesn't compute
+/// counts — both fields default to 0 and the dashboard treats it as
+/// "unknown".
 #[must_use]
 pub fn infer_file_changes(
     tool_name: &str,
     input: &serde_json::Value,
     base_path: Option<&Path>,
+    line_diff: Option<&LineDiff>,
 ) -> Vec<FileChange> {
     let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
         return Vec::new();
@@ -243,13 +224,9 @@ pub fn infer_file_changes(
         _ => return Vec::new(),
     };
 
-    let (lines_added, lines_removed) = if tool_name == "edit_file" {
-        let old_text = input.get("old_text").and_then(|v| v.as_str()).unwrap_or("");
-        let new_text = input.get("new_text").and_then(|v| v.as_str()).unwrap_or("");
-        diff_line_counts(old_text, new_text)
-    } else {
-        (0, 0)
-    };
+    let (lines_added, lines_removed) = line_diff
+        .map(|d| (d.lines_added, d.lines_removed))
+        .unwrap_or((0, 0));
 
     vec![FileChange {
         path: path.to_string(),
@@ -429,7 +406,7 @@ mod tests {
     fn test_infer_file_changes_write_create_without_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let input = serde_json::json!({"path": "src/new.rs"});
-        let changes = infer_file_changes("write_file", &input, Some(dir.path()));
+        let changes = infer_file_changes("write_file", &input, Some(dir.path()), None);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, "src/new.rs");
         assert!(matches!(changes[0].kind, FileChangeKind::Create));
@@ -443,7 +420,7 @@ mod tests {
         std::fs::write(&file, "old").unwrap();
 
         let input = serde_json::json!({"path": "src/lib.rs"});
-        let changes = infer_file_changes("write_file", &input, Some(dir.path()));
+        let changes = infer_file_changes("write_file", &input, Some(dir.path()), None);
         assert_eq!(changes.len(), 1);
         assert!(matches!(changes[0].kind, FileChangeKind::Modify));
     }
@@ -451,70 +428,66 @@ mod tests {
     #[test]
     fn test_infer_file_changes_write_defaults_to_modify_without_base_path() {
         let input = serde_json::json!({"path": "src/lib.rs"});
-        let changes = infer_file_changes("write_file", &input, None);
+        let changes = infer_file_changes("write_file", &input, None, None);
         assert_eq!(changes.len(), 1);
         assert!(matches!(changes[0].kind, FileChangeKind::Modify));
     }
 
-    #[test]
-    fn diff_line_counts_pure_insert() {
-        let (added, removed) = diff_line_counts("a\nb\n", "a\nb\nc\nd\n");
-        assert_eq!(added, 2);
-        assert_eq!(removed, 0);
-    }
+    // ====================================================================
+    // line_diff plumbing — verifies infer_file_changes promotes the
+    // tool-level LineDiff hint into FileChange.lines_added/_removed.
+    // ====================================================================
 
     #[test]
-    fn diff_line_counts_pure_delete() {
-        let (added, removed) = diff_line_counts("a\nb\nc\nd\n", "a\nb\n");
-        assert_eq!(added, 0);
-        assert_eq!(removed, 2);
-    }
-
-    #[test]
-    fn diff_line_counts_mixed_replace() {
-        // Replacing a single line counts as one insert + one delete.
-        let (added, removed) = diff_line_counts("a\nold\nc\n", "a\nnew\nc\n");
-        assert_eq!(added, 1);
-        assert_eq!(removed, 1);
-    }
-
-    #[test]
-    fn diff_line_counts_identical_strings() {
-        let (added, removed) = diff_line_counts("same\nlines\n", "same\nlines\n");
-        assert_eq!(added, 0);
-        assert_eq!(removed, 0);
-    }
-
-    #[test]
-    fn test_infer_file_changes_edit_populates_line_counts() {
-        let input = serde_json::json!({
-            "path": "src/lib.rs",
-            "old_text": "fn old() {}\n",
-            "new_text": "fn new() {}\nfn extra() {}\n",
-        });
-        let changes = infer_file_changes("edit_file", &input, None);
-        assert_eq!(changes.len(), 1);
-        assert!(matches!(changes[0].kind, FileChangeKind::Modify));
-        // One line replaced + one new line appended → 2 inserts, 1 delete.
-        assert_eq!(changes[0].lines_added, 2);
-        assert_eq!(changes[0].lines_removed, 1);
-    }
-
-    #[test]
-    fn test_infer_file_changes_edit_missing_inputs_yields_zero() {
+    fn infer_file_changes_uses_line_diff_hint_for_edit() {
         let input = serde_json::json!({"path": "src/lib.rs"});
-        let changes = infer_file_changes("edit_file", &input, None);
+        let hint = LineDiff {
+            lines_added: 7,
+            lines_removed: 2,
+        };
+        let changes = infer_file_changes("edit_file", &input, None, Some(&hint));
         assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].lines_added, 0);
+        assert_eq!(changes[0].lines_added, 7);
+        assert_eq!(changes[0].lines_removed, 2);
+    }
+
+    #[test]
+    fn infer_file_changes_uses_line_diff_hint_for_write() {
+        let input = serde_json::json!({"path": "src/new.rs"});
+        let hint = LineDiff {
+            lines_added: 50,
+            lines_removed: 0,
+        };
+        let changes = infer_file_changes("write_file", &input, None, Some(&hint));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].lines_added, 50);
         assert_eq!(changes[0].lines_removed, 0);
     }
 
     #[test]
-    fn test_infer_file_changes_write_leaves_line_counts_zero() {
-        // write_file can't compute pre-content from input alone; counts
-        // stay at 0 so downstream consumers know the diff is unknown.
-        let input = serde_json::json!({"path": "src/new.rs", "content": "a\nb\nc\n"});
-        let changes = infer_file_changes("write_file", &input, None);
+    fn infer_file_changes_uses_line_diff_hint_for_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("src/old.rs");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "doomed").unwrap();
+        let input = serde_json::json!({"path": "src/old.rs"});
+        let hint = LineDiff {
+            lines_added: 0,
+            lines_removed: 30,
+        };
+        let changes = infer_file_changes("delete_file", &input, Some(dir.path()), Some(&hint));
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0].kind, FileChangeKind::Delete));
+        assert_eq!(changes[0].lines_added, 0);
+        assert_eq!(changes[0].lines_removed, 30);
+    }
+
+    #[test]
+    fn infer_file_changes_defaults_to_zero_when_hint_absent() {
+        // Tool-layer didn't compute a diff (e.g. a custom file mutator);
+        // counts default to 0 ("unknown") rather than fabricating a value.
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        let changes = infer_file_changes("edit_file", &input, None, None);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].lines_added, 0);
         assert_eq!(changes[0].lines_removed, 0);

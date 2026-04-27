@@ -98,6 +98,19 @@ pub fn fs_write(
     debug!(?resolved, "Writing file");
 
     let file_existed = resolved.exists();
+    // Snapshot pre-content before the write so we can compute a real
+    // line-level diff rather than guessing from sizes alone. Only
+    // captured when the file already exists; for a fresh create the
+    // pre-content is the empty string (no allocation needed). We read
+    // it lazily into a String so a non-UTF-8 file silently falls back
+    // to "no pre-content" (lines_added counts the new content as a
+    // pure insert) rather than failing the write — line counting is a
+    // best-effort observability signal, not a correctness gate.
+    let pre_content = if file_existed {
+        fs::read_to_string(&resolved).unwrap_or_default()
+    } else {
+        String::new()
+    };
     let existing_size = if file_existed {
         usize::try_from(fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0)).unwrap_or(usize::MAX)
     } else {
@@ -146,12 +159,18 @@ pub fn fs_write(
     let bytes_written = content.len();
     let truncated_warning = looks_truncated(&resolved, content);
 
+    // Compute the actual line diff between pre-content and new content.
+    // For a fresh create, pre_content is empty so this collapses to
+    // "lines_added = new line count, lines_removed = 0".
+    let (lines_added, lines_removed) = super::diff::count_line_diff(&pre_content, content);
+
     let mut result = ToolResult::success(
         "write_file",
         format!("Wrote {bytes_written} bytes to {path}"),
     )
     .with_metadata("bytes_written", bytes_written.to_string())
-    .with_metadata("file_existed", file_existed.to_string());
+    .with_metadata("file_existed", file_existed.to_string())
+    .with_line_diff(lines_added, lines_removed);
 
     if truncated_warning {
         result = result.with_metadata(
@@ -503,5 +522,47 @@ mod tests {
             !result.metadata.contains_key("chunk_suggestion"),
             "chunk_suggestion metadata should be absent for content under WRITE_FILE_CHUNK_BYTES"
         );
+    }
+
+    // ====================================================================
+    // line_diff coverage — verifies fs_write attaches accurate line counts
+    // for both the create-from-scratch and overwrite flows so the agent
+    // loop can populate FileChange.lines_added/_removed without re-reading
+    // the filesystem.
+    // ====================================================================
+
+    #[test]
+    fn fs_write_create_reports_added_lines_only() {
+        let (sandbox, _dir) = create_test_sandbox();
+        let result = fs_write(&sandbox, "new.rs", "fn a() {}\nfn b() {}\n", false).unwrap();
+        let line_diff = result.line_diff.expect("create should report a line diff");
+        assert_eq!(line_diff.lines_added, 2);
+        assert_eq!(line_diff.lines_removed, 0);
+    }
+
+    #[test]
+    fn fs_write_overwrite_reports_replacement_diff() {
+        let (sandbox, dir) = create_test_sandbox();
+        // Pre-content: 3 lines.
+        fs::write(dir.path().join("lib.rs"), "old1\nold2\nold3\n").unwrap();
+        // Overwrite with 2 different lines plus 1 unchanged tail —
+        // 2 inserts, 2 deletes (same-position lines that differ become
+        // a paired insert+delete in similar's line model).
+        let result = fs_write(&sandbox, "lib.rs", "new1\nnew2\nold3\n", false).unwrap();
+        let line_diff = result.line_diff.expect("overwrite should report a line diff");
+        assert_eq!(line_diff.lines_added, 2);
+        assert_eq!(line_diff.lines_removed, 2);
+    }
+
+    #[test]
+    fn fs_write_overwrite_with_identical_content_reports_zero_diff() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("noop.rs"), "same\nsame\n").unwrap();
+        let result = fs_write(&sandbox, "noop.rs", "same\nsame\n", false).unwrap();
+        let line_diff = result
+            .line_diff
+            .expect("identical overwrite still reports a diff (just zero)");
+        assert_eq!(line_diff.lines_added, 0);
+        assert_eq!(line_diff.lines_removed, 0);
     }
 }

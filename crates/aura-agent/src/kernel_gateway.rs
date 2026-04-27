@@ -70,20 +70,22 @@ impl AgentToolExecutor for KernelToolGateway {
                 .enumerate()
                 .map(|(i, r)| {
                     if let Some(output) = r.tool_output {
+                        let file_changes = if output.is_error {
+                            Vec::new()
+                        } else {
+                            helpers::infer_file_changes(
+                                &tool_calls[i].name,
+                                &tool_calls[i].input,
+                                None,
+                                output.line_diff.as_ref(),
+                            )
+                        };
                         ToolCallResult {
                             tool_use_id: output.tool_use_id,
                             content: output.content,
                             is_error: output.is_error,
                             stop_loop: false,
-                            file_changes: if output.is_error {
-                                Vec::new()
-                            } else {
-                                helpers::infer_file_changes(
-                                    &tool_calls[i].name,
-                                    &tool_calls[i].input,
-                                    None,
-                                )
-                            },
+                            file_changes,
                         }
                     } else {
                         let tc = &tool_calls[i];

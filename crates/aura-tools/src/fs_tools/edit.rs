@@ -161,6 +161,13 @@ fn apply_edit(
         ));
     }
 
+    // Compute the file-level line diff before we move new_content into
+    // the CRLF-restoration branch below. Working off the LF-normalised
+    // pre/post pair (rather than the raw old_text/new_text inputs) gives
+    // accurate counts even when replace_all=true expands across many
+    // sites: the harness sees the actual net effect on the file.
+    let (lines_added, lines_removed) = super::diff::count_line_diff(content, &new_content);
+
     let final_content = if had_crlf {
         new_content.replace('\n', "\r\n")
     } else {
@@ -178,7 +185,8 @@ fn apply_edit(
         "edit_file",
         format!("Replaced {replacements} occurrence(s) in {path}"),
     )
-    .with_metadata("replacements", replacements.to_string()))
+    .with_metadata("replacements", replacements.to_string())
+    .with_line_diff(lines_added, lines_removed))
 }
 
 /// Edit a file by replacing text.

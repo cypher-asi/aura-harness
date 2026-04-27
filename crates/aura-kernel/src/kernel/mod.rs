@@ -106,6 +106,13 @@ pub struct ToolOutput {
     /// Set when the kernel produced this output because the policy
     /// raised [`crate::PolicyVerdict::RequireApproval`].
     pub approval_required: Option<ApprovalRequiredInfo>,
+    /// Optional per-file line diff for file-mutating tools (`fs_write`,
+    /// `fs_edit`, `fs_delete`). Populated by the kernel boundary from
+    /// the underlying [`aura_core::ToolResult::line_diff`] so the agent
+    /// loop can attach accurate `lines_added` / `lines_removed` counts
+    /// to its `FileChange` records without re-reading the filesystem.
+    /// `None` for every other tool and for tool failures.
+    pub line_diff: Option<aura_core::LineDiff>,
 }
 
 /// Details about a tool invocation that was denied because it needs an
