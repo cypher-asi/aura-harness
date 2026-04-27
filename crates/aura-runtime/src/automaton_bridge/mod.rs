@@ -213,12 +213,22 @@ impl AutomatonBridge {
         &self,
         model: Option<&str>,
         auth_token: Option<&str>,
+        aura_org_id: Option<&str>,
+        aura_session_id: Option<&str>,
     ) -> AgentRunnerConfig {
         let mut config = AgentRunnerConfig::default();
         if let Some(m) = model {
             config.default_model = m.to_string();
         }
         config.auth_token = auth_token.map(String::from);
+        // Forward router/billing identifiers (org + session UUIDs)
+        // from the `POST /automaton/start` payload. These flow into
+        // `AgentLoopConfig` (see `configure_loop_config`) and then
+        // onto every `ModelRequest`, where the Anthropic provider
+        // stamps them as `X-Aura-Org-Id` / `X-Aura-Session-Id` —
+        // matching the headers that interactive chat already sends.
+        config.aura_org_id = aura_org_id.map(String::from);
+        config.aura_session_id = aura_session_id.map(String::from);
         config
     }
 
@@ -302,6 +312,8 @@ impl AutomatonController for AutomatonBridge {
             None,
             None,
             aura_core::AgentPermissions::full_access(),
+            None,
+            None,
         )
         .await
     }
@@ -366,6 +378,8 @@ impl AutomatonController for AutomatonBridge {
             aura_core::AgentPermissions::full_access(),
             None,
             Vec::new(),
+            None,
+            None,
         )
         .await
     }

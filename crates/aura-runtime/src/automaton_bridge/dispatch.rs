@@ -17,10 +17,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aura_core::AgentPermissions;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
-use aura_core::AgentPermissions;
 use aura_kernel::Kernel;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
@@ -89,6 +89,8 @@ impl AutomatonBridge {
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
         agent_permissions: AgentPermissions,
+        aura_org_id: Option<&str>,
+        aura_session_id: Option<&str>,
         labels: AutomatonKindLabels,
     ) -> Result<AutomatonRunContext, String> {
         let domain = self.domain_with_jwt(auth_token);
@@ -142,7 +144,8 @@ impl AutomatonBridge {
         let gateway_domain: Arc<dyn DomainApi> =
             Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
 
-        let runner_config = self.build_runner_config(model, auth_token);
+        let runner_config =
+            self.build_runner_config(model, auth_token, aura_org_id, aura_session_id);
         let catalog = Arc::new(
             self.catalog
                 .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
@@ -171,6 +174,8 @@ impl AutomatonBridge {
         installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
         installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
         agent_permissions: AgentPermissions,
+        aura_org_id: Option<String>,
+        aura_session_id: Option<String>,
     ) -> Result<String, String> {
         if let Some(entry) = self.project_handles.get(project_id) {
             let tracked = entry.value();
@@ -193,6 +198,8 @@ impl AutomatonBridge {
                 installed_tools,
                 installed_integrations,
                 agent_permissions,
+                aura_org_id.as_deref(),
+                aura_session_id.as_deref(),
                 AutomatonKindLabels {
                     kernel: "dev loop",
                     capabilities: "dev loop",
@@ -253,6 +260,8 @@ impl AutomatonBridge {
         agent_permissions: AgentPermissions,
         prior_failure: Option<String>,
         work_log: Vec<String>,
+        aura_org_id: Option<String>,
+        aura_session_id: Option<String>,
     ) -> Result<String, String> {
         let ctx = self
             .prepare_automaton_run(
@@ -263,6 +272,8 @@ impl AutomatonBridge {
                 installed_tools,
                 installed_integrations,
                 agent_permissions,
+                aura_org_id.as_deref(),
+                aura_session_id.as_deref(),
                 AutomatonKindLabels {
                     kernel: "task runtime",
                     capabilities: "task",

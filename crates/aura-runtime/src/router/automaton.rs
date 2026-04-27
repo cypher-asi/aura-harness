@@ -39,6 +39,19 @@ pub(super) struct AutomatonStartRequest {
     /// `AgenticTaskParams::work_log`. Ignored on dev-loop starts.
     #[serde(default)]
     work_log: Vec<String>,
+    /// Org UUID forwarded as the `X-Aura-Org-Id` header on outbound
+    /// `/v1/messages` calls so `aura-router` can bucket per-org rate
+    /// limits / billing on automaton runs the same way it does for
+    /// interactive chat. `#[serde(default)]` keeps older callers (or
+    /// the in-tree `aura-os-server` before this field was wired up)
+    /// compatible — the harness simply omits the header if absent.
+    #[serde(default)]
+    aura_org_id: Option<String>,
+    /// Storage session UUID forwarded as `X-Aura-Session-Id`.
+    /// Caller-generated per automaton-start so concurrent runs of
+    /// the same agent get distinct billing/observability partitions.
+    #[serde(default)]
+    aura_session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +103,8 @@ pub(super) async fn automaton_start_handler(
                 agent_permissions,
                 req.prior_failure,
                 req.work_log,
+                req.aura_org_id,
+                req.aura_session_id,
             )
             .await
     } else {
@@ -104,6 +119,8 @@ pub(super) async fn automaton_start_handler(
                 req.installed_tools,
                 req.installed_integrations,
                 agent_permissions,
+                req.aura_org_id,
+                req.aura_session_id,
             )
             .await
     }

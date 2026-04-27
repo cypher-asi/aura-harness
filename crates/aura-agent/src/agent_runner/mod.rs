@@ -96,6 +96,22 @@ pub struct AgentRunnerConfig {
     pub simple_model: String,
     /// JWT auth token for proxy-mode LLM routing.
     pub auth_token: Option<String>,
+    /// Org UUID forwarded as the `X-Aura-Org-Id` header on outbound
+    /// `/v1/messages` calls so `aura-router` can bucket per-org rate
+    /// limits / billing on automaton runs the same way it does for
+    /// interactive chat (where `SessionState::aura_org_id` already
+    /// flows through `AgentLoopConfig::aura_org_id`). Without this
+    /// header `aura-router` falls back to per-IP buckets, which is
+    /// what makes burst-y eval automation traffic trip Cloudflare on
+    /// `aura-router.onrender.com` even when chat from the same
+    /// account does not.
+    pub aura_org_id: Option<String>,
+    /// Storage session UUID forwarded as the `X-Aura-Session-Id`
+    /// header on outbound `/v1/messages` calls. Mirrors the chat
+    /// path's `SessionState::aura_session_id`, generated per
+    /// automaton-start so concurrent runs of the same agent get
+    /// distinct billing/observability partitions.
+    pub aura_session_id: Option<String>,
 }
 
 impl Default for AgentRunnerConfig {
@@ -116,6 +132,8 @@ impl Default for AgentRunnerConfig {
             default_model: crate::constants::DEFAULT_MODEL.to_string(),
             simple_model: crate::constants::FALLBACK_MODEL.to_string(),
             auth_token: None,
+            aura_org_id: None,
+            aura_session_id: None,
         }
     }
 }
@@ -339,6 +357,13 @@ impl AgentRunner {
             stream_timeout: Duration::from_secs(self.config.stream_timeout_secs),
             billing_reason: "aura_chat".to_string(),
             max_context_tokens: Some(self.config.max_context_tokens),
+            // Mirror `configure_loop_config`: when an automaton's
+            // built-in chat (e.g. the dev-loop's planner chat) goes
+            // through this path, propagate the same router/billing
+            // identifiers so the outbound headers match the
+            // interactive WebSocket chat path.
+            aura_org_id: self.config.aura_org_id.clone(),
+            aura_session_id: self.config.aura_session_id.clone(),
             ..AgentLoopConfig::default()
         };
         let agent_loop = AgentLoop::new(config);
@@ -476,6 +501,17 @@ pub fn configure_loop_config(
         auth_token: config.auth_token.clone(),
         system_prompt,
         model,
+        // Forward the router/billing identifiers populated by the
+        // automaton bridge so outbound `/v1/messages` calls carry
+        // `X-Aura-Org-Id` / `X-Aura-Session-Id`. Same pattern as the
+        // interactive-chat path (`SessionState`) — the loop builder
+        // at line ~676 of `agent_loop/mod.rs` calls
+        // `.aura_org_id(config.aura_org_id.clone())` /
+        // `.aura_session_id(...)` on the `ModelRequest`, so we just
+        // need to make sure the `AgentLoopConfig` we hand it is
+        // populated.
+        aura_org_id: config.aura_org_id.clone(),
+        aura_session_id: config.aura_session_id.clone(),
         ..AgentLoopConfig::default()
     }
 }
