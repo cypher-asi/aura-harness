@@ -427,6 +427,50 @@ fn test_binary_allowlist_strips_windows_exe_suffix() {
     assert!(check_binary_allowlist(fake.to_str().unwrap(), true, false, &allowlist).is_ok());
 }
 
+#[test]
+fn test_strip_windows_executable_suffix_handles_common_shims() {
+    assert_eq!(strip_windows_executable_suffix("npm"), "npm");
+    assert_eq!(strip_windows_executable_suffix("npm.exe"), "npm");
+    assert_eq!(strip_windows_executable_suffix("npm.EXE"), "npm");
+    assert_eq!(strip_windows_executable_suffix("npm.cmd"), "npm");
+    assert_eq!(strip_windows_executable_suffix("NPM.CMD"), "NPM");
+    assert_eq!(strip_windows_executable_suffix("npx.cmd"), "npx");
+    assert_eq!(strip_windows_executable_suffix("pnpm.CMD"), "pnpm");
+    assert_eq!(strip_windows_executable_suffix("yarn.cmd"), "yarn");
+    assert_eq!(strip_windows_executable_suffix("setup.bat"), "setup");
+    assert_eq!(strip_windows_executable_suffix("setup.BAT"), "setup");
+    assert_eq!(strip_windows_executable_suffix(".cmd"), ".cmd");
+    assert_eq!(strip_windows_executable_suffix("foo.txt"), "foo.txt");
+}
+
+#[test]
+fn test_binary_allowlist_strips_windows_cmd_suffix() {
+    // Regression: on Windows, `which("npm")` resolves to `npm.cmd` (not
+    // `npm.exe`). Allow-list entries are platform-agnostic ("npm"), so
+    // the file-name comparison must strip `.cmd` the same way it strips
+    // `.exe`. Without this, real Node-tooling invocations from the
+    // dev-loop are rejected with `Forbidden(npm.cmd)`.
+    let allowlist = vec!["npm".to_string()];
+    let fake = if cfg!(windows) {
+        Path::new("C:/fake/dir/npm.cmd")
+    } else {
+        Path::new("/fake/dir/npm")
+    };
+    assert!(check_binary_allowlist(fake.to_str().unwrap(), true, false, &allowlist).is_ok());
+}
+
+#[test]
+fn test_binary_allowlist_strips_windows_bat_suffix() {
+    let allowlist = vec!["legacy-tool".to_string()];
+    let fake = if cfg!(windows) {
+        Path::new("C:/fake/dir/legacy-tool.bat")
+    } else {
+        Path::new("/fake/dir/legacy-tool")
+    };
+    assert!(check_binary_allowlist(fake.to_str().unwrap(), true, false, &allowlist).is_ok());
+}
+
+
 // ========================================================================
 // CmdRunTool::execute gating — Phase 2 hardening
 // ========================================================================

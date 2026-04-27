@@ -2,8 +2,8 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::ToolResult;
 use aura_core::{Capability, ToolDefinition};
+use aura_core::ToolResult;
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -509,6 +509,29 @@ fn expand_env_vars(input: &str) -> String {
     result
 }
 
+/// Strip a Windows-style executable suffix (`.exe`, `.cmd`, `.bat`) from a
+/// resolved binary file name, case-insensitively, so allow-list entries can
+/// stay platform-agnostic.
+///
+/// `"git"` matches both `git` and `git.exe`; `"npm"` matches `npm.cmd`
+/// (the shim `which` returns for Node-tooling on Windows); `"npx"` matches
+/// `npx.cmd`; analogous for `pnpm`/`yarn`/`tsc`/etc. Without this, the
+/// resolved Windows shim file name (`npm.cmd`) never matches a bare
+/// allow-list entry (`npm`), and the harness rejects valid invocations
+/// with `Forbidden(npm.cmd)`.
+fn strip_windows_executable_suffix(name: &str) -> &str {
+    const SUFFIXES: &[&str] = &[".exe", ".cmd", ".bat"];
+    for suffix in SUFFIXES {
+        if name.len() > suffix.len() {
+            let (head, tail) = name.split_at(name.len() - suffix.len());
+            if tail.eq_ignore_ascii_case(suffix) {
+                return head;
+            }
+        }
+    }
+    name
+}
+
 /// Resolve `program` through `which` and check its file name against
 /// `allowlist`.
 ///
@@ -563,14 +586,7 @@ fn check_binary_allowlist(
     let file_name = resolved
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| {
-            // On Windows strip the `.exe` suffix so allow-list entries can
-            // be platform-agnostic (`"git"` matches both `git` and `git.exe`).
-            s.strip_suffix(".exe")
-                .or_else(|| s.strip_suffix(".EXE"))
-                .unwrap_or(s)
-                .to_string()
-        })
+        .map(|s| strip_windows_executable_suffix(s).to_string())
         .ok_or_else(|| {
             ToolError::Forbidden(format!("program '{program}' resolved to a non-UTF-8 path"))
         })?;
