@@ -36,7 +36,7 @@ enum ApiError {
     },
     /// 402 — stop immediately, no retry or fallback.
     InsufficientCredits(String),
-    /// 403 / 503 with Cloudflare HTML — retryable (service cold-starting).
+    /// 403 / 503 with Cloudflare HTML — retryable once so WAF blocks do not storm.
     CloudflareBlock(String),
     /// Generic transient upstream 5xx — 500 / 502 / 503 (non-Cloudflare) /
     /// 504. Mapped to a retryable class so a single provider blip doesn't

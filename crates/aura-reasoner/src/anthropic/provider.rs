@@ -16,6 +16,47 @@ use serde::Serialize;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
+const CLOUDFLARE_MAX_RETRIES: u32 = 1;
+
+#[derive(Debug, Clone, Copy)]
+struct RequestRoutingContext {
+    has_aura_org_id: bool,
+    has_aura_session_id: bool,
+}
+
+impl RequestRoutingContext {
+    fn from_request(request: &ModelRequest) -> Self {
+        Self {
+            has_aura_org_id: request
+                .aura_org_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty()),
+            has_aura_session_id: request
+                .aura_session_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty()),
+        }
+    }
+
+    fn org_label(self) -> &'static str {
+        if self.has_aura_org_id {
+            "present"
+        } else {
+            "missing"
+        }
+    }
+
+    fn session_label(self) -> &'static str {
+        if self.has_aura_session_id {
+            "present"
+        } else {
+            "missing"
+        }
+    }
+}
+
 impl AnthropicProvider {
     fn model_looks_like_anthropic(model: &str) -> bool {
         let model = model.trim().to_ascii_lowercase();
@@ -89,7 +130,11 @@ impl AnthropicProvider {
         })?;
 
         if !response.status().is_success() {
-            return Err(classify_api_error(response).await);
+            return Err(classify_api_error(
+                response,
+                RequestRoutingContext::from_request(request_ctx),
+            )
+            .await);
         }
 
         Ok(response)
@@ -102,9 +147,7 @@ impl AnthropicProvider {
         json_body: &B,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
         let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
-            ApiError::Other(ReasonerError::Internal(
-                "router auth token missing".into(),
-            ))
+            ApiError::Other(ReasonerError::Internal("router auth token missing".into()))
         })?;
 
         let mut req_builder = self
@@ -144,7 +187,10 @@ impl AnthropicProvider {
     }
 }
 
-async fn classify_api_error(response: reqwest::Response) -> ApiError {
+async fn classify_api_error(
+    response: reqwest::Response,
+    routing: RequestRoutingContext,
+) -> ApiError {
     let status = response.status();
     let status_code = status.as_u16();
     let header_retry_after = parse_retry_after_header(response.headers());
@@ -163,6 +209,8 @@ async fn classify_api_error(response: reqwest::Response) -> ApiError {
         body = %body_preview,
         retry_after_s = ?header_retry_after.map(|d| d.as_secs()),
         request_id = ?request_id,
+        aura_org_id = routing.org_label(),
+        aura_session_id = routing.session_label(),
         "Anthropic API error"
     );
 
@@ -186,8 +234,12 @@ async fn classify_api_error(response: reqwest::Response) -> ApiError {
                 );
             }
         }
+        let request_id_label = request_id.as_deref().unwrap_or("unknown");
         return ApiError::CloudflareBlock(format!(
-            "LLM proxy returned Cloudflare block ({status}) — service may be cold-starting"
+            "LLM proxy returned Cloudflare block ({status}; request_id={request_id_label}; \
+             aura_org_id={}; aura_session_id={})",
+            routing.org_label(),
+            routing.session_label()
         ));
     }
 
@@ -406,14 +458,20 @@ fn classify_retry_action(
     last_err: &mut Option<ReasonerError>,
 ) -> RetryAction {
     match err {
-        ApiError::CloudflareBlock(msg) if attempt < max_retries => {
+        ApiError::CloudflareBlock(msg) if attempt < max_retries.min(CLOUDFLARE_MAX_RETRIES) => {
             let sleep = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
             // `Duration::as_millis` returns u128 but 30s backoff caps well below
             // u64::MAX; truncation cannot happen. `warn!` field value expressions
             // can't carry attributes directly, so bind first.
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = sleep.as_millis() as u64;
-            warn!(model = %model, attempt, backoff_ms, "Cloudflare block, will retry");
+            warn!(
+                model = %model,
+                attempt,
+                backoff_ms,
+                max_cloudflare_retries = CLOUDFLARE_MAX_RETRIES,
+                "Cloudflare block, will retry once with conservative backoff"
+            );
             *last_err = Some(ReasonerError::Transient {
                 status: 403,
                 message: msg.clone(),
@@ -503,9 +561,9 @@ fn classify_retry_action(
 fn retry_reason_for(err: &ApiError) -> &'static str {
     match err {
         ApiError::Overloaded { .. } => "rate_limited_429",
-        ApiError::CloudflareBlock(_) => "transient_5xx",
+        ApiError::CloudflareBlock(_) => "cloudflare_block",
         // Axis 2: distinct label so the dev loop can tell a real
-        // upstream 5xx apart from Cloudflare cold-starts in
+        // upstream 5xx apart from Cloudflare/WAF blocks in
         // `retries.jsonl` (the heuristic reports bucket by reason).
         ApiError::TransientServer { .. } => "upstream_5xx",
         ApiError::InsufficientCredits(_) => "insufficient_credits",
@@ -1073,8 +1131,8 @@ mod retry_tests {
     #[test]
     fn retry_reason_for_labels_transient_5xx_distinctly() {
         // `upstream_5xx` must be distinct from the Cloudflare-specific
-        // `transient_5xx` bucket so run heuristics can separate
-        // provider-internal outages from cold-start cloudflare
+        // `cloudflare_block` bucket so run heuristics can separate
+        // provider-internal outages from Cloudflare/WAF
         // blocks in retry histograms.
         let err = ApiError::TransientServer {
             status: 503,
@@ -1083,7 +1141,26 @@ mod retry_tests {
         assert_eq!(retry_reason_for(&err), "upstream_5xx");
         assert_eq!(
             retry_reason_for(&ApiError::CloudflareBlock("cf".into())),
-            "transient_5xx"
+            "cloudflare_block"
+        );
+    }
+
+    #[test]
+    fn classify_retry_action_caps_cloudflare_retries() {
+        let err = ApiError::CloudflareBlock("cf".into());
+        let mut last_err = None;
+
+        let first = classify_retry_action(&err, 0, 8, 1000, 30_000, 0, 1, "primary", &mut last_err);
+        assert!(
+            matches!(first, RetryAction::Retry { .. }),
+            "first Cloudflare block should get one conservative retry"
+        );
+
+        let second =
+            classify_retry_action(&err, 1, 8, 1000, 30_000, 0, 1, "primary", &mut last_err);
+        assert!(
+            matches!(second, RetryAction::Propagate),
+            "Cloudflare block must not burn the full generic retry budget"
         );
     }
 }

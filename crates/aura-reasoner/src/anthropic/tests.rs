@@ -454,6 +454,64 @@ async fn test_proxy_mode_sends_caching_beta_header() {
 }
 
 #[tokio::test]
+async fn test_proxy_mode_forwards_aura_routing_headers() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"test","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        default_model: "aura-claude-sonnet-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        backoff_initial_ms: 250,
+        backoff_cap_ms: 30_000,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        fallback_model: None,
+        prompt_caching_enabled: true,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-claude-sonnet-4-6", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .aura_org_id(Some("org-123".to_string()))
+        .aura_session_id(Some("session-456".to_string()))
+        .try_build()
+        .unwrap();
+
+    let _ = provider.complete(request).await;
+
+    let captured = server.await.unwrap();
+    let captured_lower = captured.to_ascii_lowercase();
+    assert!(
+        captured_lower.contains("x-aura-org-id: org-123"),
+        "Proxy request should include org routing header.\nCaptured request:\n{captured}"
+    );
+    assert!(
+        captured_lower.contains("x-aura-session-id: session-456"),
+        "Proxy request should include session routing header.\nCaptured request:\n{captured}"
+    );
+}
+
+#[tokio::test]
 async fn test_complete_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

@@ -58,7 +58,7 @@ pub use error::ReasonerError;
 /// themselves if they need more than `wait_ms` worth of accuracy.
 #[derive(Debug, Clone)]
 pub struct RetryInfo {
-    /// Short class name, e.g. `"rate_limited_429"`, `"transient_5xx"`.
+    /// Short class name, e.g. `"rate_limited_429"`, `"cloudflare_block"`, `"upstream_5xx"`.
     pub reason: String,
     /// 1-based attempt number that will now occur (first retry = 2).
     pub attempt: u32,
@@ -254,7 +254,9 @@ mod tests {
             Message::new(
                 Role::Assistant,
                 vec![
-                    ContentBlock::Text { text: "hello".into() },
+                    ContentBlock::Text {
+                        text: "hello".into(),
+                    },
                     ContentBlock::Thinking {
                         thinking: "hidden".into(),
                         signature: None,

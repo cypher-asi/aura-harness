@@ -76,8 +76,8 @@ pub enum DebugEvent {
     #[serde(rename = "debug.retry")]
     Retry {
         timestamp: DateTime<Utc>,
-        /// Short error class: `"rate_limited_429"`, `"transient_5xx"`,
-        /// `"timeout"`, `"stream_interrupted"`, etc.
+        /// Short error class: `"rate_limited_429"`, `"cloudflare_block"`,
+        /// `"upstream_5xx"`, `"timeout"`, `"stream_interrupted"`, etc.
         reason: String,
         /// 1-based attempt number that WILL now occur (first retry = 2).
         attempt: u32,
