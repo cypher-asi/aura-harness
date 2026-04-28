@@ -295,9 +295,8 @@ Provider-agnostic interface for LLM completions. Defines normalized message type
 | `ToolDefinition` | Tool name + description + JSON Schema (re-exported from `aura-core`) |
 | `StreamEvent` | SSE-style events: `TextDelta`, `ThinkingDelta`, `InputJsonDelta`, `ContentBlockStart/Stop`, ... |
 | `StreamAccumulator` | Folds `StreamEvent`s into a complete `ModelResponse` |
-| `AnthropicProvider` | HTTP client with retry, model chain fallback, proxy/direct routing |
-| `AnthropicConfig` | Provider configuration: model, routing mode, timeouts |
-| `RoutingMode` | `Proxy` or `Direct` |
+| `AnthropicProvider` | Anthropic-shaped HTTP client (router/proxy only) with retry + model-chain fallback |
+| `AnthropicConfig` | Provider configuration: model, router URL, timeouts |
 | `MockProvider` | Queued/canned responses for testing |
 
 #### Submodules
@@ -305,7 +304,7 @@ Provider-agnostic interface for LLM completions. Defines normalized message type
 | Module | Contents |
 |--------|----------|
 | `types/` | `Message`, `ContentBlock`, `Role`, `ImageSource`, `ModelRequest`, `ModelRequestBuilder`, `ThinkingConfig`, `ModelResponse`, `Usage`, `ProviderTrace`, `StopReason`, `StreamEvent`, `StreamContentType`, `StreamAccumulator`, `AccumulatedToolUse`, `ToolChoice` |
-| `anthropic/` | `AnthropicProvider`, `AnthropicConfig`, `RoutingMode`, SSE parser, API type conversion. The Phase 2b refactor split `anthropic/sse.rs` into `anthropic/sse/{mod,parse,event,state,tests}.rs` so the parser, event-shape, and accumulator state each get their own module. |
+| `anthropic/` | `AnthropicProvider`, `AnthropicConfig`, SSE parser, API type conversion. The Phase 2b refactor split `anthropic/sse.rs` into `anthropic/sse/{mod,parse,event,state,tests}.rs` so the parser, event-shape, and accumulator state each get their own module. |
 | `mock` | `MockProvider`, `MockResponse` |
 | `request` | `ProposeRequest`, `RecordSummary`, `ProposeLimits` (kernel propose flow) |
 | `error` | `ReasonerError` |

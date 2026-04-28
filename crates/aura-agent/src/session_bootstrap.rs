@@ -107,10 +107,10 @@ pub fn load_auth_token() -> Option<String> {
 }
 
 // `ProviderSelection` / `select_provider` were removed in Wave 4. The
-// canonical factory now lives in
-// [`aura_reasoner::provider_factory`]. Callers use
-// `aura_reasoner::provider_from_name` / `provider_from_session_config` /
-// `default_provider_from_env`.
+// canonical factory now lives in [`aura_reasoner::provider_factory`].
+// Callers use `aura_reasoner::default_provider_from_env`,
+// `aura_reasoner::with_session_overrides`, and
+// `aura_reasoner::mock_provider`.
 
 // ---------------------------------------------------------------------
 // Phase 3 consolidation: moved from `src/session_helpers.rs`.

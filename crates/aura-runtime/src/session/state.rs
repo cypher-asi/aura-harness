@@ -15,7 +15,7 @@ use aura_core::{
     InstalledIntegrationDefinition, InstalledToolDefinition,
 };
 use aura_protocol::{
-    AgentPermissionsWire, CapabilityWire, IntentClassifierSpec, SessionProviderConfig,
+    AgentPermissionsWire, CapabilityWire, IntentClassifierSpec, SessionModelOverrides,
 };
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_tools::IntentClassifier;
@@ -43,9 +43,9 @@ pub struct Session {
     pub(crate) model: String,
     /// Provider identifier for this session.
     pub(crate) provider_name: String,
-    /// Optional provider override resolved from `session_init`.
-    pub(crate) provider_config: Option<SessionProviderConfig>,
-    /// Optional concrete provider override built from `provider_config`.
+    /// Optional per-session model overrides resolved from `session_init`.
+    pub(crate) provider_overrides: Option<SessionModelOverrides>,
+    /// Optional concrete provider override built from `provider_overrides`.
     pub(crate) provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
     /// Max tokens per response.
     pub(crate) max_tokens: u32,
@@ -134,7 +134,7 @@ impl Session {
             system_prompt: String::new(),
             model: aura_agent::DEFAULT_MODEL.to_string(),
             provider_name: String::new(),
-            provider_config: None,
+            provider_overrides: None,
             provider_override: None,
             max_tokens: 16384,
             temperature: None,
@@ -243,11 +243,21 @@ impl Session {
             self.auth_token = Some(token);
         }
         if let Some(agent_id) = init.agent_id {
-            self.skill_agent_id = Some(agent_id.clone());
+            self.skill_agent_id = Some(
+                init.template_agent_id
+                    .as_ref()
+                    .filter(|id| !id.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| agent_id.clone()),
+            );
             self.agent_id = AgentId::from_hex(&agent_id).unwrap_or_else(|_| {
                 let hash = blake3::hash(agent_id.as_bytes());
                 AgentId::new(*hash.as_bytes())
             });
+        } else if let Some(template_agent_id) = init.template_agent_id {
+            if !template_agent_id.trim().is_empty() {
+                self.skill_agent_id = Some(template_agent_id);
+            }
         }
         if init.user_id.trim().is_empty() {
             return Err("user_id is required".into());
@@ -268,8 +278,8 @@ impl Session {
         if let Some(id) = init.aura_org_id {
             self.aura_org_id = Some(id);
         }
-        if let Some(provider_config) = init.provider_config {
-            self.provider_config = Some(provider_config);
+        if let Some(provider_overrides) = init.provider_overrides {
+            self.provider_overrides = Some(provider_overrides);
         }
         if let Some(spec) = init.intent_classifier {
             let (classifier, manifest) = build_intent_classifier(spec);
@@ -347,10 +357,12 @@ impl Session {
             max_context_tokens: Some(self.context_window_tokens),
             stream_timeout: std::time::Duration::from_secs(180),
             auth_token: self.auth_token.clone(),
-            upstream_provider_family: self
-                .provider_config
-                .as_ref()
-                .and_then(|config| config.upstream_provider_family.clone()),
+            // The wire-level `SessionModelOverrides` no longer carries
+            // an upstream provider-family hint — proxy routing is the
+            // single LLM path. Per-request family hints (used by
+            // X-Aura-Upstream-Provider-Family on outbound calls) come
+            // from elsewhere if and when they are needed.
+            upstream_provider_family: None,
             aura_project_id: self.project_id.clone(),
             aura_agent_id: self.aura_agent_id.clone(),
             aura_session_id: self.aura_session_id.clone(),

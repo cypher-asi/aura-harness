@@ -3,7 +3,7 @@ use super::convert::{
     build_system_block, convert_messages_to_api, convert_tool_choice, convert_tools_to_api,
     resolve_output_config, resolve_thinking,
 };
-use super::{AnthropicConfig, AnthropicProvider, ApiError, RoutingMode};
+use super::{AnthropicConfig, AnthropicProvider, ApiError};
 use crate::{
     Message, ModelProvider, ModelRequest, ReasonerError, StopReason, StreamEvent, ThinkingConfig,
     ToolChoice, ToolDefinition,
@@ -13,10 +13,10 @@ use std::time::Duration;
 
 #[test]
 fn test_config_new() {
-    let config = AnthropicConfig::new("test-key", "claude-3-haiku");
-    assert_eq!(config.api_key, "test-key");
+    let config = AnthropicConfig::new("claude-3-haiku");
     assert_eq!(config.default_model, "claude-3-haiku");
-    assert_eq!(config.routing_mode, RoutingMode::Direct);
+    assert_eq!(config.base_url, "https://aura-router.onrender.com");
+    assert!(config.prompt_caching_enabled);
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn test_cache_control_on_last_user_message() {
 
 #[test]
 fn test_beta_header_present() {
-    let config = AnthropicConfig::new("test-key", "test-model");
+    let config = AnthropicConfig::new("test-model");
     let provider = AnthropicProvider::new(config).unwrap();
 
     let system = build_system_block("test", true);
@@ -169,14 +169,14 @@ const TEST_FALLBACK_MODEL: &str = "claude-sonnet-4-6";
 
 #[test]
 fn test_config_with_fallback() {
-    let mut config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+    let mut config = AnthropicConfig::new(TEST_DEFAULT_MODEL);
     config.fallback_model = Some(TEST_FALLBACK_MODEL.to_string());
     assert_eq!(config.fallback_model, Some(TEST_FALLBACK_MODEL.to_string()));
 }
 
 #[test]
 fn test_model_chain_without_fallback() {
-    let config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+    let config = AnthropicConfig::new(TEST_DEFAULT_MODEL);
     let provider = AnthropicProvider::new(config).unwrap();
     let chain = provider.model_chain(TEST_DEFAULT_MODEL);
     assert_eq!(chain, vec![TEST_DEFAULT_MODEL]);
@@ -184,7 +184,7 @@ fn test_model_chain_without_fallback() {
 
 #[test]
 fn test_model_chain_with_fallback() {
-    let mut config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+    let mut config = AnthropicConfig::new(TEST_DEFAULT_MODEL);
     config.fallback_model = Some(TEST_FALLBACK_MODEL.to_string());
     let provider = AnthropicProvider::new(config).unwrap();
     let chain = provider.model_chain(TEST_DEFAULT_MODEL);
@@ -193,7 +193,7 @@ fn test_model_chain_with_fallback() {
 
 #[test]
 fn test_model_chain_deduplicates() {
-    let mut config = AnthropicConfig::new("key", TEST_DEFAULT_MODEL);
+    let mut config = AnthropicConfig::new(TEST_DEFAULT_MODEL);
     config.fallback_model = Some(TEST_DEFAULT_MODEL.to_string());
     let provider = AnthropicProvider::new(config).unwrap();
     let chain = provider.model_chain(TEST_DEFAULT_MODEL);
@@ -423,14 +423,12 @@ async fn test_proxy_mode_sends_caching_beta_header() {
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "aura-claude-sonnet-4-6".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -456,62 +454,6 @@ async fn test_proxy_mode_sends_caching_beta_header() {
 }
 
 #[tokio::test]
-async fn test_direct_mode_sends_caching_beta_header() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = vec![0u8; 8192];
-        let n = socket.read(&mut buf).await.unwrap();
-        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
-
-        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"test","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-
-        request_text
-    });
-
-    let config = AnthropicConfig {
-        api_key: "test-api-key".to_string(),
-        default_model: "test-model".to_string(),
-        timeout_ms: 5000,
-        max_retries: 0,
-        backoff_initial_ms: 250,
-        backoff_cap_ms: 30_000,
-        base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Direct,
-        fallback_model: None,
-        prompt_caching_enabled: true,
-    };
-
-    let provider = AnthropicProvider::new(config).unwrap();
-    let request = ModelRequest::builder("test-model", "system")
-        .message(Message::user("test"))
-        .try_build()
-        .unwrap();
-
-    let _ = provider.complete(request).await;
-
-    let captured = server.await.unwrap();
-    assert!(
-        captured.contains("anthropic-beta"),
-        "Direct request should include anthropic-beta header.\nCaptured headers:\n{captured}"
-    );
-    assert!(
-        captured.contains("prompt-caching-2024-07-31"),
-        "anthropic-beta header should include prompt-caching beta tag.\nCaptured headers:\n{captured}"
-    );
-}
-
-#[tokio::test]
 async fn test_complete_timeout() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -526,14 +468,12 @@ async fn test_complete_timeout() {
     });
 
     let config = AnthropicConfig {
-        api_key: "test-key".to_string(),
         default_model: "test-model".to_string(),
         timeout_ms: 200,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Direct,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -541,6 +481,7 @@ async fn test_complete_timeout() {
     let provider = AnthropicProvider::new(config).unwrap();
     let request = ModelRequest::builder("test-model", "system")
         .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
         .try_build()
         .unwrap();
 
@@ -550,58 +491,6 @@ async fn test_complete_timeout() {
     assert!(
         matches!(err, ReasonerError::Timeout),
         "expected Timeout, got: {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn test_direct_mode_omits_caching_beta_header_when_disabled() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut buf = vec![0u8; 8192];
-        let n = socket.read(&mut buf).await.unwrap();
-        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
-
-        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"test","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        socket.write_all(response.as_bytes()).await.unwrap();
-
-        request_text
-    });
-
-    let config = AnthropicConfig {
-        api_key: "test-api-key".to_string(),
-        default_model: "test-model".to_string(),
-        timeout_ms: 5000,
-        max_retries: 0,
-        backoff_initial_ms: 250,
-        backoff_cap_ms: 30_000,
-        base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Direct,
-        fallback_model: None,
-        prompt_caching_enabled: false,
-    };
-
-    let provider = AnthropicProvider::new(config).unwrap();
-    let request = ModelRequest::builder("test-model", "system")
-        .message(Message::user("test"))
-        .try_build()
-        .unwrap();
-
-    let _ = provider.complete(request).await;
-
-    let captured = server.await.unwrap();
-    assert!(
-        !captured.contains("anthropic-beta"),
-        "Direct request should omit anthropic-beta header when prompt caching is disabled.\nCaptured headers:\n{captured}"
     );
 }
 
@@ -630,14 +519,12 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "aura-gpt-4.1".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -713,14 +600,12 @@ async fn test_cross_family_proxy_fallback_buffers_streaming_and_omits_anthropic_
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "claude-opus-4-6".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: Some("aura-gpt-5-4".to_string()),
         prompt_caching_enabled: true,
     };
@@ -788,14 +673,12 @@ async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "aura-gpt-4.1".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -845,14 +728,12 @@ async fn test_proxy_deepseek_family_uses_provider_hint_and_usage_aliases() {
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "deepseek-v4-flash".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -913,14 +794,12 @@ async fn test_proxy_hint_prefers_anthropic_family_over_model_heuristics() {
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "aura-gpt-4.1".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -971,14 +850,12 @@ async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "claude-opus-4-6".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };
@@ -1045,14 +922,12 @@ async fn test_proxy_non_anthropic_family_omits_thinking_and_output_config_for_co
     });
 
     let config = AnthropicConfig {
-        api_key: String::new(),
         default_model: "claude-opus-4-6".to_string(),
         timeout_ms: 5000,
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
-        routing_mode: RoutingMode::Proxy,
         fallback_model: None,
         prompt_caching_enabled: true,
     };

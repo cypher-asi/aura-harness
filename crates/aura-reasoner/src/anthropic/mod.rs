@@ -12,7 +12,7 @@ mod convert;
 mod provider;
 mod sse;
 
-pub use config::{AnthropicConfig, RoutingMode};
+pub use config::AnthropicConfig;
 pub use provider::exp_backoff_with_jitter;
 
 use crate::error::ReasonerError;
@@ -129,10 +129,9 @@ impl AnthropicProvider {
     ///
     /// # Errors
     ///
-    /// Returns error if configuration or client creation fails.
+    /// Returns error if HTTP client creation fails.
     pub fn from_env() -> Result<Self, ReasonerError> {
-        let config = AnthropicConfig::from_env()?;
-        Self::new(config)
+        Self::new(AnthropicConfig::from_env())
     }
 
     /// Build the ordered model fallback chain.

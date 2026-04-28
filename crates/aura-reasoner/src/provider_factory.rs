@@ -1,259 +1,119 @@
-//! Unified provider factory for Aura.
+//! Provider factory for Aura.
 //!
-//! Historically two parallel factories existed:
-//! - `aura_agent::session_bootstrap::select_provider(name)` — used from the
-//!   root binary to pick a provider by short name (`"anthropic"`, `"mock"`).
-//! - `aura_runtime::provider_factory` — used from the WebSocket session handler
-//!   to build a provider from a session-scoped configuration.
+//! There is exactly one real LLM provider: an Anthropic-shaped HTTP client
+//! that talks to `aura-router` (the Aura proxy) with a per-request JWT.
+//! For tests, [`mock_provider`] returns a fixture-friendly `MockProvider`.
 //!
-//! Both ultimately constructed a [`Box<dyn ModelProvider>`]. Wave 4
-//! collapses them into this single module. Callers pick the constructor
-//! that matches their input shape:
-//!
-//! - [`from_name`] — for simple name-based selection (root bin).
-//! - [`from_provider_config`] — for session-scoped configs (node). The node
-//!   crate converts its wire-level `SessionProviderConfig` into the
-//!   reasoner-owned [`ProviderConfig`] at the boundary to avoid pulling a
-//!   cross-tree protocol dependency into `aura-reasoner`.
-//!
-//! # Fallback policy
-//!
-//! `from_name("anthropic")` attempts to read [`AnthropicConfig::from_env`]
-//! and, if it succeeds, builds an Anthropic provider. Historically the
-//! agent-side helper silently fell back to `MockProvider` on any error; the
-//! unified factory preserves that fallback so existing `aura` headless
-//! flows still boot in CI without secrets, but it emits a `warn!` so the
-//! behaviour is observable. Callers that need hard failure semantics
-//! should call `AnthropicProvider::from_env` directly.
+//! Per-session overrides — model, fallback model, prompt-caching toggle —
+//! arrive on the wire as `aura_protocol::SessionModelOverrides` and are
+//! converted by callers into [`SessionOverrides`] before invoking
+//! [`with_session_overrides`].
 
 use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use crate::anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
+use crate::anthropic::{AnthropicConfig, AnthropicProvider};
 use crate::error::ReasonerError;
 use crate::mock::MockProvider;
 use crate::ModelProvider;
 
 /// Result of a provider selection.
-///
-/// Holds the constructed provider along with a short name suitable for
-/// logging or status display. `name` distinguishes the primary request
-/// from any fallback (e.g. `"mock (fallback)"`).
 pub struct ProviderSelection {
-    /// The shared, thread-safe provider instance.
+    /// Shared, thread-safe provider instance.
     pub provider: Arc<dyn ModelProvider + Send + Sync>,
     /// Human-readable provider name used for logging / status display.
     pub name: String,
 }
 
-/// Logical specification of which provider to build.
-#[derive(Debug, Clone)]
-pub enum ProviderSpec {
-    /// Mock provider (no external calls).
-    Mock,
-    /// Anthropic provider with a specific configuration.
-    Anthropic(AnthropicConfig),
-}
-
-/// Reasoner-owned session-scoped provider configuration.
+/// Per-session overrides extracted from `SessionModelOverrides` on the wire.
 ///
-/// This mirrors the fields carried on the wire-level
-/// `aura_protocol::SessionProviderConfig` but lives inside the reasoner so
-/// `aura-reasoner` does not take a cross-tree dependency on the protocol
-/// crate. Call sites (e.g. `aura-runtime`) convert the protocol DTO to this
-/// struct at the boundary.
-#[derive(Debug, Clone)]
-pub struct ProviderConfig {
-    /// Provider short name. Currently only `"anthropic"` is supported for
-    /// per-session configs; `"mock"` is constructed via [`from_name`].
-    pub provider: String,
-    /// Optional routing mode override (`"direct"` or `"proxy"`). Defaults
-    /// to `Direct` when absent.
-    pub routing_mode: Option<String>,
-    /// Optional API key (required for `direct` mode).
-    pub api_key: Option<String>,
-    /// Optional base URL override. Defaults to the Anthropic API for
-    /// direct mode and the env-configured router URL for proxy mode.
-    pub base_url: Option<String>,
-    /// Optional default model name.
+/// These three values are the only knobs that still mean anything once
+/// the LLM path is collapsed to "always proxy through aura-router with
+/// JWT". Everything else is server-side env config or a per-request
+/// header.
+#[derive(Debug, Clone, Default)]
+pub struct SessionOverrides {
     pub default_model: Option<String>,
-    /// Optional fallback model for 429/529 retries.
     pub fallback_model: Option<String>,
-    /// Whether Anthropic prompt-caching directives should be attached.
-    /// Defaults to `true` when absent.
     pub prompt_caching_enabled: Option<bool>,
 }
 
-fn mock_provider(reason: &'static str) -> Arc<dyn ModelProvider + Send + Sync> {
-    Arc::new(MockProvider::simple_response(reason))
-}
-
-fn proxy_base_url() -> String {
-    std::env::var("AURA_ROUTER_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "https://aura-router.onrender.com".to_string())
-}
-
-const MOCK_BANNER: &str =
-    "Mock mode: Set AURA_LLM_ROUTING and required credentials to enable real AI responses.";
-
-/// Select a provider by short name.
+/// Build the default router-backed provider from environment variables.
 ///
-/// Supported names:
-/// - `"mock"` — always returns a [`MockProvider`].
-/// - `"anthropic"` — attempts to build from environment variables; on
-///   failure logs a warning and falls back to a mock.
-/// - anything else — returns a `ReasonerError::Internal` describing the
-///   unknown name. This replaces the older behaviour where any unknown
-///   name silently fell through to Anthropic / mock.
-///
-/// # Errors
-///
-/// Returns [`ReasonerError::Internal`] for unknown provider names. The
-/// Anthropic branch never errors; it emits a warning and returns a mock on
-/// env-config failure to preserve the previous boot-without-secrets UX.
-pub fn from_name(name: &str) -> Result<ProviderSelection, ReasonerError> {
-    match name {
-        "mock" => Ok(ProviderSelection {
-            provider: mock_provider(MOCK_BANNER),
-            name: "mock".to_string(),
-        }),
-        "anthropic" => Ok(build_anthropic_from_env()),
-        other => Err(ReasonerError::Internal(format!(
-            "unknown provider `{other}` (expected `anthropic` or `mock`)"
-        ))),
-    }
-}
-
-fn build_anthropic_from_env() -> ProviderSelection {
-    match AnthropicConfig::from_env() {
-        Ok(cfg) => match AnthropicProvider::new(cfg) {
-            Ok(provider) => ProviderSelection {
-                provider: Arc::new(provider),
-                name: "anthropic".to_string(),
-            },
-            Err(e) => {
-                warn!(error = %e, "LLM provider build failed, using mock");
-                ProviderSelection {
-                    provider: mock_provider(MOCK_BANNER),
-                    name: "mock (fallback)".to_string(),
-                }
-            }
+/// Wraps [`AnthropicConfig::from_env`] + [`AnthropicProvider::new`]. On
+/// the rare HTTP-client construction failure (e.g. invalid TLS
+/// configuration), logs a warning and substitutes a mock so callers can
+/// still boot — this preserves the historical "no secrets needed" UX in
+/// CI / integration test entrypoints.
+#[must_use]
+pub fn default_provider() -> ProviderSelection {
+    let cfg = AnthropicConfig::from_env();
+    info!(
+        base_url = %cfg.base_url,
+        default_model = %cfg.default_model,
+        "LLM provider ready (router-backed proxy)"
+    );
+    match AnthropicProvider::new(cfg) {
+        Ok(provider) => ProviderSelection {
+            provider: Arc::new(provider),
+            name: "anthropic".to_string(),
         },
         Err(e) => {
-            warn!(error = %e, "LLM provider not configured, using mock");
+            warn!(error = %e, "LLM provider build failed, using mock");
             ProviderSelection {
-                provider: mock_provider(MOCK_BANNER),
+                provider: Arc::new(MockProvider::simple_response(
+                    "Mock provider (HTTP client init failed)",
+                )),
                 name: "mock (fallback)".to_string(),
             }
         }
     }
 }
 
-/// Build a default provider from environment variables.
-///
-/// Equivalent to `from_name("anthropic")` but never fails: a mock is
-/// substituted on any error. Node startup uses this when no per-session
-/// override has been provided yet.
-#[must_use]
-pub fn default_from_env() -> ProviderSelection {
-    build_anthropic_from_env()
-}
-
-/// Build a provider from an explicit [`ProviderSpec`].
+/// Build a provider with per-session overrides applied to the env-default
+/// config.
 ///
 /// # Errors
 ///
-/// Returns [`ReasonerError`] if the Anthropic config is invalid (e.g.
-/// direct-mode API key missing).
-pub fn from_spec(spec: ProviderSpec) -> Result<ProviderSelection, ReasonerError> {
-    match spec {
-        ProviderSpec::Mock => Ok(ProviderSelection {
-            provider: mock_provider(MOCK_BANNER),
-            name: "mock".to_string(),
-        }),
-        ProviderSpec::Anthropic(cfg) => {
-            let mode_label = if cfg.routing_mode == RoutingMode::Proxy {
-                "proxy"
-            } else {
-                "direct"
-            };
-            let provider = AnthropicProvider::new(cfg).map_err(|e| {
-                ReasonerError::Internal(format!("creating anthropic provider: {e}"))
-            })?;
-            info!(mode = mode_label, "LLM provider ready ({mode_label} mode)");
-            Ok(ProviderSelection {
-                provider: Arc::new(provider),
-                name: "anthropic".to_string(),
-            })
-        }
+/// Returns [`ReasonerError`] only if HTTP client construction fails.
+pub fn with_session_overrides(
+    overrides: SessionOverrides,
+) -> Result<ProviderSelection, ReasonerError> {
+    let mut cfg = AnthropicConfig::from_env();
+    if let Some(model) = overrides.default_model.filter(|v| !v.trim().is_empty()) {
+        cfg.default_model = model;
     }
+    if let Some(fallback) = overrides
+        .fallback_model
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        cfg.fallback_model = Some(fallback);
+    }
+    if let Some(caching) = overrides.prompt_caching_enabled {
+        cfg.prompt_caching_enabled = caching;
+    }
+    info!(
+        base_url = %cfg.base_url,
+        default_model = %cfg.default_model,
+        prompt_caching_enabled = cfg.prompt_caching_enabled,
+        "LLM provider ready (session overrides applied)"
+    );
+    let provider = AnthropicProvider::new(cfg)?;
+    Ok(ProviderSelection {
+        provider: Arc::new(provider),
+        name: "anthropic".to_string(),
+    })
 }
 
-/// Build a provider from a session-scoped [`ProviderConfig`].
-///
-/// The node crate converts its wire-level `SessionProviderConfig` into
-/// this shape before calling into the factory.
-///
-/// # Errors
-///
-/// Returns [`ReasonerError::Internal`] if:
-/// - `config.provider` is not `"anthropic"`.
-/// - `direct` mode is requested without an API key.
-/// - The underlying [`AnthropicProvider::new`] call fails.
-pub fn from_provider_config(config: &ProviderConfig) -> Result<ProviderSelection, ReasonerError> {
-    match config.provider.as_str() {
-        "anthropic" => {
-            let routing_mode = match config.routing_mode.as_deref() {
-                Some("proxy") => RoutingMode::Proxy,
-                _ => RoutingMode::Direct,
-            };
-
-            let anthropic_cfg = AnthropicConfig {
-                api_key: config.api_key.clone().unwrap_or_default(),
-                default_model: config
-                    .default_model
-                    .clone()
-                    .unwrap_or_else(|| "claude-opus-4-6".to_string()),
-                timeout_ms: 300_000,
-                max_retries: 2,
-                backoff_initial_ms: 250,
-                backoff_cap_ms: 30_000,
-                base_url: config
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| match routing_mode {
-                        RoutingMode::Direct => "https://api.anthropic.com".to_string(),
-                        RoutingMode::Proxy => proxy_base_url(),
-                    }),
-                routing_mode,
-                fallback_model: config.fallback_model.clone(),
-                prompt_caching_enabled: config.prompt_caching_enabled.unwrap_or(true),
-            };
-
-            if anthropic_cfg.routing_mode == RoutingMode::Direct && anthropic_cfg.api_key.is_empty()
-            {
-                return Err(ReasonerError::Internal(
-                    "anthropic direct mode requires an API key".to_string(),
-                ));
-            }
-
-            from_spec(ProviderSpec::Anthropic(anthropic_cfg))
-        }
-        other => Err(ReasonerError::Internal(format!(
-            "unsupported session provider `{other}`"
-        ))),
-    }
-}
-
-/// Test-only helper that returns a mock-backed [`ProviderSelection`].
-#[cfg(test)]
+/// Build a mock-backed provider for tests and offline boot. Never fails.
 #[must_use]
-pub fn mock_selection() -> ProviderSelection {
+pub fn mock_provider() -> ProviderSelection {
     ProviderSelection {
-        provider: mock_provider(MOCK_BANNER),
+        provider: Arc::new(MockProvider::simple_response(
+            "Mock provider (tests only)",
+        )),
         name: "mock".to_string(),
     }
 }
@@ -263,81 +123,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_name_mock_returns_mock_provider() {
-        let selection = from_name("mock").expect("mock must succeed");
+    fn mock_provider_returns_mock() {
+        let selection = mock_provider();
         assert_eq!(selection.name, "mock");
         assert_eq!(selection.provider.name(), "mock");
     }
 
     #[test]
-    fn from_name_unknown_provider_errors() {
-        match from_name("gpt-but-not-really") {
-            Ok(_) => panic!("unknown names must error"),
-            Err(ReasonerError::Internal(m)) => assert!(m.contains("unknown provider")),
-            Err(other) => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn from_provider_config_direct_without_api_key_errors() {
-        let cfg = ProviderConfig {
-            provider: "anthropic".to_string(),
-            routing_mode: Some("direct".to_string()),
-            api_key: None,
-            base_url: None,
-            default_model: None,
-            fallback_model: None,
-            prompt_caching_enabled: None,
-        };
-        match from_provider_config(&cfg) {
-            Ok(_) => panic!("direct without key must fail"),
-            Err(ReasonerError::Internal(m)) => assert!(m.contains("API key")),
-            Err(other) => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn from_provider_config_proxy_builds_without_api_key() {
-        // ENV test: set router URL so `proxy_base_url` is deterministic.
+    fn with_session_overrides_applies_default_model() {
         std::env::set_var("AURA_ROUTER_URL", "http://127.0.0.1:3999");
-        let cfg = ProviderConfig {
-            provider: "anthropic".to_string(),
-            routing_mode: Some("proxy".to_string()),
-            api_key: None,
-            base_url: None,
+        let selection = with_session_overrides(SessionOverrides {
             default_model: Some("aura-claude-sonnet-4-6".to_string()),
             fallback_model: None,
             prompt_caching_enabled: Some(true),
-        };
-        let selection = from_provider_config(&cfg).expect("proxy build");
-        assert_eq!(selection.name, "anthropic");
+        })
+        .expect("with_session_overrides");
         assert_eq!(selection.provider.name(), "anthropic");
     }
 
     #[test]
-    fn from_provider_config_unsupported_provider_errors() {
-        let cfg = ProviderConfig {
-            provider: "definitely-not-real".to_string(),
-            routing_mode: None,
-            api_key: None,
-            base_url: None,
-            default_model: None,
-            fallback_model: None,
+    fn with_session_overrides_ignores_blank_strings() {
+        std::env::set_var("AURA_ROUTER_URL", "http://127.0.0.1:3999");
+        let selection = with_session_overrides(SessionOverrides {
+            default_model: Some("   ".to_string()),
+            fallback_model: Some("".to_string()),
             prompt_caching_enabled: None,
-        };
-        match from_provider_config(&cfg) {
-            Ok(_) => panic!("unknown provider must fail"),
-            Err(ReasonerError::Internal(m)) => {
-                assert!(m.contains("unsupported session provider"));
-            }
-            Err(other) => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn mock_selection_helper_returns_mock() {
-        let selection = mock_selection();
-        assert_eq!(selection.name, "mock");
-        assert_eq!(selection.provider.name(), "mock");
+        })
+        .expect("with_session_overrides");
+        assert_eq!(selection.provider.name(), "anthropic");
     }
 }

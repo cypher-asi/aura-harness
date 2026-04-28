@@ -75,12 +75,6 @@ cargo run -- run --ui none
 cargo run -p aura-runtime --bin aura-node
 ```
 
-Direct Anthropic access:
-
-```sh
-AURA_LLM_ROUTING=direct AURA_ANTHROPIC_API_KEY=sk-ant-... cargo run
-```
-
 ### Docker
 
 The Dockerfile builds from the **parent directory** that contains both `aura-harness/` and `aura-os/`, so the `aura-protocol` path dependency resolves in the image. Run from the parent:
@@ -338,15 +332,17 @@ The node reads configuration from environment variables via `NodeConfig::from_en
 
 ### LLM routing
 
+All LLM traffic flows through the AURA router (proxy) using a per-request JWT. There is no direct-provider path: `aura-harness` does not call Anthropic (or any other provider) on its own.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AURA_LLM_ROUTING` | `proxy` | `proxy` (via aura-router with JWT) or `direct` (Anthropic API). |
 | `AURA_ROUTER_URL` | `https://aura-router.onrender.com` | Proxy router endpoint. |
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions. WebSocket clients supply their own. |
-| `AURA_ANTHROPIC_API_KEY` | — | Required when `AURA_LLM_ROUTING=direct`. |
-| `AURA_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic API base URL override. |
-| `AURA_ANTHROPIC_MODEL` | `claude-opus-4-6` | Model identifier. |
+| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model identifier sent to the router. (Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback for one release.) |
+| `AURA_DEFAULT_FALLBACK_MODEL` | — | Optional secondary model used on 429/529 retries. |
 | `AURA_MODEL_TIMEOUT_MS` | `60000` | LLM request timeout. |
+| `AURA_LLM_MAX_RETRIES` | `8` | Per-model retry budget before falling back. |
+| `AURA_DISABLE_PROMPT_CACHING` | — | Set to `1`/`true` to disable Anthropic prompt-caching directives. |
 
 ### Node runtime
 

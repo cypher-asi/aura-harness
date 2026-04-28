@@ -50,23 +50,10 @@ pub(crate) fn default_agent_permissions_payload() -> Value {
 
 /// Resolve auth token for LLM tests. Panics when credentials are missing.
 pub fn require_llm_token() -> String {
-    let routing = std::env::var("AURA_LLM_ROUTING").unwrap_or_default();
-    if routing == "direct" {
-        if std::env::var("AURA_ANTHROPIC_API_KEY").is_err()
-            && std::env::var("ANTHROPIC_API_KEY").is_err()
-        {
-            panic!(
-                "LLM credentials required: AURA_LLM_ROUTING=direct but neither \
-                 AURA_ANTHROPIC_API_KEY nor ANTHROPIC_API_KEY is set"
-            );
-        }
-        return String::new();
-    }
     load_auth_token().unwrap_or_else(|| {
         panic!(
             "LLM credentials required: no auth token available. \
-             Set AURA_ROUTER_JWT, run `aura login`, or set \
-             AURA_LLM_ROUTING=direct with an API key."
+             Set AURA_ROUTER_JWT or run `aura login`."
         )
     })
 }
@@ -254,11 +241,8 @@ impl TestServer {
 }
 
 pub fn create_provider() -> Arc<dyn ModelProvider + Send + Sync> {
-    match AnthropicConfig::from_env() {
-        Ok(config) => match AnthropicProvider::new(config) {
-            Ok(p) => Arc::new(p),
-            Err(_) => Arc::new(MockProvider::simple_response("(mock)")),
-        },
+    match AnthropicProvider::new(AnthropicConfig::from_env()) {
+        Ok(p) => Arc::new(p),
         Err(_) => Arc::new(MockProvider::simple_response("(mock)")),
     }
 }

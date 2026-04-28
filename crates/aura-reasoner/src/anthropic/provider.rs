@@ -37,19 +37,11 @@ impl AnthropicProvider {
 
     fn prompt_caching_enabled_for_model(&self, request: &ModelRequest, model: &str) -> bool {
         self.config.prompt_caching_enabled
-            && match self.config.routing_mode {
-                super::RoutingMode::Proxy => {
-                    Self::supports_anthropic_proxy_features(request, model)
-                }
-                super::RoutingMode::Direct => Self::model_looks_like_anthropic(model),
-            }
+            && Self::supports_anthropic_proxy_features(request, model)
     }
 
     fn anthropic_request_features_enabled(&self, request: &ModelRequest, model: &str) -> bool {
-        match self.config.routing_mode {
-            super::RoutingMode::Proxy => Self::supports_anthropic_proxy_features(request, model),
-            super::RoutingMode::Direct => Self::model_looks_like_anthropic(model),
-        }
+        Self::supports_anthropic_proxy_features(request, model)
     }
 
     async fn check_base_url_reachable(&self) -> bool {
@@ -109,53 +101,42 @@ impl AnthropicProvider {
         model: &str,
         json_body: &B,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
-        use super::config::RoutingMode;
+        let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
+            ApiError::Other(ReasonerError::Internal(
+                "router auth token missing".into(),
+            ))
+        })?;
 
         let mut req_builder = self
             .client
             .post(format!("{}/v1/messages", self.config.base_url))
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
             .json(json_body);
-        let prompt_caching_enabled = self.config.prompt_caching_enabled;
-        let proxy_prompt_caching_enabled =
-            prompt_caching_enabled && Self::supports_anthropic_proxy_features(request_ctx, model);
 
-        match self.config.routing_mode {
-            RoutingMode::Direct => {
-                req_builder = req_builder.header("x-api-key", &self.config.api_key);
-                if prompt_caching_enabled {
-                    req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
-                }
-            }
-            RoutingMode::Proxy => {
-                let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
-                    ApiError::Other(ReasonerError::Internal(
-                        "Proxy mode requires a JWT auth token".into(),
-                    ))
-                })?;
-                req_builder = req_builder.header("authorization", format!("Bearer {token}"));
-                if proxy_prompt_caching_enabled {
-                    req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
-                }
-                if let Some(ref v) = request_ctx.aura_project_id {
-                    req_builder = req_builder.header("X-Aura-Project-Id", v);
-                }
-                if let Some(ref v) = request_ctx.aura_agent_id {
-                    req_builder = req_builder.header("X-Aura-Agent-Id", v);
-                }
-                if let Some(ref v) = request_ctx.aura_session_id {
-                    req_builder = req_builder.header("X-Aura-Session-Id", v);
-                }
-                if let Some(ref v) = request_ctx.aura_org_id {
-                    req_builder = req_builder.header("X-Aura-Org-Id", v);
-                }
-                if let Some(ref family) = request_ctx.upstream_provider_family {
-                    let family = family.trim();
-                    if !family.is_empty() {
-                        req_builder = req_builder.header("X-Aura-Upstream-Provider-Family", family);
-                    }
-                }
+        if self.config.prompt_caching_enabled
+            && Self::supports_anthropic_proxy_features(request_ctx, model)
+        {
+            req_builder = req_builder.header("anthropic-beta", "prompt-caching-2024-07-31");
+        }
+
+        if let Some(ref v) = request_ctx.aura_project_id {
+            req_builder = req_builder.header("X-Aura-Project-Id", v);
+        }
+        if let Some(ref v) = request_ctx.aura_agent_id {
+            req_builder = req_builder.header("X-Aura-Agent-Id", v);
+        }
+        if let Some(ref v) = request_ctx.aura_session_id {
+            req_builder = req_builder.header("X-Aura-Session-Id", v);
+        }
+        if let Some(ref v) = request_ctx.aura_org_id {
+            req_builder = req_builder.header("X-Aura-Org-Id", v);
+        }
+        if let Some(ref family) = request_ctx.upstream_provider_family {
+            let family = family.trim();
+            if !family.is_empty() {
+                req_builder = req_builder.header("X-Aura-Upstream-Provider-Family", family);
             }
         }
 
@@ -186,6 +167,25 @@ async fn classify_api_error(response: reqwest::Response) -> ApiError {
     );
 
     if super::is_cloudflare_html(&body) {
+        if let Ok(dir) = std::env::var("AURA_DEBUG_CLOUDFLARE_DUMP_DIR") {
+            let dir_path = std::path::PathBuf::from(&dir);
+            if std::fs::create_dir_all(&dir_path).is_ok() {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                let file = dir_path.join(format!("cf-block-{ts}.html"));
+                let header_dump = format!(
+                    "<!-- aura-debug status={status} request_id={request_id:?} retry_after_s={:?} -->\n",
+                    header_retry_after.map(|d| d.as_secs())
+                );
+                let _ = std::fs::write(&file, format!("{header_dump}{body}"));
+                error!(
+                    cloudflare_dump_path = %file.display(),
+                    "Cloudflare HTML dumped for diagnosis"
+                );
+            }
+        }
         return ApiError::CloudflareBlock(format!(
             "LLM proxy returned Cloudflare block ({status}) — service may be cold-starting"
         ));
@@ -719,11 +719,7 @@ impl ModelProvider for AnthropicProvider {
     }
 
     async fn health_check(&self) -> bool {
-        use super::config::RoutingMode;
-        match self.config.routing_mode {
-            RoutingMode::Direct if self.config.api_key.trim().is_empty() => false,
-            _ => self.check_base_url_reachable().await,
-        }
+        self.check_base_url_reachable().await
     }
 
     #[tracing::instrument(skip(self, request), fields(model = %request.model))]
@@ -736,12 +732,10 @@ impl ModelProvider for AnthropicProvider {
 
         run_model_chain_with_retries(&self.config, &models, |model_idx, model| {
             Box::pin(async move {
-                if self.config.routing_mode == super::RoutingMode::Proxy
-                    && !Self::supports_anthropic_proxy_features(request_ref, &model)
-                {
+                if !Self::supports_anthropic_proxy_features(request_ref, &model) {
                     debug!(
                         model = %model,
-                        "Proxy-backed fallback model does not support Anthropic SSE; buffering completion"
+                        "Router-backed fallback model does not support Anthropic SSE; buffering completion"
                     );
                     let mut buffered_request = request_ref.clone();
                     buffered_request.model = crate::ModelName::from(model.as_str());

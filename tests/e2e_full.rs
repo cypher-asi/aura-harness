@@ -1165,7 +1165,7 @@ async fn jwt_via_session_init_token() {
 }
 
 #[tokio::test]
-async fn jwt_proxy_mode_llm_turn() {
+async fn jwt_llm_turn() {
     let _ = dotenvy::dotenv();
     let (email, password) = require_zos!();
     let token = common::zos_login(&email, &password).await.unwrap();
@@ -1186,7 +1186,7 @@ async fn jwt_proxy_mode_llm_turn() {
 }
 
 #[tokio::test]
-async fn jwt_proxy_mode_tool_turn() {
+async fn jwt_tool_turn() {
     let _ = dotenvy::dotenv();
     let (email, password) = require_zos!();
     let token = common::zos_login(&email, &password).await.unwrap();
@@ -1214,13 +1214,8 @@ async fn jwt_proxy_mode_tool_turn() {
 }
 
 #[tokio::test]
-async fn jwt_missing_in_proxy_mode_errors() {
+async fn jwt_missing_errors() {
     let _ = dotenvy::dotenv();
-    let routing = std::env::var("AURA_LLM_ROUTING").unwrap_or_default();
-    assert!(
-        routing == "proxy" || routing.is_empty(),
-        "this test requires proxy mode but AURA_LLM_ROUTING={routing}"
-    );
     let _creds = require_zos!();
 
     let server = TestServer::start().await;
@@ -1235,13 +1230,14 @@ async fn jwt_missing_in_proxy_mode_errors() {
     ws.send_user_message("hello").await;
 
     let messages = ws.collect_turn(Duration::from_secs(60)).await;
-    // Should get an error about missing JWT for proxy mode
+    // Should get an error about missing JWT (the only LLM path is the
+    // router proxy, which requires a Bearer token).
     let has_error = messages
         .iter()
         .any(|m| m["type"] == "error" || m["stop_reason"] == "end_turn_with_errors");
     assert!(
         has_error,
-        "missing JWT in proxy mode should produce an error or error stop_reason"
+        "missing JWT should produce an error or error stop_reason"
     );
 }
 

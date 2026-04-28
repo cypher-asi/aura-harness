@@ -58,7 +58,7 @@ pub use node::Node;
 pub use aura_protocol::{
     ApprovalResponse, AssistantMessageEnd, AssistantMessageStart, ConversationMessage, ErrorMsg,
     FileOp, FilesChanged, InboundMessage, InstalledTool, OutboundMessage, SessionInit,
-    SessionProviderConfig, SessionReady, SessionUsage, TextDelta, ThinkingDelta,
+    SessionModelOverrides, SessionReady, SessionUsage, TextDelta, ThinkingDelta,
     ToolApprovalDecision, ToolApprovalPrompt, ToolApprovalRemember, ToolApprovalResponse,
     ToolAuth as ProtocolToolAuth, ToolInfo, ToolResultMsg, ToolUseStart, UserMessage,
 };

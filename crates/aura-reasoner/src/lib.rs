@@ -29,9 +29,8 @@ pub mod provider_factory;
 pub mod types;
 
 pub use provider_factory::{
-    default_from_env as default_provider_from_env, from_name as provider_from_name,
-    from_provider_config as provider_from_session_config, from_spec as provider_from_spec,
-    ProviderConfig, ProviderSelection, ProviderSpec,
+    default_provider as default_provider_from_env, mock_provider, with_session_overrides,
+    ProviderSelection, SessionOverrides,
 };
 
 pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
@@ -46,7 +45,7 @@ pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
     }
 }
 
-pub use anthropic::{AnthropicConfig, AnthropicProvider, RoutingMode};
+pub use anthropic::{AnthropicConfig, AnthropicProvider};
 pub use error::ReasonerError;
 
 // ============================================================================
@@ -255,9 +254,7 @@ mod tests {
             Message::new(
                 Role::Assistant,
                 vec![
-                    ContentBlock::Text {
-                        text: "hello".into(),
-                    },
+                    ContentBlock::Text { text: "hello".into() },
                     ContentBlock::Thinking {
                         thinking: "hidden".into(),
                         signature: None,

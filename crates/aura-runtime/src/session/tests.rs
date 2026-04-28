@@ -50,9 +50,10 @@ fn init_with_project_path(path: &std::path::Path) -> SessionInit {
         aura_session_id: None,
         aura_org_id: None,
         agent_id: None,
+        template_agent_id: None,
         user_id: "user-test".to_string(),
         tool_permissions: None,
-        provider_config: None,
+        provider_overrides: None,
         intent_classifier: None,
         agent_permissions: AgentPermissionsWire::default(),
     }
@@ -141,9 +142,10 @@ fn apply_init_builds_intent_classifier_when_spec_present() {
         aura_session_id: None,
         aura_org_id: None,
         agent_id: None,
+        template_agent_id: None,
         user_id: "user-test".to_string(),
         tool_permissions: None,
-        provider_config: None,
+        provider_overrides: None,
         intent_classifier: Some(spec),
         agent_permissions: AgentPermissionsWire::default(),
     };
@@ -190,9 +192,10 @@ fn apply_init_leaves_intent_classifier_none_when_spec_absent() {
         aura_session_id: None,
         aura_org_id: None,
         agent_id: None,
+        template_agent_id: None,
         user_id: "user-test".to_string(),
         tool_permissions: None,
-        provider_config: None,
+        provider_overrides: None,
         intent_classifier: None,
         agent_permissions: AgentPermissionsWire::default(),
     };
@@ -223,9 +226,10 @@ fn blank_session_init() -> SessionInit {
         aura_session_id: None,
         aura_org_id: None,
         agent_id: None,
+        template_agent_id: None,
         user_id: "user-test".to_string(),
         tool_permissions: None,
-        provider_config: None,
+        provider_overrides: None,
         intent_classifier: None,
         agent_permissions: AgentPermissionsWire::default(),
     }
@@ -236,6 +240,32 @@ fn apply_init_applies_full_access_permissions_by_default() {
     let mut session = test_session(None);
     session.apply_init(blank_session_init()).unwrap();
     assert_eq!(session.agent_permissions, AgentPermissions::full_access());
+}
+
+#[test]
+fn apply_init_uses_template_agent_id_for_skill_lookup() {
+    let mut session = test_session(None);
+    let mut init = blank_session_init();
+    init.agent_id = Some("spec-gen-project-123".to_string());
+    init.template_agent_id = Some("f74bc868-0a34-4195-9718-bf5ce7f67a55".to_string());
+
+    session.apply_init(init).unwrap();
+
+    assert_eq!(
+        session.skill_agent_id.as_deref(),
+        Some("f74bc868-0a34-4195-9718-bf5ce7f67a55")
+    );
+}
+
+#[test]
+fn apply_init_falls_back_to_agent_id_for_skill_lookup() {
+    let mut session = test_session(None);
+    let mut init = blank_session_init();
+    init.agent_id = Some("legacy-agent-id".to_string());
+
+    session.apply_init(init).unwrap();
+
+    assert_eq!(session.skill_agent_id.as_deref(), Some("legacy-agent-id"));
 }
 
 #[test]

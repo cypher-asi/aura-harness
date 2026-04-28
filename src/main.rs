@@ -230,19 +230,13 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
         ProcessManagerConfig::default(),
     ));
 
-    let selection = match aura_reasoner::provider_from_name(&args.provider) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = %e, "unknown provider name, falling back to mock");
-            // Phase 5 (error-handling polish): the previous
-            // `.expect("mock provider is always available")` would
-            // panic the CLI if the provider registry ever stopped
-            // recognising "mock". Surface a structured error so
-            // bootstrap exits non-zero with an actionable message.
-            aura_reasoner::provider_from_name("mock").map_err(|mock_err| {
-                anyhow::anyhow!("failed to construct fallback mock reasoner provider: {mock_err}")
-            })?
-        }
+    // After the proxy-only collapse there are exactly two providers:
+    // `mock` for tests / no-secrets boots, and the router-backed
+    // Anthropic-shaped client for everything else. The legacy
+    // `--provider` arg only ever takes `"anthropic"` or `"mock"`.
+    let selection = match args.provider.as_str() {
+        "mock" => aura_reasoner::mock_provider(),
+        _ => aura_reasoner::default_provider_from_env(),
     };
     if selection.name != "anthropic" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));

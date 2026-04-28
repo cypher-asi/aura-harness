@@ -167,7 +167,7 @@ HTTP router, scheduler, and worker management.
 
 ### Phase 8: TypeScript Gateway (`aura-gateway-ts`) — REMOVED
 
-The TypeScript sidecar that originally wrapped the Claude Code SDK has been removed. `aura-reasoner` now calls Anthropic directly in Rust (`reqwest`), either against `api.anthropic.com` in direct mode or through `aura-router` in proxy mode. Prompt caching, tool schemas, and the propose-only contract are all implemented in-tree. See Phase 16 for the deprecation/removal record.
+The TypeScript sidecar that originally wrapped the Claude Code SDK has been removed. `aura-reasoner` now calls Anthropic-shaped LLMs in Rust (`reqwest`) through `aura-router` (the AURA proxy) using a per-request JWT. The legacy direct-Anthropic path was deleted in the proxy-only collapse — prompt caching, tool schemas, and the propose-only contract are all implemented in-tree. See Phase 16 for the deprecation/removal record.
 
 ---
 
@@ -288,7 +288,7 @@ point.
 
 TypeScript gateway dependency removed.
 
-- [x] Provider selection config (`AURA_LLM_ROUTING=proxy|direct`)
+- [x] Provider selection config — collapsed in 2026: only the `aura-router` proxy path remains; LLM auth is JWT-only.
 - [x] Rust provider tested end-to-end (`AnthropicProvider` + mock)
 - [x] Rust provider is the only path (Node sidecar deleted)
 - [x] `aura-gateway-ts` directory removed from the workspace

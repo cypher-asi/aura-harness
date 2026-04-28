@@ -13,7 +13,7 @@
 //! when the relevant env vars are missing.
 //!
 //! Required environment (via `.env` or exported):
-//! - `AURA_LLM_ROUTING` / `AURA_ROUTER_URL` (or direct-mode keys)
+//! - `AURA_ROUTER_URL` (defaulted) and a JWT via `AURA_ROUTER_JWT` or `aura login`.
 
 mod common;
 

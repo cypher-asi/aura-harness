@@ -91,7 +91,7 @@ pub(super) async fn handle_session_init(
     outbound_tx: &mpsc::Sender<OutboundMessage>,
     ctx: &WsContext,
 ) {
-    let provider_config = init.provider_config.clone();
+    let provider_overrides = init.provider_overrides.clone();
 
     if session.initialized {
         let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
@@ -102,17 +102,13 @@ pub(super) async fn handle_session_init(
         return;
     }
 
-    let resolved_provider_override = if let Some(provider_config) = provider_config {
-        let reasoner_cfg = aura_reasoner::ProviderConfig {
-            provider: provider_config.provider.clone(),
-            routing_mode: provider_config.routing_mode.clone(),
-            api_key: provider_config.api_key.clone(),
-            base_url: provider_config.base_url.clone(),
-            default_model: provider_config.default_model.clone(),
-            fallback_model: provider_config.fallback_model.clone(),
-            prompt_caching_enabled: provider_config.prompt_caching_enabled,
+    let resolved_provider_override = if let Some(overrides) = provider_overrides {
+        let reasoner_overrides = aura_reasoner::SessionOverrides {
+            default_model: overrides.default_model.clone(),
+            fallback_model: overrides.fallback_model.clone(),
+            prompt_caching_enabled: overrides.prompt_caching_enabled,
         };
-        match aura_reasoner::provider_from_session_config(&reasoner_cfg) {
+        match aura_reasoner::with_session_overrides(reasoner_overrides) {
             Ok(selection) => Some(selection.provider),
             Err(e) => {
                 let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
@@ -336,11 +332,7 @@ pub(super) async fn build_kernel_with_config(
         ctx.store.clone(),
         ctx.scheduler.clone(),
     )));
-    if let Some(base_url) = ctx
-        .aura_os_server_url
-        .as_deref()
-        .filter(|url| !url.is_empty())
-    {
+    if let Some(base_url) = ctx.aura_os_server_url.as_deref().filter(|url| !url.is_empty()) {
         resolver = resolver.with_spawn_hook(Arc::new(AuraServerSpawnHook::new(
             base_url.to_string(),
             session.auth_token.clone(),
@@ -460,20 +452,22 @@ impl TurnEventSink for OutboundMessageSink<'_> {
         // best-effort value of well-known string fields the preview
         // cards consume (markdown_contents, content, old_text, etc.).
         let parsed = super::partial_json::parse_partial_tool_input(&name, &input);
-        let md_len = parsed
-            .get("markdown_contents")
-            .and_then(|v| v.as_str())
-            .map_or(0, str::len);
-        let content_len = parsed
-            .get("content")
-            .and_then(|v| v.as_str())
-            .map_or(0, str::len);
+        let str_field_len = |key: &str| {
+            parsed
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map_or(0, str::len)
+        };
+        let md_len = str_field_len("markdown_contents");
+        let content_len = str_field_len("content");
+        let description_len = str_field_len("description");
         tracing::info!(
             tool = %name,
             raw_input_bytes = input.len(),
             parsed_keys = parsed.as_object().map_or(0, |o| o.len()),
             markdown_len = md_len,
             content_len,
+            description_len,
             "forwarding tool_call_snapshot"
         );
         self.push(OutboundMessage::ToolCallSnapshot(ToolCallSnapshot {
@@ -646,7 +640,7 @@ mod tests {
     use crate::session::{Session, WsContext};
     use aura_agent::{AgentLoopResult, FileChange, FileChangeKind};
     use aura_core::{AgentToolPermissions, ToolState, UserToolDefaults};
-    use aura_protocol::{AgentPermissionsWire, SessionInit, SessionProviderConfig};
+    use aura_protocol::{AgentPermissionsWire, SessionInit, SessionModelOverrides};
     use aura_reasoner::MockProvider;
     use aura_store::RocksStore;
     use aura_tools::{ToolCatalog, ToolConfig};
@@ -771,14 +765,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_loop_config_preserves_upstream_provider_family() {
+    fn agent_loop_config_omits_upstream_provider_family_after_overrides_only_carry_model_knobs() {
         let mut session = Session::new(PathBuf::from("/tmp/aura"));
-        session.provider_config = Some(SessionProviderConfig {
-            provider: "anthropic".to_string(),
-            routing_mode: Some("proxy".to_string()),
-            upstream_provider_family: Some("deepseek".to_string()),
-            api_key: None,
-            base_url: None,
+        session.provider_overrides = Some(SessionModelOverrides {
             default_model: Some("deepseek-v4-flash".to_string()),
             fallback_model: None,
             prompt_caching_enabled: Some(true),
@@ -786,10 +775,10 @@ mod tests {
 
         let config = session.agent_loop_config();
 
-        assert_eq!(
-            config.upstream_provider_family,
-            Some("deepseek".to_string())
-        );
+        // The wire `SessionModelOverrides` no longer carries a family
+        // hint; family detection on the harness side falls back to the
+        // model-name heuristic in `RouterProvider::supports_anthropic_proxy_features`.
+        assert_eq!(config.upstream_provider_family, None);
     }
 
     #[tokio::test]
@@ -819,14 +808,10 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
+            template_agent_id: None,
             user_id: "user-test".to_string(),
             tool_permissions: None,
-            provider_config: Some(SessionProviderConfig {
-                provider: "anthropic".to_string(),
-                routing_mode: Some("proxy".to_string()),
-                upstream_provider_family: None,
-                api_key: None,
-                base_url: Some("http://127.0.0.1:9999".to_string()),
+            provider_overrides: Some(SessionModelOverrides {
                 default_model: Some("claude-opus-4-6".to_string()),
                 fallback_model: None,
                 prompt_caching_enabled: Some(true),
@@ -864,9 +849,10 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
+            template_agent_id: None,
             user_id: "user-test".to_string(),
             tool_permissions: None,
-            provider_config: None,
+            provider_overrides: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
         };
@@ -913,9 +899,10 @@ mod tests {
             aura_session_id: None,
             aura_org_id: None,
             agent_id: None,
+            template_agent_id: None,
             user_id: "user-test".to_string(),
             tool_permissions: None,
-            provider_config: None,
+            provider_overrides: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
         };
