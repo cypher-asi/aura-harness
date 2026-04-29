@@ -12,6 +12,7 @@ mod session_helpers;
 
 use cli::{Cli, Commands, RunArgs, UiMode};
 
+use anyhow::Context;
 use aura_agent::{
     AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager, ProcessManagerConfig,
 };
@@ -231,13 +232,14 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     ));
 
     // After the proxy-only collapse there are exactly two providers:
-    // `mock` for tests / no-secrets boots, and the router-backed
+    // `mock` for explicit test / offline mode, and the router-backed
     // Anthropic-shaped client for everything else. The legacy
     // `--provider` arg only ever takes `"anthropic"` or `"mock"`.
     let selection = match args.provider.as_str() {
-        "mock" => aura_reasoner::mock_provider(),
+        "mock" => Ok(aura_reasoner::mock_provider()),
         _ => aura_reasoner::default_provider_from_env(),
-    };
+    }
+    .context("building model provider")?;
     if selection.name != "anthropic" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }

@@ -9,9 +9,9 @@
 //! in live instead of staying empty until the end of the turn.
 //!
 //! For specific known top-level string fields (e.g. `markdown_contents`,
-//! `content`, `old_text`, `new_text`, `path`, `title`), we just need to scan
-//! for `"key":"..."` and collect the characters that have arrived so far,
-//! respecting JSON escape rules.
+//! `content`, `description`, `old_text`, `new_text`, `path`, `title`), we
+//! just need to scan for `"key":"..."` and collect the characters that have
+//! arrived so far, respecting JSON escape rules.
 
 use serde_json::{Map, Value};
 
@@ -48,10 +48,9 @@ fn fields_for_tool(tool_name: &str) -> &'static [&'static str] {
         "create_spec" | "update_spec" => &["title", "markdown_contents"],
         "write_file" => &["path", "content"],
         "edit_file" => &["path", "old_text", "new_text"],
-        // For unknown tools, fall back to a conservative set of common
-        // string fields so the snapshot at least carries something. The
-        // client merges shallowly so unrelated fields are harmless.
-        _ => &["path", "title", "content", "markdown_contents"],
+        "create_task" => &["spec_id", "title", "description"],
+        "update_task" => &["task_id", "title", "description", "status"],
+        _ => &[],
     }
 }
 
@@ -225,9 +224,43 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_falls_back_to_common_fields() {
+    fn unknown_partial_tool_returns_empty_object() {
         let v = parse_partial_tool_input("custom_tool", "{\"title\":\"hi");
+        assert_eq!(v, serde_json::json!({}));
+    }
+
+    #[test]
+    fn unknown_tool_returns_complete_json_when_buffer_parses() {
+        let v = parse_partial_tool_input("custom_tool", r#"{"title":"hi"}"#);
         assert_eq!(v["title"], "hi");
+    }
+
+    #[test]
+    fn extracts_partial_description_for_create_task() {
+        let v = parse_partial_tool_input(
+            "create_task",
+            "{\"spec_id\":\"abc\",\"title\":\"My Task\",\"description\":\"Do the thing",
+        );
+        assert_eq!(v["spec_id"], "abc");
+        assert_eq!(v["title"], "My Task");
+        assert_eq!(v["description"], "Do the thing");
+    }
+
+    #[test]
+    fn extracts_partial_description_for_update_task() {
+        let v = parse_partial_tool_input(
+            "update_task",
+            "{\"task_id\":\"abc\",\"title\":\"Renamed\",\"description\":\"Now with",
+        );
+        assert_eq!(v["task_id"], "abc");
+        assert_eq!(v["title"], "Renamed");
+        assert_eq!(v["description"], "Now with");
+    }
+
+    #[test]
+    fn unknown_partial_tool_does_not_extract_description() {
+        let v = parse_partial_tool_input("custom_tool", "{\"description\":\"hi");
+        assert_eq!(v, serde_json::json!({}));
     }
 
     #[test]

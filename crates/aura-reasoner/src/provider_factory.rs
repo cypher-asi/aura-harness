@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::anthropic::{AnthropicConfig, AnthropicProvider};
 use crate::error::ReasonerError;
@@ -41,34 +41,23 @@ pub struct SessionOverrides {
 
 /// Build the default router-backed provider from environment variables.
 ///
-/// Wraps [`AnthropicConfig::from_env`] + [`AnthropicProvider::new`]. On
-/// the rare HTTP-client construction failure (e.g. invalid TLS
-/// configuration), logs a warning and substitutes a mock so callers can
-/// still boot — this preserves the historical "no secrets needed" UX in
-/// CI / integration test entrypoints.
-#[must_use]
-pub fn default_provider() -> ProviderSelection {
+/// Wraps [`AnthropicConfig::from_env`] + [`AnthropicProvider::new`].
+///
+/// # Errors
+///
+/// Returns [`ReasonerError`] if HTTP client construction fails.
+pub fn default_provider() -> Result<ProviderSelection, ReasonerError> {
     let cfg = AnthropicConfig::from_env();
     info!(
         base_url = %cfg.base_url,
         default_model = %cfg.default_model,
         "LLM provider ready (router-backed proxy)"
     );
-    match AnthropicProvider::new(cfg) {
-        Ok(provider) => ProviderSelection {
-            provider: Arc::new(provider),
-            name: "anthropic".to_string(),
-        },
-        Err(e) => {
-            warn!(error = %e, "LLM provider build failed, using mock");
-            ProviderSelection {
-                provider: Arc::new(MockProvider::simple_response(
-                    "Mock provider (HTTP client init failed)",
-                )),
-                name: "mock (fallback)".to_string(),
-            }
-        }
-    }
+    let provider = AnthropicProvider::new(cfg)?;
+    Ok(ProviderSelection {
+        provider: Arc::new(provider),
+        name: "anthropic".to_string(),
+    })
 }
 
 /// Build a provider with per-session overrides applied to the env-default
@@ -111,9 +100,7 @@ pub fn with_session_overrides(
 #[must_use]
 pub fn mock_provider() -> ProviderSelection {
     ProviderSelection {
-        provider: Arc::new(MockProvider::simple_response(
-            "Mock provider (tests only)",
-        )),
+        provider: Arc::new(MockProvider::simple_response("Mock provider (tests only)")),
         name: "mock".to_string(),
     }
 }
@@ -127,6 +114,14 @@ mod tests {
         let selection = mock_provider();
         assert_eq!(selection.name, "mock");
         assert_eq!(selection.provider.name(), "mock");
+    }
+
+    #[test]
+    fn default_provider_returns_anthropic_or_error() {
+        std::env::set_var("AURA_ROUTER_URL", "http://127.0.0.1:3999");
+        let selection = default_provider().expect("default_provider");
+        assert_eq!(selection.name, "anthropic");
+        assert_eq!(selection.provider.name(), "anthropic");
     }
 
     #[test]

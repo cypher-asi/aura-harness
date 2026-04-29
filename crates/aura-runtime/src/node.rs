@@ -121,7 +121,9 @@ impl Node {
         let executors = vec![resolver];
         info!("Executors configured");
 
-        let provider = aura_reasoner::default_provider_from_env().provider;
+        let provider = aura_reasoner::default_provider_from_env()
+            .context("building default model provider")?
+            .provider;
 
         // Invariant §3: LLM calls performed by the memory subsystem are
         // recorded via a dedicated "memory service" kernel whose agent log
@@ -279,6 +281,7 @@ mod tests {
 
     #[test]
     fn test_create_model_provider_returns_something() {
-        let _provider = aura_reasoner::default_provider_from_env();
+        let _provider =
+            aura_reasoner::default_provider_from_env().expect("default provider should build");
     }
 }
