@@ -1,9 +1,11 @@
+use super::safe_transition::{safe_transition, TransitionOutcome};
 use super::{
-    extract_shell_command, forward_agent_event, info, validate_execution, warn, AgenticTaskParams,
-    Arc, AutomatonError, AutomatonEvent, DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap,
-    ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor, TaskExecutionResult,
-    TaskInfo, TaskTrackingConfig, TickContext, ToolProfile, MAX_RETRIES_PER_TASK, STATE_FAILED_IDS,
-    STATE_FAILURE_REASONS, STATE_RETRY_COUNTS, STATE_TASK_QUEUE, STATE_WORK_LOG,
+    debug, extract_shell_command, forward_agent_event, info, validate_execution, warn,
+    AgenticTaskParams, Arc, AutomatonError, AutomatonEvent, DevLoopAutomaton, DevLoopConfig,
+    DomainApi, HashMap, ProjectInfo, SessionInfo, ShellTaskParams, SpecInfo, TaskDescriptor,
+    TaskExecutionResult, TaskInfo, TaskTrackingConfig, TickContext, ToolProfile,
+    MAX_RETRIES_PER_TASK, STATE_FAILED_IDS, STATE_FAILURE_REASONS, STATE_RETRY_COUNTS,
+    STATE_TASK_QUEUE, STATE_WORK_LOG,
 };
 use crate::builtins::noop_executor::NoOpExecutor;
 
@@ -199,8 +201,17 @@ async fn enqueue_retries(
         *count += 1;
         info!(task_id = %id, attempt = *count, "Retrying failed task");
 
-        if let Err(e) = domain.transition_task(id, "ready", None).await {
-            warn!(task_id = %id, error = %e, "Failed to sync retry status to backend");
+        match safe_transition(domain, id, "ready").await {
+            Ok(TransitionOutcome::Applied) => {}
+            Ok(TransitionOutcome::AlreadyInTarget) => {
+                debug!(task_id = %id, status = "ready", "Task already in target state; skipping retry sync");
+            }
+            Ok(TransitionOutcome::LocalOnlyMissing) => {
+                debug!(task_id = %id, status = "ready", "Task not on backend (404); skipping retry sync");
+            }
+            Err(e) => {
+                warn!(task_id = %id, error = %e, "Failed to sync retry status to backend");
+            }
         }
 
         queue.push(id.clone());

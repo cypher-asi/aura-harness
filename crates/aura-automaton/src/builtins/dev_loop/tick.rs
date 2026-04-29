@@ -1,8 +1,8 @@
-use super::safe_transition::safe_transition;
+use super::safe_transition::{safe_transition, TransitionOutcome};
 use super::{
-    info, topological_sort, warn, Automaton, AutomatonError, AutomatonEvent, DevLoopAutomaton,
-    DevLoopConfig, DomainApi, HashMap, HashSet, Schedule, TaskAggregate, TaskDescriptor,
-    TaskExecutionResult, TickContext, TickOutcome, COMMIT_SKIPPED_NO_CHANGES,
+    debug, info, topological_sort, warn, Automaton, AutomatonError, AutomatonEvent,
+    DevLoopAutomaton, DevLoopConfig, DomainApi, HashMap, HashSet, Schedule, TaskAggregate,
+    TaskDescriptor, TaskExecutionResult, TickContext, TickOutcome, COMMIT_SKIPPED_NO_CHANGES,
     STATE_COMPLETED_COUNT, STATE_DONE_IDS, STATE_FAILED_COUNT, STATE_FAILED_IDS,
     STATE_FAILURE_REASONS, STATE_INITIALIZED, STATE_LOOP_FINISHED, STATE_TASK_QUEUE,
     STATE_WORK_LOG,
@@ -65,7 +65,7 @@ impl DevLoopAutomaton {
     ) -> Result<TickOutcome, AutomatonError> {
         if self.tool_executor.is_none() {
             return Err(AutomatonError::InvalidConfig(
-                "no tool executor configured â€” the agent cannot perform file or command operations"
+                "no tool executor configured - the agent cannot perform file or command operations"
                     .into(),
             ));
         }
@@ -138,7 +138,16 @@ impl DevLoopAutomaton {
         let task = match self.domain.get_task(&task_id, None).await {
             Ok(t) => t,
             Err(e) => {
-                warn!(task_id = %task_id, error = %e, "Failed to fetch task, skipping");
+                // Local-only task ids (minted by the harness's
+                // in-process spec→task pipeline without a matching
+                // `POST /api/projects/.../tasks`) consistently 404.
+                // Demote to debug so the operator log only retains
+                // genuine backend errors.
+                if super::safe_transition::is_task_not_found(&e) {
+                    debug!(task_id = %task_id, "Task not on backend (404); skipping");
+                } else {
+                    warn!(task_id = %task_id, error = %e, "Failed to fetch task, skipping");
+                }
                 return Ok(TickOutcome::Continue);
             }
         };
@@ -216,12 +225,11 @@ impl DevLoopAutomaton {
                 .await;
         }
 
-        // `safe_transition` guards against the `done → done` rejection
-        // observed in production: the agent's `task_done` tool moves the
-        // task to `done` server-side first, and this post-execution
-        // sync previously surfaced the redundant POST as a WARN.
-        if let Err(e) = safe_transition(self.domain.as_ref(), &task.id, "done").await {
-            warn!(task_id = %task.id, error = %e, "Failed to sync task done status to backend");
+        match safe_transition(self.domain.as_ref(), &task.id, "done").await {
+            Ok(outcome) => log_transition_outcome(&task.id, "done", outcome),
+            Err(e) => {
+                warn!(task_id = %task.id, error = %e, "Failed to sync task done status to backend")
+            }
         }
 
         let mut done_ids: Vec<String> = ctx.state.get(STATE_DONE_IDS).unwrap_or_default();
@@ -262,12 +270,11 @@ impl DevLoopAutomaton {
     ) -> Result<(), AutomatonError> {
         warn!(task_id = %task.id, error = %e, "Task execution failed");
 
-        // `safe_transition` bridges `ready → in_progress → failed` when
-        // the task is still in `ready` (storage rejects the direct
-        // `ready → failed` jump; see the note in
-        // `aura-os-server/src/handlers/dev_loop.rs`).
-        if let Err(te) = safe_transition(self.domain.as_ref(), &task.id, "failed").await {
-            warn!(task_id = %task.id, error = %te, "Failed to sync task failed status to backend");
+        match safe_transition(self.domain.as_ref(), &task.id, "failed").await {
+            Ok(outcome) => log_transition_outcome(&task.id, "failed", outcome),
+            Err(te) => {
+                warn!(task_id = %task.id, error = %te, "Failed to sync task failed status to backend")
+            }
         }
 
         let mut failed_ids: Vec<String> = ctx.state.get(STATE_FAILED_IDS).unwrap_or_default();
@@ -303,13 +310,31 @@ fn deps_satisfied(task: &TaskDescriptor, done_set: &HashSet<&str>) -> bool {
 }
 
 async fn transition_to_in_progress(domain: &dyn DomainApi, task: &TaskDescriptor) {
-    // Delegate to `safe_transition` so the `failed → ready →
-    // in_progress` bridge (used when re-running a previously-failed
-    // task) is applied consistently with the success / failure paths.
-    // `safe_transition` also skips the `pending → ready` leg when the
-    // task is already ready or in_progress, avoiding stray WARNs.
-    if let Err(e) = safe_transition(domain, &task.id, "in_progress").await {
-        warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
+    match safe_transition(domain, &task.id, "in_progress").await {
+        Ok(outcome) => log_transition_outcome(&task.id, "in_progress", outcome),
+        Err(e) => {
+            warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
+        }
+    }
+}
+
+fn log_transition_outcome(task_id: &str, target: &str, outcome: TransitionOutcome) {
+    match outcome {
+        TransitionOutcome::Applied => {}
+        TransitionOutcome::AlreadyInTarget => {
+            debug!(
+                task_id,
+                status = %target,
+                "Task already in target state; skipping status sync"
+            );
+        }
+        TransitionOutcome::LocalOnlyMissing => {
+            debug!(
+                task_id,
+                status = %target,
+                "Task not on backend (404); skipping status sync"
+            );
+        }
     }
 }
 
