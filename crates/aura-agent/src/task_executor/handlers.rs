@@ -51,6 +51,25 @@ pub(super) fn enrich_compiler_output_sync(project_folder: &str, raw_output: &str
 }
 
 impl TaskToolExecutor {
+    fn tool_result(
+        tc: &ToolCallInfo,
+        content: impl Into<String>,
+        is_error: bool,
+        stop_loop: bool,
+    ) -> ToolCallResult {
+        ToolCallResult {
+            tool_use_id: tc.id.clone(),
+            content: content.into(),
+            is_error,
+            stop_loop,
+            file_changes: Vec::new(),
+        }
+    }
+
+    fn gate_rejection(tc: &ToolCallInfo, content: impl Into<String>) -> ToolCallResult {
+        Self::tool_result(tc, content, true, false)
+    }
+
     pub(super) async fn track_file_op(&self, tool_name: &str, input: &serde_json::Value) {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
         if path.is_empty() {
@@ -76,10 +95,6 @@ impl TaskToolExecutor {
         self.tracked_file_ops.lock().await.push(op);
     }
 
-    pub(super) fn enrich_compiler_output(&self, raw_output: &str) -> String {
-        enrich_compiler_output_sync(&self.project_folder, raw_output)
-    }
-
     pub(super) async fn handle_task_done(
         &self,
         tc: &ToolCallInfo,
@@ -89,46 +104,22 @@ impl TaskToolExecutor {
         self.extract_notes_and_follow_ups(tc).await;
 
         if let Some(error_prompt) = self.check_pervasive_errors().await {
-            results.push(ToolCallResult {
-                tool_use_id: tc.id.clone(),
-                content: error_prompt,
-                is_error: true,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            });
+            results.push(Self::gate_rejection(tc, error_prompt));
             return;
         }
 
         if let Some(review_prompt) = self.check_self_review().await {
-            results.push(ToolCallResult {
-                tool_use_id: tc.id.clone(),
-                content: review_prompt,
-                is_error: true,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            });
+            results.push(Self::gate_rejection(tc, review_prompt));
             return;
         }
 
         if let Some(no_write_prompt) = self.check_no_writes().await {
-            results.push(ToolCallResult {
-                tool_use_id: tc.id.clone(),
-                content: no_write_prompt,
-                is_error: true,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            });
+            results.push(Self::gate_rejection(tc, no_write_prompt));
             return;
         }
 
         if let Some(stub_prompt) = self.check_stubs_and_reject().await {
-            results.push(ToolCallResult {
-                tool_use_id: tc.id.clone(),
-                content: stub_prompt,
-                is_error: true,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            });
+            results.push(Self::gate_rejection(tc, stub_prompt));
             return;
         }
 
@@ -138,34 +129,21 @@ impl TaskToolExecutor {
         // env-var escape hatch, and emits status text on failure.
         match self.check_all_tests_pass().await {
             TestGateOutcome::Passed | TestGateOutcome::Skipped => {
-                results.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content: r#"{"status":"completed"}"#.to_string(),
-                    is_error: false,
-                    stop_loop: true,
-                    file_changes: Vec::new(),
-                });
+                results.push(Self::tool_result(
+                    tc,
+                    r#"{"status":"completed"}"#,
+                    false,
+                    true,
+                ));
                 *stop = true;
             }
             TestGateOutcome::Failed { prompt } => {
-                results.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content: prompt,
-                    is_error: true,
-                    stop_loop: false,
-                    file_changes: Vec::new(),
-                });
+                results.push(Self::gate_rejection(tc, prompt));
             }
             TestGateOutcome::Exhausted { prompt } => {
                 // Budget exhausted: stop the loop and let the automaton see
                 // the dod_test_gate_exhausted flag on the merged result.
-                results.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content: prompt,
-                    is_error: true,
-                    stop_loop: true,
-                    file_changes: Vec::new(),
-                });
+                results.push(Self::tool_result(tc, prompt, true, true));
                 *stop = true;
             }
         }
@@ -275,13 +253,31 @@ impl TaskToolExecutor {
         if no_changes {
             return None;
         }
-        Some(
-            "ERROR: You are completing this task but have not made any file changes \
-             (write_file, edit_file, or delete_file). Implementation tasks must produce \
-             file changes. If this task genuinely requires no file changes, call task_done \
-             again with \"no_changes_needed\": true and explain why in the \"notes\" field."
-                .to_string(),
-        )
+        // Name the current phase so the model can recover through the
+        // intended submit_plan -> implement -> task_done workflow.
+        let phase = self.task_phase.lock().await;
+        let prefix = if matches!(*phase, TaskPhase::Exploring) {
+            "ERROR: task_done was rejected — you have not produced any file changes \
+             (write_file / edit_file / delete_file) AND you are still in the EXPLORING phase. \
+             You cannot finish a task from Exploring; the task workflow is:\n\
+             \n\
+             1. (you are here) Briefly explore with read_file / search_code / find_files / list_files.\n\
+             2. Call submit_plan with a concrete approach (≥20 chars) and at least one path in \
+                files_to_modify or files_to_create. Plan acceptance unlocks file edits.\n\
+             3. Implement with write_file / edit_file / delete_file.\n\
+             4. THEN call task_done.\n\
+             \n\
+             Do NOT keep retrying task_done — call submit_plan next. "
+        } else {
+            "ERROR: task_done was rejected — you are in the IMPLEMENTING phase but have not \
+             produced any file changes (write_file / edit_file / delete_file). Implementation \
+             tasks must produce file changes. Make the edits this task requires, then call \
+             task_done. "
+        };
+        Some(format!(
+            "{prefix}If this task genuinely requires no file changes, call task_done again with \
+             \"no_changes_needed\": true and explain why in the \"notes\" field."
+        ))
     }
 
     /// Run the full project test suite and translate the outcome into a
@@ -492,39 +488,34 @@ impl TaskToolExecutor {
                     let mut outcomes = self.recent_tool_outcomes.lock().await;
                     outcomes.reset();
                 }
-                results.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content: format!(
+                results.push(Self::tool_result(
+                    tc,
+                    format!(
                         "Plan accepted. Proceeding to implementation.\n\n\
                          YOUR PLAN (reference during implementation):\n{context_string}\n\n\
                          Now implement according to this plan. Start with the most \
                          foundational changes first.",
                     ),
-                    is_error: false,
-                    stop_loop: false,
-                    file_changes: Vec::new(),
-                });
+                    false,
+                    false,
+                ));
             }
             Err(reason) => {
-                results.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content: format!("Plan rejected: {reason}. Revise and resubmit."),
-                    is_error: true,
-                    stop_loop: false,
-                    file_changes: Vec::new(),
-                });
+                results.push(Self::gate_rejection(
+                    tc,
+                    format!("Plan rejected: {reason}. Revise and resubmit."),
+                ));
             }
         }
     }
 
     pub(super) fn handle_get_context(&self, tc: &ToolCallInfo, results: &mut Vec<ToolCallResult>) {
-        results.push(ToolCallResult {
-            tool_use_id: tc.id.clone(),
-            content: self.task_context.clone(),
-            is_error: false,
-            stop_loop: false,
-            file_changes: Vec::new(),
-        });
+        results.push(Self::tool_result(
+            tc,
+            self.task_context.clone(),
+            false,
+            false,
+        ));
     }
 
     pub(super) fn emit_tool_status(&self, tc: &ToolCallInfo, result: &ToolCallResult) {
@@ -578,5 +569,9 @@ fn tail(s: &str, max_bytes: usize) -> String {
         .char_indices()
         .find_map(|(i, c)| if c == '\n' { Some(start + i + 1) } else { None })
         .unwrap_or(start);
-    format!("[truncated; showing last {} bytes]\n{}", s.len() - cut, &s[cut..])
+    format!(
+        "[truncated; showing last {} bytes]\n{}",
+        s.len() - cut,
+        &s[cut..]
+    )
 }

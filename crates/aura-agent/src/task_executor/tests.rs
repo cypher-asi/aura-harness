@@ -139,6 +139,8 @@ fn task_done_no_changes(notes: &str) -> ToolCallInfo {
 
 #[tokio::test]
 async fn task_done_rejects_when_no_file_ops() {
+    // `make_executor()` puts the executor in `Implementing` phase, so
+    // the rejection should be the implementing-phase variant.
     let executor = make_executor();
     let calls = [task_done_call("all done")];
     let results = executor.execute(&calls).await;
@@ -146,7 +148,47 @@ async fn task_done_rejects_when_no_file_ops() {
     assert_eq!(results.len(), 1);
     assert!(results[0].is_error);
     assert!(!results[0].stop_loop);
-    assert!(results[0].content.contains("not made any file changes"));
+    let body = &results[0].content;
+    assert!(
+        body.contains("have not produced any file changes"),
+        "expected implementing-phase rejection wording: {body}"
+    );
+    assert!(
+        body.contains("IMPLEMENTING phase"),
+        "rejection must name the current phase: {body}"
+    );
+    assert!(
+        body.contains("no_changes_needed"),
+        "rejection must keep the no_changes_needed escape hatch: {body}"
+    );
+}
+
+/// SWE-bench regression guard: when the agent calls `task_done` while
+/// still in `Exploring` phase, the rejection must spell out the
+/// submit_plan → implement → task_done workflow so the model stops
+/// looping on `task_done`.
+#[tokio::test]
+async fn task_done_in_exploring_phase_points_at_submit_plan() {
+    let executor = make_exploring_executor();
+    let calls = [task_done_call("done")];
+    let results = executor.execute(&calls).await;
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].is_error);
+    assert!(!results[0].stop_loop);
+    let body = &results[0].content;
+    assert!(
+        body.contains("EXPLORING phase"),
+        "exploring-phase rejection must name the phase: {body}"
+    );
+    assert!(
+        body.contains("submit_plan"),
+        "exploring-phase rejection must instruct the model to submit_plan: {body}"
+    );
+    assert!(
+        body.contains("Do NOT keep retrying task_done"),
+        "exploring-phase rejection must tell the model to stop looping: {body}"
+    );
 }
 
 #[tokio::test]
@@ -415,6 +457,77 @@ async fn policy_denials_do_not_count_against_error_ratio() {
     );
 }
 
+/// Build an executor stuck in [`TaskPhase::Exploring`]. Used to exercise
+/// the write/edit/delete gate without going through the real agent loop.
+fn make_exploring_executor() -> TaskToolExecutor {
+    TaskToolExecutor {
+        inner: Arc::new(NoOpInner),
+        project_folder: "/tmp/test".to_string(),
+        build_command: None,
+        test_command: Some("cargo test --workspace".to_string()),
+        test_command_override: None,
+        task_context: String::new(),
+        tracked_file_ops: Default::default(),
+        notes: Default::default(),
+        follow_ups: Default::default(),
+        stub_fix_attempts: Default::default(),
+        test_gate_attempts: Default::default(),
+        test_runner: Arc::new(MockTestRunner::always_pass()),
+        disable_test_gate: false,
+        task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
+        self_review: Default::default(),
+        event_tx: None,
+        no_changes_needed: Default::default(),
+        dod_test_gate_exhausted: Default::default(),
+        recent_tool_outcomes: Default::default(),
+    }
+}
+
+/// `write_file` calls before `submit_plan` must be rejected with a
+/// schema-rich message so the model can self-correct on its next turn.
+/// Regression guard for the SWE-bench failure mode where the gate
+/// emitted a single-sentence error that gave the model nothing to do
+/// next, and it would either retry the same write or escape into
+/// `task_done` with no file ops.
+#[tokio::test]
+async fn write_file_in_exploring_phase_returns_actionable_schema() {
+    let executor = make_exploring_executor();
+    let call = ToolCallInfo {
+        id: "wf_1".into(),
+        name: "write_file".into(),
+        input: serde_json::json!({
+            "path": "src/lib.rs",
+            "content": "fn main() {}",
+        }),
+    };
+
+    let results = executor.execute(&[call]).await;
+
+    assert_eq!(results.len(), 1);
+    let r = &results[0];
+    assert!(r.is_error, "gated write_file must report is_error");
+    assert!(!r.stop_loop, "gate must not stop the loop");
+    assert_eq!(r.file_changes.len(), 0);
+
+    let body = &r.content;
+    assert!(
+        body.contains("submit_plan"),
+        "rejection must reference submit_plan: {body}"
+    );
+    assert!(
+        body.contains("\"approach\""),
+        "rejection must include the approach field schema: {body}"
+    );
+    assert!(
+        body.contains("\"files_to_modify\"") && body.contains("\"files_to_create\""),
+        "rejection must include both file-list field names: {body}"
+    );
+    assert!(
+        body.contains("at least 20 characters"),
+        "rejection must spell out the approach length requirement: {body}"
+    );
+}
+
 #[tokio::test]
 async fn submit_plan_resets_outcome_window() {
     let executor = TaskToolExecutor {
@@ -523,7 +636,11 @@ async fn task_done_passes_gate_when_tests_pass() {
         results[0].content
     );
     assert!(results[0].stop_loop);
-    assert_eq!(*runner.calls.lock().await, 1, "test runner should be invoked exactly once");
+    assert_eq!(
+        *runner.calls.lock().await,
+        1,
+        "test runner should be invoked exactly once"
+    );
     assert!(!*executor.dod_test_gate_exhausted.lock().await);
 }
 
@@ -540,9 +657,7 @@ async fn task_done_rejects_when_tests_fail_within_budget() {
     assert!(results[0].is_error);
     assert!(!results[0].stop_loop, "must keep iterating within budget");
     assert!(
-        results[0]
-            .content
-            .contains("Definition-of-Done test gate"),
+        results[0].content.contains("Definition-of-Done test gate"),
         "rejection prompt missing DoD framing: {}",
         results[0].content
     );

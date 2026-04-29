@@ -4,12 +4,6 @@
 //! [`TaskToolExecutor`] wraps an inner [`AgentToolExecutor`] to intercept
 //! engine-level tools (`task_done`, `submit_plan`, `get_task_context`) and
 //! enforce the explore-then-implement workflow.
-//
-// TODO(phase5, 2026-04-22): TaskToolExecutor and its helpers are not
-// yet invoked from the live agent loop — plan gating and task context
-// are staged for Phase 5 integration. Until then, silence dead-code
-// warnings at the module root rather than per-symbol.
-#![allow(dead_code)]
 
 use std::path::Path;
 use std::sync::Arc;
@@ -31,6 +25,28 @@ use crate::verify::{infer_default_build_command, infer_default_test_command, Tes
 
 const MAX_STUB_FIX_ATTEMPTS: u32 = 2;
 
+/// Reply returned to the model when it tries `write_file` / `edit_file` /
+/// `delete_file` while still in [`TaskPhase::Exploring`].
+///
+/// The message includes the accepted `submit_plan` shape because the
+/// exploring-phase write gate is recoverable only when the next model turn
+/// submits a valid plan.
+const SUBMIT_PLAN_GATE_MESSAGE: &str = "ERROR: write_file / edit_file / delete_file are blocked until you call submit_plan.\n\
+\n\
+Call submit_plan first with this exact JSON shape:\n\
+{\n\
+  \"approach\": \"<at least 20 chars: how you'll fix the task>\",\n\
+  \"files_to_modify\": [\"<existing path>\", ...],\n\
+  \"files_to_create\": [\"<new path>\", ...],\n\
+  \"key_decisions\": [\"<optional notes>\", ...]\n\
+}\n\
+\n\
+Validation requirements (rejecting submit_plan calls that do not satisfy them):\n\
+- \"approach\" must be at least 20 characters describing your strategy.\n\
+- \"files_to_modify\" + \"files_to_create\" must list at least one path.\n\
+\n\
+Once submit_plan is accepted, write/edit/delete tools unlock for the rest of this task. Do NOT call task_done before then — the completion gate also requires at least one successful file operation.";
+
 /// Maximum number of times the `task_done` hard gate will reject a completion
 /// because the project test suite is failing.
 ///
@@ -43,31 +59,29 @@ pub const MAX_TASK_DONE_TEST_RETRIES: u32 = 8;
 
 /// Environment variable that disables the `task_done` test gate.
 ///
-/// Set to `"1"` to opt out (e.g. for quick scripted experiments where the
-/// project does not have a meaningful test suite). The gate also no-ops
-/// automatically when the project has no `test_command` configured AND no
-/// default can be inferred from the project manifest.
-pub const DISABLE_TEST_GATE_ENV: &str = "AURA_DOD_DISABLE_TEST_GATE";
+/// This is an explicit operator escape hatch for emergency/manual runs only.
+/// The reader accepts only the literal `"1"`; typo-prone truthy values keep
+/// the gate active. Normal projects should configure a test command instead.
+pub(crate) const DISABLE_TEST_GATE_ENV: &str = "AURA_DOD_DISABLE_TEST_GATE";
 
 /// Environment variable that overrides the project-configured test command
-/// for the `task_done` hard gate. Useful when an operator wants to point the
-/// gate at a different test runner than the project default — e.g. running
-/// `pytest -q -k smoke` inside a debugging session, or chaining
-/// `cargo test --workspace && npm test --silent` for a polyglot repo —
-/// without editing the project record. Empty string is treated as unset so
-/// callers can clear the override per-shell.
+/// for the `task_done` hard gate.
+///
+/// This remains an operator override, not a fallback. Empty or whitespace-only
+/// values are treated as unset so a shell can clear the override without
+/// accidentally disabling the gate.
 ///
 /// Resolution order at gate time, highest precedence first:
 ///   1. `AURA_DOD_TEST_COMMAND` (this env var, captured at executor construction)
 ///   2. `Project.test_command` (per-project config)
 ///   3. `infer_default_test_command(project_root)` (manifest auto-detect)
-pub const TEST_COMMAND_OVERRIDE_ENV: &str = "AURA_DOD_TEST_COMMAND";
+pub(crate) const TEST_COMMAND_OVERRIDE_ENV: &str = "AURA_DOD_TEST_COMMAND";
 
 /// Read the [`DISABLE_TEST_GATE_ENV`] env var at construction time. Returns
 /// `true` only when explicitly set to `"1"`. Captured once per executor so
 /// concurrent tests that mutate the global env cannot race the gate.
 #[must_use]
-pub fn read_disable_test_gate_env() -> bool {
+pub(crate) fn read_disable_test_gate_env() -> bool {
     std::env::var(DISABLE_TEST_GATE_ENV).ok().as_deref() == Some("1")
 }
 
@@ -76,7 +90,7 @@ pub fn read_disable_test_gate_env() -> bool {
 /// Captured once per executor so concurrent tests that mutate the global env
 /// cannot race the gate.
 #[must_use]
-pub fn read_test_command_override_env() -> Option<String> {
+pub(crate) fn read_test_command_override_env() -> Option<String> {
     let raw = std::env::var(TEST_COMMAND_OVERRIDE_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -92,7 +106,7 @@ pub fn read_test_command_override_env() -> Option<String> {
 /// [`crate::verify::run_full_test_suite`]. Unit tests inject a deterministic
 /// mock so the gate can be exercised without spinning up a child process.
 #[async_trait]
-pub trait TaskTestRunner: Send + Sync + std::fmt::Debug {
+pub(crate) trait TaskTestRunner: Send + Sync + std::fmt::Debug {
     async fn run_tests(
         &self,
         project_root: &Path,
@@ -103,7 +117,7 @@ pub trait TaskTestRunner: Send + Sync + std::fmt::Debug {
 /// Default [`TaskTestRunner`] implementation that runs the project's test
 /// command via the verify module.
 #[derive(Debug, Default)]
-pub struct RealTaskTestRunner;
+pub(crate) struct RealTaskTestRunner;
 
 #[async_trait]
 impl TaskTestRunner for RealTaskTestRunner {
@@ -127,7 +141,7 @@ mod tests;
 
 /// Tool executor that layers plan gating, file-op tracking, self-review,
 /// and stub detection on top of a delegated executor.
-pub struct TaskToolExecutor {
+pub(crate) struct TaskToolExecutor {
     /// Inner executor that handles filesystem and search tools.
     pub inner: Arc<dyn AgentToolExecutor>,
     /// Path to the project root for build and stub checks.
@@ -187,7 +201,7 @@ pub struct TaskToolExecutor {
 /// single implementation burst (submit_plan + ~10-15 file/search ops +
 /// a handful of retries) without letting errors from earlier in the
 /// turn veto a `task_done` that the agent has clearly recovered from.
-pub const RECENT_OUTCOMES_WINDOW: usize = 16;
+pub(crate) const RECENT_OUTCOMES_WINDOW: usize = 16;
 
 /// One slot in the [`RecentToolOutcomes`] ring buffer.
 #[derive(Debug, Clone, Copy)]
@@ -217,12 +231,12 @@ struct OutcomeEntry {
 /// the implementing phase (after `submit_plan`) so prior exploration
 /// noise never influences the completion check.
 #[derive(Debug, Default)]
-pub struct RecentToolOutcomes {
+pub(crate) struct RecentToolOutcomes {
     entries: std::collections::VecDeque<OutcomeEntry>,
     /// True when the most recent `run_command` actually executed and
     /// returned a non-zero exit. Policy-denied commands *do not* set
     /// this flag because nothing ran.
-    pub last_command_failed: bool,
+    pub(crate) last_command_failed: bool,
 }
 
 impl RecentToolOutcomes {
@@ -340,15 +354,7 @@ impl AgentToolExecutor for TaskToolExecutor {
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if gated_indices.contains(&i) {
-                results.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content: "ERROR: You must call submit_plan before making file changes. \
-                              Explore the codebase, form your approach, then submit your plan."
-                        .to_string(),
-                    is_error: true,
-                    stop_loop: false,
-                    file_changes: Vec::new(),
-                });
+                results.push(ToolCallResult::error(&tc.id, SUBMIT_PLAN_GATE_MESSAGE));
                 continue;
             }
             match tc.name.as_str() {
@@ -466,7 +472,7 @@ impl AgentToolExecutor for TaskToolExecutor {
 // ---------------------------------------------------------------------------
 
 /// Format a concise hint for a tool call's arguments (for status logging).
-pub fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
+pub(crate) fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
     match tc.name.as_str() {
         "read_file" => {
             let path = tc.input.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -521,7 +527,7 @@ pub fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
 }
 
 /// Check if build output looks like compiler errors (Rust or TypeScript).
-pub fn looks_like_compiler_errors(output: &str) -> bool {
+pub(crate) fn looks_like_compiler_errors(output: &str) -> bool {
     let has_rust_errors = output.contains("error[E") && output.contains("-->");
     let has_generic_errors = output.contains("error:") && output.contains("-->");
     let has_ts_errors = output.contains("TS2") && output.contains("error TS");
