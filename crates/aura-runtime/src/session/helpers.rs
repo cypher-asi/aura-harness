@@ -332,7 +332,11 @@ pub(super) async fn build_kernel_with_config(
         ctx.store.clone(),
         ctx.scheduler.clone(),
     )));
-    if let Some(base_url) = ctx.aura_os_server_url.as_deref().filter(|url| !url.is_empty()) {
+    if let Some(base_url) = ctx
+        .aura_os_server_url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+    {
         resolver = resolver.with_spawn_hook(Arc::new(AuraServerSpawnHook::new(
             base_url.to_string(),
             session.auth_token.clone(),
@@ -452,12 +456,8 @@ impl TurnEventSink for OutboundMessageSink<'_> {
         // best-effort value of well-known string fields the preview
         // cards consume (markdown_contents, content, old_text, etc.).
         let parsed = super::partial_json::parse_partial_tool_input(&name, &input);
-        let str_field_len = |key: &str| {
-            parsed
-                .get(key)
-                .and_then(|v| v.as_str())
-                .map_or(0, str::len)
-        };
+        let str_field_len =
+            |key: &str| parsed.get(key).and_then(|v| v.as_str()).map_or(0, str::len);
         let md_len = str_field_len("markdown_contents");
         let content_len = str_field_len("content");
         let description_len = str_field_len("description");

@@ -23,7 +23,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use aura_agent::agent_runner::{
     AgentRunner, AgentRunnerConfig, AgenticTaskParams, ShellTaskParams, TaskExecutionResult,

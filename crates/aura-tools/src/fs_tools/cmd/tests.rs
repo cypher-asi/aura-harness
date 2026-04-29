@@ -470,7 +470,6 @@ fn test_binary_allowlist_strips_windows_bat_suffix() {
     assert!(check_binary_allowlist(fake.to_str().unwrap(), true, false, &allowlist).is_ok());
 }
 
-
 // ========================================================================
 // CmdRunTool::execute gating — Phase 2 hardening
 // ========================================================================
@@ -954,4 +953,75 @@ async fn test_cmd_run_tool_command_alias_empty_allowlist_is_permissive() {
         .expect("empty allowlist with allow_shell=true must accept the `command` alias");
 
     assert!(result.ok, "expected success, got {result:?}");
+}
+
+// ========================================================================
+// windows_resolve_program — PATHEXT-aware bare-name resolution
+// ========================================================================
+//
+// Bare names may be expanded to PATHEXT shims for direct spawn, but
+// caller-supplied paths and explicit extensions remain unchanged.
+
+/// Operator intent wins for non-bare names.
+#[cfg(windows)]
+#[test]
+fn windows_resolve_program_passes_through_paths_and_extensions() {
+    use std::path::Path;
+
+    let cwd = Path::new(".");
+    assert!(windows_resolve_program(r"tools\foo.exe", None, cwd).is_none());
+    assert!(windows_resolve_program("./build.sh", None, cwd).is_none());
+    assert!(windows_resolve_program(r"C:\Windows\System32\cmd.exe", None, cwd).is_none());
+    assert!(windows_resolve_program("npm.cmd", None, cwd).is_none());
+    assert!(windows_resolve_program("BUILD.BAT", None, cwd).is_none());
+    assert!(windows_resolve_program("python.exe", None, cwd).is_none());
+}
+
+/// Smoke test against a real Windows binary so the PATHEXT integration is
+/// exercised without depending on Node or another optional toolchain.
+#[cfg(windows)]
+#[test]
+fn windows_resolve_program_finds_cmd_via_pathext() {
+    use std::path::Path;
+
+    let cwd = Path::new(".");
+    let Some(resolved) = windows_resolve_program("cmd", None, cwd) else {
+        return;
+    };
+    assert!(
+        resolved.is_absolute(),
+        "expected absolute resolved path, got {}",
+        resolved.display()
+    );
+    let lower = resolved
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    assert!(
+        lower.starts_with("cmd."),
+        "expected resolved file to start with 'cmd.', got {lower}"
+    );
+}
+
+/// `cmd_spawn` keeps bare-name resolution on the direct-spawn path.
+#[cfg(windows)]
+#[tokio::test]
+async fn cmd_spawn_resolves_bare_cmd_via_pathext() {
+    let (sandbox, _dir) = create_test_sandbox();
+    let result = cmd_spawn(
+        &sandbox,
+        "cmd",
+        &["/C".into(), "exit".into(), "0".into()],
+        None,
+    );
+    let (mut child, _display) = match result {
+        Ok(t) => t,
+        Err(e) => panic!("expected cmd_spawn to find cmd via PATHEXT, got: {e:?}"),
+    };
+    let status = child.wait().expect("child wait failed");
+    assert!(
+        status.success(),
+        "expected `cmd /C exit 0` to succeed, got {status:?}"
+    );
 }

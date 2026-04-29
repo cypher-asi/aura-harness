@@ -2,8 +2,8 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{Capability, ToolDefinition};
 use aura_core::ToolResult;
+use aura_core::{Capability, ToolDefinition};
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -21,12 +21,9 @@ pub enum ThresholdResult {
 
 /// Reject any program name that could be interpreted as a shell command.
 ///
-/// Used to keep [`cmd_spawn`] safe: even though the default path no
-/// longer wraps invocations in `sh -c` / `cmd.exe /C`, a hostile caller
-/// could still embed metacharacters in `program` and hope the OS falls
-/// back to shell resolution (`CreateProcessW` on Windows, `posix_spawn`
-/// on Unix). Rejecting these characters up front guarantees that what
-/// the caller typed is a bare executable name or path.
+/// Used to keep [`cmd_spawn`] safe: the direct-spawn path resolves only
+/// executable names or paths. Shell syntax belongs in the explicit
+/// `shell_script` path, where it is gated by policy.
 ///
 /// Rejects:
 /// - Empty strings
@@ -122,12 +119,31 @@ pub fn cmd_spawn(
         format!("{} {}", program, args.join(" "))
     };
 
-    let mut cmd = Command::new(program);
+    // Windows direct spawn is PATHEXT-aware for bare program names, but
+    // still launches the resolved executable directly rather than through
+    // `cmd.exe`.
+    #[cfg(windows)]
+    let fresh_path = refresh_system_path();
+
+    let spawn_target: std::ffi::OsString = {
+        #[cfg(windows)]
+        {
+            windows_resolve_program(program, fresh_path.as_deref(), &working_dir)
+                .map(std::path::PathBuf::into_os_string)
+                .unwrap_or_else(|| program.into())
+        }
+        #[cfg(not(windows))]
+        {
+            program.into()
+        }
+    };
+
+    let mut cmd = Command::new(&spawn_target);
     cmd.args(args);
 
     #[cfg(windows)]
     {
-        if let Some(fresh_path) = refresh_system_path() {
+        if let Some(ref fresh_path) = fresh_path {
             cmd.env("PATH", fresh_path);
         }
         cmd.env("PYTHONUTF8", "1");
@@ -428,6 +444,43 @@ fn wait_with_hard_timeout(
             ));
         }
         thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// PATHEXT-aware program resolution for [`cmd_spawn`] on Windows.
+///
+/// Bare program names are resolved with [`which::which_in`] so `.cmd` /
+/// `.bat` shims are found without routing through `cmd.exe`. Caller-supplied
+/// paths and explicit-extension names are left to `Command::new` unchanged.
+///
+/// Returns `None` when:
+/// - the input already contains a path separator (so it's a relative or
+///   absolute path the OS can resolve directly);
+/// - the input already ends with a recognised executable extension;
+/// - `which` cannot find any matching binary on PATH (the caller then
+///   attempts the original direct spawn and lets the OS report the error).
+#[cfg(windows)]
+fn windows_resolve_program(
+    program: &str,
+    fresh_path: Option<&str>,
+    cwd: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(program);
+    if path.components().count() > 1 {
+        return None;
+    }
+    let lower = program.to_ascii_lowercase();
+    if lower.ends_with(".exe")
+        || lower.ends_with(".cmd")
+        || lower.ends_with(".bat")
+        || lower.ends_with(".com")
+        || lower.ends_with(".ps1")
+    {
+        return None;
+    }
+    match fresh_path {
+        Some(p) => which::which_in(program, Some(p), cwd).ok(),
+        None => which::which(program).ok(),
     }
 }
 
