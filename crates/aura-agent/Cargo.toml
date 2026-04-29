@@ -29,6 +29,9 @@ bytes = { workspace = true }
 dashmap = { workspace = true }
 chrono = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+which = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

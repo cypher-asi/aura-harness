@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use anyhow::{anyhow, Context};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
@@ -38,12 +39,28 @@ fn truncate_output(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let half = max / 2;
-    let start = &s[..half];
-    let end = &s[s.len() - half..];
+    let start = &s[..floor_char_boundary(s, half)];
+    let end = &s[ceil_char_boundary(s, s.len() - half)..];
     format!(
         "{start}\n\n... (truncated {0} bytes) ...\n\n{end}",
         s.len() - max
     )
+}
+
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    idx = idx.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn ceil_char_boundary(s: &str, mut idx: usize) -> usize {
+    idx = idx.min(s.len());
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
 }
 
 fn needs_shell(cmd: &str) -> bool {
@@ -117,42 +134,100 @@ fn spawn_build_child(
         }
     } else {
         let parts: Vec<&str> = build_command.split_whitespace().collect();
-        Command::new(parts[0])
+        // On Windows, Rust's `Command::new("npm")` ignores `PATHEXT` so
+        // node-ecosystem shims (`npm.cmd`, `yarn.cmd`, `pnpm.cmd`,
+        // `vite.cmd`, etc.) fail with `program not found` even when they
+        // are clearly on PATH. Resolve the bare name through `which`
+        // first (which *does* honour `PATHEXT`) so the build/test gate
+        // can run npm scripts on Windows without forcing operators to
+        // wrap every command in `cmd /C`.
+        #[cfg(target_os = "windows")]
+        let program: std::ffi::OsString = windows_resolve_program(parts[0], project_dir)
+            .map(std::path::PathBuf::into_os_string)
+            .unwrap_or_else(|| parts[0].into());
+        #[cfg(not(target_os = "windows"))]
+        let program: std::ffi::OsString = parts[0].into();
+
+        Command::new(&program)
             .args(&parts[1..])
             .current_dir(project_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
     }
-    .map_err(|e| anyhow::anyhow!("failed to execute build command `{build_command}`: {e}"))?;
+    .map_err(|e| {
+        anyhow!(
+            "failed to execute build command `{build_command}` in `{}`: {e}",
+            project_dir.display()
+        )
+    })?;
     Ok(child)
+}
+
+/// PATHEXT-aware bare-name resolution used by [`spawn_build_child`] on
+/// Windows. See the analogous helper in
+/// `aura_tools::fs_tools::cmd` — kept duplicated here to avoid widening
+/// `aura-tools`' public surface for what's a small, very local fix.
+///
+/// Returns `None` for inputs that already look like a path or carry an
+/// explicit executable extension; the caller then falls back to passing
+/// the original string straight to `Command::new`, which preserves the
+/// pre-fix behaviour (and lets `Command::new` produce the canonical OS
+/// `not found` error if the file truly doesn't exist).
+#[cfg(target_os = "windows")]
+fn windows_resolve_program(program: &str, cwd: &Path) -> Option<std::path::PathBuf> {
+    let path = Path::new(program);
+    if path.components().count() > 1 {
+        return None;
+    }
+    let lower = program.to_ascii_lowercase();
+    if lower.ends_with(".exe")
+        || lower.ends_with(".cmd")
+        || lower.ends_with(".bat")
+        || lower.ends_with(".com")
+        || lower.ends_with(".ps1")
+    {
+        return None;
+    }
+    let path_env = std::env::var("PATH").ok();
+    match path_env {
+        Some(p) => which::which_in(program, Some(p), cwd).ok(),
+        None => which::which(program).ok(),
+    }
 }
 
 fn spawn_output_collectors(
     child: &mut tokio::process::Child,
     output_tx: Option<UnboundedSender<String>>,
 ) -> (
-    tokio::task::JoinHandle<String>,
-    tokio::task::JoinHandle<String>,
+    tokio::task::JoinHandle<anyhow::Result<String>>,
+    tokio::task::JoinHandle<anyhow::Result<String>>,
 ) {
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
     let stdout_tx = output_tx.clone();
-    let stdout_handle = tokio::spawn(async move { collect_lines(stdout_pipe, stdout_tx).await });
-    let stderr_handle = tokio::spawn(async move { collect_lines(stderr_pipe, output_tx).await });
+    let stdout_handle =
+        tokio::spawn(async move { collect_lines("stdout", stdout_pipe, stdout_tx).await });
+    let stderr_handle =
+        tokio::spawn(async move { collect_lines("stderr", stderr_pipe, output_tx).await });
 
     (stdout_handle, stderr_handle)
 }
 
 async fn collect_lines<R: tokio::io::AsyncRead + Unpin>(
+    stream_name: &'static str,
     pipe: Option<R>,
     tx: Option<UnboundedSender<String>>,
-) -> String {
+) -> anyhow::Result<String> {
     let mut collected = String::new();
     if let Some(pipe) = pipe {
         let mut reader = tokio::io::BufReader::new(pipe).lines();
-        while let Ok(Some(line)) = reader.next_line().await {
+        while let Some(line) = reader
+            .next_line()
+            .await
+            .with_context(|| format!("failed reading build command {stream_name}"))?
+        {
             if let Some(ref tx) = tx {
                 let _ = tx.send(format!("{line}\n"));
             }
@@ -160,19 +235,19 @@ async fn collect_lines<R: tokio::io::AsyncRead + Unpin>(
             collected.push('\n');
         }
     }
-    collected
+    Ok(collected)
 }
 
 async fn await_build_result(
     child: &mut tokio::process::Child,
     build_command: &str,
-    stdout_handle: tokio::task::JoinHandle<String>,
-    stderr_handle: tokio::task::JoinHandle<String>,
+    stdout_handle: tokio::task::JoinHandle<anyhow::Result<String>>,
+    stderr_handle: tokio::task::JoinHandle<anyhow::Result<String>>,
 ) -> anyhow::Result<BuildResult> {
     match tokio::time::timeout(BUILD_TIMEOUT, child.wait()).await {
         Ok(Ok(status)) => {
-            let stdout_raw = stdout_handle.await.unwrap_or_default();
-            let stderr_raw = stderr_handle.await.unwrap_or_default();
+            let stdout_raw = collect_joined_output(stdout_handle, "stdout", build_command).await?;
+            let stderr_raw = collect_joined_output(stderr_handle, "stderr", build_command).await?;
             Ok(BuildResult {
                 success: status.success(),
                 stdout: truncate_output(&stdout_raw, MAX_OUTPUT_BYTES),
@@ -188,11 +263,21 @@ async fn await_build_result(
     }
 }
 
+async fn collect_joined_output(
+    handle: tokio::task::JoinHandle<anyhow::Result<String>>,
+    stream_name: &str,
+    build_command: &str,
+) -> anyhow::Result<String> {
+    handle.await.map_err(|e| {
+        anyhow!("build command `{build_command}` {stream_name} collector failed: {e}")
+    })?
+}
+
 async fn handle_build_timeout(
     child: &mut tokio::process::Child,
     build_command: &str,
-    stdout_handle: tokio::task::JoinHandle<String>,
-    stderr_handle: tokio::task::JoinHandle<String>,
+    stdout_handle: tokio::task::JoinHandle<anyhow::Result<String>>,
+    stderr_handle: tokio::task::JoinHandle<anyhow::Result<String>>,
 ) -> anyhow::Result<BuildResult> {
     warn!(
         command = %build_command,
@@ -202,9 +287,9 @@ async fn handle_build_timeout(
     if let Err(e) = child.kill().await {
         warn!(command = %build_command, error = %e, "failed to kill timed-out build process");
     }
-    let partial_stderr = stderr_handle.await.unwrap_or_default();
+    let partial_stderr = collect_timeout_output(stderr_handle, "stderr", build_command).await;
     let timeout_msg = format!(
-        "Build command timed out after {}s. The command may start a long-running \
+        "Build command `{build_command}` timed out after {}s. The command may start a long-running \
          process (e.g. a server). Use `cargo build` or `cargo check` instead of \
          `cargo run` for build verification.",
         BUILD_TIMEOUT.as_secs()
@@ -220,11 +305,25 @@ async fn handle_build_timeout(
     };
     Ok(BuildResult {
         success: false,
-        stdout: stdout_handle.await.unwrap_or_default(),
+        stdout: truncate_output(
+            &collect_timeout_output(stdout_handle, "stdout", build_command).await,
+            MAX_OUTPUT_BYTES,
+        ),
         stderr,
         exit_code: None,
         timed_out: true,
     })
+}
+
+async fn collect_timeout_output(
+    handle: tokio::task::JoinHandle<anyhow::Result<String>>,
+    stream_name: &str,
+    build_command: &str,
+) -> String {
+    match collect_joined_output(handle, stream_name, build_command).await {
+        Ok(output) => output,
+        Err(e) => format!("[failed to collect build command {stream_name}: {e}]\n"),
+    }
 }
 
 fn log_build_result(result: &BuildResult, build_command: &str) {
@@ -582,7 +681,9 @@ fn parse_rspec_output(output: &str) -> Vec<IndividualTestResult> {
     // RSpec invocation would fall through to the aggregate-only branch.
     if let Some(stats) = rspec_summary_counts(output) {
         let already_failed = results.len();
-        let passes = stats.examples.saturating_sub(stats.failures + stats.pending);
+        let passes = stats
+            .examples
+            .saturating_sub(stats.failures + stats.pending);
         for i in 0..passes {
             results.push(IndividualTestResult {
                 name: format!("(rspec example #{idx})", idx = i + 1),
@@ -717,6 +818,13 @@ PASS src/hooks.test.ts
     }
 
     #[test]
+    fn truncate_output_handles_multibyte_boundaries() {
+        let long = "é".repeat(100);
+        let result = truncate_output(&long, 51);
+        assert!(result.contains("truncated"));
+    }
+
+    #[test]
     fn needs_shell_with_pipe() {
         assert!(needs_shell("cargo test | head"));
     }
@@ -783,8 +891,12 @@ ok  \tgithub.com/example/ok\t0.123s
                 .any(|n| n.contains("github.com/example/broken")),
             "package-level FAIL line should be captured: got {names_failed:?}"
         );
-        assert!(results.iter().any(|r| r.name == "TestAlpha" && r.status == "passed"));
-        assert!(results.iter().any(|r| r.name == "TestGamma" && r.status == "skipped"));
+        assert!(results
+            .iter()
+            .any(|r| r.name == "TestAlpha" && r.status == "passed"));
+        assert!(results
+            .iter()
+            .any(|r| r.name == "TestGamma" && r.status == "skipped"));
         assert!(summary.contains("failed"));
     }
 
@@ -835,9 +947,36 @@ Finished in 0.05 seconds
         assert_eq!(results[0].name, "(aggregate)");
         assert_eq!(results[0].status, "passed");
 
-        let (results, _summary) =
-            parse_test_output("custom-runner: failure!", "trace...", false);
+        let (results, _summary) = parse_test_output("custom-runner: failure!", "trace...", false);
         assert_eq!(results[0].status, "failed");
+    }
+
+    #[tokio::test]
+    async fn run_build_command_rejects_empty_command() {
+        let err = run_build_command(std::path::Path::new("."), "  ", None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("build_command is empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_build_command_reports_spawn_failure_with_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = "__aura_missing_command_for_runner_test__";
+
+        let err = run_build_command(dir.path(), command, None)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+
+        assert!(msg.contains(command), "missing command context: {msg}");
+        assert!(
+            msg.contains(&dir.path().display().to_string()),
+            "missing directory context: {msg}"
+        );
     }
 
     #[test]
@@ -849,5 +988,66 @@ no test markers here
         let (results, _summary) = parse_test_output(stdout, "", true);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "(aggregate)");
+    }
+
+    /// `windows_resolve_program` must keep its hands off any input that
+    /// already looks like a path or carries an explicit executable
+    /// extension. Returning `None` here is the contract that lets
+    /// `spawn_build_child` fall through to `Command::new(parts[0])` with
+    /// the operator's original string, which is critical so we don't
+    /// silently rewrite (for example) a project-local `./build.cmd`
+    /// into a `.cmd` that happens to share a name on PATH.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_resolve_program_skips_paths_and_explicit_extensions() {
+        use std::path::Path;
+
+        let cwd = Path::new(".");
+        // Anything containing a path separator → caller intent.
+        assert!(windows_resolve_program(r"tools\foo.exe", cwd).is_none());
+        assert!(windows_resolve_program("./build.sh", cwd).is_none());
+        assert!(windows_resolve_program(r"C:\Windows\System32\where.exe", cwd).is_none());
+
+        // Explicit extension → let `Command::new` do its own PATH search,
+        // which already works for `.exe` and tolerates `.cmd`/`.bat`
+        // when the operator typed them out.
+        assert!(windows_resolve_program("npm.cmd", cwd).is_none());
+        assert!(windows_resolve_program("BUILD.BAT", cwd).is_none());
+        assert!(windows_resolve_program("python.exe", cwd).is_none());
+    }
+
+    /// Smoke test that `which::which_in` actually finds a real Windows
+    /// shim when given a bare name. We probe `cmd` (which is always on
+    /// PATH as `cmd.exe`) so the test is robust on stripped-down CI
+    /// images that don't ship npm/node. The point is to assert *that*
+    /// resolution happens, not which extension wins; on a host without
+    /// `cmd` on PATH we skip rather than fail so this stays portable.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_resolve_program_finds_bare_name_via_pathext() {
+        use std::path::Path;
+
+        let cwd = Path::new(".");
+        let Some(resolved) = windows_resolve_program("cmd", cwd) else {
+            // `cmd` somehow not on PATH on this host. Nothing to assert
+            // about behaviour we don't control; treat as a non-failure
+            // skip so the test suite stays green in restrictive CI
+            // sandboxes (e.g. WSL crates run on Linux containers).
+            return;
+        };
+        assert!(
+            resolved.is_absolute(),
+            "expected an absolute resolved path, got {}",
+            resolved.display()
+        );
+        let lower = resolved
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        assert!(
+            lower.starts_with("cmd."),
+            "expected resolved file to start with 'cmd.', got {lower}"
+        );
     }
 }

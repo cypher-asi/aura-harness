@@ -7,7 +7,9 @@ use crate::types::ToolCallInfo;
 use crate::types::ToolCallResult;
 
 use super::search_cache::normalized_search_key;
-use super::tool_execution::{push_tool_result_message_with_context, split_cached, update_cache};
+use super::tool_execution::{
+    push_tool_result_message_with_context, split_cached, truncate_preview, update_cache,
+};
 
 #[test]
 fn tool_results_are_emitted_before_context_texts() {
@@ -305,4 +307,11 @@ fn split_cached_prefers_exact_over_fuzzy_when_both_match() {
         !cached[0].content.contains("fuzzy-hit"),
         "fuzzy value should not leak when exact hit exists"
     );
+}
+
+#[test]
+fn truncate_preview_uses_ascii_marker() {
+    let preview = truncate_preview("abcdef", 3);
+    assert_eq!(preview, "abc...");
+    assert!(!preview.contains('\u{2026}'));
 }

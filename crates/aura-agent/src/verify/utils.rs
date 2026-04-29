@@ -101,30 +101,27 @@ pub fn infer_default_build_command(project_root: &Path) -> Option<String> {
     None
 }
 
-/// Infer a default full-suite test command from project manifest files.
+/// Infer one deterministic default test command from project manifest files.
 ///
 /// Recognises Cargo, the JS package managers (Bun, pnpm, Yarn, npm, Deno),
-/// Python (pytest), Go, Ruby (Bundler/RSpec), .NET, Maven, and Gradle. When
-/// the project root carries manifests for several ecosystems (a polyglot
-/// monorepo) the recognised commands are joined with ` && ` so the DoD gate
-/// runs the *whole* project's test suites, not just whichever stack happens
-/// to match first.
+/// Python (pytest), Go, Ruby (Bundler/RSpec), Maven, Gradle, and .NET. The
+/// inference deliberately returns a single command in a stable precedence
+/// order instead of auto-chaining every detected ecosystem. Polyglot projects
+/// that need a full multi-suite gate should provide an explicit test command.
 ///
 /// Returns `None` when no recognised manifest is present; the caller should
 /// then decide whether to skip the test gate (analysis-only project) or
 /// abort with a configuration error.
 pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
-    let mut commands = Vec::new();
-
     if project_root.join("Cargo.toml").is_file() {
-        commands.push("cargo test --workspace --all-features".to_string());
+        return Some("cargo test --workspace --all-features".to_string());
     }
 
     // JS/TS ecosystem: pick the runner the project actually uses by
     // looking at the lockfile, then fall back to npm. Only one JS runner
     // wins because they all execute the same `package.json` scripts.
     if project_root.join("package.json").is_file() {
-        let js_cmd = if project_root.join("bun.lockb").is_file()
+        return Some(if project_root.join("bun.lockb").is_file()
             || project_root.join("bun.lock").is_file()
         {
             "bun test"
@@ -134,13 +131,13 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
             "yarn test --silent"
         } else {
             "npm test --silent --if-present"
-        };
-        commands.push(js_cmd.to_string());
-    } else if project_root.join("deno.json").is_file()
-        || project_root.join("deno.jsonc").is_file()
-    {
+        }
+        .to_string());
+    }
+
+    if project_root.join("deno.json").is_file() || project_root.join("deno.jsonc").is_file() {
         // Deno projects don't carry a package.json by default.
-        commands.push("deno test --quiet".to_string());
+        return Some("deno test --quiet".to_string());
     }
 
     if project_root.join("pyproject.toml").is_file()
@@ -149,11 +146,11 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
         || project_root.join("setup.cfg").is_file()
         || project_root.join("pytest.ini").is_file()
     {
-        commands.push("python -m pytest -q".to_string());
+        return Some("python -m pytest -q".to_string());
     }
 
     if project_root.join("go.mod").is_file() {
-        commands.push("go test ./...".to_string());
+        return Some("go test ./...".to_string());
     }
 
     if project_root.join("Gemfile").is_file() {
@@ -165,11 +162,11 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
         } else {
             "bundle exec rake test"
         };
-        commands.push(ruby_cmd.to_string());
+        return Some(ruby_cmd.to_string());
     }
 
     if project_root.join("pom.xml").is_file() {
-        commands.push("mvn -B test".to_string());
+        return Some("mvn -B test".to_string());
     } else if project_root.join("build.gradle").is_file()
         || project_root.join("build.gradle.kts").is_file()
         || project_root.join("settings.gradle").is_file()
@@ -182,18 +179,14 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
         } else {
             "gradle"
         };
-        commands.push(format!("{wrapper} test"));
+        return Some(format!("{wrapper} test"));
     }
 
     if has_dotnet_project(project_root) {
-        commands.push("dotnet test --nologo".to_string());
+        return Some("dotnet test --nologo".to_string());
     }
 
-    if commands.is_empty() {
-        None
-    } else {
-        Some(commands.join(" && "))
-    }
+    None
 }
 
 /// Detect a .NET project by searching for `*.sln`, `*.csproj`, or `*.fsproj`
@@ -391,11 +384,8 @@ mod tests {
         assert!(cmd.contains("dotnet test"), "got {cmd}");
     }
 
-    /// A polyglot monorepo (Rust core + frontend + Python tooling)
-    /// must run all three suites, joined with `&&` so a failure in any
-    /// one fails the gate.
     #[test]
-    fn infer_test_command_chains_polyglot_monorepo() {
+    fn infer_test_command_uses_first_recognized_manifest_for_polyglot_project() {
         let dir = tempdir().unwrap();
         touch(&dir.path().join("Cargo.toml"));
         touch(&dir.path().join("package.json"));
@@ -403,14 +393,11 @@ mod tests {
         touch(&dir.path().join("go.mod"));
 
         let cmd = infer_default_test_command(dir.path()).unwrap();
-        assert!(cmd.contains("cargo test"), "got {cmd}");
-        assert!(cmd.contains("npm test"), "got {cmd}");
-        assert!(cmd.contains("pytest"), "got {cmd}");
-        assert!(cmd.contains("go test"), "got {cmd}");
-        // Each pair separated by ` && ` so the runner short-circuits on
-        // the first failing suite and the agent still sees the failure
-        // through the gate's error path.
-        assert_eq!(cmd.matches(" && ").count(), 3, "got {cmd}");
+        assert_eq!(cmd, "cargo test --workspace --all-features");
+        assert!(
+            !cmd.contains(" && "),
+            "inferred defaults must not auto-chain: {cmd}"
+        );
     }
 
     #[test]

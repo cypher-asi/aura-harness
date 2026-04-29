@@ -120,6 +120,15 @@ async fn execute_and_cache_tools(
     })
 }
 
+/// Maximum characters of the tool result body included in the
+/// `Tool call completed` log line as `result_preview`. Only emitted on
+/// errors so the operator can diagnose tool rejections (e.g. write_file
+/// validation, task_done gate) without dumping every successful tool's
+/// full output into `harness.log`. Sized to comfortably hold the
+/// `task_done` rejection text (~298B) and most validation errors from
+/// `aura-tools` while staying under any tracing field truncation limits.
+const TOOL_ERROR_PREVIEW_LIMIT: usize = 1024;
+
 fn emit_and_log_results(event_tx: Option<&Sender<AgentLoopEvent>>, tools: &ExecutedTools) {
     for r in &tools.all_results {
         let tool_name = tools
@@ -134,18 +143,56 @@ fn emit_and_log_results(event_tx: Option<&Sender<AgentLoopEvent>>, tools: &Execu
         } else {
             "executor"
         };
-        info!(
-            tool_use_id = %r.tool_use_id,
-            tool_name = tool_name,
-            is_write = helpers::is_write_tool(tool_name),
-            is_error = r.is_error,
-            stop_loop = r.stop_loop,
-            source = source,
-            result_len = r.content.len(),
-            "Tool call completed"
-        );
+        if r.is_error {
+            let preview = truncate_preview(&r.content, TOOL_ERROR_PREVIEW_LIMIT);
+            info!(
+                tool_use_id = %r.tool_use_id,
+                tool_name = tool_name,
+                is_write = helpers::is_write_tool(tool_name),
+                is_error = r.is_error,
+                stop_loop = r.stop_loop,
+                source = source,
+                result_len = r.content.len(),
+                result_preview = preview.as_str(),
+                "Tool call completed"
+            );
+        } else {
+            info!(
+                tool_use_id = %r.tool_use_id,
+                tool_name = tool_name,
+                is_write = helpers::is_write_tool(tool_name),
+                is_error = r.is_error,
+                stop_loop = r.stop_loop,
+                source = source,
+                result_len = r.content.len(),
+                "Tool call completed"
+            );
+        }
     }
     emit_tool_results(event_tx, &tools.all_results, &tools.tool_calls);
+}
+
+/// Sanitise a tool error body for inline embedding in a `tracing` log
+/// field: collapse whitespace, drop control characters, replace inner
+/// double quotes (which would otherwise break naive `key="value"`
+/// parsers like `infra/evals/external/bin/follow-harness-log.mjs`),
+/// and clip to `limit` characters with an ASCII marker.
+pub(super) fn truncate_preview(content: &str, limit: usize) -> String {
+    let collapsed: String = content
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let trimmed = collapsed
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('"', "'");
+    if trimmed.chars().count() <= limit {
+        trimmed
+    } else {
+        let head: String = trimmed.chars().take(limit).collect();
+        format!("{head}...")
+    }
 }
 
 fn emit_stop_error(
@@ -173,7 +220,9 @@ fn check_termination_conditions(
 ) -> bool {
     let should_stop = tools.all_results.iter().any(|r| r.stop_loop);
 
-    let all_errors = !tools.all_results.is_empty() && tools.all_results.iter().all(|r| r.is_error);
+    let all_errors = !tools.saw_empty_path_block
+        && !tools.all_results.is_empty()
+        && tools.all_results.iter().all(|r| r.is_error);
     if all_errors {
         state.counters.consecutive_all_error_iterations += 1;
     } else {
@@ -280,13 +329,7 @@ pub(super) fn split_cached(
                 source = "cache:exact",
                 "Tool call satisfied from cache"
             );
-            cached.push(ToolCallResult {
-                tool_use_id: tc.id.clone(),
-                content,
-                is_error: false,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            });
+            cached.push(cached_tool_result(tc, content));
             continue;
         }
 
@@ -304,13 +347,7 @@ pub(super) fn split_cached(
                     source = "cache:fuzzy",
                     "Tool call satisfied from fuzzy cache"
                 );
-                cached.push(ToolCallResult {
-                    tool_use_id: tc.id.clone(),
-                    content,
-                    is_error: false,
-                    stop_loop: false,
-                    file_changes: Vec::new(),
-                });
+                cached.push(cached_tool_result(tc, content));
                 continue;
             }
         }
@@ -319,6 +356,16 @@ pub(super) fn split_cached(
     }
 
     (cached, uncached)
+}
+
+fn cached_tool_result(call: &ToolCallInfo, content: String) -> ToolCallResult {
+    ToolCallResult {
+        tool_use_id: call.id.clone(),
+        content,
+        is_error: false,
+        stop_loop: false,
+        file_changes: Vec::new(),
+    }
 }
 
 pub(super) fn update_cache(
