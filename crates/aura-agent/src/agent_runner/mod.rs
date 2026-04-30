@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use aura_reasoner::{Message, ModelProvider, ToolDefinition};
+use aura_reasoner::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
@@ -112,6 +112,20 @@ pub struct AgentRunnerConfig {
     /// automaton-start so concurrent runs of the same agent get
     /// distinct billing/observability partitions.
     pub aura_session_id: Option<String>,
+    /// Template agent UUID forwarded as the `X-Aura-Agent-Id` header
+    /// on outbound `/v1/messages` calls. Mirrors the chat path's
+    /// `SessionState::aura_agent_id` (populated from
+    /// `SessionInit::aura_agent_id`). Without this, automaton runs
+    /// hit `aura-router` without an agent identity and Cloudflare's
+    /// WAF treats them as unsanctioned API traffic, returning the
+    /// HTML challenge page (status 403) that's been stalling SWE-bench.
+    pub aura_agent_id: Option<String>,
+    /// Project UUID forwarded as the `X-Aura-Project-Id` header on
+    /// outbound `/v1/messages` calls. Mirrors the chat / task-extract
+    /// paths' `SessionState::project_id` -> `aura_project_id`
+    /// projection. Same WAF-bucketing rationale as
+    /// [`Self::aura_agent_id`].
+    pub aura_project_id: Option<String>,
 }
 
 impl Default for AgentRunnerConfig {
@@ -134,6 +148,8 @@ impl Default for AgentRunnerConfig {
             auth_token: None,
             aura_org_id: None,
             aura_session_id: None,
+            aura_agent_id: None,
+            aura_project_id: None,
         }
     }
 }
@@ -232,13 +248,14 @@ impl AgentRunner {
             params.completed_deps,
             &work_log_summary,
         );
-        let task_ctx = task_context::build_full_task_context(
+        let mut task_ctx = task_context::build_full_task_context(
             base_context,
             params.workspace_map,
             params.type_defs_context,
             params.codebase_snapshot,
             params.dep_api_context,
         );
+        task_context::cap_bootstrap_task_context(&mut task_ctx);
 
         let loop_config = configure_loop_config(
             complexity,
@@ -364,6 +381,8 @@ impl AgentRunner {
             // interactive WebSocket chat path.
             aura_org_id: self.config.aura_org_id.clone(),
             aura_session_id: self.config.aura_session_id.clone(),
+            aura_agent_id: self.config.aura_agent_id.clone(),
+            aura_project_id: self.config.aura_project_id.clone(),
             ..AgentLoopConfig::default()
         };
         let agent_loop = AgentLoop::new(config);
@@ -512,6 +531,9 @@ pub fn configure_loop_config(
         // populated.
         aura_org_id: config.aura_org_id.clone(),
         aura_session_id: config.aura_session_id.clone(),
+        aura_agent_id: config.aura_agent_id.clone(),
+        aura_project_id: config.aura_project_id.clone(),
+        request_kind: ModelRequestKind::DevLoopBootstrap,
         ..AgentLoopConfig::default()
     }
 }

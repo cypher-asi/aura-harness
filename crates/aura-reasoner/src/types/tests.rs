@@ -47,6 +47,7 @@ fn test_model_request_builder() {
         .message(Message::user("Hi"))
         .max_tokens(1000)
         .temperature(0.7)
+        .request_kind(ModelRequestKind::Chat)
         .try_build()
         .unwrap();
 
@@ -55,6 +56,75 @@ fn test_model_request_builder() {
     assert_eq!(request.messages.len(), 1);
     assert_eq!(request.max_tokens.get(), 1000);
     assert_eq!(request.temperature.map(f32::from), Some(0.7));
+    assert_eq!(request.metadata.kind, Some(ModelRequestKind::Chat));
+}
+
+#[test]
+fn test_safe_auxiliary_request_contract_is_accepted() {
+    let request = ModelRequest::builder("claude-opus-4-6", "You are helpful")
+        .message(Message::user("Hi"))
+        .try_build()
+        .unwrap();
+
+    let profile = ModelContentProfile::from_request(&request)
+        .validate()
+        .expect("safe untagged requests should remain accepted");
+
+    assert_eq!(profile.kind, ModelRequestKind::Auxiliary);
+    assert_eq!(profile.verdict, ModelContractVerdict::Accept);
+}
+
+#[test]
+fn test_project_tool_task_extract_missing_stable_session_id_is_blocked() {
+    let create_task = ToolDefinition::new(
+        "create_task",
+        "Create a task",
+        serde_json::json!({"type": "object"}),
+    );
+    let request = ModelRequest::builder("claude-opus-4-6", "Extract project tasks")
+        .message(Message::user("Turn this spec into tasks"))
+        .tools(vec![create_task])
+        .aura_project_id(Some("project-123".to_string()))
+        .aura_agent_id(Some("agent-123".to_string()))
+        .aura_org_id(Some("org-123".to_string()))
+        .try_build()
+        .unwrap();
+
+    let violation = ModelContentProfile::from_request(&request)
+        .validate()
+        .expect_err("project task extraction requires a stable session id");
+
+    assert_eq!(
+        violation.reason,
+        ModelContractViolationReason::MissingStableSessionId
+    );
+    assert_eq!(
+        violation.profile.kind,
+        ModelRequestKind::ProjectToolTaskExtract
+    );
+}
+
+#[test]
+fn test_oversized_dev_loop_bootstrap_is_blocked_before_emergency_cap() {
+    let request = ModelRequest::builder("claude-opus-4-6", "You are an agent")
+        .message(Message::user("x".repeat(12 * 1024)))
+        .request_kind(ModelRequestKind::DevLoopBootstrap)
+        .aura_project_id(Some("project-123".to_string()))
+        .aura_agent_id(Some("agent-123".to_string()))
+        .aura_session_id(Some("session-123".to_string()))
+        .aura_org_id(Some("org-123".to_string()))
+        .try_build()
+        .unwrap();
+
+    let violation = ModelContentProfile::from_request(&request)
+        .validate()
+        .expect_err("oversized bootstrap user content should be rejected locally");
+
+    assert_eq!(
+        violation.reason,
+        ModelContractViolationReason::UnboundedBootstrapContext
+    );
+    assert_eq!(violation.profile.kind, ModelRequestKind::DevLoopBootstrap);
 }
 
 #[test]

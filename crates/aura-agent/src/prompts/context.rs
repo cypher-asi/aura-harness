@@ -1,5 +1,132 @@
 use super::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
 
+/// Default max bytes the spec.markdown_contents section may contribute to
+/// the dev-loop bootstrap user message. The full spec is duplicative of
+/// the task description for the case where one spec has one task, and
+/// it inflates the request body with the same code patterns twice. The
+/// upstream Cloudflare WAF in front of `aura-router.onrender.com` blocks
+/// dev-loop bootstrap bodies whose user message contains a high density
+/// of code-like content (Python slicing, `&` operators, file paths,
+/// repeated escaped-amp `\u0026` sequences). Capping the spec section to
+/// ~1.5KB plus a short "(truncated)" marker keeps the body well below
+/// the empirically observed WAF cliff while preserving the spec title
+/// and the high-level intent of the spec for context.
+///
+/// Tunable at runtime via `AURA_AGENT_BOOTSTRAP_SPEC_BYTES` to allow
+/// experimentation without a rebuild. Set to `0` to skip the spec
+/// markdown entirely (only the title is included).
+const BOOTSTRAP_SPEC_DEFAULT_BYTES: usize = 1500;
+
+fn bootstrap_spec_byte_budget() -> usize {
+    std::env::var("AURA_AGENT_BOOTSTRAP_SPEC_BYTES")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(BOOTSTRAP_SPEC_DEFAULT_BYTES)
+}
+
+/// Returns true if the bootstrap should strip fenced code blocks from
+/// spec markdown and task descriptions. Default: enabled, because
+/// triple-backtick blocks containing Python/shell snippets are the
+/// densest WAF triggers we see on `aura-router.onrender.com`'s
+/// Cloudflare zone (e.g. `from X import Y`, slicing, `&` operators).
+/// Set `AURA_AGENT_BOOTSTRAP_STRIP_CODE_FENCES=0` to disable for a run
+/// (e.g. when targeting a different proxy).
+fn bootstrap_should_strip_code_fences() -> bool {
+    !matches!(
+        std::env::var("AURA_AGENT_BOOTSTRAP_STRIP_CODE_FENCES").as_deref(),
+        Ok("0") | Ok("false") | Ok("no") | Ok("off")
+    )
+}
+
+/// Strip fenced code blocks (```...```) from a markdown string, replacing
+/// each one with a `[code example: <N> bytes elided to fit body cap]`
+/// marker. Preserves all surrounding prose so the agent retains the
+/// human-readable explanation. Indentation-based code blocks (4-space
+/// indent) are left untouched on purpose: they are rare in our specs/
+/// task descriptions and harder to detect reliably.
+fn strip_fenced_code_blocks(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut in_fence = false;
+    let mut fence_buf = String::new();
+    for line in input.split_inclusive('\n') {
+        // A fence line starts with three backticks, optionally followed
+        // by a language tag and trailing whitespace. We accept both
+        // ```python and ```python\n.
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        let is_fence = trimmed.trim_start().starts_with("```");
+        if !in_fence && is_fence {
+            in_fence = true;
+            fence_buf.clear();
+            continue;
+        }
+        if in_fence && is_fence {
+            in_fence = false;
+            let elided_bytes = fence_buf.len();
+            out.push_str(&format!(
+                "[code example: {elided_bytes} bytes elided to fit body cap; \
+                 read the source files directly with `read_file` if needed]\n"
+            ));
+            fence_buf.clear();
+            continue;
+        }
+        if in_fence {
+            fence_buf.push_str(line);
+        } else {
+            out.push_str(line);
+        }
+    }
+    if in_fence {
+        // Unterminated fence: keep the buffered content verbatim so we
+        // never silently drop content; the WAF risk in this rare case
+        // is preferable to silently losing instructions.
+        out.push_str("```\n");
+        out.push_str(&fence_buf);
+    }
+    out
+}
+
+fn append_spec_section(ctx: &mut String, spec: &SpecInfo<'_>, budget: usize) {
+    if budget == 0 || spec.markdown_contents.is_empty() {
+        ctx.push_str(&format!("# Spec: {}\n\n", spec.title));
+        return;
+    }
+    let sanitized;
+    let body: &str = if bootstrap_should_strip_code_fences() {
+        sanitized = strip_fenced_code_blocks(spec.markdown_contents);
+        &sanitized
+    } else {
+        spec.markdown_contents
+    };
+    if body.len() <= budget {
+        ctx.push_str(&format!("# Spec: {}\n{body}\n\n", spec.title));
+        return;
+    }
+    // Truncate at a UTF-8 boundary so the resulting string is valid Rust
+    // text. Walk char_indices forward and stop at the last index <=
+    // budget; this guarantees we never split a multi-byte char.
+    let cut = body
+        .char_indices()
+        .take_while(|(i, _)| *i < budget)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let kept = &body[..cut];
+    let omitted = body.len() - cut;
+    ctx.push_str(&format!(
+        "# Spec: {}\n{kept}\n\n[... spec truncated to fit body cap; omitted {omitted} bytes. \
+         The task description below carries the actionable content for this turn.]\n\n",
+        spec.title
+    ));
+}
+
+fn task_description_for_bootstrap(task: &TaskInfo<'_>) -> String {
+    if bootstrap_should_strip_code_fences() {
+        strip_fenced_code_blocks(task.description)
+    } else {
+        task.description.to_string()
+    }
+}
+
 #[must_use]
 pub fn build_agentic_task_context(
     project: &ProjectInfo<'_>,
@@ -14,11 +141,9 @@ pub fn build_agentic_task_context(
         "# Project: {}\n{}\n\n",
         project.name, project.description
     ));
-    ctx.push_str(&format!(
-        "# Spec: {}\n{}\n\n",
-        spec.title, spec.markdown_contents
-    ));
-    ctx.push_str(&format!("# Task: {}\n{}\n\n", task.title, task.description));
+    append_spec_section(&mut ctx, spec, bootstrap_spec_byte_budget());
+    let task_desc = task_description_for_bootstrap(task);
+    ctx.push_str(&format!("# Task: {}\n{task_desc}\n\n", task.title));
 
     if !session.summary_of_previous_context.is_empty() {
         ctx.push_str(&format!(
@@ -163,6 +288,126 @@ mod tests {
         let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[dep], "");
         assert!(ctx.contains("Prior task"));
         assert!(ctx.contains("src/lib.rs (modify)"));
+    }
+
+    #[test]
+    fn strip_fenced_code_blocks_removes_python_block() {
+        let input =
+            "Here is prose.\n\n```python\nimport os\nos.system('rm -rf /')\n```\n\nMore prose.\n";
+        let out = strip_fenced_code_blocks(input);
+        assert!(out.contains("Here is prose."));
+        assert!(out.contains("More prose."));
+        assert!(!out.contains("import os"));
+        assert!(!out.contains("os.system"));
+        assert!(out.contains("[code example:"));
+    }
+
+    #[test]
+    fn strip_fenced_code_blocks_handles_multiple_fences() {
+        let input = "a\n```\none\n```\nb\n```rust\ntwo\n```\nc\n";
+        let out = strip_fenced_code_blocks(input);
+        assert!(out.contains("a\n"));
+        assert!(out.contains("b\n"));
+        assert!(out.contains("c\n"));
+        assert!(!out.contains("one"));
+        assert!(!out.contains("two"));
+        assert_eq!(out.matches("[code example:").count(), 2);
+    }
+
+    #[test]
+    fn strip_fenced_code_blocks_preserves_input_without_fences() {
+        let input = "no fences here, just prose with `inline code` and `more`.\n";
+        let out = strip_fenced_code_blocks(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn task_description_strips_fences_for_bootstrap() {
+        let project = ProjectInfo {
+            name: "p",
+            description: "",
+            folder_path: "/tmp",
+            build_command: None,
+            test_command: None,
+        };
+        let spec = SpecInfo {
+            title: "s",
+            markdown_contents: "",
+        };
+        let task = TaskInfo {
+            title: "T",
+            description: "Do this:\n\n```python\nm.Linear1D(10) & m.Linear1D(5)\n```\n\nDone.",
+            execution_notes: "",
+            files_changed: &[],
+        };
+        let session = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        assert!(ctx.contains("Do this:"));
+        assert!(ctx.contains("Done."));
+        assert!(!ctx.contains("Linear1D"));
+        assert!(ctx.contains("[code example:"));
+    }
+
+    #[test]
+    fn long_spec_markdown_is_truncated_to_budget() {
+        let project = ProjectInfo {
+            name: "p",
+            description: "",
+            folder_path: "/tmp",
+            build_command: None,
+            test_command: None,
+        };
+        let big_md = "x".repeat(5_000);
+        let spec = SpecInfo {
+            title: "Big spec",
+            markdown_contents: &big_md,
+        };
+        let task = TaskInfo {
+            title: "Task",
+            description: "Do it",
+            execution_notes: "",
+            files_changed: &[],
+        };
+        let session = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        assert!(ctx.contains("# Spec: Big spec"));
+        assert!(ctx.contains("spec truncated to fit body cap"));
+        assert!(
+            ctx.len() < 5_000,
+            "expected truncation to keep ctx small, got {}",
+            ctx.len()
+        );
+    }
+
+    #[test]
+    fn short_spec_markdown_is_kept_intact() {
+        let project = ProjectInfo {
+            name: "p",
+            description: "",
+            folder_path: "/tmp",
+            build_command: None,
+            test_command: None,
+        };
+        let spec = SpecInfo {
+            title: "Tiny",
+            markdown_contents: "tiny body",
+        };
+        let task = TaskInfo {
+            title: "T",
+            description: "d",
+            execution_notes: "",
+            files_changed: &[],
+        };
+        let session = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        assert!(ctx.contains("tiny body"));
+        assert!(!ctx.contains("spec truncated"));
     }
 
     #[test]

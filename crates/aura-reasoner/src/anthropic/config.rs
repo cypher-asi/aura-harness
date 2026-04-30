@@ -22,6 +22,14 @@ pub struct AnthropicConfig {
     /// Maximum backoff between retries, in milliseconds. Overridable via
     /// `AURA_LLM_BACKOFF_CAP_MS`.
     pub backoff_cap_ms: u64,
+    /// Minimum spacing between outbound `/v1/messages` requests, in
+    /// milliseconds. `0` disables throttling.
+    ///
+    /// This is process-wide in the provider implementation. It is primarily
+    /// for local/eval automation that routes through the public managed
+    /// router edge, where dense agent-loop request bursts can be blocked by
+    /// the WAF before aura-router can return a canonical 429/400.
+    pub min_request_interval_ms: u64,
     /// Aura-router base URL. Read from `AURA_ROUTER_URL`; defaults to
     /// `https://aura-router.onrender.com`.
     pub base_url: String,
@@ -29,6 +37,18 @@ pub struct AnthropicConfig {
     pub fallback_model: Option<String>,
     /// Whether Anthropic prompt-caching directives should be attached.
     pub prompt_caching_enabled: bool,
+    /// Phase-0 diagnostic: temporary emergency cap on the serialized
+    /// `/v1/messages` request body, in bytes. When `> 0` and the body
+    /// exceeds the cap, the largest text block in the last user
+    /// message is truncated in-place (with a `<<<AURA_HARNESS_…>>>`
+    /// marker) so the request fits before it is forwarded to the
+    /// router. `0` disables the cap entirely (default).
+    ///
+    /// Lives behind `AURA_LLM_EMERGENCY_BODY_CAP_BYTES` so operators
+    /// can flip the hypothesis test ("does Cloudflare stop blocking
+    /// once the body fits in N bytes?") without rebuilding. Removed /
+    /// replaced when the proper canonical-rejection validator lands.
+    pub emergency_body_cap_bytes: usize,
 }
 
 impl AnthropicConfig {
@@ -41,8 +61,10 @@ impl AnthropicConfig {
     /// - `AURA_LLM_MAX_RETRIES` (default `8`)
     /// - `AURA_LLM_BACKOFF_INITIAL_MS` (default `250`)
     /// - `AURA_LLM_BACKOFF_CAP_MS` (default `30000`)
+    /// - `AURA_LLM_MIN_REQUEST_INTERVAL_MS` (default `0` = disabled)
     /// - `AURA_DEFAULT_FALLBACK_MODEL` (optional)
     /// - `AURA_DISABLE_PROMPT_CACHING` (`1`/`true`/`yes` disables caching)
+    /// - `AURA_LLM_EMERGENCY_BODY_CAP_BYTES` (default `0` = disabled)
     ///
     /// Never errors — every field has a default.
     #[must_use]
@@ -83,6 +105,19 @@ impl AnthropicConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(30_000);
+        let min_request_interval_ms: u64 = std::env::var("AURA_LLM_MIN_REQUEST_INTERVAL_MS")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+
+        // Phase-0 diagnostic. Reject negative / non-numeric values
+        // silently (fall back to disabled) so a typo in the env never
+        // wedges the harness — the operator sees the disabled state
+        // through the `body_bytes` info log that is emitted anyway.
+        let emergency_body_cap_bytes: usize = std::env::var("AURA_LLM_EMERGENCY_BODY_CAP_BYTES")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
 
         Self {
             default_model,
@@ -90,9 +125,11 @@ impl AnthropicConfig {
             max_retries,
             backoff_initial_ms,
             backoff_cap_ms,
+            min_request_interval_ms,
             base_url,
             fallback_model,
             prompt_caching_enabled,
+            emergency_body_cap_bytes,
         }
     }
 
@@ -106,9 +143,11 @@ impl AnthropicConfig {
             max_retries: 8,
             backoff_initial_ms: 250,
             backoff_cap_ms: 30_000,
+            min_request_interval_ms: 0,
             base_url: "https://aura-router.onrender.com".to_string(),
             fallback_model: None,
             prompt_caching_enabled: true,
+            emergency_body_cap_bytes: 0,
         }
     }
 }
@@ -157,11 +196,13 @@ mod env_backoff_tests {
             let _g1 = EnvGuard::unset("AURA_LLM_MAX_RETRIES");
             let _g2 = EnvGuard::unset("AURA_LLM_BACKOFF_INITIAL_MS");
             let _g3 = EnvGuard::unset("AURA_LLM_BACKOFF_CAP_MS");
+            let _g4 = EnvGuard::unset("AURA_LLM_MIN_REQUEST_INTERVAL_MS");
             AnthropicConfig::from_env()
         });
         assert_eq!(cfg.max_retries, 8, "default max_retries");
         assert_eq!(cfg.backoff_initial_ms, 250, "default backoff_initial_ms");
         assert_eq!(cfg.backoff_cap_ms, 30_000, "default backoff_cap_ms");
+        assert_eq!(cfg.min_request_interval_ms, 0, "default request throttle");
     }
 
     #[test]
@@ -170,11 +211,13 @@ mod env_backoff_tests {
             let _g1 = EnvGuard::set("AURA_LLM_MAX_RETRIES", "12");
             let _g2 = EnvGuard::set("AURA_LLM_BACKOFF_INITIAL_MS", "500");
             let _g3 = EnvGuard::set("AURA_LLM_BACKOFF_CAP_MS", "60000");
+            let _g4 = EnvGuard::set("AURA_LLM_MIN_REQUEST_INTERVAL_MS", "2500");
             AnthropicConfig::from_env()
         });
         assert_eq!(cfg.max_retries, 12);
         assert_eq!(cfg.backoff_initial_ms, 500);
         assert_eq!(cfg.backoff_cap_ms, 60_000);
+        assert_eq!(cfg.min_request_interval_ms, 2_500);
     }
 
     #[test]
@@ -187,5 +230,32 @@ mod env_backoff_tests {
         });
         assert_eq!(cfg.base_url, "https://aura-router.onrender.com");
         assert_eq!(cfg.default_model, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn emergency_body_cap_defaults_to_zero() {
+        let cfg = with_env(|| {
+            let _g = EnvGuard::unset("AURA_LLM_EMERGENCY_BODY_CAP_BYTES");
+            AnthropicConfig::from_env()
+        });
+        assert_eq!(cfg.emergency_body_cap_bytes, 0);
+    }
+
+    #[test]
+    fn emergency_body_cap_reads_env_value() {
+        let cfg = with_env(|| {
+            let _g = EnvGuard::set("AURA_LLM_EMERGENCY_BODY_CAP_BYTES", "524288");
+            AnthropicConfig::from_env()
+        });
+        assert_eq!(cfg.emergency_body_cap_bytes, 524_288);
+    }
+
+    #[test]
+    fn emergency_body_cap_garbage_value_falls_back_to_disabled() {
+        let cfg = with_env(|| {
+            let _g = EnvGuard::set("AURA_LLM_EMERGENCY_BODY_CAP_BYTES", "not-a-number");
+            AnthropicConfig::from_env()
+        });
+        assert_eq!(cfg.emergency_body_cap_bytes, 0);
     }
 }

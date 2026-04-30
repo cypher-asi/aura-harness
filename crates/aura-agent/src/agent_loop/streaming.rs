@@ -421,7 +421,8 @@ fn stream_error_is_retryable(err: &ReasonerError) -> bool {
         // `true` here would cause a redundant second fallback
         // path; returning `false` keeps responsibility where it
         // belongs.
-        ReasonerError::StreamAbortedWithPartial { .. } => false,
+        ReasonerError::StreamAbortedWithPartial { .. }
+        | ReasonerError::ModelRequestContractViolation(_) => false,
     }
 }
 

@@ -101,6 +101,7 @@ pub async fn fetch_codebase_context(
 // ---------------------------------------------------------------------------
 
 pub const MAX_TASK_CONTEXT_CHARS: usize = 160_000; // ~40K tokens
+const DEFAULT_BOOTSTRAP_TASK_CONTEXT_CHARS: usize = 3_000;
 const MAX_WORK_LOG_TASK_CONTEXT: usize = 4_000;
 
 /// Compose the full task context from the base context and codebase sections.
@@ -136,6 +137,33 @@ pub fn build_full_task_context(
     }
     cap_task_context(&mut task_context, MAX_TASK_CONTEXT_CHARS);
     task_context
+}
+
+pub fn cap_bootstrap_task_context(task_context: &mut String) {
+    let budget = std::env::var("AURA_AGENT_BOOTSTRAP_CONTEXT_CHARS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_BOOTSTRAP_TASK_CONTEXT_CHARS);
+    if budget == 0 || task_context.len() <= budget {
+        return;
+    }
+
+    cap_task_context(task_context, budget);
+    if task_context.len() <= budget {
+        return;
+    }
+
+    let marker = "\n\n[... task context truncated before LLM routing; use read_file/search_code/get_task_context for additional details ...]\n";
+    let marker_len = marker.len().min(budget);
+    let keep = budget.saturating_sub(marker_len);
+    let cut = task_context
+        .char_indices()
+        .take_while(|(idx, ch)| idx + ch.len_utf8() <= keep)
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    task_context.truncate(cut);
+    task_context.push_str(marker);
 }
 
 /// Build a summary of the work log for inclusion in task context.
@@ -381,6 +409,24 @@ mod tests {
         cap_task_context(&mut ctx, 500);
         assert!(ctx.len() <= 550);
         assert!(ctx.contains("(context truncated)"));
+    }
+
+    #[test]
+    fn cap_bootstrap_task_context_applies_small_routing_budget() {
+        let mut ctx = String::new();
+        ctx.push_str("# Task\nFix the issue\n");
+        ctx.push_str("\n# Current Codebase Files\n");
+        ctx.push_str(&"x".repeat(20_000));
+
+        cap_bootstrap_task_context(&mut ctx);
+
+        assert!(
+            ctx.len() <= DEFAULT_BOOTSTRAP_TASK_CONTEXT_CHARS,
+            "expected bootstrap context <= {}, got {}",
+            DEFAULT_BOOTSTRAP_TASK_CONTEXT_CHARS,
+            ctx.len()
+        );
+        assert!(ctx.contains("# Task"));
     }
 
     #[test]

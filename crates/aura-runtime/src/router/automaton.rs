@@ -52,6 +52,16 @@ pub(super) struct AutomatonStartRequest {
     /// the same agent get distinct billing/observability partitions.
     #[serde(default)]
     aura_session_id: Option<String>,
+    /// Template agent UUID forwarded as `X-Aura-Agent-Id` on outbound
+    /// `/v1/messages` calls. Mirrors the chat path's
+    /// `SessionInit::aura_agent_id`. Without this header
+    /// `aura-router`'s Cloudflare WAF reads the request as
+    /// unsanctioned API traffic — which is what was producing the
+    /// `403 Forbidden` HTML challenges on dev-loop / task-run paths
+    /// while interactive chat from the same account succeeded.
+    /// `#[serde(default)]` keeps older clients compatible.
+    #[serde(default)]
+    aura_agent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +115,7 @@ pub(super) async fn automaton_start_handler(
                 req.work_log,
                 req.aura_org_id,
                 req.aura_session_id,
+                req.aura_agent_id,
             )
             .await
     } else {
@@ -121,6 +132,7 @@ pub(super) async fn automaton_start_handler(
                 agent_permissions,
                 req.aura_org_id,
                 req.aura_session_id,
+                req.aura_agent_id,
             )
             .await
     }

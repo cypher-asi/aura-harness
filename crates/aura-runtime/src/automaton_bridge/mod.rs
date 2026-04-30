@@ -215,20 +215,33 @@ impl AutomatonBridge {
         auth_token: Option<&str>,
         aura_org_id: Option<&str>,
         aura_session_id: Option<&str>,
+        aura_agent_id: Option<&str>,
+        aura_project_id: Option<&str>,
     ) -> AgentRunnerConfig {
         let mut config = AgentRunnerConfig::default();
         if let Some(m) = model {
             config.default_model = m.to_string();
         }
         config.auth_token = auth_token.map(String::from);
-        // Forward router/billing identifiers (org + session UUIDs)
-        // from the `POST /automaton/start` payload. These flow into
+        // Forward all four router/billing identifiers from the
+        // `POST /automaton/start` payload. These flow into
         // `AgentLoopConfig` (see `configure_loop_config`) and then
         // onto every `ModelRequest`, where the Anthropic provider
-        // stamps them as `X-Aura-Org-Id` / `X-Aura-Session-Id` —
-        // matching the headers that interactive chat already sends.
+        // stamps them as `X-Aura-Org-Id` / `X-Aura-Session-Id` /
+        // `X-Aura-Agent-Id` / `X-Aura-Project-Id` — matching the
+        // headers that interactive chat already sends. Missing
+        // `X-Aura-Agent-Id` / `X-Aura-Project-Id` on the dev-loop /
+        // task-run path was the WAF trigger: `aura-router`'s
+        // Cloudflare rules score requests partly on whether they
+        // carry a full aura-os identity envelope, and a stripped
+        // envelope made eval bursts read as unsanctioned API
+        // traffic and pick up the managed challenge (HTTP 403 +
+        // HTML body) that interactive chat from the same account
+        // never saw.
         config.aura_org_id = aura_org_id.map(String::from);
         config.aura_session_id = aura_session_id.map(String::from);
+        config.aura_agent_id = aura_agent_id.map(String::from);
+        config.aura_project_id = aura_project_id.map(String::from);
         config
     }
 
@@ -314,6 +327,7 @@ impl AutomatonController for AutomatonBridge {
             aura_core::AgentPermissions::full_access(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -378,6 +392,7 @@ impl AutomatonController for AutomatonBridge {
             aura_core::AgentPermissions::full_access(),
             None,
             Vec::new(),
+            None,
             None,
             None,
         )

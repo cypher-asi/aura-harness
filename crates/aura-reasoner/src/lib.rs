@@ -93,10 +93,12 @@ pub fn emit_retry(info: RetryInfo) {
 pub use kernel_propose::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use mock::{MockProvider, MockResponse};
 pub use types::{
-    AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, MaxTokens, Message, ModelName,
-    ModelRequest, ModelResponse, PartialToolUse, ProviderTrace, Role, StopReason,
-    StreamAccumulator, StreamContentType, StreamEvent, Temperature, ThinkingConfig, ToolChoice,
-    ToolDefinition, ToolResultContent, Usage,
+    AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, MaxTokens, Message,
+    ModelContentProfile, ModelContractVerdict, ModelContractViolationReason, ModelName,
+    ModelRequest, ModelRequestContractViolation, ModelRequestKind, ModelRequestMetadata,
+    ModelResponse, PartialToolUse, ProviderTrace, Role, StopReason, StreamAccumulator,
+    StreamContentType, StreamEvent, Temperature, ThinkingConfig, ToolChoice, ToolDefinition,
+    ToolResultContent, Usage,
 };
 
 use futures_util::Stream;

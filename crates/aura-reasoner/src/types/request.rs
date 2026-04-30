@@ -1,3 +1,4 @@
+use super::content_profile::{ModelRequestKind, ModelRequestMetadata};
 use super::message::Message;
 use super::tool::{ToolChoice, ToolDefinition};
 use crate::error::ReasonerError;
@@ -218,6 +219,8 @@ pub struct ModelRequest {
     pub aura_session_id: Option<String>,
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
+    /// Optional request-contract metadata used by provider-bound validation.
+    pub metadata: ModelRequestMetadata,
 }
 
 impl ModelRequest {
@@ -244,6 +247,7 @@ pub struct ModelRequestBuilder {
     aura_agent_id: Option<String>,
     aura_session_id: Option<String>,
     aura_org_id: Option<String>,
+    metadata: ModelRequestMetadata,
 }
 
 impl ModelRequestBuilder {
@@ -265,6 +269,7 @@ impl ModelRequestBuilder {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            metadata: ModelRequestMetadata::default(),
         }
     }
 
@@ -355,6 +360,18 @@ impl ModelRequestBuilder {
         self
     }
 
+    #[must_use]
+    pub const fn request_kind(mut self, kind: ModelRequestKind) -> Self {
+        self.metadata.kind = Some(kind);
+        self
+    }
+
+    #[must_use]
+    pub fn metadata(mut self, metadata: ModelRequestMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     /// Build the request, validating newtypes at the edge.
     ///
     /// # Errors
@@ -380,6 +397,7 @@ impl ModelRequestBuilder {
             aura_agent_id: self.aura_agent_id,
             aura_session_id: self.aura_session_id,
             aura_org_id: self.aura_org_id,
+            metadata: self.metadata,
         })
     }
 }

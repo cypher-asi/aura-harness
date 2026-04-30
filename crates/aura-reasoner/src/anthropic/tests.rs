@@ -5,8 +5,8 @@ use super::convert::{
 };
 use super::{AnthropicConfig, AnthropicProvider, ApiError};
 use crate::{
-    Message, ModelProvider, ModelRequest, ReasonerError, StopReason, StreamEvent, ThinkingConfig,
-    ToolChoice, ToolDefinition,
+    Message, ModelProvider, ModelRequest, ModelRequestKind, ReasonerError, StopReason, StreamEvent,
+    ThinkingConfig, ToolChoice, ToolDefinition,
 };
 use futures_util::StreamExt;
 use std::time::Duration;
@@ -286,9 +286,74 @@ fn test_cloudflare_detection() {
     assert!(is_cloudflare_html(
         r#"<!DOCTYPE html><!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US">"#
     ));
+    assert!(is_cloudflare_html(
+        r#"<!DOCTYPE html><html><body><p>Your request was blocked by this site's web application firewall (WAF).</p></body></html>"#
+    ));
     assert!(!is_cloudflare_html(
         r#"{"error":{"type":"authentication_error","message":"invalid api key"}}"#
     ));
+}
+
+#[tokio::test]
+async fn test_cloudflare_html_maps_to_typed_diagnostic_with_profile() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let _ = socket.read(&mut buf).await.unwrap();
+
+        let body = r#"<!DOCTYPE html><html><body>
+            <p>Your request was blocked by this site's web application firewall (WAF).</p>
+            <p>Request ID: <code>cf-test-123</code></p>
+        </body></html>"#;
+        let response = format!(
+            "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\ncf-ray: ray-test\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let config = AnthropicConfig {
+        default_model: "aura-claude-sonnet-4-6".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        backoff_initial_ms: 250,
+        backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        fallback_model: None,
+        prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-claude-sonnet-4-6", "system")
+        .message(Message::user("test"))
+        .request_kind(ModelRequestKind::Chat)
+        .auth_token(Some("test-jwt-token".to_string()))
+        .try_build()
+        .unwrap();
+
+    let err = provider.complete(request).await.unwrap_err();
+    server.await.unwrap();
+
+    match err {
+        ReasonerError::Transient {
+            status, message, ..
+        } => {
+            assert_eq!(status, 403);
+            assert!(message.contains("Cloudflare block"));
+            assert!(message.contains("request_id=cf-test-123"));
+            assert!(message.contains("kind=Chat"));
+            assert!(message.contains("content_signature="));
+        }
+        other => panic!("expected typed Cloudflare transient diagnostic, got {other:?}"),
+    }
 }
 
 #[test]
@@ -428,9 +493,11 @@ async fn test_proxy_mode_sends_caching_beta_header() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -483,9 +550,11 @@ async fn test_proxy_mode_forwards_aura_routing_headers() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -531,9 +600,11 @@ async fn test_complete_timeout() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -582,9 +653,11 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -663,9 +736,11 @@ async fn test_cross_family_proxy_fallback_buffers_streaming_and_omits_anthropic_
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: Some("aura-gpt-5-4".to_string()),
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -736,9 +811,11 @@ async fn test_proxy_openai_models_omit_prompt_caching_headers_and_fields() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -791,9 +868,11 @@ async fn test_proxy_deepseek_family_uses_provider_hint_and_usage_aliases() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -857,9 +936,11 @@ async fn test_proxy_hint_prefers_anthropic_family_over_model_heuristics() {
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -913,9 +994,11 @@ async fn test_proxy_hint_prefers_non_anthropic_family_over_model_heuristics_for_
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();
@@ -985,9 +1068,11 @@ async fn test_proxy_non_anthropic_family_omits_thinking_and_output_config_for_co
         max_retries: 0,
         backoff_initial_ms: 250,
         backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
         base_url: format!("http://127.0.0.1:{}", addr.port()),
         fallback_model: None,
         prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
     };
 
     let provider = AnthropicProvider::new(config).unwrap();

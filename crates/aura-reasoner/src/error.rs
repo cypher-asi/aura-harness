@@ -4,7 +4,7 @@
 //! logic can branch on the error *variant* rather than string-matching status
 //! codes embedded in the error message.
 
-use crate::types::PartialToolUse;
+use crate::types::{ModelRequestContractViolation, PartialToolUse};
 use std::time::Duration;
 
 /// Classified model-provider error.
@@ -92,6 +92,11 @@ pub enum ReasonerError {
         partial_tool_use: Option<PartialToolUse>,
     },
 
+    /// Provider-bound request failed the local harness contract before it was
+    /// sent to the router.
+    #[error("{0}")]
+    ModelRequestContractViolation(ModelRequestContractViolation),
+
     /// Catch-all for other provider-level failures.
     #[error("{0}")]
     Internal(String),
@@ -120,7 +125,8 @@ impl ReasonerError {
             Self::RateLimited { .. }
             | Self::InsufficientCredits(_)
             | Self::Timeout
-            | Self::StreamAbortedWithPartial { .. } => false,
+            | Self::StreamAbortedWithPartial { .. }
+            | Self::ModelRequestContractViolation(_) => false,
         }
     }
 

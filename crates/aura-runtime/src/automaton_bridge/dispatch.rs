@@ -17,10 +17,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aura_core::AgentPermissions;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
-use aura_core::AgentPermissions;
 use aura_kernel::Kernel;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
@@ -91,6 +91,7 @@ impl AutomatonBridge {
         agent_permissions: AgentPermissions,
         aura_org_id: Option<&str>,
         aura_session_id: Option<&str>,
+        aura_agent_id: Option<&str>,
         labels: AutomatonKindLabels,
     ) -> Result<AutomatonRunContext, String> {
         let domain = self.domain_with_jwt(auth_token);
@@ -144,8 +145,19 @@ impl AutomatonBridge {
         let gateway_domain: Arc<dyn DomainApi> =
             Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
 
-        let runner_config =
-            self.build_runner_config(model, auth_token, aura_org_id, aura_session_id);
+        // `project_id` doubles as `aura_project_id` on the chat /
+        // task-extract paths (see `SessionState::wire_request_ctx`
+        // -> `aura_project_id: self.project_id.clone()`), so feed
+        // the same value here to keep the dev-loop / task-run wire
+        // shape symmetric with chat.
+        let runner_config = self.build_runner_config(
+            model,
+            auth_token,
+            aura_org_id,
+            aura_session_id,
+            aura_agent_id,
+            Some(project_id),
+        );
         let catalog = Arc::new(
             self.catalog
                 .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
@@ -176,6 +188,7 @@ impl AutomatonBridge {
         agent_permissions: AgentPermissions,
         aura_org_id: Option<String>,
         aura_session_id: Option<String>,
+        aura_agent_id: Option<String>,
     ) -> Result<String, String> {
         if let Some(entry) = self.project_handles.get(project_id) {
             let tracked = entry.value();
@@ -200,6 +213,7 @@ impl AutomatonBridge {
                 agent_permissions,
                 aura_org_id.as_deref(),
                 aura_session_id.as_deref(),
+                aura_agent_id.as_deref(),
                 AutomatonKindLabels {
                     kernel: "dev loop",
                     capabilities: "dev loop",
@@ -262,6 +276,7 @@ impl AutomatonBridge {
         work_log: Vec<String>,
         aura_org_id: Option<String>,
         aura_session_id: Option<String>,
+        aura_agent_id: Option<String>,
     ) -> Result<String, String> {
         let ctx = self
             .prepare_automaton_run(
@@ -274,6 +289,7 @@ impl AutomatonBridge {
                 agent_permissions,
                 aura_org_id.as_deref(),
                 aura_session_id.as_deref(),
+                aura_agent_id.as_deref(),
                 AutomatonKindLabels {
                     kernel: "task runtime",
                     capabilities: "task",

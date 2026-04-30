@@ -36,7 +36,7 @@ enum ApiError {
     },
     /// 402 — stop immediately, no retry or fallback.
     InsufficientCredits(String),
-    /// 403 / 503 with Cloudflare HTML — retryable once so WAF blocks do not storm.
+    /// 403 / 503 with managed edge WAF HTML — retryable once so blocks do not storm.
     CloudflareBlock(String),
     /// Generic transient upstream 5xx — 500 / 502 / 503 (non-Cloudflare) /
     /// 504. Mapped to a retryable class so a single provider blip doesn't
@@ -62,7 +62,7 @@ impl From<ApiError> for ReasonerError {
                 retry_after,
             },
             ApiError::InsufficientCredits(msg) => Self::InsufficientCredits(msg),
-            // Cloudflare cold-start blocks are transient — encode that
+            // Managed edge WAF blocks are transient — encode that
             // classification in the variant rather than expecting
             // downstream code to special-case status 403 messages.
             ApiError::CloudflareBlock(msg) => Self::Transient {
@@ -93,7 +93,15 @@ fn format_rate_limited_message(message: &str, retry_after: Option<Duration>) -> 
 }
 
 fn is_cloudflare_html(body: &str) -> bool {
-    body.contains("<!DOCTYPE html") && (body.contains("cloudflare") || body.contains("oldie"))
+    if !body.contains("<!DOCTYPE html") {
+        return false;
+    }
+
+    let body_lower = body.to_ascii_lowercase();
+    body_lower.contains("cloudflare")
+        || body_lower.contains("oldie")
+        || body_lower.contains("web application firewall")
+        || body_lower.contains("your request was blocked")
 }
 
 // ============================================================================

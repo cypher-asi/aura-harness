@@ -54,6 +54,9 @@ impl From<aura_reasoner::ReasonerError> for RuntimeError {
             aura_reasoner::ReasonerError::StreamAbortedWithPartial { reason, .. } => {
                 Self::Model(reason)
             }
+            aura_reasoner::ReasonerError::ModelRequestContractViolation(violation) => {
+                Self::Model(violation.to_string())
+            }
         }
     }
 }

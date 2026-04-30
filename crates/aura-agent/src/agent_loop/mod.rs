@@ -32,7 +32,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aura_reasoner::{Message, ModelProvider, ModelRequest, Role, StopReason, ToolDefinition};
+use aura_reasoner::{
+    Message, ModelProvider, ModelRequest, ModelRequestKind, Role, StopReason, ToolDefinition,
+};
 use aura_tools::IntentClassifier;
 use chrono::Utc;
 use tokio::sync::mpsc::Sender;
@@ -124,6 +126,13 @@ pub struct AgentLoopConfig {
     pub aura_session_id: Option<String>,
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
+    /// Request contract kind used when building provider-bound requests.
+    ///
+    /// Chat/session callers default to [`ModelRequestKind::Chat`]. Task
+    /// automation sets this to [`ModelRequestKind::DevLoopBootstrap`];
+    /// after the first iteration the loop automatically sends
+    /// [`ModelRequestKind::DevLoopContinuation`] for that flow.
+    pub request_kind: ModelRequestKind,
     /// Post-turn observers (e.g. memory ingestion).
     /// Called automatically at the end of every turn inside the loop.
     pub observers: Vec<Arc<dyn TurnObserver>>,
@@ -194,6 +203,7 @@ impl Default for AgentLoopConfig {
             aura_agent_id: None,
             aura_session_id: None,
             aura_org_id: None,
+            request_kind: ModelRequestKind::Chat,
             observers: Vec::new(),
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
@@ -664,6 +674,31 @@ impl LoopState {
             _ => (classifier_filtered, aura_reasoner::ToolChoice::Auto),
         };
 
+        let has_task_tools = effective_tools.iter().any(|tool| {
+            matches!(
+                tool.name.as_str(),
+                "create_task" | "update_task" | "list_tasks" | "get_task" | "delete_task"
+            )
+        });
+        let has_spec_tools = effective_tools.iter().any(|tool| {
+            matches!(
+                tool.name.as_str(),
+                "create_spec" | "update_spec" | "list_specs" | "get_spec" | "delete_spec"
+            )
+        });
+        let request_kind = match (
+            has_task_tools,
+            has_spec_tools,
+            config.request_kind,
+            iteration,
+        ) {
+            (true, _, _, _) => ModelRequestKind::ProjectToolTaskExtract,
+            (_, true, _, _) => ModelRequestKind::ProjectToolSpecGen,
+            (_, _, ModelRequestKind::DevLoopBootstrap, 0) => ModelRequestKind::DevLoopBootstrap,
+            (_, _, ModelRequestKind::DevLoopBootstrap, _) => ModelRequestKind::DevLoopContinuation,
+            (_, _, kind, _) => kind,
+        };
+
         ModelRequest::builder(&config.model, &config.system_prompt)
             .messages(self.messages.clone())
             .tools(effective_tools)
@@ -675,6 +710,7 @@ impl LoopState {
             .aura_agent_id(config.aura_agent_id.clone())
             .aura_session_id(config.aura_session_id.clone())
             .aura_org_id(config.aura_org_id.clone())
+            .request_kind(request_kind)
             .try_build()
             .map_err(crate::AgentError::from)
     }
