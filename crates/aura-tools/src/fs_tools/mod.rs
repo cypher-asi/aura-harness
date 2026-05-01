@@ -2,6 +2,7 @@
 
 mod cmd;
 mod delete;
+mod diff;
 mod edit;
 mod find;
 mod ls;

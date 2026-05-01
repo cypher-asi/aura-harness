@@ -387,6 +387,7 @@ mod tests {
                 created: vec!["new.txt".to_string()],
                 modified: vec!["old.txt".to_string()],
                 deleted: vec![],
+                diffs: vec![],
             },
             originating_user_id: None,
         });

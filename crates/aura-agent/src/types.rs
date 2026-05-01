@@ -12,10 +12,19 @@ pub enum FileChangeKind {
 }
 
 /// A single file mutation observed during execution.
+///
+/// `lines_added` / `lines_removed` are populated by tools that can compute
+/// a diff cheaply (currently `edit_file`, which has both `old_text` and
+/// `new_text` in its input). Tools that can't (e.g. `write_file` without
+/// pre-content, `delete_file` after the file is gone) leave the counts
+/// at 0 — downstream consumers must treat 0 as "unknown", not "no
+/// change".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileChange {
     pub path: String,
     pub kind: FileChangeKind,
+    pub lines_added: u32,
+    pub lines_removed: u32,
 }
 
 /// Information about a tool call to be executed.
@@ -252,8 +261,17 @@ pub struct AgentLoopResult {
 impl AgentLoopResult {
     /// Record a file change, collapsing multiple mutations on the same path
     /// into a single net effect for turn-level reporting.
+    ///
+    /// Line counts (`lines_added` / `lines_removed`) accumulate across
+    /// merged mutations so several edits to the same file in one turn
+    /// surface as a single rolled-up diff. The exception is the
+    /// Create-then-Delete pairing, where the entry is dropped entirely
+    /// (the file existed only transiently within the turn) — line
+    /// counts disappear with it, matching the "net effect" semantics.
     pub fn record_file_change(&mut self, change: FileChange) {
         if let Some(existing) = self.file_changes.iter_mut().find(|c| c.path == change.path) {
+            existing.lines_added = existing.lines_added.saturating_add(change.lines_added);
+            existing.lines_removed = existing.lines_removed.saturating_add(change.lines_removed);
             match (existing.kind, change.kind) {
                 (FileChangeKind::Create, FileChangeKind::Modify) => {}
                 (FileChangeKind::Create, FileChangeKind::Delete) => {
@@ -329,17 +347,29 @@ pub trait AgentToolExecutor: Send + Sync {
 mod tests {
     use super::{AgentLoopResult, FileChange, FileChangeKind};
 
+    fn fc(path: &str, kind: FileChangeKind) -> FileChange {
+        FileChange {
+            path: path.into(),
+            kind,
+            lines_added: 0,
+            lines_removed: 0,
+        }
+    }
+
+    fn fc_lines(path: &str, kind: FileChangeKind, added: u32, removed: u32) -> FileChange {
+        FileChange {
+            path: path.into(),
+            kind,
+            lines_added: added,
+            lines_removed: removed,
+        }
+    }
+
     #[test]
     fn file_change_summary_keeps_net_create() {
         let mut result = AgentLoopResult::default();
-        result.record_file_change(FileChange {
-            path: "src/new.rs".into(),
-            kind: FileChangeKind::Create,
-        });
-        result.record_file_change(FileChange {
-            path: "src/new.rs".into(),
-            kind: FileChangeKind::Modify,
-        });
+        result.record_file_change(fc("src/new.rs", FileChangeKind::Create));
+        result.record_file_change(fc("src/new.rs", FileChangeKind::Modify));
         assert_eq!(result.file_changes.len(), 1);
         assert!(matches!(
             result.file_changes[0].kind,
@@ -350,32 +380,40 @@ mod tests {
     #[test]
     fn file_change_summary_drops_create_then_delete() {
         let mut result = AgentLoopResult::default();
-        result.record_file_change(FileChange {
-            path: "src/temp.rs".into(),
-            kind: FileChangeKind::Create,
-        });
-        result.record_file_change(FileChange {
-            path: "src/temp.rs".into(),
-            kind: FileChangeKind::Delete,
-        });
+        result.record_file_change(fc("src/temp.rs", FileChangeKind::Create));
+        result.record_file_change(fc("src/temp.rs", FileChangeKind::Delete));
         assert!(result.file_changes.is_empty());
     }
 
     #[test]
     fn file_change_summary_turns_delete_then_create_into_modify() {
         let mut result = AgentLoopResult::default();
-        result.record_file_change(FileChange {
-            path: "src/lib.rs".into(),
-            kind: FileChangeKind::Delete,
-        });
-        result.record_file_change(FileChange {
-            path: "src/lib.rs".into(),
-            kind: FileChangeKind::Create,
-        });
+        result.record_file_change(fc("src/lib.rs", FileChangeKind::Delete));
+        result.record_file_change(fc("src/lib.rs", FileChangeKind::Create));
         assert_eq!(result.file_changes.len(), 1);
         assert!(matches!(
             result.file_changes[0].kind,
             FileChangeKind::Modify
         ));
+    }
+
+    #[test]
+    fn file_change_summary_sums_line_counts_across_merges() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(fc_lines(
+            "src/lib.rs",
+            FileChangeKind::Modify,
+            10,
+            2,
+        ));
+        result.record_file_change(fc_lines(
+            "src/lib.rs",
+            FileChangeKind::Modify,
+            5,
+            3,
+        ));
+        assert_eq!(result.file_changes.len(), 1);
+        assert_eq!(result.file_changes[0].lines_added, 15);
+        assert_eq!(result.file_changes[0].lines_removed, 5);
     }
 }

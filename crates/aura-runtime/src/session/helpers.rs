@@ -5,7 +5,7 @@ use super::ws_handler::populate_tool_definitions;
 use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
-    tool_info_from_definition_with_state, AssistantMessageEnd, ErrorMsg, FilesChanged,
+    tool_info_from_definition_with_state, AssistantMessageEnd, ErrorMsg, FileDiff, FilesChanged,
     OutboundMessage, SessionInit, SessionReady, SessionUsage, SkillInfo, TextDelta, ThinkingDelta,
     ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
 };
@@ -32,6 +32,19 @@ fn summarize_files_changed(loop_result: &AgentLoopResult) -> FilesChanged {
             aura_agent::FileChangeKind::Create => files_changed.created.push(change.path.clone()),
             aura_agent::FileChangeKind::Modify => files_changed.modified.push(change.path.clone()),
             aura_agent::FileChangeKind::Delete => files_changed.deleted.push(change.path.clone()),
+        }
+        // Emit a per-path diff entry whenever the harness produced
+        // non-zero counts. Tools that don't compute a diff (write_file
+        // / delete_file today) leave both at 0 and we skip them — the
+        // dashboard treats absence of a diff entry as "unknown" rather
+        // than "zero lines changed", so omitting beats inserting a
+        // misleading 0/0.
+        if change.lines_added > 0 || change.lines_removed > 0 {
+            files_changed.diffs.push(FileDiff {
+                path: change.path.clone(),
+                lines_added: change.lines_added,
+                lines_removed: change.lines_removed,
+            });
         }
     }
     files_changed
@@ -691,14 +704,20 @@ mod tests {
                 FileChange {
                     path: "src/new.rs".into(),
                     kind: FileChangeKind::Create,
+                    lines_added: 0,
+                    lines_removed: 0,
                 },
                 FileChange {
                     path: "src/lib.rs".into(),
                     kind: FileChangeKind::Modify,
+                    lines_added: 0,
+                    lines_removed: 0,
                 },
                 FileChange {
                     path: "src/old.rs".into(),
                     kind: FileChangeKind::Delete,
+                    lines_added: 0,
+                    lines_removed: 0,
                 },
             ],
             ..AgentLoopResult::default()
@@ -708,6 +727,38 @@ mod tests {
         assert_eq!(summary.created, vec!["src/new.rs"]);
         assert_eq!(summary.modified, vec!["src/lib.rs"]);
         assert_eq!(summary.deleted, vec!["src/old.rs"]);
+        // No FileChange carried non-zero counts, so diffs stays empty
+        // and the wire format doesn't carry a misleading 0/0 entry.
+        assert!(summary.diffs.is_empty());
+    }
+
+    #[test]
+    fn summarize_files_changed_emits_diffs_for_nonzero_counts() {
+        let loop_result = AgentLoopResult {
+            file_changes: vec![
+                FileChange {
+                    path: "src/touched.rs".into(),
+                    kind: FileChangeKind::Modify,
+                    lines_added: 7,
+                    lines_removed: 2,
+                },
+                // write_file path: counts stay at 0 (unknown), so this
+                // entry must NOT show up in diffs.
+                FileChange {
+                    path: "src/new.rs".into(),
+                    kind: FileChangeKind::Create,
+                    lines_added: 0,
+                    lines_removed: 0,
+                },
+            ],
+            ..AgentLoopResult::default()
+        };
+
+        let summary = summarize_files_changed(&loop_result);
+        assert_eq!(summary.diffs.len(), 1);
+        assert_eq!(summary.diffs[0].path, "src/touched.rs");
+        assert_eq!(summary.diffs[0].lines_added, 7);
+        assert_eq!(summary.diffs[0].lines_removed, 2);
     }
 
     #[test]
