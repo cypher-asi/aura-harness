@@ -1943,7 +1943,7 @@ impl ModelProvider for AnthropicProvider {
         self.check_base_url_reachable().await
     }
 
-    #[tracing::instrument(skip(self, request), fields(model = %request.model))]
+    #[tracing::instrument(level = "debug", skip(self, request), fields(model = %request.model))]
     async fn complete_streaming(
         &self,
         request: ModelRequest,

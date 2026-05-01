@@ -98,10 +98,60 @@ fn test_project_tool_task_extract_missing_stable_session_id_is_blocked() {
         violation.reason,
         ModelContractViolationReason::MissingStableSessionId
     );
-    assert_eq!(
-        violation.profile.kind,
-        ModelRequestKind::ProjectToolTaskExtract
+    assert_eq!(violation.profile.kind, ModelRequestKind::ProjectToolTaskExtract);
+}
+
+#[test]
+fn test_project_tool_task_extract_accepts_benchmark_sized_requirements() {
+    let create_task = ToolDefinition::new(
+        "create_task",
+        "Create a task",
+        serde_json::json!({"type": "object"}),
     );
+    let request = ModelRequest::builder("claude-opus-4-6", "Extract project tasks")
+        .message(Message::user("x".repeat(24 * 1024)))
+        .tools(vec![create_task])
+        .aura_project_id(Some("project-123".to_string()))
+        .aura_agent_id(Some("agent-123".to_string()))
+        .aura_session_id(Some("session-123".to_string()))
+        .aura_org_id(Some("org-123".to_string()))
+        .try_build()
+        .unwrap();
+
+    let profile = ModelContentProfile::from_request(&request)
+        .validate()
+        .expect("SWE-bench requirements files around 20KiB should pass locally");
+
+    assert_eq!(profile.kind, ModelRequestKind::ProjectToolTaskExtract);
+    assert_eq!(profile.verdict, ModelContractVerdict::Accept);
+}
+
+#[test]
+fn test_project_tool_task_extract_still_blocks_unbounded_context() {
+    let create_task = ToolDefinition::new(
+        "create_task",
+        "Create a task",
+        serde_json::json!({"type": "object"}),
+    );
+    let request = ModelRequest::builder("claude-opus-4-6", "Extract project tasks")
+        .message(Message::user("x".repeat(49 * 1024)))
+        .tools(vec![create_task])
+        .aura_project_id(Some("project-123".to_string()))
+        .aura_agent_id(Some("agent-123".to_string()))
+        .aura_session_id(Some("session-123".to_string()))
+        .aura_org_id(Some("org-123".to_string()))
+        .try_build()
+        .unwrap();
+
+    let violation = ModelContentProfile::from_request(&request)
+        .validate()
+        .expect_err("truly oversized project-tool context should still be rejected locally");
+
+    assert_eq!(
+        violation.reason,
+        ModelContractViolationReason::EmergencyCapRequired
+    );
+    assert_eq!(violation.profile.kind, ModelRequestKind::ProjectToolTaskExtract);
 }
 
 #[test]

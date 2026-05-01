@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 const DEV_LOOP_BOOTSTRAP_LAST_USER_MAX_BYTES: usize = 8 * 1024;
 const DEV_LOOP_BOOTSTRAP_TOTAL_TEXT_MAX_BYTES: usize = 24 * 1024;
-const PROJECT_TOOL_LAST_USER_MAX_BYTES: usize = 16 * 1024;
+const PROJECT_TOOL_LAST_USER_MAX_BYTES: usize = 32 * 1024;
+const PROJECT_TOOL_TOTAL_TEXT_MAX_BYTES: usize = 48 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -146,11 +147,7 @@ impl ModelContentProfile {
             self.messages_text_bytes,
             self.last_user_text_bytes,
             self.tool_count,
-            if self.has_aura_session_id {
-                "present"
-            } else {
-                "missing"
-            }
+            if self.has_aura_session_id { "present" } else { "missing" }
         )
     }
 
@@ -187,7 +184,9 @@ impl ModelContentProfile {
                 }
             }
             ModelRequestKind::ProjectToolSpecGen | ModelRequestKind::ProjectToolTaskExtract => {
-                if self.last_user_text_bytes > PROJECT_TOOL_LAST_USER_MAX_BYTES {
+                if self.last_user_text_bytes > PROJECT_TOOL_LAST_USER_MAX_BYTES
+                    || self.messages_text_bytes > PROJECT_TOOL_TOTAL_TEXT_MAX_BYTES
+                {
                     self.reasons
                         .push(ModelContractViolationReason::EmergencyCapRequired);
                 }

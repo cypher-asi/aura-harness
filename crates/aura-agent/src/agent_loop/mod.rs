@@ -115,8 +115,9 @@ pub struct AgentLoopConfig {
     /// Optional upstream provider family hint for managed proxy routing.
     pub upstream_provider_family: Option<String>,
     /// Tool names the user wants prioritized for the current turn.
-    /// On the first iteration, tools are filtered to this set and
-    /// `tool_choice` is set to force tool usage.
+    /// When present, the model only sees this scoped tool surface for
+    /// the whole turn sequence. Tool choice remains `auto` because
+    /// Anthropic rejects forced tool use while extended thinking is enabled.
     pub tool_hints: Option<Vec<String>>,
     /// Project ID for X-Aura-Project-Id billing header.
     pub aura_project_id: Option<String>,
@@ -655,24 +656,22 @@ impl LoopState {
             _ => tools.to_vec(),
         };
 
-        let (effective_tools, tool_choice) = match (&config.tool_hints, iteration) {
-            (Some(hints), 0) if !hints.is_empty() => {
+        let effective_tools = match &config.tool_hints {
+            Some(hints) if !hints.is_empty() => {
                 let filtered: Vec<_> = classifier_filtered
                     .iter()
                     .filter(|t| hints.iter().any(|h| h == &t.name))
                     .cloned()
                     .collect();
                 if filtered.is_empty() {
-                    (classifier_filtered, aura_reasoner::ToolChoice::Auto)
-                } else if filtered.len() == 1 {
-                    let name = filtered[0].name.clone();
-                    (filtered, aura_reasoner::ToolChoice::Tool { name })
+                    classifier_filtered
                 } else {
-                    (filtered, aura_reasoner::ToolChoice::Required)
+                    filtered
                 }
             }
-            _ => (classifier_filtered, aura_reasoner::ToolChoice::Auto),
+            _ => classifier_filtered,
         };
+        let tool_choice = aura_reasoner::ToolChoice::Auto;
 
         let has_task_tools = effective_tools.iter().any(|tool| {
             matches!(
@@ -686,12 +685,7 @@ impl LoopState {
                 "create_spec" | "update_spec" | "list_specs" | "get_spec" | "delete_spec"
             )
         });
-        let request_kind = match (
-            has_task_tools,
-            has_spec_tools,
-            config.request_kind,
-            iteration,
-        ) {
+        let request_kind = match (has_task_tools, has_spec_tools, config.request_kind, iteration) {
             (true, _, _, _) => ModelRequestKind::ProjectToolTaskExtract,
             (_, true, _, _) => ModelRequestKind::ProjectToolSpecGen,
             (_, _, ModelRequestKind::DevLoopBootstrap, 0) => ModelRequestKind::DevLoopBootstrap,
@@ -854,5 +848,61 @@ mod intent_classifier_tests {
         let tools = vec![mk_tool("anything_tool")];
         let req = state.build_request(&config, &tools, 1).unwrap();
         assert_eq!(req.tools.len(), 1);
+    }
+
+    #[test]
+    fn build_request_keeps_tool_hints_scoped_after_first_iteration() {
+        let config = AgentLoopConfig {
+            tool_hints: Some(vec![
+                "read_file".to_string(),
+                "create_task".to_string(),
+            ]),
+            ..AgentLoopConfig::default()
+        };
+        let msgs = vec![
+            Message::user("extract tasks"),
+            Message::assistant("calling tool"),
+            Message::tool_results(vec![(
+                "tu_1".into(),
+                aura_reasoner::ToolResultContent::Text("large requirements".into()),
+                false,
+            )]),
+        ];
+        let state = LoopState::new(&config, msgs);
+        let tools = vec![
+            mk_tool("read_file"),
+            mk_tool("create_task"),
+            mk_tool("run_command"),
+            mk_tool("generate_image"),
+        ];
+
+        let req = state.build_request(&config, &tools, 2).unwrap();
+        let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+
+        assert_eq!(names, vec!["read_file", "create_task"]);
+        assert!(matches!(req.tool_choice, aura_reasoner::ToolChoice::Auto));
+    }
+
+    #[test]
+    fn build_request_keeps_tool_hints_auto_on_first_iteration() {
+        let config = AgentLoopConfig {
+            tool_hints: Some(vec![
+                "read_file".to_string(),
+                "create_task".to_string(),
+            ]),
+            ..AgentLoopConfig::default()
+        };
+        let state = LoopState::new(&config, vec![Message::user("extract tasks")]);
+        let tools = vec![
+            mk_tool("read_file"),
+            mk_tool("create_task"),
+            mk_tool("run_command"),
+        ];
+
+        let req = state.build_request(&config, &tools, 0).unwrap();
+        let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+
+        assert_eq!(names, vec!["read_file", "create_task"]);
+        assert!(matches!(req.tool_choice, aura_reasoner::ToolChoice::Auto));
     }
 }

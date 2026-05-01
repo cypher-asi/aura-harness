@@ -21,9 +21,12 @@ pub enum ThresholdResult {
 
 /// Reject any program name that could be interpreted as a shell command.
 ///
-/// Used to keep [`cmd_spawn`] safe: the direct-spawn path resolves only
-/// executable names or paths. Shell syntax belongs in the explicit
-/// `shell_script` path, where it is gated by policy.
+/// Used to keep [`cmd_spawn`] safe: even though the default path no
+/// longer wraps invocations in `sh -c` / `cmd.exe /C`, a hostile caller
+/// could still embed metacharacters in `program` and hope the OS falls
+/// back to shell resolution (`CreateProcessW` on Windows, `posix_spawn`
+/// on Unix). Rejecting these characters up front guarantees that what
+/// the caller typed is a bare executable name or path.
 ///
 /// Rejects:
 /// - Empty strings
@@ -119,9 +122,14 @@ pub fn cmd_spawn(
         format!("{} {}", program, args.join(" "))
     };
 
-    // Windows direct spawn is PATHEXT-aware for bare program names, but
-    // still launches the resolved executable directly rather than through
-    // `cmd.exe`.
+    // On Windows, Rust's `Command::new("npm")` calls `CreateProcessW`
+    // after a PATH search that does NOT honour `PATHEXT`, so shims that
+    // ship as `.cmd` / `.bat` (npm, yarn, pnpm, ng, vite, eslint,
+    // prettier, …) all fail with `program not found`. Resolve the bare
+    // name through `which` first so we feed `Command` an absolute path
+    // and the child process is launched directly without `cmd.exe`
+    // re-parsing argv (preserves the no-shell guarantee that protects
+    // arguments containing spaces, semicolons, etc.).
     #[cfg(windows)]
     let fresh_path = refresh_system_path();
 
@@ -449,16 +457,21 @@ fn wait_with_hard_timeout(
 
 /// PATHEXT-aware program resolution for [`cmd_spawn`] on Windows.
 ///
-/// Bare program names are resolved with [`which::which_in`] so `.cmd` /
-/// `.bat` shims are found without routing through `cmd.exe`. Caller-supplied
-/// paths and explicit-extension names are left to `Command::new` unchanged.
+/// Rust's standard library performs a bare-name PATH search that ignores
+/// `PATHEXT`, so `Command::new("npm")` cannot find `npm.cmd`. This helper
+/// uses [`which::which_in`] (which *does* honour `PATHEXT`) against the
+/// freshly-merged registry+process PATH to produce an absolute path
+/// pointing at the correct shim, while leaving caller-supplied paths
+/// (anything with a separator) and explicit-extension names (`foo.exe`,
+/// `bar.cmd`) untouched so we don't second-guess the operator's intent.
 ///
 /// Returns `None` when:
 /// - the input already contains a path separator (so it's a relative or
 ///   absolute path the OS can resolve directly);
 /// - the input already ends with a recognised executable extension;
 /// - `which` cannot find any matching binary on PATH (the caller then
-///   attempts the original direct spawn and lets the OS report the error).
+///   falls back to `Command::new(program)` and lets the OS produce its
+///   native `program not found` error).
 #[cfg(windows)]
 fn windows_resolve_program(
     program: &str,
