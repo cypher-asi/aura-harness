@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// State for a turn that is currently being processed in the background.
@@ -57,7 +57,12 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
         while let Some(msg) = outbound_rx.recv().await {
             match serde_json::to_string(&msg) {
                 Ok(json) => {
+                    let message_type = outbound_message_type(&json);
                     if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                        warn!(
+                            %message_type,
+                            "WebSocket outbound send failed; client likely disconnected"
+                        );
                         break;
                     }
                 }
@@ -96,6 +101,18 @@ pub async fn handle_ws_connection(socket: WebSocket, ctx: WsContext) {
     info!(session_id = %session.session_id, "WebSocket connection closed");
     drop(outbound_tx);
     let _ = send_task.await;
+}
+
+fn outbound_message_type(json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|ty| ty.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 enum TurnAction {
@@ -146,14 +163,29 @@ async fn run_active_turn_select(
                             TurnAction::Continue
                         }
                         WsAction::Close => {
-                            debug!(session_id = %session.session_id, "Client closed during generation");
+                            info!(session_id = %session.session_id, "Client closed during generation");
                             gen.cancel_token.cancel();
                             TurnAction::Close
                         }
                         WsAction::Continue => TurnAction::Continue,
                     }
                 }
-                _ = &mut gen.join_handle => {
+                join_result = &mut gen.join_handle => {
+                    match join_result {
+                        Ok(()) => {
+                            info!(
+                                session_id = %session.session_id,
+                                "Generation turn task finished"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                session_id = %session.session_id,
+                                error = %e,
+                                "Generation turn task failed"
+                            );
+                        }
+                    }
                     TurnAction::TurnFinished
                 }
             }
@@ -239,20 +271,34 @@ async fn dispatch_idle_message(
                 None => IdleAction::Continue,
             }
         }
-        Ok(InboundMessage::GenerationRequest(req)) => match ctx.router_url {
-            Some(ref url) => match generation::start_generation(session, req, outbound_tx, url) {
-                Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
-                None => IdleAction::Continue,
-            },
-            None => {
-                let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
-                    code: "no_router_url".into(),
-                    message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
-                    recoverable: false,
-                }));
-                IdleAction::Continue
+        Ok(InboundMessage::GenerationRequest(req)) => {
+            info!(
+                session_id = %session.session_id,
+                mode = %req.mode,
+                has_router_url = ctx.router_url.is_some(),
+                "Generation request received"
+            );
+            match ctx.router_url {
+                Some(ref url) => match generation::start_generation(session, req, outbound_tx, url)
+                {
+                    Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
+                    None => IdleAction::Continue,
+                },
+                None => {
+                    warn!(
+                        session_id = %session.session_id,
+                        mode = %req.mode,
+                        "Generation request rejected because AURA_ROUTER_URL is not configured"
+                    );
+                    let _ = outbound_tx.try_send(OutboundMessage::Error(ErrorMsg {
+                        code: "no_router_url".into(),
+                        message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
+                        recoverable: false,
+                    }));
+                    IdleAction::Continue
+                }
             }
-        },
+        }
         Ok(InboundMessage::Cancel) => {
             debug!(session_id = %session.session_id, "Cancel received but no turn is active");
             IdleAction::Continue
