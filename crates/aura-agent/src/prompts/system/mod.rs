@@ -242,6 +242,8 @@ DEFINITION OF DONE (HARD GATE):
         tool_discipline = TOOL_CALL_DISCIPLINE_SECTION,
     );
 
+    append_agents_md(&mut prompt, project.folder_path);
+
     if let Some(ws_info) = workspace_info {
         prompt.push_str(&workspace_context_section(ws_info));
     }
@@ -337,6 +339,7 @@ pub fn build_chat_system_prompt(project: &ProjectInfo<'_>, custom_system_prompt:
         project.test_command.unwrap_or("(not set)"),
     ));
 
+    append_agents_md(&mut prompt, project.folder_path);
     append_tech_stack(&mut prompt, project.folder_path);
     prompt
 }
@@ -434,6 +437,58 @@ fn append_config_previews(prompt: &mut String, folder: &std::path::Path) {
         prompt.push_str("\n### Key Config Files\n");
         prompt.push_str(&config_sections.join("\n"));
         prompt.push('\n');
+    }
+}
+
+/// Hard cap on AGENTS.md bytes injected into the system prompt. Larger
+/// files are skipped (with a warn log) rather than truncated so the
+/// agent never reads a half-instruction.
+pub(crate) const AGENTS_MD_MAX_BYTES: usize = 64 * 1024;
+
+/// Header used when an AGENTS.md is found at the workspace root. Kept
+/// as a `const` so callers and tests can both reference the canonical
+/// wording instead of duplicating the literal.
+pub(crate) const AGENTS_MD_SECTION_HEADER: &str = "## Project AGENTS.md";
+
+/// Read the project root's `AGENTS.md` (case-insensitive) and append it
+/// as a dedicated system-prompt section. No-op when the file is absent,
+/// when `folder_path` is not a directory, or when the file exceeds the
+/// byte cap.
+///
+/// We try a small set of explicit casing variants instead of doing a
+/// full directory scan: the AGENTS.md convention is well-defined and
+/// three `fs::read_to_string` probes are cheaper than enumerating the
+/// workspace root.
+fn append_agents_md(prompt: &mut String, folder_path: &str) {
+    let folder = std::path::Path::new(folder_path);
+    if !folder.is_dir() {
+        return;
+    }
+    for variant in ["AGENTS.md", "agents.md", "Agents.md"] {
+        let path = folder.join(variant);
+        match std::fs::read_to_string(&path) {
+            Ok(content) if content.len() <= AGENTS_MD_MAX_BYTES => {
+                prompt.push_str(&format!(
+                    "\n{header}\n\
+                     The following instructions come from the project's `{variant}` file \
+                     at the workspace root. Treat them as authoritative project-author \
+                     guidance and follow them throughout this session.\n\n\
+                     ```\n{content}\n```\n",
+                    header = AGENTS_MD_SECTION_HEADER,
+                ));
+                return;
+            }
+            Ok(content) => {
+                tracing::warn!(
+                    bytes = content.len(),
+                    cap = AGENTS_MD_MAX_BYTES,
+                    variant,
+                    "AGENTS.md exceeded byte cap; skipping injection",
+                );
+                return;
+            }
+            Err(_) => continue,
+        }
     }
 }
 

@@ -210,3 +210,193 @@ fn chat_system_prompt_detects_tech_stack() {
     assert!(prompt.contains("Rust"));
     assert!(prompt.contains("Node.js/TypeScript"));
 }
+
+// ---------------------------------------------------------------------------
+// AGENTS.md injection
+//
+// `append_agents_md` runs from BOTH `build_chat_system_prompt` and
+// `agentic_execution_system_prompt`, so we mirror the assertions across
+// both builders to lock the contract in place. The helper is internal
+// (private), so tests assert against the rendered prompt instead of
+// calling it directly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn chat_system_prompt_includes_agents_md_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "Always run cargo check before tests.\nNo emojis.\n",
+    )
+    .unwrap();
+
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        name: "WithAgents",
+        description: "",
+        folder_path: &folder,
+        build_command: None,
+        test_command: None,
+    };
+    let prompt = build_chat_system_prompt(&project, "");
+
+    assert!(
+        prompt.contains(AGENTS_MD_SECTION_HEADER),
+        "chat prompt is missing the AGENTS.md section header"
+    );
+    assert!(
+        prompt.contains("Always run cargo check before tests."),
+        "chat prompt did not include AGENTS.md body"
+    );
+    assert!(
+        prompt.contains("`AGENTS.md`"),
+        "chat prompt did not mention the matched filename variant"
+    );
+}
+
+#[test]
+fn chat_system_prompt_handles_case_insensitive_variants() {
+    let dir = tempfile::tempdir().unwrap();
+    // Only the lowercase variant exists.
+    std::fs::write(dir.path().join("agents.md"), "Lowercase variant body.").unwrap();
+
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        name: "LowerAgents",
+        description: "",
+        folder_path: &folder,
+        build_command: None,
+        test_command: None,
+    };
+    let prompt = build_chat_system_prompt(&project, "");
+
+    assert!(prompt.contains(AGENTS_MD_SECTION_HEADER));
+    assert!(prompt.contains("Lowercase variant body."));
+    // On case-insensitive filesystems (Windows / macOS default) the
+    // first probe `AGENTS.md` opens the same inode as `agents.md`, so
+    // the variant label may be either. On case-sensitive filesystems
+    // (Linux) only the second probe matches and the label is
+    // `agents.md`. Accept both so the test is cross-platform.
+    assert!(
+        prompt.contains("`AGENTS.md`") || prompt.contains("`agents.md`"),
+        "expected one of the recognised variant labels in the rendered prompt"
+    );
+}
+
+#[test]
+fn chat_system_prompt_omits_agents_md_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    // Intentionally do not write AGENTS.md.
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        name: "NoAgents",
+        description: "",
+        folder_path: &folder,
+        build_command: None,
+        test_command: None,
+    };
+    let prompt = build_chat_system_prompt(&project, "");
+
+    assert!(
+        !prompt.contains(AGENTS_MD_SECTION_HEADER),
+        "chat prompt unexpectedly includes the AGENTS.md section when no file is present"
+    );
+}
+
+#[test]
+fn chat_system_prompt_skips_agents_md_when_over_size_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    // 1 byte over the cap so the helper's size guard trips.
+    let oversize = "x".repeat(AGENTS_MD_MAX_BYTES + 1);
+    std::fs::write(dir.path().join("AGENTS.md"), &oversize).unwrap();
+
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        name: "BigAgents",
+        description: "",
+        folder_path: &folder,
+        build_command: None,
+        test_command: None,
+    };
+    let prompt = build_chat_system_prompt(&project, "");
+
+    assert!(
+        !prompt.contains(AGENTS_MD_SECTION_HEADER),
+        "oversize AGENTS.md must be skipped, not truncated"
+    );
+    // And the giant payload must not leak into the prompt either.
+    assert!(
+        !prompt.contains(&oversize),
+        "oversize AGENTS.md content must never reach the system prompt"
+    );
+}
+
+#[test]
+fn chat_system_prompt_skips_agents_md_when_folder_missing() {
+    let project = ProjectInfo {
+        name: "Ghost",
+        description: "",
+        folder_path: "/definitely/does/not/exist/aura/agents/md/test",
+        build_command: None,
+        test_command: None,
+    };
+    let prompt = build_chat_system_prompt(&project, "");
+
+    assert!(
+        !prompt.contains(AGENTS_MD_SECTION_HEADER),
+        "non-existent folder_path must not surface an AGENTS.md section"
+    );
+}
+
+#[test]
+fn agentic_prompt_includes_agents_md_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "Use raw string literals for multi-line Rust strings.",
+    )
+    .unwrap();
+
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        name: "AgenticAgents",
+        description: "",
+        folder_path: &folder,
+        build_command: Some("cargo build"),
+        test_command: Some("cargo test"),
+    };
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+
+    assert!(prompt.contains(AGENTS_MD_SECTION_HEADER));
+    assert!(prompt.contains("Use raw string literals for multi-line Rust strings."));
+}
+
+#[test]
+fn agentic_prompt_omits_agents_md_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        name: "AgenticNoAgents",
+        description: "",
+        folder_path: &folder,
+        build_command: Some("cargo build"),
+        test_command: Some("cargo test"),
+    };
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+
+    assert!(
+        !prompt.contains(AGENTS_MD_SECTION_HEADER),
+        "agentic prompt unexpectedly includes the AGENTS.md section when no file is present"
+    );
+}
+
+#[test]
+fn agentic_prompt_skips_agents_md_when_folder_missing() {
+    let project = test_project("/definitely/does/not/exist/aura/agentic/test");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+
+    assert!(
+        !prompt.contains(AGENTS_MD_SECTION_HEADER),
+        "non-existent folder_path must not surface an AGENTS.md section in the agentic prompt"
+    );
+}
