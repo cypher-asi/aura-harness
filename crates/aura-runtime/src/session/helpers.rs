@@ -27,6 +27,7 @@ use tokio::time::{timeout, Duration};
 use tracing::{error, info, warn};
 
 const OUTBOUND_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_DELTA_COALESCE_BYTES: usize = 512;
 
 fn summarize_files_changed(loop_result: &AgentLoopResult) -> FilesChanged {
     let mut files_changed = FilesChanged::default();
@@ -419,10 +420,96 @@ pub(super) async fn build_kernel_with_config(
 struct OutboundMessageSink<'a> {
     outbound: &'a mpsc::Sender<OutboundMessage>,
     closed: bool,
+    pending_delta: Option<PendingStreamDelta>,
+}
+
+enum PendingStreamDelta {
+    Text(String),
+    Thinking(String),
+}
+
+impl PendingStreamDelta {
+    fn len(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            Self::Thinking(thinking) => thinking.len(),
+        }
+    }
+
+    fn into_message(self) -> OutboundMessage {
+        match self {
+            Self::Text(text) => OutboundMessage::TextDelta(TextDelta { text }),
+            Self::Thinking(thinking) => OutboundMessage::ThinkingDelta(ThinkingDelta { thinking }),
+        }
+    }
 }
 
 impl OutboundMessageSink<'_> {
     async fn push(&mut self, msg: OutboundMessage) {
+        self.flush_pending_delta().await;
+        self.push_now(msg).await;
+    }
+
+    async fn push_text_delta(&mut self, text: String) {
+        self.push_delta(StreamDeltaKind::Text, text).await;
+    }
+
+    async fn push_thinking_delta(&mut self, thinking: String) {
+        self.push_delta(StreamDeltaKind::Thinking, thinking).await;
+    }
+
+    async fn push_delta(&mut self, kind: StreamDeltaKind, chunk: String) {
+        if self.closed {
+            return;
+        }
+
+        let matches_pending = matches!(
+            (&self.pending_delta, kind),
+            (Some(PendingStreamDelta::Text(_)), StreamDeltaKind::Text)
+                | (
+                    Some(PendingStreamDelta::Thinking(_)),
+                    StreamDeltaKind::Thinking
+                )
+        );
+        if self.pending_delta.is_some() && !matches_pending {
+            self.flush_pending_delta().await;
+        }
+
+        match (&mut self.pending_delta, kind) {
+            (Some(PendingStreamDelta::Text(buffer)), StreamDeltaKind::Text) => {
+                buffer.push_str(&chunk);
+            }
+            (Some(PendingStreamDelta::Thinking(buffer)), StreamDeltaKind::Thinking) => {
+                buffer.push_str(&chunk);
+            }
+            (slot @ None, StreamDeltaKind::Text) => {
+                *slot = Some(PendingStreamDelta::Text(chunk));
+            }
+            (slot @ None, StreamDeltaKind::Thinking) => {
+                *slot = Some(PendingStreamDelta::Thinking(chunk));
+            }
+            _ => unreachable!("mismatched pending delta was flushed before append"),
+        }
+
+        if self
+            .pending_delta
+            .as_ref()
+            .is_some_and(|delta| delta.len() >= STREAM_DELTA_COALESCE_BYTES)
+        {
+            self.flush_pending_delta().await;
+        }
+    }
+
+    async fn flush_pending_delta(&mut self) {
+        if self.closed {
+            return;
+        }
+        if let Some(delta) = self.pending_delta.take() {
+            self.push_now(delta.into_message()).await;
+        }
+    }
+
+    async fn push_now(&mut self, msg: OutboundMessage) {
         if self.closed {
             return;
         }
@@ -430,6 +517,12 @@ impl OutboundMessageSink<'_> {
             self.closed = true;
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum StreamDeltaKind {
+    Text,
+    Thinking,
 }
 
 async fn send_outbound_with_backpressure(
@@ -457,13 +550,11 @@ async fn send_outbound_with_backpressure(
 #[async_trait]
 impl TurnEventSink for OutboundMessageSink<'_> {
     async fn on_text_delta(&mut self, text: String) {
-        self.push(OutboundMessage::TextDelta(TextDelta { text }))
-            .await;
+        self.push_text_delta(text).await;
     }
 
     async fn on_thinking_delta(&mut self, thinking: String) {
-        self.push(OutboundMessage::ThinkingDelta(ThinkingDelta { thinking }))
-            .await;
+        self.push_thinking_delta(thinking).await;
     }
 
     async fn on_tool_start(&mut self, id: String, name: String) {
@@ -542,6 +633,7 @@ pub(super) async fn forward_events_to_ws(
     let mut sink = OutboundMessageSink {
         outbound: &outbound,
         closed: false,
+        pending_delta: None,
     };
     while let Some(event) = event_rx.recv().await {
         map_agent_loop_event(event, &mut sink).await;
@@ -549,6 +641,7 @@ pub(super) async fn forward_events_to_ws(
             break;
         }
     }
+    sink.flush_pending_delta().await;
 }
 
 pub(super) async fn finalize_turn(
@@ -918,6 +1011,147 @@ mod tests {
             Some(OutboundMessage::AssistantMessageEnd(end)) if end.message_id == "msg-1"
         ));
         apply_handle.await.expect("apply task joins");
+    }
+
+    #[tokio::test]
+    async fn forward_events_coalesces_consecutive_text_deltas() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        let forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+
+        event_tx
+            .send(AgentLoopEvent::TextDelta("hel".to_string()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::TextDelta("lo".to_string()))
+            .await
+            .unwrap();
+        drop(event_tx);
+
+        forward_handle.await.expect("stream forward task joins");
+
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::TextDelta(delta)) if delta.text == "hello"
+        ));
+        assert!(outbound_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn forward_events_flushes_text_before_non_text_event() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        let forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+
+        event_tx
+            .send(AgentLoopEvent::TextDelta("before".to_string()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::ToolStart {
+                id: "tool-1".to_string(),
+                name: "read_file".to_string(),
+            })
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::TextDelta("after".to_string()))
+            .await
+            .unwrap();
+        drop(event_tx);
+
+        forward_handle.await.expect("stream forward task joins");
+
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::TextDelta(delta)) if delta.text == "before"
+        ));
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::ToolUseStart(start))
+                if start.id == "tool-1" && start.name == "read_file"
+        ));
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::TextDelta(delta)) if delta.text == "after"
+        ));
+        assert!(outbound_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn forward_events_coalesces_thinking_separately_from_text() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        let forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+
+        event_tx
+            .send(AgentLoopEvent::ThinkingDelta("think".to_string()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::ThinkingDelta("ing".to_string()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::TextDelta("text".to_string()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::ThinkingDelta("more".to_string()))
+            .await
+            .unwrap();
+        drop(event_tx);
+
+        forward_handle.await.expect("stream forward task joins");
+
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::ThinkingDelta(delta)) if delta.thinking == "thinking"
+        ));
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::TextDelta(delta)) if delta.text == "text"
+        ));
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::ThinkingDelta(delta)) if delta.thinking == "more"
+        ));
+        assert!(outbound_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn forward_events_flushes_pending_text_before_terminal_error() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        let forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+
+        event_tx
+            .send(AgentLoopEvent::TextDelta("partial".to_string()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::Error {
+                code: "stream_error".to_string(),
+                message: "boom".to_string(),
+                recoverable: true,
+            })
+            .await
+            .unwrap();
+        drop(event_tx);
+
+        forward_handle.await.expect("stream forward task joins");
+
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::TextDelta(delta)) if delta.text == "partial"
+        ));
+        assert!(matches!(
+            outbound_rx.recv().await,
+            Some(OutboundMessage::Error(err))
+                if err.code == "stream_error" && err.message == "boom" && err.recoverable
+        ));
+        assert!(outbound_rx.recv().await.is_none());
     }
 
     #[tokio::test]

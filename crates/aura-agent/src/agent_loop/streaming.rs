@@ -29,6 +29,16 @@ pub(super) fn emit(tx: Option<&Sender<AgentLoopEvent>>, event: AgentLoopEvent) {
     }
 }
 
+/// Send an event from async streaming paths, preserving LLM deltas instead of
+/// dropping them when the bounded event channel is temporarily saturated.
+async fn emit_with_backpressure(tx: Option<&Sender<AgentLoopEvent>>, event: AgentLoopEvent) {
+    if let Some(tx) = tx {
+        if let Err(e) = tx.send(event).await {
+            tracing::warn!("agent event channel closed: {e}");
+        }
+    }
+}
+
 /// Emit an [`AgentLoopEvent::IterationComplete`] event along with the
 /// matching [`DebugEvent::Iteration`] frame for the `aura-os` run
 /// bundle. `duration_ms` reflects wall-clock time since the start of
@@ -105,7 +115,7 @@ fn emit_debug_llm_call(
 }
 
 /// Map a [`StreamEvent`] to the corresponding [`AgentLoopEvent`] and emit it.
-fn emit_stream_event(
+async fn emit_stream_event(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     stream_event: &StreamEvent,
     accumulator: &StreamAccumulator,
@@ -116,44 +126,47 @@ fn emit_stream_event(
 
     match stream_event {
         StreamEvent::TextDelta { text } => {
-            emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+            emit_with_backpressure(event_tx, AgentLoopEvent::TextDelta(text.clone())).await;
         }
         StreamEvent::ThinkingDelta { thinking } => {
-            emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+            emit_with_backpressure(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone())).await;
         }
         StreamEvent::ContentBlockStart {
             content_type: StreamContentType::ToolUse { id, name },
             ..
         } => {
-            emit(
+            emit_with_backpressure(
                 event_tx,
                 AgentLoopEvent::ToolStart {
                     id: id.clone(),
                     name: name.clone(),
                 },
-            );
+            )
+            .await;
         }
         StreamEvent::InputJsonDelta { .. } => {
             if let Some(ref tool) = accumulator.current_tool_use {
-                emit(
+                emit_with_backpressure(
                     event_tx,
                     AgentLoopEvent::ToolInputSnapshot {
                         id: tool.id.clone(),
                         name: tool.name.clone(),
                         input: tool.input_json.clone(),
                     },
-                );
+                )
+                .await;
             }
         }
         StreamEvent::Error { message, .. } => {
-            emit(
+            emit_with_backpressure(
                 event_tx,
                 AgentLoopEvent::Error {
                     code: "stream_error".to_string(),
                     message: message.clone(),
                     recoverable: true,
                 },
-            );
+            )
+            .await;
         }
         _ => {}
     }
@@ -210,7 +223,7 @@ async fn drain_remaining_stream(
         match next {
             Some(Ok(event)) => {
                 accumulator.process(&event);
-                emit_stream_event(event_tx, &event, &accumulator);
+                emit_stream_event(event_tx, &event, &accumulator).await;
             }
             Some(Err(e)) => return DrainOutcome::Transport(e),
             None => return DrainOutcome::Completed(Box::new(accumulator)),
@@ -241,10 +254,11 @@ async fn complete_and_emit_as_deltas(
     for block in &response.message.content {
         match block {
             aura_reasoner::ContentBlock::Text { text } => {
-                emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+                emit_with_backpressure(event_tx, AgentLoopEvent::TextDelta(text.clone())).await;
             }
             aura_reasoner::ContentBlock::Thinking { thinking, .. } => {
-                emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+                emit_with_backpressure(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()))
+                    .await;
             }
             _ => {}
         }
