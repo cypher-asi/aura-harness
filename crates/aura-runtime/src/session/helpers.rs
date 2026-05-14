@@ -5,9 +5,9 @@ use super::ws_handler::populate_tool_definitions;
 use super::{Session, WsContext};
 use crate::executor_factory;
 use crate::protocol::{
-    tool_info_from_definition_with_state, AssistantMessageEnd, ErrorMsg, FileDiff, FilesChanged,
-    OutboundMessage, SessionInit, SessionReady, SessionUsage, SkillInfo, TextDelta, ThinkingDelta,
-    ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
+    tool_info_from_definition_with_state, AssistantMessageEnd, ContextBreakdown, ErrorMsg,
+    FileDiff, FilesChanged, OutboundMessage, SessionInit, SessionReady, SessionUsage, SkillInfo,
+    TextDelta, ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
 };
 use crate::runtime_capabilities;
 use crate::session::cross_agent_hook::{AuraServerAgentHook, AuraServerSpawnHook};
@@ -749,6 +749,16 @@ pub(super) async fn apply_turn_result(
         0.0
     };
 
+    let breakdown = &loop_result.context_breakdown;
+    let context_breakdown = ContextBreakdown {
+        system_prompt_tokens: breakdown.system_prompt_tokens,
+        tools_tokens: breakdown.tools_tokens,
+        skills_tokens: breakdown.skills_tokens,
+        mcp_tokens: breakdown.mcp_tokens,
+        subagents_tokens: breakdown.subagents_tokens,
+        conversation_tokens: breakdown.conversation_tokens,
+    };
+
     send_outbound_with_backpressure(
         outbound_tx,
         OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
@@ -768,6 +778,7 @@ pub(super) async fn apply_turn_result(
                 context_utilization,
                 model: session.model.clone(),
                 provider: session.provider_name.clone(),
+                context_breakdown,
             },
             files_changed,
             originating_user_id: None,

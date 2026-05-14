@@ -584,17 +584,34 @@ async fn prepare_turn_context(
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
 
+    // Subagent surface is constant for the bundled registry today. The
+    // dispatch tool re-emits the registry's name + description per
+    // entry on every turn, so the per-turn breakdown attributes those
+    // chars to the "Subagents" bucket. Custom registries (e.g. tests)
+    // would override this once they're plumbed through `WsContext`.
+    config.subagents_chars =
+        crate::subagent_registry::registry_chars(&crate::subagent_registry::SubagentRegistry::bundled());
+
     // Resolve active skill names before creating the memory observer so we can
     // forward them for procedure extraction.
     let mut active_skill_names: Vec<String> = Vec::new();
     if let (Some(ref sm), Some(ref agent_id)) = (&ctx.skill_manager, &session.skill_agent_id) {
         if let Ok(mgr) = sm.read() {
+            // Capture the prompt length before injection so the "Skills"
+            // bucket can be reported as the delta — the text the
+            // skill-injection step actually appends to the system
+            // prompt — without double-counting it under "System
+            // prompt" downstream in `agent_loop::context::recompute_breakdown`.
+            let pre_inject_chars = config.system_prompt.len();
             let injected = mgr.inject_agent_skills(agent_id, &mut config.system_prompt);
+            let post_inject_chars = config.system_prompt.len();
+            config.skills_chars = post_inject_chars.saturating_sub(pre_inject_chars);
             if !injected.is_empty() {
                 active_skill_names = injected.iter().map(|s| s.name.clone()).collect();
                 debug!(
                     session_id = %session.session_id,
                     skill_count = active_skill_names.len(),
+                    skills_chars = config.skills_chars,
                     "Injected agent skills into prompt"
                 );
             }

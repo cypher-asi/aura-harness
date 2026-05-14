@@ -87,6 +87,24 @@ impl ToolCallResult {
     }
 }
 
+/// Per-bucket token estimates surfaced on [`AgentLoopResult`] and
+/// forwarded to clients via `aura_protocol::ContextBreakdown`. Buckets
+/// follow the same `chars / CHARS_PER_TOKEN` heuristic that produces
+/// [`AgentLoopResult::estimated_context_tokens`], so they are
+/// directly comparable on the wire.
+///
+/// `mcp_tokens` is reserved for MCP integration (see plan); the harness
+/// does not populate it today.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentContextBreakdown {
+    pub system_prompt_tokens: u64,
+    pub tools_tokens: u64,
+    pub skills_tokens: u64,
+    pub mcp_tokens: u64,
+    pub subagents_tokens: u64,
+    pub conversation_tokens: u64,
+}
+
 /// Result of an automatic build check.
 #[derive(Debug, Clone, Default)]
 pub struct AutoBuildResult {
@@ -243,6 +261,13 @@ pub struct AgentLoopResult {
     pub total_cache_read_input_tokens: u64,
     /// Best-effort estimate of the current occupied context window in tokens.
     pub estimated_context_tokens: u64,
+    /// Per-bucket token estimates that approximately sum to
+    /// [`Self::estimated_context_tokens`]. Computed using the same
+    /// `chars / CHARS_PER_TOKEN` heuristic; see
+    /// [`crate::agent_loop::context`] for the rules. Populated on every
+    /// turn that reaches the compaction step (which is every turn that
+    /// actually calls the model).
+    pub context_breakdown: AgentContextBreakdown,
     /// Net file mutations observed across the turn.
     pub file_changes: Vec<FileChange>,
     /// Number of iterations completed.
@@ -400,18 +425,8 @@ mod tests {
     #[test]
     fn file_change_summary_sums_line_counts_across_merges() {
         let mut result = AgentLoopResult::default();
-        result.record_file_change(fc_lines(
-            "src/lib.rs",
-            FileChangeKind::Modify,
-            10,
-            2,
-        ));
-        result.record_file_change(fc_lines(
-            "src/lib.rs",
-            FileChangeKind::Modify,
-            5,
-            3,
-        ));
+        result.record_file_change(fc_lines("src/lib.rs", FileChangeKind::Modify, 10, 2));
+        result.record_file_change(fc_lines("src/lib.rs", FileChangeKind::Modify, 5, 3));
         assert_eq!(result.file_changes.len(), 1);
         assert_eq!(result.file_changes[0].lines_added, 15);
         assert_eq!(result.file_changes[0].lines_removed, 5);

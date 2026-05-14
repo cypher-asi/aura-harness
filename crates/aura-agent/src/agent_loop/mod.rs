@@ -158,6 +158,19 @@ pub struct AgentLoopConfig {
     ///
     /// [`intent_classifier`]: Self::intent_classifier
     pub intent_classifier_manifest: Vec<(String, String)>,
+    /// Character count of the static skills surface for this session,
+    /// used by the per-turn context breakdown to estimate the "Skills"
+    /// bucket. Computed once at session start by the runtime crate from
+    /// the resolved [`aura_protocol::SkillInfo`] list. Defaults to `0`
+    /// when the harness is run without skills wired in (e.g. unit
+    /// tests, dev loop), in which case the bucket reads as zero.
+    pub skills_chars: usize,
+    /// Character count of the static subagent registry for this
+    /// session, used by the per-turn context breakdown to estimate the
+    /// "Subagents" bucket. Computed once at session start by the
+    /// runtime crate from the active [`aura_runtime::SubagentRegistry`].
+    /// Defaults to `0` for the same reasons as [`Self::skills_chars`].
+    pub subagents_chars: usize,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -208,6 +221,8 @@ impl Default for AgentLoopConfig {
             observers: Vec::new(),
             intent_classifier: None,
             intent_classifier_manifest: Vec::new(),
+            skills_chars: 0,
+            subagents_chars: 0,
         }
     }
 }
@@ -339,7 +354,7 @@ impl AgentLoop {
             }
             state.begin_iteration(&self.config, iteration);
             let iteration_started_at = Instant::now();
-            context::compact_if_needed(&self.config, &mut state);
+            context::compact_if_needed(&self.config, &mut state, &tools);
 
             let request = state.build_request(&self.config, &tools, iteration)?;
             let response = match self
@@ -451,7 +466,7 @@ impl AgentLoop {
         let mut last_error = initial_error;
 
         for (tier, warning) in recovery_steps {
-            if !context::compact_for_overflow(state, tier) {
+            if !context::compact_for_overflow(&self.config, state, tier, tools) {
                 debug!("Skipping overflow retry because compaction made no progress");
                 continue;
             }
@@ -685,7 +700,12 @@ impl LoopState {
                 "create_spec" | "update_spec" | "list_specs" | "get_spec" | "delete_spec"
             )
         });
-        let request_kind = match (has_task_tools, has_spec_tools, config.request_kind, iteration) {
+        let request_kind = match (
+            has_task_tools,
+            has_spec_tools,
+            config.request_kind,
+            iteration,
+        ) {
             (true, _, _, _) => ModelRequestKind::ProjectToolTaskExtract,
             (_, true, _, _) => ModelRequestKind::ProjectToolSpecGen,
             (_, _, ModelRequestKind::DevLoopBootstrap, 0) => ModelRequestKind::DevLoopBootstrap,
@@ -853,10 +873,7 @@ mod intent_classifier_tests {
     #[test]
     fn build_request_keeps_tool_hints_scoped_after_first_iteration() {
         let config = AgentLoopConfig {
-            tool_hints: Some(vec![
-                "read_file".to_string(),
-                "create_task".to_string(),
-            ]),
+            tool_hints: Some(vec!["read_file".to_string(), "create_task".to_string()]),
             ..AgentLoopConfig::default()
         };
         let msgs = vec![
@@ -886,10 +903,7 @@ mod intent_classifier_tests {
     #[test]
     fn build_request_keeps_tool_hints_auto_on_first_iteration() {
         let config = AgentLoopConfig {
-            tool_hints: Some(vec![
-                "read_file".to_string(),
-                "create_task".to_string(),
-            ]),
+            tool_hints: Some(vec!["read_file".to_string(), "create_task".to_string()]),
             ..AgentLoopConfig::default()
         };
         let state = LoopState::new(&config, vec![Message::user("extract tasks")]);

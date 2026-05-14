@@ -49,6 +49,28 @@ impl Default for SubagentRegistry {
     }
 }
 
+/// Approximate the on-prompt character cost of a [`SubagentRegistry`]
+/// for the per-turn context breakdown. Counts the name, description,
+/// system prompt, and the comma-joined `allowed_tools` list — the
+/// fields the dispatch tool surfaces back to the parent agent so it
+/// knows what each subagent kind can do. Other fields (budgets,
+/// capabilities) carry negligible token cost and are ignored.
+#[must_use]
+pub fn registry_chars(registry: &SubagentRegistry) -> usize {
+    registry
+        .all()
+        .iter()
+        .map(|kind| {
+            let tools_chars = kind
+                .allowed_tools
+                .iter()
+                .map(|t| t.len() + 1) // +1 per join separator
+                .sum::<usize>();
+            kind.name.len() + kind.description.len() + kind.system_prompt.len() + tools_chars
+        })
+        .sum()
+}
+
 fn general_purpose() -> SubagentKindSpec {
     SubagentKindSpec {
         name: "general_purpose".into(),
@@ -135,6 +157,22 @@ fn readonly_kind(name: &str, description: &str, system_prompt: &str) -> Subagent
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `registry_chars` must be > 0 for the bundled registry so the
+    /// per-turn context breakdown surfaces a non-zero "Subagents"
+    /// bucket out of the box. Concrete value isn't asserted because
+    /// the bundled prompts are free-text and may evolve.
+    #[test]
+    fn registry_chars_is_nonzero_for_bundled_registry() {
+        let registry = SubagentRegistry::bundled();
+        assert!(registry_chars(&registry) > 0);
+    }
+
+    #[test]
+    fn registry_chars_is_zero_for_empty_registry() {
+        let registry = SubagentRegistry::from_specs(Vec::new());
+        assert_eq!(registry_chars(&registry), 0);
+    }
 
     #[test]
     fn bundled_registry_contains_expected_kinds() {

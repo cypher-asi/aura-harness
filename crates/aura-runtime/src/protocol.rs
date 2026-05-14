@@ -382,6 +382,14 @@ mod tests {
                 context_utilization: 0.5,
                 model: aura_agent::DEFAULT_MODEL.to_string(),
                 provider: "anthropic".to_string(),
+                context_breakdown: ContextBreakdown {
+                    system_prompt_tokens: 7,
+                    tools_tokens: 11,
+                    skills_tokens: 13,
+                    mcp_tokens: 0,
+                    subagents_tokens: 17,
+                    conversation_tokens: 102,
+                },
             },
             files_changed: FilesChanged {
                 created: vec!["new.txt".to_string()],
@@ -403,12 +411,60 @@ mod tests {
         assert_eq!(json["usage"]["cumulative_cache_creation_input_tokens"], 50);
         assert_eq!(json["usage"]["cumulative_cache_read_input_tokens"], 20);
         assert_eq!(json["usage"]["model"], aura_agent::DEFAULT_MODEL);
+        // Per-bucket context breakdown round-trips through serde so the
+        // frontend can render the new popover without losing fidelity.
+        let breakdown = &json["usage"]["context_breakdown"];
+        assert_eq!(breakdown["system_prompt_tokens"], 7);
+        assert_eq!(breakdown["tools_tokens"], 11);
+        assert_eq!(breakdown["skills_tokens"], 13);
+        assert_eq!(breakdown["mcp_tokens"], 0);
+        assert_eq!(breakdown["subagents_tokens"], 17);
+        assert_eq!(breakdown["conversation_tokens"], 102);
         assert_eq!(json["files_changed"]["created"][0], "new.txt");
         assert_eq!(json["files_changed"]["modified"][0], "old.txt");
         assert!(json["files_changed"]["deleted"]
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    /// Older harness builds will continue to omit `context_breakdown`
+    /// from the JSON they produce; with `#[serde(default)]` the field
+    /// must deserialize back to its zero value so newer frontends never
+    /// crash when reading legacy payloads.
+    #[test]
+    fn assistant_message_end_deserializes_without_context_breakdown() {
+        let json = serde_json::json!({
+            "type": "assistant_message_end",
+            "message_id": "msg_legacy",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "estimated_context_tokens": 15,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cumulative_input_tokens": 10,
+                "cumulative_output_tokens": 5,
+                "cumulative_cache_creation_input_tokens": 0,
+                "cumulative_cache_read_input_tokens": 0,
+                "context_utilization": 0.0,
+                "model": "test",
+                "provider": "test",
+            },
+            "files_changed": {
+                "created": [],
+                "modified": [],
+                "deleted": [],
+            },
+        });
+        let parsed: OutboundMessage = serde_json::from_value(json).unwrap();
+        match parsed {
+            OutboundMessage::AssistantMessageEnd(end) => {
+                assert!(end.usage.context_breakdown.is_empty());
+            }
+            _ => panic!("Expected AssistantMessageEnd"),
+        }
     }
 
     #[test]
