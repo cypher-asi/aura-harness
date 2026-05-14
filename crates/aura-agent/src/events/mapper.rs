@@ -79,6 +79,18 @@ pub trait TurnEventSink: Send {
     async fn on_stream_reset(&mut self, _reason: String) {}
     async fn on_warning(&mut self, _message: String) {}
     async fn on_error(&mut self, _code: String, _message: String, _recoverable: bool) {}
+    /// Heartbeat / status hook. Default no-op so sinks that don't
+    /// care about progress frames (TUI in non-interactive mode, in-process
+    /// tests) keep compiling without changes; the WS sink overrides this
+    /// to forward the frame onto the harness wire.
+    async fn on_progress(
+        &mut self,
+        _stage: String,
+        _tool_name: Option<String>,
+        _elapsed_ms: Option<u64>,
+        _message: Option<String>,
+    ) {
+    }
     async fn on_tool_call_retrying(
         &mut self,
         _tool_use_id: String,
@@ -156,6 +168,15 @@ where
             message,
             recoverable,
         } => sink.on_error(code, message, recoverable).await,
+        AgentLoopEvent::Progress {
+            stage,
+            tool_name,
+            elapsed_ms,
+            message,
+        } => {
+            sink.on_progress(stage, tool_name, elapsed_ms, message)
+                .await;
+        }
         AgentLoopEvent::ToolCallRetrying {
             tool_use_id,
             tool_name,

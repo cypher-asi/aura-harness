@@ -74,6 +74,7 @@ pub(super) fn start_generation(
             code: "not_initialized".into(),
             message: "Send session_init before generation_request".into(),
             recoverable: true,
+            support_id: None,
         }));
         return None;
     }
@@ -94,6 +95,7 @@ pub(super) fn start_generation(
                 code: "invalid_mode".into(),
                 message: msg,
                 recoverable: true,
+                support_id: None,
             }));
             return None;
         }

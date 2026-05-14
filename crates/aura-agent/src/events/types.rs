@@ -160,6 +160,34 @@ pub enum TurnEvent {
         recoverable: bool,
     },
 
+    /// Heartbeat or status event the harness wants to surface to the
+    /// client without it counting as text/tool/error traffic.
+    ///
+    /// Phase 6 of agent-stuck-and-reset: long tool calls emit
+    /// `Progress { stage: "tool_running", tool_name, elapsed_ms }`
+    /// every `AURA_TURN_TOOL_HEARTBEAT_INTERVAL_SECS` so aura-os's
+    /// sliding-idle watchdog (which would otherwise trip
+    /// `turn_timeout` after 180s of broadcast quiet) and the
+    /// client-side stuck-stream watchdog see forward motion. The
+    /// optional fields are deliberately untyped beyond the wire
+    /// shape; callers populate whatever makes sense for the stage.
+    Progress {
+        /// Short, machine-readable stage tag (e.g. `"tool_running"`).
+        /// The aura-os chat client renders unknown stages as the
+        /// literal label, so adding new tags does not require a
+        /// coordinated client release.
+        stage: String,
+        /// Tool whose long-running execution is producing this
+        /// heartbeat. Set on `stage = "tool_running"`; left `None`
+        /// for stages that don't refer to a single tool.
+        tool_name: Option<String>,
+        /// Wall-clock milliseconds since the heartbeat's reference
+        /// event (tool start for `"tool_running"`).
+        elapsed_ms: Option<u64>,
+        /// Optional human-readable label / detail string.
+        message: Option<String>,
+    },
+
     /// Structured observability frame for the `aura-os` run bundle.
     /// Flows through the same channel as the UI-facing variants so
     /// that downstream forwarders preserve ordering.

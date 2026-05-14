@@ -177,10 +177,16 @@ async fn test_stall_terminates_loop() {
         "Loop should terminate after exactly STALL_STREAK_THRESHOLD iterations"
     );
 
+    // Phase 6 of agent-stuck-and-reset: the stall recovery warning
+    // text was rewritten to match the new `agent_stalled` terminal
+    // error wording so the message embedded into the conversation
+    // stays consistent with the broadcast `Error.message` the chat
+    // client surfaces. The literal substring `"forward progress"` is
+    // the stable handshake between the two strings.
     let has_stall_warning = result.messages.iter().any(|msg| {
         msg.content.iter().any(|block| {
             if let ContentBlock::Text { text } = block {
-                text.contains("CRITICAL") && text.contains("stalled")
+                text.contains("forward progress")
             } else {
                 false
             }

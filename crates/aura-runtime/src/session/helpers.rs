@@ -115,6 +115,7 @@ pub(super) async fn handle_session_init(
             code: "already_initialized".into(),
             message: "Session has already been initialized".into(),
             recoverable: true,
+            support_id: None,
         }));
         return;
     }
@@ -132,6 +133,7 @@ pub(super) async fn handle_session_init(
                     code: "invalid_provider_config".into(),
                     message: e.to_string(),
                     recoverable: true,
+                    support_id: None,
                 }));
                 return;
             }
@@ -145,6 +147,7 @@ pub(super) async fn handle_session_init(
             code: "invalid_workspace".into(),
             message: e,
             recoverable: true,
+            support_id: None,
         }));
         return;
     }
@@ -159,6 +162,7 @@ pub(super) async fn handle_session_init(
                     code: "tool_permissions_load_failed".into(),
                     message: e,
                     recoverable: true,
+                    support_id: None,
                 }));
                 return;
             }
@@ -466,10 +470,7 @@ impl OutboundMessageSink<'_> {
         let matches_pending = matches!(
             (&self.pending_delta, kind),
             (Some(PendingStreamDelta::Text(_)), StreamDeltaKind::Text)
-                | (
-                    Some(PendingStreamDelta::Thinking(_)),
-                    StreamDeltaKind::Thinking
-                )
+                | (Some(PendingStreamDelta::Thinking(_)), StreamDeltaKind::Thinking)
         );
         if self.pending_delta.is_some() && !matches_pending {
             self.flush_pending_delta().await;
@@ -614,6 +615,23 @@ impl TurnEventSink for OutboundMessageSink<'_> {
             code,
             message,
             recoverable,
+            support_id: None,
+        }))
+        .await;
+    }
+
+    async fn on_progress(
+        &mut self,
+        stage: String,
+        tool_name: Option<String>,
+        elapsed_ms: Option<u64>,
+        message: Option<String>,
+    ) {
+        self.push(OutboundMessage::Progress(crate::protocol::ProgressMsg {
+            stage,
+            tool_name,
+            elapsed_ms,
+            message,
         }))
         .await;
     }
@@ -671,6 +689,7 @@ pub(super) async fn finalize_turn(
                     code: "turn_error".into(),
                     message: format!("Turn processing failed: {e}"),
                     recoverable: true,
+                    support_id: None,
                 }),
                 "turn_error",
             )
@@ -686,6 +705,7 @@ async fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id
             code: "internal_error".into(),
             message: "Turn processing task panicked".into(),
             recoverable: false,
+            support_id: None,
         }),
         "turn_panic_error",
     )
@@ -772,8 +792,7 @@ pub(super) async fn apply_turn_result(
                 cache_read_input_tokens,
                 cumulative_input_tokens: session.cumulative_input_tokens,
                 cumulative_output_tokens: session.cumulative_output_tokens,
-                cumulative_cache_creation_input_tokens: session
-                    .cumulative_cache_creation_input_tokens,
+                cumulative_cache_creation_input_tokens: session.cumulative_cache_creation_input_tokens,
                 cumulative_cache_read_input_tokens: session.cumulative_cache_read_input_tokens,
                 context_utilization,
                 model: session.model.clone(),

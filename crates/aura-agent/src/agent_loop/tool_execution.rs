@@ -201,13 +201,34 @@ fn emit_stop_error(
     code: &str,
     msg: &str,
 ) {
+    emit_stop_error_with_recoverability(event_tx, state, code, msg, false);
+}
+
+/// Emit a terminal error event and set `state.result.stalled`.
+///
+/// The `recoverable` flag flows through to
+/// [`crate::events::AgentLoopEvent::Error`] and ultimately the
+/// `HarnessOutbound::Error` that aura-os sees on the SSE wire. Pass
+/// `false` for hard structural failures (consecutive errors,
+/// pathless writes) and `true` for soft "the agent is stuck but the
+/// user can intervene" cases (`agent_stalled` from the
+/// [`crate::blocking::stall::StallDetector`]) so the chat client's
+/// stuck-stream watchdog renders Stop / Retry / Report instead of a
+/// dead-end "session error".
+fn emit_stop_error_with_recoverability(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    state: &mut LoopState,
+    code: &str,
+    msg: &str,
+    recoverable: bool,
+) {
     helpers::append_warning(&mut state.messages, msg);
     streaming::emit(
         event_tx,
         AgentLoopEvent::Error {
             code: code.to_string(),
             message: msg.to_string(),
-            recoverable: false,
+            recoverable,
         },
     );
     state.result.stalled = true;
@@ -246,14 +267,27 @@ fn check_termination_conditions(
     }
 
     if tools.is_stalled {
-        emit_stop_error(
-            event_tx,
-            state,
-            "stall_detected",
-            "CRITICAL: Agent appears stalled — repeatedly failing \
-             to write to the same files. Stopping to prevent \
-             infinite loop. Try a different approach or ask for help.",
+        // Phase 6 of agent-stuck-and-reset: the loop used to bail
+        // silently on stall (only `state.result.stalled = true` was
+        // set, and the `AgentLoopEvent::Error { code: "stall_detected",
+        // recoverable: false }` event happened to be emitted but with
+        // a code aura-os didn't classify as a stall). Promote to the
+        // canonical `agent_stalled` code with `recoverable: true` so
+        // the aura-os SSE remap surfaces it as a structured terminal
+        // error instead of a generic "stream dropped", and the
+        // client-side stuck-stream watchdog can render Stop / Retry /
+        // Report. The {N} substitution is `STALL_STREAK_THRESHOLD`
+        // (the only streak that can land here today) — exposing it in
+        // the message keeps the wording aligned with the policy
+        // constant if it ever changes.
+        let msg = format!(
+            "Agent loop made no forward progress for {} iterations \
+             (write target unchanged). Stopping so the chat can \
+             intervene; retry with a different approach or report \
+             the issue.",
+            crate::constants::STALL_STREAK_THRESHOLD,
         );
+        emit_stop_error_with_recoverability(event_tx, state, "agent_stalled", &msg, true);
         return true;
     }
 

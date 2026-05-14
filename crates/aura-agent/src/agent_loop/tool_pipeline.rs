@@ -18,6 +18,8 @@
 //! preserves the outer/inner split between the two files.
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::blocking::detection::{detect_all_blocked, BlockingContext};
 use crate::blocking::stall::StallDetector;
@@ -32,10 +34,138 @@ use crate::types::{
 };
 use chrono::Utc;
 use tokio::sync::mpsc::Sender;
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 use super::streaming::emit as emit_event;
 use super::{AgentLoop, AgentLoopConfig, LoopState};
+
+/// Env var that overrides the tool-running heartbeat cadence. Mirrors
+/// the same name aura-os Phase 3 already published in
+/// `apps/aura-os-server/src/handlers/agents/chat/turn_slot.rs` so the
+/// two sides stay aligned without per-process drift.
+const TOOL_HEARTBEAT_INTERVAL_ENV: &str = "AURA_TURN_TOOL_HEARTBEAT_INTERVAL_SECS";
+
+/// Default cadence (10s) when the env var is unset or unparseable.
+/// Matches `DEFAULT_TOOL_HEARTBEAT_INTERVAL_SECS` on the aura-os side
+/// so the harness emits a heartbeat well inside the server's
+/// sliding-idle window (`AURA_TURN_MAX_TIMEOUT_SECS`, default 180s).
+const DEFAULT_TOOL_HEARTBEAT_INTERVAL_SECS: u64 = 10;
+
+/// Minimum cadence: zero would degenerate into a hot loop and
+/// sub-second cadences would drown the broadcast in heartbeats.
+const MIN_TOOL_HEARTBEAT_INTERVAL_SECS: u64 = 1;
+
+/// Maximum cadence: ten minutes already exceeds the documented server
+/// idle ceiling, so values past this would defeat the heartbeat's
+/// purpose. Clamping protects against typos that would silently
+/// disable forward-progress signalling.
+const MAX_TOOL_HEARTBEAT_INTERVAL_SECS: u64 = 600;
+
+pub(super) fn read_tool_heartbeat_interval_from_env() -> Duration {
+    let secs = match std::env::var(TOOL_HEARTBEAT_INTERVAL_ENV) {
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(parsed) => parsed.clamp(
+                MIN_TOOL_HEARTBEAT_INTERVAL_SECS,
+                MAX_TOOL_HEARTBEAT_INTERVAL_SECS,
+            ),
+            Err(_) => DEFAULT_TOOL_HEARTBEAT_INTERVAL_SECS,
+        },
+        Err(_) => DEFAULT_TOOL_HEARTBEAT_INTERVAL_SECS,
+    };
+    Duration::from_secs(secs)
+}
+
+/// Cached resolved cadence so the env lookup happens once per process.
+/// Matches the `OnceLock` pattern used elsewhere in the codebase
+/// (`tool_heartbeat_interval` on the aura-os side, `max_pending_turns`,
+/// `read_broadcast_capacity_from_env`) so tooling that scrapes
+/// configuration knobs sees a consistent shape.
+pub(crate) fn tool_heartbeat_interval() -> Duration {
+    static CACHED: OnceLock<Duration> = OnceLock::new();
+    *CACHED.get_or_init(read_tool_heartbeat_interval_from_env)
+}
+
+/// Spawn a background task that emits an
+/// [`AgentLoopEvent::Progress`] heartbeat every
+/// [`tool_heartbeat_interval`] while a batch of tool calls is in
+/// flight. Returns a [`HeartbeatGuard`] whose `Drop` aborts the task
+/// — callers get cancel-on-completion semantics for free without
+/// having to wire `tokio::select!` around every executor call.
+///
+/// The first heartbeat fires after the first interval tick (i.e. the
+/// "cool" 0..interval window stays silent), so a tool that completes
+/// inside the interval never emits one. After that the cadence is
+/// strictly periodic; each tick reports `tool_running`,
+/// `tool_name=<first-tool-of-batch>`, `elapsed_ms` since batch start.
+///
+/// `event_tx` is `None` for the headless code path (no event channel,
+/// e.g. unit tests in non-streaming mode); the spawn is skipped and
+/// the returned guard is a no-op so the call site stays branch-free.
+pub(super) fn spawn_tool_heartbeat(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    to_execute: &[ToolCallInfo],
+    interval: Duration,
+) -> HeartbeatGuard {
+    let Some(tx) = event_tx.cloned() else {
+        return HeartbeatGuard { handle: None };
+    };
+    if to_execute.is_empty() {
+        return HeartbeatGuard { handle: None };
+    }
+    // Most batches contain a single tool call; when the model emits
+    // multiple in one turn we report the first one's name on the
+    // heartbeat. The server-side watchdog only cares about *some*
+    // forward-progress event arriving, and the chat client renders
+    // the stage label, so a single representative name is enough to
+    // keep the UI honest without generating one heartbeat per tool.
+    let tool_name = to_execute[0].name.clone();
+    let started_at = Instant::now();
+    let handle = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        // The first tick fires immediately; consume it so the heartbeat
+        // only emits after the configured wall-clock window has
+        // elapsed (matching the documented "long tool calls > 10s"
+        // contract).
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let event = AgentLoopEvent::Progress {
+                stage: "tool_running".to_string(),
+                tool_name: Some(tool_name.clone()),
+                elapsed_ms: Some(elapsed_ms),
+                message: None,
+            };
+            // `send` (with backpressure) over `try_send` so a
+            // momentarily-full broadcast doesn't drop a heartbeat —
+            // dropping one defeats the watchdog-friendliness contract.
+            if tx.send(event).await.is_err() {
+                // Receiver gone (turn already finalized): stop ticking.
+                break;
+            }
+        }
+    });
+    HeartbeatGuard {
+        handle: Some(handle),
+    }
+}
+
+/// RAII guard for [`spawn_tool_heartbeat`]. Aborts the heartbeat task
+/// on drop so a panicking executor or an early `?`-return at the
+/// caller doesn't leak the periodic emission past the tool's
+/// lifetime.
+pub(super) struct HeartbeatGuard {
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
 
 impl AgentLoop {
     /// Process tool call results from one iteration.
@@ -86,6 +216,16 @@ impl AgentLoop {
         let executed = if to_execute.is_empty() {
             Vec::new()
         } else {
+            // Phase 6 of agent-stuck-and-reset: spawn a periodic
+            // `progress: tool_running` heartbeat so aura-os's
+            // sliding-idle watchdog (and the client-side stuck-stream
+            // watchdog) see forward motion during a long tool call
+            // and don't trip `turn_timeout` on a turn that is
+            // actively working. The guard's `Drop` aborts the
+            // heartbeat task as soon as `executor.execute` returns
+            // (success, error, or panic — the surrounding `await`
+            // still drops the guard before unwinding propagates).
+            let _heartbeat = spawn_tool_heartbeat(event_tx, &to_execute, tool_heartbeat_interval());
             executor.execute(&to_execute).await
         };
 

@@ -473,11 +473,17 @@ mod tests {
             code: "rate_limit".to_string(),
             message: "Too many requests".to_string(),
             recoverable: true,
+            support_id: None,
         });
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "error");
         assert_eq!(json["code"], "rate_limit");
         assert!(json["recoverable"].as_bool().unwrap());
+        assert!(
+            json.get("support_id").is_none(),
+            "absent support_id must not be serialized so older receivers \
+             never see an unexpected key"
+        );
     }
 
     #[test]
@@ -486,9 +492,62 @@ mod tests {
             code: "auth_failed".to_string(),
             message: "Invalid token".to_string(),
             recoverable: false,
+            support_id: None,
         });
         let json = serde_json::to_value(&msg).unwrap();
         assert!(!json["recoverable"].as_bool().unwrap());
+    }
+
+    /// Phase 6: when an in-process emit site pre-populates `support_id`
+    /// the field rides on the wire as a top-level JSON key. Confirms
+    /// the additive serde wiring works in both directions: serialize
+    /// stamps the id, and deserializing the same JSON back into
+    /// `ErrorMsg` returns the id unchanged.
+    #[test]
+    fn test_outbound_error_msg_with_support_id_roundtrips() {
+        let msg = OutboundMessage::Error(ErrorMsg {
+            code: "agent_stalled".to_string(),
+            message: "Agent loop made no forward progress for 3 iterations".to_string(),
+            recoverable: true,
+            support_id: Some("0123456789ab".to_string()),
+        });
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["code"], "agent_stalled");
+        assert_eq!(json["support_id"], "0123456789ab");
+
+        let back: OutboundMessage = serde_json::from_value(json).unwrap();
+        match back {
+            OutboundMessage::Error(err) => {
+                assert_eq!(err.support_id.as_deref(), Some("0123456789ab"));
+                assert!(err.recoverable);
+            }
+            _ => panic!("expected Error variant"),
+        }
+    }
+
+    /// Phase 6 wire-compat guard: older harness builds (and existing
+    /// in-process emit sites that haven't been migrated yet) emit
+    /// `error` JSON without a `support_id` key. Newer aura-os builds
+    /// must still deserialize that JSON cleanly into `ErrorMsg` with
+    /// `support_id == None` so the SSE remap boundary keeps stamping
+    /// a suffix instead of crashing on a missing field.
+    #[test]
+    fn test_outbound_error_msg_deserializes_without_support_id() {
+        let json = serde_json::json!({
+            "type": "error",
+            "code": "something_else",
+            "message": "boom",
+            "recoverable": false,
+        });
+        let parsed: OutboundMessage = serde_json::from_value(json).unwrap();
+        match parsed {
+            OutboundMessage::Error(err) => {
+                assert_eq!(err.code, "something_else");
+                assert!(err.support_id.is_none());
+            }
+            _ => panic!("expected Error variant"),
+        }
     }
 
     // ========================================================================
@@ -601,6 +660,7 @@ mod tests {
                 code: "c".into(),
                 message: "m".into(),
                 recoverable: false,
+                support_id: None,
             }),
         ];
 

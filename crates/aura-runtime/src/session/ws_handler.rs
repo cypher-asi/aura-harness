@@ -218,6 +218,7 @@ fn handle_msg_during_turn(
                         code: "approval_response_error".into(),
                         message: e,
                         recoverable: true,
+                        support_id: None,
                     }));
                 }
             }
@@ -227,6 +228,7 @@ fn handle_msg_during_turn(
                 code: "turn_in_progress".into(),
                 message: "A turn is currently in progress; send cancel first".into(),
                 recoverable: true,
+                support_id: None,
             }));
         }
         Err(e) => {
@@ -234,6 +236,7 @@ fn handle_msg_during_turn(
                 code: "parse_error".into(),
                 message: format!("Invalid message: {e}"),
                 recoverable: true,
+                support_id: None,
             }));
         }
     }
@@ -301,6 +304,7 @@ async fn dispatch_idle_message(
                         code: "no_router_url".into(),
                         message: "AURA_ROUTER_URL not configured; generation unavailable".into(),
                         recoverable: false,
+                        support_id: None,
                     }));
                     IdleAction::Continue
                 }
@@ -326,6 +330,7 @@ async fn dispatch_idle_message(
                         code: "approval_response_error".into(),
                         message: e,
                         recoverable: true,
+                        support_id: None,
                     }));
                 }
             }
@@ -336,6 +341,7 @@ async fn dispatch_idle_message(
                 code: "parse_error".into(),
                 message: format!("Invalid message: {e}"),
                 recoverable: true,
+                support_id: None,
             }));
             IdleAction::Continue
         }
@@ -387,6 +393,7 @@ async fn start_turn(
             code: "not_initialized".into(),
             message: "Send session_init before user_message".into(),
             recoverable: true,
+            support_id: None,
         }));
         return None;
     }
@@ -555,6 +562,7 @@ async fn prepare_turn_context(
                 code: "kernel_error".into(),
                 message: format!("Failed to build kernel: {e}"),
                 recoverable: true,
+                support_id: None,
             });
         }
     };
@@ -575,6 +583,7 @@ async fn prepare_turn_context(
             code: "kernel_error".into(),
             message: format!("Failed to record user prompt: {e}"),
             recoverable: true,
+            support_id: None,
         });
     }
 
