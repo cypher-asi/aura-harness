@@ -176,12 +176,20 @@ impl AgentControlHook for AuraServerAgentHook {
     async fn deliver_message(
         &self,
         target_agent_id: &str,
-        _parent_agent_id: Option<&str>,
+        parent_agent_id: Option<&str>,
         _originating_user_id: Option<&str>,
         content: &str,
         attachments: Option<Value>,
     ) -> Result<(), String> {
         let url = self.endpoint(&format!("/api/agents/{target_agent_id}/events/stream"));
+        // `originating_agent_id` enables the server-side async callback
+        // wiring in `apps/aura-os-server/src/handlers/agents/chat/persist_task.rs`:
+        // once the target's `AssistantMessageEnd` lands, the server posts
+        // a follow-up `user_message` into the originating agent's session
+        // carrying the target's reply, so the caller's LLM gets a fresh
+        // turn to react instead of having to block on the SSE body here.
+        // Older servers ignore the field (Serde `#[serde(default)]` on
+        // `SendChatRequest`), so the new field is forward-compatible.
         let response = self
             .client
             .post(url)
@@ -193,7 +201,8 @@ impl AgentControlHook for AuraServerAgentHook {
                 "commands": null,
                 "project_id": null,
                 "attachments": attachments,
-                "new_session": false
+                "new_session": false,
+                "originating_agent_id": parent_agent_id,
             }))
             .send()
             .await
@@ -447,6 +456,118 @@ mod tests {
             params.get("org_id").map(String::as_str),
             Some("org-1"),
             "org_id must be forwarded alongside view=slim; got {params:?}"
+        );
+    }
+
+    /// Spin up a mock `POST /api/agents/:agent_id/events/stream` endpoint
+    /// that captures the inbound JSON body, returns a `200` with the
+    /// `x-aura-chat-persisted: true` header so `deliver_message` returns
+    /// `Ok(())`, and reports back the body through the shared `Mutex`.
+    ///
+    /// Header construction uses `axum::http` types directly (rather than
+    /// the `reqwest::header` aliases imported at the top of the module
+    /// for header inspection in `require_persisted_header` tests) because
+    /// axum 0.7 builds on `http` 1.x and rejects the older
+    /// `reqwest::header::HeaderValue` types at the response builder.
+    async fn spawn_capturing_chat_stream_mock(captured: Arc<Mutex<Option<Value>>>) -> String {
+        use axum::extract::Path;
+        use axum::http::header::HeaderName as AxumHeaderName;
+        use axum::http::HeaderMap as AxumHeaderMap;
+        use axum::http::HeaderValue as AxumHeaderValue;
+        use axum::http::StatusCode;
+        use axum::routing::post;
+
+        let captured_for_route = captured.clone();
+        let app = axum::Router::new().route(
+            "/api/agents/:agent_id/events/stream",
+            post(
+                move |Path(_agent_id): Path<String>, axum::Json(body): axum::Json<Value>| {
+                    let captured = captured_for_route.clone();
+                    async move {
+                        *captured.lock().await = Some(body);
+                        let mut headers = AxumHeaderMap::new();
+                        headers.insert(
+                            AxumHeaderName::from_static(CHAT_PERSISTED_HEADER),
+                            AxumHeaderValue::from_static("true"),
+                        );
+                        (StatusCode::OK, headers, "")
+                    }
+                },
+            ),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}")
+    }
+
+    /// Cross-repo regression: pin that the cross-agent `deliver_message`
+    /// flows the caller's agent id into the outbound POST as
+    /// `originating_agent_id`. The server-side async reply wiring
+    /// (`spawn_cross_agent_reply_callback` in
+    /// `apps/aura-os-server/src/handlers/agents/chat/persist_task.rs`)
+    /// keys on this field to post a follow-up `user_message` back into
+    /// the originating agent's session when the target's turn finishes,
+    /// so if either side drops the field the async reply chain breaks
+    /// silently.
+    #[tokio::test]
+    async fn deliver_message_forwards_parent_agent_id_as_originating_agent_id() {
+        let captured = Arc::new(Mutex::new(None::<Value>));
+        let base_url = spawn_capturing_chat_stream_mock(captured.clone()).await;
+
+        let hook = AuraServerAgentHook::new(base_url, Some("test-jwt".into()));
+        hook.deliver_message(
+            "target-agent",
+            Some("caller-agent"),
+            Some("user-root"),
+            "hello",
+            None,
+        )
+        .await
+        .expect("deliver_message call");
+
+        let body = captured.lock().await.clone().expect("captured body");
+        assert_eq!(
+            body.get("originating_agent_id").and_then(Value::as_str),
+            Some("caller-agent"),
+            "deliver_message must forward parent_agent_id as `originating_agent_id` so \
+             aura-os-server can post the target's reply back into the caller's session; \
+             got: {body}"
+        );
+        assert_eq!(
+            body.get("content").and_then(Value::as_str),
+            Some("hello"),
+            "content must be threaded through verbatim; got: {body}"
+        );
+        assert_eq!(
+            body.get("new_session").and_then(Value::as_bool),
+            Some(false),
+            "deliver_message must always join the target's existing chat session; got: {body}"
+        );
+    }
+
+    /// Companion to the above: when the caller agent id is unknown
+    /// (e.g. the tool was invoked from a context without
+    /// `caller_agent_id`), the POST body still includes
+    /// `originating_agent_id`, but as a JSON `null`. This pins the
+    /// nullable shape so the server's serde deserializer
+    /// (`Option<String>` with `#[serde(default)]`) keeps accepting it.
+    #[tokio::test]
+    async fn deliver_message_serializes_missing_parent_as_null() {
+        let captured = Arc::new(Mutex::new(None::<Value>));
+        let base_url = spawn_capturing_chat_stream_mock(captured.clone()).await;
+
+        let hook = AuraServerAgentHook::new(base_url, Some("test-jwt".into()));
+        hook.deliver_message("target-agent", None, None, "hello", None)
+            .await
+            .expect("deliver_message call");
+
+        let body = captured.lock().await.clone().expect("captured body");
+        assert!(
+            body.get("originating_agent_id").is_some_and(Value::is_null),
+            "missing parent_agent_id must serialize as a JSON null; got: {body}"
         );
     }
 }

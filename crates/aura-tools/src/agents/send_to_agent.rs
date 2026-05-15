@@ -8,6 +8,23 @@
 //! performed by [`crate::AgentControlHook::deliver_message`] when wired.
 //! Without a hook the tool still executes the gate and returns a
 //! descriptive outcome — see [`crate::agents`] module docs.
+//!
+//! ## Reply delivery contract
+//!
+//! `send_to_agent` is intentionally non-blocking: the tool returns as soon
+//! as the target's `user_message` is persisted (the `x-aura-chat-persisted`
+//! header on the SSE response is `true`). The target's reply is delivered
+//! **asynchronously**: when its `AssistantMessageEnd` lands, the
+//! aura-os-server persist task posts a follow-up `user_message` into the
+//! originating agent's session carrying the target's reply text. The LLM
+//! then sees that follow-up as a fresh turn and can react to it.
+//!
+//! The successful `ToolResult` carries a `reply_delivery=async_user_message`
+//! metadata tag so the LLM-side prompt copy can stop trying to read the
+//! reply out of the synchronous `delivered: true` body. See
+//! `apps/aura-os-server/src/handlers/agents/chat/persist_task.rs` in the
+//! aura-os repo for the server-side `spawn_cross_agent_reply_callback`
+//! that owns the post-back side of this contract.
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
@@ -142,8 +159,16 @@ impl Tool for SendToAgentTool {
 
         let body = serde_json::to_vec(&outcome)
             .map_err(|e| ToolError::Serialization(format!("send_to_agent outcome: {e}")))?;
+        // `reply_delivery=async_user_message` documents the cross-repo
+        // contract: aura-os-server posts the target's reply back into
+        // the caller's session as a new `user_message` once the target's
+        // turn finishes (see `spawn_cross_agent_reply_callback` in
+        // `apps/aura-os-server/src/handlers/agents/chat/persist_task.rs`).
+        // The LLM-side prompt copy can read this hint and stop trying
+        // to read the reply out of the synchronous ToolResult body.
         Ok(ToolResult::success(SEND_TO_AGENT_TOOL_NAME, body)
-            .with_metadata("target_agent_id", outcome.target_agent_id.clone()))
+            .with_metadata("target_agent_id", outcome.target_agent_id.clone())
+            .with_metadata("reply_delivery", "async_user_message"))
     }
 }
 
@@ -201,7 +226,9 @@ mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
+    use async_trait::async_trait;
     use aura_core::{AgentId, AgentPermissions, AgentScope};
+    use std::sync::Arc;
 
     fn ctx(caller: AgentPermissions) -> ToolContext {
         let dir = std::env::temp_dir();
@@ -210,6 +237,46 @@ mod tests {
         ctx.caller_agent_id = Some(AgentId::generate());
         ctx.originating_user_id = Some("user-root".into());
         ctx
+    }
+
+    /// In-memory `AgentControlHook` used to drive the `execute` path
+    /// without standing up a real aura-os-server. `deliver_message`
+    /// returns `Ok(())` so the success branch is exercised.
+    struct OkHook;
+
+    #[async_trait]
+    impl crate::tool::AgentControlHook for OkHook {
+        async fn deliver_message(
+            &self,
+            _target_agent_id: &str,
+            _parent_agent_id: Option<&str>,
+            _originating_user_id: Option<&str>,
+            _content: &str,
+            _attachments: Option<serde_json::Value>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn lifecycle(
+            &self,
+            _target_agent_id: &str,
+            _parent_agent_id: Option<&str>,
+            _originating_user_id: Option<&str>,
+            _action: &str,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn delegate_task(
+            &self,
+            _target_agent_id: &str,
+            _parent_agent_id: Option<&str>,
+            _originating_user_id: Option<&str>,
+            _task: &str,
+            _context: Option<&serde_json::Value>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -282,5 +349,47 @@ mod tests {
             attachments: None,
         };
         assert!(SendToAgentTool::evaluate(&ctx(caller), &input).is_ok());
+    }
+
+    /// Cross-repo contract: a successful `send_to_agent` execution must
+    /// stamp `reply_delivery=async_user_message` onto the `ToolResult`
+    /// metadata. This is the signal the LLM-side prompt copy keys on to
+    /// stop trying to read the target's reply out of the synchronous
+    /// body and instead wait for the follow-up `user_message` that
+    /// aura-os-server posts back into the caller's session when the
+    /// target's turn finishes.
+    #[tokio::test]
+    async fn send_to_agent_marks_successful_result_with_async_reply_metadata() {
+        let caller = AgentPermissions {
+            scope: AgentScope::default(),
+            capabilities: vec![Capability::ControlAgent],
+        };
+        let mut tctx = ctx(caller);
+        tctx.agent_control_hook = Some(Arc::new(OkHook));
+
+        let result = SendToAgentTool
+            .execute(
+                &tctx,
+                serde_json::json!({
+                    "agent_id": "target-id",
+                    "content": "hi",
+                }),
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.ok, "OkHook must produce a success result");
+        assert_eq!(
+            result.metadata.get("target_agent_id").map(String::as_str),
+            Some("target-id"),
+            "existing `target_agent_id` metadata must be preserved; got: {:?}",
+            result.metadata
+        );
+        assert_eq!(
+            result.metadata.get("reply_delivery").map(String::as_str),
+            Some("async_user_message"),
+            "successful send_to_agent must announce async reply delivery; got: {:?}",
+            result.metadata
+        );
     }
 }
