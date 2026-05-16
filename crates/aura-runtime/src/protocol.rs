@@ -389,6 +389,8 @@ mod tests {
                     mcp_tokens: 0,
                     subagents_tokens: 17,
                     conversation_tokens: 102,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                 },
             },
             files_changed: FilesChanged {
