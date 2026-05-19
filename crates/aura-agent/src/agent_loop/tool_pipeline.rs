@@ -503,6 +503,7 @@ fn track_tool_effects(
 
         if helpers::is_exploration_tool(&tool.name) {
             exploration_state.count += 1;
+            blocking_ctx.exploration_count += 1;
             if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
                 if tool.input.get("start_line").is_some() {
                     read_guard.record_range_read(path);
@@ -683,5 +684,102 @@ mod chunk_guard_tests {
             partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
         assert!(oversized.is_empty());
         assert_eq!(remaining.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod track_tool_effects_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn mk_read_tool(id: &str, path: &str) -> ToolCallInfo {
+        ToolCallInfo {
+            id: id.to_string(),
+            name: "read_file".to_string(),
+            input: json!({"path": path}),
+        }
+    }
+
+    fn mk_read_result(tool_use_id: &str) -> ToolCallResult {
+        ToolCallResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: "ok".to_string(),
+            is_error: false,
+            kind: aura_core::ToolResultKind::Ok,
+            stop_loop: false,
+            file_changes: Vec::new(),
+        }
+    }
+
+    /// Regression test for the silently-dead exploration hard block.
+    ///
+    /// `track_tool_effects` historically only bumped `exploration_state.count`
+    /// (the warning counter) and never `blocking_ctx.exploration_count`
+    /// (the counter `detect_blocked_exploration` in `blocking/detection`
+    /// actually reads). This test pins both increments and the detector
+    /// boundary so the hard block can't go silent again.
+    #[test]
+    fn exploration_count_is_incremented_by_track_tool_effects() {
+        let allowance = 12_usize;
+
+        let mut blocking_ctx = BlockingContext::new(allowance);
+        let mut read_guard = ReadGuardState::default();
+        let mut exploration_state = ExplorationState::default();
+        let mut result = AgentLoopResult::default();
+        let mut had_any_write = false;
+
+        // Drive `allowance` successful exploration calls, each on a
+        // distinct path so per-file read-guard limits don't trip and
+        // change which arm of `track_tool_effects` we exercise.
+        for i in 0..allowance {
+            let tool_id = format!("toolu_explore_{i}");
+            let path = format!("src/file_{i}.rs");
+            let to_execute = vec![mk_read_tool(&tool_id, &path)];
+            let executed = vec![mk_read_result(&tool_id)];
+            track_tool_effects(
+                &to_execute,
+                &executed,
+                &mut result,
+                &mut blocking_ctx,
+                &mut read_guard,
+                &mut exploration_state,
+                &mut had_any_write,
+            );
+        }
+
+        assert_eq!(
+            blocking_ctx.exploration_count, allowance,
+            "track_tool_effects must increment BlockingContext::exploration_count \
+             on every successful exploration call (this was the dead-block bug)"
+        );
+        assert_eq!(
+            exploration_state.count, allowance,
+            "the parallel warning counter must stay in sync"
+        );
+        assert!(!had_any_write, "no writes were issued in this test");
+
+        // `detect_blocked_exploration` is reached through the public
+        // `detect_all_blocked` entry point; it uses `count >= allowance`,
+        // so the very next exploration call (the (N+1)th) must block.
+        // The probe path is fresh, so per-file read-guard limits cannot
+        // trip and steal the block verdict from the exploration detector.
+        let next_call = mk_read_tool("toolu_explore_next", "src/file_probe.rs");
+        let check = crate::blocking::detection::detect_all_blocked(
+            &next_call,
+            &blocking_ctx,
+            &read_guard,
+        );
+        assert!(
+            check.blocked,
+            "with exploration_count == allowance, the next exploration call must block"
+        );
+        assert!(
+            check
+                .recovery_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Exploration budget exceeded"),
+            "block message should be the documented 'Exploration budget exceeded' verdict"
+        );
     }
 }
