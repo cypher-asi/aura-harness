@@ -166,6 +166,14 @@ pub fn fs_write(
         }
     }
 
+    // Structural guard: refuse to land a busted `Cargo.toml` on disk.
+    // Running BEFORE `fs::write` keeps the previous on-disk content
+    // intact when the new content is malformed; the agent then sees
+    // the structural error and can retry with a corrected manifest.
+    if super::cargo_toml_guard::is_cargo_manifest(&resolved) {
+        super::cargo_toml_guard::validate_cargo_toml(content)?;
+    }
+
     fs::write(&resolved, content).map_err(|e| {
         ToolError::Io(std::io::Error::new(
             e.kind(),
@@ -186,6 +194,11 @@ pub fn fs_write(
 
     let bytes_written = content.len();
     let truncated_warning = looks_truncated(&resolved, content);
+    let module_link_warning = if file_existed {
+        None
+    } else {
+        super::module_link::check_module_link(sandbox, path, &resolved)
+    };
 
     // Compute the actual line diff between pre-content and new content.
     // For a fresh create, pre_content is empty so this collapses to
@@ -205,6 +218,15 @@ pub fn fs_write(
             "warning",
             "Content has unbalanced braces/parentheses – may be truncated".to_string(),
         );
+    }
+
+    if let Some(check) = module_link_warning {
+        if !check.linked {
+            result = result.with_metadata("unlinked_module", "true");
+            if let Some(message) = check.message {
+                result = result.with_metadata("unlinked_module_hint", message);
+            }
+        }
     }
 
     if bytes_written > WRITE_FILE_CHUNK_BYTES {
@@ -624,6 +646,108 @@ mod tests {
             .expect("overwrite should report a line diff");
         assert_eq!(line_diff.lines_added, 2);
         assert_eq!(line_diff.lines_removed, 2);
+    }
+
+    #[test]
+    fn fs_write_rejects_unparseable_cargo_toml() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::create_dir(dir.path().join("crate")).unwrap();
+        let broken = "[dependencies\nserde = \"1\"\n";
+        let result = fs_write(&sandbox, "crate/Cargo.toml", broken, false);
+        let Err(ToolError::InvalidArguments(msg)) = result else {
+            panic!("expected InvalidArguments");
+        };
+        assert!(msg.contains("does not parse as TOML"));
+        assert!(
+            !dir.path().join("crate/Cargo.toml").exists(),
+            "broken manifest must not land on disk"
+        );
+    }
+
+    #[test]
+    fn fs_write_rejects_cargo_toml_with_duplicate_dependency() {
+        // toml's strict parser is the first line of defense; the manual
+        // scanner's diagnostic is the second. We use a manifest the
+        // parser rejects to keep the test stable across `toml` minor
+        // versions and assert that the user-facing message points at the
+        // duplicate.
+        let (sandbox, _dir) = create_test_sandbox();
+        let manifest = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\
+                        [dependencies]\nserde = \"1\"\nserde = \"2\"\n";
+        let result = fs_write(&sandbox, "Cargo.toml", manifest, false);
+        let Err(ToolError::InvalidArguments(msg)) = result else {
+            panic!("expected InvalidArguments");
+        };
+        assert!(
+            msg.contains("does not parse as TOML") || msg.contains("declares the same dependency"),
+            "expected duplicate-key diagnostic, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn fs_write_accepts_clean_cargo_toml() {
+        let (sandbox, _dir) = create_test_sandbox();
+        let manifest = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\
+                        [dependencies]\nserde = \"1\"\n";
+        let result = fs_write(&sandbox, "Cargo.toml", manifest, false).unwrap();
+        assert!(result.ok);
+    }
+
+    #[test]
+    fn fs_write_flags_unlinked_new_module() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn ok() {}\n", // no `mod hpke_hybrid;`
+        )
+        .unwrap();
+        let result = fs_write(&sandbox, "src/hpke_hybrid.rs", "pub fn run() {}\n", false).unwrap();
+        assert_eq!(
+            result.metadata.get("unlinked_module").map(String::as_str),
+            Some("true"),
+            "unlinked_module flag must be set"
+        );
+        let hint = result
+            .metadata
+            .get("unlinked_module_hint")
+            .expect("hint present");
+        assert!(hint.contains("mod hpke_hybrid"), "hint = {hint}");
+        assert!(hint.contains("src/lib.rs"), "hint = {hint}");
+    }
+
+    #[test]
+    fn fs_write_does_not_flag_when_sibling_declares_module() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub mod hpke_hybrid;\npub fn ok() {}\n",
+        )
+        .unwrap();
+        let result = fs_write(&sandbox, "src/hpke_hybrid.rs", "pub fn run() {}\n", false).unwrap();
+        assert!(
+            !result.metadata.contains_key("unlinked_module"),
+            "metadata = {:?}",
+            result.metadata
+        );
+    }
+
+    #[test]
+    fn fs_write_does_not_flag_overwrites() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn ok() {}\n").unwrap();
+        // Pre-existing file: write the initial version, THEN overwrite.
+        // The overwrite path should NOT re-flag the module-link gap; it
+        // only fires for fresh creations to avoid spamming on every edit.
+        let _ = fs_write(&sandbox, "src/hpke_hybrid.rs", "pub fn a() {}\n", false).unwrap();
+        let result =
+            fs_write(&sandbox, "src/hpke_hybrid.rs", "pub fn b() {}\nx\n", false).unwrap();
+        assert!(
+            !result.metadata.contains_key("unlinked_module"),
+            "overwrite must not re-emit the warning"
+        );
     }
 
     #[test]

@@ -5,8 +5,23 @@ use async_trait::async_trait;
 use aura_core::ToolDefinition;
 use aura_core::ToolResult;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Read;
 use tracing::{debug, instrument};
+
+/// Compute a short, stable hex digest of the bytes returned to the
+/// agent. Stamped onto the `content_hash` metadata key so consumers
+/// (the agent loop's exploration-budget tracker, the dashboard's
+/// repeated-read warning) can deduplicate identical re-reads without
+/// re-comparing full payloads. We use `DefaultHasher` rather than
+/// pulling in a crypto-grade hash because the only consumer is
+/// "did we already see this exact byte sequence?" — collision risk is
+/// acceptable and the implementation has zero new dependencies.
+fn content_hash_hex(bytes: &[u8]) -> String {
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
 
 /// Build the standard truncation marker used by `fs_read` so the LLM gets a
 /// consistent, machine-readable hint about how to recover the missing bytes.
@@ -97,18 +112,22 @@ pub fn fs_read(
             output.push_str(&truncation_marker(original_len - idx, original_len));
             output_truncated = true;
         }
+        let content_hash = content_hash_hex(output.as_bytes());
         let mut result = ToolResult::success("read_file", output)
             .with_metadata("size", size.to_string())
             .with_metadata("total_lines", total.to_string())
             .with_metadata("start_line", start.to_string())
-            .with_metadata("end_line", end.to_string());
+            .with_metadata("end_line", end.to_string())
+            .with_metadata("content_hash", content_hash);
         if truncated || output_truncated {
             result = result.with_metadata("truncated", "true");
         }
         Ok(result)
     } else {
+        let content_hash = content_hash_hex(&contents);
         let mut result = ToolResult::success("read_file", contents)
-            .with_metadata("size", size.to_string());
+            .with_metadata("size", size.to_string())
+            .with_metadata("content_hash", content_hash);
         if truncated {
             result = result.with_metadata("truncated", "true");
         }
@@ -206,6 +225,46 @@ mod tests {
         let result = fs_read(&sandbox, "test.txt", 1024, None, None).unwrap();
         assert!(result.ok);
         assert_eq!(&result.stdout[..], content.as_bytes());
+        assert!(
+            result.metadata.contains_key("content_hash"),
+            "content_hash must be stamped on every read so dedup tracking works"
+        );
+    }
+
+    #[test]
+    fn fs_read_content_hash_is_deterministic_across_reads() {
+        let (sandbox, dir) = create_test_sandbox();
+        let content = "stable bytes";
+        fs::write(dir.path().join("stable.txt"), content).unwrap();
+        let a = fs_read(&sandbox, "stable.txt", 1024, None, None).unwrap();
+        let b = fs_read(&sandbox, "stable.txt", 1024, None, None).unwrap();
+        assert_eq!(
+            a.metadata.get("content_hash"),
+            b.metadata.get("content_hash"),
+            "identical bytes must produce identical content_hash"
+        );
+    }
+
+    #[test]
+    fn fs_read_content_hash_changes_when_bytes_change() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("mut.txt"), "before").unwrap();
+        let a = fs_read(&sandbox, "mut.txt", 1024, None, None).unwrap();
+        fs::write(dir.path().join("mut.txt"), "after").unwrap();
+        let b = fs_read(&sandbox, "mut.txt", 1024, None, None).unwrap();
+        assert_ne!(
+            a.metadata.get("content_hash"),
+            b.metadata.get("content_hash"),
+            "different bytes must yield different content_hash"
+        );
+    }
+
+    #[test]
+    fn fs_read_line_range_also_emits_content_hash() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("multi.txt"), "a\nb\nc\nd\n").unwrap();
+        let result = fs_read(&sandbox, "multi.txt", 1024, Some(2), Some(3)).unwrap();
+        assert!(result.metadata.contains_key("content_hash"));
     }
 
     #[test]

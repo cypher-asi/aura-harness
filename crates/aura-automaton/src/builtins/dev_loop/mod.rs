@@ -67,7 +67,10 @@ pub(crate) use tick::commit_and_push;
 pub(crate) use validation::validate_execution;
 
 pub use forward_event::forward_agent_event;
-pub use validation::DecompositionHint;
+pub use validation::{
+    build_preflight_failure_to_error, build_preflight_gate_enabled, validate_build_preflight,
+    BuildPreflightOutcome, DecompositionHint,
+};
 
 // ---------------------------------------------------------------------------
 // Per-automaton state keys + retry policy

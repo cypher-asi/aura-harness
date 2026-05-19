@@ -205,6 +205,91 @@ fn test_fs_edit_fuzzy_match_no_match() {
 }
 
 #[test]
+fn test_fs_edit_not_found_error_shows_partial_anchor_window() {
+    let (sandbox, dir) = create_test_sandbox();
+    let content = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\ntheta\n";
+    fs::write(dir.path().join("anchor.txt"), content).unwrap();
+
+    // First needle line exists ("delta") but the rest doesn't — the
+    // helper should anchor on the matched prefix and show a window.
+    let result = fs_edit(
+        &sandbox,
+        "anchor.txt",
+        "delta\nMISSING\nFAKE",
+        "replacement",
+        false,
+    );
+    assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
+    let Err(ToolError::InvalidArguments(msg)) = result else {
+        unreachable!();
+    };
+    assert!(
+        msg.contains("Closest partial match"),
+        "expected anchor-bearing error, got: {msg}"
+    );
+    assert!(
+        msg.contains("1 of 3 needle line"),
+        "expected matched/total annotation, got: {msg}"
+    );
+    assert!(msg.contains("delta"), "window must contain anchored line");
+    assert!(msg.contains("gamma"), "window must contain pre-context");
+    assert!(msg.contains("epsilon"), "window must contain post-context");
+    assert!(
+        msg.contains("Re-derive old_text"),
+        "remediation hint must be present"
+    );
+}
+
+#[test]
+fn test_fs_edit_rejects_cargo_toml_edit_that_breaks_parse() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let result = fs_edit(
+        &sandbox,
+        "Cargo.toml",
+        "[package]",
+        "[package", // broken — missing closing bracket
+        false,
+    );
+    let Err(ToolError::InvalidArguments(msg)) = result else {
+        panic!("expected InvalidArguments");
+    };
+    assert!(msg.contains("does not parse as TOML"), "msg = {msg}");
+    let on_disk = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(
+        on_disk.contains("[package]"),
+        "original Cargo.toml must be preserved when guard trips"
+    );
+}
+
+#[test]
+fn test_fs_edit_not_found_error_falls_back_when_zero_lines_match() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(
+        dir.path().join("nothing.txt"),
+        "real\ncontent\nhere\nnothing\nmatches\n",
+    )
+    .unwrap();
+
+    let result = fs_edit(
+        &sandbox,
+        "nothing.txt",
+        "zzz\nyyy\nxxx",
+        "replacement",
+        false,
+    );
+    let Err(ToolError::InvalidArguments(msg)) = result else {
+        panic!("expected InvalidArguments");
+    };
+    assert!(msg.contains("None of the 3 needle line"));
+    assert!(msg.contains("read_file the target path first"));
+}
+
+#[test]
 fn test_fs_edit_shrinkage_guard_rejects_large_reduction() {
     let (sandbox, dir) = create_test_sandbox();
 

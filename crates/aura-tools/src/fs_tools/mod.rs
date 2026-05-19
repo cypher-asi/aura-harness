@@ -1,11 +1,13 @@
 //! Filesystem tool implementations.
 
+mod cargo_toml_guard;
 mod cmd;
 mod delete;
 mod diff;
 mod edit;
 mod find;
 mod ls;
+mod module_link;
 mod read;
 mod search;
 mod stat;

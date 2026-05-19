@@ -1004,6 +1004,90 @@ fn windows_resolve_program_finds_cmd_via_pathext() {
     );
 }
 
+// ========================================================================
+// cargo stderr classification — verifies we lift compiler diagnostics
+// into ToolResult metadata so the agent loop sees `cargo check` failures
+// even when stdout is empty.
+// ========================================================================
+
+#[test]
+fn classify_cargo_invocation_matches_known_subcommands() {
+    assert_eq!(
+        classify_cargo_invocation(Some("cargo"), &["check".to_string()]),
+        Some("check")
+    );
+    assert_eq!(
+        classify_cargo_invocation(Some("cargo.exe"), &["build".to_string()]),
+        Some("build")
+    );
+    assert_eq!(
+        classify_cargo_invocation(
+            Some("/usr/local/bin/cargo"),
+            &["+nightly".to_string(), "test".to_string()]
+        ),
+        Some("test")
+    );
+    assert_eq!(
+        classify_cargo_invocation(Some("cargo"), &["clippy".to_string()]),
+        Some("clippy")
+    );
+    assert_eq!(classify_cargo_invocation(Some("cargo"), &[]), None);
+    assert_eq!(
+        classify_cargo_invocation(Some("rustc"), &["check".to_string()]),
+        None
+    );
+    assert_eq!(
+        classify_cargo_invocation(Some("cargo"), &["doc".to_string()]),
+        None
+    );
+}
+
+#[test]
+fn extract_cargo_errors_lifts_first_error_with_location() {
+    let stderr = "\
+warning: unused import: `Foo`
+ --> src/lib.rs:3:5
+error[E0432]: unresolved import `crate::missing`
+ --> src/lib.rs:7:5
+  |
+7 | use crate::missing;
+  |     ^^^^^^^^^^^^^^ no `missing` in the crate root
+
+error[E0277]: the trait bound `Foo: Bar` is not satisfied
+ --> crates/foo/src/lib.rs:42:1
+
+error: aborting due to 2 previous errors
+";
+    let errors = extract_cargo_errors(stderr);
+    assert_eq!(errors.len(), 2);
+    assert_eq!(errors[0].code, "E0432");
+    assert!(errors[0].message.contains("unresolved import"));
+    assert_eq!(errors[0].location.as_deref(), Some("src/lib.rs:7:5"));
+    assert_eq!(errors[1].code, "E0277");
+    assert_eq!(
+        errors[1].location.as_deref(),
+        Some("crates/foo/src/lib.rs:42:1")
+    );
+}
+
+#[test]
+fn extract_cargo_errors_caps_count_at_five() {
+    let mut stderr = String::new();
+    for i in 0..20 {
+        stderr.push_str(&format!(
+            "error[E{i:04}]: bad thing\n --> src/lib.rs:{i}:1\n\n"
+        ));
+    }
+    let errors = extract_cargo_errors(&stderr);
+    assert_eq!(errors.len(), 5);
+}
+
+#[test]
+fn extract_cargo_errors_returns_empty_on_clean_stderr() {
+    let errors = extract_cargo_errors("warning: unused variable: `x`\n");
+    assert!(errors.is_empty());
+}
+
 /// `cmd_spawn` keeps bare-name resolution on the direct-spawn path.
 #[cfg(windows)]
 #[tokio::test]

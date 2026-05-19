@@ -52,6 +52,98 @@ fn fuzzy_line_match(content: &str, old_text: &str) -> Result<Option<(usize, usiz
     }
 }
 
+/// Window of file context surrounding a near-miss anchor returned by
+/// [`best_partial_anchor`]. The `lines` are pre-formatted as
+/// `<lineno>|<text>` so the agent can copy them verbatim into the next
+/// `old_text` attempt.
+struct AnchorWindow {
+    matched_lines: usize,
+    anchor_start_line: usize,
+    anchor_end_line: usize,
+    lines: Vec<String>,
+}
+
+/// Find the longest prefix of `needle` (line-wise, trimmed) that has a
+/// unique match in `content` and return a ±3-line window around it so
+/// the caller can show the model exactly what is in the file at the
+/// site it was trying to edit.
+///
+/// Returns `None` when not even a single needle line matches anywhere
+/// in the file — at that point a directional hint would be guesswork.
+fn best_partial_anchor(content: &str, needle: &str) -> Option<AnchorWindow> {
+    const CONTEXT: usize = 3;
+    let needle_lines: Vec<&str> = needle.lines().map(str::trim).collect();
+    if needle_lines.is_empty() {
+        return None;
+    }
+    let content_lines: Vec<&str> = content.lines().collect();
+
+    for k in (1..=needle_lines.len()).rev() {
+        let prefix = &needle_lines[..k];
+        let mut matches: Vec<usize> = Vec::new();
+        'outer: for start in 0..content_lines.len() {
+            if start + prefix.len() > content_lines.len() {
+                break;
+            }
+            for (i, line) in prefix.iter().enumerate() {
+                if content_lines[start + i].trim() != *line {
+                    continue 'outer;
+                }
+            }
+            matches.push(start);
+            if matches.len() > 1 {
+                break;
+            }
+        }
+        if matches.len() == 1 {
+            let start = matches[0];
+            let end = start + prefix.len() - 1;
+            let window_start = start.saturating_sub(CONTEXT);
+            let window_end = (end + CONTEXT).min(content_lines.len().saturating_sub(1));
+            let lines: Vec<String> = (window_start..=window_end)
+                .map(|i| format!("{:>6}|{}", i + 1, content_lines[i]))
+                .collect();
+            return Some(AnchorWindow {
+                matched_lines: k,
+                anchor_start_line: start + 1,
+                anchor_end_line: end + 1,
+                lines,
+            });
+        }
+    }
+    None
+}
+
+/// Format a "text not found" error with a best-effort anchor and a
+/// ±3-line file window so the model can re-derive `old_text` from real
+/// bytes instead of guessing again. Falls back to a short message when
+/// no needle line matched anywhere in the file.
+fn format_not_found_error(content: &str, needle: &str) -> String {
+    let needle_total = needle.lines().count();
+    match best_partial_anchor(content, needle) {
+        Some(window) => {
+            let body = window.lines.join("\n");
+            format!(
+                "The specified text was not found in the file.\n\
+                 Closest partial match: {matched} of {total} needle line(s) matched at lines {start}-{end}.\n\
+                 ---- file context (\u{00b1}3 lines, line-numbered) ----\n\
+                 {body}\n\
+                 ----\n\
+                 Re-derive old_text from the bytes shown above; do not retry the previous old_text.",
+                matched = window.matched_lines,
+                total = needle_total,
+                start = window.anchor_start_line,
+                end = window.anchor_end_line,
+            )
+        }
+        None => format!(
+            "The specified text was not found in the file. \
+             None of the {needle_total} needle line(s) match any line in the file; \
+             read_file the target path first and copy real bytes into old_text."
+        ),
+    }
+}
+
 struct ValidatedEdit {
     resolved: PathBuf,
     content: String,
@@ -156,9 +248,10 @@ fn find_match_in_content(
                 buf.push_str(&content[end..]);
                 Ok((buf, 1))
             }
-            Ok(None) => Err(ToolError::InvalidArguments(
-                "The specified text was not found in the file".to_string(),
-            )),
+            Ok(None) => Err(ToolError::InvalidArguments(format_not_found_error(
+                content,
+                old_text_norm,
+            ))),
             Err(msg) => Err(ToolError::InvalidArguments(msg)),
         }
     } else if !replace_all && exact_count > 1 {
@@ -187,6 +280,15 @@ fn apply_edit(
              This likely indicates truncated content."
                 .to_string(),
         ));
+    }
+
+    // Structural guard for Cargo manifests. Mirrors the pre-write
+    // check in `fs_write`: if the edit would leave the manifest
+    // unparseable or with duplicate dependency keys, refuse it before
+    // touching the filesystem so the existing on-disk content is
+    // preserved for the agent to inspect / retry.
+    if super::cargo_toml_guard::is_cargo_manifest(resolved) {
+        super::cargo_toml_guard::validate_cargo_toml(&new_content)?;
     }
 
     // Compute the file-level line diff before we move new_content into
