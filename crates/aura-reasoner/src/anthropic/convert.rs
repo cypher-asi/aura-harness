@@ -183,6 +183,8 @@ pub(super) fn convert_messages_to_api(
         }
     }
 
+    dedupe_tool_results(&mut api_messages);
+
     api_messages
 }
 
@@ -222,6 +224,122 @@ pub(super) fn convert_tool_choice(choice: &ToolChoice) -> Option<ApiToolChoice> 
         ToolChoice::Required => Some(ApiToolChoice::Any),
         ToolChoice::Tool { name } => Some(ApiToolChoice::Tool { name: name.clone() }),
     }
+}
+
+/// Collapse duplicate `tool_result` blocks so the request honors Anthropic's
+/// invariant that each `tool_use_id` may appear in at most one `tool_result`
+/// block across the entire `messages[]` array.
+///
+/// Anthropic rejects the whole conversation with
+/// `each tool_use must have a single result. Found multiple tool_result
+/// blocks with id: <toolu_…>` when this rule is violated. Duplicates have
+/// been observed slipping into the outbound queue from upstream recovery
+/// paths (most notably `handle_max_tokens` synthesizing a placeholder for a
+/// pending tool that later receives the real result), so this acts as a
+/// last-line safety net before the body is serialized.
+///
+/// Semantics (mirrors `dedupe_tool_results_by_id` in `aura-os`'s
+/// `compaction.rs`, but operates array-wide on typed [`ApiContent`]):
+///
+/// * **Last-write-wins on the body**: the kept block's `content`,
+///   `is_error`, and `cache_control` come from the *last* occurrence of the
+///   id, because that is the freshest observation.
+/// * **Kept-in-place at the first occurrence**: the surviving block stays
+///   at the position of the *first* occurrence, so the model still sees
+///   results in the timeline order they were originally reported.
+/// * **Empty messages are dropped**: if a message's only blocks were
+///   duplicate `ToolResult`s, the now-empty message is removed because
+///   Anthropic also 400s on empty `content` arrays.
+/// * **Blocks without a `tool_use_id` pass through**: defensive guard for a
+///   construction that shouldn't be reachable for `ToolResult`. We
+///   deliberately do not silently drop these — the API rejecting them
+///   loudly is the desired forensic signal.
+/// * Non-`ToolResult` blocks and ids that appear exactly once are
+///   untouched.
+///
+/// Emits one `tracing::warn!` per duplicated id (with the id and the count
+/// of removed copies) when the sweep actually fires, so the upstream
+/// emission path is easy to find in production logs.
+pub(super) fn dedupe_tool_results(api_messages: &mut Vec<ApiMessage>) {
+    use std::collections::{HashMap, HashSet};
+
+    let mut positions_by_id: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+
+    for (mi, msg) in api_messages.iter().enumerate() {
+        for (ci, block) in msg.content.iter().enumerate() {
+            if let ApiContent::ToolResult { tool_use_id, .. } = block {
+                if tool_use_id.is_empty() {
+                    continue;
+                }
+                positions_by_id
+                    .entry(tool_use_id.clone())
+                    .or_default()
+                    .push((mi, ci));
+            }
+        }
+    }
+
+    let mut to_remove: HashSet<(usize, usize)> = HashSet::new();
+
+    for (id, positions) in &positions_by_id {
+        if positions.len() <= 1 {
+            continue;
+        }
+        let copies_removed = positions.len() - 1;
+        tracing::warn!(
+            tool_use_id = %id,
+            copies_removed = copies_removed,
+            "convert_messages_to_api: deduplicated tool_result blocks before sending to Anthropic; \
+             upstream emission path is likely synthesizing a placeholder that later collides with a real result"
+        );
+
+        let (first_mi, first_ci) = positions[0];
+        let (last_mi, last_ci) = positions[positions.len() - 1];
+
+        let (last_content, last_is_error, last_cache_control) =
+            match &api_messages[last_mi].content[last_ci] {
+                ApiContent::ToolResult {
+                    content,
+                    is_error,
+                    cache_control,
+                    ..
+                } => (content.clone(), *is_error, cache_control.clone()),
+                _ => continue,
+            };
+
+        if let ApiContent::ToolResult {
+            content,
+            is_error,
+            cache_control,
+            ..
+        } = &mut api_messages[first_mi].content[first_ci]
+        {
+            *content = last_content;
+            *is_error = last_is_error;
+            *cache_control = last_cache_control;
+        }
+
+        for pos in positions.iter().skip(1) {
+            to_remove.insert(*pos);
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    for (mi, msg) in api_messages.iter_mut().enumerate() {
+        let mut indices_to_remove: Vec<usize> = to_remove
+            .iter()
+            .filter_map(|&(m, c)| if m == mi { Some(c) } else { None })
+            .collect();
+        indices_to_remove.sort_unstable_by(|a, b| b.cmp(a));
+        for ci in indices_to_remove {
+            msg.content.remove(ci);
+        }
+    }
+
+    api_messages.retain(|m| !m.content.is_empty());
 }
 
 pub(super) fn convert_response_to_aura(content: &[ApiContent]) -> Message {
