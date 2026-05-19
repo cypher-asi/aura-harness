@@ -80,16 +80,20 @@ pub(super) fn stderr_looks_remote_exhausted(stderr: &str) -> bool {
         .any(|m| lower.contains(m))
 }
 
-/// Bounded exponential backoff between push attempts: 2s, 5s, 15s,
-/// then 15s for every subsequent attempt. Keeping the cap low means
-/// a push that fails all attempts still returns within ~22s of extra
-/// wall-clock — small enough that the dev-loop's post-commit handoff
-/// isn't held up for minutes.
+/// Bounded backoff between push attempts: 1s, 2s, then 2s for every
+/// subsequent attempt.
+///
+/// The default `ToolConfig` only runs two attempts total, so most of
+/// this schedule is academic — the only inter-attempt gap an
+/// out-of-the-box dev-loop ever waits is the first 1s. The cap stays
+/// at 2s (not 15s like the previous schedule) so a misconfigured
+/// `git_push_attempts` of 5+ still cannot stall the agent for more
+/// than a few extra seconds; "fail fast, move on" is the explicit
+/// policy here.
 pub(super) fn push_backoff_for_attempt(attempt_index: u32) -> Duration {
     match attempt_index {
-        0 => Duration::from_secs(2),
-        1 => Duration::from_secs(5),
-        _ => Duration::from_secs(15),
+        0 => Duration::from_secs(1),
+        _ => Duration::from_secs(2),
     }
 }
 

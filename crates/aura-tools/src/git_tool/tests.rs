@@ -361,13 +361,17 @@ fn remote_storage_exhausted_error_renders_actionable_message() {
 
 #[test]
 fn push_backoff_is_bounded() {
-    assert_eq!(push_backoff_for_attempt(0), Duration::from_secs(2));
-    assert_eq!(push_backoff_for_attempt(1), Duration::from_secs(5));
-    assert_eq!(push_backoff_for_attempt(2), Duration::from_secs(15));
-    // Cap holds for anything past the third retry so a
-    // misconfigured `git_push_attempts` value can't stall the
-    // dev-loop for minutes.
-    assert_eq!(push_backoff_for_attempt(9), Duration::from_secs(15));
+    // "Fail fast, move on" budget: 1s before the first retry,
+    // 2s for every retry after that. The default `git_push_attempts`
+    // is 2 so production runs only ever wait the first slot, but the
+    // cap protects operators who raise the knob.
+    assert_eq!(push_backoff_for_attempt(0), Duration::from_secs(1));
+    assert_eq!(push_backoff_for_attempt(1), Duration::from_secs(2));
+    assert_eq!(push_backoff_for_attempt(2), Duration::from_secs(2));
+    // Cap still holds far beyond any reasonable `git_push_attempts`
+    // — a misconfigured 10-attempt loop spends ≤19s total in
+    // backoff, never minutes.
+    assert_eq!(push_backoff_for_attempt(9), Duration::from_secs(2));
 }
 
 #[tokio::test]
@@ -392,8 +396,9 @@ async fn git_push_retries_on_timeout_then_errors_out() {
 
     let policy = PushPolicy {
         per_attempt_timeout: Duration::from_millis(50),
-        // Two attempts keeps the test fast (~2s backoff between) while
-        // still exercising the retry path.
+        // Two attempts keeps the test fast (one ~1s backoff slot
+        // between them under the current schedule) while still
+        // exercising the retry path.
         attempts: 2,
     };
     let start = std::time::Instant::now();
@@ -408,12 +413,14 @@ async fn git_push_retries_on_timeout_then_errors_out() {
     .await
     .expect_err("push must time out on all attempts");
     assert!(matches!(err, GitToolError::Timeout(_, _)), "got {err:?}");
-    // At least one 2s backoff must have elapsed between the two
-    // attempts, confirming the retry loop ran instead of short-
-    // circuiting after the first timeout.
+    // At least one ~1s backoff slot must have elapsed between the
+    // two attempts, confirming the retry loop ran instead of
+    // short-circuiting after the first timeout. (The slot is
+    // `push_backoff_for_attempt(0)` = 1s; we leave a small slack
+    // below the nominal to avoid CI clock-jitter flakes.)
     assert!(
-        start.elapsed() >= Duration::from_millis(1_500),
-        "expected retry backoff to add ≥1.5s, got {:?}",
+        start.elapsed() >= Duration::from_millis(900),
+        "expected retry backoff to add ≥~1s, got {:?}",
         start.elapsed()
     );
 }

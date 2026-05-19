@@ -213,21 +213,29 @@ pub struct ToolConfig {
     pub max_async_timeout_ms: u64,
     /// Per-attempt timeout for `git push` (milliseconds).
     ///
-    /// Push is a network operation against Orbit and is routinely
-    /// slower than `git add` / `git commit`, which run entirely
-    /// locally. Keeping it on its own knob lets slow pushes finish
-    /// without having to raise every other async command's ceiling,
-    /// and decouples push tolerance from the workspace-wide
-    /// `max_async_timeout_ms` cap (clamped to 120s for every other
-    /// git operation inside `git_tool::workspace_timeout`).
+    /// Push is a network operation against Orbit and on a healthy
+    /// remote completes well under five seconds. Anything past a
+    /// handful of seconds is overwhelmingly the orbit endpoint
+    /// being unreachable rather than a slow-but-progressing push,
+    /// so the budget is tuned tight: short timeout, few attempts,
+    /// fail fast and let the dev-loop / agent move on instead of
+    /// burning minutes per task on a wedged network. The knob is
+    /// still its own field (and separate from
+    /// `max_async_timeout_ms`, clamped to 120s for every other git
+    /// operation inside `git_tool::workspace_timeout`) so operators
+    /// who run against a slow self-hosted Orbit can raise it
+    /// without inflating every other async command's ceiling.
     pub git_push_timeout_ms: u64,
     /// Number of `git push` attempts, including the first. Values
     /// below 1 are coerced to 1 at the call-site. Each retry waits
-    /// an exponentially increasing backoff (2s, 5s, 15s) before the
-    /// next attempt; only timeouts and transient network errors
-    /// (`could not read from remote`, `RPC failed`, `early EOF`,
-    /// `connection reset`) are retried — auth failures and
-    /// non-fast-forward rejections short-circuit immediately.
+    /// a short bounded backoff (see `push_backoff_for_attempt`)
+    /// before the next attempt; only timeouts and transient network
+    /// errors (`could not read from remote`, `RPC failed`,
+    /// `early EOF`, `connection reset`) are retried — auth failures
+    /// and non-fast-forward rejections short-circuit immediately.
+    /// The default is intentionally small ("a couple of quick
+    /// tries") rather than three-plus so a dead remote doesn't burn
+    /// the agent's wall-clock budget.
     pub git_push_attempts: u32,
     /// Extra filesystem paths to allow beyond the workspace root.
     /// Granted by skill permissions at runtime.
@@ -258,8 +266,15 @@ impl ToolConfig {
             max_read_bytes: 64 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,
-            git_push_timeout_ms: 300_000,
-            git_push_attempts: 3,
+            // 10s per attempt × 2 attempts + 1s backoff = ~21s
+            // worst-case before we surrender and let the agent move
+            // on. Bumped down from the legacy 5min × 3 (2s/5s/15s
+            // backoff) = ~15min budget that used to wedge dev-loop
+            // runs whenever Orbit was unreachable. Operators who
+            // host a slow self-hosted Orbit can raise these
+            // explicitly on the tool config.
+            git_push_timeout_ms: 10_000,
+            git_push_attempts: 2,
             extra_allowed_paths: vec![],
         }
     }
