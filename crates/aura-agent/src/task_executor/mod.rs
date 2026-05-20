@@ -6,6 +6,7 @@
 //! enforce the explore-then-implement workflow.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -195,6 +196,14 @@ pub(crate) struct TaskToolExecutor {
     pub dod_test_gate_exhausted: Arc<Mutex<bool>>,
     /// Rolling counters for recent tool call outcomes (success / error).
     pub recent_tool_outcomes: Arc<Mutex<RecentToolOutcomes>>,
+    /// Shared flag flipped by `handle_submit_plan` when a plan is accepted.
+    /// The agent loop holds a clone of the same `Arc<AtomicBool>` via
+    /// [`crate::agent_loop::AgentLoopConfig::phase_reset_signal`] and
+    /// observes-and-clears it on the next iteration so the implementation
+    /// phase starts with a fresh exploration/read-guard budget. Defaults to
+    /// a private `false` when the executor is built standalone (e.g. unit
+    /// tests) — the loop simply never sees the signal in that case.
+    pub reset_explore_on_phase_change: Arc<AtomicBool>,
 }
 
 /// Capacity of the rolling outcome window. Sized to comfortably cover a

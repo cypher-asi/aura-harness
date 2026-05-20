@@ -124,7 +124,7 @@ fn soft_budget_injects_steering_message() {
         "should tell the model to call exactly one tool, got: {injected}"
     );
     assert!(
-        injected.contains("12000 bytes"),
+        injected.contains("32000 bytes"),
         "should cite the Phase 1 write chunk cap, got: {injected}"
     );
     assert!(

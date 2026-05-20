@@ -1,4 +1,5 @@
 use super::*;
+use crate::constants::DEFAULT_EXPLORATION_ALLOWANCE;
 
 fn make_tool(name: &str, input: serde_json::Value) -> ToolCallInfo {
     ToolCallInfo {
@@ -10,7 +11,7 @@ fn make_tool(name: &str, input: serde_json::Value) -> ToolCallInfo {
 
 #[test]
 fn test_detect_blocked_writes_allows_first_write() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_writes(&tool, &ctx).unwrap();
     assert!(!result.blocked);
@@ -18,7 +19,7 @@ fn test_detect_blocked_writes_allows_first_write() {
 
 #[test]
 fn test_detect_blocked_writes_blocks_second_write() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     ctx.written_paths.insert("test.rs".to_string());
     let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_writes(&tool, &ctx).unwrap();
@@ -30,7 +31,7 @@ fn test_detect_blocked_writes_blocks_second_write() {
 
 #[test]
 fn test_detect_blocked_writes_allows_edit_file_on_written_path() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     ctx.written_paths.insert("test.rs".to_string());
     let tool = make_tool("edit_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_writes(&tool, &ctx);
@@ -42,7 +43,7 @@ fn test_detect_blocked_writes_allows_edit_file_on_written_path() {
 
 #[test]
 fn test_detect_blocked_writes_allows_delete_file_on_written_path() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     ctx.written_paths.insert("test.rs".to_string());
     let tool = make_tool("delete_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_writes(&tool, &ctx);
@@ -54,8 +55,9 @@ fn test_detect_blocked_writes_allows_delete_file_on_written_path() {
 
 #[test]
 fn test_detect_blocked_write_failures_at_threshold() {
-    let mut ctx = BlockingContext::new(12);
-    ctx.write_failures.insert("test.rs".to_string(), 3);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
+    ctx.write_failures
+        .insert("test.rs".to_string(), WRITE_FAILURE_BLOCK_THRESHOLD);
     let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_write_failures(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -63,8 +65,8 @@ fn test_detect_blocked_write_failures_at_threshold() {
 
 #[test]
 fn test_detect_blocked_commands_under_threshold() {
-    let mut ctx = BlockingContext::new(12);
-    ctx.consecutive_cmd_failures = 4;
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
+    ctx.consecutive_cmd_failures = CMD_FAILURE_BLOCK_THRESHOLD - 1;
     let tool = make_tool("run_command", serde_json::json!({"command": "cargo build"}));
     let result = detect_blocked_commands(&tool, &ctx).unwrap();
     assert!(!result.blocked);
@@ -72,8 +74,8 @@ fn test_detect_blocked_commands_under_threshold() {
 
 #[test]
 fn test_detect_blocked_commands_at_threshold() {
-    let mut ctx = BlockingContext::new(12);
-    ctx.consecutive_cmd_failures = 5;
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
+    ctx.consecutive_cmd_failures = CMD_FAILURE_BLOCK_THRESHOLD;
     let tool = make_tool("run_command", serde_json::json!({"command": "cargo build"}));
     let result = detect_blocked_commands(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -81,7 +83,7 @@ fn test_detect_blocked_commands_at_threshold() {
 
 #[test]
 fn test_detect_blocked_exploration_allows_under() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("read_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_exploration(&tool, &ctx).unwrap();
     assert!(!result.blocked);
@@ -89,8 +91,8 @@ fn test_detect_blocked_exploration_allows_under() {
 
 #[test]
 fn test_detect_blocked_exploration_when_exceeded() {
-    let mut ctx = BlockingContext::new(12);
-    ctx.exploration_count = 12;
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
+    ctx.exploration_count = DEFAULT_EXPLORATION_ALLOWANCE;
     let tool = make_tool("read_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_exploration(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -98,7 +100,7 @@ fn test_detect_blocked_exploration_when_exceeded() {
 
 #[test]
 fn test_decrement_cooldowns_reduces_and_removes() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     ctx.write_cooldowns.insert("a.rs".to_string(), 2);
     ctx.write_cooldowns.insert("b.rs".to_string(), 1);
     ctx.decrement_cooldowns();
@@ -108,7 +110,7 @@ fn test_decrement_cooldowns_reduces_and_removes() {
 
 #[test]
 fn test_detect_missing_args_blocks_write_file_without_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("write_file", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -122,7 +124,7 @@ fn test_detect_missing_args_blocks_write_file_without_path() {
 
 #[test]
 fn test_detect_missing_args_blocks_edit_file_without_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("edit_file", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -131,7 +133,7 @@ fn test_detect_missing_args_blocks_edit_file_without_path() {
 
 #[test]
 fn test_detect_missing_args_blocks_delete_file_without_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("delete_file", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -139,7 +141,7 @@ fn test_detect_missing_args_blocks_delete_file_without_path() {
 
 #[test]
 fn test_detect_missing_args_allows_write_file_with_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("write_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_missing_required_args(&tool, &ctx);
     assert!(result.is_none());
@@ -147,7 +149,7 @@ fn test_detect_missing_args_allows_write_file_with_path() {
 
 #[test]
 fn test_detect_missing_args_blocks_write_file_with_empty_path_string() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("write_file", serde_json::json!({"path": ""}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -160,7 +162,7 @@ fn test_detect_missing_args_blocks_write_file_with_empty_path_string() {
 
 #[test]
 fn test_detect_missing_args_blocks_edit_file_with_whitespace_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("edit_file", serde_json::json!({"path": "   \t"}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -168,7 +170,7 @@ fn test_detect_missing_args_blocks_edit_file_with_whitespace_path() {
 
 #[test]
 fn test_detect_missing_args_blocks_read_file_with_empty_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("read_file", serde_json::json!({"path": ""}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -176,7 +178,7 @@ fn test_detect_missing_args_blocks_read_file_with_empty_path() {
 
 #[test]
 fn test_detect_missing_args_uses_last_read_path_as_hint() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     ctx.on_read_path("crates/zero-identity/src/identity.rs");
     let tool = make_tool("edit_file", serde_json::json!({}));
     let msg = detect_missing_required_args(&tool, &ctx)
@@ -192,7 +194,7 @@ fn test_detect_missing_args_uses_last_read_path_as_hint() {
 
 #[test]
 fn test_detect_missing_args_blocks_run_command_without_command() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("run_command", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -204,7 +206,7 @@ fn test_detect_missing_args_blocks_run_command_without_command() {
 
 #[test]
 fn test_detect_missing_args_blocks_run_command_with_empty_command() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("run_command", serde_json::json!({"command": "  "}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -212,7 +214,7 @@ fn test_detect_missing_args_blocks_run_command_with_empty_command() {
 
 #[test]
 fn test_detect_missing_args_allows_run_command_with_command() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("run_command", serde_json::json!({"command": "cargo build"}));
     let result = detect_missing_required_args(&tool, &ctx);
     assert!(result.is_none());
@@ -220,7 +222,7 @@ fn test_detect_missing_args_allows_run_command_with_command() {
 
 #[test]
 fn test_detect_missing_args_allows_run_command_with_program() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool(
         "run_command",
         serde_json::json!({"program": "cargo", "args": ["build"]}),
@@ -231,7 +233,7 @@ fn test_detect_missing_args_allows_run_command_with_program() {
 
 #[test]
 fn test_detect_missing_args_allows_run_command_with_shell_script() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool(
         "run_command",
         serde_json::json!({"shell_script": "cargo build", "allow_shell": true}),
@@ -242,7 +244,7 @@ fn test_detect_missing_args_allows_run_command_with_shell_script() {
 
 #[test]
 fn test_detect_missing_args_blocks_read_file_without_path() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("read_file", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx).unwrap();
     assert!(result.blocked);
@@ -250,7 +252,7 @@ fn test_detect_missing_args_blocks_read_file_without_path() {
 
 #[test]
 fn test_detect_missing_args_skips_unrelated_tools() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let tool = make_tool("list_files", serde_json::json!({}));
     let result = detect_missing_required_args(&tool, &ctx);
     assert!(result.is_none());
@@ -258,7 +260,7 @@ fn test_detect_missing_args_skips_unrelated_tools() {
 
 #[test]
 fn test_pathless_write_hint_prefers_last_read_then_written() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     assert!(ctx.pathless_write_hint().is_none());
     ctx.written_paths.insert("src/lib.rs".into());
     assert_eq!(ctx.pathless_write_hint(), Some("src/lib.rs"));
@@ -272,7 +274,7 @@ fn test_pathless_write_hint_prefers_last_read_then_written() {
 
 #[test]
 fn test_detect_all_blocked_catches_empty_args_write() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let read_guard = ReadGuardState::default();
     let tool = make_tool("delete_file", serde_json::json!({}));
     let result = detect_all_blocked(&tool, &ctx, &read_guard);
@@ -281,7 +283,7 @@ fn test_detect_all_blocked_catches_empty_args_write() {
 
 #[test]
 fn test_detect_all_blocked_combines_all_detectors() {
-    let ctx = BlockingContext::new(12);
+    let ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let read_guard = ReadGuardState::default();
     let tool = make_tool("write_file", serde_json::json!({"path": "new.rs"}));
     let result = detect_all_blocked(&tool, &ctx, &read_guard);
@@ -290,13 +292,48 @@ fn test_detect_all_blocked_combines_all_detectors() {
 
 #[test]
 fn test_on_write_success_resets_state() {
-    let mut ctx = BlockingContext::new(12);
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     let mut read_guard = ReadGuardState::default();
     read_guard.record_full_read("test.rs");
     ctx.write_failures.insert("test.rs".to_string(), 2);
     ctx.on_write_success("test.rs", &mut read_guard);
     assert!(ctx.written_paths.contains("test.rs"));
     assert!(!ctx.write_failures.contains_key("test.rs"));
-    assert_eq!(ctx.exploration_allowance, 14);
+    assert_eq!(ctx.exploration_allowance, DEFAULT_EXPLORATION_ALLOWANCE + 2);
     assert_eq!(read_guard.full_read_count("test.rs"), 0);
+}
+
+/// Pin the relaxed structural-blocker constants so future drift is
+/// intentional. The plan `harness-dev-loop-efficiency` raised these
+/// values by roughly 3x to give a normal explore + verify-edit cycle
+/// headroom without the agent burning the turn on blocker
+/// oscillation. EMPTY_PATH_BLOCK_LIMIT and
+/// CONSECUTIVE_ERROR_ITERATIONS_LIMIT are deliberately kept tight as
+/// last-ditch wedge guards.
+#[test]
+fn relaxed_constants_are_consistent() {
+    use crate::constants::{
+        CMD_FAILURE_BLOCK_THRESHOLD, CONSECUTIVE_ERROR_ITERATIONS_LIMIT,
+        DEFAULT_EXPLORATION_ALLOWANCE, EMPTY_PATH_BLOCK_LIMIT, EXPLORATION_WARNING_MILD_OFFSET,
+        EXPLORATION_WARNING_STRONG_OFFSET, MAX_RANGE_READS_PER_FILE, MAX_READS_PER_FILE,
+        STALL_STREAK_THRESHOLD, WRITE_COOLDOWN_ITERATIONS, WRITE_FAILURE_BLOCK_THRESHOLD,
+        WRITE_FILE_CHUNK_BYTES, WRITE_FILE_HARD_MAX_BYTES,
+    };
+
+    assert_eq!(DEFAULT_EXPLORATION_ALLOWANCE, 40);
+    assert_eq!(MAX_READS_PER_FILE, 10);
+    assert_eq!(MAX_RANGE_READS_PER_FILE, 15);
+    assert_eq!(WRITE_FILE_CHUNK_BYTES, 32_000);
+    assert_eq!(WRITE_FILE_HARD_MAX_BYTES, 32_000);
+    assert_eq!(WRITE_FAILURE_BLOCK_THRESHOLD, 6);
+    assert_eq!(WRITE_COOLDOWN_ITERATIONS, 1);
+    assert_eq!(CMD_FAILURE_BLOCK_THRESHOLD, 8);
+    assert_eq!(STALL_STREAK_THRESHOLD, 5);
+    assert_eq!(EXPLORATION_WARNING_MILD_OFFSET, 8);
+    assert_eq!(EXPLORATION_WARNING_STRONG_OFFSET, 4);
+
+    // These two stay tight on purpose — pathless writes and turns that
+    // are 100% errors never recover by adding more iterations.
+    assert_eq!(EMPTY_PATH_BLOCK_LIMIT, 3);
+    assert_eq!(CONSECUTIVE_ERROR_ITERATIONS_LIMIT, 5);
 }

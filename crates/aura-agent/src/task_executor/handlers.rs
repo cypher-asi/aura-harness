@@ -493,6 +493,11 @@ impl TaskToolExecutor {
                     let mut outcomes = self.recent_tool_outcomes.lock().await;
                     outcomes.reset();
                 }
+                // Tell the agent loop (if it shares this Arc) to reset
+                // its exploration/read-guard counters on the next
+                // iteration so the implement phase has a fresh budget.
+                self.reset_explore_on_phase_change
+                    .store(true, std::sync::atomic::Ordering::Release);
                 results.push(Self::tool_result(
                     tc,
                     format!(

@@ -93,21 +93,21 @@ pub fn compute_exploration_allowance(
         || combined.contains("multi-file");
 
     let base: usize = match complexity {
-        TaskComplexity::Simple => 8,
-        TaskComplexity::Standard => 12,
+        TaskComplexity::Simple => 24,
+        TaskComplexity::Standard => 40,
         TaskComplexity::Complex => {
             if is_refactoring {
-                22
+                80
             } else {
-                18
+                60
             }
         }
     };
 
     if member_count >= 15 {
-        base + 4
+        base + 16
     } else if member_count >= 8 {
-        base + 2
+        base + 8
     } else {
         base
     }
@@ -201,24 +201,27 @@ mod tests {
 
     #[test]
     fn compute_exploration_allowance_simple_small_workspace() {
+        // Simple + small workspace (member_count < 8): base 24, no bonus
         assert_eq!(
             compute_exploration_allowance("Add dependency for serde", "", 3),
-            8
+            24
         );
     }
 
     #[test]
     fn compute_exploration_allowance_complex_refactoring_large_workspace() {
+        // Complex + refactoring + large workspace (member_count >= 15): base 80 + 16
         assert_eq!(
             compute_exploration_allowance("Refactor the auth module", "", 20),
-            26
+            96
         );
     }
 
     #[test]
     fn compute_exploration_allowance_standard_medium_workspace() {
+        // Standard + medium workspace (member_count >= 8): base 40 + 8
         let desc = "a".repeat(500);
-        assert_eq!(compute_exploration_allowance("Add handler", &desc, 10), 14);
+        assert_eq!(compute_exploration_allowance("Add handler", &desc, 10), 48);
     }
 
     #[test]

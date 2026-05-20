@@ -5,6 +5,7 @@
 //! [`AgentLoop`].
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -219,6 +220,22 @@ impl AgentRunner {
         event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
+        // Non-tracked callers (e.g. chat) do not share an exploration-
+        // reset signal with a `TaskToolExecutor`; pass `None` so the
+        // loop simply does not perform the reset.
+        self.execute_task_inner(provider, executor, params, event_tx, cancel, None)
+            .await
+    }
+
+    async fn execute_task_inner(
+        &self,
+        provider: &dyn ModelProvider,
+        executor: &dyn AgentToolExecutor,
+        params: &AgenticTaskParams<'_>,
+        event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
+        cancel: Option<CancellationToken>,
+        phase_reset_signal: Option<Arc<AtomicBool>>,
+    ) -> Result<TaskExecutionResult, crate::AgentError> {
         let complexity = classify_task_complexity(params.task.title, params.task.description);
 
         let exploration_allowance = compute_exploration_allowance(
@@ -257,13 +274,14 @@ impl AgentRunner {
         );
         task_context::cap_bootstrap_task_context(&mut task_ctx);
 
-        let loop_config = configure_loop_config(
+        let mut loop_config = configure_loop_config(
             complexity,
             &self.config,
             exploration_allowance,
             params.member_count,
             system_prompt,
         );
+        loop_config.phase_reset_signal = phase_reset_signal;
 
         let agent_loop = AgentLoop::new(loop_config);
         let messages = vec![Message::user(&task_ctx)];
@@ -305,6 +323,13 @@ impl AgentRunner {
         event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
+        // Shared `Arc<AtomicBool>` between the task executor and the
+        // wrapped agent loop. The executor flips it to `true` from
+        // `handle_submit_plan`; the loop observes-and-clears it from
+        // `LoopState::begin_iteration` to reset exploration counters
+        // for the implementation phase. See plan
+        // `harness-dev-loop-efficiency`.
+        let reset_signal = Arc::new(AtomicBool::new(false));
         let task_executor = TaskToolExecutor {
             inner: tracking.inner_executor,
             project_folder: tracking.project_folder,
@@ -325,10 +350,18 @@ impl AgentRunner {
             no_changes_needed: Arc::default(),
             dod_test_gate_exhausted: Arc::default(),
             recent_tool_outcomes: Arc::default(),
+            reset_explore_on_phase_change: Arc::clone(&reset_signal),
         };
 
         let mut result = self
-            .execute_task(provider, &task_executor, params, event_tx, cancel)
+            .execute_task_inner(
+                provider,
+                &task_executor,
+                params,
+                event_tx,
+                cancel,
+                Some(reset_signal),
+            )
             .await?;
 
         task_executor.merge_into_result(&mut result).await;

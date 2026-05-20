@@ -159,35 +159,39 @@ mod tests {
 
     #[test]
     fn test_exploration_warning_mild() {
+        // Mild offset is 8, so with allowance 40 the warning fires at count >= 32.
         let mut state = ExplorationState {
-            count: 8,
+            count: 32,
             ..Default::default()
         };
-        let msg = check_exploration_warning(&mut state, 12);
+        let msg = check_exploration_warning(&mut state, 40);
         assert!(msg.is_some());
         assert!(state.warned_mild);
     }
 
     #[test]
     fn test_exploration_warning_strong() {
+        // Strong offset is 4, so with allowance 40 the warning fires at count >= 36.
         let mut state = ExplorationState {
-            count: 10,
+            count: 36,
             warned_mild: true,
             ..Default::default()
         };
-        let msg = check_exploration_warning(&mut state, 12);
+        let msg = check_exploration_warning(&mut state, 40);
         assert!(msg.is_some());
         assert!(state.warned_strong);
     }
 
     #[test]
     fn test_exploration_warning_not_duplicated() {
+        // At count 32 (mild threshold for allowance 40) with warned_mild
+        // already set, strong hasn't fired (needs >= 36), so no warning.
         let mut state = ExplorationState {
-            count: 8,
+            count: 32,
             warned_mild: true,
             ..Default::default()
         };
-        let msg = check_exploration_warning(&mut state, 12);
+        let msg = check_exploration_warning(&mut state, 40);
         assert!(msg.is_none());
     }
 

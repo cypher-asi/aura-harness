@@ -91,12 +91,13 @@ mod tests {
     }
 
     #[test]
-    fn test_triggers_at_streak_3() {
+    fn test_triggers_at_threshold() {
         let mut det = StallDetector::default();
         let targets: HashSet<String> = ["a.rs".to_string()].into();
-        assert!(!det.update(&targets, false, true)); // 1
-        assert!(!det.update(&targets, false, true)); // 2
-        assert!(det.update(&targets, false, true)); // 3 = threshold
+        for _ in 1..STALL_STREAK_THRESHOLD {
+            assert!(!det.update(&targets, false, true));
+        }
+        assert!(det.update(&targets, false, true));
     }
 
     #[test]
@@ -107,8 +108,10 @@ mod tests {
         assert!(!det.update(&targets_a, false, true)); // 1
         assert!(!det.update(&targets_a, false, true)); // 2
         assert!(!det.update(&targets_b, false, true)); // reset to 1
-        assert!(!det.update(&targets_b, false, true)); // 2
-        assert!(det.update(&targets_b, false, true)); // 3 = threshold
+        for _ in 2..STALL_STREAK_THRESHOLD {
+            assert!(!det.update(&targets_b, false, true));
+        }
+        assert!(det.update(&targets_b, false, true)); // threshold
     }
 
     #[test]
@@ -119,17 +122,19 @@ mod tests {
         assert!(!det.update(&targets, false, true)); // 2
         assert!(!det.update(&targets, true, true)); // success resets
         assert_eq!(det.streak(), 0);
-        assert!(!det.update(&targets, false, true)); // 1 again
-        assert!(!det.update(&targets, false, true)); // 2
-        assert!(det.update(&targets, false, true)); // 3 = threshold
+        for _ in 1..STALL_STREAK_THRESHOLD {
+            assert!(!det.update(&targets, false, true));
+        }
+        assert!(det.update(&targets, false, true)); // threshold
     }
 
     #[test]
     fn test_multiple_targets_same_set() {
         let mut det = StallDetector::default();
         let targets: HashSet<String> = ["a.rs".to_string(), "b.rs".to_string()].into();
-        assert!(!det.update(&targets, false, true));
-        assert!(!det.update(&targets, false, true));
+        for _ in 1..STALL_STREAK_THRESHOLD {
+            assert!(!det.update(&targets, false, true));
+        }
         assert!(det.update(&targets, false, true));
     }
 
@@ -145,9 +150,11 @@ mod tests {
         let targets: HashSet<String> = ["a.rs".to_string()].into();
         let empty = HashSet::new();
         assert!(!det.update(&targets, false, true)); // 1
-        assert!(!det.update(&empty, false, true)); // pathless write: streak grows to 2
-        assert_eq!(det.streak(), 2);
-        assert!(det.update(&empty, false, true)); // 3 = threshold
+        for i in 2..STALL_STREAK_THRESHOLD {
+            assert!(!det.update(&empty, false, true));
+            assert_eq!(det.streak(), i);
+        }
+        assert!(det.update(&empty, false, true)); // threshold
     }
 
     #[test]

@@ -611,7 +611,9 @@ mod chunk_guard_tests {
 
     #[test]
     fn write_file_over_chunk_bytes_is_rejected_without_disk_write() {
-        let huge = "x".repeat(13_000);
+        // Content size must exceed `WRITE_FILE_CHUNK_BYTES` (32_000
+        // after the harness-dev-loop-efficiency relaxation).
+        let huge = "x".repeat(33_000);
         let call = mk_tool(
             "toolu_1",
             "write_file",
@@ -640,7 +642,7 @@ mod chunk_guard_tests {
             "synthetic content should name edit_file in the recovery hint"
         );
         assert!(
-            oversized[0].content.contains("12000"),
+            oversized[0].content.contains("32000"),
             "synthetic content should reference the byte cap"
         );
         assert!(
@@ -764,11 +766,8 @@ mod track_tool_effects_tests {
         // The probe path is fresh, so per-file read-guard limits cannot
         // trip and steal the block verdict from the exploration detector.
         let next_call = mk_read_tool("toolu_explore_next", "src/file_probe.rs");
-        let check = crate::blocking::detection::detect_all_blocked(
-            &next_call,
-            &blocking_ctx,
-            &read_guard,
-        );
+        let check =
+            crate::blocking::detection::detect_all_blocked(&next_call, &blocking_ctx, &read_guard);
         assert!(
             check.blocked,
             "with exploration_count == allowance, the next exploration call must block"

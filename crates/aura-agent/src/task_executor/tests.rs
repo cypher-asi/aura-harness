@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent_runner::TaskExecutionResult;
 use crate::verify::TestSuiteOutcome;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -107,6 +108,7 @@ fn make_executor_with_runner(runner: Arc<dyn TaskTestRunner>) -> TaskToolExecuto
         no_changes_needed: Default::default(),
         dod_test_gate_exhausted: Default::default(),
         recent_tool_outcomes: Default::default(),
+        reset_explore_on_phase_change: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -480,6 +482,7 @@ fn make_exploring_executor() -> TaskToolExecutor {
         no_changes_needed: Default::default(),
         dod_test_gate_exhausted: Default::default(),
         recent_tool_outcomes: Default::default(),
+        reset_explore_on_phase_change: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -550,6 +553,7 @@ async fn submit_plan_resets_outcome_window() {
         no_changes_needed: Default::default(),
         dod_test_gate_exhausted: Default::default(),
         recent_tool_outcomes: Default::default(),
+        reset_explore_on_phase_change: Arc::new(AtomicBool::new(false)),
     };
     // Simulate a noisy exploration phase: 10 errors accumulated.
     {
@@ -740,6 +744,7 @@ async fn task_done_test_gate_skipped_when_no_command_or_default() {
         no_changes_needed: Default::default(),
         dod_test_gate_exhausted: Default::default(),
         recent_tool_outcomes: Default::default(),
+        reset_explore_on_phase_change: Arc::new(AtomicBool::new(false)),
     };
     seed_with_file_op(&executor).await;
 
@@ -897,5 +902,88 @@ async fn task_done_gate_uses_env_override_command() {
     assert_eq!(
         cmds[0], "custom-runner --smoke",
         "gate must run the override, not the project config"
+    );
+}
+
+// ------------------------------------------------------------------
+// Phase-reset handshake tests
+// ------------------------------------------------------------------
+
+/// Build an executor stuck in [`TaskPhase::Exploring`] and wired to a
+/// caller-supplied `Arc<AtomicBool>` so the test can inspect the
+/// reset-signal flip directly.
+fn make_exploring_executor_with_signal(signal: Arc<AtomicBool>) -> TaskToolExecutor {
+    TaskToolExecutor {
+        inner: Arc::new(NoOpInner),
+        project_folder: "/tmp/test".to_string(),
+        build_command: None,
+        test_command: Some("cargo test --workspace".to_string()),
+        test_command_override: None,
+        task_context: String::new(),
+        tracked_file_ops: Default::default(),
+        notes: Default::default(),
+        follow_ups: Default::default(),
+        stub_fix_attempts: Default::default(),
+        test_gate_attempts: Default::default(),
+        test_runner: Arc::new(MockTestRunner::always_pass()),
+        disable_test_gate: false,
+        task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
+        self_review: Default::default(),
+        event_tx: None,
+        no_changes_needed: Default::default(),
+        dod_test_gate_exhausted: Default::default(),
+        recent_tool_outcomes: Default::default(),
+        reset_explore_on_phase_change: signal,
+    }
+}
+
+/// `handle_submit_plan` must flip the shared exploration-reset signal
+/// on the successful `Ok(())` branch so the wrapping agent loop knows
+/// to zero its exploration/read-guard counters at the next iteration.
+#[tokio::test]
+async fn submit_plan_flips_reset_signal() {
+    let signal = Arc::new(AtomicBool::new(false));
+    let executor = make_exploring_executor_with_signal(Arc::clone(&signal));
+
+    let plan_call = ToolCallInfo {
+        id: "sp_1".into(),
+        name: "submit_plan".into(),
+        input: serde_json::json!({
+            "approach": "fix the bug by adding a null check that prevents the crash",
+            "files_to_modify": ["src/main.rs"],
+            "key_decisions": ["use an early return"],
+        }),
+    };
+    let results = executor.execute(&[plan_call]).await;
+    assert!(!results[0].is_error, "plan should be accepted");
+
+    assert!(
+        signal.load(Ordering::Acquire),
+        "reset signal must be flipped to true after successful plan acceptance"
+    );
+}
+
+/// Companion: a rejected `submit_plan` must NOT flip the reset signal,
+/// otherwise the agent loop would reset counters every time the model
+/// submitted a malformed plan.
+#[tokio::test]
+async fn invalid_plan_does_not_flip_reset_signal() {
+    let signal = Arc::new(AtomicBool::new(false));
+    let executor = make_exploring_executor_with_signal(Arc::clone(&signal));
+
+    let plan_call = ToolCallInfo {
+        id: "sp_1".into(),
+        name: "submit_plan".into(),
+        input: serde_json::json!({
+            "approach": "short",
+            "files_to_modify": [],
+        }),
+    };
+    let results = executor.execute(&[plan_call]).await;
+    assert!(results[0].is_error, "plan should be rejected");
+
+    assert!(
+        !signal.load(Ordering::Acquire),
+        "reset signal must NOT be flipped on rejected plan"
     );
 }

@@ -286,39 +286,36 @@ async fn pipeline_write_success_clears_cache() {
     );
 }
 
-/// Sends 3 `write_file` calls in a single iteration to reach the failure
-/// threshold (`WRITE_FAILURE_BLOCK_THRESHOLD` = 3) in one round, then
-/// verifies the next write is blocked before the stall detector fires.
+/// Sends `WRITE_FAILURE_BLOCK_THRESHOLD` `write_file` calls in a
+/// single iteration to drive the per-path failure count to the
+/// threshold (raised from 3 to 6 by the harness-dev-loop-efficiency
+/// plan), then verifies the next write is blocked before the stall
+/// detector fires.
 #[tokio::test]
 async fn pipeline_blocking_detection_triggers() {
     let batch_response = MockResponse {
         stop_reason: StopReason::ToolUse,
-        content: vec![
-            ContentBlock::tool_use(
-                "t1",
-                "write_file",
-                serde_json::json!({"path": "test.rs", "content": "a"}),
-            ),
-            ContentBlock::tool_use(
-                "t2",
-                "write_file",
-                serde_json::json!({"path": "test.rs", "content": "b"}),
-            ),
-            ContentBlock::tool_use(
-                "t3",
-                "write_file",
-                serde_json::json!({"path": "test.rs", "content": "c"}),
-            ),
-        ],
+        content: (0..crate::constants::WRITE_FAILURE_BLOCK_THRESHOLD)
+            .map(|i| {
+                ContentBlock::tool_use(
+                    format!("t{i}"),
+                    "write_file",
+                    serde_json::json!({
+                        "path": "test.rs",
+                        "content": format!("v{i}"),
+                    }),
+                )
+            })
+            .collect(),
         usage: Usage::new(100, 50),
     };
 
     let provider = MockProvider::new()
         .with_response(batch_response)
         .with_default_response(MockResponse::tool_use(
-            "t4",
+            "t_after",
             "write_file",
-            serde_json::json!({"path": "test.rs", "content": "d"}),
+            serde_json::json!({"path": "test.rs", "content": "after-threshold"}),
         ));
 
     let executor = FailingWriteExecutor;
@@ -429,8 +426,8 @@ async fn pipeline_stall_emits_agent_stalled_terminal_error() {
             None
         }
     });
-    let (msg, recoverable) =
-        stall_error.expect("stall must emit terminal AgentLoopEvent::Error { code: agent_stalled }");
+    let (msg, recoverable) = stall_error
+        .expect("stall must emit terminal AgentLoopEvent::Error { code: agent_stalled }");
     assert!(
         recoverable,
         "agent_stalled must be recoverable so the chat client renders Stop / Retry / Report"

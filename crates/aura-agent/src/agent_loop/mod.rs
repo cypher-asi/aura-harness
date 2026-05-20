@@ -29,6 +29,7 @@ mod tests;
 mod tests_advanced;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -178,6 +179,13 @@ pub struct AgentLoopConfig {
     /// runtime crate from the active [`aura_runtime::SubagentRegistry`].
     /// Defaults to `0` for the same reasons as [`Self::skills_chars`].
     pub subagents_chars: usize,
+    /// Optional handshake from a wrapping
+    /// [`crate::task_executor::TaskToolExecutor`]: when the inner
+    /// `Arc<AtomicBool>` flips to `true`, [`LoopState::begin_iteration`]
+    /// resets the exploration/read-guard counters and bumps the
+    /// allowance so the implementation phase has a fresh budget. `None`
+    /// for non-task callers (e.g. chat).
+    pub phase_reset_signal: Option<Arc<AtomicBool>>,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -232,6 +240,7 @@ impl Default for AgentLoopConfig {
             intent_classifier_manifest: Vec::new(),
             skills_chars: 0,
             subagents_chars: 0,
+            phase_reset_signal: None,
         }
     }
 }
@@ -790,6 +799,38 @@ impl LoopState {
     fn begin_iteration(&mut self, config: &AgentLoopConfig, iteration: usize) {
         self.build_cooldown = self.build_cooldown.saturating_sub(1);
         self.blocking_ctx.decrement_cooldowns();
+
+        // Observe-and-clear the optional handshake from a wrapping
+        // `TaskToolExecutor`: when `submit_plan` is accepted the
+        // executor flips this shared `Arc<AtomicBool>` to `true`, and
+        // the loop must zero out exploration/read-guard counters so the
+        // implement phase has a fresh budget instead of inheriting the
+        // exploration phase's exhausted one. `written_paths` is
+        // intentionally preserved so duplicate-write detection still
+        // works after the reset. `exploration_compaction_done` is
+        // cleared so proactive compaction can fire once more during
+        // the implement phase. The allowance is bumped by
+        // `config.exploration_allowance / 2` (the implement-bonus from
+        // the plan) on top of any in-place growth so the model has
+        // headroom for verify-read cycles between edits.
+        if let Some(ref signal) = config.phase_reset_signal {
+            if signal.swap(false, Ordering::AcqRel) {
+                tracing::info!(
+                    old_exploration_count = self.blocking_ctx.exploration_count,
+                    old_exploration_allowance = self.blocking_ctx.exploration_allowance,
+                    "submit_plan accepted: resetting exploration/read-guard counters"
+                );
+                self.blocking_ctx.exploration_count = 0;
+                self.exploration_state.count = 0;
+                self.read_guard = ReadGuardState::default();
+                let implement_bonus = config.exploration_allowance / 2;
+                self.blocking_ctx.exploration_allowance = self
+                    .blocking_ctx
+                    .exploration_allowance
+                    .saturating_add(implement_bonus);
+                self.exploration_compaction_done = false;
+            }
+        }
 
         // If the previous iteration ended with a `MaxTokens` truncation
         // mid-`tool_use`, restore the budget to the configured maximum

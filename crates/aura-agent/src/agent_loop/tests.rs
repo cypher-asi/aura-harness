@@ -114,7 +114,11 @@ fn test_agent_loop_config_defaults() {
     // extraction) with `stop_reason: "cancelled"`. See
     // `constants::MAX_ITERATIONS`.
     assert_eq!(config.max_iterations, usize::MAX);
-    assert_eq!(config.exploration_allowance, 12);
+    // Raised from 12 to 40 by the harness-dev-loop-efficiency plan so a
+    // realistic explore + verify-edit cycle fits without burning the
+    // turn on exploration-budget oscillation. See
+    // `constants::DEFAULT_EXPLORATION_ALLOWANCE`.
+    assert_eq!(config.exploration_allowance, 40);
     assert_eq!(config.auto_build_cooldown, 2);
     assert_eq!(config.thinking_taper_after, 2);
     assert!((config.thinking_taper_factor - 0.6).abs() < f64::EPSILON);
@@ -122,6 +126,9 @@ fn test_agent_loop_config_defaults() {
     // (harness observed `edit_file` truncations at ~2.5 KB / ~1000
     // tokens plus preceding reasoning). See `constants::THINKING_MIN_BUDGET`.
     assert_eq!(config.thinking_min_budget, 6144);
+    // The default config carries no exploration-reset signal; only
+    // `execute_task_tracked` wires one through.
+    assert!(config.phase_reset_signal.is_none());
 }
 
 #[tokio::test]
@@ -541,4 +548,161 @@ async fn test_agent_loop_handles_summary_compaction() {
         .messages
         .iter()
         .any(|message| message.text_content().contains("earlier turns explored")));
+}
+
+// ------------------------------------------------------------------
+// phase_reset_signal + LoopState::begin_iteration tests
+// ------------------------------------------------------------------
+
+/// The plan's headline regression check: drive `blocking_ctx`
+/// exploration up to the allowance, flip the shared
+/// `Arc<AtomicBool>`, run one `begin_iteration` tick, then assert (a)
+/// the exploration counter is zero, (b) the allowance has grown by
+/// `allowance / 2`, and (c) `ReadGuardState` is empty. The bonus
+/// arithmetic is the implement-phase headroom that lets the model do
+/// verify-reads between edits without re-tripping the exploration
+/// block.
+#[test]
+fn phase_reset_clears_exploration_budget() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let signal = Arc::new(AtomicBool::new(false));
+    let config = AgentLoopConfig {
+        exploration_allowance: 40,
+        phase_reset_signal: Some(Arc::clone(&signal)),
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![]);
+
+    // Drive exploration to the allowance so the read-guard would
+    // otherwise stay tripped for the rest of the turn.
+    state.blocking_ctx.exploration_count = config.exploration_allowance;
+    state.exploration_state.count = config.exploration_allowance;
+    state.read_guard.record_full_read("foo.rs");
+    state.read_guard.record_full_read("foo.rs");
+    state.read_guard.record_range_read("bar.rs");
+    state.exploration_compaction_done = true;
+
+    // Duplicate-write detection must survive the reset, so seed
+    // `written_paths` and assert it stays populated below.
+    state.blocking_ctx.written_paths.insert("written.rs".into());
+
+    // Flip the shared signal (in production this is done by
+    // `TaskToolExecutor::handle_submit_plan`).
+    signal.store(true, Ordering::Release);
+
+    // One iteration tick observes and clears the signal.
+    state.begin_iteration(&config, 5);
+
+    // (a) exploration counter zeroed (both the blocking_ctx hard
+    // block and the exploration_state warning counter).
+    assert_eq!(state.blocking_ctx.exploration_count, 0);
+    assert_eq!(state.exploration_state.count, 0);
+
+    // (b) allowance grew by allowance / 2 (the implement bonus from
+    // the plan): config.exploration_allowance = 40, bump = 20, so
+    // the new value is 60.
+    assert_eq!(
+        state.blocking_ctx.exploration_allowance,
+        config.exploration_allowance + config.exploration_allowance / 2,
+    );
+
+    // (c) ReadGuardState empty.
+    assert_eq!(state.read_guard.full_read_count("foo.rs"), 0);
+    assert_eq!(state.read_guard.range_read_count("bar.rs"), 0);
+
+    // Side effects we explicitly want: compaction-done flag cleared
+    // so proactive compaction can fire once more during implementing,
+    // signal itself consumed so the next tick is a no-op, and
+    // written_paths preserved for duplicate-write detection.
+    assert!(!state.exploration_compaction_done);
+    assert!(
+        !signal.load(Ordering::Acquire),
+        "signal must be consumed by begin_iteration"
+    );
+    assert!(
+        state.blocking_ctx.written_paths.contains("written.rs"),
+        "written_paths must be preserved across signal reset"
+    );
+}
+
+/// Companion: when the signal is wired but not flipped, the reset
+/// branch must not fire — the loop's normal counters keep ticking.
+#[test]
+fn begin_iteration_does_not_reset_when_signal_unset() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let signal = Arc::new(AtomicBool::new(false));
+    let config = AgentLoopConfig {
+        exploration_allowance: 40,
+        phase_reset_signal: Some(Arc::clone(&signal)),
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![]);
+    state.blocking_ctx.exploration_count = 10;
+    state.exploration_state.count = 10;
+
+    state.begin_iteration(&config, 5);
+
+    assert_eq!(state.blocking_ctx.exploration_count, 10);
+    assert_eq!(state.exploration_state.count, 10);
+    assert_eq!(state.blocking_ctx.exploration_allowance, 40);
+}
+
+/// Companion: without a wired signal (the chat path), begin_iteration
+/// must not touch exploration counters at all.
+#[test]
+fn begin_iteration_no_op_when_no_signal_configured() {
+    let config = AgentLoopConfig {
+        exploration_allowance: 40,
+        phase_reset_signal: None,
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![]);
+    state.blocking_ctx.exploration_count = 40;
+
+    state.begin_iteration(&config, 5);
+
+    assert_eq!(state.blocking_ctx.exploration_count, 40);
+}
+
+/// End-to-end on the blocker: when `exploration_count` is past
+/// `exploration_allowance`, `detect_all_blocked` blocks reads. After
+/// the signal flips and one `begin_iteration` tick clears the
+/// counter, the same read tool must be allowed through.
+#[test]
+fn exploration_block_then_signal_unblocks() {
+    use crate::blocking::detection::detect_all_blocked;
+    use crate::types::ToolCallInfo;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let signal = Arc::new(AtomicBool::new(false));
+    let config = AgentLoopConfig {
+        exploration_allowance: 40,
+        phase_reset_signal: Some(Arc::clone(&signal)),
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![]);
+
+    state.blocking_ctx.exploration_count = 41;
+
+    let read_tool = ToolCallInfo {
+        id: "t1".into(),
+        name: "read_file".into(),
+        input: serde_json::json!({"path": "src/lib.rs"}),
+    };
+    let result = detect_all_blocked(&read_tool, &state.blocking_ctx, &state.read_guard);
+    assert!(result.blocked, "should be blocked before signal");
+
+    signal.store(true, Ordering::Release);
+    state.begin_iteration(&config, 6);
+
+    let result = detect_all_blocked(&read_tool, &state.blocking_ctx, &state.read_guard);
+    assert!(
+        !result.blocked,
+        "should be unblocked after signal reset in begin_iteration"
+    );
 }

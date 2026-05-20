@@ -49,7 +49,8 @@ pub fn tool_result_cache_key(tool_name: &str, input: &serde_json::Value) -> Stri
 pub const MAX_ITERATIONS: usize = usize::MAX;
 
 /// Default exploration allowance (read-only tool calls before warnings).
-pub const DEFAULT_EXPLORATION_ALLOWANCE: usize = 12;
+/// Raised from 12 to 40 to give realistic explore/edit cycles headroom.
+pub const DEFAULT_EXPLORATION_ALLOWANCE: usize = 40;
 
 /// Auto-build cooldown: minimum iterations between automatic build checks.
 pub const AUTO_BUILD_COOLDOWN: usize = 2;
@@ -71,19 +72,24 @@ pub const THINKING_TAPER_FACTOR: f64 = 0.6;
 pub const THINKING_MIN_BUDGET: u32 = 6144;
 
 /// Maximum full reads of the same file before blocking.
-pub const MAX_READS_PER_FILE: usize = 3;
+/// Raised from 3 to 10 to give realistic explore/edit cycles headroom.
+pub const MAX_READS_PER_FILE: usize = 10;
 
 /// Maximum range reads of the same file before blocking.
-pub const MAX_RANGE_READS_PER_FILE: usize = 5;
+/// Raised from 5 to 15 to give realistic explore/edit cycles headroom.
+pub const MAX_RANGE_READS_PER_FILE: usize = 15;
 
 /// Consecutive command failures before blocking all commands.
-pub const CMD_FAILURE_BLOCK_THRESHOLD: usize = 5;
+/// Raised from 5 to 8 to give realistic explore/edit cycles headroom.
+pub const CMD_FAILURE_BLOCK_THRESHOLD: usize = 8;
 
 /// Consecutive write failures on a single file before blocking writes to it.
-pub const WRITE_FAILURE_BLOCK_THRESHOLD: usize = 3;
+/// Raised from 3 to 6 to give realistic explore/edit cycles headroom.
+pub const WRITE_FAILURE_BLOCK_THRESHOLD: usize = 6;
 
 /// Stall detection: identical write targets for this many iterations triggers fail-fast.
-pub const STALL_STREAK_THRESHOLD: usize = 3;
+/// Raised from 3 to 5 to give realistic explore/edit cycles headroom.
+pub const STALL_STREAK_THRESHOLD: usize = 5;
 
 /// Budget warning at 30% utilization.
 pub const BUDGET_WARNING_30: f64 = 0.30;
@@ -95,10 +101,12 @@ pub const BUDGET_WARNING_40_NO_WRITE: f64 = 0.40;
 pub const BUDGET_WARNING_60: f64 = 0.60;
 
 /// Exploration warning (mild) at allowance minus this value.
-pub const EXPLORATION_WARNING_MILD_OFFSET: usize = 4;
+/// Raised from 4 to 8 to give realistic explore/edit cycles headroom.
+pub const EXPLORATION_WARNING_MILD_OFFSET: usize = 8;
 
 /// Exploration warning (strong) at allowance minus this value.
-pub const EXPLORATION_WARNING_STRONG_OFFSET: usize = 2;
+/// Raised from 2 to 4 to give realistic explore/edit cycles headroom.
+pub const EXPLORATION_WARNING_STRONG_OFFSET: usize = 4;
 
 /// Characters per token estimate for context budget calculations.
 pub const CHARS_PER_TOKEN: usize = 4;
@@ -119,7 +127,8 @@ pub const COMPACTION_TIER_30: f64 = 0.30;
 pub const COMPACTION_TIER_MICRO: f64 = 0.15;
 
 /// Write file cooldown in iterations after a write failure.
-pub const WRITE_COOLDOWN_ITERATIONS: usize = 2;
+/// Raised from 2 to 1 to give realistic explore/edit cycles headroom.
+pub const WRITE_COOLDOWN_ITERATIONS: usize = 1;
 
 /// Tools classified as exploration (read-only, non-modifying).
 pub const EXPLORATION_TOOLS: &[&str] = &[
@@ -160,12 +169,14 @@ pub const EMPTY_PATH_BLOCK_LIMIT: usize = 3;
 /// skeleton first and use `edit_file` appends for the rest. The goal is to
 /// avoid re-echoing huge content into the next turn when the model
 /// inevitably trips `max_tokens` mid-write.
-pub const WRITE_FILE_CHUNK_BYTES: usize = 12_000;
+/// Raised from 12_000 to 32_000 to give realistic explore/edit cycles headroom.
+pub const WRITE_FILE_CHUNK_BYTES: usize = 32_000;
 
 /// Hard ceiling on `write_file` content size. Reserved for future use by
 /// executor-side enforcement; currently kept equal to
 /// [`WRITE_FILE_CHUNK_BYTES`] so callers have one effective limit.
-pub const WRITE_FILE_HARD_MAX_BYTES: usize = 12_000;
+/// Raised from 12_000 to 32_000 to give realistic explore/edit cycles headroom.
+pub const WRITE_FILE_HARD_MAX_BYTES: usize = 32_000;
 
 // ---------------------------------------------------------------------------
 // Narration budget (Phase 4 live steering)

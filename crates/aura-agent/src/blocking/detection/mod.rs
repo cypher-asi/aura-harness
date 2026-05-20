@@ -313,7 +313,7 @@ fn detect_blocked_commands(tool: &ToolCallInfo, ctx: &BlockingContext) -> Option
 }
 
 /// Detector 4: Block exploration tools when allowance is exceeded.
-fn detect_blocked_exploration(
+pub(crate) fn detect_blocked_exploration(
     tool: &ToolCallInfo,
     ctx: &BlockingContext,
 ) -> Option<BlockCheckResult> {
