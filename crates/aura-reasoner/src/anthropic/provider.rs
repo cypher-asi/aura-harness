@@ -574,16 +574,14 @@ impl AnthropicProvider {
         model: &str,
         body_bytes: Vec<u8>,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
-        let token = request_ctx.auth_token.as_deref().ok_or_else(|| {
-            ApiError::Other(ReasonerError::Internal("router auth token missing".into()))
-        })?;
+        let token = request_ctx.auth_token.as_deref();
 
         // #region agent log
         debug_log_outbound_request(
             request_ctx,
             model,
             body_bytes.len(),
-            token,
+            token.unwrap_or("<public-guest>"),
             &self.config.base_url,
         );
         // #endregion
@@ -593,8 +591,14 @@ impl AnthropicProvider {
             .post(format!("{}/v1/messages", self.config.base_url))
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .header("authorization", format!("Bearer {token}"))
             .body(body_bytes);
+
+        // Only send Authorization header when a token is present.
+        // Public-guest sessions have no token — the router accepts
+        // unauthenticated requests and assigns user_id "public-guest".
+        if let Some(token) = token {
+            req_builder = req_builder.header("authorization", format!("Bearer {token}"));
+        }
 
         if self.config.prompt_caching_enabled
             && Self::supports_anthropic_proxy_features(request_ctx, model)
