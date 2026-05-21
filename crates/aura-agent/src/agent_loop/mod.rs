@@ -829,6 +829,14 @@ impl LoopState {
                     .exploration_allowance
                     .saturating_add(implement_bonus);
                 self.exploration_compaction_done = false;
+                // Arm the post-plan exploration hard block. Before this
+                // call `detect_blocked_exploration` is a no-op (see its
+                // doc comment) so the agent can spend whatever reads it
+                // needs to assemble a credible `submit_plan` payload.
+                // Once flipped, the gate polices runaway read thrash
+                // during the implementation phase, which is the
+                // original intent of the gate.
+                self.blocking_ctx.mark_plan_submitted();
             }
         }
 

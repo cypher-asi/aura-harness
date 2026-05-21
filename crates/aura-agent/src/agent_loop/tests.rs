@@ -539,15 +539,14 @@ async fn test_agent_loop_handles_summary_compaction() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    assert_eq!(
-        kinds.first().copied().flatten(),
-        Some(ModelRequestKind::Auxiliary)
-    );
+    assert_eq!(kinds.first().copied().flatten(), Some(ModelRequestKind::Auxiliary));
     assert!(result.total_text.contains("Done after summary compaction."));
-    assert!(result
-        .messages
-        .iter()
-        .any(|message| message.text_content().contains("earlier turns explored")));
+    assert!(
+        result
+            .messages
+            .iter()
+            .any(|message| message.text_content().contains("earlier turns explored"))
+    );
 }
 
 // ------------------------------------------------------------------
@@ -586,7 +585,10 @@ fn phase_reset_clears_exploration_budget() {
 
     // Duplicate-write detection must survive the reset, so seed
     // `written_paths` and assert it stays populated below.
-    state.blocking_ctx.written_paths.insert("written.rs".into());
+    state
+        .blocking_ctx
+        .written_paths
+        .insert("written.rs".into());
 
     // Flip the shared signal (in production this is done by
     // `TaskToolExecutor::handle_submit_plan`).
@@ -669,9 +671,19 @@ fn begin_iteration_no_op_when_no_signal_configured() {
 }
 
 /// End-to-end on the blocker: when `exploration_count` is past
-/// `exploration_allowance`, `detect_all_blocked` blocks reads. After
-/// the signal flips and one `begin_iteration` tick clears the
-/// counter, the same read tool must be allowed through.
+/// `exploration_allowance` *and the plan latch is set*,
+/// `detect_all_blocked` blocks reads. After the signal flips a second
+/// time (e.g. the agent re-submits an updated plan via the normal
+/// reset path) and one `begin_iteration` tick clears the counter, the
+/// same read tool must be allowed through.
+///
+/// The pre-plan case where `exploration_count > allowance` does NOT
+/// block is covered separately by
+/// `crate::blocking::detection::tests::test_detect_blocked_exploration_pre_plan_never_blocks`
+/// — the exploration hard block is intentionally a no-op until
+/// `BlockingContext::mark_plan_submitted` flips the latch (which the
+/// signal observer below does on the first reset), so we set up the
+/// state with the latch already armed.
 #[test]
 fn exploration_block_then_signal_unblocks() {
     use crate::blocking::detection::detect_all_blocked;
@@ -688,6 +700,10 @@ fn exploration_block_then_signal_unblocks() {
     let mut state = super::LoopState::new(&config, vec![]);
 
     state.blocking_ctx.exploration_count = 41;
+    // Arm the post-plan exploration hard block so the assertion below
+    // exercises the post-plan branch. The signal-observer path used
+    // below re-arms it idempotently on the second reset.
+    state.blocking_ctx.mark_plan_submitted();
 
     let read_tool = ToolCallInfo {
         id: "t1".into(),
@@ -704,5 +720,38 @@ fn exploration_block_then_signal_unblocks() {
     assert!(
         !result.blocked,
         "should be unblocked after signal reset in begin_iteration"
+    );
+}
+
+/// Regression guard for the submit_plan deadlock fix: the agent
+/// loop's signal observer must flip `BlockingContext::plan_submitted`
+/// in addition to resetting the counters, so the post-plan hard block
+/// can fire when the implement phase actually thrashes. Without this
+/// the gate would never engage and `038ccdf`'s anti-thrash intent
+/// would silently disappear in the opposite direction.
+#[test]
+fn phase_reset_arms_plan_submitted_latch() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let signal = Arc::new(AtomicBool::new(false));
+    let config = AgentLoopConfig {
+        exploration_allowance: 40,
+        phase_reset_signal: Some(Arc::clone(&signal)),
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![]);
+    assert!(
+        !state.blocking_ctx.plan_submitted,
+        "latch must default to false so pre-plan exploration stays soft"
+    );
+
+    signal.store(true, Ordering::Release);
+    state.begin_iteration(&config, 1);
+
+    assert!(
+        state.blocking_ctx.plan_submitted,
+        "begin_iteration must arm the latch when it observes the reset signal so the \
+         post-plan exploration hard block can fire"
     );
 }

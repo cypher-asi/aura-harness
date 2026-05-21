@@ -35,6 +35,19 @@ pub struct BlockingContext {
     /// next attempt has a concrete target rather than repeating the
     /// pathless misfire.
     pub(crate) last_read_path: Option<String>,
+    /// Set when `TaskToolExecutor::handle_submit_plan` accepts a plan
+    /// and the agent loop observes the resulting reset signal in
+    /// `LoopState::begin_iteration`. Gates the exploration hard block
+    /// in [`detect_blocked_exploration`]: pre-plan exploration is the
+    /// only path the agent has to gather enough context to call
+    /// `submit_plan` in the first place, so hard-blocking it wedges
+    /// the run (the structural plan gate already rejects writes
+    /// pre-plan, so the agent has no legal next tool). After
+    /// `submit_plan` succeeds, the gate flips on and now polices
+    /// runaway read thrash during the implementation phase, which is
+    /// what the gate was designed for. Defaults to `false`; flipped
+    /// once and never cleared for the rest of the run.
+    pub(crate) plan_submitted: bool,
 }
 
 impl BlockingContext {
@@ -103,6 +116,16 @@ impl BlockingContext {
         } else {
             self.consecutive_cmd_failures += 1;
         }
+    }
+
+    /// Flip the `plan_submitted` latch. Called by the agent loop from
+    /// `LoopState::begin_iteration` after it observes the shared
+    /// `Arc<AtomicBool>` reset signal flipped by
+    /// `TaskToolExecutor::handle_submit_plan`. Idempotent: subsequent
+    /// calls are no-ops so callers do not have to guard against
+    /// re-observation of the signal across replays.
+    pub(crate) fn mark_plan_submitted(&mut self) {
+        self.plan_submitted = true;
     }
 }
 
@@ -313,12 +336,29 @@ fn detect_blocked_commands(tool: &ToolCallInfo, ctx: &BlockingContext) -> Option
 }
 
 /// Detector 4: Block exploration tools when allowance is exceeded.
+///
+/// Phase-gated: the hard block only fires once the agent has
+/// successfully called `submit_plan` (signalled via
+/// [`BlockingContext::mark_plan_submitted`]). Before the plan,
+/// exploration is the only path the agent has to gather the context it
+/// needs to fill in a credible `submit_plan` payload, and the
+/// structural plan gate already rejects every write tool pre-plan — so
+/// hard-blocking reads there leaves the agent with no legal next tool
+/// and the run wedges into a "task completed without any file
+/// operations" failure (the regression introduced when
+/// `track_tool_effects` was first wired to the blocking counter, see
+/// the parallel test `exploration_count_is_incremented_by_track_tool_effects`).
+/// Soft pressure during exploration still comes from the warning
+/// offsets in [`crate::constants`] and the agent's system prompt.
 pub(crate) fn detect_blocked_exploration(
     tool: &ToolCallInfo,
     ctx: &BlockingContext,
 ) -> Option<BlockCheckResult> {
     if !EXPLORATION_TOOLS.contains(&tool.name.as_str()) {
         return None;
+    }
+    if !ctx.plan_submitted {
+        return Some(BlockCheckResult::allowed());
     }
     if ctx.exploration_count >= ctx.exploration_allowance {
         Some(BlockCheckResult::blocked(

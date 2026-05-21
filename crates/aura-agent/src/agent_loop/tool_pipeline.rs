@@ -760,6 +760,15 @@ mod track_tool_effects_tests {
         );
         assert!(!had_any_write, "no writes were issued in this test");
 
+        // The exploration hard block is phase-gated as of the
+        // submit_plan-deadlock fix: it only fires after
+        // `mark_plan_submitted` flips the latch. We simulate the
+        // post-plan world here (the agent loop's signal observer in
+        // `LoopState::begin_iteration` does the same flip in
+        // production) so the rest of the test exercises the
+        // documented post-plan behavior.
+        blocking_ctx.mark_plan_submitted();
+
         // `detect_blocked_exploration` is reached through the public
         // `detect_all_blocked` entry point; it uses `count >= allowance`,
         // so the very next exploration call (the (N+1)th) must block.

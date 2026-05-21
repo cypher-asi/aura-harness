@@ -93,9 +93,55 @@ fn test_detect_blocked_exploration_allows_under() {
 fn test_detect_blocked_exploration_when_exceeded() {
     let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
     ctx.exploration_count = DEFAULT_EXPLORATION_ALLOWANCE;
+    // The hard exploration block is phase-gated: it only fires after
+    // `submit_plan` has flipped the latch (see
+    // `BlockingContext::mark_plan_submitted`). Pre-plan, the detector
+    // is a no-op so the agent can keep gathering context — see the
+    // companion `test_detect_blocked_exploration_pre_plan_never_blocks`.
+    ctx.mark_plan_submitted();
     let tool = make_tool("read_file", serde_json::json!({"path": "test.rs"}));
     let result = detect_blocked_exploration(&tool, &ctx).unwrap();
     assert!(result.blocked);
+}
+
+#[test]
+fn test_detect_blocked_exploration_pre_plan_never_blocks() {
+    // Regression guard for the `submit_plan` deadlock: before the
+    // agent calls `submit_plan` the structural plan gate rejects every
+    // write tool (`TaskToolExecutor::call_tool_batch`), so if the
+    // exploration hard block fires pre-plan the agent has no legal
+    // next tool and the run wedges with "task completed without any
+    // file operations — completion not verified". Pin the no-op:
+    // pre-plan, even an exhausted budget must let reads through.
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
+    ctx.exploration_count = DEFAULT_EXPLORATION_ALLOWANCE.saturating_mul(10);
+    assert!(
+        !ctx.plan_submitted,
+        "plan_submitted must default to false so the gate stays soft pre-plan"
+    );
+    for tool_name in ["read_file", "list_files", "find_files", "stat_file", "search_code"] {
+        let tool = make_tool(tool_name, serde_json::json!({"path": "test.rs"}));
+        let result = detect_blocked_exploration(&tool, &ctx).unwrap();
+        assert!(
+            !result.blocked,
+            "pre-plan exploration via `{tool_name}` must never hard-block — \
+             the structural plan gate already prevents writes, so blocking \
+             reads here leaves the agent with no legal next tool"
+        );
+    }
+}
+
+#[test]
+fn test_mark_plan_submitted_is_idempotent() {
+    // Subsequent calls must be no-ops so callers (the agent loop's
+    // signal observer) don't have to guard against re-observation
+    // across iterations.
+    let mut ctx = BlockingContext::new(DEFAULT_EXPLORATION_ALLOWANCE);
+    assert!(!ctx.plan_submitted);
+    ctx.mark_plan_submitted();
+    assert!(ctx.plan_submitted);
+    ctx.mark_plan_submitted();
+    assert!(ctx.plan_submitted);
 }
 
 #[test]

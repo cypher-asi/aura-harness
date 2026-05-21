@@ -223,7 +223,7 @@ impl AgentRunner {
         // Non-tracked callers (e.g. chat) do not share an exploration-
         // reset signal with a `TaskToolExecutor`; pass `None` so the
         // loop simply does not perform the reset.
-        self.execute_task_inner(provider, executor, params, event_tx, cancel, None)
+        self.execute_task_inner(provider, executor, params, event_tx, cancel, None, None)
             .await
     }
 
@@ -235,6 +235,7 @@ impl AgentRunner {
         event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
         phase_reset_signal: Option<Arc<AtomicBool>>,
+        prebuilt_task_ctx: Option<String>,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
         let complexity = classify_task_complexity(params.task.title, params.task.description);
 
@@ -256,22 +257,17 @@ impl AgentRunner {
             exploration_allowance,
         );
 
-        let work_log_summary = task_context::build_work_log_summary(params.work_log);
-        let base_context = build_agentic_task_context(
-            params.project,
-            params.spec,
-            params.task,
-            params.session,
-            params.completed_deps,
-            &work_log_summary,
-        );
-        let mut task_ctx = task_context::build_full_task_context(
-            base_context,
-            params.workspace_map,
-            params.type_defs_context,
-            params.codebase_snapshot,
-            params.dep_api_context,
-        );
+        // Reuse the caller-supplied full task context bundle when
+        // present (the `execute_task_tracked` path pre-builds it so
+        // the `get_task_context` tool can return a non-empty payload
+        // — see `build_full_task_ctx`) and only build a fresh one for
+        // the non-tracked path. Either way we cap the copy used as
+        // the initial user message via `cap_bootstrap_task_context`
+        // so model routing stays small; the full bundle (when
+        // provided) is the executor's source of truth for the tool
+        // response and stays untruncated.
+        let mut task_ctx = prebuilt_task_ctx
+            .unwrap_or_else(|| build_full_task_ctx(params));
         task_context::cap_bootstrap_task_context(&mut task_ctx);
 
         let mut loop_config = configure_loop_config(
@@ -330,13 +326,26 @@ impl AgentRunner {
         // for the implementation phase. See plan
         // `harness-dev-loop-efficiency`.
         let reset_signal = Arc::new(AtomicBool::new(false));
+        // Build the full (uncapped) task-context bundle ONCE here so
+        // both the `get_task_context` tool response and the initial
+        // user message inside `execute_task_inner` derive from the
+        // same source. Historically `task_context` was hard-coded to
+        // `String::new()` on the executor, so every call to
+        // `get_task_context` returned an empty payload and forced the
+        // agent into a long `list_files`/`read_file`/`search_code`
+        // burn just to rediscover the task description the server
+        // already had — see the `submit_plan` deadlock investigation.
+        // The bundle is pure data shaping (no I/O) so the helper is
+        // cheap and the inner method skips its own build via the
+        // `prebuilt_task_ctx` channel.
+        let full_task_ctx = build_full_task_ctx(params);
         let task_executor = TaskToolExecutor {
             inner: tracking.inner_executor,
             project_folder: tracking.project_folder,
             build_command: tracking.build_command,
             test_command: tracking.test_command,
             test_command_override: crate::task_executor::read_test_command_override_env(),
-            task_context: String::new(),
+            task_context: full_task_ctx.clone(),
             tracked_file_ops: Arc::default(),
             notes: Arc::default(),
             follow_ups: Arc::default(),
@@ -361,6 +370,7 @@ impl AgentRunner {
                 event_tx,
                 cancel,
                 Some(reset_signal),
+                Some(full_task_ctx),
             )
             .await?;
 
@@ -569,6 +579,40 @@ pub fn configure_loop_config(
         request_kind: ModelRequestKind::DevLoopBootstrap,
         ..AgentLoopConfig::default()
     }
+}
+
+/// Build the full (uncapped) task-context bundle: project / spec /
+/// task description / session / completed-deps / work-log header,
+/// plus workspace map + type defs + codebase snapshot + dep-api
+/// surface (all of which are themselves capped by
+/// `build_full_task_context` via [`task_context::MAX_TASK_CONTEXT_CHARS`]).
+///
+/// Shared by the non-tracked `execute_task` path (which builds inline)
+/// and the tracked path (`execute_task_tracked`), which pre-builds so
+/// the same string is both the initial user message (after
+/// `cap_bootstrap_task_context` shrinks it for model routing) and the
+/// `get_task_context` tool response (which stays untruncated so the
+/// agent can pull the full bundle on demand instead of grinding through
+/// `list_files` / `read_file` / `search_code` to rediscover it).
+///
+/// Pure data shaping: no I/O, no async, safe to call from any context.
+fn build_full_task_ctx(params: &AgenticTaskParams<'_>) -> String {
+    let work_log_summary = task_context::build_work_log_summary(params.work_log);
+    let base_context = build_agentic_task_context(
+        params.project,
+        params.spec,
+        params.task,
+        params.session,
+        params.completed_deps,
+        &work_log_summary,
+    );
+    task_context::build_full_task_context(
+        base_context,
+        params.workspace_map,
+        params.type_defs_context,
+        params.codebase_snapshot,
+        params.dep_api_context,
+    )
 }
 
 /// Process an [`AgentLoopResult`] into a [`TaskExecutionResult`].
