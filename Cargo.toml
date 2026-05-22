@@ -55,6 +55,7 @@ members = [
     "crates/aura-runtime",
     "crates/aura-memory",
     "crates/aura-skills",
+    "crates/aura-protocol",
 ]
 
 [profile.dev]
@@ -185,7 +186,7 @@ aura-reasoner = { path = "crates/aura-reasoner" }
 aura-agent = { path = "crates/aura-agent" }
 aura-automaton = { path = "crates/aura-automaton" }
 aura-tools = { path = "crates/aura-tools" }
-aura-protocol = { path = "../aura-os/crates/aura-protocol" }
+aura-protocol = { path = "crates/aura-protocol" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 proptest = { workspace = true }
