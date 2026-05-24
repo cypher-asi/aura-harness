@@ -92,6 +92,113 @@ fn agentic_prompt_no_longer_tells_agent_to_ignore_pre_existing_failures() {
     );
 }
 
+/// Phase 3 of harness-v2 restored the EXPLORATION BUDGET section in the
+/// agentic system prompt. The 2026-05 strip removed the prose while
+/// keeping the runtime gate armed, leaving the model with no
+/// in-context steering signal. These assertions pin the restored
+/// wording so a future strip cannot quietly remove it again without
+/// flipping the test.
+#[test]
+fn agentic_prompt_surfaces_exploration_budget_section() {
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 17);
+
+    assert!(
+        prompt.contains("EXPLORATION BUDGET:"),
+        "EXPLORATION BUDGET section header missing: {prompt}"
+    );
+    assert!(
+        prompt.contains("~17 read-only tool calls"),
+        "exploration_allowance value not substituted into the budget prose: {prompt}"
+    );
+    assert!(
+        prompt.contains("read_file, list_files, find_files, stat_file, search_code"),
+        "read-only tool list missing from budget prose: {prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "the only legal moves are write_file / edit_file / delete_file / task_done"
+        ),
+        "post-budget legal-move enumeration missing: {prompt}"
+    );
+    assert!(
+        prompt.contains("Each file can be read at most 3 times (full) or 5 times (ranged)"),
+        "per-file read-cap prose missing: {prompt}"
+    );
+    assert!(
+        prompt.contains("call task_done with `no_changes_needed: true`"),
+        "no_changes_needed escape-hatch prose missing from budget section: {prompt}"
+    );
+    assert!(
+        prompt.contains("This is a first-class outcome, not a fallback"),
+        "first-class-outcome framing missing from budget section: {prompt}"
+    );
+}
+
+/// The Workflow block was rewritten as an explicit 5-step list
+/// (Explore -> optional plan -> write -> verify -> task_done). Pin
+/// each step so the ordering and the optional-plan framing don't
+/// silently regress.
+#[test]
+fn agentic_prompt_pins_explicit_five_step_workflow() {
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+
+    assert!(prompt.contains("Workflow:"), "Workflow header missing");
+    assert!(
+        prompt.contains("1. Explore (read_file / search_code / list_files)"),
+        "step 1 (Explore) missing or rephrased: {prompt}"
+    );
+    assert!(
+        prompt.contains("2. (Optional) call submit_plan to record your approach. Not required."),
+        "step 2 (optional submit_plan) missing or rephrased: {prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "3. Make the changes with write_file (new files) or edit_file (targeted edits)."
+        ),
+        "step 3 (write/edit) missing or rephrased: {prompt}"
+    );
+    assert!(
+        prompt.contains("4. Run the build / tests as needed"),
+        "step 4 (build/tests) missing or rephrased: {prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "5. Call task_done when the changes compile and the test suite is green."
+        ),
+        "step 5 (task_done) missing or rephrased: {prompt}"
+    );
+    assert!(
+        prompt.contains(
+            "If no changes were required, call task_done with `no_changes_needed: true`."
+        ),
+        "step 5 no_changes_needed branch missing: {prompt}"
+    );
+}
+
+/// `no_changes_needed` was previously buried in the Rules block. Phase
+/// 3 promotes it to a first-class outcome by mentioning it both in the
+/// Workflow / EXPLORATION BUDGET sections AND adding a dedicated Rules
+/// bullet. Pin the Rules bullet so the promotion doesn't get reverted
+/// in isolation.
+#[test]
+fn agentic_prompt_promotes_no_changes_needed_in_rules() {
+    let project = test_project("/nonexistent");
+    let prompt = agentic_execution_system_prompt(&project, None, None, 20);
+
+    assert!(
+        prompt.contains(
+            "If exploration reveals the task is already done"
+        ),
+        "no_changes_needed Rules-bullet prose missing: {prompt}"
+    );
+    assert!(
+        prompt.contains("file-op enforcement is bypassed"),
+        "Rules bullet must clarify file-op enforcement is bypassed: {prompt}"
+    );
+}
+
 /// When the operator has set `AURA_DOD_TEST_COMMAND`, the prompt's
 /// rendered test command must match the override so the agent sees the
 /// exact command the gate is going to run. Otherwise the agent would

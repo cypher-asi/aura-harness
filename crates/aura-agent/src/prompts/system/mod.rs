@@ -127,7 +127,7 @@ pub fn agentic_execution_system_prompt(
     project: &ProjectInfo<'_>,
     agent: Option<&AgentInfo<'_>>,
     workspace_info: Option<&str>,
-    _exploration_allowance: usize,
+    exploration_allowance: usize,
 ) -> String {
     let build_cmd = project.build_command.unwrap_or("(not configured)");
     // Prefer the operator's env override so the prompt shows the agent the
@@ -147,13 +147,12 @@ pub fn agentic_execution_system_prompt(
     let preamble = build_agent_preamble(agent);
     let platform_info = platform_info_string();
 
-    // The `_exploration_allowance` is no longer surfaced to the model:
-    // the previous text said both "EXPLORATION LIMITS (ENFORCED): hard
-    // limit of ~N exploration calls" and "STRUCT AND TYPE VERIFICATION
-    // (CRITICAL): always verify before writing", which combined to
-    // push the model into long read-only turns. Keep the runtime
-    // gate, drop the prose. Same with the per-turn one-write rule
-    // and the "verify-types-CRITICAL" amplifier.
+    // Phase 3 of harness-v2 restored the EXPLORATION BUDGET prose and
+    // the explicit 5-step Workflow. The 2026-05 strip removed both
+    // while keeping the runtime budget gate armed, leaving the model
+    // with no in-context steering signal — which is the upstream
+    // cause of the "read 40 files, never write" trap. The runtime
+    // gate is the hard guarantee; this prose is the soft steering.
     let mut prompt = format!(
         r#"{preamble}You are an expert software engineer executing a single implementation task.
 You have tools to read, edit, and run commands in the workspace.
@@ -161,10 +160,17 @@ You have tools to read, edit, and run commands in the workspace.
 {platform_info}
 
 Workflow:
-1. Read the files you need to understand the task. Use search_code / list_files first when you don't know paths.
-2. Make the changes with write_file (new files) or edit_file (targeted edits).
-3. Run the build / tests as needed (`{build_cmd}` / `{test_cmd}`).
-4. Call task_done when the changes compile and the test suite is green.
+1. Explore (read_file / search_code / list_files). Cap reads — see EXPLORATION BUDGET below.
+2. (Optional) call submit_plan to record your approach. Not required.
+3. Make the changes with write_file (new files) or edit_file (targeted edits).
+4. Run the build / tests as needed (`{build_cmd}` / `{test_cmd}`).
+5. Call task_done when the changes compile and the test suite is green. If no changes were required, call task_done with `no_changes_needed: true`.
+
+EXPLORATION BUDGET:
+- You have ~{exploration_allowance} read-only tool calls (read_file, list_files, find_files, stat_file, search_code) before the next one is hard-blocked by the harness.
+- After the budget is exhausted, the only legal moves are write_file / edit_file / delete_file / task_done. Continued exploration calls will return error results.
+- Each file can be read at most 3 times (full) or 5 times (ranged). Repeat reads against the same file return cached results.
+- If you have read enough and the task does not require any change, call task_done with `no_changes_needed: true` and a one-sentence explanation in `notes`. This is a first-class outcome, not a fallback.
 
 Build command: {build_cmd}
 Test command: {test_cmd}
@@ -174,6 +180,7 @@ Rules:
 - For Rust source: ASCII only, raw string literals for multi-line strings, `serde_json::json!()` for JSON in tests.
 - For TypeScript: forward slashes in import paths.
 - Do not call `task_done` until the build passes and the full project test suite (`{test_cmd}`) is green. The harness re-runs the suite as a hard gate.
+- If exploration reveals the task is already done (e.g. a prior task implemented it, or the change is a no-op), call task_done with `no_changes_needed: true` and explain in `notes`. The DoD test gate still runs, but file-op enforcement is bypassed.
 - Do not output raw JSON with `file_ops` in text responses; use the tools.
 - No emojis in notes or output.
 
