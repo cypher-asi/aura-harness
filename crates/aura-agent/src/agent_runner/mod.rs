@@ -20,7 +20,8 @@ use crate::file_ops::FileOp;
 use crate::planning::{TaskPhase, TaskPlan};
 use crate::prompts::{
     agentic_execution_system_prompt, build_agentic_task_context, build_chat_system_prompt,
-    AgentInfo, ProjectInfo, SessionInfo, SpecInfo, TaskInfo,
+    default_caps, extract_hints, resolve_hints, AgentInfo, FsWorkspace, ProjectInfo, SessionInfo,
+    SpecInfo, TaskInfo,
 };
 use crate::task_context;
 use crate::task_executor::TaskToolExecutor;
@@ -180,6 +181,14 @@ pub struct AgenticTaskParams<'a> {
     pub dep_api_context: &'a str,
     pub member_count: usize,
     pub tools: Vec<ToolDefinition>,
+    /// 0-indexed retry counter. `0` is the first attempt (a fresh task
+    /// or an initial run after a process restart), `1+` is a retry.
+    /// Gates Phase 4 context enrichment: pre-resolved paths/symbols are
+    /// only spliced into the initial user message on attempt 0, since
+    /// retries get a different, narrower context from Phase 5's
+    /// decomposition path (and re-injecting the same hints wastes
+    /// tokens without adding signal).
+    pub attempt: u32,
 }
 
 /// Context for a shell task execution.
@@ -276,8 +285,10 @@ impl AgentRunner {
         // so model routing stays small; the full bundle (when
         // provided) is the executor's source of truth for the tool
         // response and stays untruncated.
-        let mut task_ctx = prebuilt_task_ctx
-            .unwrap_or_else(|| build_full_task_ctx(params));
+        let mut task_ctx = match prebuilt_task_ctx {
+            Some(ctx) => ctx,
+            None => build_full_task_ctx(params).await,
+        };
         task_context::cap_bootstrap_task_context(&mut task_ctx);
 
         let mut loop_config = configure_loop_config(
@@ -349,10 +360,14 @@ impl AgentRunner {
         // agent into a long `list_files`/`read_file`/`search_code`
         // burn just to rediscover the task description the server
         // already had — see the `submit_plan` deadlock investigation.
-        // The bundle is pure data shaping (no I/O) so the helper is
-        // cheap and the inner method skips its own build via the
-        // `prebuilt_task_ctx` channel.
-        let full_task_ctx = build_full_task_ctx(params);
+        // Phase 4 update: the helper is now async because attempt-0
+        // contexts splice in a pre-resolved paths/symbols block (best
+        // effort, 2s per-call timeout, falls back cleanly to the
+        // pre-Phase-4 prompt on any IO failure). Still called ONCE so
+        // both the `get_task_context` tool response and the initial
+        // user message inside `execute_task_inner` derive from the
+        // same source, and so we never pay the resolve cost twice.
+        let full_task_ctx = build_full_task_ctx(params).await;
         let task_executor = TaskToolExecutor {
             inner: tracking.inner_executor,
             project_folder: tracking.project_folder,
@@ -619,9 +634,16 @@ pub fn configure_loop_config(
 /// `read_file` / `search_code` / `list_files` — give it the task text
 /// and let it pull the rest on demand.
 ///
-/// Pure data shaping: no I/O, no async, safe to call from any context.
-fn build_full_task_ctx(params: &AgenticTaskParams<'_>) -> String {
+/// On `params.attempt == 0` this resolves the Phase 4 enrichment block
+/// (paths + symbols extracted from the task description, looked up on
+/// disk) and splices it into the returned context. Each per-call IO is
+/// wrapped in a 2-second timeout (see [`default_caps`]), so a slow
+/// filesystem or grep can NEVER block context construction — the worst
+/// case is that the enrichment block is omitted and the agent gets the
+/// pre-Phase-4 prompt. On retries the resolve is skipped entirely.
+async fn build_full_task_ctx(params: &AgenticTaskParams<'_>) -> String {
     let work_log_summary = task_context::build_work_log_summary(params.work_log);
+    let enrichment_block = resolve_enrichment_block(params).await;
     build_agentic_task_context(
         params.project,
         params.spec,
@@ -629,7 +651,36 @@ fn build_full_task_ctx(params: &AgenticTaskParams<'_>) -> String {
         params.session,
         params.completed_deps,
         &work_log_summary,
+        params.attempt,
+        enrichment_block.as_deref(),
     )
+}
+
+/// Phase 4: extract candidate paths & symbols from the task description
+/// and resolve them against the project folder. Returns `None` (and
+/// emits nothing in the task context) when:
+/// - `attempt > 0` (retries skip enrichment — see Phase 5),
+/// - the description has no resolvable hints,
+/// - the project `folder_path` is empty / nonexistent,
+/// - or every resolve call timed out / hit a missing file.
+async fn resolve_enrichment_block(params: &AgenticTaskParams<'_>) -> Option<String> {
+    if params.attempt != 0 {
+        return None;
+    }
+    let hints = extract_hints(params.task.description);
+    if !hints.is_meaningful() {
+        return None;
+    }
+    let folder = params.project.folder_path;
+    if folder.is_empty() {
+        return None;
+    }
+    let workspace = FsWorkspace::new(folder);
+    let resolved = resolve_hints(&hints, &workspace, default_caps()).await;
+    if resolved.is_empty() {
+        return None;
+    }
+    Some(resolved.into_block())
 }
 
 /// Process an [`AgentLoopResult`] into a [`TaskExecutionResult`].

@@ -4,12 +4,17 @@
 //! keeping this module free of app-layer dependencies.
 
 mod context;
+pub mod enrichment;
 mod fix;
 mod system;
 mod turn_kernel_system;
 
 pub use crate::verify::error_types::{parse_error_references, BuildFixAttemptRecord};
 pub use context::build_agentic_task_context;
+pub use enrichment::{
+    default_caps, extract_hints, resolve_hints, ContextHints, FsWorkspace, ResolveCaps,
+    ResolvedContext, SymbolHit, WorkspaceReader,
+};
 pub use fix::{build_fix_prompt_with_history, build_stub_fix_prompt, BuildFixPromptParams};
 pub use system::{
     agentic_execution_system_prompt, build_chat_system_prompt, build_fix_system_prompt,

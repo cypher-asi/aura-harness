@@ -127,6 +127,15 @@ fn task_description_for_bootstrap(task: &TaskInfo<'_>) -> String {
     }
 }
 
+/// Build the initial user-message context for an agentic task run.
+///
+/// `attempt` is the 0-indexed retry counter — 0 for the first run, 1+
+/// for retries. `enrichment_block` is the pre-resolved
+/// paths/symbols/file-heads markdown produced by the
+/// [`crate::prompts::enrichment`] module. It is only spliced when
+/// `attempt == 0` and the block is non-empty: on retries, Phase 5's
+/// decomposition will provide a different, narrower context and the
+/// resolve cost is wasted on re-runs of the same task.
 #[must_use]
 pub fn build_agentic_task_context(
     project: &ProjectInfo<'_>,
@@ -135,6 +144,8 @@ pub fn build_agentic_task_context(
     session: &SessionInfo<'_>,
     completed_deps: &[TaskInfo<'_>],
     work_log_summary: &str,
+    attempt: u32,
+    enrichment_block: Option<&str>,
 ) -> String {
     let mut ctx = String::new();
     ctx.push_str(&format!(
@@ -144,6 +155,22 @@ pub fn build_agentic_task_context(
     append_spec_section(&mut ctx, spec, bootstrap_spec_byte_budget());
     let task_desc = task_description_for_bootstrap(task);
     ctx.push_str(&format!("# Task: {}\n{task_desc}\n\n", task.title));
+
+    // Phase 4: splice the pre-resolved paths/symbols block immediately
+    // after the task description, but only on the first attempt. On
+    // retries, the agent already saw this once and Phase 5's
+    // decomposition (when wired) provides a different starting context;
+    // re-injecting the same hints just wastes tokens and hides the
+    // signal that this is a re-run.
+    if attempt == 0 {
+        if let Some(block) = enrichment_block {
+            let trimmed = block.trim();
+            if !trimmed.is_empty() {
+                ctx.push_str(trimmed);
+                ctx.push_str("\n\n");
+            }
+        }
+    }
 
     if !session.summary_of_previous_context.is_empty() {
         ctx.push_str(&format!(
@@ -234,7 +261,8 @@ mod tests {
         let session = SessionInfo {
             summary_of_previous_context: "",
         };
-        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
         assert!(ctx.contains("myproj"));
         assert!(ctx.contains("Do the thing"));
         assert!(ctx.contains("Spec 1"));
@@ -272,7 +300,8 @@ mod tests {
         let session = SessionInfo {
             summary_of_previous_context: "",
         };
-        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[dep], "");
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[dep], "", 0, None);
         assert!(ctx.contains("Prior task"));
         assert!(ctx.contains("src/lib.rs (modify)"));
     }
@@ -330,7 +359,8 @@ mod tests {
         let session = SessionInfo {
             summary_of_previous_context: "",
         };
-        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
         assert!(ctx.contains("Do this:"));
         assert!(ctx.contains("Done."));
         assert!(!ctx.contains("Linear1D"));
@@ -360,7 +390,8 @@ mod tests {
         let session = SessionInfo {
             summary_of_previous_context: "",
         };
-        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
         assert!(ctx.contains("# Spec: Big spec"));
         assert!(ctx.contains("spec truncated to fit body cap"));
         assert!(
@@ -392,7 +423,8 @@ mod tests {
         let session = SessionInfo {
             summary_of_previous_context: "",
         };
-        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
         assert!(ctx.contains("tiny body"));
         assert!(!ctx.contains("spec truncated"));
     }
@@ -422,7 +454,8 @@ mod tests {
         let session = SessionInfo {
             summary_of_previous_context: "",
         };
-        let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "");
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
         assert!(
             !ctx.contains("This task involves writing tests"),
             "verify-before-writing block must stay out of the task context"
@@ -434,6 +467,149 @@ mod tests {
         assert!(
             ctx.contains("Make the changes this task requires, then call task_done."),
             "round-2 directive must replace the deleted preamble"
+        );
+    }
+
+    /// Phase 4: on `attempt == 0` an enrichment block is spliced in
+    /// immediately after the task header.
+    #[test]
+    fn build_agentic_task_context_first_attempt_includes_block() {
+        let project = ProjectInfo {
+            name: "p",
+            description: "",
+            folder_path: "/tmp",
+            build_command: None,
+            test_command: None,
+        };
+        let spec = SpecInfo {
+            title: "s",
+            markdown_contents: "",
+        };
+        let task = TaskInfo {
+            title: "Implement enqueue",
+            description: "Wire Publisher::enqueue in crates/zero-network/src/publisher.rs",
+            execution_notes: "",
+            files_changed: &[],
+        };
+        let session = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let block = "## Pre-resolved context (from task description)\n\n\
+                     Files mentioned in the task that exist in the workspace:\n\
+                     - `crates/zero-network/src/publisher.rs`\n\n\
+                     Use these as starting points; you do NOT need to re-list \
+                     the directory or re-grep for these symbols.\n";
+        let ctx = build_agentic_task_context(
+            &project,
+            &spec,
+            &task,
+            &session,
+            &[],
+            "",
+            0,
+            Some(block),
+        );
+        assert!(
+            ctx.contains("## Pre-resolved context (from task description)"),
+            "first attempt must include the enrichment header"
+        );
+        assert!(
+            ctx.contains("crates/zero-network/src/publisher.rs"),
+            "first attempt must include the resolved path"
+        );
+        // The block must land between the task header and the trailing
+        // directive so the model reads it before the "make changes"
+        // instruction. Empirically: task header index < block index <
+        // directive index.
+        let task_idx = ctx
+            .find("# Task: Implement enqueue")
+            .expect("task header present");
+        let block_idx = ctx
+            .find("## Pre-resolved context")
+            .expect("block present");
+        let directive_idx = ctx
+            .find("Make the changes this task requires")
+            .expect("directive present");
+        assert!(
+            task_idx < block_idx && block_idx < directive_idx,
+            "block must be spliced between task header and directive \
+             (task={task_idx}, block={block_idx}, directive={directive_idx})"
+        );
+    }
+
+    /// Phase 4: on `attempt > 0` the enrichment block is suppressed
+    /// even when the caller passes one, so retries don't pay the
+    /// resolve cost twice.
+    #[test]
+    fn build_agentic_task_context_retry_attempt_skips_block() {
+        let project = ProjectInfo {
+            name: "p",
+            description: "",
+            folder_path: "/tmp",
+            build_command: None,
+            test_command: None,
+        };
+        let spec = SpecInfo {
+            title: "s",
+            markdown_contents: "",
+        };
+        let task = TaskInfo {
+            title: "Implement enqueue",
+            description: "Wire Publisher::enqueue in crates/zero-network/src/publisher.rs",
+            execution_notes: "previous attempt timed out",
+            files_changed: &[],
+        };
+        let session = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let block = "## Pre-resolved context (from task description)\n\n\
+                     Files mentioned in the task that exist in the workspace:\n\
+                     - `crates/zero-network/src/publisher.rs`\n";
+        let ctx = build_agentic_task_context(
+            &project,
+            &spec,
+            &task,
+            &session,
+            &[],
+            "",
+            1,
+            Some(block),
+        );
+        assert!(
+            !ctx.contains("## Pre-resolved context"),
+            "retry must NOT include the enrichment header, got:\n{ctx}"
+        );
+    }
+
+    /// Phase 4: an empty block on attempt 0 must not emit an orphan
+    /// header. Tests the trim-and-skip path in `build_agentic_task_context`.
+    #[test]
+    fn build_agentic_task_context_empty_block_is_skipped() {
+        let project = ProjectInfo {
+            name: "p",
+            description: "",
+            folder_path: "/tmp",
+            build_command: None,
+            test_command: None,
+        };
+        let spec = SpecInfo {
+            title: "s",
+            markdown_contents: "",
+        };
+        let task = TaskInfo {
+            title: "T",
+            description: "d",
+            execution_notes: "",
+            files_changed: &[],
+        };
+        let session = SessionInfo {
+            summary_of_previous_context: "",
+        };
+        let ctx =
+            build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, Some("   \n"));
+        assert!(
+            !ctx.contains("Pre-resolved context"),
+            "empty/whitespace block must not produce a header"
         );
     }
 }

@@ -73,6 +73,15 @@ impl DevLoopAutomaton {
             ctx.state.get(STATE_FAILURE_REASONS).unwrap_or_default();
         let prior_failure = failure_reasons.get(&task.id).cloned().unwrap_or_default();
         let work_log: Vec<String> = ctx.state.get(STATE_WORK_LOG).unwrap_or_default();
+        // Phase 4: the dev-loop's per-task retry counter is the source
+        // of truth for `attempt`. 0 on the first run; 1, 2, ... after
+        // each `try_retry_failed` increment. The counter is the same
+        // one the dev-loop already uses to gate retries against
+        // `MAX_RETRIES_PER_TASK`, so we don't introduce a parallel
+        // notion of "how many times has this task been tried".
+        let retry_counts: HashMap<String, u32> =
+            ctx.state.get(STATE_RETRY_COUNTS).unwrap_or_default();
+        let attempt = retry_counts.get(&task.id).copied().unwrap_or(0);
         let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
 
         let project_info = ProjectInfo {
@@ -110,6 +119,7 @@ impl DevLoopAutomaton {
             dep_api_context: "",
             member_count: 1,
             tools,
+            attempt,
         };
 
         let cancel = ctx.cancellation_token().clone();

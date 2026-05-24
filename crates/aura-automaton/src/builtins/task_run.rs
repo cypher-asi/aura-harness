@@ -89,6 +89,14 @@ struct TaskRunConfig {
     /// `AgenticTaskParams::work_log` expects. Defaults to empty for
     /// initial attempts.
     work_log: Vec<String>,
+    /// Phase 4: 0-indexed retry counter. `0` is a fresh task, `1+` is
+    /// a retry. Threaded into `AgenticTaskParams::attempt` so the
+    /// agent runner can decide whether to splice the pre-resolved
+    /// paths/symbols block into the initial user message. Defaults to
+    /// 0 when omitted, and back-derived from `prior_failure` being
+    /// present when the caller didn't pass an explicit `attempt` (a
+    /// non-empty prior_failure implies at least one prior attempt).
+    attempt: u32,
 }
 
 impl TaskRunConfig {
@@ -122,12 +130,22 @@ impl TaskRunConfig {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // Phase 4: prefer an explicit `attempt` if the caller passes
+        // one; otherwise infer "≥1 prior attempt" from a non-empty
+        // `prior_failure` (older callers always shipped that field on
+        // retries). Bare initial runs end up with `attempt = 0`.
+        let attempt = config
+            .get("attempt")
+            .and_then(serde_json::Value::as_u64)
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+            .unwrap_or_else(|| u32::from(prior_failure.is_some()));
         Ok(Self {
             project_id,
             task_id,
             agent_instance_id,
             prior_failure,
             work_log,
+            attempt,
         })
     }
 }
@@ -294,6 +312,7 @@ impl TaskRunAutomaton {
             dep_api_context: "",
             member_count: 1,
             tools,
+            attempt: cfg.attempt,
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
@@ -404,6 +423,36 @@ mod tests {
         assert_eq!(cfg.agent_instance_id, "default");
         assert!(cfg.prior_failure.is_none());
         assert!(cfg.work_log.is_empty());
+        assert_eq!(
+            cfg.attempt, 0,
+            "fresh task without prior_failure must default to attempt 0"
+        );
+    }
+
+    #[test]
+    fn from_json_infers_attempt_from_prior_failure_presence() {
+        // Older callers ship a non-empty `prior_failure` on retries
+        // but no explicit `attempt`. Treat that as ≥1 attempt so the
+        // Phase 4 enrichment block is suppressed on the re-run.
+        let cfg = TaskRunConfig::from_json(&json!({
+            "project_id": "proj-1",
+            "task_id": "task-1",
+            "prior_failure": "stream timeout",
+        }))
+        .expect("parse minimal config");
+        assert_eq!(cfg.attempt, 1);
+    }
+
+    #[test]
+    fn from_json_prefers_explicit_attempt_over_inferred() {
+        let cfg = TaskRunConfig::from_json(&json!({
+            "project_id": "proj-1",
+            "task_id": "task-1",
+            "prior_failure": "stream timeout",
+            "attempt": 3,
+        }))
+        .expect("parse minimal config");
+        assert_eq!(cfg.attempt, 3);
     }
 
     #[test]
