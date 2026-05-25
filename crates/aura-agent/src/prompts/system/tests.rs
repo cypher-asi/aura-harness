@@ -3,6 +3,7 @@ use crate::prompts::AgentIdentity;
 
 fn test_project(folder: &str) -> ProjectInfo<'_> {
     ProjectInfo {
+        project_id: None,
         name: "TestProj",
         description: "Test project description",
         folder_path: folder,
@@ -168,7 +169,7 @@ fn agentic_prompt_uses_test_command_env_override_when_set() {
 #[test]
 fn chat_system_prompt_uses_base_when_custom_empty() {
     let project = test_project("/nonexistent/path");
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
     assert!(prompt.starts_with("<chat_capabilities>\n"));
     assert!(prompt.contains(CHAT_SYSTEM_PROMPT_BASE));
     assert!(prompt.contains("TestProj"));
@@ -177,7 +178,7 @@ fn chat_system_prompt_uses_base_when_custom_empty() {
 #[test]
 fn chat_system_prompt_prepends_custom() {
     let project = test_project("/nonexistent/path");
-    let prompt = build_chat_system_prompt(&project, "Custom instructions here.");
+    let prompt = build_chat_system_prompt(&project, "Custom instructions here.", None);
     assert!(prompt.starts_with("Custom instructions here."));
     assert!(prompt.contains(CHAT_SYSTEM_PROMPT_BASE));
     assert!(prompt.contains("TestProj"));
@@ -186,13 +187,14 @@ fn chat_system_prompt_prepends_custom() {
 #[test]
 fn chat_system_prompt_includes_project_details() {
     let project = ProjectInfo {
+        project_id: None,
         name: "MyApp",
         description: "A web application",
         folder_path: "/nonexistent/path",
         build_command: Some("npm run build"),
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
     assert!(prompt.contains("MyApp"));
     assert!(prompt.contains("A web application"));
     assert!(prompt.contains("npm run build"));
@@ -209,13 +211,14 @@ fn chat_system_prompt_drops_workspace_overview_helpers() {
     std::fs::write(dir.path().join("package.json"), "{}").unwrap();
 
     let project = ProjectInfo {
+        project_id: None,
         name: "MultiStack",
         description: "",
         folder_path: &dir.path().to_string_lossy(),
         build_command: None,
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
     assert!(
         !prompt.contains("### Project Structure"),
         "Project Structure overview must not appear in the chat prompt: {prompt}"
@@ -241,13 +244,14 @@ fn chat_system_prompt_includes_agents_md_when_present() {
 
     let folder = dir.path().to_string_lossy().into_owned();
     let project = ProjectInfo {
+        project_id: None,
         name: "WithAgents",
         description: "",
         folder_path: &folder,
         build_command: None,
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
 
     assert!(
         prompt.contains(AGENTS_MD_SECTION_TAG_PREFIX),
@@ -270,13 +274,14 @@ fn chat_system_prompt_handles_case_insensitive_variants() {
 
     let folder = dir.path().to_string_lossy().into_owned();
     let project = ProjectInfo {
+        project_id: None,
         name: "LowerAgents",
         description: "",
         folder_path: &folder,
         build_command: None,
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
 
     assert!(prompt.contains(AGENTS_MD_SECTION_TAG_PREFIX));
     assert!(prompt.contains("Lowercase variant body."));
@@ -291,13 +296,14 @@ fn chat_system_prompt_omits_agents_md_when_absent() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
     let project = ProjectInfo {
+        project_id: None,
         name: "NoAgents",
         description: "",
         folder_path: &folder,
         build_command: None,
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
 
     assert!(
         !prompt.contains(AGENTS_MD_SECTION_TAG_PREFIX),
@@ -313,13 +319,14 @@ fn chat_system_prompt_skips_agents_md_when_over_size_cap() {
 
     let folder = dir.path().to_string_lossy().into_owned();
     let project = ProjectInfo {
+        project_id: None,
         name: "BigAgents",
         description: "",
         folder_path: &folder,
         build_command: None,
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
 
     assert!(
         !prompt.contains(AGENTS_MD_SECTION_TAG_PREFIX),
@@ -334,13 +341,14 @@ fn chat_system_prompt_skips_agents_md_when_over_size_cap() {
 #[test]
 fn chat_system_prompt_skips_agents_md_when_folder_missing() {
     let project = ProjectInfo {
+        project_id: None,
         name: "Ghost",
         description: "",
         folder_path: "/definitely/does/not/exist/aura/agents/md/test",
         build_command: None,
         test_command: None,
     };
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
 
     assert!(
         !prompt.contains(AGENTS_MD_SECTION_TAG_PREFIX),
@@ -359,6 +367,7 @@ fn agentic_prompt_includes_agents_md_when_present() {
 
     let folder = dir.path().to_string_lossy().into_owned();
     let project = ProjectInfo {
+        project_id: None,
         name: "AgenticAgents",
         description: "",
         folder_path: &folder,
@@ -376,6 +385,7 @@ fn agentic_prompt_omits_agents_md_when_absent() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
     let project = ProjectInfo {
+        project_id: None,
         name: "AgenticNoAgents",
         description: "",
         folder_path: &folder,
@@ -494,6 +504,7 @@ fn scrub(s: &str, dir: &str) -> String {
 
 fn demo_project(folder: &str) -> ProjectInfo<'_> {
     ProjectInfo {
+        project_id: None,
         name: "Demo",
         description: "A demo project.",
         folder_path: folder,
@@ -596,7 +607,7 @@ fn snapshot_chat_default() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
     let project = demo_project(&folder);
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
     let scrubbed = scrub(&prompt, &folder);
     assert_snapshot("chat_default", &scrubbed);
 }
@@ -611,7 +622,74 @@ fn snapshot_chat_with_agents_md() {
     .unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
     let project = demo_project(&folder);
-    let prompt = build_chat_system_prompt(&project, "");
+    let prompt = build_chat_system_prompt(&project, "", None);
     let scrubbed = scrub(&prompt, &folder);
     assert_snapshot("chat_with_agents_md", &scrubbed);
+}
+
+#[test]
+fn snapshot_chat_with_identity() {
+    // Chat-WS migration: identity / skills / operator-prompt populated,
+    // no AGENTS.md. Mirrors the dev-loop identity snapshot but with the
+    // chat-preset section selection (`<chat_capabilities>` instead of
+    // `<dev_loop_workflow>` + `<tool_discipline>`). The `<project_context>`
+    // block carries `project_id` because the chat path threads the
+    // typed `ChatProjectInfoWire.id` through `ProjectInfo::project_id`
+    // — pinning that the dev-loop continues to omit `project_id` while
+    // chat surfaces the legacy aura-os field for tool grounding.
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        project_id: Some("00000000-0000-0000-0000-000000000001"),
+        name: "Demo",
+        description: "A demo project.",
+        folder_path: &folder,
+        build_command: Some("cargo build"),
+        test_command: Some("cargo test"),
+    };
+    let skills = vec!["Rust".to_string(), "TypeScript".to_string()];
+    let agent = AgentInfo {
+        identity: Some(AgentIdentity {
+            name: "Atlas",
+            role: "Engineer",
+            personality: "Precise and methodical.",
+        }),
+        skills: &skills,
+        system_prompt: Some("Use TDD on every change."),
+    };
+    let prompt = build_chat_system_prompt(&project, "", Some(&agent));
+    let scrubbed = scrub(&prompt, &folder);
+    assert_snapshot("chat_with_identity", &scrubbed);
+}
+
+#[test]
+fn snapshot_chat_with_identity_and_agents_md() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("AGENTS.md"),
+        "Always run cargo check before tests.\nNo emojis.\n",
+    )
+    .unwrap();
+    let folder = dir.path().to_string_lossy().into_owned();
+    let project = ProjectInfo {
+        project_id: Some("00000000-0000-0000-0000-000000000001"),
+        name: "Demo",
+        description: "A demo project.",
+        folder_path: &folder,
+        build_command: Some("cargo build"),
+        test_command: Some("cargo test"),
+    };
+    let skills = vec!["Rust".to_string(), "TypeScript".to_string()];
+    let agent = AgentInfo {
+        identity: Some(AgentIdentity {
+            name: "Atlas",
+            role: "Engineer",
+            personality: "Precise and methodical.",
+        }),
+        skills: &skills,
+        system_prompt: Some("Use TDD on every change."),
+    };
+    let prompt = build_chat_system_prompt(&project, "", Some(&agent));
+    let scrubbed = scrub(&prompt, &folder);
+    assert_snapshot("chat_with_identity_and_agents_md", &scrubbed);
 }

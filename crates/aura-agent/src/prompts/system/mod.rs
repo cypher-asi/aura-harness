@@ -132,8 +132,26 @@ pub fn agentic_execution_system_prompt(
 /// `custom_system_prompt` is still prepended verbatim above the
 /// builder output so operator overrides survive the bracketed-schema
 /// migration.
+///
+/// The follow-up "chat WS migration" PR threaded an optional
+/// [`AgentInfo`] through so a populated identity / skills / operator
+/// prompt produces the corresponding `<agent_identity>` /
+/// `<agent_skills>` / `<agent_system_prompt>` blocks before the
+/// `<project_context>` envelope. Section ordering matches the
+/// `apply_init` typed-fields path used by the chat WS surface.
+/// Callers without an agent context pass `None` and those sections
+/// are dropped silently — keeping the chat-default snapshot
+/// byte-identical with PR C.
 #[must_use]
-pub fn build_chat_system_prompt(project: &ProjectInfo<'_>, custom_system_prompt: &str) -> String {
+pub fn build_chat_system_prompt(
+    project: &ProjectInfo<'_>,
+    custom_system_prompt: &str,
+    agent: Option<&AgentInfo<'_>>,
+) -> String {
+    let identity = agent.and_then(|a| a.identity);
+    let skills_owned: Vec<String> = agent.map(|a| a.skills.to_vec()).unwrap_or_default();
+    let agent_system_prompt = agent.and_then(|a| a.system_prompt);
+
     let mut prompt = String::new();
     if !custom_system_prompt.is_empty() {
         prompt.push_str(custom_system_prompt);
@@ -142,6 +160,9 @@ pub fn build_chat_system_prompt(project: &ProjectInfo<'_>, custom_system_prompt:
     prompt.push_str(
         &SystemPromptBuilder::new()
             .chat_capabilities()
+            .agent_identity(identity)
+            .agent_skills(&skills_owned)
+            .agent_system_prompt(agent_system_prompt)
             .project_context(project)
             .agents_md_from_workspace(project.folder_path)
             .build(),

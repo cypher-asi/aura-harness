@@ -57,6 +57,10 @@ fn init_with_project_path(path: &std::path::Path) -> SessionInit {
         provider_overrides: None,
         intent_classifier: None,
         agent_permissions: AgentPermissionsWire::default(),
+        agent_identity: None,
+        agent_skills: Vec::new(),
+        agent_system_prompt: None,
+        project_info: None,
     }
 }
 
@@ -149,6 +153,10 @@ fn apply_init_builds_intent_classifier_when_spec_present() {
         provider_overrides: None,
         intent_classifier: Some(spec),
         agent_permissions: AgentPermissionsWire::default(),
+        agent_identity: None,
+        agent_skills: Vec::new(),
+        agent_system_prompt: None,
+        project_info: None,
     };
 
     session.apply_init(init).unwrap();
@@ -199,6 +207,10 @@ fn apply_init_leaves_intent_classifier_none_when_spec_absent() {
         provider_overrides: None,
         intent_classifier: None,
         agent_permissions: AgentPermissionsWire::default(),
+        agent_identity: None,
+        agent_skills: Vec::new(),
+        agent_system_prompt: None,
+        project_info: None,
     };
     session.apply_init(init).unwrap();
     assert!(session.intent_classifier.is_none());
@@ -233,6 +245,10 @@ fn blank_session_init() -> SessionInit {
         provider_overrides: None,
         intent_classifier: None,
         agent_permissions: AgentPermissionsWire::default(),
+        agent_identity: None,
+        agent_skills: Vec::new(),
+        agent_system_prompt: None,
+        project_info: None,
     }
 }
 
@@ -393,6 +409,89 @@ fn apply_init_applies_ceo_preset_when_wired_explicitly() {
     };
     session.apply_init(init).unwrap();
     assert_eq!(session.agent_permissions, AgentPermissions::ceo_preset());
+}
+
+/// Chat-WS migration regression: when ANY typed-field is populated
+/// on `SessionInit`, `apply_init` must build the session prompt via
+/// `SystemPromptBuilder` from those typed inputs and ignore the
+/// legacy `system_prompt: Option<String>` payload.
+///
+/// Pins the section ordering and per-field rendering so an aura-os
+/// caller that stops baking the prompt and starts forwarding typed
+/// fields gets a structurally-equivalent system prompt out the
+/// other side. The harness-side helper itself has dedicated
+/// snapshot coverage in
+/// `aura-agent::prompts::system::tests::snapshot_chat_with_identity*`;
+/// this test pins the wiring through `apply_init`.
+#[test]
+fn apply_init_typed_fields_path_takes_priority_over_legacy_system_prompt() {
+    use aura_protocol::{AgentIdentityWire, ChatProjectInfoWire};
+
+    let mut session = test_session(None);
+    let mut init = blank_session_init();
+    init.system_prompt = Some("LEGACY_PRE_BAKED_PROMPT_THAT_MUST_BE_IGNORED".to_string());
+    init.agent_identity = Some(AgentIdentityWire {
+        name: "Atlas".into(),
+        role: "Engineer".into(),
+        personality: "Precise and methodical.".into(),
+    });
+    init.agent_skills = vec!["Rust".into(), "TypeScript".into()];
+    init.agent_system_prompt = Some("Use TDD on every change.".into());
+    init.project_info = Some(ChatProjectInfoWire {
+        id: "00000000-0000-0000-0000-000000000001".into(),
+        name: "Demo".into(),
+        description: "A demo project.".into(),
+        workspace_root: String::new(),
+        build_command: "cargo build".into(),
+        test_command: "cargo test".into(),
+    });
+
+    session.apply_init(init).unwrap();
+
+    let prompt = &session.system_prompt;
+
+    assert!(
+        !prompt.contains("LEGACY_PRE_BAKED_PROMPT_THAT_MUST_BE_IGNORED"),
+        "typed-fields path must ignore the legacy system_prompt payload; got prompt:\n{prompt}",
+    );
+
+    assert!(prompt.contains("<chat_capabilities>"), "missing <chat_capabilities>: {prompt}");
+    assert!(prompt.contains("<agent_identity>"), "missing <agent_identity>: {prompt}");
+    assert!(prompt.contains("name: Atlas"), "missing identity name: {prompt}");
+    assert!(prompt.contains("role: Engineer"), "missing identity role: {prompt}");
+    assert!(prompt.contains("Precise and methodical"), "missing personality: {prompt}");
+    assert!(prompt.contains("<agent_skills>"), "missing <agent_skills>: {prompt}");
+    assert!(prompt.contains("- Rust"), "missing Rust skill: {prompt}");
+    assert!(prompt.contains("- TypeScript"), "missing TypeScript skill: {prompt}");
+    assert!(prompt.contains("<agent_system_prompt>"), "missing <agent_system_prompt>: {prompt}");
+    assert!(prompt.contains("Use TDD on every change."), "missing operator prompt body: {prompt}");
+    assert!(prompt.contains("<project_context>"), "missing <project_context>: {prompt}");
+    assert!(
+        prompt.contains("project_id: 00000000-0000-0000-0000-000000000001"),
+        "missing project id: {prompt}",
+    );
+    assert!(prompt.contains("project_name: Demo"), "missing project name: {prompt}");
+    assert!(prompt.contains("build_command: cargo build"), "missing build command: {prompt}");
+    assert!(prompt.contains("test_command: cargo test"), "missing test command: {prompt}");
+}
+
+/// Chat-WS migration regression: when EVERY typed field is absent
+/// or blank, `apply_init` must fall back to the legacy
+/// `SessionInit.system_prompt` payload verbatim. This preserves
+/// compatibility with older callers (and any test fixtures) that
+/// were written before the typed-fields wire shape landed.
+#[test]
+fn apply_init_falls_back_to_legacy_system_prompt_when_typed_fields_empty() {
+    let mut session = test_session(None);
+    let mut init = blank_session_init();
+    init.system_prompt = Some("LEGACY_BAKED_BODY_VERBATIM".to_string());
+
+    session.apply_init(init).unwrap();
+
+    assert_eq!(
+        session.system_prompt, "LEGACY_BAKED_BODY_VERBATIM",
+        "with all typed-fields absent, apply_init must use SessionInit.system_prompt verbatim",
+    );
 }
 
 #[test]

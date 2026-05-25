@@ -4,6 +4,7 @@ use crate::verify::error_types::{parse_error_references, BuildFixAttemptRecord};
 
 fn test_project() -> ProjectInfo<'static> {
     ProjectInfo {
+        project_id: None,
         name: "test",
         description: "Test project",
         folder_path: "/tmp/test",

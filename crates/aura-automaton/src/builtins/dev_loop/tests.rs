@@ -292,6 +292,7 @@ fn envelope_roundtrips_into_system_prompt_tags() {
     let info = envelope.as_agent_info().expect("populated");
 
     let project = aura_agent::prompts::ProjectInfo {
+        project_id: None,
         name: "Demo",
         description: "A demo project.",
         folder_path: "/nonexistent",
@@ -326,6 +327,7 @@ fn empty_envelope_keeps_identity_sections_off() {
     assert!(info.is_none());
 
     let project = aura_agent::prompts::ProjectInfo {
+        project_id: None,
         name: "Demo",
         description: "A demo project.",
         folder_path: "/nonexistent",

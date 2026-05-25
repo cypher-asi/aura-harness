@@ -10,6 +10,8 @@ use std::collections::HashMap;
 #[cfg(feature = "typescript")]
 use ts_rs::TS;
 
+use crate::agent_identity::AgentIdentityWire;
+use crate::chat_project_info::ChatProjectInfoWire;
 use crate::common::{ToolApprovalDecision, ToolApprovalRemember};
 use crate::installed::{InstalledIntegration, InstalledTool};
 use crate::permissions::{AgentPermissionsWire, AgentToolPermissionsWire};
@@ -167,6 +169,37 @@ pub struct SessionInit {
     /// an empty map means "explicitly inherit the user default".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_permissions: Option<AgentToolPermissionsWire>,
+    /// Chat-WS migration: typed agent identity (name / role /
+    /// personality) the harness's `SystemPromptBuilder` consumes for
+    /// the chat path's `<agent_identity>` section. Mirrors the
+    /// dev-loop wire field on `AutomatonStartRequest`. When absent or
+    /// every sub-field is blank, the harness keeps `<agent_identity>`
+    /// out of the assembled prompt and — together with the other
+    /// typed fields — falls back to the legacy
+    /// [`SessionInit::system_prompt`] path for backward compatibility
+    /// with older callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_identity: Option<AgentIdentityWire>,
+    /// Chat-WS migration: operator-curated skills list rendered as
+    /// `<agent_skills>`. Empty list ⇒ the harness drops the section
+    /// entirely.
+    #[serde(default)]
+    pub agent_skills: Vec<String>,
+    /// Chat-WS migration: operator-authored system prompt (the
+    /// "system prompt" textarea on the agent template, plus any
+    /// server-baked addenda such as the project-state continuity
+    /// snapshot or plan-mode suffix). Empty / `None` ⇒ no
+    /// `<agent_system_prompt>` section is rendered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_system_prompt: Option<String>,
+    /// Chat-WS migration: typed project descriptor consumed by the
+    /// harness's `SystemPromptBuilder.project_context()`. When
+    /// populated, the harness assembles the chat system prompt via
+    /// the builder's `chat_capabilities + project_context + agents_md`
+    /// preset (plus identity sections when set) and ignores the
+    /// legacy [`SessionInit::system_prompt`] field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_info: Option<ChatProjectInfoWire>,
 }
 
 /// Keyword-driven classifier spec shipped in [`SessionInit`].

@@ -21,6 +21,9 @@ use crate::prompts::ProjectInfo;
 #[must_use]
 pub(crate) fn render(project: &ProjectInfo<'_>) -> String {
     let mut body = String::new();
+    if let Some(pid) = project.project_id.map(str::trim).filter(|s| !s.is_empty()) {
+        body.push_str(&format!("project_id: {pid}\n"));
+    }
     body.push_str(&format!("project_name: {}\n", project.name));
     let description = project.description.trim();
     if !description.is_empty() {

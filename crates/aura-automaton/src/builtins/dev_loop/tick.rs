@@ -245,6 +245,7 @@ impl DevLoopAutomaton {
             .unwrap_or_else(|| project.path.clone());
 
         let project_info = ProjectInfo {
+            project_id: None,
             name: &project.name,
             description: project.description.as_deref().unwrap_or(""),
             folder_path: &effective_path,

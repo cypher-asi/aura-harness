@@ -34,6 +34,7 @@
 //! see `aura_core::AgentPermissions::contains` on the harness side.
 
 pub mod agent_identity;
+pub mod chat_project_info;
 pub mod client;
 pub mod common;
 pub mod installed;
@@ -41,6 +42,7 @@ pub mod permissions;
 pub mod server;
 
 pub use agent_identity::AgentIdentityWire;
+pub use chat_project_info::ChatProjectInfoWire;
 pub use client::{
     ApprovalResponse, ConversationMessage, GenerationRequest, InboundMessage, IntentClassifierRule,
     IntentClassifierSpec, MessageAttachment, SessionInit, SessionModelOverrides,

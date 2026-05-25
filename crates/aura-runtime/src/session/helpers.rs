@@ -1307,6 +1307,10 @@ mod tests {
             }),
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
+            agent_identity: None,
+            agent_skills: Vec::new(),
+            agent_system_prompt: None,
+            project_info: None,
         };
 
         handle_session_init(&mut session, invalid_init, &outbound_tx, &ctx).await;
@@ -1344,6 +1348,10 @@ mod tests {
             provider_overrides: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
+            agent_identity: None,
+            agent_skills: Vec::new(),
+            agent_system_prompt: None,
+            project_info: None,
         };
 
         handle_session_init(&mut session, retry_init, &outbound_tx, &ctx).await;
@@ -1394,6 +1402,10 @@ mod tests {
             provider_overrides: None,
             intent_classifier: None,
             agent_permissions: AgentPermissionsWire::default(),
+            agent_identity: None,
+            agent_skills: Vec::new(),
+            agent_system_prompt: None,
+            project_info: None,
         };
 
         let (outbound_tx, mut outbound_rx) = mpsc::channel(8);

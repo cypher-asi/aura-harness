@@ -9,13 +9,17 @@
 
 use crate::protocol::{self, SessionInit};
 use crate::session::ToolApprovalBroker;
-use aura_agent::{prompts::default_system_prompt, AgentLoopConfig};
+use aura_agent::prompts::{
+    default_system_prompt, AgentIdentity, ProjectInfo, SystemPromptBuilder,
+};
+use aura_agent::AgentLoopConfig;
 use aura_core::{
     AgentId, AgentPermissions, AgentScope, AgentToolPermissions, Capability,
     InstalledIntegrationDefinition, InstalledToolDefinition,
 };
 use aura_protocol::{
-    AgentPermissionsWire, CapabilityWire, IntentClassifierSpec, SessionModelOverrides,
+    AgentIdentityWire, AgentPermissionsWire, CapabilityWire, ChatProjectInfoWire,
+    IntentClassifierSpec, SessionModelOverrides,
 };
 use aura_reasoner::{Message, ModelProvider, ToolDefinition};
 use aura_tools::IntentClassifier;
@@ -127,6 +131,16 @@ pub struct Session {
     pub(crate) tool_permissions: Option<AgentToolPermissions>,
     /// Live approval broker attached to this WebSocket connection.
     pub(crate) tool_approval_broker: Option<Arc<ToolApprovalBroker>>,
+    /// Chat-WS migration: set when [`Session::apply_init`] assembled
+    /// [`Self::system_prompt`] from the typed identity / project_info
+    /// wire fields via [`SystemPromptBuilder`]. The chat
+    /// `<project_context>` block already carries the workspace `folder:`
+    /// line (and any `<agents_md>` body), so [`Self::agent_loop_config`]
+    /// skips the legacy `## Workspace` markdown addendum on this path
+    /// — the addendum is only meaningful for legacy callers that
+    /// shipped a pre-baked prompt string with no project metadata of
+    /// its own.
+    pub(crate) typed_chat_prompt: bool,
 }
 
 impl Session {
@@ -173,13 +187,38 @@ impl Session {
             user_id: String::new(),
             tool_permissions: None,
             tool_approval_broker: None,
+            typed_chat_prompt: false,
         }
     }
 
     /// Apply a `session_init` message to configure this session.
     pub(super) fn apply_init(&mut self, init: SessionInit) -> Result<(), String> {
-        if let Some(prompt) = init.system_prompt {
-            self.system_prompt = prompt;
+        // Chat-WS migration: when ANY of the typed identity / project
+        // info fields are populated, the harness assembles the system
+        // prompt itself via [`SystemPromptBuilder`] (chat preset:
+        // `chat_capabilities` + identity sections + `project_context`
+        // + `agents_md`). This path takes priority over the legacy
+        // pre-baked `init.system_prompt` string. When ALL of the new
+        // fields are absent / empty we fall through to the legacy
+        // path so older callers (and the dev-loop / TUI surfaces)
+        // continue to work byte-identically.
+        let typed_prompt = build_typed_chat_system_prompt(
+            init.agent_identity.as_ref(),
+            &init.agent_skills,
+            init.agent_system_prompt.as_deref(),
+            init.project_info.as_ref(),
+        );
+        match typed_prompt {
+            Some(prompt) => {
+                self.system_prompt = prompt;
+                self.typed_chat_prompt = true;
+            }
+            None => {
+                if let Some(prompt) = init.system_prompt {
+                    self.system_prompt = prompt;
+                }
+                self.typed_chat_prompt = false;
+            }
         }
         if let Some(model) = init.model {
             self.context_window_tokens = context_window_for_model(&model);
@@ -335,15 +374,22 @@ impl Session {
             self.system_prompt.clone()
         };
 
-        let system_prompt = if let Some(ref pp) = self.project_path {
-            format!(
+        // Chat-WS migration: the typed-fields path renders
+        // `<project_context>` with the workspace folder inline, so the
+        // pre-existing `## Workspace` markdown addendum is redundant
+        // (and would violate the bracketed-tag schema). Skip it on
+        // that path. Legacy callers (which leave
+        // [`Self::typed_chat_prompt`] `false`) keep the addendum so
+        // their pre-baked prompts continue to advertise the workspace
+        // root the way they always have.
+        let system_prompt = match (&self.project_path, self.typed_chat_prompt) {
+            (Some(pp), false) => format!(
                 "{base_prompt}\n\n## Workspace\n\n\
                  Your workspace root is `{}`. All relative file paths are resolved against this directory. \
                  When referring to files, use paths relative to this root.",
                 pp.display()
-            )
-        } else {
-            base_prompt
+            ),
+            _ => base_prompt,
         };
 
         // Wire-protocol `max_turns` is `u32`; map the `u32::MAX`
@@ -431,6 +477,71 @@ pub(crate) fn agent_loop_stream_timeout() -> std::time::Duration {
         .unwrap_or(REASONER_DEFAULT_TIMEOUT_MS);
     std::time::Duration::from_millis(reasoner_ms)
         + std::time::Duration::from_secs(STREAM_TIMEOUT_MARGIN_SECS)
+}
+
+/// Chat-WS migration helper: assemble the chat-path system prompt from
+/// the typed [`SessionInit`] identity / project info wire fields via
+/// [`SystemPromptBuilder`].
+///
+/// Returns `Some(prompt)` when at least one typed field is populated
+/// (in which case the caller stamps [`Session::typed_chat_prompt`] and
+/// ignores the legacy `system_prompt` string), and `None` when every
+/// typed field is absent / blank — letting [`Session::apply_init`]
+/// fall back to the legacy path for backward compatibility with older
+/// callers (and the TUI / dev-loop surfaces that never populate these
+/// fields).
+///
+/// Section selection mirrors `aura_agent::prompts::build_chat_system_prompt`:
+/// `chat_capabilities` first, then any populated identity sections,
+/// then `<project_context>` and the AGENTS.md probe.
+fn build_typed_chat_system_prompt(
+    identity_wire: Option<&AgentIdentityWire>,
+    skills: &[String],
+    agent_system_prompt: Option<&str>,
+    project_wire: Option<&ChatProjectInfoWire>,
+) -> Option<String> {
+    let identity_populated = identity_wire.map(|w| !w.is_empty()).unwrap_or(false);
+    let skills_populated = skills.iter().any(|s| !s.trim().is_empty());
+    let agent_prompt_populated = agent_system_prompt
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let project_populated = project_wire.map(|w| !w.is_empty()).unwrap_or(false);
+
+    if !identity_populated && !skills_populated && !agent_prompt_populated && !project_populated {
+        return None;
+    }
+
+    let identity = identity_wire.filter(|w| !w.is_empty()).map(|w| AgentIdentity {
+        name: w.name.as_str(),
+        role: w.role.as_str(),
+        personality: w.personality.as_str(),
+    });
+    let mut builder = SystemPromptBuilder::new()
+        .chat_capabilities()
+        .agent_identity(identity)
+        .agent_skills(skills)
+        .agent_system_prompt(agent_system_prompt);
+
+    // `<project_context>` and the AGENTS.md probe only fire when
+    // aura-os actually shipped a project descriptor on the wire — bare
+    // -agent (non-project) chat lands here with `project_wire = None`,
+    // and rendering an empty project block would produce visually
+    // blank `project_name: ` / `folder: ` lines.
+    if let Some(project) = project_wire.filter(|w| !w.is_empty()) {
+        let project_info = ProjectInfo {
+            project_id: Some(project.id.as_str()).filter(|s| !s.trim().is_empty()),
+            name: project.name.as_str(),
+            description: project.description.as_str(),
+            folder_path: project.workspace_root.as_str(),
+            build_command: Some(project.build_command.as_str()).filter(|s| !s.trim().is_empty()),
+            test_command: Some(project.test_command.as_str()).filter(|s| !s.trim().is_empty()),
+        };
+        builder = builder
+            .project_context(&project_info)
+            .agents_md_from_workspace(project_info.folder_path);
+    }
+
+    Some(builder.build())
 }
 
 /// Translate an [`IntentClassifierSpec`] from the wire protocol into the

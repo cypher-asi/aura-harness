@@ -242,6 +242,7 @@ mod tests {
     #[test]
     fn basic_context_contains_project_and_task() {
         let project = ProjectInfo {
+            project_id: None,
             name: "myproj",
             description: "A test project",
             folder_path: "/tmp",
@@ -271,6 +272,7 @@ mod tests {
     #[test]
     fn context_includes_completed_deps() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -340,6 +342,7 @@ mod tests {
     #[test]
     fn task_description_strips_fences_for_bootstrap() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -370,6 +373,7 @@ mod tests {
     #[test]
     fn long_spec_markdown_is_truncated_to_budget() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -404,6 +408,7 @@ mod tests {
     #[test]
     fn short_spec_markdown_is_kept_intact() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -435,6 +440,7 @@ mod tests {
     #[test]
     fn context_omits_test_warning_for_test_tasks() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -475,6 +481,7 @@ mod tests {
     #[test]
     fn build_agentic_task_context_first_attempt_includes_block() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -543,6 +550,7 @@ mod tests {
     #[test]
     fn build_agentic_task_context_retry_attempt_skips_block() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",
@@ -586,6 +594,7 @@ mod tests {
     #[test]
     fn build_agentic_task_context_empty_block_is_skipped() {
         let project = ProjectInfo {
+            project_id: None,
             name: "p",
             description: "",
             folder_path: "/tmp",

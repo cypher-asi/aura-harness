@@ -31,8 +31,17 @@ pub use system::{
 pub use turn_kernel_system::default_system_prompt;
 
 /// Minimal project descriptor for prompt builders.
+///
+/// `project_id` is `Option<&str>` so the dev-loop path can keep
+/// passing `None` (the dev-loop's `<project_context>` has never
+/// surfaced a `project_id` line, and the four base dev-loop
+/// snapshots assert that). The chat WS migration sets it to
+/// `Some(...)` so the chat `<project_context>` retains the
+/// `project_id:` line the legacy aura-os helper used to surface for
+/// tool-id grounding.
 #[derive(Debug)]
 pub struct ProjectInfo<'a> {
+    pub project_id: Option<&'a str>,
     pub name: &'a str,
     pub description: &'a str,
     pub folder_path: &'a str,

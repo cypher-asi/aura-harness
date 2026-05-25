@@ -421,6 +421,7 @@ impl AgentRunner {
         cancel: Option<CancellationToken>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
         let system_prompt = {
+            let project_id = project.project_id.map(str::to_owned);
             let name = project.name.to_owned();
             let description = project.description.to_owned();
             let folder_path = project.folder_path.to_owned();
@@ -429,13 +430,14 @@ impl AgentRunner {
             let custom = custom_system_prompt.to_owned();
             tokio::task::spawn_blocking(move || {
                 let p = ProjectInfo {
+                    project_id: project_id.as_deref(),
                     name: &name,
                     description: &description,
                     folder_path: &folder_path,
                     build_command: build_command.as_deref(),
                     test_command: test_command.as_deref(),
                 };
-                build_chat_system_prompt(&p, &custom)
+                build_chat_system_prompt(&p, &custom, None)
             })
             .await?
         };
