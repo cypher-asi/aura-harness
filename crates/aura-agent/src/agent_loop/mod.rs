@@ -1123,17 +1123,37 @@ impl LoopState {
         };
         // Threshold-B steering: when the model has spent
         // [`READ_ONLY_FORCE_TOOL_THRESHOLD`] consecutive iterations on
-        // read-only tool calls without writing or completing, force
-        // any tool call. Anthropic's `ToolChoice` exposes `Required`
+        // read-only tool calls without writing or completing, force a
+        // tool call. Anthropic's `ToolChoice` exposes `Required`
         // (force any tool) but no per-call "disable parallel" knob;
         // pairing it with the `disable_thinking_this_iteration` flag
         // (set in `begin_iteration` under the same condition) is what
         // makes the forced call legal — Anthropic rejects forced
         // tool use while extended thinking is enabled.
+        //
+        // Harness v2.3 (Phase F): for dev-loop tasks
+        // (`dev_loop_completion_required`), force `apply_patch`
+        // specifically via `ToolChoice::Tool` instead of any tool.
+        // Production log analysis (debug-95fd5c.log) showed the model
+        // satisfying `ToolChoice::Required` by picking another read
+        // tool every turn — counter stayed permanently saturated,
+        // tool_choice stayed `any`, no `EndTurn` ever fired, and
+        // Phase B's EndTurn intercept never got a chance to engage.
+        // Forcing `apply_patch` removes the read-loop escape hatch:
+        // the model must emit a patch (correct patches reset the
+        // counter via `had_any_file_write`; malformed patches return
+        // a parser-error tool_result that the model self-corrects).
+        // Chat / non-dev-loop callers keep `ToolChoice::Required`.
         let tool_choice = if self.counters.consecutive_read_only_iterations
             >= crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD
         {
-            aura_reasoner::ToolChoice::Required
+            if config.dev_loop_completion_required {
+                aura_reasoner::ToolChoice::Tool {
+                    name: "apply_patch".to_string(),
+                }
+            } else {
+                aura_reasoner::ToolChoice::Required
+            }
         } else {
             aura_reasoner::ToolChoice::Auto
         };

@@ -732,6 +732,79 @@ fn force_tool_required_and_thinking_clamped_at_read_only_threshold_b() {
     );
 }
 
+/// Harness v2.3 (Phase F): when `dev_loop_completion_required` is on
+/// and the read-only streak crosses threshold B, `tool_choice` must
+/// be `ToolChoice::Tool { name: "apply_patch" }`, NOT
+/// `ToolChoice::Required`. This pins the production fix for the
+/// "tool_choice=any satisfied by another read" trap that left the
+/// loop spinning on read tools until `max_iterations` exhausted.
+#[test]
+fn dev_loop_force_tool_targets_apply_patch_at_read_only_threshold_b() {
+    use aura_reasoner::{Message, ToolChoice};
+
+    let config = AgentLoopConfig {
+        dev_loop_completion_required: true,
+        thinking_budget: Some(8_192),
+        max_tokens: 16_384,
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
+    state.counters.consecutive_read_only_iterations =
+        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD;
+
+    state.begin_iteration(&config, 5);
+    assert!(
+        state.thinking.disable_thinking_this_iteration,
+        "begin_iteration must still arm disable_thinking_this_iteration in \
+         dev-loop mode (Anthropic rejects forced tool use with extended \
+         thinking enabled, regardless of which tool is forced)",
+    );
+
+    let request = state
+        .build_request(&config, &[], 5)
+        .expect("build_request must succeed");
+    match &request.tool_choice {
+        ToolChoice::Tool { name } => assert_eq!(
+            name, "apply_patch",
+            "dev-loop force-tool must target apply_patch by name, not '{name}'",
+        ),
+        other => panic!(
+            "dev_loop_completion_required + read-only threshold B must produce \
+             ToolChoice::Tool {{ name: \"apply_patch\" }}, got {other:?}",
+        ),
+    }
+}
+
+/// Companion: with `dev_loop_completion_required: false` (chat / generic
+/// mode) the existing `ToolChoice::Required` behavior must be preserved
+/// at threshold B. Pins the dev-loop-vs-chat split so a future change
+/// that unconditionally forces apply_patch trips here.
+#[test]
+fn chat_mode_force_tool_remains_required_at_read_only_threshold_b() {
+    use aura_reasoner::{Message, ToolChoice};
+
+    let config = AgentLoopConfig {
+        // dev_loop_completion_required defaults to false — explicit
+        // for the test's intent.
+        thinking_budget: Some(8_192),
+        max_tokens: 16_384,
+        ..AgentLoopConfig::default()
+    };
+    assert!(!config.dev_loop_completion_required);
+    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
+    state.counters.consecutive_read_only_iterations =
+        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD;
+
+    state.begin_iteration(&config, 5);
+    let request = state.build_request(&config, &[], 5).unwrap();
+    assert!(
+        matches!(request.tool_choice, ToolChoice::Required),
+        "chat mode must keep ToolChoice::Required at threshold B (no \
+         apply_patch tool exists in chat profiles); got {:?}",
+        request.tool_choice,
+    );
+}
+
 /// Companion: ONE iteration short of threshold B must keep
 /// `tool_choice: Auto` and leave the thinking-disable flag clear.
 /// Pins the boundary so a future change that fires the force-tool
