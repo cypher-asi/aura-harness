@@ -125,6 +125,14 @@ pub struct AgentRunnerConfig {
     /// projection. Same WAF-bucketing rationale as
     /// [`Self::aura_agent_id`].
     pub aura_project_id: Option<String>,
+    /// Stable `prompt_cache_key` forwarded to OpenAI-family routing
+    /// via [`AgentLoopConfig::prompt_cache_key`]. The dev-loop and
+    /// task-run paths set this to `Some(format!("devloop:{project_id}"))`
+    /// so cross-task agent invocations land on the same OpenAI cache
+    /// bucket. Anthropic caching does not need a key — the provider's
+    /// ephemeral `cache_control` breakpoints in
+    /// `aura_reasoner::anthropic::convert` handle prefix reuse.
+    pub prompt_cache_key: Option<String>,
 }
 
 impl Default for AgentRunnerConfig {
@@ -160,6 +168,7 @@ impl Default for AgentRunnerConfig {
             aura_session_id: None,
             aura_agent_id: None,
             aura_project_id: None,
+            prompt_cache_key: None,
         }
     }
 }
@@ -446,6 +455,7 @@ impl AgentRunner {
             aura_session_id: self.config.aura_session_id.clone(),
             aura_agent_id: self.config.aura_agent_id.clone(),
             aura_project_id: self.config.aura_project_id.clone(),
+            prompt_cache_key: self.config.prompt_cache_key.clone(),
             ..AgentLoopConfig::default()
         };
         let agent_loop = AgentLoop::new(config);
@@ -598,6 +608,7 @@ pub fn configure_loop_config(
         aura_session_id: config.aura_session_id.clone(),
         aura_agent_id: config.aura_agent_id.clone(),
         aura_project_id: config.aura_project_id.clone(),
+        prompt_cache_key: config.prompt_cache_key.clone(),
         request_kind: ModelRequestKind::DevLoopBootstrap,
         // Phase 2 of harness-v2: disable extended thinking on the
         // first iteration so the explore turn emits fast tool calls

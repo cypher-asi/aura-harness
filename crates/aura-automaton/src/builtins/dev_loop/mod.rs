@@ -1,115 +1,52 @@
-//! Dev-loop automaton – the core continuous task-execution loop.
+//! Dev-loop automaton — runs project tasks in order.
 //!
-//! The loop is fully self-managed: it fetches all tasks on first tick,
-//! topologically sorts them by dependencies, and executes them one at a
-//! time. Task status transitions are handled internally and synced back
-//! to the domain API as a best-effort side-effect.
+//! Intentionally minimal: fetch all tasks on first tick, drop the ones
+//! already marked `done`, sort the rest by `order`, then execute one
+//! per tick through [`aura_agent::agent_runner::AgentRunner`]. Status
+//! transitions are best-effort writes to the domain API. No retries,
+//! no dependency graph, no DoD aggregates, no commit gates, no
+//! preflight — those layers belong in higher-level orchestration.
 //!
-//! `mod.rs` is intentionally kept thin: it owns the [`DevLoopAutomaton`]
-//! façade, the per-loop `STATE_*` keys, and the orchestration helpers
-//! (`topological_sort`, `extract_shell_command`). Heavier subsystems
-//! live in dedicated siblings:
-//!
-//! - [`aggregate`] — `TaskAggregate` + commit/chunk-guard markers.
-//! - [`validation`] — `validate_execution` + the opt-in build
-//!   preflight gate (`AURA_BUILD_GATE`).
-//! - [`forward_event`] — `aura_agent::AgentLoopEvent` → `AutomatonEvent`
-//!   translation used by `tick.rs`, `task_run.rs`, and `chat.rs`.
-//!
-//! The blanket `use` block below is preserved verbatim from the
-//! pre-split file so sibling modules that pull names via `super::{...}`
-//! (e.g. `tick.rs`, `run.rs`, `finish.rs`, `tests.rs`) continue to
-//! resolve everything without any churn outside this directory.
+//! `mod.rs` owns the [`DevLoopAutomaton`] façade and [`DevLoopConfig`].
+//! The Automaton trait impl and per-task execution live in [`tick`].
+//! [`forward_event`] translates `aura_agent::AgentLoopEvent` into
+//! `AutomatonEvent` for the WS stream and is also re-used by
+//! `task_run.rs` and `chat.rs`.
 
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use tracing::{debug, info, warn};
-
-use aura_agent::agent_runner::{
-    AgentRunner, AgentRunnerConfig, AgenticTaskParams, ShellTaskParams, TaskExecutionResult,
-    TaskTrackingConfig,
-};
-use aura_agent::prompts::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
+use aura_agent::agent_runner::{AgentRunner, AgentRunnerConfig};
 use aura_reasoner::ModelProvider;
-use aura_tools::catalog::{ToolCatalog, ToolProfile};
-use aura_tools::domain_tools::{DomainApi, TaskDescriptor};
+use aura_tools::catalog::ToolCatalog;
+use aura_tools::domain_tools::DomainApi;
 
-use crate::context::TickContext;
 use crate::error::AutomatonError;
-use crate::events::AutomatonEvent;
-use crate::runtime::{Automaton, TickOutcome};
-use crate::schedule::Schedule;
 
-mod aggregate;
-mod finish;
 mod forward_event;
-mod run;
-mod safe_transition;
 mod tick;
-mod validation;
 
 #[cfg(test)]
 mod tests;
 
-// ---------------------------------------------------------------------------
-// Re-exports
-// ---------------------------------------------------------------------------
-//
-// Sibling modules (`tick.rs`, `run.rs`, `tests.rs`) and the cross-builtin
-// callers in `task_run.rs` / `chat.rs` import everything via
-// `super::dev_loop::{...}` or `super::{...}`. Re-exporting from `mod.rs`
-// keeps those import paths stable so the diff stays scoped to this
-// directory.
-
-pub(crate) use aggregate::{TaskAggregate, COMMIT_SKIPPED_NO_CHANGES};
-pub(crate) use safe_transition::safe_transition;
-pub(crate) use tick::commit_and_push;
-pub(crate) use validation::validate_execution;
-
 pub use forward_event::forward_agent_event;
-pub use validation::{
-    build_preflight_failure_to_error, build_preflight_gate_enabled, validate_build_preflight,
-    BuildPreflightOutcome,
-};
 
-// ---------------------------------------------------------------------------
-// Per-automaton state keys + retry policy
-// ---------------------------------------------------------------------------
-
+// Per-automaton state keys. Only two cross-tick values survive the
+// simplification: the queue of remaining task IDs and an initialized
+// flag so the first tick can populate it. Counters are kept so the
+// `LoopFinished` terminal event still reports completed/failed totals
+// the UI surfaces.
+const STATE_INITIALIZED: &str = "initialized";
+const STATE_TASK_QUEUE: &str = "task_queue";
 const STATE_COMPLETED_COUNT: &str = "completed_count";
 const STATE_FAILED_COUNT: &str = "failed_count";
-const STATE_WORK_LOG: &str = "work_log";
-const STATE_RETRY_COUNTS: &str = "retry_counts";
 const STATE_LOOP_FINISHED: &str = "loop_finished";
-const STATE_TASK_QUEUE: &str = "task_queue";
-const STATE_DONE_IDS: &str = "done_ids";
-const STATE_FAILED_IDS: &str = "failed_ids";
-const STATE_FAILURE_REASONS: &str = "failure_reasons";
-const STATE_INITIALIZED: &str = "initialized";
-
-const MAX_RETRIES_PER_TASK: u32 = 2;
-
-// ---------------------------------------------------------------------------
-// Config + automaton façade
-// ---------------------------------------------------------------------------
 
 pub(crate) struct DevLoopConfig {
     pub(crate) project_id: String,
-    // TODO: will be used when dev-loop sessions tag their agent instance
     #[allow(dead_code)]
     agent_instance_id: String,
-    // TODO: will be used for model selection in dev-loop
     #[allow(dead_code)]
     model: String,
-    /// PR B identity envelope. Parsed once at config-load time; the
-    /// borrowed `AgentIdentity` / `AgentInfo` views fed into
-    /// [`AgenticTaskParams::agent`] are derived from these owned
-    /// buffers via [`AgentIdentityEnvelope::as_agent_info`]. None of
-    /// the three fields are populated by `aura-os` until PR C, so
-    /// [`AgentIdentityEnvelope::is_empty`] returns `true` for every
-    /// production caller in this PR.
-    pub(crate) agent_identity: AgentIdentityEnvelope,
 }
 
 impl DevLoopConfig {
@@ -129,118 +66,20 @@ impl DevLoopConfig {
             .and_then(|v| v.as_str())
             .unwrap_or(aura_agent::DEFAULT_MODEL)
             .to_string();
-        let agent_identity = AgentIdentityEnvelope::from_json(config);
         Ok(Self {
             project_id,
             agent_instance_id,
             model,
-            agent_identity,
-        })
-    }
-}
-
-/// Owned mirror of `aura_protocol::AgentIdentityWire` + skills + system
-/// prompt, threaded from the `AutomatonStartRequest` JSON config blob
-/// into `AgenticTaskParams::agent`.
-///
-/// Owns its strings so the `&str`-borrowing
-/// [`aura_agent::prompts::AgentInfo`] view we hand to
-/// [`AgenticTaskParams::agent`] can be built on demand from a stable
-/// in-memory location. PR B reads but never populates these fields
-/// (aura-os doesn't send them yet); PR C flips a single field on the
-/// aura-os side and identity flows into the model-facing prompt.
-#[derive(Debug, Default)]
-pub(crate) struct AgentIdentityEnvelope {
-    pub(crate) name: String,
-    pub(crate) role: String,
-    pub(crate) personality: String,
-    pub(crate) skills: Vec<String>,
-    pub(crate) system_prompt: Option<String>,
-}
-
-impl AgentIdentityEnvelope {
-    pub(crate) fn from_json(config: &serde_json::Value) -> Self {
-        let identity = config.get("agent_identity");
-        let name = identity
-            .and_then(|v| v.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let role = identity
-            .and_then(|v| v.get("role"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let personality = identity
-            .and_then(|v| v.get("personality"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let skills = config
-            .get("agent_skills")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let system_prompt = config
-            .get("agent_system_prompt")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string);
-        Self {
-            name,
-            role,
-            personality,
-            skills,
-            system_prompt,
-        }
-    }
-
-    /// True when no field carries content. PR B's default state for
-    /// every caller — `AgenticTaskParams::agent` stays `None` and the
-    /// assembled prompt matches the PR A snapshots byte-for-byte.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.name.trim().is_empty()
-            && self.role.trim().is_empty()
-            && self.personality.trim().is_empty()
-            && self.skills.is_empty()
-            && self
-                .system_prompt
-                .as_deref()
-                .map_or(true, |s| s.trim().is_empty())
-    }
-
-    /// Borrow this envelope as an [`aura_agent::prompts::AgentInfo`].
-    /// Returns `None` when [`Self::is_empty`].
-    pub(crate) fn as_agent_info(&self) -> Option<aura_agent::prompts::AgentInfo<'_>> {
-        if self.is_empty() {
-            return None;
-        }
-        let identity = (!self.name.is_empty()
-            || !self.role.is_empty()
-            || !self.personality.is_empty())
-        .then_some(aura_agent::prompts::AgentIdentity {
-            name: &self.name,
-            role: &self.role,
-            personality: &self.personality,
-        });
-        Some(aura_agent::prompts::AgentInfo {
-            identity,
-            skills: self.skills.as_slice(),
-            system_prompt: self.system_prompt.as_deref(),
         })
     }
 }
 
 pub struct DevLoopAutomaton {
-    domain: Arc<dyn DomainApi>,
-    provider: Arc<dyn ModelProvider>,
-    runner: AgentRunner,
-    catalog: Arc<ToolCatalog>,
-    tool_executor: Option<Arc<dyn aura_agent::types::AgentToolExecutor>>,
+    pub(crate) domain: Arc<dyn DomainApi>,
+    pub(crate) provider: Arc<dyn ModelProvider>,
+    pub(crate) runner: AgentRunner,
+    pub(crate) catalog: Arc<ToolCatalog>,
+    pub(crate) tool_executor: Option<Arc<dyn aura_agent::types::AgentToolExecutor>>,
 }
 
 impl DevLoopAutomaton {
@@ -279,73 +118,4 @@ impl DevLoopAutomaton {
         self.tool_executor = Some(executor);
         self
     }
-}
-
-// ---------------------------------------------------------------------------
-// Topological sort + free-form helpers
-// ---------------------------------------------------------------------------
-
-/// Topologically sort tasks by dependencies. Returns task IDs in execution
-/// order. Tasks with no dependencies come first.
-fn topological_sort(tasks: &[TaskDescriptor]) -> Vec<String> {
-    let task_ids: HashSet<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
-    let mut in_degree: HashMap<&str, usize> = HashMap::new();
-    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
-
-    for t in tasks {
-        in_degree.entry(&t.id).or_insert(0);
-        adj.entry(&t.id).or_default();
-        for dep in &t.dependencies {
-            if task_ids.contains(dep.as_str()) {
-                adj.entry(dep.as_str()).or_default().push(&t.id);
-                *in_degree.entry(&t.id).or_insert(0) += 1;
-            }
-        }
-    }
-
-    let mut queue: VecDeque<&str> = in_degree
-        .iter()
-        .filter(|(_, &deg)| deg == 0)
-        .map(|(&id, _)| id)
-        .collect();
-
-    // Stable sort: prefer tasks by their order field
-    let order_map: HashMap<&str, u32> = tasks.iter().map(|t| (t.id.as_str(), t.order)).collect();
-    let mut queue_vec: Vec<&str> = queue.iter().copied().collect();
-    queue.clear();
-    queue_vec.sort_by_key(|id| order_map.get(id).copied().unwrap_or(u32::MAX));
-    queue = queue_vec.into_iter().collect();
-
-    let mut result = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        result.push(node.to_string());
-        if let Some(neighbors) = adj.get(node) {
-            let mut next_batch: Vec<&str> = Vec::new();
-            for &neighbor in neighbors {
-                if let Some(deg) = in_degree.get_mut(neighbor) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        next_batch.push(neighbor);
-                    }
-                }
-            }
-            next_batch.sort_by_key(|id| order_map.get(id).copied().unwrap_or(u32::MAX));
-            for n in next_batch {
-                queue.push_back(n);
-            }
-        }
-    }
-
-    result
-}
-
-pub fn extract_shell_command(task: &TaskDescriptor) -> Option<String> {
-    let title_lower = task.title.to_lowercase();
-    if title_lower.starts_with("run:") || title_lower.starts_with("shell:") {
-        let cmd = task.title.split_once(':')?.1.trim().to_string();
-        if !cmd.is_empty() {
-            return Some(cmd);
-        }
-    }
-    None
 }

@@ -244,6 +244,13 @@ impl AutomatonBridge {
         config.aura_session_id = aura_session_id.map(String::from);
         config.aura_agent_id = aura_agent_id.map(String::from);
         config.aura_project_id = aura_project_id.map(String::from);
+        // Stable per-project key so OpenAI-family routing buckets all
+        // dev-loop / task-run invocations for the same project onto the
+        // same prompt cache. Anthropic caching does not need this — the
+        // provider's ephemeral `cache_control` breakpoints in
+        // `aura_reasoner::anthropic::convert` handle prefix reuse based
+        // on byte-identical system/tools/last-user-block content.
+        config.prompt_cache_key = aura_project_id.map(|pid| format!("devloop:{pid}"));
         config
     }
 
