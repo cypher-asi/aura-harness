@@ -337,11 +337,10 @@ pub(super) fn check_termination_conditions(
     {
         let n = state.counters.consecutive_read_only_iterations;
         let msg = format!(
-            "FORCE-PROGRESS: You have made {n} consecutive iterations of read-only tool calls \
-             without writing or completing. Your next turn MUST be one of: (a) write_file / \
-             edit_file / delete_file with a real path, or (b) task_done. If exploration has \
-             shown that no file changes are needed, call task_done(no_changes_needed: true, \
-             notes: \"<one sentence why>\")."
+            "STOP READING. You have spent {n} iterations on read-only tool calls. \
+             Your next response MUST be a single tool call: write_file / edit_file \
+             / delete_file with a real path, or task_done. If no changes are needed, \
+             call task_done(no_changes_needed: true, notes: \"<one sentence why>\")."
         );
         info!(
             consecutive_read_only_iterations = n,

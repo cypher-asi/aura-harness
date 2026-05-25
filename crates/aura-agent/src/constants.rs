@@ -236,14 +236,34 @@ pub const NARRATION_TOKEN_HARD_BUDGET: usize = 4_000;
 /// Orthogonal to [`NARRATION_TOKEN_SOFT_BUDGET`]: that one fires when
 /// the model produces text but no tool calls; this one fires when the
 /// model produces tool calls but they are all read-only.
-pub const READ_ONLY_INJECTION_THRESHOLD: usize = 4;
+///
+/// Phase C of harness-v2.2 tightened this from `4` to `2`: crash
+/// investigation showed the model burning 4 read-only iterations on a
+/// small task (per-turn `tool_count=3`, `result_lens` 1187/2846/1225/409)
+/// before the nudge fired, by which point most of the credit budget
+/// was gone. Two read-only iterations is enough signal that the model
+/// is grinding without writing; the nudge is a user message (not a
+/// hard stop) so a legitimate "look twice then patch" pattern still
+/// pays only one extra reminder message before the model gets to
+/// write.
+pub const READ_ONLY_INJECTION_THRESHOLD: usize = 2;
 
 /// Hard threshold: after this many consecutive read-only iterations,
 /// force `tool_choice = Required` and disable extended thinking for
 /// the next turn so the model has no choice but to call a tool
 /// (preferably a write). Anthropic blocks forced tool use while
 /// extended thinking is enabled, so the two flips ride together.
-pub const READ_ONLY_FORCE_TOOL_THRESHOLD: usize = 6;
+///
+/// Phase C of harness-v2.2 tightened this from `6` to `3`: paired with
+/// the new [`READ_ONLY_INJECTION_THRESHOLD`] of 2, the steering is now
+/// "one polite nudge after two read-only iterations, then force a tool
+/// call on the third". Also dovetails with the Phase B EndTurn
+/// intercept's attempt-3 escalation: that path saturates the read-only
+/// counter at this threshold, so a single attempt-3 bump now escalates
+/// straight to forced `tool_choice` on the very next iteration instead
+/// of skipping a full intervention level (which is what the old
+/// `6` value did — the bump landed one short of where it needed to).
+pub const READ_ONLY_FORCE_TOOL_THRESHOLD: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Dev-loop EndTurn completion contract (Phase B of harness-v2.2)

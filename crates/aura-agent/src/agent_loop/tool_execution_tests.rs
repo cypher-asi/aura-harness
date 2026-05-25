@@ -333,7 +333,7 @@ fn truncate_preview_uses_ascii_marker() {
 //
 //   1. The counter increments by exactly 1 per iteration.
 //   2. At `READ_ONLY_INJECTION_THRESHOLD` iterations the loop appends
-//      the verbatim `FORCE-PROGRESS:` user message ONCE.
+//      the verbatim `STOP READING` user message ONCE.
 //   3. A subsequent iteration that contains a `write_file` resets
 //      the counter to 0 (forward progress clears the streak).
 // ------------------------------------------------------------------
@@ -408,9 +408,11 @@ fn force_progress_user_message_injected_at_threshold_a() {
     }
 
     // The loop must have appended a synthetic user message containing
-    // the verbatim `FORCE-PROGRESS:` marker. The exact wording also
-    // pins the no_changes_needed escape hatch — Phase 3's restored
-    // prompt language relies on this nudge.
+    // the verbatim `STOP READING` marker (Phase C of harness-v2.2
+    // replaced the older `FORCE-PROGRESS:` prose with an imperative
+    // opener). The exact wording also pins the no_changes_needed
+    // escape hatch — Phase 3's restored prompt language relies on
+    // this nudge.
     let force_progress_text: String = state
         .messages
         .iter()
@@ -422,8 +424,8 @@ fn force_progress_user_message_injected_at_threshold_a() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        force_progress_text.contains("FORCE-PROGRESS:"),
-        "expected FORCE-PROGRESS: marker after {} read-only iterations, got:\n{force_progress_text}",
+        force_progress_text.contains("STOP READING"),
+        "expected STOP READING marker after {} read-only iterations, got:\n{force_progress_text}",
         crate::constants::READ_ONLY_INJECTION_THRESHOLD,
     );
     assert!(
@@ -449,12 +451,12 @@ fn force_progress_message_is_not_injected_below_threshold_a() {
     }
     let injected = state.messages.iter().any(|m| {
         m.content.iter().any(|b| {
-            matches!(b, ContentBlock::Text { text } if text.contains("FORCE-PROGRESS:"))
+            matches!(b, ContentBlock::Text { text } if text.contains("STOP READING"))
         })
     });
     assert!(
         !injected,
-        "FORCE-PROGRESS must not fire below threshold A ({} iterations)",
+        "STOP READING nudge must not fire below threshold A ({} iterations)",
         below,
     );
 }

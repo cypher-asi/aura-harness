@@ -1287,3 +1287,124 @@ async fn dev_loop_endturn_after_task_done_terminates_cleanly() {
         }
     }
 }
+
+/// Phase C of harness-v2.2 anchor: with the tightened thresholds
+/// (`READ_ONLY_INJECTION_THRESHOLD = 2`,
+/// `READ_ONLY_FORCE_TOOL_THRESHOLD = 3`), driving exactly two
+/// read-only iterations through `check_termination_conditions` must
+/// (a) leave the counter at 2 — matching the injection threshold,
+/// and (b) append a synthetic user message containing the new
+/// `STOP READING` imperative opener. One more read-only iteration
+/// pushes the counter to 3, the force threshold, at which point
+/// `begin_iteration` + `build_request` must flip `tool_choice` to
+/// `Required` and arm `disable_thinking_this_iteration` (Anthropic
+/// rejects forced tool use with extended thinking enabled, so the
+/// two flips ride together — same invariant
+/// `force_tool_required_and_thinking_clamped_at_read_only_threshold_b`
+/// pins for the upper threshold).
+#[test]
+fn read_only_force_tool_fires_after_two_read_iterations() {
+    use aura_reasoner::ToolChoice;
+
+    use super::tool_execution::{check_termination_conditions, ExecutedTools};
+
+    // Mirrors the helper in `tool_execution_tests` — kept local so
+    // this test does not depend on cross-module visibility tweaks.
+    fn read_only_executed_tools(idx: usize) -> ExecutedTools {
+        let id = format!("read_{idx}");
+        ExecutedTools {
+            tool_calls: vec![ToolCallInfo {
+                id: id.clone(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({"path": format!("src/lib{idx}.rs")}),
+            }],
+            all_results: vec![ToolCallResult::success(&id, "file body")],
+            side_messages: Vec::new(),
+            is_stalled: false,
+            blocked_ids: Default::default(),
+            cached_ids: Default::default(),
+            saw_empty_path_block: false,
+        }
+    }
+
+    // Pick a `thinking_budget` strictly above the auto-thinking
+    // threshold so the clamp is observable on `build_request`
+    // (otherwise the budget would silently sit below the clamp and
+    // the assertion would trivially pass).
+    let config = AgentLoopConfig {
+        thinking_budget: Some(8_192),
+        max_tokens: 16_384,
+        ..AgentLoopConfig::default()
+    };
+    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
+    assert_eq!(state.counters.consecutive_read_only_iterations, 0);
+
+    // --- Iters 0 and 1: read-only --------------------------------
+    for idx in 0..crate::constants::READ_ONLY_INJECTION_THRESHOLD {
+        let stopped =
+            check_termination_conditions(None, &mut state, read_only_executed_tools(idx));
+        assert!(!stopped, "iteration {idx} must not stop the loop");
+    }
+    assert_eq!(
+        state.counters.consecutive_read_only_iterations,
+        crate::constants::READ_ONLY_INJECTION_THRESHOLD,
+        "after exactly READ_ONLY_INJECTION_THRESHOLD read iterations the counter \
+         must sit at the threshold value (Phase C: 2)"
+    );
+
+    let nudge_text: String = state
+        .messages
+        .iter()
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        nudge_text.contains("STOP READING"),
+        "force-progress nudge must appear in state.messages at threshold A and \
+         use the Phase C imperative opener; got:\n{nudge_text}"
+    );
+
+    // --- Iter 2: one more read-only pushes us to threshold B -----
+    let stopped = check_termination_conditions(
+        None,
+        &mut state,
+        read_only_executed_tools(crate::constants::READ_ONLY_INJECTION_THRESHOLD),
+    );
+    assert!(!stopped, "third read-only iter must not stop the loop");
+    assert_eq!(
+        state.counters.consecutive_read_only_iterations,
+        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD,
+        "one more read-only iter past threshold A must saturate at threshold B \
+         (Phase C: 3)"
+    );
+
+    // --- Next `begin_iteration` + `build_request` must force tool
+    //     choice and disable thinking for this turn. --------------
+    state.begin_iteration(&config, 5);
+    assert!(
+        state.thinking.disable_thinking_this_iteration,
+        "begin_iteration must arm disable_thinking_this_iteration when the \
+         read-only counter is at or above READ_ONLY_FORCE_TOOL_THRESHOLD \
+         (Anthropic rejects forced tool use with extended thinking enabled)"
+    );
+    let request = state
+        .build_request(&config, &[], 5)
+        .expect("build_request must succeed");
+    assert!(
+        matches!(request.tool_choice, ToolChoice::Required),
+        "tool_choice must be Required once the read-only counter hits \
+         READ_ONLY_FORCE_TOOL_THRESHOLD; got {:?}",
+        request.tool_choice,
+    );
+    assert!(
+        request.max_tokens.get() <= crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
+        "max_tokens must be clamped to <= THINKING_AUTO_ENABLE_THRESHOLD ({}) \
+         when thinking is disabled this iteration; got {}",
+        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
+        request.max_tokens.get(),
+    );
+}
