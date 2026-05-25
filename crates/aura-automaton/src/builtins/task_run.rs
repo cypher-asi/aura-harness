@@ -75,11 +75,11 @@ struct TaskRunConfig {
     task_id: String,
     #[allow(dead_code)]
     agent_instance_id: String,
-    /// PR C: typed identity bundle parsed off the dispatch JSON.
-    /// `None` when aura-os left the wire fields empty / blank. The
-    /// envelope is reused from the dev-loop module so the two
-    /// automatons share a single parser + render pathway.
-    agent_envelope: Option<super::dev_loop::AgentIdentityEnvelope>,
+    /// Identity envelope parsed off the dispatch JSON. Reuses the
+    /// `AgentIdentityEnvelope` from `dev_loop` so the two automatons
+    /// share a single parser + render pathway. Stays empty
+    /// (`is_empty == true`) until the aura-os populator lands.
+    agent_identity: super::dev_loop::AgentIdentityEnvelope,
 }
 
 impl TaskRunConfig {
@@ -99,12 +99,12 @@ impl TaskRunConfig {
             .and_then(|v| v.as_str())
             .unwrap_or("default")
             .to_string();
-        let agent_envelope = super::dev_loop::parse_agent_envelope(config);
+        let agent_identity = super::dev_loop::AgentIdentityEnvelope::from_json(config);
         Ok(Self {
             project_id,
             task_id,
             agent_instance_id,
-            agent_envelope,
+            agent_identity,
         })
     }
 }
@@ -218,14 +218,12 @@ impl TaskRunAutomaton {
         };
         let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
 
-        // PR C: borrow the parsed AgentIdentityEnvelope (if any) as an
-        // AgentInfo<'_> so the prompt builder renders
-        // <agent_identity>/<agent_skills>/<agent_system_prompt>.
-        // `as_agent_info()` returns `None` when every field is blank.
-        let agent_info = cfg
-            .agent_envelope
-            .as_ref()
-            .and_then(|env| env.as_agent_info());
+        // Borrow the parsed identity envelope (if any) as a transient
+        // `AgentInfo<'_>` so `SystemPromptBuilder` renders the
+        // `<agent_identity>` / `<agent_skills>` / `<agent_system_prompt>`
+        // sections. `as_agent_info()` returns `None` whenever the
+        // wire fields are absent / blank.
+        let agent_info = cfg.agent_identity.as_agent_info();
 
         let params = AgenticTaskParams {
             project: &project_info,

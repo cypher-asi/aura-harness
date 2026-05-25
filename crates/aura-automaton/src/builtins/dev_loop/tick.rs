@@ -273,10 +273,7 @@ impl DevLoopAutomaton {
         // sections. `as_agent_info()` returns `None` whenever the
         // wire fields are absent / blank, leaving the prompt
         // byte-identical to the empty-identity baseline.
-        let agent_info = cfg
-            .agent_envelope
-            .as_ref()
-            .and_then(|env| env.as_agent_info());
+        let agent_info = cfg.agent_identity.as_agent_info();
 
         let params = AgenticTaskParams {
             project: &project_info,
