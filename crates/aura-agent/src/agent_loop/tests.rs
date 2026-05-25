@@ -2,8 +2,8 @@
 
 use aura_reasoner::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, ModelRequest,
-    ModelRequestKind, ModelResponse, ProviderTrace, ReasonerError, Role, StopReason,
-    ToolDefinition, Usage,
+    ModelRequestKind, ModelResponse, ProviderTrace, ReasonerError, StopReason, ToolDefinition,
+    Usage,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -668,172 +668,26 @@ fn begin_iteration_no_op_when_no_signal_configured() {
     assert_eq!(state.blocking_ctx.exploration_count, 40);
 }
 
-// ------------------------------------------------------------------
-// Phase 2 contract — read-only force-tool steering at threshold B
-// (`READ_ONLY_FORCE_TOOL_THRESHOLD`, harness-v2).
-//
-// `begin_iteration` must arm `disable_thinking_this_iteration` and
-// `build_request` must downgrade `tool_choice` to `Required` AND
-// clamp `max_tokens` at or below `THINKING_AUTO_ENABLE_THRESHOLD`
-// for the same iteration. Anthropic blocks forced tool use while
-// extended thinking is enabled, so the two flips ride together.
-// ------------------------------------------------------------------
-
-/// Threshold-B headline regression: drive the read-only streak counter
-/// up to `READ_ONLY_FORCE_TOOL_THRESHOLD`, run one `begin_iteration`
-/// tick + one `build_request` call, then assert (a) thinking is
-/// disabled for this turn (one-shot flag set), (b) the produced
-/// request has `tool_choice: Required`, and (c) `max_tokens` is
-/// clamped at or below `THINKING_AUTO_ENABLE_THRESHOLD` so the
-/// reasoner's auto-enable-extended-thinking heuristic does not
-/// re-engage thinking despite the disable flag.
+/// Sanity: with the read-only / force-tool steering removed by the
+/// cook-loop-fix strip (2026-05), `build_request` must always
+/// produce `ToolChoice::Auto` regardless of any internal state.
 #[test]
-fn force_tool_required_and_thinking_clamped_at_read_only_threshold_b() {
+fn build_request_always_emits_tool_choice_auto() {
     use aura_reasoner::{Message, ToolChoice};
 
-    // Pick a `thinking_budget` strictly above the auto-thinking
-    // threshold so the clamp is observable: the budget would
-    // otherwise sit comfortably above the threshold and the
-    // assertion below would silently pass.
     let config = AgentLoopConfig {
         thinking_budget: Some(8_192),
         max_tokens: 16_384,
         ..AgentLoopConfig::default()
     };
-    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
-    state.counters.consecutive_read_only_iterations =
-        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD;
-
-    state.begin_iteration(&config, 5);
-    assert!(
-        state.thinking.disable_thinking_this_iteration,
-        "begin_iteration must arm disable_thinking_this_iteration when the \
-         read-only streak crosses threshold B (Anthropic rejects forced \
-         tool use with extended thinking enabled)",
-    );
-
+    let state = super::LoopState::new(&config, vec![Message::user("hi")]);
     let request = state
         .build_request(&config, &[], 5)
         .expect("build_request must succeed");
-    assert!(
-        matches!(request.tool_choice, ToolChoice::Required),
-        "tool_choice must be Required at threshold B, got {:?}",
-        request.tool_choice,
-    );
-    assert!(
-        request.max_tokens.get() <= crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        "max_tokens must be clamped to <= THINKING_AUTO_ENABLE_THRESHOLD ({}) \
-         when thinking is disabled this iteration; got {}",
-        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        request.max_tokens.get(),
-    );
-}
-
-/// Harness v2.3 (Phase F): when `dev_loop_completion_required` is on
-/// and the read-only streak crosses threshold B, `tool_choice` must
-/// be `ToolChoice::Tool { name: "apply_patch" }`, NOT
-/// `ToolChoice::Required`. This pins the production fix for the
-/// "tool_choice=any satisfied by another read" trap that left the
-/// loop spinning on read tools until `max_iterations` exhausted.
-#[test]
-fn dev_loop_force_tool_targets_apply_patch_at_read_only_threshold_b() {
-    use aura_reasoner::{Message, ToolChoice};
-
-    let config = AgentLoopConfig {
-        dev_loop_completion_required: true,
-        thinking_budget: Some(8_192),
-        max_tokens: 16_384,
-        ..AgentLoopConfig::default()
-    };
-    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
-    state.counters.consecutive_read_only_iterations =
-        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD;
-
-    state.begin_iteration(&config, 5);
-    assert!(
-        state.thinking.disable_thinking_this_iteration,
-        "begin_iteration must still arm disable_thinking_this_iteration in \
-         dev-loop mode (Anthropic rejects forced tool use with extended \
-         thinking enabled, regardless of which tool is forced)",
-    );
-
-    let request = state
-        .build_request(&config, &[], 5)
-        .expect("build_request must succeed");
-    match &request.tool_choice {
-        ToolChoice::Tool { name } => assert_eq!(
-            name, "apply_patch",
-            "dev-loop force-tool must target apply_patch by name, not '{name}'",
-        ),
-        other => panic!(
-            "dev_loop_completion_required + read-only threshold B must produce \
-             ToolChoice::Tool {{ name: \"apply_patch\" }}, got {other:?}",
-        ),
-    }
-}
-
-/// Companion: with `dev_loop_completion_required: false` (chat / generic
-/// mode) the existing `ToolChoice::Required` behavior must be preserved
-/// at threshold B. Pins the dev-loop-vs-chat split so a future change
-/// that unconditionally forces apply_patch trips here.
-#[test]
-fn chat_mode_force_tool_remains_required_at_read_only_threshold_b() {
-    use aura_reasoner::{Message, ToolChoice};
-
-    let config = AgentLoopConfig {
-        // dev_loop_completion_required defaults to false — explicit
-        // for the test's intent.
-        thinking_budget: Some(8_192),
-        max_tokens: 16_384,
-        ..AgentLoopConfig::default()
-    };
-    assert!(!config.dev_loop_completion_required);
-    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
-    state.counters.consecutive_read_only_iterations =
-        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD;
-
-    state.begin_iteration(&config, 5);
-    let request = state.build_request(&config, &[], 5).unwrap();
-    assert!(
-        matches!(request.tool_choice, ToolChoice::Required),
-        "chat mode must keep ToolChoice::Required at threshold B (no \
-         apply_patch tool exists in chat profiles); got {:?}",
-        request.tool_choice,
-    );
-}
-
-/// Companion: ONE iteration short of threshold B must keep
-/// `tool_choice: Auto` and leave the thinking-disable flag clear.
-/// Pins the boundary so a future change that fires the force-tool
-/// override one iteration earlier (or one iteration later) trips here.
-#[test]
-fn read_only_streak_below_threshold_b_keeps_tool_choice_auto() {
-    use aura_reasoner::{Message, ToolChoice};
-
-    let config = AgentLoopConfig {
-        thinking_budget: Some(8_192),
-        max_tokens: 16_384,
-        ..AgentLoopConfig::default()
-    };
-    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
-    state.counters.consecutive_read_only_iterations =
-        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD.saturating_sub(1);
-
-    state.begin_iteration(&config, 5);
-    assert!(
-        !state.thinking.disable_thinking_this_iteration,
-        "thinking must NOT be disabled below threshold B",
-    );
-    let request = state.build_request(&config, &[], 5).unwrap();
     assert!(
         matches!(request.tool_choice, ToolChoice::Auto),
-        "tool_choice must remain Auto below threshold B, got {:?}",
+        "tool_choice must always be Auto after the cook-loop-fix strip; got {:?}",
         request.tool_choice,
-    );
-    assert_eq!(
-        request.max_tokens.get(),
-        state.thinking.budget,
-        "max_tokens must follow the unclamped thinking budget below threshold B",
     );
 }
 
@@ -923,99 +777,21 @@ fn phase_reset_arms_plan_submitted_latch() {
     );
 }
 
-/// Recording mock provider used by the Phase B dev-loop completion
-/// tests. Returns each configured response in sequence (falling back
-/// to a default EndTurn after the configured list is drained, like
-/// `MockProvider`) and records the `max_tokens` of every request so
-/// tests can prove that thinking-disable kicked in on the right
-/// iterations.
-struct RecordingMockProvider {
-    responses: Mutex<Vec<MockResponse>>,
-    max_tokens_seen: Mutex<Vec<u32>>,
-}
-
-impl RecordingMockProvider {
-    fn new(responses: Vec<MockResponse>) -> Self {
-        Self {
-            responses: Mutex::new(responses),
-            max_tokens_seen: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn max_tokens(&self) -> Vec<u32> {
-        self.max_tokens_seen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-}
-
-#[async_trait::async_trait]
-impl ModelProvider for RecordingMockProvider {
-    fn name(&self) -> &'static str {
-        "recording-mock"
-    }
-
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
-        self.max_tokens_seen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(request.max_tokens.get());
-        let response = {
-            let mut responses = self
-                .responses
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if responses.is_empty() {
-                MockResponse {
-                    stop_reason: StopReason::EndTurn,
-                    content: vec![ContentBlock::text("default")],
-                    usage: Usage::new(50, 10),
-                }
-            } else {
-                responses.remove(0)
-            }
-        };
-        Ok(ModelResponse::new(
-            response.stop_reason,
-            Message::new(Role::Assistant, response.content),
-            response.usage,
-            ProviderTrace::new("recording-mock", 0),
-        ))
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-}
 
 #[tokio::test]
-async fn dev_loop_endturn_with_no_writes_continues_until_intercept_cap() {
-    // Phase B of harness-v2.2 — replaces the v2.1 one-shot
-    // EndTurn intercept band-aid with the structural rule below.
-    //
-    // Pinned sequence for a dev-loop task that never writes:
-    //   Iter 0: EndTurn -> intercept #1 (polite reminder)
-    //   Iter 1: EndTurn -> intercept #2 (clamp thinking next turn)
-    //   Iter 2: EndTurn -> intercept #3 (force tool_choice next turn)
-    //   Iter 3: EndTurn -> cap reached, loop exits cleanly
-    //
-    // post-hoc `validate_execution` then catches the empty-write
-    // outcome — that part lives outside this test.
+async fn dev_loop_endturn_with_no_writes_terminates_immediately() {
+    // The cook-loop-fix strip (2026-05) removed the dev-loop EndTurn
+    // intercept escalation. A dev-loop task that ends its first turn
+    // with `EndTurn` must now exit the loop on that turn — no nudges,
+    // no force-tool-choice escalation, no thinking-disable on the
+    // next iteration.
     let executor = MockExecutor { results: vec![] };
 
-    let endturn = |text: &str, usage_out: u64| MockResponse {
+    let provider = MockProvider::new().with_response(MockResponse {
         stop_reason: StopReason::EndTurn,
-        content: vec![ContentBlock::text(text)],
-        usage: Usage::new(100, usage_out),
-    };
-    let responses = vec![
-        endturn("I'm thinking about the task.", 20),
-        endturn("Still considering my approach.", 25),
-        endturn("Almost there, just need to plan.", 30),
-        endturn("OK, no concrete write yet.", 35),
-    ];
-    let provider = RecordingMockProvider::new(responses);
+        content: vec![ContentBlock::text("I'm thinking about the task.")],
+        usage: Usage::new(100, 20),
+    });
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
@@ -1044,123 +820,21 @@ async fn dev_loop_endturn_with_no_writes_continues_until_intercept_cap() {
         .unwrap();
 
     assert_eq!(
-        result.iterations,
-        crate::constants::END_TURN_INTERCEPT_CAP + 1,
-        "dev-loop EndTurn intercept must fire exactly END_TURN_INTERCEPT_CAP times \
-         before the loop is allowed to exit; pre-Phase-B this was 1 (v2.1 band-aid \
-         only fired once and then exited)"
+        result.iterations, 1,
+        "EndTurn must terminate the dev-loop on the first occurrence; no intercept",
     );
+    assert!(result.file_changes.is_empty());
 
-    // No write tool ever ran, so the run's recorded file_changes must
-    // be empty. This indirectly pins `had_any_file_write == false`
-    // (the latch reads from `state.had_any_write`, which only flips
-    // on a successful path-carrying write).
-    assert!(
-        result.file_changes.is_empty(),
-        "no write tool was called, so the result must carry no file changes"
-    );
-
-    // Drain warnings emitted via the event stream and confirm we saw
-    // exactly three force-progress nudges with the attempt-1 / -2 / -3
-    // wording. The order they arrive in the channel matches the
-    // dispatch order at the end of iterations 0, 1, 2.
-    let mut warnings = Vec::new();
     while let Ok(event) = rx.try_recv() {
         if let AgentLoopEvent::Warning(msg) = event {
-            // Only collect the intercept nudges, not other warnings
-            // (e.g. budget-related) that might land in this channel.
-            if msg.contains("EndTurn")
-                || msg.contains("ended your turn")
-                || msg.contains("Choose one")
-            {
-                warnings.push(msg);
-            }
+            assert!(
+                !(msg.contains("ended your turn without writing")
+                    || msg.contains("Second EndTurn without progress")
+                    || msg.contains("Third EndTurn without progress")),
+                "no dev-loop intercept nudge may fire after the strip; got: {msg}"
+            );
         }
     }
-    assert_eq!(
-        warnings.len(),
-        crate::constants::END_TURN_INTERCEPT_CAP,
-        "exactly END_TURN_INTERCEPT_CAP intercept warnings must be emitted on the \
-         event stream so transcripts surface the escalation; got: {warnings:?}"
-    );
-    assert!(
-        warnings[0].contains("Your next response MUST contain exactly one tool call"),
-        "attempt-1 must be the polite reminder; got: {}",
-        warnings[0]
-    );
-    assert!(
-        warnings[1].contains("Extended thinking is now disabled"),
-        "attempt-2 must clamp thinking; got: {}",
-        warnings[1]
-    );
-    assert!(
-        warnings[2].contains("Third EndTurn") && warnings[2].contains("FORCE a tool call"),
-        "attempt-3 must escalate to forced tool choice; got: {}",
-        warnings[2]
-    );
-
-    // The same three nudges must also be appended into the message
-    // history (so the model actually sees them on the next request).
-    let messages_text: String = result
-        .messages
-        .iter()
-        .flat_map(|m| m.content.iter())
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        messages_text.contains("ended your turn without writing any files"),
-        "attempt-1 nudge must be in the message history: {messages_text}"
-    );
-    assert!(
-        messages_text.contains("Second EndTurn without progress"),
-        "attempt-2 nudge must be in the message history"
-    );
-    assert!(
-        messages_text.contains("Third EndTurn without progress"),
-        "attempt-3 nudge must be in the message history"
-    );
-
-    // Thinking must be enabled on iters 0 and 1, then clamped from
-    // iter 2 onward (the attempt-2 nudge promises it for the NEXT
-    // turn, which is iter 2). `build_request` clamps `max_tokens` to
-    // `THINKING_AUTO_ENABLE_THRESHOLD` (2048) when disabling thinking
-    // and otherwise lets it sit at the full thinking budget.
-    let observed = provider.max_tokens();
-    assert_eq!(
-        observed.len(),
-        4,
-        "RecordingMockProvider must see exactly 4 requests; got {observed:?}"
-    );
-    assert!(
-        observed[0] > crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        "iter 0 must run with thinking enabled (max_tokens > {}, got {})",
-        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        observed[0]
-    );
-    assert!(
-        observed[1] > crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        "iter 1 must still run with thinking enabled (max_tokens > {}, got {})",
-        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        observed[1]
-    );
-    assert!(
-        observed[2] <= crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        "iter 2 must run with thinking disabled per the attempt-2 nudge \
-         (max_tokens <= {}, got {})",
-        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        observed[2]
-    );
-    assert!(
-        observed[3] <= crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        "iter 3 must keep thinking disabled per the attempt-3 nudge \
-         (max_tokens <= {}, got {})",
-        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        observed[3]
-    );
 }
 
 #[tokio::test]
@@ -1521,124 +1195,3 @@ async fn dev_loop_endturn_after_task_done_terminates_cleanly() {
     }
 }
 
-/// Phase C of harness-v2.2 anchor: with the tightened thresholds
-/// (`READ_ONLY_INJECTION_THRESHOLD = 2`,
-/// `READ_ONLY_FORCE_TOOL_THRESHOLD = 3`), driving exactly two
-/// read-only iterations through `check_termination_conditions` must
-/// (a) leave the counter at 2 — matching the injection threshold,
-/// and (b) append a synthetic user message containing the new
-/// `STOP READING` imperative opener. One more read-only iteration
-/// pushes the counter to 3, the force threshold, at which point
-/// `begin_iteration` + `build_request` must flip `tool_choice` to
-/// `Required` and arm `disable_thinking_this_iteration` (Anthropic
-/// rejects forced tool use with extended thinking enabled, so the
-/// two flips ride together — same invariant
-/// `force_tool_required_and_thinking_clamped_at_read_only_threshold_b`
-/// pins for the upper threshold).
-#[test]
-fn read_only_force_tool_fires_after_two_read_iterations() {
-    use aura_reasoner::ToolChoice;
-
-    use super::tool_execution::{check_termination_conditions, ExecutedTools};
-
-    // Mirrors the helper in `tool_execution_tests` — kept local so
-    // this test does not depend on cross-module visibility tweaks.
-    fn read_only_executed_tools(idx: usize) -> ExecutedTools {
-        let id = format!("read_{idx}");
-        ExecutedTools {
-            tool_calls: vec![ToolCallInfo {
-                id: id.clone(),
-                name: "read_file".to_string(),
-                input: serde_json::json!({"path": format!("src/lib{idx}.rs")}),
-            }],
-            all_results: vec![ToolCallResult::success(&id, "file body")],
-            side_messages: Vec::new(),
-            is_stalled: false,
-            blocked_ids: Default::default(),
-            cached_ids: Default::default(),
-            saw_empty_path_block: false,
-        }
-    }
-
-    // Pick a `thinking_budget` strictly above the auto-thinking
-    // threshold so the clamp is observable on `build_request`
-    // (otherwise the budget would silently sit below the clamp and
-    // the assertion would trivially pass).
-    let config = AgentLoopConfig {
-        thinking_budget: Some(8_192),
-        max_tokens: 16_384,
-        ..AgentLoopConfig::default()
-    };
-    let mut state = super::LoopState::new(&config, vec![Message::user("hi")]);
-    assert_eq!(state.counters.consecutive_read_only_iterations, 0);
-
-    // --- Iters 0 and 1: read-only --------------------------------
-    for idx in 0..crate::constants::READ_ONLY_INJECTION_THRESHOLD {
-        let stopped =
-            check_termination_conditions(None, &mut state, read_only_executed_tools(idx), false);
-        assert!(!stopped, "iteration {idx} must not stop the loop");
-    }
-    assert_eq!(
-        state.counters.consecutive_read_only_iterations,
-        crate::constants::READ_ONLY_INJECTION_THRESHOLD,
-        "after exactly READ_ONLY_INJECTION_THRESHOLD read iterations the counter \
-         must sit at the threshold value (Phase C: 2)"
-    );
-
-    let nudge_text: String = state
-        .messages
-        .iter()
-        .flat_map(|m| m.content.iter())
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        nudge_text.contains("STOP READING"),
-        "force-progress nudge must appear in state.messages at threshold A and \
-         use the Phase C imperative opener; got:\n{nudge_text}"
-    );
-
-    // --- Iter 2: one more read-only pushes us to threshold B -----
-    let stopped = check_termination_conditions(
-        None,
-        &mut state,
-        read_only_executed_tools(crate::constants::READ_ONLY_INJECTION_THRESHOLD),
-        false,
-    );
-    assert!(!stopped, "third read-only iter must not stop the loop");
-    assert_eq!(
-        state.counters.consecutive_read_only_iterations,
-        crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD,
-        "one more read-only iter past threshold A must saturate at threshold B \
-         (Phase C: 3)"
-    );
-
-    // --- Next `begin_iteration` + `build_request` must force tool
-    //     choice and disable thinking for this turn. --------------
-    state.begin_iteration(&config, 5);
-    assert!(
-        state.thinking.disable_thinking_this_iteration,
-        "begin_iteration must arm disable_thinking_this_iteration when the \
-         read-only counter is at or above READ_ONLY_FORCE_TOOL_THRESHOLD \
-         (Anthropic rejects forced tool use with extended thinking enabled)"
-    );
-    let request = state
-        .build_request(&config, &[], 5)
-        .expect("build_request must succeed");
-    assert!(
-        matches!(request.tool_choice, ToolChoice::Required),
-        "tool_choice must be Required once the read-only counter hits \
-         READ_ONLY_FORCE_TOOL_THRESHOLD; got {:?}",
-        request.tool_choice,
-    );
-    assert!(
-        request.max_tokens.get() <= crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        "max_tokens must be clamped to <= THINKING_AUTO_ENABLE_THRESHOLD ({}) \
-         when thinking is disabled this iteration; got {}",
-        crate::constants::THINKING_AUTO_ENABLE_THRESHOLD,
-        request.max_tokens.get(),
-    );
-}

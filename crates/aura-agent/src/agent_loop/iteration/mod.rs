@@ -6,12 +6,9 @@ use aura_reasoner::{
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::warn;
 
-use crate::constants::{
-    CHARS_PER_TOKEN, NARRATION_TOKEN_HARD_BUDGET, NARRATION_TOKEN_SOFT_BUDGET,
-    WRITE_FILE_CHUNK_BYTES,
-};
+use crate::constants::CHARS_PER_TOKEN;
 use crate::events::AgentLoopEvent;
 use crate::sanitize;
 use crate::types::AgentLoopResult;
@@ -362,89 +359,6 @@ struct PendingTool {
     id: String,
     name: String,
     path: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Narration budget (Phase 4 live steering)
-// ---------------------------------------------------------------------------
-
-/// Build the steering message text injected at the soft budget. Shared
-/// with tests so the assertion and the production string cannot drift.
-pub(super) fn narration_steering_message(token_count: usize) -> String {
-    format!(
-        "[harness steering] The last turns produced {token_count} tokens of text with no tool \
-         calls. On your next turn, call exactly ONE tool (read_file, search_code, or write_file \
-         \u{2264} {WRITE_FILE_CHUNK_BYTES} bytes). Do NOT narrate a plan."
-    )
-}
-
-/// Update the per-turn narration counter and, when budgets are crossed,
-/// inject a steering user message or stamp a stop-reason override.
-///
-/// Returns `true` when the loop should break immediately (hard budget
-/// exhausted). The caller is expected to invoke this after
-/// [`accumulate_response`] and the stop-reason dispatch.
-pub(super) fn update_narration_budget(
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    state: &mut super::LoopState,
-    response: &ModelResponse,
-) -> bool {
-    let had_tool_call = response
-        .message
-        .content
-        .iter()
-        .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
-
-    if had_tool_call {
-        state.counters.last_turn_had_tool_call = true;
-        state.counters.consecutive_narration_tokens = 0;
-        return false;
-    }
-
-    state.counters.last_turn_had_tool_call = false;
-    let added = usize::try_from(response.usage.output_tokens).unwrap_or(usize::MAX);
-    state.counters.consecutive_narration_tokens = state
-        .counters
-        .consecutive_narration_tokens
-        .saturating_add(added);
-
-    // Hard budget takes precedence: we do not want to inject a steering
-    // message on a turn we are already aborting.
-    if state.counters.consecutive_narration_tokens >= NARRATION_TOKEN_HARD_BUDGET {
-        let msg = format!(
-            "[harness steering] Narration budget exhausted after {} tokens without a tool call. \
-             Stopping the turn so the orchestrator can decompose the task.",
-            state.counters.consecutive_narration_tokens
-        );
-        warn!(
-            tokens = state.counters.consecutive_narration_tokens,
-            "narration hard budget exhausted, forcing stop_reason_override"
-        );
-        super::streaming::emit(
-            event_tx,
-            AgentLoopEvent::Error {
-                code: "narration_budget_exhausted".to_string(),
-                message: msg,
-                recoverable: true,
-            },
-        );
-        state.result.stop_reason_override = Some("narration_budget_exhausted".to_string());
-        state.result.stalled = true;
-        return true;
-    }
-
-    if state.counters.consecutive_narration_tokens >= NARRATION_TOKEN_SOFT_BUDGET {
-        let steer = narration_steering_message(state.counters.consecutive_narration_tokens);
-        info!(
-            tokens = state.counters.consecutive_narration_tokens,
-            "narration soft budget crossed, injecting steering user message"
-        );
-        state.messages.push(Message::user(steer.clone()));
-        super::streaming::emit(event_tx, AgentLoopEvent::Warning(steer));
-        state.counters.consecutive_narration_tokens = 0;
-    }
-
-    false
 }
 
 fn extract_pending_tools(response: &ModelResponse) -> Vec<PendingTool> {

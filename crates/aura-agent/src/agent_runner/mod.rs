@@ -617,16 +617,11 @@ pub fn configure_loop_config(
         // instead of "Thought for 2m"-bursting. Chat / non-task
         // callers leave this off (the default).
         disable_thinking_iteration_0: true,
-        // Harness v2.2 Phase B: dev-loop tasks own their completion
-        // contract — `EndTurn` alone is not completion. While neither
-        // a file write nor a successful `task_done` has happened, the
-        // loop intercepts `EndTurn` up to
-        // `END_TURN_INTERCEPT_CAP` times with escalating
-        // force-progress nudges (polite -> disable thinking -> force
-        // tool_choice) before exiting and handing the empty-write
-        // outcome to `validate_execution` / the decomposition path.
-        // Chat / non-task callers leave this off (the default) so a
-        // "read one file and answer" turn still ends cleanly.
+        // Dev-loop profile marker. The EndTurn intercept escalation
+        // it used to gate was removed by the cook-loop-fix strip
+        // (2026-05); the flag is kept so downstream code (system
+        // prompt, telemetry) can still distinguish dev-loop runs
+        // from chat / generic runs.
         dev_loop_completion_required: true,
         ..AgentLoopConfig::default()
     }

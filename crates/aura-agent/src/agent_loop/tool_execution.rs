@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::constants::{tool_result_cache_key, CACHEABLE_TOOLS, WRITE_TOOLS};
+use crate::constants::{tool_result_cache_key, CACHEABLE_TOOLS};
 use aura_reasoner::{ContentBlock, Message, ModelResponse, ToolResultContent};
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
@@ -48,12 +48,7 @@ pub(super) async fn handle_tool_use(
         None => return true,
     };
     emit_and_log_results(event_tx, &tools);
-    check_termination_conditions(
-        event_tx,
-        state,
-        tools,
-        agent.config.dev_loop_completion_required,
-    )
+    check_termination_conditions(event_tx, state, tools)
 }
 
 async fn execute_and_cache_tools(
@@ -243,7 +238,6 @@ pub(super) fn check_termination_conditions(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
     tools: ExecutedTools,
-    dev_loop_completion_required: bool,
 ) -> bool {
     let should_stop = tools.all_results.iter().any(|r| r.stop_loop);
 
@@ -278,24 +272,6 @@ pub(super) fn check_termination_conditions(
         state.counters.consecutive_empty_path_block_iterations = 0;
     }
 
-    // Read-only streak counter (Phase 2). Distinct from
-    // `consecutive_narration_tokens`: that one fires when the model
-    // produces text but no tool calls; this one fires when the model
-    // produces only read-only tool calls without any
-    // `write_file`/`edit_file`/`delete_file`/`task_done` (the four
-    // calls that constitute "forward progress"). Tool-free turns are
-    // skipped entirely — they are handled by the narration budget,
-    // and double-counting them here would let two orthogonal
-    // steering signals trigger off the same trace.
-    let had_progress_call = tools.tool_calls.iter().any(|tc| {
-        WRITE_TOOLS.contains(&tc.name.as_str()) || tc.name == "task_done"
-    });
-    if had_progress_call {
-        state.counters.consecutive_read_only_iterations = 0;
-    } else if !tools.tool_calls.is_empty() {
-        state.counters.consecutive_read_only_iterations += 1;
-    }
-
     // Phase B of harness-v2.2: latch the cumulative
     // `had_any_file_write` / `task_done_completed` flags consulted by
     // `dispatch_stop_reason` when `dev_loop_completion_required` is on.
@@ -328,42 +304,6 @@ pub(super) fn check_termination_conditions(
         tools.all_results,
         tools.side_messages,
     );
-
-    // Soft threshold A: inject a synthetic user message demanding the
-    // next turn be a write or `task_done`. Fires exactly once at the
-    // boundary so the model sees one clear steering nudge instead of
-    // a wall of repeated demands. If the model still produces only
-    // reads after this, the counter keeps incrementing toward
-    // [`READ_ONLY_FORCE_TOOL_THRESHOLD`] (handled in `build_request`)
-    // and ultimately the existing
-    // [`crate::constants::CONSECUTIVE_ERROR_ITERATIONS_LIMIT`] /
-    // narration budgets if the calls start erroring or stop entirely.
-    if state.counters.consecutive_read_only_iterations
-        == crate::constants::READ_ONLY_INJECTION_THRESHOLD
-    {
-        let n = state.counters.consecutive_read_only_iterations;
-        // Dev-loop tasks see only `apply_patch`; chat-mode / generic
-        // agents still see the granular write surface. Pick the wording
-        // matching the active tool profile so the nudge names tools the
-        // model can actually call.
-        let write_surface = if dev_loop_completion_required {
-            "apply_patch with a real `*** Begin Patch ... *** End Patch` envelope, or task_done"
-        } else {
-            "write_file / edit_file / delete_file with a real path, or task_done"
-        };
-        let msg = format!(
-            "STOP READING. You have spent {n} iterations on read-only tool calls. \
-             Your next response MUST be a single tool call: {write_surface}. If no \
-             changes are needed, call task_done(no_changes_needed: true, notes: \
-             \"<one sentence why>\")."
-        );
-        info!(
-            consecutive_read_only_iterations = n,
-            "read-only injection threshold crossed; appending force-progress user message"
-        );
-        helpers::append_warning(&mut state.messages, &msg);
-        streaming::emit(event_tx, AgentLoopEvent::Warning(msg));
-    }
 
     if should_stop {
         return true;

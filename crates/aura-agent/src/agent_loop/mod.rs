@@ -197,29 +197,15 @@ pub struct AgentLoopConfig {
     /// `read_file`. Default `false` for chat / generic callers
     /// where deliberation on the first turn is desirable.
     pub disable_thinking_iteration_0: bool,
-    /// When true, this loop owns its completion contract — `EndTurn`
-    /// alone is not completion. The loop will intercept up to
-    /// [`crate::constants::END_TURN_INTERCEPT_CAP`] `EndTurn`s with
-    /// escalating force-progress messages before allowing termination.
+    /// Marker for the dev-loop task profile.
     ///
-    /// Set `true` by [`crate::agent_runner`] for dev-loop tasks. The
-    /// dispatch path checks [`LoopState::had_any_file_write`] and
-    /// [`LoopState::task_done_completed`] — if neither has fired,
-    /// `dispatch_stop_reason` injects an escalating nudge instead of
-    /// breaking the loop:
-    ///   - attempt 1: polite reminder to write or call `task_done`,
-    ///   - attempt 2: + disable extended thinking for next turn,
-    ///   - attempt 3: + bump
-    ///     [`IterCounters::consecutive_read_only_iterations`] to
-    ///     [`crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD`] so the
-    ///     next iteration triggers Phase 2's `tool_choice = Required`.
-    ///
-    /// After the cap, the loop exits cleanly and post-hoc validation
-    /// (`validate_execution`) catches the empty-write outcome so the
-    /// decomposition path takes over.
-    ///
-    /// Default `false` for chat / generic callers where `EndTurn`
-    /// after a read or two is the legitimate end of the turn.
+    /// Historically gated the `EndTurn` intercept escalation and
+    /// force-tool-choice path; the cook-loop-fix strip (2026-05)
+    /// removed both. The flag is retained as a profile marker so
+    /// downstream consumers (system-prompt builder, telemetry,
+    /// log tagging) can still distinguish dev-loop runs from chat /
+    /// generic runs, but it no longer influences the agent loop's
+    /// termination behavior — `EndTurn` always terminates the loop.
     pub dev_loop_completion_required: bool,
 }
 
@@ -501,9 +487,6 @@ impl AgentLoop {
             {
                 break;
             }
-            if iteration::update_narration_budget(event_tx.as_ref(), &mut state, &response) {
-                break;
-            }
             if post_iteration_checks(&self.config, event_tx.as_ref(), &mut state, iteration) {
                 break;
             }
@@ -617,26 +600,12 @@ impl AgentLoop {
 
     /// Dispatch on the model's stop reason. Returns `true` if the loop should break.
     ///
-    /// `EndTurn` / `StopSequence` normally terminate the loop. When
-    /// [`AgentLoopConfig::dev_loop_completion_required`] is enabled
-    /// (dev-loop policy), the loop owns its completion contract:
-    /// `EndTurn` alone is not completion. While neither
-    /// [`LoopState::had_any_file_write`] nor
-    /// [`LoopState::task_done_completed`] has fired, the loop will
-    /// intercept up to [`crate::constants::END_TURN_INTERCEPT_CAP`]
-    /// `EndTurn`s with escalating force-progress nudges:
-    ///   - attempt 1: polite reminder,
-    ///   - attempt 2: + clamp extended thinking for the next iteration,
-    ///   - attempt 3: + bump
-    ///     [`IterCounters::consecutive_read_only_iterations`] to
-    ///     [`crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD`] so the
-    ///     next iteration triggers Phase 2's `tool_choice = Required`.
-    ///
-    /// After the cap is hit the loop exits cleanly and post-hoc
-    /// validation (`validate_execution`) catches the empty-write
-    /// outcome so the decomposition path takes over. Chat / generic
-    /// callers leave the flag `false` and keep the immediate-exit
-    /// behavior.
+    /// `EndTurn` / `StopSequence` terminate the loop unconditionally.
+    /// The cook-loop-fix strip (2026-05) removed the dev-loop
+    /// `EndTurn` intercept escalation, the per-attempt force-progress
+    /// nudges, and the `dev_loop_completion_required` short-circuit
+    /// that used to keep the loop spinning until the model produced a
+    /// write. The harness now trusts the first `EndTurn` it sees.
     async fn dispatch_stop_reason(
         &self,
         response: &aura_reasoner::ModelResponse,
@@ -645,50 +614,7 @@ impl AgentLoop {
         state: &mut LoopState,
     ) -> bool {
         match response.stop_reason {
-            StopReason::EndTurn | StopReason::StopSequence => {
-                // Phase G diagnostic: log every EndTurn so production debug
-                // logs surface whether `dev_loop_completion_required` is
-                // actually true at runtime and whether the intercept
-                // preconditions are met. Drop this once the production
-                // dev-loop path is confirmed wired through Phase B.
-                tracing::warn!(
-                    dev_loop_completion_required = self.config.dev_loop_completion_required,
-                    had_any_file_write = state.had_any_file_write,
-                    task_done_completed = state.task_done_completed,
-                    endturn_intercept_count = state.counters.endturn_intercept_count,
-                    consecutive_read_only_iterations =
-                        state.counters.consecutive_read_only_iterations,
-                    "PHASE_G_DIAG: EndTurn observed in dispatch_stop_reason"
-                );
-                if self.config.dev_loop_completion_required
-                    && !state.had_any_file_write
-                    && !state.task_done_completed
-                    && state.counters.endturn_intercept_count
-                        < crate::constants::END_TURN_INTERCEPT_CAP
-                {
-                    state.counters.endturn_intercept_count += 1;
-                    let attempt = state.counters.endturn_intercept_count;
-                    let msg = build_progress_demand(attempt, self.config.dev_loop_completion_required);
-                    info!(
-                        attempt,
-                        "dev_loop_completion_required: intercepting EndTurn before any write or task_done"
-                    );
-                    crate::helpers::append_warning(&mut state.messages, &msg);
-                    streaming::emit(event_tx, AgentLoopEvent::Warning(msg));
-                    if attempt >= 2 {
-                        state.thinking.disable_thinking_this_iteration = true;
-                    }
-                    if attempt >= 3 {
-                        // Trigger Phase 2's `tool_choice = Required` path
-                        // on the next iteration by saturating the
-                        // read-only counter at the force threshold.
-                        state.counters.consecutive_read_only_iterations =
-                            crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD;
-                    }
-                    return false;
-                }
-                true
-            }
+            StopReason::EndTurn | StopReason::StopSequence => true,
             StopReason::MaxTokens => !iteration::handle_max_tokens(&self.config, response, state),
             StopReason::ToolUse => {
                 tool_execution::handle_tool_use(self, response, executor, event_tx, state).await
@@ -745,50 +671,6 @@ impl AgentLoop {
         }
 
         Err(iteration::LlmCallError::PromptTooLong(last_error))
-    }
-}
-
-/// Build the escalating force-progress nudge for the
-/// [`AgentLoopConfig::dev_loop_completion_required`] EndTurn intercept.
-///
-/// Three severity tiers, gated on [`IterCounters::endturn_intercept_count`]:
-///   1 = polite reminder,
-///   2 = clamp warning (extended thinking is being disabled next turn),
-///   3 = forced-tool warning (next turn forces a tool call; any further
-///       EndTurn after this exits the loop and fails the task).
-///
-/// `use_apply_patch` selects the tool wording: when true (dev-loop
-/// profile, Phase E of harness-v2.2), the nudge lists `apply_patch /
-/// task_done`; when false (chat-mode / generic agents), it lists the
-/// granular `write_file / edit_file / delete_file / task_done` surface
-/// those agents still see.
-fn build_progress_demand(attempt: usize, use_apply_patch: bool) -> String {
-    let tools = if use_apply_patch {
-        "apply_patch / task_done"
-    } else {
-        "write_file / edit_file / delete_file / task_done"
-    };
-    let tools_with_path_hint = if use_apply_patch {
-        "apply_patch with a real `*** Begin Patch ... *** End Patch` envelope, or task_done"
-    } else {
-        "write_file / edit_file / delete_file with a real path, or task_done"
-    };
-    match attempt {
-        1 => "You ended your turn without writing any files or calling task_done. \
-              The dev-loop requires either a file write or task_done before completion. \
-              Your next response MUST contain exactly one tool call."
-            .to_string(),
-        2 => format!(
-            "Second EndTurn without progress. Extended thinking is now disabled for \
-             the next turn. Your next response MUST be a single tool call: \
-             {tools_with_path_hint} (use no_changes_needed: true if exploration shows \
-             no change is required)."
-        ),
-        _ => format!(
-            "Third EndTurn without progress. The next turn will FORCE a tool call. \
-             Choose one: {tools}. Any further EndTurn after this will exit the loop \
-             and fail the task."
-        ),
     }
 }
 
@@ -860,46 +742,12 @@ pub(crate) struct IterCounters {
     pub(crate) consecutive_all_error_iterations: usize,
     /// Consecutive iterations that contained at least one pathless
     /// `write_file`/`edit_file`/`delete_file` block. Reset whenever an
-    /// iteration finishes with no pathless-write blocks. See
-    /// [`crate::constants::EMPTY_PATH_BLOCK_LIMIT`] — the loop exits
-    /// with a hard error when this counter crosses the threshold, so a
-    /// model stuck re-emitting the same malformed call cannot drag
-    /// the run to the full consecutive-error limit.
+    /// iteration finishes with no pathless-write blocks. The cap on
+    /// [`crate::constants::EMPTY_PATH_BLOCK_LIMIT`] is neutralized
+    /// (`usize::MAX`) by the cook-loop-fix strip, so this counter is
+    /// kept for diagnostic logging only — it no longer terminates
+    /// the loop.
     pub(crate) consecutive_empty_path_block_iterations: usize,
-    /// Rolling count of output tokens produced across turns that
-    /// emitted no `tool_use` blocks. Reset to zero whenever a turn
-    /// executes at least one tool call or when the soft narration
-    /// budget fires a steering injection.
-    pub(crate) consecutive_narration_tokens: usize,
-    /// Whether the most recently processed turn produced at least one
-    /// `tool_use` block. Initialized to `true` so the first turn starts
-    /// with a budget-clean state.
-    pub(crate) last_turn_had_tool_call: bool,
-    /// Consecutive iterations whose tool calls were ALL read-only
-    /// (no `write_file`/`edit_file`/`delete_file`/`task_done`). Reset
-    /// to zero on any iteration that contained at least one write or
-    /// completion call, and unchanged on tool-free iterations (those
-    /// are handled by [`Self::consecutive_narration_tokens`]).
-    ///
-    /// Drives two thresholds in
-    /// [`super::tool_execution::check_termination_conditions`] and
-    /// [`LoopState::build_request`]:
-    ///
-    /// - [`crate::constants::READ_ONLY_INJECTION_THRESHOLD`]: inject a
-    ///   synthetic user message demanding the next turn be a write
-    ///   or `task_done`.
-    /// - [`crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD`]: force
-    ///   `tool_choice = Required` and disable extended thinking for
-    ///   the next turn so the model cannot defer to more deliberation.
-    pub(crate) consecutive_read_only_iterations: usize,
-    /// How many times `dispatch_stop_reason` has intercepted an
-    /// `EndTurn` in this run while
-    /// [`AgentLoopConfig::dev_loop_completion_required`] is `true`.
-    /// Capped at [`crate::constants::END_TURN_INTERCEPT_CAP`]; after
-    /// the cap the loop exits and post-hoc validation catches the
-    /// empty-write outcome. Zero on construction, never reset within
-    /// a run.
-    pub(crate) endturn_intercept_count: usize,
 }
 
 /// Mutable state carried across iterations of the agent loop.
@@ -975,10 +823,6 @@ impl LoopState {
             counters: IterCounters {
                 consecutive_all_error_iterations: 0,
                 consecutive_empty_path_block_iterations: 0,
-                consecutive_narration_tokens: 0,
-                last_turn_had_tool_call: true,
-                consecutive_read_only_iterations: 0,
-                endturn_intercept_count: 0,
             },
         }
     }
@@ -1054,32 +898,6 @@ impl LoopState {
             self.thinking.disable_thinking_this_iteration = true;
         }
 
-        // Threshold-B steering: when the read-only streak crosses
-        // [`READ_ONLY_FORCE_TOOL_THRESHOLD`], we force `tool_choice`
-        // in `build_request`. Anthropic rejects forced tool use while
-        // extended thinking is enabled, so the same condition must
-        // also disable thinking for this one turn.
-        if self.counters.consecutive_read_only_iterations
-            >= crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD
-        {
-            self.thinking.disable_thinking_this_iteration = true;
-        }
-
-        // Phase B of harness-v2.2: the attempt-2 EndTurn intercept
-        // nudge promises "extended thinking is now disabled for the
-        // next turn". `dispatch_stop_reason` runs at the END of an
-        // iteration, so the flag it sets gets cleared at the top of
-        // the next `begin_iteration`. Re-arm here based on the
-        // sticky [`IterCounters::endturn_intercept_count`] so the
-        // message and the actual outbound request stay in sync.
-        // Attempt 3 piggybacks on the read-only force-tool path
-        // above (it bumps `consecutive_read_only_iterations` to the
-        // force threshold), so this branch only has to cover the
-        // attempt-2 case explicitly.
-        if self.counters.endturn_intercept_count >= 2 {
-            self.thinking.disable_thinking_this_iteration = true;
-        }
-
         // If the previous iteration ended with a `MaxTokens` truncation
         // mid-`tool_use`, restore the budget to the configured maximum
         // and skip the taper this turn. The model is about to retry
@@ -1135,42 +953,11 @@ impl LoopState {
             }
             _ => classifier_filtered,
         };
-        // Threshold-B steering: when the model has spent
-        // [`READ_ONLY_FORCE_TOOL_THRESHOLD`] consecutive iterations on
-        // read-only tool calls without writing or completing, force a
-        // tool call. Anthropic's `ToolChoice` exposes `Required`
-        // (force any tool) but no per-call "disable parallel" knob;
-        // pairing it with the `disable_thinking_this_iteration` flag
-        // (set in `begin_iteration` under the same condition) is what
-        // makes the forced call legal — Anthropic rejects forced
-        // tool use while extended thinking is enabled.
-        //
-        // Harness v2.3 (Phase F): for dev-loop tasks
-        // (`dev_loop_completion_required`), force `apply_patch`
-        // specifically via `ToolChoice::Tool` instead of any tool.
-        // Production log analysis (debug-95fd5c.log) showed the model
-        // satisfying `ToolChoice::Required` by picking another read
-        // tool every turn — counter stayed permanently saturated,
-        // tool_choice stayed `any`, no `EndTurn` ever fired, and
-        // Phase B's EndTurn intercept never got a chance to engage.
-        // Forcing `apply_patch` removes the read-loop escape hatch:
-        // the model must emit a patch (correct patches reset the
-        // counter via `had_any_file_write`; malformed patches return
-        // a parser-error tool_result that the model self-corrects).
-        // Chat / non-dev-loop callers keep `ToolChoice::Required`.
-        let tool_choice = if self.counters.consecutive_read_only_iterations
-            >= crate::constants::READ_ONLY_FORCE_TOOL_THRESHOLD
-        {
-            if config.dev_loop_completion_required {
-                aura_reasoner::ToolChoice::Tool {
-                    name: "apply_patch".to_string(),
-                }
-            } else {
-                aura_reasoner::ToolChoice::Required
-            }
-        } else {
-            aura_reasoner::ToolChoice::Auto
-        };
+        // The cook-loop-fix strip (2026-05) removed the read-only
+        // streak counter and the force-tool-choice path that rode on
+        // top of it. `tool_choice` is always `Auto`; the model picks
+        // its own next move.
+        let tool_choice = aura_reasoner::ToolChoice::Auto;
 
         let has_task_tools = effective_tools.iter().any(|tool| {
             matches!(
