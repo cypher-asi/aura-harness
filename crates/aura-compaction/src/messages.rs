@@ -2,7 +2,7 @@
 
 use aura_reasoner::{ContentBlock, Message, ModelRequestKind, Role, ToolResultContent};
 use serde_json::Value;
-use tracing::{debug, info};
+use tracing::debug;
 
 const CHARS_PER_TOKEN: usize = 4;
 const COMPACTION_TIER_HISTORY: f64 = 0.85;
@@ -10,18 +10,16 @@ const COMPACTION_TIER_AGGRESSIVE: f64 = 0.70;
 const COMPACTION_TIER_60: f64 = 0.60;
 const COMPACTION_TIER_30: f64 = 0.30;
 const COMPACTION_TIER_MICRO: f64 = 0.15;
-const DEFAULT_PRESERVE_RECENT_WRITES: usize = 2;
-const DEFAULT_REDACT_AT: f64 = 0.30;
 const DEFAULT_SUMMARY_AT: f64 = 0.85;
 const DEV_LOOP_BOOTSTRAP_TOTAL_TEXT_MAX_BYTES: usize = 24 * 1024;
 const PROJECT_TOOL_TOTAL_TEXT_MAX_BYTES: usize = 48 * 1024;
 
-/// Absolute message-byte threshold for light compaction.
-pub const ABSOLUTE_BYTE_LIGHT_AT: usize = 64 * 1024;
-/// Absolute message-byte threshold for aggressive compaction.
-pub const ABSOLUTE_BYTE_AGGRESSIVE_AT: usize = 96 * 1024;
-/// Absolute message-byte threshold for micro compaction.
-pub const ABSOLUTE_BYTE_MICRO_AT: usize = 128 * 1024;
+/// Upper bound on the synthetic summary's target footprint (in chars).
+///
+/// Used as a sanity ceiling so a request-body-cap-less Chat run can't
+/// ask for an arbitrarily large summary target. 96 KiB ≈ 24 K tokens,
+/// which is well under any sensible context budget.
+const SUMMARY_TARGET_CEILING: usize = 96 * 1024;
 
 /// Hard upper bound on bytes-per-tool-blob kept in session storage.
 pub const SESSION_TOOL_BLOB_MAX_BYTES: usize = 8 * 1024;
@@ -106,14 +104,8 @@ pub struct CompactionPolicy {
     pub request_kind: Option<ModelRequestKind>,
     /// Explicit request body cap, when the caller knows one.
     pub request_body_cap_bytes: Option<usize>,
-    /// Number of recent write-like assistant turns to leave unredacted.
-    pub preserve_recent_writes: usize,
-    /// Pressure at which write-input redaction is allowed.
-    pub redact_at: f64,
     /// Pressure at which local compaction asks the caller for model-backed summary escalation.
     pub summary_at: f64,
-    /// Disable write-input redaction while keeping other compaction behavior.
-    pub disable_redact: bool,
 }
 
 impl CompactionPolicy {
@@ -140,10 +132,7 @@ impl CompactionPolicy {
             raw_message_bytes: None,
             request_kind: None,
             request_body_cap_bytes: None,
-            preserve_recent_writes: DEFAULT_PRESERVE_RECENT_WRITES,
-            redact_at: DEFAULT_REDACT_AT,
             summary_at: DEFAULT_SUMMARY_AT,
-            disable_redact: false,
         }
     }
 }
@@ -151,31 +140,9 @@ impl CompactionPolicy {
 impl Default for CompactionPolicy {
     fn default() -> Self {
         let mut policy = Self::default_values();
-        policy.preserve_recent_writes = env_usize(
-            "AURA_COMPACTION_PRESERVE_RECENT_WRITES",
-            DEFAULT_PRESERVE_RECENT_WRITES,
-        );
-        policy.redact_at = env_unit_f64("AURA_COMPACTION_REDACT_AT", DEFAULT_REDACT_AT);
         policy.summary_at = env_unit_f64("AURA_COMPACTION_SUMMARY_AT", DEFAULT_SUMMARY_AT);
-        policy.disable_redact = env_bool("AURA_COMPACTION_DISABLE_REDACT");
         policy
     }
-}
-
-fn env_bool(name: &str) -> bool {
-    std::env::var(name).ok().is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(default)
 }
 
 fn env_unit_f64(name: &str, default: f64) -> f64 {
@@ -494,6 +461,22 @@ fn tier_for(pressure: f64) -> Option<CompactionConfig> {
 }
 
 /// Compute the effective pressure used for tier selection.
+///
+/// Pressure is the maximum of two real signals:
+///
+/// * **Context pressure** — `current_context_tokens / max_context_tokens`.
+///   This is the only honest measure of how full the model's context
+///   window is.
+/// * **Request-body-cap pressure** — `raw_message_bytes / request_body_cap`,
+///   used only on request kinds that actually have an upstream body
+///   cap (`DevLoopBootstrap`, `ProjectToolSpecGen`, etc.). Plain `Chat`
+///   continuations have no cap so this term is zero.
+///
+/// We deliberately do *not* drive pressure off raw message-byte count
+/// alone — every modern model we target has a context window measured
+/// in hundreds of thousands of tokens, and synthetic byte-envelope
+/// pressure was silently rewriting tool results long before real
+/// pressure existed.
 #[must_use]
 pub fn effective_pressure(input: &CompactionInput<'_>) -> f64 {
     let policy = input.policy;
@@ -513,30 +496,16 @@ pub fn effective_pressure(input: &CompactionInput<'_>) -> f64 {
             pressure_tokens as f64 / max_ctx as f64
         }
     });
-    let raw_bytes = policy
-        .raw_message_bytes
-        .unwrap_or_else(|| estimate_message_chars(input.messages));
-    let byte_pressure = absolute_byte_pressure(raw_bytes);
     let request_cap_pressure = request_body_cap(policy)
-        .map(|cap| cap_pressure(raw_bytes, cap))
+        .map(|cap| {
+            let raw_bytes = policy
+                .raw_message_bytes
+                .unwrap_or_else(|| estimate_message_chars(input.messages));
+            cap_pressure(raw_bytes, cap)
+        })
         .unwrap_or(0.0);
 
-    context_pressure
-        .max(byte_pressure)
-        .max(request_cap_pressure)
-        .min(1.0)
-}
-
-fn absolute_byte_pressure(messages_chars: usize) -> f64 {
-    if messages_chars >= ABSOLUTE_BYTE_MICRO_AT {
-        COMPACTION_TIER_HISTORY
-    } else if messages_chars >= ABSOLUTE_BYTE_AGGRESSIVE_AT {
-        COMPACTION_TIER_AGGRESSIVE
-    } else if messages_chars >= ABSOLUTE_BYTE_LIGHT_AT {
-        COMPACTION_TIER_30
-    } else {
-        0.0
-    }
+    context_pressure.max(request_cap_pressure).min(1.0)
 }
 
 fn request_body_cap(policy: CompactionPolicy) -> Option<usize> {
@@ -563,20 +532,6 @@ fn cap_pressure(bytes: usize, cap: usize) -> f64 {
     }
 }
 
-/// Tiered selector keyed off raw message-character bytes.
-#[must_use]
-pub fn absolute_byte_tier(messages_chars: usize) -> Option<CompactionConfig> {
-    if messages_chars >= ABSOLUTE_BYTE_MICRO_AT {
-        Some(CompactionConfig::micro())
-    } else if messages_chars >= ABSOLUTE_BYTE_AGGRESSIVE_AT {
-        Some(CompactionConfig::aggressive())
-    } else if messages_chars >= ABSOLUTE_BYTE_LIGHT_AT {
-        Some(CompactionConfig::light())
-    } else {
-        None
-    }
-}
-
 /// Pick whichever tier trims more aggressively.
 #[must_use]
 pub fn pick_stricter_tier(
@@ -594,107 +549,6 @@ pub fn pick_stricter_tier(
         (Some(x), None) => Some(x),
         (None, Some(y)) => Some(y),
         (None, None) => None,
-    }
-}
-
-/// Best-effort Rust signature extraction.
-///
-/// If `content` looks like Rust code, replaces function/method bodies with
-/// a placeholder, keeping signatures and structural items visible.
-#[must_use]
-pub fn try_signature_compact(content: &str) -> Option<String> {
-    const RUST_MARKERS: &[&str] = &["fn ", "pub fn", "struct ", "impl ", "mod "];
-    let has_rust = RUST_MARKERS.iter().any(|m| content.contains(m));
-    if !has_rust {
-        return None;
-    }
-
-    let mut result = String::with_capacity(content.len());
-    let mut chars = content.chars().peekable();
-    let mut line_buf = String::new();
-    let mut brace_depth: i32 = 0;
-    let mut in_body = false;
-    let mut body_start_depth: i32 = 0;
-    let mut wrote_placeholder = false;
-
-    while let Some(ch) = chars.next() {
-        if ch == '\n' || chars.peek().is_none() {
-            if ch != '\n' {
-                line_buf.push(ch);
-            }
-
-            let trimmed = line_buf.trim_start();
-            let is_sig_line = trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("fn ")
-                || trimmed.starts_with("pub(crate) fn ")
-                || trimmed.starts_with("pub async fn ")
-                || trimmed.starts_with("async fn ")
-                || trimmed.starts_with("pub unsafe fn ")
-                || trimmed.starts_with("unsafe fn ")
-                || trimmed.starts_with("pub const fn ")
-                || trimmed.starts_with("const fn ");
-
-            if in_body {
-                for c in line_buf.chars() {
-                    match c {
-                        '{' => brace_depth += 1,
-                        '}' => brace_depth -= 1,
-                        _ => {}
-                    }
-                }
-
-                if brace_depth <= body_start_depth {
-                    if !wrote_placeholder {
-                        result.push_str("    // ... body omitted ...\n");
-                    }
-                    result.push_str(&line_buf);
-                    result.push('\n');
-                    in_body = false;
-                } else if !wrote_placeholder {
-                    result.push_str("    // ... body omitted ...\n");
-                    wrote_placeholder = true;
-                }
-            } else if is_sig_line && line_buf.contains('{') {
-                result.push_str(&line_buf);
-                result.push('\n');
-
-                let open_count = line_buf
-                    .chars()
-                    .filter(|&c| c == '{')
-                    .fold(0_i32, |count, _| count.saturating_add(1));
-                let close_count = line_buf
-                    .chars()
-                    .filter(|&c| c == '}')
-                    .fold(0_i32, |count, _| count.saturating_add(1));
-                brace_depth += open_count - close_count;
-
-                if brace_depth > 0 {
-                    in_body = true;
-                    body_start_depth = brace_depth - 1;
-                    wrote_placeholder = false;
-                }
-            } else {
-                for c in line_buf.chars() {
-                    match c {
-                        '{' => brace_depth += 1,
-                        '}' => brace_depth -= 1,
-                        _ => {}
-                    }
-                }
-                result.push_str(&line_buf);
-                result.push('\n');
-            }
-
-            line_buf.clear();
-        } else {
-            line_buf.push(ch);
-        }
-    }
-
-    if result.len().saturating_mul(10) <= content.len().saturating_mul(7) {
-        Some(result)
-    } else {
-        None
     }
 }
 
@@ -741,7 +595,7 @@ fn summary_target_total_chars(policy: CompactionPolicy, before_chars: usize) -> 
         target = target.min(cap.saturating_mul(8) / 10);
     }
 
-    target.min(ABSOLUTE_BYTE_AGGRESSIVE_AT).max(1_024)
+    target.min(SUMMARY_TARGET_CEILING).max(1_024)
 }
 
 fn message_tool_use_ids(message: &Message) -> Vec<&str> {
@@ -853,103 +707,20 @@ fn compact_content_block(
                 ToolResultContent::Json(v) => serde_json::to_string(v).unwrap_or_default(),
             };
             if text.len() > config.tool_result_max_chars {
-                let compacted = try_signature_compact(&text).unwrap_or_else(|| {
-                    truncate_content(&text, config.tool_result_max_chars, head_chars, tail_chars)
-                });
-                if compacted.len() <= config.tool_result_max_chars || compacted.len() < text.len() {
-                    *content = ToolResultContent::Text(compacted);
-                } else {
-                    *content = ToolResultContent::Text(truncate_content(
-                        &text,
-                        config.tool_result_max_chars,
-                        head_chars,
-                        tail_chars,
-                    ));
-                }
+                *content = ToolResultContent::Text(truncate_content(
+                    &text,
+                    config.tool_result_max_chars,
+                    head_chars,
+                    tail_chars,
+                ));
             }
         }
         ContentBlock::Text { text } => {
             if text.len() > config.text_max_chars {
-                if let Some(sig) = try_signature_compact(text) {
-                    if sig.len() <= config.text_max_chars || sig.len() < text.len() {
-                        *text = sig;
-                    } else {
-                        *text =
-                            truncate_content(text, config.text_max_chars, head_chars, tail_chars);
-                    }
-                } else {
-                    *text = truncate_content(text, config.text_max_chars, head_chars, tail_chars);
-                }
+                *text = truncate_content(text, config.text_max_chars, head_chars, tail_chars);
             }
         }
         _ => {}
-    }
-}
-
-fn write_redaction_fields(tool_name: &str, input: &Value) -> &'static [&'static str] {
-    match tool_name {
-        "write_file" if input.get("content").and_then(Value::as_str).is_some() => &["content"],
-        "edit_file" => {
-            let has_old_string = input.get("old_string").and_then(Value::as_str).is_some();
-            let has_new_string = input.get("new_string").and_then(Value::as_str).is_some();
-            if has_old_string && has_new_string {
-                &["old_string", "new_string"]
-            } else if input.get("old_text").and_then(Value::as_str).is_some()
-                && input.get("new_text").and_then(Value::as_str).is_some()
-            {
-                &["old_text", "new_text"]
-            } else {
-                &[]
-            }
-        }
-        _ => &[],
-    }
-}
-
-fn message_has_write_input(message: &Message) -> bool {
-    message.content.iter().any(|block| match block {
-        ContentBlock::ToolUse { name, input, .. } => {
-            !RedactionMarker::is_marker(input) && !write_redaction_fields(name, input).is_empty()
-        }
-        _ => false,
-    })
-}
-
-fn redact_write_input(input: &Value, fields: &[&str]) -> Value {
-    let mut redacted = input.clone();
-    for field in fields {
-        let bytes = redacted
-            .get(*field)
-            .and_then(Value::as_str)
-            .map_or(0, str::len);
-        redacted = RedactionMarker::mark(&redacted, field, bytes);
-    }
-    redacted
-}
-
-fn redact_aged_write_inputs(messages: &mut [Message], preserve_recent_writes: usize) {
-    let mut write_message_indices = Vec::new();
-    for (idx, message) in messages.iter().enumerate().skip(1) {
-        if message_has_write_input(message) {
-            write_message_indices.push(idx);
-        }
-    }
-
-    let redact_count = write_message_indices
-        .len()
-        .saturating_sub(preserve_recent_writes);
-    for idx in write_message_indices.into_iter().take(redact_count) {
-        for block in &mut messages[idx].content {
-            if let ContentBlock::ToolUse { name, input, .. } = block {
-                if RedactionMarker::is_marker(input) {
-                    continue;
-                }
-                let fields = write_redaction_fields(name, input);
-                if !fields.is_empty() {
-                    *input = redact_write_input(input, fields);
-                }
-            }
-        }
     }
 }
 
@@ -965,7 +736,8 @@ pub fn compact_older_messages(messages: &mut [Message], config: &CompactionConfi
     }
 }
 
-/// Choose and apply a compaction tier using utilization and absolute-byte guards.
+/// Choose and apply a compaction tier using context-window utilization
+/// and explicit request-body caps.
 #[allow(clippy::needless_pass_by_value)]
 pub fn compact_messages(input: CompactionInput<'_>) -> CompactionReport {
     let before_chars = estimate_message_chars(input.messages);
@@ -974,22 +746,14 @@ pub fn compact_messages(input: CompactionInput<'_>) -> CompactionReport {
     let policy = input.policy;
 
     if let Some(tier) = chosen {
-        debug!("Compacting context");
-        if absolute_byte_pressure(before_chars) >= pressure {
-            info!(
-                messages_chars = before_chars,
-                pressure,
-                tool_result_max_chars = tier.tool_result_max_chars,
-                text_max_chars = tier.text_max_chars,
-                preserve_recent = tier.preserve_recent,
-                "compaction triggered by absolute_bytes (proxy-envelope guard)",
-            );
-        }
+        debug!(
+            pressure,
+            tool_result_max_chars = tier.tool_result_max_chars,
+            text_max_chars = tier.text_max_chars,
+            preserve_recent = tier.preserve_recent,
+            "Compacting context"
+        );
         compact_older_messages(input.messages, &tier);
-    }
-
-    if !policy.disable_redact && pressure >= policy.redact_at {
-        redact_aged_write_inputs(input.messages, policy.preserve_recent_writes);
     }
 
     let after_chars = estimate_message_chars(input.messages);
@@ -1096,31 +860,6 @@ pub fn apply_message_summary(
     }
 }
 
-/// Apply proactive exploration compaction when the caller has crossed its threshold.
-pub fn compact_exploration_if_needed(
-    messages: &mut [Message],
-    exploration_count: usize,
-    exploration_allowance: usize,
-    max_context_tokens: Option<u64>,
-    already_compacted: bool,
-) -> bool {
-    if already_compacted || max_context_tokens.is_none() {
-        return false;
-    }
-    let threshold = (exploration_allowance * 2) / 3;
-    if exploration_count < threshold {
-        return false;
-    }
-
-    let tier = CompactionConfig::history();
-    compact_older_messages(messages, &tier);
-    debug!(
-        exploration_count,
-        threshold, "Proactive compaction triggered by exploration usage"
-    );
-    true
-}
-
 /// Convert message characters to the existing heuristic token estimate.
 #[must_use]
 pub fn message_chars_to_tokens(chars: usize) -> u64 {
@@ -1174,75 +913,15 @@ pub fn summarize_write_input(tool_name: &str, input: &Value) -> Option<Value> {
     }
 }
 
-/// Collapse oversized repeated cache hits for read-only tools.
-#[must_use]
-pub fn summarize_cached_tool_result(
-    tool_name: &str,
-    input: &Value,
-    content: &str,
-) -> Option<String> {
-    if std::env::var("AURA_DISABLE_CACHED_RESULT_SHAPING")
-        .ok()
-        .as_deref()
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-    {
-        return None;
-    }
-
-    let (reuse_threshold, max_chars, head_chars, tail_chars) = match tool_name {
-        "read_file" => (8_000, 4_000, 3_000, 500),
-        "search_code" => (4_000, 2_000, 1_500, 250),
-        "list_files" | "find_files" => (2_500, 1_200, 900, 150),
-        "stat_file" => (1_500, 900, 650, 100),
-        _ => return None,
-    };
-
-    if content.len() <= reuse_threshold {
-        return None;
-    }
-
-    let descriptor = cached_tool_descriptor(input);
-    let truncated = truncate_content(content, max_chars, Some(head_chars), Some(tail_chars));
-    Some(format!(
-        "Cached result reused from earlier identical `{tool_name}` call{descriptor}. Full output was {} chars.\n\n{truncated}",
-        content.len()
-    ))
-}
-
-/// Apply a write-input or cached-result summary.
+/// Apply a write-input redaction summary.
+///
+/// Cached-result-shaping has been removed: tool results either fit
+/// verbatim or get a visible `truncate_content` marker via
+/// `compact_older_messages`. This entry point now only redacts oversized
+/// write-tool inputs that the storage / request-build path hands us.
 #[must_use]
 pub fn apply_summary(input: ToolSummaryInput<'_>) -> Option<SummaryOutput> {
-    if let Some(content) = input.content {
-        summarize_cached_tool_result(input.tool_name, input.input, content).map(SummaryOutput::Text)
-    } else {
-        summarize_write_input(input.tool_name, input.input).map(SummaryOutput::Input)
-    }
-}
-
-fn cached_tool_descriptor(input: &Value) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
-        parts.push(format!("path={path}"));
-    }
-    if let Some(pattern) = input.get("pattern").and_then(|v| v.as_str()) {
-        parts.push(format!("pattern={pattern}"));
-    }
-    if let Some(query) = input.get("query").and_then(|v| v.as_str()) {
-        parts.push(format!("query={query}"));
-    }
-    if let Some(start_line) = input.get("start_line").and_then(|v| v.as_u64()) {
-        parts.push(format!("start_line={start_line}"));
-    }
-    if let Some(end_line) = input.get("end_line").and_then(|v| v.as_u64()) {
-        parts.push(format!("end_line={end_line}"));
-    }
-
-    if parts.is_empty() {
-        String::new()
-    } else {
-        format!(" ({})", parts.join(", "))
-    }
+    summarize_write_input(input.tool_name, input.input).map(SummaryOutput::Input)
 }
 
 /// Cap each `ToolUse` input / `ToolResult` content in `messages` at the storage limit.
@@ -1396,69 +1075,6 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_extract_rust() {
-        let rust_code = r#"
-use std::io;
-
-pub fn compute_sum(a: i32, b: i32) -> i32 {
-let result = a + b;
-println!("sum = {}", result);
-if result > 100 {
-    panic!("too big");
-}
-result
-}
-
-pub struct Config {
-pub name: String,
-pub value: u64,
-}
-
-impl Config {
-pub fn new(name: &str) -> Self {
-    Self {
-        name: name.to_string(),
-        value: 0,
-    }
-}
-
-pub fn set_value(&mut self, v: u64) {
-    self.value = v;
-    println!("value set to {}", v);
-    if v > 1000 {
-        panic!("value too large");
-    }
-}
-}
-
-fn helper_internal() {
-let x = 42;
-let y = x * 2;
-println!("{}", y);
-for i in 0..10 {
-    println!("{}", i);
-}
-}
-"#;
-        let result = try_signature_compact(rust_code);
-        assert!(result.is_some(), "should extract Rust signatures");
-        let extracted = result.unwrap();
-        assert!(extracted.contains("pub fn compute_sum"));
-        assert!(extracted.contains("// ... body omitted ..."));
-        assert!(extracted.contains("pub fn new"));
-        assert!(extracted.len() < rust_code.len());
-    }
-
-    #[test]
-    fn test_signature_extract_non_rust() {
-        let json = r#"{"key": "value", "nested": {"a": 1, "b": 2}}"#;
-        assert!(try_signature_compact(json).is_none());
-
-        let plain = "This is just some plain text with no code at all.\nIt has multiple lines.\nBut nothing resembling Rust.";
-        assert!(try_signature_compact(plain).is_none());
-    }
-
-    #[test]
     fn test_5_tier_selection() {
         let t = select_tier(0.90).unwrap();
         assert_eq!(t.preserve_recent, 2);
@@ -1585,13 +1201,6 @@ for i in 0..10 {
         assert!(summarize_write_input("totally_unknown", &input).is_none());
     }
 
-    fn assistant_tool_use(name: &str, input: Value) -> Message {
-        Message {
-            role: Role::Assistant,
-            content: vec![ContentBlock::tool_use("toolu_1", name, input)],
-        }
-    }
-
     fn tool_use_with_id(id: &str) -> Message {
         Message {
             role: Role::Assistant,
@@ -1635,50 +1244,6 @@ for i in 0..10 {
         messages.push(Message::assistant("recent assistant tail"));
         messages.push(Message::user("recent user tail"));
         messages
-    }
-
-    fn high_pressure_policy(preserve_recent_writes: usize) -> CompactionPolicy {
-        CompactionPolicy {
-            raw_message_bytes: Some(ABSOLUTE_BYTE_LIGHT_AT),
-            preserve_recent_writes,
-            ..CompactionPolicy::default()
-        }
-    }
-
-    #[test]
-    fn redact_skips_latest_assistant_turn() {
-        let mut messages = vec![
-            Message::user("anchor"),
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "old.rs", "content": "old content"}),
-            ),
-            Message::user("old result"),
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "latest.rs", "content": "latest content"}),
-            ),
-        ];
-
-        compact_messages(CompactionInput {
-            messages: &mut messages,
-            policy: high_pressure_policy(1),
-        });
-
-        match &messages[1].content[0] {
-            ContentBlock::ToolUse { input, .. } => {
-                assert!(input.get("content").is_none());
-                assert!(RedactionMarker::is_marker(input));
-            }
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-        match &messages[3].content[0] {
-            ContentBlock::ToolUse { input, .. } => {
-                assert_eq!(input["content"], "latest content");
-                assert!(!RedactionMarker::is_marker(input));
-            }
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1777,11 +1342,16 @@ for i in 0..10 {
 
     #[test]
     fn summary_action_only_at_high_pressure() {
+        // Build a fixture that's well below the summary_at threshold:
+        // 200K context window, 80K context tokens (40% pressure) — far
+        // below the 0.85 default. Compaction may still apply a tier,
+        // but it must NOT escalate to NeedsSummary.
         let mut messages = long_summary_fixture();
         let report = compact_messages(CompactionInput {
             messages: &mut messages,
             policy: CompactionPolicy {
-                raw_message_bytes: Some(ABSOLUTE_BYTE_AGGRESSIVE_AT),
+                max_context_tokens: Some(200_000),
+                current_context_tokens: Some(80_000),
                 summary_at: 0.85,
                 ..CompactionPolicy::default()
             },
@@ -1791,77 +1361,6 @@ for i in 0..10 {
             !matches!(report.action, CompactionAction::NeedsSummary(_)),
             "summary escalation should wait for policy.summary_at"
         );
-    }
-
-    #[test]
-    fn redact_noop_below_pressure_threshold() {
-        let mut messages = vec![
-            Message::user("anchor"),
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "old.rs", "content": "old content"}),
-            ),
-            Message::user("tail"),
-        ];
-        let before = serde_json::to_value(&messages[1].content[0]).unwrap();
-
-        compact_messages(CompactionInput {
-            messages: &mut messages,
-            policy: CompactionPolicy {
-                raw_message_bytes: Some(ABSOLUTE_BYTE_LIGHT_AT - 1),
-                preserve_recent_writes: 0,
-                ..CompactionPolicy::default()
-            },
-        });
-
-        assert_eq!(
-            serde_json::to_value(&messages[1].content[0]).unwrap(),
-            before
-        );
-    }
-
-    #[test]
-    fn redact_targets_only_aged_writes() {
-        let mut messages = vec![
-            Message::user("anchor"),
-            assistant_tool_use("read_file", serde_json::json!({"path": "old.rs"})),
-            Message::user("read result"),
-            assistant_tool_use(
-                "edit_file",
-                serde_json::json!({
-                    "path": "old.rs",
-                    "old_text": "old",
-                    "new_text": "new",
-                }),
-            ),
-            Message::user("edit result"),
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "latest.rs", "content": "latest"}),
-            ),
-        ];
-
-        compact_messages(CompactionInput {
-            messages: &mut messages,
-            policy: high_pressure_policy(1),
-        });
-
-        match &messages[1].content[0] {
-            ContentBlock::ToolUse { input, .. } => assert_eq!(input["path"], "old.rs"),
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-        match &messages[3].content[0] {
-            ContentBlock::ToolUse { input, .. } => {
-                assert!(input.get("old_text").is_none());
-                assert!(input.get("new_text").is_none());
-                assert!(RedactionMarker::is_marker(input));
-            }
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-        match &messages[5].content[0] {
-            ContentBlock::ToolUse { input, .. } => assert_eq!(input["content"], "latest"),
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1878,44 +1377,13 @@ for i in 0..10 {
     }
 
     #[test]
-    fn cache_aware_compaction_does_not_bust_cache_breakpoint() {
-        let mut messages = vec![
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "cached.rs", "content": "cached"}),
-            ),
-            Message::user("first result"),
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "old.rs", "content": "old"}),
-            ),
-            Message::user("old result"),
-            assistant_tool_use(
-                "write_file",
-                serde_json::json!({"path": "latest.rs", "content": "latest"}),
-            ),
-        ];
-
-        compact_messages(CompactionInput {
-            messages: &mut messages,
-            policy: high_pressure_policy(1),
-        });
-
-        match &messages[0].content[0] {
-            ContentBlock::ToolUse { input, .. } => {
-                assert_eq!(input["content"], "cached");
-                assert!(!RedactionMarker::is_marker(input));
-            }
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-        match &messages[2].content[0] {
-            ContentBlock::ToolUse { input, .. } => assert!(RedactionMarker::is_marker(input)),
-            other => panic!("expected ToolUse, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn request_kind_body_cap_contributes_pressure() {
+        // Without `absolute_byte_pressure`, the `DevLoopBootstrap` body
+        // cap is the only thing that can push pressure above zero on a
+        // tiny conversation. Set raw_message_bytes well above the
+        // 24 KiB cap and assert pressure crosses into a tier purely on
+        // the cap math (raw / cap), with `max_context_tokens` and
+        // `current_context_tokens` left at their defaults.
         let mut messages = vec![Message::user("small")];
         let input = CompactionInput {
             messages: &mut messages,
@@ -1926,73 +1394,179 @@ for i in 0..10 {
             },
         };
 
-        assert!(effective_pressure(&input) > 1.0_f64.min(DEFAULT_REDACT_AT));
-        assert!(select_tier(effective_pressure(&input)).is_some());
-    }
-
-    #[test]
-    fn test_summarize_cached_tool_result_for_large_read_file() {
-        let input = serde_json::json!({"path": "src/lib.rs"});
-        let content = "a".repeat(9_000);
-        let summary = summarize_cached_tool_result("read_file", &input, &content).unwrap();
-        assert!(summary.contains("Cached result reused"));
-        assert!(summary.contains("path=src/lib.rs"));
-        assert!(summary.contains("Full output was 9000 chars"));
-        assert!(summary.contains("truncated"));
-        assert!(summary.len() < content.len());
-    }
-
-    #[test]
-    fn test_summarize_cached_tool_result_cuts_large_read_file_footprint_substantially() {
-        let input = serde_json::json!({"path": "src/lib.rs"});
-        let content = "a".repeat(9_000);
-        let summary = summarize_cached_tool_result("read_file", &input, &content).unwrap();
-        let saved_chars = content.len() - summary.len();
-        assert!(summary.len() <= 4_300, "summary should stay compact");
+        let pressure = effective_pressure(&input);
         assert!(
-            saved_chars >= 4_500,
-            "expected at least 4.5k chars saved, got {saved_chars}"
+            pressure >= 1.0,
+            "raw bytes above the cap should saturate request_cap_pressure to 1.0; got {pressure}"
+        );
+        assert!(
+            select_tier(pressure).is_some(),
+            "saturated pressure should pick a tier"
+        );
+
+        // Sanity: a Chat continuation has no body cap, so the same
+        // raw_message_bytes should NOT trip pressure on its own.
+        let mut messages2 = vec![Message::user("small")];
+        let chat_input = CompactionInput {
+            messages: &mut messages2,
+            policy: CompactionPolicy {
+                raw_message_bytes: Some(DEV_LOOP_BOOTSTRAP_TOTAL_TEXT_MAX_BYTES + 1),
+                request_kind: Some(ModelRequestKind::Chat),
+                ..CompactionPolicy::default()
+            },
+        };
+        assert_eq!(
+            effective_pressure(&chat_input),
+            0.0,
+            "Chat continuations have no body cap; raw bytes alone must not produce pressure",
         );
     }
 
+    /// Regression: a Rust-shaped 6 KB `read_file` ToolResult must
+    /// survive `compact_messages` verbatim when no compaction tier is
+    /// selected, and at every pressure below `summary_at` (default
+    /// 0.85) the worst case must be a *visible* `truncate_content`
+    /// marker — never a silent signature-compact skeleton with
+    /// `// ... body omitted ...`.
+    ///
+    /// (The plan's wording said "verbatim at 40% pressure", but the
+    /// existing tier matrix selects the `light` tier at >= 30% with
+    /// `tool_result_max_chars = 3000`, so a 6 KB ToolResult is
+    /// always truncated above the 30% threshold. The regression we
+    /// actually care about is *signature-compact never fires at any
+    /// non-summary pressure*; that's what this test pins down.)
     #[test]
-    fn test_summarize_cached_tool_result_leaves_small_result_unchanged() {
-        let input = serde_json::json!({"path": "src/lib.rs"});
-        let content = "fn main() {}\n";
-        assert!(summarize_cached_tool_result("read_file", &input, content).is_none());
-    }
+    fn read_file_result_survives_compaction_below_summary_pressure() {
+        // ~6 KB of Rust-shaped content. The fixture deliberately
+        // contains the structural markers `try_signature_compact` used
+        // to look for, so any future regression that re-introduces
+        // signature collapse will produce a `body omitted` marker that
+        // this test asserts is absent.
+        let snippet = "pub fn foo(x: u64) -> u64 {\n    let y = x + 1;\n    y * 2\n}\n\n";
+        let body = snippet.repeat(120);
+        assert!(body.len() >= 6_000, "fixture should be at least 6 KB");
 
-    #[test]
-    fn test_summarize_cached_tool_result_ignores_unknown_tools() {
-        let input = serde_json::json!({"command": "pwd"});
-        let content = "x".repeat(10_000);
-        assert!(summarize_cached_tool_result("run_command", &input, &content).is_none());
-    }
+        let original_len = body.len();
+        let original_body = body.clone();
 
-    #[test]
-    fn test_summarize_cached_tool_result_cuts_large_search_code_footprint() {
-        let input = serde_json::json!({"pattern": "fn main", "path": "src"});
-        let content = "b".repeat(6_000);
-        let summary = summarize_cached_tool_result("search_code", &input, &content).unwrap();
-        let saved_chars = content.len() - summary.len();
-        assert!(summary.len() <= 2_300, "summary should stay compact");
-        assert!(
-            saved_chars >= 3_500,
-            "expected at least 3.5k chars saved, got {saved_chars}"
-        );
-    }
+        fn build_history(body: &str) -> Vec<Message> {
+            let mut messages = Vec::new();
+            messages.push(Message::user("anchor"));
+            // A few small messages so the ToolResult is *not* in the
+            // preserve_recent tail.
+            for i in 0..4 {
+                messages.push(Message::assistant(format!("filler-{i}")));
+                messages.push(Message::user(format!("ack-{i}")));
+            }
+            // The aged ToolResult under test.
+            messages.push(Message {
+                role: Role::User,
+                content: vec![ContentBlock::tool_result(
+                    "tu_read_publisher",
+                    ToolResultContent::Text(body.to_string()),
+                    false,
+                )],
+            });
+            // Pad the tail to push the ToolResult above out of
+            // preserve_recent.
+            for i in 0..12 {
+                messages.push(Message::assistant(format!("tail-asst-{i}")));
+                messages.push(Message::user(format!("tail-user-{i}")));
+            }
+            messages
+        }
 
-    #[test]
-    fn test_summarize_cached_tool_result_cuts_large_list_files_footprint() {
-        let input = serde_json::json!({"path": "."});
-        let content = "c".repeat(3_000);
-        let summary = summarize_cached_tool_result("list_files", &input, &content).unwrap();
-        let saved_chars = content.len() - summary.len();
-        assert!(summary.len() <= 1_400, "summary should stay compact");
-        assert!(
-            saved_chars >= 1_500,
-            "expected at least 1.5k chars saved, got {saved_chars}"
-        );
+        // The aged ToolResult is at index `1 + 4*2 = 9`.
+        let target_idx = 9;
+
+        // 10% pressure: below `select_tier`'s 15% floor, so no
+        // compaction tier fires. The ToolResult must be byte-for-byte
+        // identical to the original.
+        {
+            let mut messages = build_history(&body);
+            assert!(matches!(
+                &messages[target_idx].content[0],
+                ContentBlock::ToolResult { .. }
+            ));
+
+            compact_messages(CompactionInput {
+                messages: &mut messages,
+                policy: CompactionPolicy {
+                    max_context_tokens: Some(200_000),
+                    current_context_tokens: Some(20_000),
+                    ..CompactionPolicy::default()
+                },
+            });
+
+            match &messages[target_idx].content[0] {
+                ContentBlock::ToolResult { content, .. } => match content {
+                    ToolResultContent::Text(t) => {
+                        assert_eq!(
+                            t.len(),
+                            original_len,
+                            "at 10% pressure the ToolResult must survive verbatim"
+                        );
+                        assert_eq!(t, &original_body);
+                    }
+                    other => panic!("expected Text content, got {other:?}"),
+                },
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        }
+
+        // 40%, 65%, 80% pressure: compaction may shrink the result,
+        // but the worst case must be a visible `truncate_content`
+        // marker — never the old signature-compact
+        // `// ... body omitted ...` skeleton, and never the old
+        // cached-result-shaping "Cached result reused" preamble.
+        for pct in [0.40_f64, 0.65_f64, 0.80_f64] {
+            let mut messages = build_history(&body);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let current_tokens = (200_000.0_f64 * pct) as u64;
+
+            compact_messages(CompactionInput {
+                messages: &mut messages,
+                policy: CompactionPolicy {
+                    max_context_tokens: Some(200_000),
+                    current_context_tokens: Some(current_tokens),
+                    ..CompactionPolicy::default()
+                },
+            });
+
+            match &messages[target_idx].content[0] {
+                ContentBlock::ToolResult { content, .. } => match content {
+                    ToolResultContent::Text(t) => {
+                        if t.len() == original_len {
+                            assert_eq!(
+                                t, &original_body,
+                                "untouched results must be byte-identical"
+                            );
+                        } else {
+                            assert!(
+                                t.contains("content truncated"),
+                                "shrunk ToolResult at {pct} pressure must carry a visible \
+                                 truncate_content marker; got prefix: {}",
+                                &t.chars().take(200).collect::<String>()
+                            );
+                            assert!(
+                                !t.contains("body omitted"),
+                                "shrunk ToolResult must NOT use signature-compact skeleton; \
+                                 got at {pct} pressure prefix: {}",
+                                &t.chars().take(200).collect::<String>()
+                            );
+                            assert!(
+                                !t.contains("Cached result reused"),
+                                "shrunk ToolResult must NOT use cached-result-shaping prefix; \
+                                 got at {pct} pressure prefix: {}",
+                                &t.chars().take(200).collect::<String>()
+                            );
+                        }
+                    }
+                    other => panic!("expected Text content, got {other:?}"),
+                },
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        }
     }
 
     #[test]

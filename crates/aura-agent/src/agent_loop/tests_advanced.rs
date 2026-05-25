@@ -199,64 +199,6 @@ async fn test_stall_terminates_loop() {
 }
 
 #[tokio::test]
-async fn test_exploration_compact_at_two_thirds() {
-    let long_content = "x".repeat(3000);
-    let executor = MockExecutor {
-        results: vec![ToolCallResult::success("placeholder", &long_content)],
-    };
-
-    let mut provider_builder = MockProvider::new();
-    for i in 0..8 {
-        provider_builder = provider_builder.with_response(MockResponse::tool_use(
-            format!("t{i}"),
-            "read_file",
-            serde_json::json!({"path": format!("file{i}.txt")}),
-        ));
-    }
-    provider_builder = provider_builder.with_response(MockResponse::text("Done"));
-    let provider = provider_builder;
-
-    let config = AgentLoopConfig {
-        exploration_allowance: 12,
-        max_context_tokens: Some(200_000),
-        system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
-    };
-    let agent = AgentLoop::new(config);
-    let messages = vec![Message::user("read many files")];
-    let tools = vec![ToolDefinition::new(
-        "read_file",
-        "Read a file",
-        serde_json::json!({"type": "object"}),
-    )];
-
-    let result = agent
-        .run(&provider, &executor, messages, tools)
-        .await
-        .unwrap();
-
-    assert_eq!(result.iterations, 9);
-
-    let has_truncation = result.messages.iter().any(|msg| {
-        msg.content.iter().any(|block| {
-            if let ContentBlock::ToolResult {
-                content: ToolResultContent::Text(t),
-                ..
-            } = block
-            {
-                t.contains("content truncated")
-            } else {
-                false
-            }
-        })
-    });
-    assert!(
-        has_truncation,
-        "Exploration-triggered compaction should have truncated older tool results"
-    );
-}
-
-#[tokio::test]
 async fn test_no_exploration_compact_when_low() {
     let long_content = "y".repeat(3000);
     let executor = MockExecutor {

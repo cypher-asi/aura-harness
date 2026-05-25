@@ -1,5 +1,4 @@
 use aura_reasoner::ContentBlock;
-use aura_reasoner::Message;
 use std::collections::HashMap;
 
 use crate::constants::tool_result_cache_key;
@@ -54,8 +53,13 @@ fn tool_results_are_emitted_before_context_texts() {
     ));
 }
 
+/// Cached read hits now reinsert the cache content verbatim — the
+/// silent cache-result-shaping path was removed because it was
+/// rewriting `read_file` results without telling the model. This test
+/// pins the new contract: the same long content goes back into the
+/// transcript byte-for-byte.
 #[test]
-fn cached_read_hits_are_compacted_before_reinsertion() {
+fn cached_read_hits_reinsert_content_verbatim() {
     let call = ToolCallInfo {
         id: "tool_1".to_string(),
         name: "read_file".to_string(),
@@ -73,45 +77,7 @@ fn cached_read_hits_are_compacted_before_reinsertion() {
 
     assert!(uncached.is_empty());
     assert_eq!(cached.len(), 1);
-    assert!(cached[0].content.contains("Cached result reused"));
-    assert!(cached[0].content.len() < long_content.len());
-}
-
-#[test]
-fn repeated_cached_reads_reduce_message_footprint_across_turns() {
-    let call = ToolCallInfo {
-        id: "tool_1".to_string(),
-        name: "read_file".to_string(),
-        input: serde_json::json!({"path": "src/lib.rs"}),
-    };
-    let mut cache = HashMap::new();
-    let long_content = "a".repeat(9_000);
-    cache.insert(
-        tool_result_cache_key(&call.name, &call.input),
-        long_content.clone(),
-    );
-
-    let mut shaped_messages = vec![Message::user("Read the same file again.")];
-    let fuzzy_cache = HashMap::new();
-    let (shaped_cached, _) = split_cached(std::slice::from_ref(&call), &cache, &fuzzy_cache);
-    push_tool_result_message_with_context(&mut shaped_messages, shaped_cached, Vec::new());
-
-    let mut unshaped_messages = vec![Message::user("Read the same file again.")];
-    push_tool_result_message_with_context(
-        &mut unshaped_messages,
-        vec![ToolCallResult::success("tool_1", &long_content)],
-        Vec::new(),
-    );
-
-    let shaped_chars = aura_compaction::estimate_message_chars(&shaped_messages);
-    let unshaped_chars = aura_compaction::estimate_message_chars(&unshaped_messages);
-    let saved_chars = unshaped_chars.saturating_sub(shaped_chars);
-
-    assert!(shaped_chars < unshaped_chars);
-    assert!(
-        saved_chars >= 4_500,
-        "expected at least 4.5k chars saved across repeated turn, got {saved_chars}"
-    );
+    assert_eq!(cached[0].content, long_content);
 }
 
 #[test]

@@ -646,6 +646,20 @@ impl AgentLoop {
     ) -> bool {
         match response.stop_reason {
             StopReason::EndTurn | StopReason::StopSequence => {
+                // Phase G diagnostic: log every EndTurn so production debug
+                // logs surface whether `dev_loop_completion_required` is
+                // actually true at runtime and whether the intercept
+                // preconditions are met. Drop this once the production
+                // dev-loop path is confirmed wired through Phase B.
+                tracing::warn!(
+                    dev_loop_completion_required = self.config.dev_loop_completion_required,
+                    had_any_file_write = state.had_any_file_write,
+                    task_done_completed = state.task_done_completed,
+                    endturn_intercept_count = state.counters.endturn_intercept_count,
+                    consecutive_read_only_iterations =
+                        state.counters.consecutive_read_only_iterations,
+                    "PHASE_G_DIAG: EndTurn observed in dispatch_stop_reason"
+                );
                 if self.config.dev_loop_completion_required
                     && !state.had_any_file_write
                     && !state.task_done_completed
@@ -1270,7 +1284,6 @@ fn post_iteration_checks(
     iteration: usize,
 ) -> bool {
     context::emit_checkpoint_if_needed(event_tx, state);
-    context::compact_exploration_if_needed(config, state);
     context::check_budget_warnings(config, event_tx, state, iteration);
     if context::should_stop_for_budget(config, state, iteration) {
         state.result.timed_out = true;
