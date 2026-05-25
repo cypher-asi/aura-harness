@@ -15,9 +15,9 @@
 //! (no syntax-aware parser, no exception list bookkeeping) while
 //! still catching the regression PR D is designed to prevent:
 //! someone bypassing the [`crate::prompts::steering::SteeringInjector`]
-//! by hand-writing an envelope inline. Stub fix prompts, task_done
-//! gate rejections, and `apply_patch` diagnostics now all route
-//! through the injector; this test ensures they stay routed.
+//! by hand-writing an envelope inline. Stub fix prompts and task_done
+//! gate rejections now all route through the injector; this test
+//! ensures they stay routed.
 //!
 //! The walker scans `.rs` files under `crates/aura-agent/src/` and
 //! skips the `prompts/` subtree entirely so the legitimate envelope

@@ -111,10 +111,10 @@ impl SystemPromptBuilder {
         self
     }
 
-    /// Append the `<dev_loop_workflow>` block (workflow + apply_patch
-    /// envelope + git safety + code quality). `build_cmd` and
-    /// `test_cmd` are spliced into the prose verbatim so the agent's
-    /// mental model matches the DoD gate's invocation.
+    /// Append the `<dev_loop_workflow>` block (workflow + git safety +
+    /// code quality). `build_cmd` and `test_cmd` are spliced into the
+    /// prose verbatim so the agent's mental model matches the DoD
+    /// gate's invocation.
     #[must_use]
     pub fn dev_loop_workflow(mut self, build_cmd: &str, test_cmd: &str) -> Self {
         self.sections

@@ -70,7 +70,7 @@ fn agentic_prompt_no_longer_advertises_exploration_budget() {
         "per-file read-cap prose was supposed to be removed: {prompt}"
     );
     assert!(
-        !prompt.contains("the only legal moves are apply_patch / task_done"),
+        !prompt.contains("the only legal moves are"),
         "post-budget legal-move prose was supposed to be removed: {prompt}"
     );
 }

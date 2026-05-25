@@ -727,8 +727,7 @@ pub struct LoopState {
     pub(crate) had_any_write: bool,
     /// Set true the first iteration whose tool results contain any
     /// `FileOp` (any successful `write_file` / `edit_file` /
-    /// `delete_file`, or — Phase E — `apply_patch`). Cumulative across
-    /// the run — never reset. Gates the
+    /// `delete_file`). Cumulative across the run — never reset. Gates the
     /// [`AgentLoopConfig::dev_loop_completion_required`] `EndTurn`
     /// intercept: once a write has happened, `EndTurn` is allowed to
     /// terminate the loop cleanly.

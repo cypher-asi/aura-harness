@@ -109,116 +109,6 @@ fn render_task_done_test_gate_io_failure_includes_command_and_error() {
 }
 
 #[test]
-fn render_apply_patch_missing_argument_wraps_with_envelope() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchMissingArgument);
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("requires a non-empty `patch` string argument"),
-        "missing-argument wording drifted:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_parse_failed_includes_envelope_hint() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchParseFailed {
-        err: "expected `*** Begin Patch`".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("failed to parse: expected `*** Begin Patch`"),
-        "parse-error interpolation drifted:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("*** Begin Patch"),
-        "envelope hint dropped:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_target_already_exists_includes_path() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchTargetAlreadyExists {
-        path: "src/lib.rs".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("`*** Add File: src/lib.rs`"),
-        "path interpolation drifted:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_target_not_found_includes_path() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchTargetNotFound {
-        path: "src/missing.rs".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("target file `src/missing.rs` does not exist"),
-        "not-found wording drifted:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_path_escape_includes_path() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchPathEscape {
-        path: "../../etc/passwd".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("`../../etc/passwd` resolves outside the workspace root"),
-        "path-escape wording drifted:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_context_mismatch_renders_hunk_one_based() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchContextMismatch {
-        path: "src/lib.rs".into(),
-        hunk_index: 0,
-        reason: "context not found".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("hunk #1 in `src/lib.rs`"),
-        "hunk one-based index drifted:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("context not found"),
-        "reason interpolation drifted:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_conflicting_changes_includes_reason() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchConflictingChanges {
-        path: "src/main.rs".into(),
-        reason: "Add and Update both target the same file.".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("conflicting directives for `src/main.rs`"),
-        "conflicting wording drifted:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("Add and Update both target the same file."),
-        "reason interpolation drifted:\n{rendered}"
-    );
-}
-
-#[test]
-fn render_apply_patch_io_includes_path_and_source() {
-    let rendered = SteeringInjector::render(&SteeringKind::ApplyPatchIo {
-        path: "src/lib.rs".into(),
-        source: "permission denied".into(),
-    });
-    assert_envelope(&rendered, "apply_patch_parse_error");
-    assert!(
-        rendered.contains("filesystem failure on `src/lib.rs`: permission denied"),
-        "io wording drifted:\n{rendered}"
-    );
-}
-
-#[test]
 fn render_stub_detected_uses_existing_build_stub_fix_prompt_wording() {
     let reports = vec![StubReport {
         path: "src/lib.rs".into(),
@@ -274,9 +164,7 @@ fn inject_after_assistant_message_pushes_new_user_message() {
     let mut messages = vec![Message::assistant("hi")];
     let _returned = SteeringInjector::inject(
         &mut messages,
-        SteeringKind::ApplyPatchParseFailed {
-            err: "bad envelope".into(),
-        },
+        SteeringKind::TaskDoneNoWrites,
     );
 
     assert_eq!(

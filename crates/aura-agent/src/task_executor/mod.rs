@@ -304,7 +304,7 @@ impl AgentToolExecutor for TaskToolExecutor {
 
         for (i, tc) in tool_calls.iter().enumerate() {
             match tc.name.as_str() {
-                "task_done" | "get_task_context" | "submit_plan" | "apply_patch" => {}
+                "task_done" | "get_task_context" | "submit_plan" => {}
                 "write_file" | "edit_file" | "delete_file" => {
                     self.track_file_op(&tc.name, &tc.input).await;
                     if let Some(path) = tc.input.get("path").and_then(|v| v.as_str()) {
@@ -349,18 +349,6 @@ impl AgentToolExecutor for TaskToolExecutor {
                 }
                 "submit_plan" => {
                     self.handle_submit_plan(tc, &mut results).await;
-                }
-                "apply_patch" => {
-                    self.handle_apply_patch(tc, &mut results).await;
-                    // Pipe the result through the same status emit +
-                    // rolling-outcome accounting as delegated tools so
-                    // the live UI sees `[tool: apply_patch -> ok]` and
-                    // the pervasive-error guard tracks success/failure.
-                    if let Some(result) = results.last() {
-                        self.emit_tool_status(tc, result);
-                        let mut outcomes = self.recent_tool_outcomes.lock().await;
-                        outcomes.record(&tc.name, result.is_error, &result.content);
-                    }
                 }
                 _ => {
                     if let Some(result) = delegated_iter.next() {
@@ -489,16 +477,6 @@ pub(crate) fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        "apply_patch" => {
-            // The full patch envelope is too large for a status line;
-            // just surface a byte count so the UI shows "apply_patch(1.2kB)".
-            let bytes = tc
-                .input
-                .get("patch")
-                .and_then(|v| v.as_str())
-                .map_or(0, str::len);
-            format!("{}B", bytes)
-        }
         "list_files" => tc
             .input
             .get("directory")

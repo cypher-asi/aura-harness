@@ -21,10 +21,9 @@ use crate::helpers;
 /// `SteeringKind::TaskDoneRejected(TaskDoneReject::NoFileWrites)`,
 /// which is the live shape `task_executor::handlers` consumes. The
 /// label rendered into the `kind="..."` attribute is grouped by the
-/// originating subsystem (`task_done_rejected`,
-/// `apply_patch_parse_error`, `stub_detected`) — multiple variants
-/// share a single label so the model can pattern-match on the
-/// subsystem rather than the specific sub-reason.
+/// originating subsystem (`task_done_rejected`, `stub_detected`) —
+/// multiple variants share a single label so the model can
+/// pattern-match on the subsystem rather than the specific sub-reason.
 ///
 /// Variants only exist for call sites the audit (PR D Step 1)
 /// confirmed are still live; the original PR D plan also listed
@@ -69,29 +68,6 @@ pub enum SteeringKind {
         attempt: usize,
         max_attempts: usize,
     },
-    /// `apply_patch` was invoked without a `patch` argument.
-    ApplyPatchMissingArgument,
-    /// `apply_patch` could not parse the model's envelope.
-    ApplyPatchParseFailed { err: String },
-    /// `*** Add File:` named a path that already exists.
-    ApplyPatchTargetAlreadyExists { path: String },
-    /// Update/Delete named a path that does not exist.
-    ApplyPatchTargetNotFound { path: String },
-    /// Patch path tried to escape the workspace root.
-    ApplyPatchPathEscape { path: String },
-    /// A hunk's context lines did not match the file. `hunk_index`
-    /// is 0-based; the renderer adds 1 so the operator sees
-    /// `hunk #1`.
-    ApplyPatchContextMismatch {
-        path: String,
-        hunk_index: usize,
-        reason: String,
-    },
-    /// Two directives in one patch envelope touched the same path
-    /// in conflicting ways.
-    ApplyPatchConflictingChanges { path: String, reason: String },
-    /// Filesystem error during apply.
-    ApplyPatchIo { path: String, source: String },
     /// Post-write stub detector found one or more incomplete
     /// implementations and is asking the agent to fill them in
     /// before re-calling `task_done`.
@@ -110,14 +86,6 @@ impl SteeringKind {
             | Self::TaskDoneTestGateFailed { .. }
             | Self::TaskDoneTestGateExhausted { .. }
             | Self::TaskDoneTestGateIoFailure { .. } => "task_done_rejected",
-            Self::ApplyPatchMissingArgument
-            | Self::ApplyPatchParseFailed { .. }
-            | Self::ApplyPatchTargetAlreadyExists { .. }
-            | Self::ApplyPatchTargetNotFound { .. }
-            | Self::ApplyPatchPathEscape { .. }
-            | Self::ApplyPatchContextMismatch { .. }
-            | Self::ApplyPatchConflictingChanges { .. }
-            | Self::ApplyPatchIo { .. } => "apply_patch_parse_error",
             Self::StubDetected { .. } => "stub_detected",
         }
     }

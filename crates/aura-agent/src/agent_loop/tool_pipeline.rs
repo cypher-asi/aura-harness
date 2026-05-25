@@ -332,13 +332,13 @@ fn track_tool_effects(
                     }
                 }
             } else if !exec_result.file_changes.is_empty() && !exec_result.is_error {
-                // Multi-file write (currently only `apply_patch`): the
-                // tool has no single `path` argument but the result
-                // carries one `FileChange` per touched file. Each
-                // change is treated as a successful write so the
-                // file-change journal and Phase B's
-                // `had_any_file_write` latch light up the same way
-                // they do for the granular write tools.
+                // Multi-file write fallback: the tool has no single
+                // `path` argument but the result carries one
+                // `FileChange` per touched file. Each change is
+                // treated as a successful write so the file-change
+                // journal and Phase B's `had_any_file_write` latch
+                // light up the same way they do for the granular
+                // write tools.
                 for change in &exec_result.file_changes {
                     result.record_file_change(change.clone());
                 }

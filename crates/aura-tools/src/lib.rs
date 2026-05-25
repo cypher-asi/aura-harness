@@ -25,7 +25,6 @@
 )]
 
 pub mod agents;
-pub mod apply_patch;
 pub mod automaton_tools;
 pub mod catalog;
 pub mod definitions;

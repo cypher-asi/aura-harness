@@ -5,10 +5,6 @@ use super::{
     DISABLE_TEST_GATE_ENV, MAX_STUB_FIX_ATTEMPTS, MAX_TASK_DONE_TEST_RETRIES,
 };
 use crate::prompts::{SteeringInjector, SteeringKind};
-use crate::types::{FileChange, FileChangeKind};
-use aura_tools::apply_patch::{
-    execute_apply_patch, parse_patch, AppliedChangeKind, ApplyPatchError, PatchError,
-};
 
 /// Outcome of the `task_done` test-suite hard gate.
 #[derive(Debug)]
@@ -103,98 +99,6 @@ impl TaskToolExecutor {
             _ => return,
         };
         self.tracked_file_ops.lock().await.push(op);
-    }
-
-    /// Handle the unified dev-loop write primitive.
-    ///
-    /// Parses the `patch` argument as the codex envelope format, applies
-    /// every directive atomically against the project folder, and folds
-    /// the resulting file mutations into the executor's tracked-file-ops
-    /// state so Phase B's `had_any_file_write` flag fires through the
-    /// existing pipeline.
-    ///
-    /// On parse/apply failure the model gets a structured `is_error=true`
-    /// result with a diagnostic pointing at the offending file/hunk so it
-    /// can re-emit a corrected patch on the next turn.
-    pub(super) async fn handle_apply_patch(
-        &self,
-        tc: &ToolCallInfo,
-        results: &mut Vec<ToolCallResult>,
-    ) {
-        let Some(patch_str) = tc.input.get("patch").and_then(|v| v.as_str()) else {
-            let msg = SteeringInjector::render(&SteeringKind::ApplyPatchMissingArgument);
-            results.push(Self::gate_rejection(tc, msg));
-            return;
-        };
-
-        let patch = match parse_patch(patch_str) {
-            Ok(p) => p,
-            Err(e) => {
-                let msg = SteeringInjector::render(&apply_patch_parse_kind(&e));
-                results.push(Self::gate_rejection(tc, msg));
-                return;
-            }
-        };
-
-        let workspace_root = Path::new(&self.project_folder);
-        let outcome = match execute_apply_patch(patch, workspace_root).await {
-            Ok(r) => r,
-            Err(e) => {
-                let msg = SteeringInjector::render(&apply_patch_exec_kind(&e));
-                results.push(Self::gate_rejection(tc, msg));
-                return;
-            }
-        };
-
-        // Fold every applied change into the tracked-file-ops pipeline so
-        // downstream consumers (stub detection, self-review, the DoD test
-        // gate's "did anything change?" check, and Phase B's
-        // `had_any_file_write`) light up the same way they do for
-        // `write_file` / `edit_file` / `delete_file`.
-        let mut file_changes = Vec::with_capacity(outcome.changes.len());
-        {
-            let mut tracked = self.tracked_file_ops.lock().await;
-            let mut review = self.self_review.lock().await;
-            for change in &outcome.changes {
-                let kind = match change.kind {
-                    AppliedChangeKind::Added => FileChangeKind::Create,
-                    AppliedChangeKind::Updated => FileChangeKind::Modify,
-                    AppliedChangeKind::Deleted => FileChangeKind::Delete,
-                };
-                let op = match change.kind {
-                    AppliedChangeKind::Added | AppliedChangeKind::Updated => FileOp::Modify {
-                        path: change.path.clone(),
-                        content: String::new(),
-                    },
-                    AppliedChangeKind::Deleted => FileOp::Delete {
-                        path: change.path.clone(),
-                    },
-                };
-                tracked.push(op);
-                if matches!(
-                    change.kind,
-                    AppliedChangeKind::Added | AppliedChangeKind::Updated
-                ) {
-                    review.record_write(&change.path);
-                }
-                file_changes.push(FileChange {
-                    path: change.path.clone(),
-                    kind,
-                    lines_added: change.lines_added,
-                    lines_removed: change.lines_removed,
-                });
-            }
-        }
-
-        let result = ToolCallResult {
-            tool_use_id: tc.id.clone(),
-            content: outcome.summary,
-            is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
-            stop_loop: false,
-            file_changes,
-        };
-        results.push(result);
     }
 
     pub(super) async fn handle_task_done(
@@ -642,57 +546,6 @@ impl TaskToolExecutor {
                 tracing::warn!("event channel full or closed: {e}");
             }
         }
-    }
-}
-
-/// Map a parser-level [`PatchError`] to the matching
-/// [`SteeringKind`] variant. The actual model-facing wording lives in
-/// [`crate::prompts::steering`]; this helper just routes the variant
-/// shape.
-fn apply_patch_parse_kind(err: &PatchError) -> SteeringKind {
-    SteeringKind::ApplyPatchParseFailed {
-        err: err.to_string(),
-    }
-}
-
-/// Map an executor-level [`ApplyPatchError`] to the matching
-/// [`SteeringKind`] variant. Parser errors that were promoted up are
-/// re-routed through [`apply_patch_parse_kind`]; the other variants
-/// carry the offending file / hunk / reason verbatim into their
-/// SteeringKind fields so the renderer in
-/// [`crate::prompts::steering::messages`] can reproduce the
-/// pre-PR-D diagnostic wording byte-for-byte.
-fn apply_patch_exec_kind(err: &ApplyPatchError) -> SteeringKind {
-    match err {
-        ApplyPatchError::Parse(e) => apply_patch_parse_kind(e),
-        ApplyPatchError::TargetAlreadyExists { path } => SteeringKind::ApplyPatchTargetAlreadyExists {
-            path: path.clone(),
-        },
-        ApplyPatchError::TargetNotFound { path } => SteeringKind::ApplyPatchTargetNotFound {
-            path: path.clone(),
-        },
-        ApplyPatchError::PathEscape { path } => SteeringKind::ApplyPatchPathEscape {
-            path: path.clone(),
-        },
-        ApplyPatchError::ContextMismatch {
-            path,
-            hunk_index,
-            reason,
-        } => SteeringKind::ApplyPatchContextMismatch {
-            path: path.clone(),
-            hunk_index: *hunk_index,
-            reason: reason.clone(),
-        },
-        ApplyPatchError::ConflictingChanges { path, reason } => {
-            SteeringKind::ApplyPatchConflictingChanges {
-                path: path.clone(),
-                reason: reason.clone(),
-            }
-        }
-        ApplyPatchError::Io { path, source } => SteeringKind::ApplyPatchIo {
-            path: path.clone(),
-            source: source.to_string(),
-        },
     }
 }
 

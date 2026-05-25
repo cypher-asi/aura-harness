@@ -1,8 +1,8 @@
 //! Per-iteration model-facing steering messages.
 //!
 //! Every per-iteration injection the harness emits (tool-result
-//! rejections from the `task_executor` gates, `apply_patch` parser
-//! diagnostics, stub-detector rejections, …) flows through
+//! rejections from the `task_executor` gates, stub-detector
+//! rejections, …) flows through
 //! [`SteeringInjector`] and ends up wrapped in
 //! `<harness_steering kind="...">...</harness_steering>` in the
 //! transcript. The kind label lets the model pattern-match the

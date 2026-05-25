@@ -213,8 +213,7 @@ pub(super) fn check_termination_conditions(
     // `state.had_any_write` is set by `tool_pipeline::track_tool_effects`
     // earlier in the iteration on any successful path-carrying write
     // tool. Mirroring it here keeps the two flags in lockstep without
-    // duplicating the write-detection logic. Phase E (apply_patch)
-    // will add its own progress hook in the same place.
+    // duplicating the write-detection logic.
     if state.had_any_write {
         state.had_any_file_write = true;
     }

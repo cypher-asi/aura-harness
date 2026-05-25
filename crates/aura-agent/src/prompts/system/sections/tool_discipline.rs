@@ -37,12 +37,11 @@
 //! are deliberately omitted — re-advertising them would mislead the
 //! model about what the runtime actually rejects.
 //!
-//! Layer A also dropped the historical "for larger files prefer
-//! `apply_patch`" advice from this section: after Layer 0 the
-//! dev-loop bundle no longer ships `apply_patch`, and the
-//! `write_file` + `edit_file` seed-and-append pattern handles oversized
-//! files. The §6.2 audit finding in the doom-loop plan called this out
-//! explicitly.
+//! Layer A also dropped the historical "for larger files prefer the
+//! unified-patch tool" advice from this section: the dev-loop bundle
+//! now ships only the conventional `write_file` / `edit_file` /
+//! `delete_file` writers, and the `write_file` + `edit_file`
+//! seed-and-append pattern handles oversized files.
 
 /// Render the tool-discipline section wrapped in the canonical
 /// `<tool_discipline>...</tool_discipline>` envelope.

@@ -114,13 +114,9 @@ pub const EXPLORATION_TOOLS: &[&str] = &[
 
 /// Tools that perform writes (mutations).
 ///
-/// `apply_patch` is the unified dev-loop write primitive (Phase E of
-/// harness-v2.2) and coexists with the granular `write_file` /
-/// `edit_file` / `delete_file` tools that chat-mode and other agents
-/// still use. All four count as forward progress for the read-only
-/// steering counters and Phase B's `had_any_file_write` latch.
-pub const WRITE_TOOLS: &[&str] =
-    &["apply_patch", "write_file", "edit_file", "delete_file"];
+/// All three count as forward progress for the read-only steering
+/// counters and Phase B's `had_any_file_write` latch.
+pub const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "delete_file"];
 
 /// Tools that run commands.
 pub const COMMAND_TOOLS: &[&str] = &["run_command"];

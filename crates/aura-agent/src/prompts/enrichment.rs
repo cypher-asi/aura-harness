@@ -1,11 +1,10 @@
 //! Pre-resolve files & symbols mentioned in a task description and
 //! splice the results into the first-attempt task context.
 //!
-//! Mirrors Codex's `apply_patch` seeding pattern: by the time the model
-//! lands on iteration 0 it already knows which files exist, where they
-//! live, and what their relevant signatures look like — so the explore
-//! phase is a short verification pass instead of a multi-iteration grep
-//! crawl.
+//! By the time the model lands on iteration 0 it already knows which
+//! files exist, where they live, and what their relevant signatures
+//! look like — so the explore phase is a short verification pass
+//! instead of a multi-iteration grep crawl.
 //!
 //! ## Scope
 //! - Heuristic, not LLM-driven: a couple of cheap regex passes over the

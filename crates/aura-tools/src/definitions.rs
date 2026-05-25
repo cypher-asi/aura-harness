@@ -264,52 +264,13 @@ fn dev_loop_tool_definitions() -> Vec<ToolDefinition> {
 // Engine tools
 // ============================================================================
 
-/// Definition for the dev-loop's unified write tool, `apply_patch`.
-///
-/// Exposed as its own `pub fn` so callers that build a custom dev-loop
-/// tool list (e.g. swapping `write_file/edit_file/delete_file` for
-/// this single primitive) can splice the definition without dragging in
-/// the rest of the engine bundle.
-pub fn apply_patch_definition() -> ToolDefinition {
-    tool(
-        "apply_patch",
-        "Apply a multi-file patch in the codex envelope format. The single \
-         `patch` argument is a string starting with `*** Begin Patch` and \
-         ending with `*** End Patch`. Inside the envelope, use `*** Add File: \
-         <path>`, `*** Update File: <path>`, or `*** Delete File: <path>` \
-         directives. Add bodies are sequences of `+`-prefixed content lines. \
-         Update bodies are one or more hunks: each starts with \
-         `@@ optional context @@` and contains ` `-prefixed context lines, \
-         `-`-prefixed removals, and `+`-prefixed additions. Paths must be \
-         workspace-relative (no leading `/`, no `..`, no drive letters). \
-         A single call applies any combination of Add/Update/Delete \
-         directives atomically: every directive is validated against the \
-         current filesystem before anything is written, and if any directive \
-         fails (context mismatch, missing target, etc.) NONE of the changes \
-         are applied. This is the ONLY write primitive available in this loop.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "patch": {
-                    "type": "string",
-                    "description": "The full *** Begin Patch / *** End Patch envelope, including all directives and hunks."
-                }
-            },
-            "required": ["patch"]
-        }),
-    )
-}
-
 pub fn engine_specific_tools() -> Vec<ToolDefinition> {
-    // NOTE (Layer 0): apply_patch was removed from this bundle as part
-    // of the doom-loop fix; the conventional write_file/edit_file/
-    // delete_file write primitives reach the dev-loop agent via the
+    // NOTE (Layer 0): the conventional write_file/edit_file/delete_file
+    // write primitives reach the dev-loop agent via the
     // `ToolProfile::Engine` inheritance from `ToolProfile::Core`
     // (see `crates/aura-tools/src/catalog.rs`), so they must NOT be
     // re-added here — doing so trips the no-duplicate-per-profile
     // invariant in `catalog::tests::no_duplicate_names_in_any_profile`.
-    // `apply_patch_definition()` stays compilable as a `pub fn` for
-    // opt-in callers (chat agent, benchmarks).
     vec![
         tool(
             "task_done",
