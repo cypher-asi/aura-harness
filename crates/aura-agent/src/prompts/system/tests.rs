@@ -116,9 +116,7 @@ fn agentic_prompt_surfaces_exploration_budget_section() {
         "read-only tool list missing from budget prose: {prompt}"
     );
     assert!(
-        prompt.contains(
-            "the only legal moves are write_file / edit_file / delete_file / task_done"
-        ),
+        prompt.contains("the only legal moves are apply_patch / task_done"),
         "post-budget legal-move enumeration missing: {prompt}"
     );
     assert!(
@@ -154,10 +152,8 @@ fn agentic_prompt_pins_explicit_five_step_workflow() {
         "step 2 (optional submit_plan) missing or rephrased: {prompt}"
     );
     assert!(
-        prompt.contains(
-            "3. Make the changes with write_file (new files) or edit_file (targeted edits)."
-        ),
-        "step 3 (write/edit) missing or rephrased: {prompt}"
+        prompt.contains("3. Make the changes with apply_patch"),
+        "step 3 (apply_patch) missing or rephrased: {prompt}"
     );
     assert!(
         prompt.contains("4. Run the build / tests as needed"),

@@ -379,7 +379,7 @@ fn read_only_streak_increments_per_iteration_and_resets_on_write() {
     assert_eq!(state.counters.consecutive_read_only_iterations, 0);
 
     for idx in 0..3 {
-        let stopped = check_termination_conditions(None, &mut state, read_only_executed_tools(idx));
+        let stopped = check_termination_conditions(None, &mut state, read_only_executed_tools(idx), false);
         assert!(!stopped, "iteration {idx}: should not stop on read-only call");
         assert_eq!(
             state.counters.consecutive_read_only_iterations,
@@ -388,7 +388,7 @@ fn read_only_streak_increments_per_iteration_and_resets_on_write() {
         );
     }
 
-    let stopped = check_termination_conditions(None, &mut state, write_executed_tools());
+    let stopped = check_termination_conditions(None, &mut state, write_executed_tools(), false);
     assert!(!stopped, "write iteration must not stop the loop");
     assert_eq!(
         state.counters.consecutive_read_only_iterations, 0,
@@ -403,7 +403,7 @@ fn force_progress_user_message_injected_at_threshold_a() {
 
     // Drive exactly READ_ONLY_INJECTION_THRESHOLD read-only iterations.
     for idx in 0..crate::constants::READ_ONLY_INJECTION_THRESHOLD {
-        let stopped = check_termination_conditions(None, &mut state, read_only_executed_tools(idx));
+        let stopped = check_termination_conditions(None, &mut state, read_only_executed_tools(idx), false);
         assert!(!stopped, "iteration {idx} should not stop");
     }
 
@@ -447,7 +447,7 @@ fn force_progress_message_is_not_injected_below_threshold_a() {
     let mut state = LoopState::new(&config, Vec::new());
     let below = crate::constants::READ_ONLY_INJECTION_THRESHOLD.saturating_sub(1);
     for idx in 0..below {
-        let _ = check_termination_conditions(None, &mut state, read_only_executed_tools(idx));
+        let _ = check_termination_conditions(None, &mut state, read_only_executed_tools(idx), false);
     }
     let injected = state.messages.iter().any(|m| {
         m.content.iter().any(|b| {
@@ -492,9 +492,10 @@ fn placeholder_rejection_does_not_trip_consecutive_errors_limit() {
         saw_empty_path_block: false,
     };
 
-    let stopped = check_termination_conditions(None, &mut state, tools);
+    let stopped = check_termination_conditions(None, &mut state, tools, false);
 
     assert!(!stopped);
     assert_eq!(state.counters.consecutive_all_error_iterations, 0);
     assert_eq!(state.messages.len(), 1);
 }
+

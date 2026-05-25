@@ -4,6 +4,10 @@ use super::{
     FileOp, FollowUpSuggestion, Path, TaskPhase, TaskPlan, TaskToolExecutor, ToolCallInfo,
     ToolCallResult, DISABLE_TEST_GATE_ENV, MAX_STUB_FIX_ATTEMPTS, MAX_TASK_DONE_TEST_RETRIES,
 };
+use crate::types::{FileChange, FileChangeKind};
+use aura_tools::apply_patch::{
+    execute_apply_patch, parse_patch, AppliedChangeKind, ApplyPatchError, PatchError,
+};
 
 /// Outcome of the `task_done` test-suite hard gate.
 #[derive(Debug)]
@@ -98,6 +102,101 @@ impl TaskToolExecutor {
             _ => return,
         };
         self.tracked_file_ops.lock().await.push(op);
+    }
+
+    /// Handle the unified dev-loop write primitive.
+    ///
+    /// Parses the `patch` argument as the codex envelope format, applies
+    /// every directive atomically against the project folder, and folds
+    /// the resulting file mutations into the executor's tracked-file-ops
+    /// state so Phase B's `had_any_file_write` flag fires through the
+    /// existing pipeline.
+    ///
+    /// On parse/apply failure the model gets a structured `is_error=true`
+    /// result with a diagnostic pointing at the offending file/hunk so it
+    /// can re-emit a corrected patch on the next turn.
+    pub(super) async fn handle_apply_patch(
+        &self,
+        tc: &ToolCallInfo,
+        results: &mut Vec<ToolCallResult>,
+    ) {
+        let Some(patch_str) = tc.input.get("patch").and_then(|v| v.as_str()) else {
+            results.push(Self::gate_rejection(
+                tc,
+                "apply_patch requires a non-empty `patch` string argument containing the \
+                 full `*** Begin Patch ... *** End Patch` envelope.",
+            ));
+            return;
+        };
+
+        let patch = match parse_patch(patch_str) {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = render_patch_error(&e);
+                results.push(Self::gate_rejection(tc, msg));
+                return;
+            }
+        };
+
+        let workspace_root = Path::new(&self.project_folder);
+        let outcome = match execute_apply_patch(patch, workspace_root).await {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = render_apply_error(&e);
+                results.push(Self::gate_rejection(tc, msg));
+                return;
+            }
+        };
+
+        // Fold every applied change into the tracked-file-ops pipeline so
+        // downstream consumers (stub detection, self-review, the DoD test
+        // gate's "did anything change?" check, and Phase B's
+        // `had_any_file_write`) light up the same way they do for
+        // `write_file` / `edit_file` / `delete_file`.
+        let mut file_changes = Vec::with_capacity(outcome.changes.len());
+        {
+            let mut tracked = self.tracked_file_ops.lock().await;
+            let mut review = self.self_review.lock().await;
+            for change in &outcome.changes {
+                let kind = match change.kind {
+                    AppliedChangeKind::Added => FileChangeKind::Create,
+                    AppliedChangeKind::Updated => FileChangeKind::Modify,
+                    AppliedChangeKind::Deleted => FileChangeKind::Delete,
+                };
+                let op = match change.kind {
+                    AppliedChangeKind::Added | AppliedChangeKind::Updated => FileOp::Modify {
+                        path: change.path.clone(),
+                        content: String::new(),
+                    },
+                    AppliedChangeKind::Deleted => FileOp::Delete {
+                        path: change.path.clone(),
+                    },
+                };
+                tracked.push(op);
+                if matches!(
+                    change.kind,
+                    AppliedChangeKind::Added | AppliedChangeKind::Updated
+                ) {
+                    review.record_write(&change.path);
+                }
+                file_changes.push(FileChange {
+                    path: change.path.clone(),
+                    kind,
+                    lines_added: change.lines_added,
+                    lines_removed: change.lines_removed,
+                });
+            }
+        }
+
+        let result = ToolCallResult {
+            tool_use_id: tc.id.clone(),
+            content: outcome.summary,
+            is_error: false,
+            kind: aura_core::ToolResultKind::Ok,
+            stop_loop: false,
+            file_changes,
+        };
+        results.push(result);
     }
 
     pub(super) async fn handle_task_done(
@@ -549,6 +648,61 @@ impl TaskToolExecutor {
                 tracing::warn!("event channel full or closed: {e}");
             }
         }
+    }
+}
+
+/// Render a parser-level `PatchError` as a model-facing diagnostic. Keeps
+/// the wording uniform across all `apply_patch` parser rejections so the
+/// model can pattern-match the prefix when deciding how to re-emit.
+fn render_patch_error(err: &PatchError) -> String {
+    format!(
+        "apply_patch failed to parse: {err}.\n\n\
+         Re-emit the patch with a well-formed envelope:\n\
+         *** Begin Patch\n\
+         *** Add File: path/to/new.rs   (or *** Update File: / *** Delete File:)\n\
+         +content lines (Add) / @@ context @@ then -removed / +added / `space`+context (Update)\n\
+         *** End Patch"
+    )
+}
+
+/// Render an executor-level `ApplyPatchError` (includes parse errors that
+/// were promoted up). On `ContextMismatch`, the underlying diagnostic
+/// already carries the offending file + hunk + expected lines, so we
+/// surface it verbatim.
+fn render_apply_error(err: &ApplyPatchError) -> String {
+    match err {
+        ApplyPatchError::Parse(e) => render_patch_error(e),
+        ApplyPatchError::TargetAlreadyExists { path } => format!(
+            "apply_patch error: `*** Add File: {path}` rejected because the target \
+             already exists. Use `*** Update File:` for an existing file, or \
+             `*** Delete File:` first if you really want to replace it."
+        ),
+        ApplyPatchError::TargetNotFound { path } => format!(
+            "apply_patch error: target file `{path}` does not exist. Read the project \
+             to verify the path, or use `*** Add File:` if you intend to create it."
+        ),
+        ApplyPatchError::PathEscape { path } => format!(
+            "apply_patch error: path `{path}` resolves outside the workspace root. All \
+             patch paths must be workspace-relative (no `..`, no absolute / drive-letter \
+             paths)."
+        ),
+        ApplyPatchError::ContextMismatch {
+            path,
+            hunk_index,
+            reason,
+        } => format!(
+            "apply_patch error: hunk #{n} in `{path}` did not match the file. {reason}\n\n\
+             Read the target file with `read_file` and re-derive the hunk's context lines \
+             from real bytes before re-emitting the patch.",
+            n = hunk_index + 1,
+        ),
+        ApplyPatchError::ConflictingChanges { path, reason } => format!(
+            "apply_patch error: conflicting directives for `{path}` within one patch. \
+             {reason} Combine them into a single directive instead."
+        ),
+        ApplyPatchError::Io { path, source } => format!(
+            "apply_patch error: filesystem failure on `{path}`: {source}"
+        ),
     }
 }
 

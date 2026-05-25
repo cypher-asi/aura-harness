@@ -82,7 +82,21 @@ impl DevLoopAutomaton {
         let retry_counts: HashMap<String, u32> =
             ctx.state.get(STATE_RETRY_COUNTS).unwrap_or_default();
         let attempt = retry_counts.get(&task.id).copied().unwrap_or(0);
-        let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
+        // Dev-loop tool surface (Phase E of harness-v2.2): swap the
+        // granular `write_file` / `edit_file` / `delete_file` for the
+        // unified `apply_patch` primitive. The granular tools stay
+        // registered in the Engine profile so chat-mode and other
+        // callers keep them, but inside the dev-loop we hide them so
+        // the model has exactly ONE write entry point. This kills the
+        // ambiguity that powered the read-only loop trap and lets
+        // Phase B's `had_any_file_write` latch trip cleanly on a
+        // single successful `apply_patch`.
+        let tools: Vec<_> = self
+            .catalog
+            .tools_for_profile(ToolProfile::Engine)
+            .into_iter()
+            .filter(|t| !matches!(t.name.as_str(), "write_file" | "edit_file" | "delete_file"))
+            .collect();
 
         let project_info = ProjectInfo {
             name: &project.name,

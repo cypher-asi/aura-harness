@@ -48,7 +48,12 @@ pub(super) async fn handle_tool_use(
         None => return true,
     };
     emit_and_log_results(event_tx, &tools);
-    check_termination_conditions(event_tx, state, tools)
+    check_termination_conditions(
+        event_tx,
+        state,
+        tools,
+        agent.config.dev_loop_completion_required,
+    )
 }
 
 async fn execute_and_cache_tools(
@@ -238,6 +243,7 @@ pub(super) fn check_termination_conditions(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
     tools: ExecutedTools,
+    dev_loop_completion_required: bool,
 ) -> bool {
     let should_stop = tools.all_results.iter().any(|r| r.stop_loop);
 
@@ -336,11 +342,20 @@ pub(super) fn check_termination_conditions(
         == crate::constants::READ_ONLY_INJECTION_THRESHOLD
     {
         let n = state.counters.consecutive_read_only_iterations;
+        // Dev-loop tasks see only `apply_patch`; chat-mode / generic
+        // agents still see the granular write surface. Pick the wording
+        // matching the active tool profile so the nudge names tools the
+        // model can actually call.
+        let write_surface = if dev_loop_completion_required {
+            "apply_patch with a real `*** Begin Patch ... *** End Patch` envelope, or task_done"
+        } else {
+            "write_file / edit_file / delete_file with a real path, or task_done"
+        };
         let msg = format!(
             "STOP READING. You have spent {n} iterations on read-only tool calls. \
-             Your next response MUST be a single tool call: write_file / edit_file \
-             / delete_file with a real path, or task_done. If no changes are needed, \
-             call task_done(no_changes_needed: true, notes: \"<one sentence why>\")."
+             Your next response MUST be a single tool call: {write_surface}. If no \
+             changes are needed, call task_done(no_changes_needed: true, notes: \
+             \"<one sentence why>\")."
         );
         info!(
             consecutive_read_only_iterations = n,

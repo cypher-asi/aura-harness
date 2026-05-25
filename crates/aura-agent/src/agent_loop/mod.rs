@@ -654,7 +654,7 @@ impl AgentLoop {
                 {
                     state.counters.endturn_intercept_count += 1;
                     let attempt = state.counters.endturn_intercept_count;
-                    let msg = build_progress_demand(attempt);
+                    let msg = build_progress_demand(attempt, self.config.dev_loop_completion_required);
                     info!(
                         attempt,
                         "dev_loop_completion_required: intercepting EndTurn before any write or task_done"
@@ -743,24 +743,38 @@ impl AgentLoop {
 ///   3 = forced-tool warning (next turn forces a tool call; any further
 ///       EndTurn after this exits the loop and fails the task).
 ///
-/// Phase E of harness-v2.2 will swap `write_file / edit_file / delete_file`
-/// for `apply_patch` in these messages; until then the granular tools
-/// remain the dev-loop write surface.
-fn build_progress_demand(attempt: usize) -> String {
+/// `use_apply_patch` selects the tool wording: when true (dev-loop
+/// profile, Phase E of harness-v2.2), the nudge lists `apply_patch /
+/// task_done`; when false (chat-mode / generic agents), it lists the
+/// granular `write_file / edit_file / delete_file / task_done` surface
+/// those agents still see.
+fn build_progress_demand(attempt: usize, use_apply_patch: bool) -> String {
+    let tools = if use_apply_patch {
+        "apply_patch / task_done"
+    } else {
+        "write_file / edit_file / delete_file / task_done"
+    };
+    let tools_with_path_hint = if use_apply_patch {
+        "apply_patch with a real `*** Begin Patch ... *** End Patch` envelope, or task_done"
+    } else {
+        "write_file / edit_file / delete_file with a real path, or task_done"
+    };
     match attempt {
         1 => "You ended your turn without writing any files or calling task_done. \
               The dev-loop requires either a file write or task_done before completion. \
               Your next response MUST contain exactly one tool call."
             .to_string(),
-        2 => "Second EndTurn without progress. Extended thinking is now disabled for \
-              the next turn. Your next response MUST be a single tool call: write_file / \
-              edit_file / delete_file with a real path, or task_done (use \
-              no_changes_needed: true if exploration shows no change is required)."
-            .to_string(),
-        _ => "Third EndTurn without progress. The next turn will FORCE a tool call. \
-              Choose one: write_file / edit_file / delete_file / task_done. Any further \
-              EndTurn after this will exit the loop and fail the task."
-            .to_string(),
+        2 => format!(
+            "Second EndTurn without progress. Extended thinking is now disabled for \
+             the next turn. Your next response MUST be a single tool call: \
+             {tools_with_path_hint} (use no_changes_needed: true if exploration shows \
+             no change is required)."
+        ),
+        _ => format!(
+            "Third EndTurn without progress. The next turn will FORCE a tool call. \
+             Choose one: {tools}. Any further EndTurn after this will exit the loop \
+             and fail the task."
+        ),
     }
 }
 

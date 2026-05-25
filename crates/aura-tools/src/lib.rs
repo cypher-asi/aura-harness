@@ -25,9 +25,10 @@
 )]
 
 pub mod agents;
+pub mod apply_patch;
 pub mod automaton_tools;
 pub mod catalog;
-pub(crate) mod definitions;
+pub mod definitions;
 pub mod domain_tools;
 mod error;
 mod executor;

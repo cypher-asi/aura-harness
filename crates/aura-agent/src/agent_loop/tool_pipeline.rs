@@ -446,7 +446,8 @@ fn track_tool_effects(
         }
 
         if helpers::is_write_tool(&tool.name) {
-            if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
+            let path_arg = tool.input.get("path").and_then(|v| v.as_str());
+            if let Some(path) = path_arg {
                 if exec_result.is_error {
                     blocking_ctx.on_write_failure(path);
                 } else {
@@ -457,8 +458,30 @@ fn track_tool_effects(
                         result.record_file_change(change.clone());
                     }
                 }
+            } else if !exec_result.file_changes.is_empty() && !exec_result.is_error {
+                // Multi-file write (currently only `apply_patch`): the
+                // tool has no single `path` argument but the result
+                // carries one `FileChange` per touched file. Treat each
+                // change as a successful write so the read-guard,
+                // blocking context, file-change journal, and Phase B's
+                // `had_any_file_write` latch all light up the same way
+                // they do for the granular write tools.
+                for change in &exec_result.file_changes {
+                    blocking_ctx.on_write_success(&change.path, read_guard);
+                    result.record_file_change(change.clone());
+                }
+                any_write_success = true;
+                *had_any_write = true;
             } else if exec_result.is_error {
-                blocking_ctx.on_malformed_write();
+                // Pathless errors from a single-path write tool indicate
+                // the model lost its `path` argument. `apply_patch`
+                // errors (parse / context mismatch / etc.) are
+                // model-fixable diagnostics, not malformed-write
+                // signals — don't trip the malformed-write counter for
+                // them.
+                if tool.name != "apply_patch" {
+                    blocking_ctx.on_malformed_write();
+                }
             }
         }
 
@@ -488,6 +511,15 @@ fn check_stall_detection(
                     if !exec_result.is_error {
                         any_write_success = true;
                     }
+                } else if !exec_result.file_changes.is_empty() && !exec_result.is_error {
+                    // Multi-file write (apply_patch): no single `path`
+                    // argument, but each successful directive emits a
+                    // FileChange that the stall detector should treat
+                    // as forward progress.
+                    for change in &exec_result.file_changes {
+                        write_targets.insert(change.path.clone());
+                    }
+                    any_write_success = true;
                 }
             }
         }

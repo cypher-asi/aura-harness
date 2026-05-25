@@ -296,7 +296,16 @@ impl TaskRunAutomaton {
         let session_info = SessionInfo {
             summary_of_previous_context: "",
         };
-        let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
+        // Dev-loop tool surface (Phase E of harness-v2.2): swap the
+        // granular `write_file` / `edit_file` / `delete_file` for the
+        // unified `apply_patch` primitive. See the matching comment in
+        // `dev_loop/run.rs`.
+        let tools: Vec<_> = self
+            .catalog
+            .tools_for_profile(ToolProfile::Engine)
+            .into_iter()
+            .filter(|t| !matches!(t.name.as_str(), "write_file" | "edit_file" | "delete_file"))
+            .collect();
 
         let params = AgenticTaskParams {
             project: &project_info,

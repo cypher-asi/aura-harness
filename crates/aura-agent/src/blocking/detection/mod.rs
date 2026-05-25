@@ -220,6 +220,27 @@ fn detect_missing_required_args(
     tool: &ToolCallInfo,
     ctx: &BlockingContext,
 ) -> Option<BlockCheckResult> {
+    // `apply_patch` is the unified dev-loop write primitive: it doesn't
+    // take a `path` argument, it takes a single `patch` string containing
+    // a multi-file envelope. Validate that shape instead of falling
+    // through to the pathless-write block below (which would reject every
+    // apply_patch call outright).
+    if tool.name == "apply_patch" {
+        let patch_ok = tool
+            .input
+            .get("patch")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty());
+        if !patch_ok {
+            return Some(BlockCheckResult::blocked(
+                "`apply_patch` requires a non-empty `patch` string argument containing \
+                 a `*** Begin Patch ... *** End Patch` envelope. Retry with the full \
+                 patch payload (Add/Update/Delete directives inside the envelope)."
+                    .to_string(),
+            ));
+        }
+        return Some(BlockCheckResult::allowed());
+    }
     if WRITE_TOOLS.contains(&tool.name.as_str()) && extract_path(tool).is_none() {
         let hint = ctx.pathless_write_hint().unwrap_or("crates/foo/src/lib.rs");
         let example = match tool.name.as_str() {
