@@ -1,9 +1,9 @@
-//! Per-tick orchestration for [`super::DevLoopAutomaton`].
+﻿//! Per-tick orchestration for [`super::DevLoopAutomaton`].
 //!
 //! Lifecycle:
 //! - `on_install` emits a `LogLine` so operators can see the loop started.
-//! - First `tick` initializes the queue: list tasks → drop `done` →
-//!   sort by `order` → store in `STATE_TASK_QUEUE`.
+//! - First `tick` initializes the queue: list tasks â†’ drop `done` â†’
+//!   sort by `order` â†’ store in `STATE_TASK_QUEUE`.
 //! - Subsequent ticks pop one task, transition it to `in_progress`,
 //!   execute through `AgentRunner::execute_task_tracked`, then record
 //!   success or failure (transition + counter + event).
@@ -88,7 +88,7 @@ impl DevLoopAutomaton {
     ) -> Result<TickOutcome, AutomatonError> {
         if self.tool_executor.is_none() {
             return Err(AutomatonError::InvalidConfig(
-                "no tool executor configured — the agent cannot perform file or command operations"
+                "no tool executor configured â€” the agent cannot perform file or command operations"
                     .into(),
             ));
         }
@@ -267,6 +267,17 @@ impl DevLoopAutomaton {
 
         let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
 
+        // Borrow the parsed identity envelope (if any) as a transient
+        // `AgentInfo<'_>` so `SystemPromptBuilder` renders the
+        // `<agent_identity>` / `<agent_skills>` / `<agent_system_prompt>`
+        // sections. `as_agent_info()` returns `None` whenever the
+        // wire fields are absent / blank, leaving the prompt
+        // byte-identical to the empty-identity baseline.
+        let agent_info = cfg
+            .agent_envelope
+            .as_ref()
+            .and_then(|env| env.as_agent_info());
+
         let params = AgenticTaskParams {
             project: &project_info,
             spec: &spec_info,
@@ -281,7 +292,7 @@ impl DevLoopAutomaton {
             member_count: 1,
             tools,
             attempt: 0,
-            agent: None,
+            agent: agent_info.as_ref(),
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);

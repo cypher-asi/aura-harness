@@ -8,7 +8,7 @@
 //! no `TaskAggregate` / `commit_and_push` (no end-of-task git), no
 //! `validate_execution` wrapper, no `extract_shell_command` shortcut
 //! for `run:` / `shell:` titled tasks, no `prior_failure` / `work_log`
-//! retry warm-up plumbing, no `AgentIdentityEnvelope`.
+//! retry warm-up plumbing. PR C re-introduces `AgentIdentityEnvelope`.
 
 use std::sync::Arc;
 
@@ -75,6 +75,11 @@ struct TaskRunConfig {
     task_id: String,
     #[allow(dead_code)]
     agent_instance_id: String,
+    /// PR C: typed identity bundle parsed off the dispatch JSON.
+    /// `None` when aura-os left the wire fields empty / blank. The
+    /// envelope is reused from the dev-loop module so the two
+    /// automatons share a single parser + render pathway.
+    agent_envelope: Option<super::dev_loop::AgentIdentityEnvelope>,
 }
 
 impl TaskRunConfig {
@@ -94,10 +99,12 @@ impl TaskRunConfig {
             .and_then(|v| v.as_str())
             .unwrap_or("default")
             .to_string();
+        let agent_envelope = super::dev_loop::parse_agent_envelope(config);
         Ok(Self {
             project_id,
             task_id,
             agent_instance_id,
+            agent_envelope,
         })
     }
 }
@@ -136,7 +143,7 @@ impl Automaton for TaskRunAutomaton {
             warn!(task_id = %task.id, error = %e, "Failed to transition task to in_progress (continuing anyway)");
         }
 
-        let result = self.run_agentic_task(ctx, &project, &spec, &task).await;
+        let result = self.run_agentic_task(ctx, &cfg, &project, &spec, &task).await;
         self.finalize_task(ctx, &task.id, result).await
     }
 }
@@ -177,6 +184,7 @@ impl TaskRunAutomaton {
     async fn run_agentic_task(
         &self,
         ctx: &TickContext,
+        cfg: &TaskRunConfig,
         project: &aura_tools::domain_tools::ProjectDescriptor,
         spec: &aura_tools::domain_tools::SpecDescriptor,
         task: &aura_tools::domain_tools::TaskDescriptor,
@@ -210,6 +218,15 @@ impl TaskRunAutomaton {
         };
         let tools = self.catalog.tools_for_profile(ToolProfile::Engine);
 
+        // PR C: borrow the parsed AgentIdentityEnvelope (if any) as an
+        // AgentInfo<'_> so the prompt builder renders
+        // <agent_identity>/<agent_skills>/<agent_system_prompt>.
+        // `as_agent_info()` returns `None` when every field is blank.
+        let agent_info = cfg
+            .agent_envelope
+            .as_ref()
+            .and_then(|env| env.as_agent_info());
+
         let params = AgenticTaskParams {
             project: &project_info,
             spec: &spec_info,
@@ -224,7 +241,7 @@ impl TaskRunAutomaton {
             member_count: 1,
             tools,
             attempt: 0,
-            agent: None,
+            agent: agent_info.as_ref(),
         };
 
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1024);
