@@ -435,6 +435,10 @@ fn dev_loop_prompt_with_identity_emits_every_section_in_order() {
         "<project_context>",
         "<dev_loop_workflow>",
         "<tool_discipline>",
+        "<editing_etiquette>",
+        "<planning_guidance>",
+        "<frontend_design>",
+        "<output_style>",
     ] {
         assert!(
             prompt.contains(tag),
@@ -449,6 +453,10 @@ fn dev_loop_prompt_with_identity_emits_every_section_in_order() {
         "<project_context>",
         "<dev_loop_workflow>",
         "<tool_discipline>",
+        "<editing_etiquette>",
+        "<planning_guidance>",
+        "<frontend_design>",
+        "<output_style>",
     ];
     let mut last = 0usize;
     for tag in order {

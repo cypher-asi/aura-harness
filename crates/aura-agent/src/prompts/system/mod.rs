@@ -114,6 +114,10 @@ pub fn agentic_execution_system_prompt(
         .agents_md_from_workspace(project.folder_path)
         .dev_loop_workflow(build_cmd, test_cmd)
         .tool_discipline()
+        .editing_etiquette()
+        .planning_guidance()
+        .frontend_design()
+        .output_style()
         .build()
 }
 

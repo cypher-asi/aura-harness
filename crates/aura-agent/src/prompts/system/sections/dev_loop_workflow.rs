@@ -42,10 +42,7 @@ Bias to act: prefer one best-effort edit and compiler feedback over more explora
 
 Invariants:
 - Read a file before editing it.
-- task_done only when `{build_cmd}` and `{test_cmd}` are both green; the harness re-runs `{test_cmd}` as a hard gate. If no changes are needed, call task_done with `no_changes_needed: true`.
-- Never run: git push --force, git reset --hard, git clean -fd, git config. Do not touch .gitignore to hide build output.
-
-When stuck on a decision (which way to resolve an ambiguity, which file to edit first), call submit_plan to publish your chosen approach before writing. It is transparent commitment surfaced to the operator, never a gate — writes are accepted with or without it."#,
+- task_done only when `{build_cmd}` and `{test_cmd}` are both green; the harness re-runs `{test_cmd}` as a hard gate. If no changes are needed, call task_done with `no_changes_needed: true`."#,
     );
     format!("<dev_loop_workflow>\n{body}\n</dev_loop_workflow>")
 }
