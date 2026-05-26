@@ -113,6 +113,48 @@ pub(crate) const RECENT_FAILURES_BUFFER_SIZE: usize = 6;
 /// echoing all of them would balloon the steering envelope.
 pub(crate) const RECOVERY_RECAP_MAX_ENTRIES: usize = 3;
 
+/// Jaccard similarity threshold between consecutive no-write read-path
+/// sets that marks the agent as circling (re-reading the same files).
+pub(crate) const CIRCLING_PATH_OVERLAP_THRESHOLD: f64 = 0.6;
+
+/// Tight continuation cap applied when [`detect_circling`] is true.
+pub(crate) const CIRCLING_MAX_CONTINUATION_TURNS: u32 = 6;
+
+/// True when the last two no-write turns read largely the same paths.
+pub(crate) fn detect_circling(recent_no_write_paths: &[HashSet<PathBuf>]) -> bool {
+    if recent_no_write_paths.len() < 2 {
+        return false;
+    }
+    let a = &recent_no_write_paths[recent_no_write_paths.len() - 2];
+    let b = &recent_no_write_paths[recent_no_write_paths.len() - 1];
+    path_set_jaccard(a, b) >= CIRCLING_PATH_OVERLAP_THRESHOLD
+}
+
+fn path_set_jaccard(a: &HashSet<PathBuf>, b: &HashSet<PathBuf>) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let inter = a.intersection(b).count();
+    let union = a.union(b).count();
+    if union == 0 {
+        0.0
+    } else {
+        inter as f64 / union as f64
+    }
+}
+
+/// Paths read on both of the last two no-write turns (for steering text).
+pub(crate) fn overlapping_read_paths(recent_no_write_paths: &[HashSet<PathBuf>]) -> Vec<PathBuf> {
+    if recent_no_write_paths.len() < 2 {
+        return Vec::new();
+    }
+    let a = &recent_no_write_paths[recent_no_write_paths.len() - 2];
+    let b = &recent_no_write_paths[recent_no_write_paths.len() - 1];
+    let mut paths: Vec<PathBuf> = a.intersection(b).cloned().collect();
+    paths.sort();
+    paths
+}
+
 /// Lifecycle event consumed by the [`GoalRuntime`].
 ///
 /// E.4 wires the `TurnCompleted` arm — the other variants exist as
@@ -293,11 +335,8 @@ pub(crate) struct ContinuationState {
     /// The runtime escalates to [`TaskRestart::Blocked`] once this
     /// reaches [`GoalRuntime::max_continuation_turns`].
     pub(crate) total_continuation_turns: u32,
-    /// Last (up to 3) read-path sets from no-write iterations.
-    /// Reserved for the blocker-signature audit; kept for parity with
-    /// the pre-E.4 [`crate::agent_loop::continuation::ContinuationState`]
-    /// shape (and so tests that move over continue to compile).
-    #[allow(dead_code)]
+    /// Last (up to 3) read-path sets from no-write iterations. Used by
+    /// [`detect_circling`] and the enriched blocked continuation body.
     pub(crate) recent_no_write_paths: Vec<HashSet<PathBuf>>,
     /// Priority A: ring buffer of the most recent rejected write
     /// attempts across recent turns. Lives on the session-scoped
@@ -488,6 +527,14 @@ impl GoalRuntime {
         }
     }
 
+    /// Whether the agent is in a read-only circling phase (overlap across
+    /// recent no-write turns, or a deep no-write streak). Drives the
+    /// session read dedup gate on [`crate::agent_loop::LoopState`].
+    pub(crate) async fn is_circling(&self) -> bool {
+        let guard = self.continuation.lock().await;
+        detect_circling(&guard.recent_no_write_paths) || guard.consecutive_no_write >= 2
+    }
+
     /// Dispatch one lifecycle event. Returns `Some(_)` when the task
     /// shell must act before the next turn (push a continuation
     /// prompt, or mark `task_blocked`); `None` when no follow-up is
@@ -563,13 +610,21 @@ impl GoalRuntime {
             None => Ok(None),
             Some(kind) => {
                 let streak = cont.consecutive_no_write;
-                if cont.total_continuation_turns >= self.max_continuation_turns {
+                let circling = detect_circling(&cont.recent_no_write_paths);
+                let effective_max = if circling {
+                    self.max_continuation_turns
+                        .min(CIRCLING_MAX_CONTINUATION_TURNS)
+                } else {
+                    self.max_continuation_turns
+                };
+                if cont.total_continuation_turns >= effective_max {
                     warn!(
                         session_id = %self.session_id,
                         task_id = %task_id,
                         streak,
                         total_continuation_turns = cont.total_continuation_turns,
-                        max_continuation_turns = self.max_continuation_turns,
+                        max_continuation_turns = effective_max,
+                        circling,
                         "max_continuation_turns exceeded; escalating to TaskBlocked"
                     );
                     return Ok(Some(TaskRestart::Blocked {
@@ -585,7 +640,22 @@ impl GoalRuntime {
                 // already, so the slice is up-to-date).
                 let recent: Vec<FailedWriteAttempt> =
                     cont.recent_failures.iter().cloned().collect();
-                let body = render(kind, streak as usize, streak, &recent);
+                let overlap = if circling && kind == ContinuationKind::Blocked {
+                    overlapping_read_paths(&cont.recent_no_write_paths)
+                } else {
+                    Vec::new()
+                };
+                let body = render(
+                    kind,
+                    streak as usize,
+                    streak,
+                    &recent,
+                    if overlap.is_empty() {
+                        None
+                    } else {
+                        Some(overlap.as_slice())
+                    },
+                );
                 cont.total_continuation_turns = cont.total_continuation_turns.saturating_add(1);
                 Ok(Some(TaskRestart::Continuation {
                     task_id,
@@ -633,6 +703,7 @@ pub(crate) fn render(
     iter: usize,
     count: u32,
     recent_errors: &[FailedWriteAttempt],
+    circling_paths: Option<&[PathBuf]>,
 ) -> String {
     match kind {
         ContinuationKind::Nudge => format!(
@@ -642,17 +713,31 @@ pub(crate) fn render(
              Either emit your next edit now, or call `task_done` with `no_changes_needed: true` and `notes` explaining why no change is needed. The task description may be stale - if the codebase contradicts the spec, trust the codebase.\n\
              </harness_continuation>"
         ),
-        ContinuationKind::Blocked => format!(
+        ContinuationKind::Blocked => {
+            let circling_note = circling_paths.map_or(String::new(), |paths| {
+                let listed: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                format!(
+                    "\nCircling detected — repeated reads on: {}.\n\
+                     Create the missing module file now; mirror the sibling reference \
+                     shown in pre-resolved context. Do not read these paths again.\n",
+                    listed.join(", ")
+                )
+            });
+            format!(
             "<harness_continuation kind=\"blocked\" iteration=\"{iter}\" consecutive_no_write=\"{count}\">\n\
              Iteration {iter}. Three consecutive iterations without a write. This is the codex-style \"blocked\" audit threshold.\n\
              \n\
              You must do one of the following on the next turn:\n\
              1. Emit your best-effort write_file / edit_file / delete_file against the existing codebase.\n\
              2. Call `task_done` with `no_changes_needed: true` and `notes` describing the contradiction between the task description and the codebase.\n\
-             \n\
+             {circling_note}\
              If you continue reading without one of the above, the harness will fail the task with `task_blocked`.\n\
              </harness_continuation>"
-        ),
+            )
+        }
         ContinuationKind::Recovery => {
             // Show the *most recent* N entries — when the buffer is
             // longer than the cap, the operator (and the model) care
@@ -696,6 +781,10 @@ mod tests {
 
     fn empty_read_paths() -> HashSet<PathBuf> {
         HashSet::new()
+    }
+
+    fn read_paths(paths: &[&str]) -> HashSet<PathBuf> {
+        paths.iter().map(PathBuf::from).collect()
     }
 
     fn fresh_runtime(max_turns: u32) -> GoalRuntime {
@@ -848,6 +937,53 @@ mod tests {
                 ContinuationKind::Blocked,
             ]
         );
+    }
+
+    #[test]
+    fn detect_circling_uses_recent_path_overlap() {
+        let first = read_paths(&["src/inbox.rs", "src/storage.rs"]);
+        let overlapping = read_paths(&["src/inbox.rs", "src/storage.rs", "src/lib.rs"]);
+        let different = read_paths(&["src/outbox.rs", "src/lib.rs"]);
+
+        assert!(detect_circling(&[first.clone(), overlapping]));
+        assert!(!detect_circling(&[first, different]));
+        assert!(!detect_circling(&[empty_read_paths(), empty_read_paths()]));
+    }
+
+    #[tokio::test]
+    async fn circling_lowers_effective_max_to_six() {
+        let runtime = fresh_runtime(100);
+        let task = TaskId::new_v4();
+        let repeated = read_paths(&["src/inbox.rs", "src/storage.rs"]);
+
+        for turn in 0..6 {
+            let restart = runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: repeated.clone(),
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap()
+                .expect("circling no-write turn should continue until cap is reached");
+            assert!(
+                matches!(restart, TaskRestart::Continuation { .. }),
+                "turn {turn} should not block yet; got {restart:?}"
+            );
+        }
+
+        let blocked = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: repeated,
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap()
+            .expect("seventh circling turn should block under effective cap 6");
+        assert!(matches!(blocked, TaskRestart::Blocked { .. }));
     }
 
     // --- mandatory E.4 tests ----------------------------------------
@@ -1034,7 +1170,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_nudge_includes_envelope_and_iteration() {
-        let body = render(ContinuationKind::Nudge, 4, 1, &[]);
+        let body = render(ContinuationKind::Nudge, 4, 1, &[], None);
         assert!(body.contains("<harness_continuation kind=\"nudge\""));
         assert!(body.contains("iteration=\"4\""));
         assert!(body.contains("consecutive_no_write=\"1\""));
@@ -1044,7 +1180,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_blocked_includes_envelope_and_options() {
-        let body = render(ContinuationKind::Blocked, 7, 3, &[]);
+        let body = render(ContinuationKind::Blocked, 7, 3, &[], None);
         assert!(body.contains("<harness_continuation kind=\"blocked\""));
         assert!(body.contains("iteration=\"7\""));
         assert!(body.contains("consecutive_no_write=\"3\""));

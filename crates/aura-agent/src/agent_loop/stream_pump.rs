@@ -50,17 +50,17 @@ use aura_reasoner::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, OutputItem, PartialToolUse,
     ProviderTrace, ReasonerError, ResponseEvent, ResponseEventStream, Role, StopReason, Usage,
 };
-use futures_util::StreamExt;
 use futures_util::stream::FuturesOrdered;
+use futures_util::StreamExt;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::AgentError;
 use crate::events::AgentLoopEvent;
 use crate::session::input_queue::InputQueue;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
+use crate::AgentError;
 
 use super::AgentLoopConfig;
 
@@ -384,15 +384,26 @@ pub(super) async fn drive_stream(
                         },
                     );
 
+                    // Circling read gate: before cache lookup or executor spawn,
+                    // reject duplicate `read_file` paths once GoalRuntime has
+                    // latched a read-only loop. This keeps the streaming pump in
+                    // lockstep with the buffered dispatcher.
+                    let single = std::slice::from_ref(&call);
+                    let (blocked_reads, allowed_calls) =
+                        super::tool_pipeline::partition_circling_duplicate_reads(single, state);
+                    if let Some(blocked) = blocked_reads.into_iter().next() {
+                        cached_pairs.push((submission_index, (call.clone(), blocked)));
+                        continue;
+                    }
+
                     // Layer E.4 tool-result cache: consult the
                     // per-run cache before spawning the future. On a
                     // hit, materialise the synthetic
                     // [`ToolCallResult`] inline so the FIFO drain
                     // returns it in submission order; the executor is
                     // NOT invoked (codex parity for read-only tools).
-                    let single = std::slice::from_ref(&call);
                     let (cached_results, uncached_calls) =
-                        super::tool_execution::split_cached(single, &state.tool_cache);
+                        super::tool_execution::split_cached(&allowed_calls, &state.tool_cache);
                     if !cached_results.is_empty() {
                         cached_pairs.push((
                             submission_index,
@@ -768,6 +779,8 @@ async fn handle_streamed_tool_use(
         &mut state.exploration_state,
         &mut state.had_any_write,
         &mut state.turn_diff,
+        Some(&mut state.repeated_read_tracker),
+        Some(&mut state.session_read_paths),
     );
     if state.had_any_write {
         state.had_any_file_write = true;

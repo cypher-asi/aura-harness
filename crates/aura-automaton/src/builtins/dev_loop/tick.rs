@@ -1,4 +1,4 @@
-﻿//! Per-tick orchestration for [`super::DevLoopAutomaton`].
+//! Per-tick orchestration for [`super::DevLoopAutomaton`].
 //!
 //! Lifecycle:
 //! - `on_install` emits a `LogLine` so operators can see the loop started.
@@ -10,6 +10,7 @@
 //! - `on_stop` emits `LoopFinished` if the loop did not already finish
 //!   naturally.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tracing::{info, warn};
@@ -22,7 +23,7 @@ use aura_tools::domain_tools::TaskDescriptor;
 use super::forward_event::spawn_agent_event_forwarder;
 use super::{
     DevLoopAutomaton, DevLoopConfig, STATE_COMPLETED_COUNT, STATE_FAILED_COUNT, STATE_INITIALIZED,
-    STATE_LOOP_FINISHED, STATE_TASK_QUEUE,
+    STATE_LOOP_FINISHED, STATE_TASK_QUEUE, STATE_TASK_RETRIES,
 };
 use crate::builtins::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
@@ -115,6 +116,8 @@ impl DevLoopAutomaton {
         ctx.state.set(STATE_INITIALIZED, &true);
         ctx.state.set(STATE_COMPLETED_COUNT, &0u32);
         ctx.state.set(STATE_FAILED_COUNT, &0u32);
+        ctx.state
+            .set(STATE_TASK_RETRIES, &HashMap::<String, u32>::new());
 
         ctx.emit(AutomatonEvent::LogLine {
             message: format!("Dev loop ready: {pending} tasks to execute"),
@@ -161,7 +164,8 @@ impl DevLoopAutomaton {
             task_title: task.title.clone(),
         })?;
 
-        let result = self.execute_task(ctx, cfg, &task).await;
+        let attempt = retry_count(ctx, &task.id);
+        let result = self.execute_task(ctx, cfg, &task, attempt).await;
 
         // User-initiated stop fires the shared cancellation token, which the
         // agent loop honours by returning an early `Ok(TaskExecutionResult)`
@@ -173,15 +177,27 @@ impl DevLoopAutomaton {
         // it cleanly and roll the task status back to `ready` so the next dev
         // loop start can pick it up.
         if ctx.is_cancelled() {
-            return self.record_task_cancelled(ctx, &task).await.map(|()| TickOutcome::Done);
+            return self
+                .record_task_cancelled(ctx, &task)
+                .await
+                .map(|()| TickOutcome::Done);
         }
 
         match result {
-            Ok(exec) => match classify_execution_result(&exec) {
-                Some(err) => self.record_task_failure(ctx, &task, err).await?,
-                None => self.record_task_success(ctx, &task, exec).await?,
-            },
-            Err(e) => self.record_task_failure(ctx, &task, e).await?,
+            Ok(exec) => {
+                if let Some(err) = classify_execution_result(&exec) {
+                    if !self.retry_task_blocked_no_write(ctx, &task, &err).await? {
+                        self.record_task_failure(ctx, &task, err).await?;
+                    }
+                } else {
+                    self.record_task_success(ctx, &task, exec).await?;
+                }
+            }
+            Err(e) => {
+                if !self.retry_task_blocked_no_write(ctx, &task, &e).await? {
+                    self.record_task_failure(ctx, &task, e).await?;
+                }
+            }
         }
 
         Ok(TickOutcome::Continue)
@@ -269,11 +285,61 @@ impl DevLoopAutomaton {
         Ok(())
     }
 
+    async fn retry_task_blocked_no_write(
+        &self,
+        ctx: &mut TickContext,
+        task: &TaskDescriptor,
+        err: &AutomatonError,
+    ) -> Result<bool, AutomatonError> {
+        if !is_task_blocked_without_write(err) {
+            return Ok(false);
+        }
+
+        let mut retries: HashMap<String, u32> =
+            ctx.state.get(STATE_TASK_RETRIES).unwrap_or_default();
+        let current = retries.get(&task.id).copied().unwrap_or(0);
+        if current >= 1 {
+            return Ok(false);
+        }
+
+        retries.insert(task.id.clone(), current + 1);
+        ctx.state.set(STATE_TASK_RETRIES, &retries);
+
+        let mut queue: Vec<String> = ctx.state.get(STATE_TASK_QUEUE).unwrap_or_default();
+        queue.insert(0, task.id.clone());
+        ctx.state.set(STATE_TASK_QUEUE, &queue);
+
+        if let Err(te) = self.domain.transition_task(&task.id, "ready", None).await {
+            warn!(task_id = %task.id, error = %te, "Failed to requeue task for decomposition retry");
+        }
+
+        let reason = err.to_string();
+        ctx.emit(AutomatonEvent::TaskRetrying {
+            task_id: task.id.clone(),
+            attempt: current + 1,
+            reason: reason.clone(),
+        })?;
+        ctx.emit(AutomatonEvent::LogLine {
+            message: format!(
+                "Retrying task {} once with a decomposition prompt after task_blocked/no-write",
+                task.id
+            ),
+        })?;
+        info!(
+            task_id = %task.id,
+            attempt = current + 1,
+            reason = %reason,
+            "Requeued task after task_blocked/no-write"
+        );
+        Ok(true)
+    }
+
     async fn execute_task(
         &self,
         ctx: &TickContext,
         cfg: &DevLoopConfig,
         task: &TaskDescriptor,
+        attempt: u32,
     ) -> Result<TaskExecutionResult, AutomatonError> {
         let project = self
             .domain
@@ -305,9 +371,20 @@ impl DevLoopAutomaton {
             title: &spec.title,
             markdown_contents: &spec.content,
         };
+        let retry_description;
+        let description = if attempt > 0 {
+            retry_description = format!(
+                "{}\n\n{}",
+                task.description,
+                decomposition_retry_prompt(task)
+            );
+            retry_description.as_str()
+        } else {
+            task.description.as_str()
+        };
         let task_info = TaskInfo {
             title: &task.title,
-            description: &task.description,
+            description,
             execution_notes: "",
             files_changed: &[],
         };
@@ -338,7 +415,7 @@ impl DevLoopAutomaton {
             dep_api_context: "",
             member_count: 1,
             tools,
-            attempt: 0,
+            attempt,
             agent: agent_info.as_ref(),
         };
 
@@ -425,6 +502,48 @@ fn classify_execution_result(exec: &TaskExecutionResult) -> Option<AutomatonErro
     }
 }
 
+fn retry_count(ctx: &TickContext, task_id: &str) -> u32 {
+    let retries: HashMap<String, u32> = ctx.state.get(STATE_TASK_RETRIES).unwrap_or_default();
+    retries.get(task_id).copied().unwrap_or(0)
+}
+
+fn is_task_blocked_without_write(err: &AutomatonError) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("task_blocked") && msg.contains("without a write")
+}
+
+fn decomposition_retry_prompt(task: &TaskDescriptor) -> String {
+    let module = infer_module_keyword(&task.title, &task.description);
+    let target = module
+        .as_ref()
+        .map(|m| format!("a `src/{m}.rs` module file"))
+        .unwrap_or_else(|| "the missing module file".to_string());
+
+    let mut prompt = format!(
+        "DECOMPOSITION (retry 1): Previous attempt ended with task_blocked without any file writes.\n\
+         Create {target} now before broad exploration. Read at most one sibling/reference file, \
+         then use write_file or edit_file. Do not repeat directory listing or broad grep before the first write."
+    );
+    if module.as_deref() == Some("outbox") {
+        prompt.push_str(
+            "\nFor this task: add the outbox module mirroring the inbox pattern; define OutboxEntry; \
+             wire put_outbox/get_outbox or equivalent storage APIs required by the local codebase.",
+        );
+    }
+    prompt
+}
+
+fn infer_module_keyword(title: &str, description: &str) -> Option<String> {
+    let text = format!("{title} {description}").to_ascii_lowercase();
+    for token in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+        match token {
+            "outbox" | "inbox" => return Some(token.to_string()),
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod classify_tests {
     use super::*;
@@ -468,6 +587,33 @@ mod classify_tests {
             "`no_changes_needed: true` is the legitimate no-op completion path \
              (task description satisfied by existing code) and must record as success",
         );
+    }
+
+    #[test]
+    fn task_blocked_without_write_is_retryable_once() {
+        let err = AutomatonError::AgentExecution(
+            "LLM error: task_blocked: max_continuation_turns exceeded without a write".into(),
+        );
+        assert!(is_task_blocked_without_write(&err));
+    }
+
+    #[test]
+    fn decomposition_retry_prompt_mentions_outbox_shape() {
+        let task = TaskDescriptor {
+            id: "task-1".into(),
+            project_id: "project-1".into(),
+            spec_id: "spec-1".into(),
+            title: "2.6 outbox CF".into(),
+            description: "Implement missing column family".into(),
+            status: "ready".into(),
+            dependencies: Vec::new(),
+            order: 1,
+        };
+        let prompt = decomposition_retry_prompt(&task);
+        assert!(prompt.contains("DECOMPOSITION (retry 1)"));
+        assert!(prompt.contains("outbox"));
+        assert!(prompt.contains("inbox"));
+        assert!(prompt.contains("write_file"));
     }
 
     // NOTE: a third case — non-empty `file_ops` classifies as success —

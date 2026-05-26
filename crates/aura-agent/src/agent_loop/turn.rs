@@ -409,12 +409,7 @@ async fn delegate_continuation_to_goal_runtime(
     }
 
     let had_write = !state.turn_diff.is_empty();
-    // Placeholder until the iteration_read_paths plumbing lands; the
-    // GoalRuntime's blocker_signature audit is the eventual consumer
-    // and accepts an empty set as a no-op for E.4. The
-    // continuation kind (Nudge / Blocked) is computed from the
-    // streak alone, so the empty set keeps the decision correct.
-    let read_paths = std::collections::HashSet::new();
+    let read_paths = state.turn_diff.read_paths().clone();
     // Priority A: snapshot the per-iteration failed-write attempts
     // BEFORE `begin_iteration` resets the turn diff at the top of
     // the next loop iteration. The goal-runtime ring buffer takes
@@ -439,6 +434,7 @@ async fn delegate_continuation_to_goal_runtime(
     let snapshot = session.goal_runtime.snapshot().await;
     state.continuation.consecutive_no_write = snapshot.consecutive_no_write;
     state.total_continuation_turns = snapshot.total_continuation_turns;
+    state.circling_latched = session.goal_runtime.is_circling().await;
 
     let Some(restart) = restart else {
         return Ok(false);

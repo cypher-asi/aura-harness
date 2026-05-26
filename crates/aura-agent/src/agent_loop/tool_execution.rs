@@ -74,11 +74,34 @@ async fn execute_and_cache_tools(
         );
     }
 
-    let (cached_results, uncached_calls) = split_cached(&tool_calls, &state.tool_cache);
+    let (circling_reads, cacheable_calls) =
+        super::tool_pipeline::partition_circling_duplicate_reads(&tool_calls, state);
+    let circling_blocked_ids: HashSet<String> = circling_reads
+        .iter()
+        .map(|r| r.tool_use_id.clone())
+        .collect();
+
+    let (cached_results, uncached_calls) = split_cached(&cacheable_calls, &state.tool_cache);
     let cached_ids: HashSet<String> = cached_results
         .iter()
         .map(|r| r.tool_use_id.clone())
         .collect();
+    if !cached_results.is_empty() {
+        // Cached read results still count as reads for the no-write
+        // circling audit and repeated-read steering. The streaming pump
+        // naturally routes cached pairs through `track_tool_effects_public`
+        // later; mirror that here for the buffered path.
+        super::tool_pipeline::track_tool_effects_public(
+            &tool_calls,
+            &cached_results,
+            &mut state.result,
+            &mut state.exploration_state,
+            &mut state.had_any_write,
+            &mut state.turn_diff,
+            Some(&mut state.repeated_read_tracker),
+            Some(&mut state.session_read_paths),
+        );
+    }
     debug!(
         cached_count = cached_results.len(),
         execute_count = uncached_calls.len(),
@@ -95,7 +118,12 @@ async fn execute_and_cache_tools(
 
     update_cache(&mut state.tool_cache, &uncached_calls, &executed_results);
 
-    let mut all_results: Vec<ToolCallResult> = cached_results;
+    let blocked_ids: HashSet<String> = blocked_ids
+        .into_iter()
+        .chain(circling_blocked_ids.into_iter())
+        .collect();
+    let mut all_results: Vec<ToolCallResult> = circling_reads;
+    all_results.extend(cached_results);
     all_results.extend(executed_results);
 
     Some(ExecutedTools {
@@ -553,7 +581,7 @@ fn slice_raw_to_line_numbered(
 /// not the upstream `ToolResult` metadata map. Keeping a private copy
 /// of the hash avoids plumbing metadata through `ToolCallResult`
 /// (which would touch every executor and test fixture in the tree).
-fn content_hash_hex(bytes: &[u8]) -> String {
+pub(crate) fn content_hash_hex(bytes: &[u8]) -> String {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
     format!("{:016x}", hasher.finish())

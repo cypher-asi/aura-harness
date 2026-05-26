@@ -17,6 +17,7 @@
 //! preserves the outer/inner split between the two files.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,7 @@ use crate::helpers;
 use crate::types::{
     AgentLoopResult, AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
+use aura_core::ToolResultKind;
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -186,11 +188,15 @@ impl AgentLoop {
         // for the huge content re-echo. These synthetic errors flow
         // through the `blocked_ids` channel so the source label
         // becomes `blocked` and cache invalidation skips them.
-        let (oversized_writes, to_execute) =
+        let (oversized_writes, after_oversized) =
             partition_oversized_writes(tool_calls, &mut side_messages, event_tx);
+
+        let (circling_reads, to_execute) =
+            partition_circling_duplicate_reads(&after_oversized, state);
 
         let blocked_ids: HashSet<String> = oversized_writes
             .iter()
+            .chain(circling_reads.iter())
             .map(|r| r.tool_use_id.clone())
             .collect();
 
@@ -217,6 +223,8 @@ impl AgentLoop {
             &mut state.exploration_state,
             &mut state.had_any_write,
             &mut state.turn_diff,
+            Some(&mut state.repeated_read_tracker),
+            Some(&mut state.session_read_paths),
         );
 
         if any_write_success && state.build_cooldown == 0 {
@@ -233,9 +241,53 @@ impl AgentLoop {
         }
 
         let mut all_results = oversized_writes;
+        all_results.extend(circling_reads);
         all_results.extend(executed);
         (all_results, side_messages, blocked_ids)
     }
+}
+
+/// Reject `read_file` calls that repeat a path already read this session
+/// when the goal runtime has latched circling.
+pub(super) fn partition_circling_duplicate_reads(
+    tool_calls: &[ToolCallInfo],
+    state: &super::LoopState,
+) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
+    if !state.circling_latched {
+        return (Vec::new(), tool_calls.to_vec());
+    }
+
+    let mut blocked = Vec::new();
+    let mut remaining = Vec::new();
+
+    for tool in tool_calls {
+        if tool.name != "read_file" {
+            remaining.push(tool.clone());
+            continue;
+        }
+        let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) else {
+            remaining.push(tool.clone());
+            continue;
+        };
+        let path_buf = PathBuf::from(path);
+        if state.session_read_paths.contains(&path_buf) {
+            blocked.push(ToolCallResult {
+                tool_use_id: tool.id.clone(),
+                content: format!(
+                    "You already read `{path}` this session. Circling detected.\n\
+                     Your next action must be write_file / edit_file / delete_file or task_done."
+                ),
+                is_error: true,
+                kind: ToolResultKind::AgentError,
+                stop_loop: false,
+                file_changes: Vec::new(),
+            });
+        } else {
+            remaining.push(tool.clone());
+        }
+    }
+
+    (blocked, remaining)
 }
 
 /// Pre-dispatch chunk guard for `write_file`.
@@ -319,6 +371,8 @@ pub(super) fn track_tool_effects_public(
     exploration_state: &mut ExplorationState,
     had_any_write: &mut bool,
     turn_diff: &mut super::turn_diff::TurnDiff,
+    repeated_read_tracker: Option<&mut crate::prompts::steering::RepeatedReadTracker>,
+    session_read_paths: Option<&mut HashSet<PathBuf>>,
 ) -> bool {
     track_tool_effects(
         to_execute,
@@ -327,6 +381,8 @@ pub(super) fn track_tool_effects_public(
         exploration_state,
         had_any_write,
         turn_diff,
+        repeated_read_tracker,
+        session_read_paths,
     )
 }
 
@@ -337,6 +393,8 @@ fn track_tool_effects(
     exploration_state: &mut ExplorationState,
     had_any_write: &mut bool,
     turn_diff: &mut super::turn_diff::TurnDiff,
+    mut repeated_read_tracker: Option<&mut crate::prompts::steering::RepeatedReadTracker>,
+    mut session_read_paths: Option<&mut HashSet<PathBuf>>,
 ) -> bool {
     use super::turn_diff::{FailedWriteAttempt, TurnDiff, FAILED_WRITE_SNIPPET_MAX_CHARS};
     use crate::types::FileChangeKind;
@@ -397,6 +455,22 @@ fn track_tool_effects(
 
         if helpers::is_exploration_tool(&tool.name) {
             exploration_state.count += 1;
+            if !exec_result.is_error {
+                if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
+                    let path_buf = PathBuf::from(path);
+                    turn_diff.record_read(path_buf.clone());
+                    if let Some(cache) = session_read_paths.as_deref_mut() {
+                        cache.insert(path_buf);
+                    }
+                }
+                if tool.name == "read_file" {
+                    if let Some(tracker) = repeated_read_tracker.as_deref_mut() {
+                        let hash =
+                            super::tool_execution::content_hash_hex(exec_result.content.as_bytes());
+                        tracker.record(&hash);
+                    }
+                }
+            }
         }
 
         if helpers::is_write_tool(&tool.name) {
@@ -659,6 +733,8 @@ mod track_tool_effects_tests {
             &mut exploration_state,
             &mut had_any_write,
             &mut turn_diff,
+            None,
+            None,
         );
 
         assert!(
@@ -721,6 +797,8 @@ mod track_tool_effects_tests {
             &mut exploration_state,
             &mut had_any_write,
             &mut turn_diff,
+            None,
+            None,
         );
 
         let recorded = turn_diff.failed_write_attempts();
@@ -756,6 +834,8 @@ mod track_tool_effects_tests {
                 &mut exploration_state,
                 &mut had_any_write,
                 &mut turn_diff,
+                None,
+                None,
             );
         }
 
@@ -763,7 +843,30 @@ mod track_tool_effects_tests {
         assert!(!had_any_write, "no writes were issued in this test");
         assert!(
             turn_diff.is_empty(),
-            "read_file calls must not record into the turn diff"
+            "read_file calls must not count as writes in the turn diff"
         );
+        assert_eq!(turn_diff.read_paths().len(), CALLS);
+    }
+
+    #[test]
+    fn circling_gate_rejects_duplicate_read_file_paths() {
+        let config = super::super::AgentLoopConfig::for_agent("claude-test-model");
+        let mut state = super::super::LoopState::new(&config, Vec::new());
+        state.circling_latched = true;
+        state
+            .session_read_paths
+            .insert(PathBuf::from("src/inbox.rs"));
+
+        let duplicate = mk_read_tool("toolu_dup", "src/inbox.rs");
+        let fresh = mk_read_tool("toolu_fresh", "src/outbox.rs");
+        let (blocked, remaining) =
+            partition_circling_duplicate_reads(&[duplicate, fresh.clone()], &state);
+
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].tool_use_id, "toolu_dup");
+        assert!(blocked[0].is_error);
+        assert!(blocked[0].content.contains("Circling detected"));
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, fresh.id);
     }
 }

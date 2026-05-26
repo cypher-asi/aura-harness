@@ -11,7 +11,7 @@
 //! bool` — to detect "no forward motion this turn" and to compute a
 //! blocker_signature for the codex-style blocked-after-3 audit.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// The net effect of a single iteration's write-tool calls on one file.
@@ -73,6 +73,9 @@ pub(crate) const FAILED_WRITE_SNIPPET_MAX_CHARS: usize = 200;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TurnDiff {
     writes: HashMap<PathBuf, FileOp>,
+    /// Exploration-tool paths touched this iteration (`read_file`,
+    /// `stat_file`, …). Consumed by the goal-runtime circling audit.
+    read_paths: HashSet<PathBuf>,
     /// Write-tool calls (`write_file` / `edit_file` / `delete_file`)
     /// that returned `is_error = true` this turn, in the order the
     /// tool dispatcher saw them. Cleared by [`Self::reset`] together
@@ -113,6 +116,16 @@ impl TurnDiff {
     /// — a create-then-delete in one iteration collapses to a deletion.
     pub(crate) fn record_delete(&mut self, path: PathBuf) {
         self.writes.insert(path, FileOp::Deleted);
+    }
+
+    /// Record a read-only tool touching `path` this iteration.
+    pub(crate) fn record_read(&mut self, path: PathBuf) {
+        self.read_paths.insert(path);
+    }
+
+    /// Paths read by exploration tools this iteration.
+    pub(crate) fn read_paths(&self) -> &HashSet<PathBuf> {
+        &self.read_paths
     }
 
     /// Returns true when no write/edit/delete landed this iteration.
@@ -158,6 +171,7 @@ impl TurnDiff {
     /// agent loop so the diff scopes to the iteration just executed.
     pub(crate) fn reset(&mut self) {
         self.writes.clear();
+        self.read_paths.clear();
         self.failed_write_attempts.clear();
     }
 }
@@ -202,10 +216,22 @@ mod tests {
         diff.record_create(PathBuf::from("a.rs"));
         diff.record_modify(PathBuf::from("b.rs"), 10);
         diff.record_delete(PathBuf::from("c.rs"));
+        diff.record_read(PathBuf::from("src/inbox.rs"));
         assert!(!diff.is_empty());
         diff.reset();
         assert!(diff.is_empty());
         assert_eq!(diff.paths().count(), 0);
+        assert!(diff.read_paths().is_empty());
+    }
+
+    #[test]
+    fn turn_diff_records_read_paths() {
+        let mut diff = TurnDiff::default();
+        diff.record_read(PathBuf::from("crates/foo/src/inbox.rs"));
+        assert_eq!(diff.read_paths().len(), 1);
+        assert!(diff
+            .read_paths()
+            .contains(&PathBuf::from("crates/foo/src/inbox.rs")));
     }
 
     #[test]

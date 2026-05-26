@@ -732,7 +732,8 @@ async fn resolve_enrichment_block(params: &AgenticTaskParams<'_>) -> Option<Stri
     if params.attempt != 0 {
         return None;
     }
-    let hints = extract_hints(params.task.description);
+    let text = format!("{} {}", params.task.title, params.task.description);
+    let hints = extract_hints(&text);
     if !hints.is_meaningful() {
         return None;
     }

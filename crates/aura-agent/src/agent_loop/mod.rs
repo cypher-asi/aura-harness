@@ -35,6 +35,8 @@ mod parity_tests;
 #[cfg(test)]
 mod pipeline_tests;
 #[cfg(test)]
+mod shamir_replay_tests;
+#[cfg(test)]
 mod streaming_tests;
 #[cfg(test)]
 mod tests;
@@ -43,8 +45,8 @@ mod tests_advanced;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use aura_reasoner::{
@@ -983,6 +985,12 @@ pub struct LoopState {
     /// this run. The loop fails the task with `task_blocked` once
     /// this hits [`AgentLoopConfig::max_continuation_turns`].
     pub(crate) total_continuation_turns: u32,
+    /// Per-turn tracker for identical-byte re-reads (Phase 3b).
+    pub(crate) repeated_read_tracker: crate::prompts::steering::RepeatedReadTracker,
+    /// Paths successfully read this session; used by the circling read gate.
+    pub(crate) session_read_paths: std::collections::HashSet<PathBuf>,
+    /// Set after each turn-stop hook when the goal runtime detects circling.
+    pub(crate) circling_latched: bool,
 }
 
 impl LoopState {
@@ -1015,6 +1023,9 @@ impl LoopState {
             turn_diff: turn_diff::TurnDiff::default(),
             continuation: continuation::ContinuationState::default(),
             total_continuation_turns: 0,
+            repeated_read_tracker: crate::prompts::steering::RepeatedReadTracker::new(),
+            session_read_paths: std::collections::HashSet::new(),
+            circling_latched: false,
         }
     }
 
@@ -1031,6 +1042,10 @@ impl LoopState {
         // longer relevant — `had_any_file_write` (cumulative latch)
         // and the per-iteration `turn_diff` answer different questions.
         self.turn_diff.reset();
+
+        for kind in self.repeated_read_tracker.begin_turn() {
+            crate::prompts::steering::SteeringInjector::inject(&mut self.messages, kind);
+        }
 
         // One-shot extended-thinking disable flag is re-evaluated each
         // iteration: seeded from the cross-iteration latch (armed by

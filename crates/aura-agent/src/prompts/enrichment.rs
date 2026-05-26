@@ -33,13 +33,17 @@ pub struct ContextHints {
     pub paths: Vec<String>,
     /// Code-symbol candidates (e.g. `Outbox::enqueue`, `RetryPolicy`).
     pub symbols: Vec<String>,
+    /// Lowercase module/file stem keywords (`outbox`, `inbox`, …).
+    pub module_keywords: Vec<String>,
+    /// Optional note spliced into the enrichment block (missing-file hints).
+    pub module_note: Option<String>,
 }
 
 impl ContextHints {
     /// True iff we have at least one candidate worth resolving.
     #[must_use]
     pub fn is_meaningful(&self) -> bool {
-        !self.paths.is_empty() || !self.symbols.is_empty()
+        !self.paths.is_empty() || !self.symbols.is_empty() || !self.module_keywords.is_empty()
     }
 }
 
@@ -106,6 +110,13 @@ pub trait WorkspaceReader: Send + Sync {
     /// `pub`/`async` prefix). Symbols of the form `Foo::bar` search for
     /// `bar` first and fall back to `Foo`.
     async fn grep_definition(&self, symbol: &str, max_hits: usize) -> Vec<SymbolHit>;
+
+    /// Find up to `max_hits` workspace-relative `**/src/{module}.rs` paths.
+    /// Default impl returns empty (test stubs).
+    async fn discover_module_paths(&self, module: &str, max_hits: usize) -> Vec<String> {
+        let _ = (module, max_hits);
+        Vec::new()
+    }
 }
 
 /// Real-filesystem implementation of [`WorkspaceReader`], rooted at a
@@ -167,6 +178,16 @@ impl WorkspaceReader for FsWorkspace {
         tokio::task::spawn_blocking(move || grep_definition_blocking(&root, &symbol, max_hits))
             .await
             .unwrap_or_default()
+    }
+
+    async fn discover_module_paths(&self, module: &str, max_hits: usize) -> Vec<String> {
+        let root = self.root.clone();
+        let module = module.to_string();
+        tokio::task::spawn_blocking(move || {
+            discover_module_paths_blocking(&root, &module, max_hits)
+        })
+        .await
+        .unwrap_or_default()
     }
 }
 
@@ -251,6 +272,52 @@ fn grep_one(root: &Path, symbol: &str, max_hits: usize) -> Vec<SymbolHit> {
         }
     }
     hits
+}
+
+fn discover_module_paths_blocking(root: &Path, module: &str, max_hits: usize) -> Vec<String> {
+    if max_hits == 0 || module.is_empty() {
+        return Vec::new();
+    }
+    let target = format!("{module}.rs");
+    let mut paths = Vec::new();
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy();
+                return !SKIP_DIRS.contains(&name.as_ref());
+            }
+            true
+        })
+    {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy();
+        if file_name != target {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !rel.contains("/src/") {
+            continue;
+        }
+        if !paths.contains(&rel) {
+            paths.push(rel);
+        }
+        if paths.len() >= max_hits {
+            break;
+        }
+    }
+    paths
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +430,13 @@ const STOPWORDS: &[&str] = &[
 /// Order of first appearance is preserved; duplicates are dropped.
 #[must_use]
 pub fn extract_hints(description: &str) -> ContextHints {
+    let mut hints = extract_hints_core(description);
+    expand_module_hints(description, &mut hints);
+    hints
+}
+
+/// Extract path/symbol hints without module-keyword expansion.
+fn extract_hints_core(description: &str) -> ContextHints {
     let mut paths = ordered_unique(extract_paths(description));
     let mut symbols = ordered_unique(extract_symbols(description));
     // Don't double-count a path-shaped token as a symbol when it
@@ -373,7 +447,76 @@ pub fn extract_hints(description: &str) -> ContextHints {
     // description with hundreds of paths would still drag.
     paths.truncate(64);
     symbols.truncate(64);
-    ContextHints { paths, symbols }
+    ContextHints {
+        paths,
+        symbols,
+        module_keywords: Vec::new(),
+        module_note: None,
+    }
+}
+
+/// Expand CF / module-task hints from lowercase keywords and sibling maps.
+fn expand_module_hints(text: &str, hints: &mut ContextHints) {
+    use crate::file_ops::task_keywords::extract_task_keywords;
+
+    let cf_task = Regex::new(r"(?i)\b(?:cf|column\s*family)\b")
+        .expect("cf regex")
+        .is_match(text);
+
+    let keywords = extract_task_keywords("", text);
+    let mut modules: Vec<String> = keywords
+        .into_iter()
+        .filter(|k| k.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .filter(|k| k.len() >= 3)
+        .collect();
+
+    let has_known_module = modules
+        .iter()
+        .any(|kw| !module_siblings(kw.as_str()).is_empty());
+    if !cf_task && !has_known_module {
+        return;
+    }
+
+    for kw in modules.clone() {
+        for sibling in module_siblings(kw.as_str()) {
+            if !modules.contains(&sibling.to_string()) {
+                modules.push(sibling.to_string());
+            }
+        }
+    }
+
+    if modules.iter().any(|m| m == "outbox") {
+        if !hints.symbols.iter().any(|s| s.contains("OutboxEntry")) {
+            hints.symbols.push("OutboxEntry".to_string());
+        }
+        hints.module_note = Some(
+            "Note: `outbox.rs` / `OutboxEntry` may not exist yet — implement them \
+             using the inbox / storage patterns below."
+                .to_string(),
+        );
+    }
+
+    if cf_task {
+        for anchor in ["storage", "lib"] {
+            if !modules.contains(&anchor.to_string()) {
+                modules.push(anchor.to_string());
+            }
+        }
+    }
+
+    hints.module_keywords = ordered_unique(modules);
+
+    if cf_task || !hints.module_keywords.is_empty() {
+        hints.symbols.truncate(64);
+    }
+}
+
+fn module_siblings(name: &str) -> &'static [&'static str] {
+    match name {
+        "outbox" => &["inbox"],
+        "inbox" => &["outbox"],
+        _ => &[],
+    }
 }
 
 fn ordered_unique<I: IntoIterator<Item = String>>(items: I) -> Vec<String> {
@@ -575,6 +718,7 @@ fn is_plausible_camel_ident(s: &str) -> bool {
 pub struct ResolvedContext {
     paths: Vec<ResolvedPath>,
     symbols: Vec<ResolvedSymbol>,
+    module_note: Option<String>,
     /// Soft budget enforced by [`Self::into_block`].
     max_block_chars: usize,
 }
@@ -596,7 +740,7 @@ impl ResolvedContext {
     /// True iff there's nothing to render.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.paths.is_empty() && self.symbols.is_empty()
+        self.paths.is_empty() && self.symbols.is_empty() && self.module_note.is_none()
     }
 
     /// Render the resolved hints as a markdown block ready to splice
@@ -615,7 +759,12 @@ impl ResolvedContext {
         let max_chars = self.max_block_chars;
         let mut path_bodies_kept: Vec<bool> = vec![true; self.paths.len()];
         loop {
-            let rendered = render_block(&self.paths, &self.symbols, &path_bodies_kept);
+            let rendered = render_block(
+                &self.paths,
+                &self.symbols,
+                &path_bodies_kept,
+                self.module_note.as_deref(),
+            );
             if rendered.len() <= max_chars || max_chars == 0 {
                 return rendered;
             }
@@ -640,10 +789,15 @@ fn render_block(
     paths: &[ResolvedPath],
     symbols: &[ResolvedSymbol],
     path_bodies_kept: &[bool],
+    module_note: Option<&str>,
 ) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     out.push_str("## Pre-resolved context (from task description)\n\n");
+
+    if let Some(note) = module_note {
+        let _ = writeln!(out, "{note}\n");
+    }
 
     if !paths.is_empty() {
         out.push_str("Files mentioned in the task that exist in the workspace:\n");
@@ -708,8 +862,23 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
     workspace: &R,
     caps: ResolveCaps,
 ) -> ResolvedContext {
+    let mut path_candidates = hints.paths.clone();
+    for kw in &hints.module_keywords {
+        let discovered = tokio::time::timeout(
+            caps.per_call_timeout,
+            workspace.discover_module_paths(kw, 2),
+        )
+        .await
+        .unwrap_or_default();
+        for path in discovered {
+            if !path_candidates.contains(&path) {
+                path_candidates.push(path);
+            }
+        }
+    }
+
     let mut resolved_paths = Vec::new();
-    for path in hints.paths.iter().take(caps.max_paths) {
+    for path in path_candidates.iter().take(caps.max_paths) {
         let exists = tokio::time::timeout(caps.per_call_timeout, workspace.exists(path))
             .await
             .unwrap_or(false);
@@ -752,6 +921,7 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
     ResolvedContext {
         paths: resolved_paths,
         symbols: resolved_symbols,
+        module_note: hints.module_note.clone(),
         max_block_chars: caps.max_block_chars,
     }
 }
@@ -773,6 +943,7 @@ mod tests {
     struct StubWorkspace {
         files: Mutex<HashMap<String, String>>,
         definitions: Mutex<HashMap<String, Vec<SymbolHit>>>,
+        module_paths: Mutex<HashMap<String, Vec<String>>>,
     }
 
     impl StubWorkspace {
@@ -789,6 +960,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(symbol.to_string(), hits);
+            self
+        }
+
+        fn with_module_paths(self, module: &str, paths: Vec<&str>) -> Self {
+            self.module_paths.lock().unwrap().insert(
+                module.to_string(),
+                paths.into_iter().map(str::to_string).collect(),
+            );
             self
         }
     }
@@ -812,6 +991,16 @@ mod tests {
                 .lock()
                 .unwrap()
                 .get(symbol)
+                .cloned()
+                .map(|v| v.into_iter().take(max_hits).collect())
+                .unwrap_or_default()
+        }
+
+        async fn discover_module_paths(&self, module: &str, max_hits: usize) -> Vec<String> {
+            self.module_paths
+                .lock()
+                .unwrap()
+                .get(module)
                 .cloned()
                 .map(|v| v.into_iter().take(max_hits).collect())
                 .unwrap_or_default()
@@ -881,6 +1070,34 @@ mod tests {
         let desc = "Refactor the engine to be faster and cleaner.";
         let hints = extract_hints(desc);
         assert!(!hints.is_meaningful(), "got {hints:?}");
+    }
+
+    #[test]
+    fn extract_hints_cf_task_surfaces_sibling_reference() {
+        let hints = extract_hints("2.6 outbox CF");
+        assert!(
+            hints.module_keywords.iter().any(|m| m == "outbox"),
+            "expected outbox module keyword in {hints:?}"
+        );
+        assert!(
+            hints.module_keywords.iter().any(|m| m == "inbox"),
+            "expected inbox sibling keyword in {hints:?}"
+        );
+        assert!(
+            hints.module_keywords.iter().any(|m| m == "storage"),
+            "expected storage anchor in {hints:?}"
+        );
+        assert!(
+            hints.symbols.iter().any(|s| s == "OutboxEntry"),
+            "expected OutboxEntry symbol hint in {hints:?}"
+        );
+        assert!(
+            hints
+                .module_note
+                .as_deref()
+                .is_some_and(|note| note.contains("outbox.rs")),
+            "expected missing-module note in {hints:?}"
+        );
     }
 
     #[test]
@@ -999,6 +1216,7 @@ mod tests {
         let hints = ContextHints {
             paths: vec!["crates/zero-storage/src/outbox.rs".into()],
             symbols: vec!["Outbox::enqueue".into()],
+            ..Default::default()
         };
         let resolved = resolve_hints(&hints, &workspace, default_caps()).await;
         assert!(!resolved.is_empty());
@@ -1012,6 +1230,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_hints_discovers_module_reference_heads() {
+        let workspace = StubWorkspace::default()
+            .with_file(
+                "crates/zero-storage/src/inbox.rs",
+                "pub struct InboxEntry;\nimpl InboxEntry {}\n",
+            )
+            .with_file(
+                "crates/zero-storage/src/storage.rs",
+                "pub const CF_INBOX: &str = \"inbox\";\npub const CF_OUTBOX: &str = \"outbox\";\n",
+            )
+            .with_module_paths("inbox", vec!["crates/zero-storage/src/inbox.rs"])
+            .with_module_paths("storage", vec!["crates/zero-storage/src/storage.rs"]);
+        let hints = extract_hints("2.6 outbox CF");
+
+        let resolved = resolve_hints(&hints, &workspace, default_caps()).await;
+        let block = resolved.into_block();
+
+        assert!(block.contains("crates/zero-storage/src/inbox.rs"));
+        assert!(block.contains("pub struct InboxEntry"));
+        assert!(block.contains("crates/zero-storage/src/storage.rs"));
+        assert!(block.contains("CF_OUTBOX"));
+        assert!(block.contains("outbox.rs"));
+    }
+
+    #[tokio::test]
     async fn resolve_hints_skips_missing_files_silently() {
         let workspace = StubWorkspace::default()
             .with_file("crates/zero-storage/src/outbox.rs", "pub struct Outbox;");
@@ -1021,6 +1264,7 @@ mod tests {
                 "crates/imaginary/src/ghost.rs".into(),
             ],
             symbols: vec![],
+            ..Default::default()
         };
         let resolved = resolve_hints(&hints, &workspace, default_caps()).await;
         let block = resolved.into_block();
@@ -1040,6 +1284,7 @@ mod tests {
         let hints = ContextHints {
             paths: vec!["crates/nope/src/missing.rs".into()],
             symbols: vec!["NotAThing".into()],
+            ..Default::default()
         };
         let resolved = resolve_hints(&hints, &workspace, default_caps()).await;
         assert!(resolved.is_empty());
@@ -1055,6 +1300,7 @@ mod tests {
         let hints = ContextHints {
             paths: vec!["crates/a/src/lib.rs".into(), "crates/b/src/lib.rs".into()],
             symbols: vec![],
+            ..Default::default()
         };
         let caps = ResolveCaps {
             max_block_chars: 400,

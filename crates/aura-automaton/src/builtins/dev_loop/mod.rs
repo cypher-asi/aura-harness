@@ -40,6 +40,7 @@ const STATE_TASK_QUEUE: &str = "task_queue";
 const STATE_COMPLETED_COUNT: &str = "completed_count";
 const STATE_FAILED_COUNT: &str = "failed_count";
 const STATE_LOOP_FINISHED: &str = "loop_finished";
+const STATE_TASK_RETRIES: &str = "task_retries";
 
 /// Owned mirror of the agent identity / skills / operator-authored
 /// system prompt wire bundle, threaded from the
