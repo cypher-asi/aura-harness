@@ -177,7 +177,7 @@ impl DevLoopAutomaton {
         })?;
 
         let result = self
-            .execute_task(ctx, cfg, &task, &project.build_command)
+            .execute_task_with_build_retry(ctx, cfg, &task, &project.build_command)
             .await;
 
         // User-initiated stop fires the shared cancellation token, which the
@@ -297,12 +297,63 @@ impl DevLoopAutomaton {
         Ok(())
     }
 
-    async fn execute_task(
+    /// Run the agent once; if the tree is still red, retry once with stderr.
+    async fn execute_task_with_build_retry(
         &self,
         ctx: &TickContext,
         cfg: &DevLoopConfig,
         task: &TaskDescriptor,
         build_command: &Option<String>,
+    ) -> Result<TaskExecutionResult, AutomatonError> {
+        let effective_path = self.effective_project_path(ctx, cfg).await?;
+        let exec = self.execute_task(ctx, cfg, task, None).await?;
+        if ctx.is_cancelled() {
+            return Ok(exec);
+        }
+        let Err(build_err) =
+            verify_build_after_agent(&effective_path, build_command.as_deref()).await
+        else {
+            return Ok(exec);
+        };
+        info!(
+            task_id = %task.id,
+            "Build still failing after agent pass; retrying once with compiler output"
+        );
+        let retry_note = truncate_for_retry(&build_err.to_string(), 12_000);
+        let exec = self
+            .execute_task(ctx, cfg, task, Some(retry_note))
+            .await?;
+        if ctx.is_cancelled() {
+            return Ok(exec);
+        }
+        verify_build_after_agent(&effective_path, build_command.as_deref()).await?;
+        Ok(exec)
+    }
+
+    async fn effective_project_path(
+        &self,
+        ctx: &TickContext,
+        cfg: &DevLoopConfig,
+    ) -> Result<String, AutomatonError> {
+        let project = self
+            .domain
+            .get_project(&cfg.project_id, None)
+            .await
+            .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
+        Ok(ctx
+            .workspace_root
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| project.path.clone()))
+    }
+
+    async fn execute_task(
+        &self,
+        ctx: &TickContext,
+        cfg: &DevLoopConfig,
+        task: &TaskDescriptor,
+        build_retry_note: Option<String>,
     ) -> Result<TaskExecutionResult, AutomatonError> {
         let project = self
             .domain
@@ -322,6 +373,12 @@ impl DevLoopAutomaton {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| project.path.clone());
 
+        let mut task_description = task.description.clone();
+        if let Some(note) = build_retry_note {
+            task_description.push_str("\n\n---\n\nBuild still failing after your last pass:\n\n");
+            task_description.push_str(&note);
+        }
+
         let project_info = ProjectInfo {
             project_id: None,
             name: &project.name,
@@ -336,7 +393,7 @@ impl DevLoopAutomaton {
         };
         let task_info = TaskInfo {
             title: &task.title,
-            description: &task.description,
+            description: &task_description,
             execution_notes: "",
             files_changed: &[],
         };
@@ -409,9 +466,6 @@ impl DevLoopAutomaton {
             .await
             .map_err(|e| AutomatonError::AgentExecution(e.to_string()))?;
 
-        if !ctx.is_cancelled() {
-            verify_build_after_agent(&effective_path, build_command.as_deref()).await?;
-        }
         Ok(exec)
     }
 
@@ -475,6 +529,32 @@ async fn verify_build_after_agent(
     run_project_build_check(project_folder, build_command)
         .await
         .map_err(AutomatonError::AgentExecution)
+}
+
+fn truncate_for_retry(message: &str, max_bytes: usize) -> String {
+    if message.len() <= max_bytes {
+        return message.to_string();
+    }
+    let half = max_bytes / 2;
+    let start = &message[..floor_char_boundary(message, half)];
+    let end = &message[ceil_char_boundary(message, message.len() - half)..];
+    format!("{start}\n\n... (truncated) ...\n\n{end}")
+}
+
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    idx = idx.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+fn ceil_char_boundary(s: &str, mut idx: usize) -> usize {
+    idx = idx.min(s.len());
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
 }
 
 fn classify_execution_result(exec: &TaskExecutionResult) -> Option<AutomatonError> {
