@@ -188,6 +188,7 @@ impl DevLoopAutomaton {
                 if let Some(err) = classify_execution_result(&exec) {
                     if !self.retry_task_blocked_no_write(ctx, &task, &err).await? {
                         self.record_task_failure(ctx, &task, err).await?;
+                        return self.finish_failed(ctx);
                     }
                 } else {
                     self.record_task_success(ctx, &task, exec).await?;
@@ -196,6 +197,7 @@ impl DevLoopAutomaton {
             Err(e) => {
                 if !self.retry_task_blocked_no_write(ctx, &task, &e).await? {
                     self.record_task_failure(ctx, &task, e).await?;
+                    return self.finish_failed(ctx);
                 }
             }
         }
@@ -458,15 +460,41 @@ impl DevLoopAutomaton {
     }
 
     fn finish(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
+        Self::finish_with_outcome(ctx, LoopFinishOutcome::Completed)
+    }
+
+    fn finish_failed(&self, ctx: &mut TickContext) -> Result<TickOutcome, AutomatonError> {
+        Self::finish_with_outcome(ctx, LoopFinishOutcome::Failed)
+    }
+
+    fn finish_with_outcome(
+        ctx: &mut TickContext,
+        outcome: LoopFinishOutcome,
+    ) -> Result<TickOutcome, AutomatonError> {
         let completed: u32 = ctx.state.get(STATE_COMPLETED_COUNT).unwrap_or(0);
         let failed: u32 = ctx.state.get(STATE_FAILED_COUNT).unwrap_or(0);
         ctx.state.set(STATE_LOOP_FINISHED, &true);
         ctx.emit(AutomatonEvent::LoopFinished {
-            outcome: "completed".into(),
+            outcome: outcome.as_str().into(),
             completed_count: completed,
             failed_count: failed,
         })?;
         Ok(TickOutcome::Done)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopFinishOutcome {
+    Completed,
+    Failed,
+}
+
+impl LoopFinishOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
     }
 }
 
@@ -556,6 +584,19 @@ mod classify_tests {
         TaskExecutionResult::default()
     }
 
+    fn test_context() -> (TickContext, tokio::sync::mpsc::Receiver<AutomatonEvent>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let ctx = TickContext::new(
+            crate::types::AutomatonId::from_string("test-dev-loop"),
+            crate::state::AutomatonState::new(),
+            tx,
+            serde_json::json!({}),
+            None,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        (ctx, rx)
+    }
+
     /// Layer C contract: an empty [`TaskExecutionResult`] (no
     /// `file_ops` AND `no_changes_needed = false`) must be classified
     /// as a failure so the dev-loop automaton records it via
@@ -599,6 +640,34 @@ mod classify_tests {
             "LLM error: task_blocked: max_continuation_turns exceeded without a write".into(),
         );
         assert!(is_task_blocked_without_write(&err));
+    }
+
+    #[test]
+    fn terminal_task_failure_finishes_loop_as_failed() {
+        let (mut ctx, mut rx) = test_context();
+        ctx.state.set(STATE_COMPLETED_COUNT, &2u32);
+        ctx.state.set(STATE_FAILED_COUNT, &1u32);
+
+        let outcome = DevLoopAutomaton::finish_with_outcome(&mut ctx, LoopFinishOutcome::Failed)
+            .expect("failed finish should emit LoopFinished");
+
+        assert!(matches!(outcome, TickOutcome::Done));
+        assert!(
+            ctx.state.get::<bool>(STATE_LOOP_FINISHED).unwrap_or(false),
+            "failed finish must suppress on_stop's secondary LoopFinished event"
+        );
+        match rx.try_recv().expect("LoopFinished event expected") {
+            AutomatonEvent::LoopFinished {
+                outcome,
+                completed_count,
+                failed_count,
+            } => {
+                assert_eq!(outcome, "failed");
+                assert_eq!(completed_count, 2);
+                assert_eq!(failed_count, 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]
