@@ -416,10 +416,15 @@ impl AgentToolExecutor for TaskToolExecutor {
                         String::new()
                     })
                 };
+                let error_count = if result.success {
+                    0
+                } else {
+                    count_build_errors(&output)
+                };
                 Some(AutoBuildResult {
                     success: result.success,
                     output,
-                    error_count: 0,
+                    error_count,
                 })
             }
             Err(e) => {
@@ -430,31 +435,11 @@ impl AgentToolExecutor for TaskToolExecutor {
     }
 
     async fn capture_build_baseline(&self) -> Option<BuildBaseline> {
-        let project_root = Path::new(&self.project_folder);
-        let cmd = self
-            .build_command
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from)
-            .or_else(|| infer_default_build_command(project_root))?;
-
-        match crate::verify::run_build_command(project_root, &cmd, None).await {
-            Ok(result) if !result.success => {
-                let sigs = BuildBaseline::extract_signatures(&result.stderr);
-                tracing::info!(
-                    count = sigs.len(),
-                    "captured build baseline with pre-existing errors",
-                );
-                Some(BuildBaseline {
-                    error_signatures: sigs,
-                })
-            }
-            Ok(_) => Some(BuildBaseline::default()),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to capture build baseline");
-                None
-            }
-        }
+        // Dev-loop tasks use `TaskToolExecutor`. Skip baseline capture so
+        // auto-build feedback is full stderr (Codex-style) without
+        // "ignore PRE-EXISTING" annotations that steer agents away from
+        // whole-tree compile-fix work.
+        None
     }
 }
 
