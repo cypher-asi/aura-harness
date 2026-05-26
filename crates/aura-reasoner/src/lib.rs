@@ -47,7 +47,7 @@ pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
     }
 }
 
-pub use anthropic::{AnthropicConfig, AnthropicProvider};
+pub use anthropic::{AnthropicConfig, AnthropicProvider, ENV_FALLBACK_MODEL};
 pub use error::ReasonerError;
 pub use response_stream::{
     response_stream_from_event_stream, response_stream_from_response, OutputItem, ResponseEvent,

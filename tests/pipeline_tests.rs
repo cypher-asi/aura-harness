@@ -69,7 +69,7 @@ async fn test_full_pipeline_enqueue_process_record() {
     let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider.clone());
     let executor = KernelToolGateway::new(kernel.clone());
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let agent_loop = AgentLoop::new(config);
 
     let prompt = String::from_utf8(dequeued_tx.payload.to_vec()).unwrap();
@@ -118,7 +118,7 @@ async fn test_pipeline_multiple_transactions() {
     let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider.clone());
     let executor = KernelToolGateway::new(kernel.clone());
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let agent_loop = AgentLoop::new(config);
 
     let mut processed = 0u64;
@@ -172,7 +172,7 @@ async fn test_deterministic_processing_same_input() {
         let kernel = build_kernel(store.clone(), &ws_dir, agent_id, provider.clone());
         let executor = KernelToolGateway::new(kernel);
 
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let agent_loop = AgentLoop::new(config);
 
         let messages = vec![aura_reasoner::Message::user("determinism test")];
@@ -260,7 +260,7 @@ async fn test_multi_agent_concurrent_processing() {
             );
             let executor = KernelToolGateway::new(kernel.clone());
 
-            let agent_loop = AgentLoop::new(AgentLoopConfig::default());
+            let agent_loop = AgentLoop::new(AgentLoopConfig::for_agent("claude-test-model"));
 
             let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
             let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
@@ -380,7 +380,7 @@ async fn test_pipeline_with_tool_use() {
         Arc::new(Kernel::new(store.clone(), provider.clone(), router, config, agent_id).unwrap());
     let executor = KernelToolGateway::new(kernel.clone());
 
-    let agent_loop = AgentLoop::new(AgentLoopConfig::default());
+    let agent_loop = AgentLoop::new(AgentLoopConfig::for_agent("claude-test-model"));
 
     let tools = vec![ToolDefinition::new(
         "read_file",

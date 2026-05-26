@@ -70,7 +70,7 @@ pub(crate) mod task_context;
 pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig, TaskId};
-pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS, DEFAULT_MODEL, FALLBACK_MODEL};
+pub use constants::{tool_result_cache_key, CACHEABLE_TOOLS};
 pub use events::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, TurnEventSink};
 pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway, RecordingModelProvider};

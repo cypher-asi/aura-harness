@@ -156,7 +156,7 @@ async fn parallel_read_tools_execute_concurrently() {
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("go")];
@@ -272,7 +272,7 @@ async fn stream_pump_path_completes_two_iteration_run() {
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
         use_stream_pump: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("go")];

@@ -71,12 +71,31 @@ pub struct AnthropicConfig {
     pub cloudflare_max_retries: u32,
 }
 
+/// Last-resort fallback model used **only** when `AURA_DEFAULT_MODEL` is
+/// unset / blank during provider construction in [`AnthropicConfig::from_env`].
+///
+/// # Boundary
+///
+/// This is the lone surviving descendant of the old `aura_agent::DEFAULT_MODEL`
+/// constant. It is intentionally narrow: nothing downstream of provider
+/// configuration may reference it. In particular, the agent loop, the agent
+/// runner, the scheduler, the worker, and the dev-loop / task-run automaton
+/// paths must each receive an explicit, caller-selected model — silently
+/// substituting this constant in those layers is exactly the regression that
+/// shipped opus-4-6 instead of opus-4-7 to production.
+///
+/// If you find yourself reaching for this from outside the provider-factory
+/// crate, plumb the model through the call site instead. (See
+/// `crates/aura-runtime/src/scheduler.rs`'s `AgentIdentityRegistry` for the
+/// registry-backed pattern that supplies per-agent identity to the worker.)
+pub const ENV_FALLBACK_MODEL: &str = "claude-opus-4-6";
+
 impl AnthropicConfig {
     /// Build a config from environment variables.
     ///
     /// Reads:
     /// - `AURA_ROUTER_URL` (default `https://aura-router.onrender.com`)
-    /// - `AURA_DEFAULT_MODEL` (default `claude-opus-4-6`)
+    /// - `AURA_DEFAULT_MODEL` (default [`ENV_FALLBACK_MODEL`] = `claude-opus-4-6`)
     /// - `AURA_MODEL_TIMEOUT_MS` (default `300000`)
     /// - `AURA_LLM_MAX_RETRIES` (default `8`)
     /// - `AURA_LLM_BACKOFF_INITIAL_MS` (default `250`)
@@ -97,7 +116,7 @@ impl AnthropicConfig {
 
         let default_model = std::env::var("AURA_DEFAULT_MODEL")
             .or_else(|_| std::env::var("AURA_ANTHROPIC_MODEL"))
-            .unwrap_or_else(|_| "claude-opus-4-6".to_string());
+            .unwrap_or_else(|_| ENV_FALLBACK_MODEL.to_string());
 
         let timeout_ms = std::env::var("AURA_MODEL_TIMEOUT_MS")
             .ok()

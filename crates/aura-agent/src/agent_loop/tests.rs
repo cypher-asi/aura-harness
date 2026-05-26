@@ -106,7 +106,7 @@ impl ModelProvider for OverflowThenSuccessProvider {
 
 #[test]
 fn test_agent_loop_config_defaults() {
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     // Default is `usize::MAX` (unlimited). Termination is driven by
     // `EndTurn`, the credit budget, or cooperative cancellation. The
     // 25-iteration cap was raised because it silently truncated
@@ -128,7 +128,7 @@ fn test_agent_loop_config_defaults() {
 
 #[tokio::test]
 async fn test_agent_loop_simple_run() {
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
     let provider = MockProvider::simple_response("Hello!");
@@ -160,7 +160,7 @@ async fn test_agent_loop_full_integration() {
 
     let config = AgentLoopConfig {
         system_prompt: "You are a test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("Read test.txt")];
@@ -188,7 +188,7 @@ async fn test_agent_loop_402_insufficient_credits() {
     let executor = MockExecutor { results: vec![] };
     let provider = MockProvider::new().with_failure();
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("hello")];
     let tools = vec![];
@@ -217,7 +217,7 @@ async fn test_max_tokens_with_pending_tools_injects_errors() {
 
     let config = AgentLoopConfig {
         system_prompt: "Test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("Read big_file.txt")];
@@ -259,7 +259,7 @@ async fn test_max_tokens_without_tools_breaks() {
 
     let config = AgentLoopConfig {
         system_prompt: "Test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("hello")];
@@ -317,7 +317,7 @@ async fn test_compaction_uses_api_input_tokens() {
     let config = AgentLoopConfig {
         max_context_tokens: Some(200_000),
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("go")];
@@ -339,7 +339,7 @@ async fn test_compaction_uses_api_input_tokens() {
 
 #[tokio::test]
 async fn test_context_estimate_includes_cache_tokens() {
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
     let provider = MockProvider::new().with_response(MockResponse {
@@ -367,7 +367,7 @@ async fn test_prompt_overflow_retries_after_compaction() {
         // legacy buffered sampling path. The pump path port is a
         // follow-up; pin this test to the legacy path until then.
         use_stream_pump: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
@@ -401,7 +401,7 @@ async fn test_prompt_overflow_fails_fast_when_compaction_cannot_help() {
     let config = AgentLoopConfig {
         max_context_tokens: Some(20_000),
         use_stream_pump: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
@@ -427,7 +427,7 @@ async fn test_prompt_overflow_uses_emergency_compaction_when_aggressive_cannot_h
     let config = AgentLoopConfig {
         max_context_tokens: Some(20_000),
         use_stream_pump: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
@@ -472,7 +472,7 @@ async fn test_prompt_overflow_retry_reduces_response_budget() {
         max_context_tokens: Some(20_000),
         max_tokens: 16_384,
         use_stream_pump: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
@@ -511,7 +511,7 @@ async fn test_agent_loop_handles_summary_compaction() {
     let config = AgentLoopConfig {
         max_context_tokens: Some(8_000),
         max_tokens: 1,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let executor = MockExecutor { results: vec![] };
@@ -572,7 +572,7 @@ fn phase_reset_clears_exploration_budget() {
     let signal = Arc::new(AtomicBool::new(false));
     let config = AgentLoopConfig {
         phase_reset_signal: Some(Arc::clone(&signal)),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let mut state = super::LoopState::new(&config, vec![]);
 
@@ -606,7 +606,7 @@ fn submit_plan_signal_latches_only_on_iteration_after_zero() {
     let signal = Arc::new(AtomicBool::new(false));
     let config = AgentLoopConfig {
         phase_reset_signal: Some(Arc::clone(&signal)),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let mut state = super::LoopState::new(&config, vec![]);
 
@@ -645,7 +645,7 @@ fn begin_iteration_does_not_reset_when_signal_unset() {
     let signal = Arc::new(AtomicBool::new(false));
     let config = AgentLoopConfig {
         phase_reset_signal: Some(Arc::clone(&signal)),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let mut state = super::LoopState::new(&config, vec![]);
     state.exploration_state.count = 10;
@@ -661,7 +661,7 @@ fn begin_iteration_does_not_reset_when_signal_unset() {
 fn begin_iteration_no_op_when_no_signal_configured() {
     let config = AgentLoopConfig {
         phase_reset_signal: None,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let mut state = super::LoopState::new(&config, vec![]);
     state.exploration_state.count = 40;
@@ -741,7 +741,7 @@ async fn three_read_file_calls_execute_in_one_iteration() {
         // collapse the positional zip to [ok-1, ok-1, ok-1] —
         // covered by the pump-side parity_tests instead.
         use_stream_pump: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("Read three files.")];
@@ -812,7 +812,7 @@ fn effort_off_when_disable_thinking_iteration_0() {
 
     let config = AgentLoopConfig {
         disable_thinking_iteration_0: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let state = super::LoopState::new(&config, vec![]);
     assert_eq!(
@@ -831,7 +831,7 @@ fn effort_medium_on_iteration_0_no_disable() {
 
     let config = AgentLoopConfig {
         disable_thinking_iteration_0: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let state = super::LoopState::new(&config, vec![]);
     assert_eq!(
@@ -847,7 +847,7 @@ fn effort_medium_on_iteration_0_no_disable() {
 fn effort_low_after_first_write() {
     use aura_reasoner::ThinkingEffort;
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
     state.had_any_file_write = true;
     assert_eq!(
@@ -863,7 +863,7 @@ fn effort_low_after_first_write() {
 fn effort_low_after_submit_plan() {
     use aura_reasoner::ThinkingEffort;
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
     state.submit_plan_called = true;
     assert_eq!(
@@ -881,7 +881,7 @@ fn effort_low_after_submit_plan() {
 fn effort_low_after_continuation_injected() {
     use aura_reasoner::ThinkingEffort;
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
     state.continuation.consecutive_no_write = 1;
     assert_eq!(
@@ -897,7 +897,7 @@ fn effort_low_after_continuation_injected() {
 fn effort_medium_default_after_iteration_zero() {
     use aura_reasoner::ThinkingEffort;
 
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let state = super::LoopState::new(&config, vec![]);
     assert_eq!(
         state.compute_thinking_effort(&config, 3),
@@ -914,7 +914,7 @@ fn effort_medium_default_after_iteration_zero() {
 fn build_request_emits_thinking_effort_only_for_dev_loop() {
     let chat_config = AgentLoopConfig {
         dev_loop_completion_required: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let chat_state = super::LoopState::new(&chat_config, vec![]);
     let chat_req = chat_state
@@ -928,7 +928,7 @@ fn build_request_emits_thinking_effort_only_for_dev_loop() {
     let dev_config = AgentLoopConfig {
         dev_loop_completion_required: true,
         disable_thinking_iteration_0: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let dev_state = super::LoopState::new(&dev_config, vec![]);
     let dev_req = dev_state
@@ -950,7 +950,7 @@ fn build_request_always_emits_tool_choice_auto() {
     let config = AgentLoopConfig {
         thinking_budget: Some(8_192),
         max_tokens: 16_384,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let state = super::LoopState::new(&config, vec![Message::user("hi")]);
     let request = state
@@ -964,24 +964,84 @@ fn build_request_always_emits_tool_choice_auto() {
 }
 
 #[tokio::test]
-async fn dev_loop_endturn_with_no_writes_terminates_immediately() {
-    // The cook-loop-fix strip (2026-05) removed the dev-loop EndTurn
-    // intercept escalation. A dev-loop task that ends its first turn
-    // with `EndTurn` must now exit the loop on that turn — no nudges,
-    // no force-tool-choice escalation, no thinking-disable on the
-    // next iteration.
-    let executor = MockExecutor { results: vec![] };
+async fn dev_loop_endturn_with_no_writes_routes_through_goal_runtime() {
+    // After Layer A's intercept restoration, a dev-loop turn that
+    // ends in an empty `EndTurn` (no writes, no successful
+    // `task_done`) must NOT short-circuit the loop. The dispatch
+    // path returns `needs_follow_up = true`, `run_turn_stop_hooks`
+    // hands the no-write turn to `GoalRuntime`, the runtime injects
+    // a continuation steer into the session's `InputQueue`, and the
+    // loop samples again.
+    //
+    // We prove the intercept fired by feeding a 3-response sequence:
+    //   iter 0: EndTurn no-write     -> intercept fires, loop continues
+    //   iter 1: ToolUse write_file   -> writes land, streak resets,
+    //                                   `had_any_file_write` latches
+    //   iter 2: EndTurn              -> exits cleanly (latch covers it)
+    //
+    // The pre-A code would have terminated after iter 0 with
+    // `iterations == 1`; the post-A code reaches iter 2.
+    struct ScriptedExecutor {
+        next: std::sync::Mutex<std::collections::VecDeque<ToolCallResult>>,
+    }
 
-    let provider = MockProvider::new().with_response(MockResponse {
-        stop_reason: StopReason::EndTurn,
-        content: vec![ContentBlock::text("I'm thinking about the task.")],
-        usage: Usage::new(100, 20),
-    });
+    #[async_trait::async_trait]
+    impl AgentToolExecutor for ScriptedExecutor {
+        async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
+            let mut q = self
+                .next
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            tool_calls
+                .iter()
+                .map(|tc| {
+                    let proto = q.pop_front().expect("ScriptedExecutor ran out of results");
+                    ToolCallResult {
+                        tool_use_id: tc.id.clone(),
+                        ..proto
+                    }
+                })
+                .collect()
+        }
+    }
+
+    let executor = ScriptedExecutor {
+        next: std::sync::Mutex::new(std::collections::VecDeque::from(vec![ToolCallResult {
+            tool_use_id: "ph_write".to_string(),
+            content: "wrote new.rs".to_string(),
+            is_error: false,
+            kind: aura_core::ToolResultKind::Ok,
+            stop_loop: false,
+            file_changes: vec![crate::types::FileChange {
+                path: "src/new.rs".to_string(),
+                kind: crate::types::FileChangeKind::Create,
+                lines_added: 1,
+                lines_removed: 0,
+            }],
+        }])),
+    };
+
+    let provider = MockProvider::new()
+        .with_response(MockResponse {
+            stop_reason: StopReason::EndTurn,
+            content: vec![ContentBlock::text("I'm thinking about the task.")],
+            usage: Usage::new(100, 20),
+        })
+        .with_response(MockResponse::tool_use(
+            "ph_write",
+            "write_file",
+            serde_json::json!({"path": "src/new.rs", "content": "pub fn bar() {}"}),
+        ))
+        .with_response(MockResponse {
+            stop_reason: StopReason::EndTurn,
+            content: vec![ContentBlock::text("Done.")],
+            usage: Usage::new(150, 10),
+        });
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
         dev_loop_completion_required: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("implement bar")];
@@ -998,28 +1058,185 @@ async fn dev_loop_endturn_with_no_writes_terminates_immediately() {
         ),
     ];
 
-    let (tx, mut rx) = mpsc::channel(64);
+    let (tx, _rx) = mpsc::channel(64);
     let result = agent
         .run_with_events(&provider, &executor, messages, tools, Some(tx), None)
         .await
         .unwrap();
 
-    assert_eq!(
-        result.iterations, 1,
-        "EndTurn must terminate the dev-loop on the first occurrence; no intercept",
+    assert!(
+        result.iterations >= 2,
+        "intercept must keep the loop alive past the empty EndTurn — \
+         got iterations = {} (pre-A code would short-circuit at 1)",
+        result.iterations,
     );
-    assert!(result.file_changes.is_empty());
+    assert!(
+        !result.file_changes.is_empty(),
+        "the recovery iteration must run, landing the write that resets the streak",
+    );
+    assert!(
+        !result.stalled,
+        "the run completes normally once a write lands — no task_blocked",
+    );
+}
 
-    while let Ok(event) = rx.try_recv() {
-        if let AgentLoopEvent::Warning(msg) = event {
-            assert!(
-                !(msg.contains("ended your turn without writing")
-                    || msg.contains("Second EndTurn without progress")
-                    || msg.contains("Third EndTurn without progress")),
-                "no dev-loop intercept nudge may fire after the strip; got: {msg}"
-            );
-        }
-    }
+/// Layer A.5: when the dev-loop intercept fires on `MaxTokens` with
+/// no pending tool calls (extended thinking ate the entire response
+/// budget without emitting a `tool_use` block), the dispatcher must
+/// arm `ThinkingBudget::pending_disable_thinking_next_iteration` so
+/// the recovery turn opens with thinking disabled. This test drives
+/// the buffered dispatch path (`AgentLoop::dispatch_stop_reason`)
+/// directly so we can isolate the latch arm + consume-and-clear
+/// semantics from the surrounding loop machinery.
+#[tokio::test]
+async fn dev_loop_max_tokens_empty_pending_arms_thinking_latch() {
+    let agent = AgentLoop::new(AgentLoopConfig {
+        system_prompt: "test".to_string(),
+        dev_loop_completion_required: true,
+        ..AgentLoopConfig::for_agent("claude-test-model")
+    });
+    let mut state = super::LoopState::new(&agent.config, vec![Message::user("implement bar")]);
+    // Sanity: the latch is born `false`.
+    assert!(!state.thinking.pending_disable_thinking_next_iteration);
+
+    let response = ModelResponse::new(
+        StopReason::MaxTokens,
+        Message::assistant("thinking... no tool call yet"),
+        Usage::new(100, 16_384),
+        ProviderTrace::new("mock", 0),
+    );
+
+    let executor = MockExecutor { results: vec![] };
+    let should_break = agent
+        .dispatch_stop_reason(&response, &executor, None, &mut state)
+        .await;
+    assert!(
+        !should_break,
+        "intercept must route the empty MaxTokens turn back through the sampling loop \
+         (return false = don't break) so run_turn_stop_hooks can hand it to GoalRuntime",
+    );
+    assert!(
+        state.thinking.pending_disable_thinking_next_iteration,
+        "the MaxTokens-empty intercept must arm the thinking-disable latch so the recovery turn \
+         opens with a tool call instead of more deliberation",
+    );
+    assert!(
+        !state.thinking.disable_thinking_this_iteration,
+        "the latch must NOT short-circuit into the current iteration — \
+         `begin_iteration` is the consume-and-clear seam",
+    );
+
+    state.begin_iteration(&agent.config, 1);
+    assert!(
+        state.thinking.disable_thinking_this_iteration,
+        "the next iteration's `begin_iteration` must consume the latch into the same-turn flag",
+    );
+    assert!(
+        !state.thinking.pending_disable_thinking_next_iteration,
+        "the latch must be cleared after one consume so subsequent iterations re-evaluate \
+         thinking disable without sticky carryover",
+    );
+}
+
+/// Streaming variant of `dev_loop_max_tokens_empty_pending_arms_thinking_latch`.
+/// Drives `super::stream_pump::dispatch_streamed_response` (the
+/// default production path since `use_stream_pump = true`) instead
+/// of the buffered `AgentLoop::dispatch_stop_reason`. Both paths
+/// must arm the latch identically.
+#[tokio::test]
+async fn dev_loop_max_tokens_empty_pending_arms_thinking_latch_streaming() {
+    let agent = AgentLoop::new(AgentLoopConfig {
+        system_prompt: "test".to_string(),
+        dev_loop_completion_required: true,
+        ..AgentLoopConfig::for_agent("claude-test-model")
+    });
+    let mut state = super::LoopState::new(&agent.config, vec![Message::user("implement bar")]);
+
+    let response = ModelResponse::new(
+        StopReason::MaxTokens,
+        Message::assistant("thinking... no tool call yet"),
+        Usage::new(100, 16_384),
+        ProviderTrace::new("mock", 0),
+    );
+
+    let executor = MockExecutor { results: vec![] };
+    let should_break = super::stream_pump::dispatch_streamed_response(
+        &agent,
+        &executor,
+        &response,
+        Vec::new(),
+        None,
+        &mut state,
+    )
+    .await;
+    assert!(
+        !should_break,
+        "streaming dispatcher must intercept identically to the buffered path",
+    );
+    assert!(
+        state.thinking.pending_disable_thinking_next_iteration,
+        "streaming MaxTokens-empty intercept must arm the latch",
+    );
+
+    state.begin_iteration(&agent.config, 1);
+    assert!(state.thinking.disable_thinking_this_iteration);
+    assert!(!state.thinking.pending_disable_thinking_next_iteration);
+}
+
+/// Streaming variant of the EndTurn intercept. The default
+/// production dev-loop path is the stream pump, so we drive
+/// `dispatch_streamed_response` directly and confirm that an empty
+/// `EndTurn` returns `false` (don't break) when the intercept
+/// conditions hold.
+#[tokio::test]
+async fn dev_loop_endturn_empty_intercepted_in_streaming_path() {
+    let agent = AgentLoop::new(AgentLoopConfig {
+        system_prompt: "test".to_string(),
+        dev_loop_completion_required: true,
+        ..AgentLoopConfig::for_agent("claude-test-model")
+    });
+    let mut state = super::LoopState::new(&agent.config, vec![Message::user("implement bar")]);
+
+    let response = ModelResponse::new(
+        StopReason::EndTurn,
+        Message::assistant("Thinking but no tool call yet."),
+        Usage::new(100, 20),
+        ProviderTrace::new("mock", 0),
+    );
+
+    let executor = MockExecutor { results: vec![] };
+    let should_break = super::stream_pump::dispatch_streamed_response(
+        &agent,
+        &executor,
+        &response,
+        Vec::new(),
+        None,
+        &mut state,
+    )
+    .await;
+    assert!(
+        !should_break,
+        "streaming dispatcher must intercept the empty EndTurn in dev-loop mode \
+         (returning false = don't break, so run_turn_stop_hooks runs the GoalRuntime nudge)",
+    );
+
+    // Once any write lands, the intercept must NOT fire — the latch
+    // is reserved for the MaxTokens-empty branch, EndTurn just lets
+    // the loop terminate on the next clean stop.
+    state.had_any_file_write = true;
+    let should_break = super::stream_pump::dispatch_streamed_response(
+        &agent,
+        &executor,
+        &response,
+        Vec::new(),
+        None,
+        &mut state,
+    )
+    .await;
+    assert!(
+        should_break,
+        "after a write has landed, EndTurn must terminate cleanly with no intercept",
+    );
 }
 
 #[tokio::test]
@@ -1053,7 +1270,7 @@ async fn dev_loop_endturn_after_write_terminates_cleanly() {
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
         dev_loop_completion_required: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("implement bar")];
@@ -1118,7 +1335,7 @@ async fn chat_mode_endturn_terminates_immediately() {
         system_prompt: "test".to_string(),
         // dev_loop_completion_required defaults to false — explicit
         // here for documentation.
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     assert!(!config.dev_loop_completion_required);
     let agent = AgentLoop::new(config);
@@ -1185,7 +1402,7 @@ async fn dev_loop_endturn_after_task_done_terminates_cleanly() {
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
         dev_loop_completion_required: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("verify the bar is already implemented")];
@@ -1258,7 +1475,7 @@ async fn turn_continues_while_needs_follow_up_true() {
 
     let config = AgentLoopConfig {
         system_prompt: "test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("read three files")];
@@ -1304,7 +1521,7 @@ async fn turn_breaks_when_model_says_stop_and_no_continuation() {
     let config = AgentLoopConfig {
         system_prompt: "test agent".to_string(),
         dev_loop_completion_required: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("are you there?")];
@@ -1409,7 +1626,7 @@ async fn phase1b_continuation_fires_in_new_turn_loop() {
     let config = AgentLoopConfig {
         system_prompt: "test agent".to_string(),
         dev_loop_completion_required: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("implement foo")];
@@ -1483,7 +1700,7 @@ async fn turn_budget_exceeded_surfaces_typed_error_when_max_turns_zero() {
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
         max_turns_per_task: 0,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("anything")];
@@ -1586,7 +1803,7 @@ async fn pending_input_extends_turn_loop() {
 
     let agent = AgentLoop::new(AgentLoopConfig {
         system_prompt: "test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     });
 
     let result = agent
@@ -1729,7 +1946,7 @@ async fn cancel_unwinds_active_turn() {
 
     let agent = AgentLoop::new(AgentLoopConfig {
         system_prompt: "test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     });
 
     let result = agent

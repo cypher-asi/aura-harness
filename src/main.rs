@@ -225,7 +225,13 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     }
     let (executor_router, tools) = session_helpers::build_executor_router_with_config(&tool_config);
 
-    let config = session_helpers::default_agent_config();
+    // The terminal harness is the one surface that legitimately
+    // resolves its model from environment configuration (no WS init,
+    // no automaton config to consult). Pin to
+    // `aura_reasoner::ENV_FALLBACK_MODEL` here — higher-level surfaces
+    // (chat WS, dev-loop, task-run) plumb the user-selected model
+    // through their own paths and never reach for the env seed.
+    let config = session_helpers::default_agent_config(aura_reasoner::ENV_FALLBACK_MODEL);
     let agent_loop = AgentLoop::new(config);
 
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);

@@ -53,7 +53,7 @@ fn seed_state_with(config: &AgentLoopConfig, response: &ModelResponse) -> LoopSt
 
 #[test]
 fn handle_max_tokens_for_write_file_carries_path_hint() {
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let response = tool_use_response("write_file", Some("crates/foo/src/lib.rs"));
     let mut state = seed_state_with(&config, &response);
 
@@ -73,7 +73,7 @@ fn handle_max_tokens_for_write_file_carries_path_hint() {
 
 #[test]
 fn handle_max_tokens_for_non_write_tool_uses_generic_text() {
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let response = tool_use_response("read_file", Some("src/main.rs"));
     let mut state = seed_state_with(&config, &response);
 
@@ -94,7 +94,7 @@ fn handle_max_tokens_for_edit_file_suggests_splitting_the_edit() {
     // model no concrete recovery path. The harness logs showed
     // repeated `edit_file` truncations as a result. The hint
     // must name `edit_file` explicitly and steer toward splitting.
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let response = tool_use_response("edit_file", Some("crates/foo/src/lib.rs"));
     let mut state = seed_state_with(&config, &response);
 
@@ -119,7 +119,7 @@ fn handle_max_tokens_sets_budget_restore_flag() {
     // `LoopState::begin_iteration`: truncation implies "next turn
     // needs full budget". Without this, a tapered budget carries
     // into the retry and the model hits `max_tokens` again.
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let response = tool_use_response("edit_file", Some("src/x.rs"));
     let mut state = seed_state_with(&config, &response);
     assert!(!state.thinking.restore_next_iteration, "precondition");
@@ -136,7 +136,7 @@ fn begin_iteration_restores_budget_and_clears_flag() {
     // Given a tapered budget and the restore flag set,
     // begin_iteration must lift the budget back to `max_tokens`
     // and clear the flag so the *next* iteration can taper again.
-    let config = AgentLoopConfig::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let mut state = LoopState::new(&config, vec![Message::user("go")]);
     state.thinking.budget = 512;
     state.thinking.restore_next_iteration = true;
@@ -163,7 +163,7 @@ fn begin_iteration_respects_min_budget_floor() {
     let config = AgentLoopConfig {
         thinking_taper_after: 0,
         thinking_taper_factor: 0.1,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let mut state = LoopState::new(&config, vec![Message::user("go")]);
 

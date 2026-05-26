@@ -541,10 +541,30 @@ pub(super) async fn dispatch_streamed_response(
     event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
     state: &mut super::LoopState,
 ) -> bool {
+    // Production dev-loop path: `use_stream_pump` defaults to `true`,
+    // so this dispatcher (not `super::AgentLoop::dispatch_stop_reason`)
+    // is what fires on a real dev-loop turn. The buffered path stays
+    // in sync because both call the same predicate.
     match response.stop_reason {
-        aura_reasoner::StopReason::EndTurn | aura_reasoner::StopReason::StopSequence => true,
+        aura_reasoner::StopReason::EndTurn | aura_reasoner::StopReason::StopSequence => {
+            !agent.should_intercept_empty_termination(state)
+        }
         aura_reasoner::StopReason::MaxTokens => {
-            !super::iteration::handle_max_tokens(&agent.config, response, state)
+            if super::iteration::handle_max_tokens(&agent.config, response, state) {
+                // Pending tool_use blocks were synthesised; keep
+                // looping so the model retries the dropped calls.
+                false
+            } else if agent.should_intercept_empty_termination(state) {
+                // Extended thinking ate the budget without producing
+                // a tool call. Arm the latch so the next iteration
+                // opens with thinking disabled, and let
+                // `run_turn_stop_hooks` run the GoalRuntime nudge
+                // path.
+                state.thinking.pending_disable_thinking_next_iteration = true;
+                false
+            } else {
+                true
+            }
         }
         aura_reasoner::StopReason::ToolUse => {
             handle_streamed_tool_use(&agent.config, executor, tool_results, event_tx, state).await
@@ -736,7 +756,7 @@ mod tests {
     #[tokio::test]
     async fn pump_drains_in_fifo_submission_order() {
         let executor = CountingExecutor::default();
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let events = vec![
             mk_call("toolu_a", "read_file"),
             mk_call("toolu_b", "read_file"),
@@ -774,7 +794,7 @@ mod tests {
         let executor = CountingExecutor::default();
         let config = AgentLoopConfig {
             stream_event_timeout: Duration::from_secs(30),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let cancel = CancellationToken::new();
         cancel.cancel();
@@ -799,7 +819,7 @@ mod tests {
     #[tokio::test]
     async fn pump_per_outputitemdone_input_drain() {
         let executor = CountingExecutor::default();
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let cancel = CancellationToken::new();
         let queue = InputQueue::new(SessionId::new_v4(), cancel.clone());
         // Drive: one tool call, then user types something between
@@ -854,7 +874,7 @@ mod tests {
         let executor = CountingExecutor::default();
         let config = AgentLoopConfig {
             stream_event_timeout: Duration::from_secs(5),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let stream: ResponseEventStream = Box::pin(futures_util::stream::pending());
         let mut state = super::super::LoopState::new(&config, Vec::new());
@@ -897,7 +917,7 @@ mod tests {
         }
 
         let executor = SleepyExecutor;
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let events = vec![
             mk_call("toolu_a", "t"),
             mk_call("toolu_b", "t"),
@@ -989,7 +1009,7 @@ mod tests {
         let config = AgentLoopConfig {
             per_tool_timeout: Duration::from_secs(10),
             stream_event_timeout: Duration::from_secs(120),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let events = vec![
             mk_call("toolu_a", "ok"),
@@ -1058,7 +1078,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn pump_emits_per_delta_events() {
         let executor = CountingExecutor::default();
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let events = vec![
             ResponseEvent::OutputItemDone(OutputItem::Thinking {
                 thinking: "thought".into(),
@@ -1139,7 +1159,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn pump_cache_hit_short_circuits_tool_spawn() {
         let executor = CountingExecutor::default();
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let cached_input = serde_json::json!({});
         let cache_key = crate::constants::tool_result_cache_key("read_file", &cached_input);
         let mut state = super::super::LoopState::new(&config, Vec::new());
@@ -1244,7 +1264,7 @@ mod tests {
         let executor = BuildSpyExecutor::default();
         let config = AgentLoopConfig {
             auto_build_cooldown: 0,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let response = ModelResponse::new(
             StopReason::ToolUse,

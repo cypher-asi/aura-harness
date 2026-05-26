@@ -8,10 +8,9 @@
 //! tiny (declarations + `WsContext` + re-exports).
 
 use crate::protocol::{self, SessionInit};
+use crate::scheduler::AgentIdentity as RuntimeAgentIdentity;
 use crate::session::ToolApprovalBroker;
-use aura_agent::prompts::{
-    default_system_prompt, AgentIdentity, ProjectInfo, SystemPromptBuilder,
-};
+use aura_agent::prompts::{default_system_prompt, AgentIdentity, ProjectInfo, SystemPromptBuilder};
 use aura_agent::AgentLoopConfig;
 use aura_core::{
     AgentId, AgentPermissions, AgentScope, AgentToolPermissions, Capability,
@@ -21,7 +20,9 @@ use aura_protocol::{
     AgentIdentityWire, AgentPermissionsWire, CapabilityWire, ChatProjectInfoWire,
     IntentClassifierSpec, SessionModelOverrides,
 };
-use aura_reasoner::{Message, ModelProvider, ToolDefinition};
+use aura_reasoner::{
+    Message, ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition,
+};
 use aura_tools::IntentClassifier;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -150,7 +151,18 @@ impl Session {
             session_id: Uuid::new_v4().to_string(),
             agent_id: AgentId::generate(),
             system_prompt: String::new(),
-            model: aura_agent::DEFAULT_MODEL.to_string(),
+            // Empty until `apply_init` lands `init.model`. The
+            // chat-WS path enforces that callers send `session_init`
+            // before any user message (see
+            // `Session::initialized` + the
+            // `ws_handler::start_turn` guard); the runtime
+            // [`AgentIdentityRegistry`](crate::scheduler::AgentIdentityRegistry)
+            // then exposes the resolved model to the worker path.
+            // A blank model here used to silently fall back to
+            // `aura_agent::DEFAULT_MODEL` (i.e. opus-4-6); we now
+            // refuse to construct an `AgentLoopConfig` until the
+            // model is populated.
+            model: String::new(),
             provider_name: String::new(),
             provider_overrides: None,
             prompt_cache_key: None,
@@ -366,6 +378,59 @@ impl Session {
         self.agent_id
     }
 
+    /// Snapshot the session's identity for the
+    /// runtime-scheduler-side [`AgentIdentityRegistry`](
+    /// crate::scheduler::AgentIdentityRegistry). Called from
+    /// `handle_session_init` once `apply_init` has populated the
+    /// model + IDs so the worker path (HTTP `/tx`,
+    /// post-permission-update fan-out, post-automaton-completion
+    /// fan-out) can build the per-turn `AgentLoopConfig` even after
+    /// the WebSocket has closed mid-turn.
+    pub(crate) fn as_runtime_identity(&self) -> RuntimeAgentIdentity {
+        let prompt_cache_retention = self
+            .prompt_cache_retention
+            .as_deref()
+            .and_then(parse_session_cache_retention);
+        RuntimeAgentIdentity {
+            model: self.model.clone(),
+            aura_org_id: self.aura_org_id.clone(),
+            aura_session_id: self.aura_session_id.clone(),
+            aura_agent_id: self.aura_agent_id.clone(),
+            aura_project_id: self.project_id.clone(),
+            system_prompt: self.resolved_system_prompt(),
+            prompt_cache_key: self.prompt_cache_key.clone(),
+            prompt_cache_retention,
+            // Chat sessions ship `Chat`. The dev-loop / task-run paths
+            // that override this are wired separately via the
+            // automaton bridge.
+            request_kind: ModelRequestKind::Chat,
+            max_tokens: self.max_tokens,
+            max_context_tokens: self.context_window_tokens as usize,
+            auth_token: self.auth_token.clone(),
+        }
+    }
+
+    /// Resolve the system prompt the same way [`Self::agent_loop_config`]
+    /// does (typed-chat path skips the legacy `## Workspace`
+    /// addendum). Held as its own helper so the registry shapshot
+    /// matches the in-process `AgentLoopConfig` byte-for-byte.
+    fn resolved_system_prompt(&self) -> String {
+        let base_prompt = if self.system_prompt.is_empty() {
+            default_system_prompt()
+        } else {
+            self.system_prompt.clone()
+        };
+        match (&self.project_path, self.typed_chat_prompt) {
+            (Some(pp), false) => format!(
+                "{base_prompt}\n\n## Workspace\n\n\
+                 Your workspace root is `{}`. All relative file paths are resolved against this directory. \
+                 When referring to files, use paths relative to this root.",
+                pp.display()
+            ),
+            _ => base_prompt,
+        }
+    }
+
     /// Build an `AgentLoopConfig` from session state.
     pub(super) fn agent_loop_config(&self) -> AgentLoopConfig {
         let base_prompt = if self.system_prompt.is_empty() {
@@ -406,7 +471,6 @@ impl Session {
 
         AgentLoopConfig {
             max_iterations,
-            model: self.model.clone(),
             system_prompt,
             max_tokens: self.max_tokens,
             max_context_tokens: Some(self.context_window_tokens),
@@ -426,8 +490,21 @@ impl Session {
             intent_classifier_manifest: self.intent_classifier_manifest.clone(),
             prompt_cache_key: self.prompt_cache_key.clone(),
             prompt_cache_retention: self.prompt_cache_retention.clone(),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent(self.model.clone())
         }
+    }
+}
+
+/// Convert the wire-side `prompt_cache_retention` (`"24h"` /
+/// `"in_memory"`) into the typed reasoner enum. Mirrors the
+/// in-process plumbing in `Session::agent_loop_config`; centralized
+/// here so the registry snapshot taken in
+/// [`Session::as_runtime_identity`] uses the same conversion.
+fn parse_session_cache_retention(value: &str) -> Option<PromptCacheRetention> {
+    match value {
+        "24h" => Some(PromptCacheRetention::Hours24),
+        "in_memory" => Some(PromptCacheRetention::InMemory),
+        _ => None,
     }
 }
 
@@ -511,11 +588,13 @@ fn build_typed_chat_system_prompt(
         return None;
     }
 
-    let identity = identity_wire.filter(|w| !w.is_empty()).map(|w| AgentIdentity {
-        name: w.name.as_str(),
-        role: w.role.as_str(),
-        personality: w.personality.as_str(),
-    });
+    let identity = identity_wire
+        .filter(|w| !w.is_empty())
+        .map(|w| AgentIdentity {
+            name: w.name.as_str(),
+            role: w.role.as_str(),
+            personality: w.personality.as_str(),
+        });
     let mut builder = SystemPromptBuilder::new()
         .chat_capabilities()
         .agent_identity(identity)
@@ -653,8 +732,13 @@ pub(crate) fn context_window_for_model(model: &str) -> u64 {
         // names use dots (gpt-5.5). Mini/nano checked before the base
         // variant so "gpt-5-4" doesn't swallow them.
         m if m.contains("gpt-5.5") || m.contains("gpt-5-5") => 1_000_000,
-        m if m.contains("gpt-5.4-mini") || m.contains("gpt-5-4-mini")
-            || m.contains("gpt-5.4-nano") || m.contains("gpt-5-4-nano") => 400_000,
+        m if m.contains("gpt-5.4-mini")
+            || m.contains("gpt-5-4-mini")
+            || m.contains("gpt-5.4-nano")
+            || m.contains("gpt-5-4-nano") =>
+        {
+            400_000
+        }
         m if m.contains("gpt-5.4") || m.contains("gpt-5-4") => 1_050_000,
         // OpenAI GPT 4.x
         m if m.contains("gpt-4.1") => 1_047_576,
@@ -684,10 +768,7 @@ mod context_window_tests {
             context_window_for_model("aura-claude-sonnet-4-6"),
             1_000_000
         );
-        assert_eq!(
-            context_window_for_model("aura-claude-haiku-4-5"),
-            200_000
-        );
+        assert_eq!(context_window_for_model("aura-claude-haiku-4-5"), 200_000);
     }
 
     #[test]
@@ -731,10 +812,7 @@ mod context_window_tests {
 
     #[test]
     fn deepseek_and_fireworks() {
-        assert_eq!(
-            context_window_for_model("aura-deepseek-v4-pro"),
-            1_000_000
-        );
+        assert_eq!(context_window_for_model("aura-deepseek-v4-pro"), 1_000_000);
         assert_eq!(
             context_window_for_model("aura-deepseek-v4-flash"),
             1_000_000

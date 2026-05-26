@@ -160,7 +160,7 @@ impl ModelProvider for StreamingMockProvider {
 fn default_config() -> AgentLoopConfig {
     AgentLoopConfig {
         system_prompt: "pipeline test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     }
 }
 

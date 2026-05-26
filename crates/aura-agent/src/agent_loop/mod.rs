@@ -308,8 +308,18 @@ impl std::fmt::Debug for AgentLoopConfig {
     }
 }
 
-impl Default for AgentLoopConfig {
-    fn default() -> Self {
+impl AgentLoopConfig {
+    /// Construct an [`AgentLoopConfig`] for an explicit, caller-supplied
+    /// model. **There is no `Default` impl on purpose** — every config
+    /// must be born with a real model identifier, otherwise the worker
+    /// path silently routes traffic for the wrong model (the
+    /// `claude-opus-4-6` vs `claude-opus-4-7` regression).
+    ///
+    /// Treat this as the agent-loop equivalent of the previous
+    /// `..AgentLoopConfig::default()` pattern: callers fill in only the
+    /// fields they care about and inherit the rest from here.
+    #[must_use]
+    pub fn for_agent(model: impl Into<String>) -> Self {
         Self {
             max_iterations: MAX_ITERATIONS,
             max_tokens: 16_384,
@@ -333,7 +343,7 @@ impl Default for AgentLoopConfig {
             thinking_min_budget: THINKING_MIN_BUDGET,
             extra_tools: Vec::new(),
             system_prompt: String::new(),
-            model: crate::constants::DEFAULT_MODEL.to_string(),
+            model: model.into(),
             auth_token: None,
             upstream_provider_family: None,
             tool_hints: None,
@@ -683,14 +693,33 @@ impl AgentLoop {
         .map_err(crate::AgentError::from)
     }
 
+    /// Predicate: when true, the dispatcher must route an empty
+    /// terminal stop reason (`EndTurn` / `StopSequence`, or
+    /// `MaxTokens` with no pending tool calls) through
+    /// `run_turn_stop_hooks` so `GoalRuntime` sees the no-write turn
+    /// and gets a chance to nudge / escalate.
+    ///
+    /// Predicate is `dev_loop_completion_required && no writes yet &&
+    /// no successful task_done`. Once either latch flips the
+    /// short-circuit returns to normal: the dev-loop is allowed to
+    /// exit cleanly on the next clean termination.
+    pub(crate) fn should_intercept_empty_termination(&self, state: &LoopState) -> bool {
+        self.config.dev_loop_completion_required
+            && !state.had_any_file_write
+            && !state.task_done_completed
+    }
+
     /// Dispatch on the model's stop reason. Returns `true` if the loop should break.
     ///
-    /// `EndTurn` / `StopSequence` terminate the loop unconditionally.
-    /// The cook-loop-fix strip (2026-05) removed the dev-loop
-    /// `EndTurn` intercept escalation, the per-attempt force-progress
-    /// nudges, and the `dev_loop_completion_required` short-circuit
-    /// that used to keep the loop spinning until the model produced a
-    /// write. The harness now trusts the first `EndTurn` it sees.
+    /// In dev-loop mode with no writes yet and no successful
+    /// `task_done`, an empty terminal stop reason (`EndTurn` /
+    /// `StopSequence`, or `MaxTokens` with no pending tool calls) is
+    /// routed back into the sampling driver as
+    /// `needs_follow_up = true` so `turn::run_turn_stop_hooks` can
+    /// hand the no-write event to `GoalRuntime` for nudging /
+    /// escalation. Outside that window (chat mode, or once any write
+    /// or successful `task_done` has happened) the dispatcher trusts
+    /// the first `EndTurn` it sees.
     async fn dispatch_stop_reason(
         &self,
         response: &aura_reasoner::ModelResponse,
@@ -699,8 +728,27 @@ impl AgentLoop {
         state: &mut LoopState,
     ) -> bool {
         match response.stop_reason {
-            StopReason::EndTurn | StopReason::StopSequence => true,
-            StopReason::MaxTokens => !iteration::handle_max_tokens(&self.config, response, state),
+            StopReason::EndTurn | StopReason::StopSequence => {
+                !self.should_intercept_empty_termination(state)
+            }
+            StopReason::MaxTokens => {
+                if iteration::handle_max_tokens(&self.config, response, state) {
+                    // Pending tool_use blocks were synthesised; keep
+                    // looping so the model retries the dropped calls.
+                    false
+                } else if self.should_intercept_empty_termination(state) {
+                    // Extended thinking ate the budget without
+                    // producing a tool call. Arm the latch so the
+                    // recovery turn opens with thinking disabled
+                    // (tool call first, deliberation later) and let
+                    // the stop-hook pipeline run the GoalRuntime
+                    // nudge path.
+                    state.thinking.pending_disable_thinking_next_iteration = true;
+                    false
+                } else {
+                    true
+                }
+            }
             StopReason::ToolUse => {
                 tool_execution::handle_tool_use(self, response, executor, event_tx, state).await
             }
@@ -811,6 +859,21 @@ pub(crate) struct ThinkingBudget {
     /// blocks forced tool use while extended thinking is enabled, so
     /// the two flips ride together).
     pub(crate) disable_thinking_this_iteration: bool,
+    /// Latch armed by the dispatch path when the dev-loop intercept
+    /// fires on a `MaxTokens` stop reason with no pending tool calls
+    /// (i.e. extended thinking consumed the entire response budget
+    /// without producing a tool_use block). The next
+    /// [`LoopState::begin_iteration`] consumes-and-clears this latch
+    /// into [`Self::disable_thinking_this_iteration`] so the recovery
+    /// turn opens with thinking disabled — the model emits a tool
+    /// call instead of more deliberation.
+    ///
+    /// We need a latch (not a same-iteration flip) because
+    /// [`LoopState::begin_iteration`] unconditionally clears
+    /// `disable_thinking_this_iteration` at the top of every turn:
+    /// a flag armed at the END of iteration N is wiped at the TOP of
+    /// iteration N+1 before `build_request` ever sees it.
+    pub(crate) pending_disable_thinking_next_iteration: bool,
 }
 
 /// Mutable state carried across iterations of the agent loop.
@@ -899,6 +962,7 @@ impl LoopState {
                 budget: config.thinking_budget.unwrap_or(config.max_tokens),
                 restore_next_iteration: false,
                 disable_thinking_this_iteration: false,
+                pending_disable_thinking_next_iteration: false,
             },
             last_context_tokens_estimate: None,
             messages,
@@ -924,13 +988,15 @@ impl LoopState {
         self.turn_diff.reset();
 
         // One-shot extended-thinking disable flag is re-evaluated each
-        // iteration: cleared first, then re-set below for the cases
-        // that need it. `build_request` reads the flag to decide
-        // whether to clamp `max_tokens` below the auto-thinking
-        // threshold. The flag never persists across iterations on
-        // its own — every turn either re-arms it or runs with
-        // thinking allowed.
-        self.thinking.disable_thinking_this_iteration = false;
+        // iteration: seeded from the cross-iteration latch (armed by
+        // the dispatch path's MaxTokens-empty intercept), then
+        // re-set below for the iteration-0 explore case. `build_request`
+        // reads the flag to decide whether to clamp `max_tokens` below
+        // the auto-thinking threshold. The latch is consume-and-clear
+        // so it fires at most once per arm.
+        self.thinking.disable_thinking_this_iteration =
+            self.thinking.pending_disable_thinking_next_iteration;
+        self.thinking.pending_disable_thinking_next_iteration = false;
 
         // Observe-and-clear the optional handshake from a wrapping
         // `TaskToolExecutor`: when `submit_plan` is accepted the
@@ -1274,7 +1340,7 @@ mod intent_classifier_tests {
                 ("create_project".to_string(), "project".to_string()),
                 ("list_credits".to_string(), "billing".to_string()),
             ],
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         }
     }
 
@@ -1339,7 +1405,7 @@ mod intent_classifier_tests {
 
     #[test]
     fn build_request_passthrough_when_classifier_absent() {
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let state = LoopState::new(&config, vec![Message::user("anything")]);
         let tools = vec![mk_tool("anything_tool")];
         let req = state.build_request(&config, &tools, 1).unwrap();
@@ -1350,7 +1416,7 @@ mod intent_classifier_tests {
     fn build_request_keeps_tool_hints_scoped_after_first_iteration() {
         let config = AgentLoopConfig {
             tool_hints: Some(vec!["read_file".to_string(), "create_task".to_string()]),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let msgs = vec![
             Message::user("extract tasks"),
@@ -1380,7 +1446,7 @@ mod intent_classifier_tests {
     fn build_request_keeps_tool_hints_auto_on_first_iteration() {
         let config = AgentLoopConfig {
             tool_hints: Some(vec!["read_file".to_string(), "create_task".to_string()]),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let state = LoopState::new(&config, vec![Message::user("extract tasks")]);
         let tools = vec![
@@ -1407,7 +1473,7 @@ mod intent_classifier_tests {
     fn build_request_keeps_chat_kind_when_task_tools_visible() {
         let config = AgentLoopConfig {
             request_kind: ModelRequestKind::Chat,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let state = LoopState::new(&config, vec![Message::user("hi there")]);
         let tools = vec![mk_tool("create_task"), mk_tool("read_file")];
@@ -1426,7 +1492,7 @@ mod intent_classifier_tests {
     fn build_request_keeps_chat_kind_when_spec_tools_visible() {
         let config = AgentLoopConfig {
             request_kind: ModelRequestKind::Chat,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let state = LoopState::new(&config, vec![Message::user("hi")]);
         let tools = vec![mk_tool("create_spec"), mk_tool("read_file")];
@@ -1444,7 +1510,7 @@ mod intent_classifier_tests {
     fn build_request_promotes_devloop_to_project_tool_task_extract_when_task_tools_visible() {
         let config = AgentLoopConfig {
             request_kind: ModelRequestKind::DevLoopBootstrap,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let state = LoopState::new(&config, vec![Message::user("extract tasks")]);
         let tools = vec![mk_tool("create_task")];
@@ -1461,7 +1527,7 @@ mod intent_classifier_tests {
     fn build_request_promotes_devloop_to_project_tool_spec_gen_when_spec_tools_visible() {
         let config = AgentLoopConfig {
             request_kind: ModelRequestKind::DevLoopBootstrap,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let state = LoopState::new(&config, vec![Message::user("extract specs")]);
         let tools = vec![mk_tool("create_spec")];

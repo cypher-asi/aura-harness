@@ -141,7 +141,7 @@ fn default_config() -> AgentLoopConfig {
         // `ResponseEventStream` (deferred per Phase E.4 plan note).
         // Pin them to the legacy path until the pump-side port lands.
         use_stream_pump: false,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     }
 }
 

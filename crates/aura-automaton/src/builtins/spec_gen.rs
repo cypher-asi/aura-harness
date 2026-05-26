@@ -154,11 +154,21 @@ impl SpecGenAutomaton {
             message: "Generating specifications...".into(),
         })?;
 
+        // No silent fallback: spec generation must use the
+        // caller-selected model. Falling back to a build-time
+        // constant here was one of the paths that produced the
+        // opus-4-6 vs opus-4-7 routing regression.
         let model = ctx
             .config
             .get("model")
             .and_then(|v| v.as_str())
-            .unwrap_or(aura_agent::DEFAULT_MODEL)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AutomatonError::InvalidConfig(
+                    "missing model — spec generation requires an explicit model identifier in the start request".into(),
+                )
+            })?
             .to_string();
 
         let request = aura_reasoner::ModelRequest::builder(&model, SPEC_GENERATION_SYSTEM_PROMPT)

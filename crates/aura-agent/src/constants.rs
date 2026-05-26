@@ -1,14 +1,19 @@
 //! Product constants and numeric parameters for the agent layer.
-
-// ---------------------------------------------------------------------------
-// Default model identifiers
-// ---------------------------------------------------------------------------
-
-/// Default frontier model for agent loops and sessions.
-pub const DEFAULT_MODEL: &str = "claude-opus-4-6";
-
-/// Fallback model used when the primary model is unavailable.
-pub const FALLBACK_MODEL: &str = "claude-sonnet-4-6";
+//!
+//! # Model selection
+//!
+//! Historically this module exported `DEFAULT_MODEL` (and `FALLBACK_MODEL`)
+//! that the agent loop, agent runner, and session bootstrap silently fell
+//! back to whenever a caller forgot to thread the user-selected model
+//! through. That was the regression that shipped `claude-opus-4-6`
+//! production traffic when the WS session had asked for `claude-opus-4-7`.
+//!
+//! Both constants have been removed. The single surviving fallback,
+//! [`aura_reasoner::ENV_FALLBACK_MODEL`], lives behind the provider
+//! boundary and is used **only** when `AURA_DEFAULT_MODEL` is unset
+//! during provider construction. Every layer above that must receive an
+//! explicit model — see [`crate::AgentLoopConfig::for_agent`] and
+//! [`crate::agent_runner::AgentRunnerConfig::for_agent`].
 
 // ---------------------------------------------------------------------------
 // Tool result caching
@@ -138,4 +143,3 @@ pub const WRITE_FILE_CHUNK_BYTES: usize = 32_000;
 /// [`WRITE_FILE_CHUNK_BYTES`] so callers have one effective limit.
 /// Raised from 12_000 to 32_000 to give realistic explore/edit cycles headroom.
 pub const WRITE_FILE_HARD_MAX_BYTES: usize = 32_000;
-

@@ -284,7 +284,7 @@ mod tests {
     fn reserves_max_tokens_for_output_headroom() {
         let config = AgentLoopConfig {
             max_tokens: 16_384,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         assert_eq!(reserved_output_tokens(&config, 200_000), 16_384);
     }
@@ -293,7 +293,7 @@ mod tests {
     fn reserve_is_capped_by_context_window() {
         let config = AgentLoopConfig {
             max_tokens: 16_384,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         assert_eq!(reserved_output_tokens(&config, 8_000), 8_000);
     }
@@ -302,14 +302,14 @@ mod tests {
     fn pressure_tokens_include_output_reserve() {
         let config = AgentLoopConfig {
             max_tokens: 20_000,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         assert_eq!(compaction_pressure_tokens(&config, 60_000, 100_000), 80_000);
     }
 
     #[test]
     fn overflow_compaction_reports_progress_when_history_shrinks() {
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let mut state = LoopState::new(
             &config,
             vec![
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn overflow_compaction_reports_no_progress_when_nothing_can_change() {
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let mut state = LoopState::new(&config, vec![Message::user("hello")]);
         state.last_context_tokens_estimate = Some(heuristic_context_tokens(&state.messages));
 
@@ -358,7 +358,7 @@ mod tests {
             skills_chars: 80,
             // 60 chars / 4 = 15 tokens.
             subagents_chars: 60,
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let mut state = LoopState::new(
             &config,
@@ -396,7 +396,7 @@ mod tests {
     /// sentinel still triggers correctly.
     #[test]
     fn compact_if_needed_static_buckets_zero_when_nothing_configured() {
-        let config = AgentLoopConfig::default();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
         let mut state = LoopState::new(&config, vec![]);
 
         compact_if_needed(&config, &mut state, &[]);

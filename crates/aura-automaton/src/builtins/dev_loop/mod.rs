@@ -172,10 +172,24 @@ impl DevLoopConfig {
             .and_then(|v| v.as_str())
             .unwrap_or("default")
             .to_string();
+        // Hard-fail when the operator config didn't pin a model. This
+        // used to silently fall back to a build-time `DEFAULT_MODEL`
+        // constant — exactly the regression where the
+        // `claude-opus-4-7` selection from the chat surface got
+        // routed at `claude-opus-4-6` because the dev-loop
+        // construction stack reached for the constant. Surface a
+        // typed `InvalidConfig` so the operator sees the
+        // configuration gap instead of a quiet model swap.
         let model = config
             .get("model")
             .and_then(|v| v.as_str())
-            .unwrap_or(aura_agent::DEFAULT_MODEL)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AutomatonError::InvalidConfig(
+                    "missing model — dev-loop requires an explicit model identifier in the start request".into(),
+                )
+            })?
             .to_string();
         let agent_identity = AgentIdentityEnvelope::from_json(config);
         Ok(Self {

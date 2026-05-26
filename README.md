@@ -338,7 +338,7 @@ All LLM traffic flows through the AURA router (proxy) using a per-request JWT. T
 |----------|---------|-------------|
 | `AURA_ROUTER_URL` | `https://aura-router.onrender.com` | Proxy router endpoint. |
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions. WebSocket clients supply their own. |
-| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model identifier sent to the router. (Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback for one release.) |
+| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` (`aura_reasoner::ENV_FALLBACK_MODEL`) | Model identifier sent to the router **only** when the request did not pin a model itself; sessions, dev-loop runs, and task runs all carry an explicit model end-to-end. (Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback for one release.) |
 | `AURA_DEFAULT_FALLBACK_MODEL` | — | Optional secondary model used on 429/529 retries. |
 | `AURA_MODEL_TIMEOUT_MS` | `60000` | LLM request timeout. |
 | `AURA_LLM_MAX_RETRIES` | `8` | Per-model retry budget before falling back. |

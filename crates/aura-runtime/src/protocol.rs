@@ -148,10 +148,11 @@ mod tests {
 
     #[test]
     fn test_inbound_session_init_full() {
+        const TEST_MODEL: &str = "claude-opus-4-7";
         let json = serde_json::json!({
             "type": "session_init",
             "system_prompt": "You are helpful",
-            "model": (aura_agent::DEFAULT_MODEL),
+            "model": TEST_MODEL,
             "max_tokens": 4096,
             "temperature": 0.7,
             "max_turns": 10,
@@ -165,7 +166,7 @@ mod tests {
         match msg {
             InboundMessage::SessionInit(init) => {
                 assert_eq!(init.system_prompt.as_deref(), Some("You are helpful"));
-                assert_eq!(init.model.as_deref(), Some(aura_agent::DEFAULT_MODEL));
+                assert_eq!(init.model.as_deref(), Some(TEST_MODEL));
                 assert_eq!(init.max_tokens, Some(4096));
                 assert!((init.temperature.unwrap() - 0.7).abs() < f32::EPSILON);
                 assert_eq!(init.max_turns, Some(10));
@@ -380,7 +381,7 @@ mod tests {
                 cumulative_cache_creation_input_tokens: 50,
                 cumulative_cache_read_input_tokens: 20,
                 context_utilization: 0.5,
-                model: aura_agent::DEFAULT_MODEL.to_string(),
+                model: "claude-opus-4-7".to_string(),
                 provider: "anthropic".to_string(),
                 context_breakdown: ContextBreakdown {
                     system_prompt_tokens: 7,
@@ -412,7 +413,7 @@ mod tests {
         assert_eq!(json["usage"]["cache_read_input_tokens"], 10);
         assert_eq!(json["usage"]["cumulative_cache_creation_input_tokens"], 50);
         assert_eq!(json["usage"]["cumulative_cache_read_input_tokens"], 20);
-        assert_eq!(json["usage"]["model"], aura_agent::DEFAULT_MODEL);
+        assert_eq!(json["usage"]["model"], "claude-opus-4-7");
         // Per-bucket context breakdown round-trips through serde so the
         // frontend can render the new popover without losing fidelity.
         let breakdown = &json["usage"]["context_breakdown"];

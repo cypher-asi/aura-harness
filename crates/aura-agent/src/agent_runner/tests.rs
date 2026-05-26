@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn configure_loop_config_simple_caps_max_tokens() {
-    let config = AgentRunnerConfig::default();
+    let config = AgentRunnerConfig::for_agent("claude-test-model");
     let loop_cfg = configure_loop_config(TaskComplexity::Simple, &config, 3, "system".into());
     assert!(loop_cfg.max_tokens <= 8_192);
     assert!(loop_cfg.max_iterations <= 15);
@@ -10,7 +10,7 @@ fn configure_loop_config_simple_caps_max_tokens() {
 
 #[test]
 fn configure_loop_config_complex_uses_full_budget() {
-    let config = AgentRunnerConfig::default();
+    let config = AgentRunnerConfig::for_agent("claude-test-model");
     let loop_cfg = configure_loop_config(TaskComplexity::Complex, &config, 3, "system".into());
     assert_eq!(
         loop_cfg.max_tokens,
@@ -21,7 +21,7 @@ fn configure_loop_config_complex_uses_full_budget() {
 
 #[test]
 fn configure_loop_config_maps_all_fields() {
-    let config = AgentRunnerConfig::default();
+    let config = AgentRunnerConfig::for_agent("claude-test-model");
     let loop_cfg = configure_loop_config(TaskComplexity::Standard, &config, 3, "system".into());
     assert_eq!(loop_cfg.billing_reason, "aura_task");
     assert_eq!(loop_cfg.auto_build_cooldown, 1);
@@ -37,7 +37,7 @@ fn configure_loop_config_seeds_thinking_budget() {
     let config = AgentRunnerConfig {
         thinking_budget: 4_000,
         task_execution_max_tokens: 16_384,
-        ..AgentRunnerConfig::default()
+        ..AgentRunnerConfig::for_agent("claude-test-model")
     };
     let standard = configure_loop_config(TaskComplexity::Standard, &config, 3, "system".into());
     assert_eq!(standard.thinking_budget, Some(4_000));

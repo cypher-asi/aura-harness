@@ -123,13 +123,20 @@ pub fn load_auth_token() -> Option<String> {
 
 /// Default [`AgentLoopConfig`] used by the TUI and other CLI-shaped
 /// embedders — pulls the canonical system prompt and the harness auth
-/// token, leaves everything else at `AgentLoopConfig::default()`.
+/// token, leaves everything else at the [`AgentLoopConfig::for_agent`]
+/// defaults.
+///
+/// Callers must thread their model selection through here. The TUI uses
+/// [`aura_reasoner::ENV_FALLBACK_MODEL`] (the seed of the reasoner's
+/// `AURA_DEFAULT_MODEL` env-var fallback). Higher-level surfaces — the
+/// chat WS path, the dev-loop / task-run automatons — pin the
+/// user-selected model and never fall through to the env seed.
 #[must_use]
-pub fn default_agent_config() -> AgentLoopConfig {
+pub fn default_agent_config(model: impl Into<String>) -> AgentLoopConfig {
     AgentLoopConfig {
         system_prompt: default_system_prompt(),
         auth_token: load_auth_token(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent(model)
     }
 }
 

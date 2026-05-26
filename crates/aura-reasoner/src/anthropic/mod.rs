@@ -12,7 +12,7 @@ mod convert;
 mod provider;
 mod sse;
 
-pub use config::AnthropicConfig;
+pub use config::{AnthropicConfig, ENV_FALLBACK_MODEL};
 pub use provider::exp_backoff_with_jitter;
 
 use crate::error::ReasonerError;

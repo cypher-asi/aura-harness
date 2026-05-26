@@ -41,7 +41,7 @@ async fn test_checkpoint_after_first_write() {
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("write hello.txt")];
@@ -95,7 +95,7 @@ async fn test_checkpoint_not_repeated() {
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("write two files")];
@@ -149,7 +149,7 @@ async fn test_no_exploration_compact_when_low() {
     let config = AgentLoopConfig {
         max_context_tokens: Some(200_000),
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
     let messages = vec![Message::user("read a few files")];

@@ -135,8 +135,22 @@ pub struct AgentRunnerConfig {
     pub prompt_cache_key: Option<String>,
 }
 
-impl Default for AgentRunnerConfig {
-    fn default() -> Self {
+impl AgentRunnerConfig {
+    /// Construct an [`AgentRunnerConfig`] for an explicit, caller-supplied
+    /// model. **There is no `Default` impl on purpose**: silently
+    /// substituting a constant is exactly what shipped the wrong
+    /// upstream model in production (the worker path took
+    /// `AgentRunnerConfig::default()` and routed every dev-loop / task-run
+    /// turn at `claude-opus-4-6` even when the user had selected
+    /// `claude-opus-4-7`).
+    ///
+    /// `simple_model` defaults to `model` so callers that don't have a
+    /// distinct cheap-tier model still get a sane starting point; pass
+    /// it through [`Self::with_simple_model`] when a separate model
+    /// should drive the trivial-task path.
+    #[must_use]
+    pub fn for_agent(model: impl Into<String>) -> Self {
+        let model = model.into();
         Self {
             max_agentic_iterations: 200,
             max_shell_task_retries: 4,
@@ -161,8 +175,8 @@ impl Default for AgentRunnerConfig {
             stream_timeout_secs: 300,
             max_context_tokens: 200_000,
             max_task_credits: None,
-            default_model: crate::constants::DEFAULT_MODEL.to_string(),
-            simple_model: crate::constants::FALLBACK_MODEL.to_string(),
+            simple_model: model.clone(),
+            default_model: model,
             auth_token: None,
             aura_org_id: None,
             aura_session_id: None,
@@ -170,6 +184,16 @@ impl Default for AgentRunnerConfig {
             aura_project_id: None,
             prompt_cache_key: None,
         }
+    }
+
+    /// Override the simple-task model used for trivial classifications
+    /// (see [`crate::turn_config::resolve_simple_model`]). Callers that
+    /// don't care fall through to [`Self::for_agent`]'s default of
+    /// echoing the primary model.
+    #[must_use]
+    pub fn with_simple_model(mut self, simple: impl Into<String>) -> Self {
+        self.simple_model = simple.into();
+        self
     }
 }
 
@@ -290,12 +314,8 @@ impl AgentRunner {
         };
         task_context::cap_bootstrap_task_context(&mut task_ctx);
 
-        let mut loop_config = configure_loop_config(
-            complexity,
-            &self.config,
-            params.member_count,
-            system_prompt,
-        );
+        let mut loop_config =
+            configure_loop_config(complexity, &self.config, params.member_count, system_prompt);
         loop_config.phase_reset_signal = phase_reset_signal;
 
         let agent_loop = AgentLoop::new(loop_config);
@@ -443,7 +463,6 @@ impl AgentRunner {
         };
         let config = AgentLoopConfig {
             system_prompt,
-            model: self.config.default_model.clone(),
             max_tokens: self.config.task_execution_max_tokens,
             stream_timeout: Duration::from_secs(self.config.stream_timeout_secs),
             billing_reason: "aura_chat".to_string(),
@@ -458,7 +477,7 @@ impl AgentRunner {
             aura_agent_id: self.config.aura_agent_id.clone(),
             aura_project_id: self.config.aura_project_id.clone(),
             prompt_cache_key: self.config.prompt_cache_key.clone(),
-            ..AgentLoopConfig::default()
+            ..AgentLoopConfig::for_agent(self.config.default_model.clone())
         };
         let agent_loop = AgentLoop::new(config);
         agent_loop
@@ -596,7 +615,6 @@ pub fn configure_loop_config(
         auto_build_cooldown: 1,
         auth_token: config.auth_token.clone(),
         system_prompt,
-        model,
         // Forward the router/billing identifiers populated by the
         // automaton bridge so outbound `/v1/messages` calls carry
         // `X-Aura-Org-Id` / `X-Aura-Session-Id`. Same pattern as the
@@ -623,7 +641,7 @@ pub fn configure_loop_config(
         // prompt, telemetry) can still distinguish dev-loop runs
         // from chat / generic runs.
         dev_loop_completion_required: true,
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent(model)
     }
 }
 

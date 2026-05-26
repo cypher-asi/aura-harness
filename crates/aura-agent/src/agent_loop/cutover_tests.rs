@@ -32,7 +32,7 @@ impl AgentToolExecutor for MockExecutor {
 fn default_config() -> AgentLoopConfig {
     AgentLoopConfig {
         system_prompt: "cutover test agent".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     }
 }
 

@@ -864,7 +864,9 @@ async fn test_ws_session_init_with_model() {
     let ws_path = server.workspaces_path().join("model-override");
     std::fs::create_dir_all(&ws_path).unwrap();
 
-    let model = aura_agent::DEFAULT_MODEL;
+    // Pin to the env-fallback model identifier — this end-to-end test
+    // exercises the wire-protocol round trip, not model selection logic.
+    let model = aura_reasoner::ENV_FALLBACK_MODEL;
     let mut ws = WsClient::connect(&server.ws_url()).await;
     let tok = if token.is_empty() {
         None

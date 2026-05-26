@@ -148,7 +148,7 @@ async fn text_response_emits_text_delta_then_iteration_complete() {
     let executor = MockExecutor { results: vec![] };
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
 
@@ -212,7 +212,7 @@ async fn tool_use_emits_tool_start_input_snapshot_then_result() {
     };
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
 
@@ -302,7 +302,7 @@ async fn budget_warning_emits_warning_event() {
     let config = AgentLoopConfig {
         max_iterations: 3,
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
 
@@ -345,7 +345,7 @@ async fn llm_error_emits_error_event() {
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        ..AgentLoopConfig::default()
+        ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
 
