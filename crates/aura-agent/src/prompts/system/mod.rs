@@ -169,6 +169,9 @@ pub fn build_chat_system_prompt(
             .agent_system_prompt(agent_system_prompt)
             .project_context(project)
             .agents_md_from_workspace(project.folder_path)
+            .editing_etiquette()
+            .frontend_design()
+            .output_style()
             .build(),
     );
     prompt

@@ -614,6 +614,45 @@ fn snapshot_dev_loop_with_identity_and_agents_md() {
 }
 
 #[test]
+fn chat_system_prompt_includes_codex_derived_sections_in_order() {
+    let project = test_project("/nonexistent/path");
+    let prompt = build_chat_system_prompt(&project, "", None);
+
+    for tag in [
+        "<chat_capabilities>",
+        "<project_context>",
+        "<editing_etiquette>",
+        "<frontend_design>",
+        "<output_style>",
+    ] {
+        assert!(prompt.contains(tag), "{tag} missing from chat prompt: {prompt}");
+    }
+    assert!(
+        !prompt.contains("<planning_guidance>"),
+        "chat path must omit planning_guidance: {prompt}"
+    );
+
+    let order = [
+        "<chat_capabilities>",
+        "<project_context>",
+        "<editing_etiquette>",
+        "<frontend_design>",
+        "<output_style>",
+    ];
+    let mut last = 0usize;
+    for tag in order {
+        let idx = prompt.find(tag).expect("tag present above");
+        assert!(idx >= last, "expected {tag} at or after {last}, found {idx}");
+        last = idx;
+    }
+    assert!(
+        prompt.rfind("<output_style>").expect("output_style present")
+            > prompt.rfind("</frontend_design>").expect("frontend_design present"),
+        "output_style must follow frontend_design: {prompt}"
+    );
+}
+
+#[test]
 fn snapshot_chat_default() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
