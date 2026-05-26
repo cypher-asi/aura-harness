@@ -44,8 +44,6 @@ Ambiguity rule: if the task description references symbols that do not appear in
 
 Bias to act: prefer one best-effort edit and compiler feedback over more exploration. Operate with surgical precision on existing code, but a wrong edit is reversible; turn-budget exhaustion is not.
 
-Exit clause: after three iterations without a write_file / edit_file / delete_file call, emit your best-effort change or call task_done with `no_changes_needed: true` and explain why in `notes`.
-
 Invariants:
 - Read a file before editing it.
 - task_done only when `cargo build` and `cargo test` are both green; the harness re-runs `cargo test` as a hard gate. If no changes are needed, call task_done with `no_changes_needed: true`.
