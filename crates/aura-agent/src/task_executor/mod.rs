@@ -458,6 +458,88 @@ impl AgentToolExecutor for TaskToolExecutor {
     }
 }
 
+/// Merge build stdout/stderr into one diagnostic blob.
+#[must_use]
+pub fn combine_build_streams(stdout: &str, stderr: &str) -> String {
+    let mut output = String::new();
+    if !stdout.is_empty() {
+        output.push_str(stdout);
+    }
+    if !stderr.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(stderr);
+    }
+    output
+}
+
+/// Count compiler error blocks in build output for auto-build messages.
+#[must_use]
+pub fn count_build_errors(output: &str) -> usize {
+    let sigs = BuildBaseline::extract_signatures(output);
+    if !sigs.is_empty() {
+        return sigs.len();
+    }
+    if looks_like_compiler_errors(output) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Run the project build command once. Returns `Ok(())` when there is no
+/// configured command or the build succeeds; `Err` carries enriched stderr
+/// for operator/agent consumption.
+pub async fn run_project_build_check(
+    project_folder: &str,
+    build_command: Option<&str>,
+) -> Result<(), String> {
+    let project_root = Path::new(project_folder);
+    let cmd = build_command
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| infer_default_build_command(project_root));
+    let Some(cmd) = cmd else {
+        return Ok(());
+    };
+
+    let result = match crate::verify::run_build_command(project_root, &cmd, None).await {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(format!("failed to run build command `{cmd}`: {e}"));
+        }
+    };
+    if result.success {
+        return Ok(());
+    }
+
+    let raw = combine_build_streams(&result.stdout, &result.stderr);
+    let pf = project_folder.to_string();
+    let raw_for_fallback = raw.clone();
+    let enriched = tokio::task::spawn_blocking(move || {
+        handlers::enrich_compiler_output_sync(&pf, &raw)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!("spawn_blocking panicked in enrich_compiler_output: {e}");
+        raw_for_fallback
+    });
+    Err(format!(
+        "Build check failed (`{cmd}`). Fix all errors before completing the task.\n\n{enriched}"
+    ))
+}
+
+impl TaskToolExecutor {
+    /// Gate `task_done` when a build command is configured and the tree is red.
+    pub(super) async fn check_build_before_completion(&self) -> Option<String> {
+        run_project_build_check(&self.project_folder, self.build_command.as_deref())
+            .await
+            .err()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

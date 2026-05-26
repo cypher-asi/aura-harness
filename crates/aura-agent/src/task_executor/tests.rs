@@ -266,6 +266,50 @@ async fn task_done_allows_no_ops_with_exemption() {
     assert!(results[0].content.contains("completed"));
 }
 
+#[tokio::test]
+async fn task_done_rejects_when_build_command_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut executor = make_executor();
+    executor.project_folder = dir.path().to_string_lossy().into_owned();
+    #[cfg(unix)]
+    {
+        executor.build_command = Some("false".to_string());
+    }
+    #[cfg(windows)]
+    {
+        executor.build_command = Some("cmd /C exit 1".to_string());
+    }
+    {
+        let mut ops = executor.tracked_file_ops.lock().await;
+        ops.push(FileOp::Create {
+            path: "src/main.rs".to_string(),
+            content: "fn main() {}".to_string(),
+        });
+    }
+    {
+        let mut sr = executor.self_review.lock().await;
+        sr.record_write("src/main.rs");
+        sr.record_read("src/main.rs");
+    }
+
+    let results = executor.execute(&[task_done_call("done")]).await;
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].is_error,
+        "task_done must be rejected when build fails: {}",
+        results[0].content
+    );
+    assert!(
+        !results[0].stop_loop,
+        "rejected task_done must not stop the loop"
+    );
+    assert!(
+        results[0].content.contains("Build check failed"),
+        "rejection must include build failure context: {}",
+        results[0].content
+    );
+}
+
 // ------------------------------------------------------------------
 // merge_into_result tests
 // ------------------------------------------------------------------

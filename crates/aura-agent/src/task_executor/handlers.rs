@@ -111,6 +111,11 @@ impl TaskToolExecutor {
             return;
         }
 
+        if let Some(build_prompt) = self.check_build_before_completion().await {
+            results.push(Self::gate_rejection(tc, build_prompt));
+            return;
+        }
+
         if !self.should_skip_test_gate_for_no_change_completion().await {
             // Codex parity (May 2026): the project test suite is no
             // longer a hard gate. We still run it once, best-effort,
