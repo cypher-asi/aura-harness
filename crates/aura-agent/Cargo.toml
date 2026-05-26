@@ -30,6 +30,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 which = { workspace = true }

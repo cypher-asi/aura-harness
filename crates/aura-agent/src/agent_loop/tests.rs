@@ -1202,3 +1202,287 @@ async fn dev_loop_endturn_after_task_done_terminates_cleanly() {
     }
 }
 
+// ------------------------------------------------------------------
+// Layer E.1 — nested loop topology (task -> turn -> sampling)
+// ------------------------------------------------------------------
+
+/// The turn loop must consume every `ToolUse` sampling without
+/// breaking, then break cleanly on the trailing `EndTurn`. Codex-shape
+/// regression: pinned because the polarity flip from
+/// `for iteration { … if break { break; } }` to
+/// `loop { … if !needs_follow_up { break; } }` would have been a
+/// silent behavior change if `dispatch_stop_reason`'s "loop should
+/// break" semantics had been mis-translated into `needs_follow_up`.
+#[tokio::test]
+async fn turn_continues_while_needs_follow_up_true() {
+    let executor = MockExecutor {
+        results: vec![
+            ToolCallResult::success("ph1", "alpha"),
+            ToolCallResult::success("ph2", "beta"),
+            ToolCallResult::success("ph3", "gamma"),
+        ],
+    };
+
+    let provider = MockProvider::new()
+        .with_response(MockResponse::tool_use(
+            "tc_1",
+            "read_file",
+            serde_json::json!({"path": "a.rs"}),
+        ))
+        .with_response(MockResponse::tool_use(
+            "tc_2",
+            "read_file",
+            serde_json::json!({"path": "b.rs"}),
+        ))
+        .with_response(MockResponse::tool_use(
+            "tc_3",
+            "read_file",
+            serde_json::json!({"path": "c.rs"}),
+        ))
+        .with_response(MockResponse::text("Done after three reads."));
+
+    let config = AgentLoopConfig {
+        system_prompt: "test agent".to_string(),
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("read three files")];
+    let tools = vec![ToolDefinition::new(
+        "read_file",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.iterations, 4,
+        "three ToolUse follow-ups plus one terminating EndTurn must \
+         all run inside one turn — total sampling requests = 4"
+    );
+    assert!(
+        result.total_text.contains("Done after three reads."),
+        "the final EndTurn message must surface on the result"
+    );
+    assert!(
+        result.llm_error.is_none(),
+        "no llm_error expected on the happy path"
+    );
+}
+
+/// Counterpart to `turn_continues_while_needs_follow_up_true`: a
+/// single `EndTurn` (no tool calls) must break the turn loop on the
+/// first sampling. Pinned so the polarity flip cannot accidentally
+/// re-introduce an off-by-one extra sampling on the "model already
+/// said stop" path. Uses the chat-path config (no
+/// `dev_loop_completion_required`) so the Phase 1.B continuation
+/// runtime is bypassed and the test only exercises the bare
+/// `needs_follow_up == false` break.
+#[tokio::test]
+async fn turn_breaks_when_model_says_stop_and_no_continuation() {
+    let executor = MockExecutor { results: vec![] };
+    let provider = MockProvider::simple_response("Nothing to do.");
+
+    let config = AgentLoopConfig {
+        system_prompt: "test agent".to_string(),
+        dev_loop_completion_required: false,
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("are you there?")];
+    let tools = vec![];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.iterations, 1,
+        "a clean EndTurn with no follow-up must break the turn loop \
+         on the first sampling"
+    );
+    assert!(result.total_text.contains("Nothing to do."));
+    assert!(!result.stalled);
+    assert!(result.llm_error.is_none());
+}
+
+/// Phase 1.B continuation must still inject its `<harness_continuation>`
+/// envelope after a read-only iteration, even though the post-iteration
+/// hook now lives in `turn::run_turn_stop_hooks` instead of the
+/// pre-E.1 `post_iteration_checks` free function. Mirrors the
+/// pre-E.1 behavior end-to-end:
+///
+///   - iter 0: `read_file` ToolUse (no write) → continuation injected
+///   - iter 1: `write_file` ToolUse (write lands, streak resets)
+///   - iter 2: `EndTurn` → break
+///
+/// Asserts that exactly one `<harness_continuation>` Warning is
+/// observed in the event stream (the iter-0 nudge), the loop runs
+/// three sampling requests, and the run does not stall.
+#[tokio::test]
+async fn phase1b_continuation_fires_in_new_turn_loop() {
+    // Per-iteration stateful executor so iter 0's `read_file` and
+    // iter 1's `write_file` get distinct `ToolCallResult`s — the
+    // generic `MockExecutor` here zips a single per-batch results
+    // vec for every dispatch, so a stateful pop is the cheapest way
+    // to surface the iter-1 `file_changes` that resets the
+    // continuation streak.
+    struct ScriptedExecutor {
+        next: std::sync::Mutex<std::collections::VecDeque<ToolCallResult>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentToolExecutor for ScriptedExecutor {
+        async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
+            let mut q = self
+                .next
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            tool_calls
+                .iter()
+                .map(|tc| {
+                    let proto = q.pop_front().expect("ScriptedExecutor ran out of results");
+                    ToolCallResult {
+                        tool_use_id: tc.id.clone(),
+                        ..proto
+                    }
+                })
+                .collect()
+        }
+    }
+
+    let executor = ScriptedExecutor {
+        next: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+            // iter 0: read_file (no write)
+            ToolCallResult::success("ph_read", "fn foo() {}"),
+            // iter 1: write_file with a recorded FileChange so the
+            // turn diff and `had_any_write` latch see the write and
+            // reset the continuation streak.
+            ToolCallResult {
+                tool_use_id: "ph_write".to_string(),
+                content: "wrote new.rs".to_string(),
+                is_error: false,
+                kind: aura_core::ToolResultKind::Ok,
+                stop_loop: false,
+                file_changes: vec![crate::types::FileChange {
+                    path: "src/new.rs".to_string(),
+                    kind: crate::types::FileChangeKind::Create,
+                    lines_added: 1,
+                    lines_removed: 0,
+                }],
+            },
+        ])),
+    };
+
+    let provider = MockProvider::new()
+        .with_response(MockResponse::tool_use(
+            "tc_read",
+            "read_file",
+            serde_json::json!({"path": "src/lib.rs"}),
+        ))
+        .with_response(MockResponse::tool_use(
+            "tc_write",
+            "write_file",
+            serde_json::json!({"path": "src/new.rs", "content": "pub fn foo() {}"}),
+        ))
+        .with_response(MockResponse::text("Done after write."));
+
+    let config = AgentLoopConfig {
+        system_prompt: "test agent".to_string(),
+        dev_loop_completion_required: true,
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("implement foo")];
+    let tools = vec![
+        ToolDefinition::new(
+            "read_file",
+            "Read a file",
+            serde_json::json!({"type": "object"}),
+        ),
+        ToolDefinition::new(
+            "write_file",
+            "Write a file",
+            serde_json::json!({"type": "object"}),
+        ),
+    ];
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let result = agent
+        .run_with_events(&provider, &executor, messages, tools, Some(tx), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.iterations, 3,
+        "three sampling requests: read (with continuation), write, terminating EndTurn"
+    );
+    assert!(
+        !result.stalled,
+        "the write resets the streak; no task_blocked"
+    );
+    assert!(
+        result.llm_error.is_none(),
+        "no llm_error on the happy continuation path"
+    );
+
+    let mut continuation_warnings: Vec<String> = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AgentLoopEvent::Warning(msg) = event {
+            if msg.contains("<harness_continuation") {
+                continuation_warnings.push(msg);
+            }
+        }
+    }
+    assert_eq!(
+        continuation_warnings.len(),
+        1,
+        "exactly one continuation envelope must surface (after the \
+         read-only iter-0); got {continuation_warnings:?}"
+    );
+    assert!(
+        continuation_warnings[0].contains("kind=\"nudge\""),
+        "iter-0 with consecutive_no_write=1 must escalate as nudge, \
+         not blocked; got: {}",
+        continuation_warnings[0]
+    );
+}
+
+/// Per-task hard ceiling regression: a misconfigured
+/// `max_turns_per_task = 0` must surface as a typed
+/// `AgentError::TurnBudgetExceeded` rather than silently returning
+/// an empty result. Pinned because the cap trips inside
+/// `task::run_task` before the first `run_turn` call and the Err
+/// propagates up through `AgentLoop::run` — callers that rely on
+/// the pre-E.1 "always-Ok" contract for normal LLM/tool errors must
+/// still see a structured failure for budget overruns.
+#[tokio::test]
+async fn turn_budget_exceeded_surfaces_typed_error_when_max_turns_zero() {
+    let executor = MockExecutor { results: vec![] };
+    let provider = MockProvider::simple_response("never reached");
+
+    let config = AgentLoopConfig {
+        system_prompt: "test".to_string(),
+        max_turns_per_task: 0,
+        ..AgentLoopConfig::default()
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("anything")];
+    let tools = vec![];
+
+    let err = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .expect_err("max_turns_per_task=0 must trip TurnBudgetExceeded");
+
+    match err {
+        crate::AgentError::TurnBudgetExceeded { turn_index, .. } => {
+            assert_eq!(turn_index, 0, "zero-budget cap trips at turn 0");
+        }
+        other => panic!("expected TurnBudgetExceeded, got {other:?}"),
+    }
+}

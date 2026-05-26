@@ -7,13 +7,18 @@
 mod context;
 mod continuation;
 mod iteration;
+mod sampling;
 mod search_cache;
 mod streaming;
+mod task;
 mod tool_execution;
 #[cfg(test)]
 mod tool_execution_tests;
 mod tool_pipeline;
+mod turn;
 mod turn_diff;
+
+pub use task::TaskId;
 
 #[cfg(test)]
 mod contract_tests;
@@ -33,7 +38,7 @@ mod tests_advanced;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use aura_reasoner::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, Role, StopReason,
@@ -43,7 +48,7 @@ use aura_tools::IntentClassifier;
 use chrono::Utc;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::budget::{BudgetState, ExplorationState};
 use crate::constants::{
@@ -51,7 +56,6 @@ use crate::constants::{
     THINKING_MIN_BUDGET, THINKING_TAPER_AFTER, THINKING_TAPER_FACTOR,
 };
 use crate::events::{AgentLoopEvent, DebugEvent};
-use crate::helpers;
 use crate::types::{AgentLoopResult, AgentToolExecutor, BuildBaseline, TurnObserver};
 
 /// Configuration for the agent loop.
@@ -210,6 +214,30 @@ pub struct AgentLoopConfig {
     /// audits before giving up). Only consulted when
     /// [`Self::dev_loop_completion_required`] is true.
     pub max_continuation_turns: u32,
+    /// Layer E.1: hard cap on the number of *turns* one task may run.
+    /// A turn is the unit of work between "model starts talking" and
+    /// "model goes quiet without follow-up signal"; codex's
+    /// `regular.rs` task shell loops on turns until `input_queue` is
+    /// empty. E.1 has no `input_queue` yet (lands in E.2), so the
+    /// task shell runs exactly one turn per task and this cap is
+    /// effectively dormant. The default `50` matches codex's
+    /// recommended ergonomics: most user-driven sessions converge in
+    /// <10 turns; the cap exists to surface a typed
+    /// [`AgentError::TurnBudgetExceeded`](crate::AgentError::TurnBudgetExceeded)
+    /// instead of letting a runaway `input_queue` push the agent
+    /// indefinitely.
+    pub max_turns_per_task: u32,
+    /// Layer E.1: hard cap on the *total* number of sampling
+    /// requests (model round-trips) across every turn of one task.
+    /// Independent of [`Self::max_iterations`] — that knob remains the
+    /// pre-E.1 global ceiling (default `usize::MAX` to avoid the
+    /// silent-cancel regression that the historic 25-cap caused for
+    /// long-running batch workflows). This cap defaults to `500` so
+    /// it stays well above the steady-state working size of every
+    /// existing dev-loop / chat scenario but trips on a genuine
+    /// runaway. Trips surface as
+    /// [`AgentError::TurnBudgetExceeded`](crate::AgentError::TurnBudgetExceeded).
+    pub max_iterations_per_task: u32,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -267,6 +295,8 @@ impl Default for AgentLoopConfig {
             disable_thinking_iteration_0: false,
             dev_loop_completion_required: false,
             max_continuation_turns: 6,
+            max_turns_per_task: 50,
+            max_iterations_per_task: 500,
         }
     }
 }
@@ -383,124 +413,25 @@ impl AgentLoop {
         event_tx: Option<Sender<AgentLoopEvent>>,
         cancellation_token: Option<CancellationToken>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
-        let mut state = LoopState::new(&self.config, messages);
-        state.build_baseline = executor.capture_build_baseline().await;
-        info!(
-            max_iterations = self.config.max_iterations,
-            "Starting agent loop"
-        );
-
-        for iteration in 0..self.config.max_iterations {
-            if is_cancelled(cancellation_token.as_ref()) {
-                debug!("Cancellation requested, stopping loop");
-                break;
-            }
-            state.begin_iteration(&self.config, iteration);
-            let iteration_started_at = Instant::now();
-            match context::compact_if_needed(&self.config, &mut state, &tools) {
-                context::CompactionOutcome::NeedsSummary(input) => {
-                    self.apply_summary_compaction(
-                        provider,
-                        &tools,
-                        event_tx.as_ref(),
-                        cancellation_token.as_ref(),
-                        &mut state,
-                        input,
-                    )
-                    .await;
-                }
-                context::CompactionOutcome::Applied(tier) => {
-                    debug!(?tier, "local compaction applied before model call");
-                }
-                context::CompactionOutcome::None => {}
-            }
-
-            let request = state.build_request(&self.config, &tools, iteration)?;
-            let response = match self
-                .call_model(
-                    provider,
-                    request,
-                    event_tx.as_ref(),
-                    cancellation_token.as_ref(),
-                )
-                .await
-            {
-                Ok(r) => r,
-                Err(iteration::LlmCallError::PromptTooLong(msg)) => {
-                    match self
-                        .retry_after_context_overflow(
-                            provider,
-                            &tools,
-                            iteration,
-                            event_tx.as_ref(),
-                            cancellation_token.as_ref(),
-                            &mut state,
-                            msg,
-                        )
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            e.apply(&mut state.result, event_tx.as_ref());
-                            break;
-                        }
-                    }
-                }
-                Err(e) => {
-                    e.apply(&mut state.result, event_tx.as_ref());
-                    break;
-                }
-            };
-
-            if let Some(input) = iteration::accumulate_response(&self.config, &mut state, &response)
-            {
-                self.apply_summary_compaction(
-                    provider,
-                    &tools,
-                    event_tx.as_ref(),
-                    cancellation_token.as_ref(),
-                    &mut state,
-                    input,
-                )
-                .await;
-            }
-            state.result.iterations = iteration + 1;
-            streaming::emit_iteration_complete(
-                event_tx.as_ref(),
-                iteration,
-                &response,
-                iteration_started_at,
-            );
-
-            // Stop fired during or right after streaming finished — don't
-            // dispatch a fresh tool batch (which would race for minutes
-            // against the cancellation observed at the top of the next
-            // iteration). Cheap "cancelled before any tool dispatch"
-            // bail-out so the loop terminates immediately instead of
-            // paying for one more (potentially long) tool round-trip.
-            if is_cancelled(cancellation_token.as_ref()) {
-                debug!("Cancellation observed after model call; skipping tool dispatch");
-                break;
-            }
-
-            if self
-                .dispatch_stop_reason(&response, executor, event_tx.as_ref(), &mut state)
-                .await
-            {
-                break;
-            }
-            if post_iteration_checks(&self.config, event_tx.as_ref(), &mut state, iteration) {
-                break;
-            }
-        }
-
-        state.result.messages = state.messages;
-
-        for observer in &self.config.observers {
-            observer.on_turn_complete(&state.result).await;
-        }
-
-        Ok(state.result)
+        // Layer E.1: delegate to the nested task → turn → sampling
+        // topology. The old per-iteration `for` loop body now lives
+        // in [`sampling::run_sampling_request`]; the turn-level
+        // `needs_follow_up` predicate and Phase 1.B stop hooks live
+        // in [`turn::run_turn`] / [`turn::run_turn_stop_hooks`]; the
+        // outer task shell with `max_turns_per_task` /
+        // `max_iterations_per_task` ceilings lives in
+        // [`task::run_task`]. See `agent_loop/turn.rs`'s module-level
+        // docs for the topology diagram.
+        task::run_task(
+            self,
+            provider,
+            executor,
+            messages,
+            tools,
+            event_tx,
+            cancellation_token,
+        )
+        .await
     }
 
     /// Dispatch on the model's stop reason. Returns `true` if the loop should break.
@@ -1111,96 +1042,11 @@ impl LoopState {
     }
 }
 
-/// Run post-iteration checks (checkpoint, compaction, budget). Returns `true` to break.
-fn post_iteration_checks(
-    config: &AgentLoopConfig,
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    state: &mut LoopState,
-    iteration: usize,
-) -> bool {
-    context::emit_checkpoint_if_needed(event_tx, state);
-    if maybe_inject_continuation(config, event_tx, state, iteration) {
-        return true;
-    }
-    context::check_budget_warnings(config, event_tx, state, iteration);
-    if context::should_stop_for_budget(config, state, iteration) {
-        state.result.timed_out = true;
-        return true;
-    }
-    false
-}
-
-/// Phase 1.B: when an iteration of a dev-loop task ends with no
-/// write_file / edit_file / delete_file and the task is not yet
-/// complete, push the agent forward with a continuation prompt
-/// (codex's `goals/continuation.md` analog). After
-/// `max_continuation_turns` consecutive injections without progress,
-/// fail the task with `task_blocked` so the harness surfaces the
-/// stall instead of burning the iteration budget on read-loops.
-///
-/// Returns `true` if the loop must terminate (task_blocked path).
-fn maybe_inject_continuation(
-    config: &AgentLoopConfig,
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    state: &mut LoopState,
-    iteration: usize,
-) -> bool {
-    if !config.dev_loop_completion_required {
-        return false;
-    }
-    // A clean `task_done` already terminates the loop in
-    // `dispatch_stop_reason`; the continuation runtime only fires on
-    // iterations that the loop intends to continue.
-    if state.task_done_completed {
-        return false;
-    }
-    // Placeholder until the iteration_read_paths plumbing lands;
-    // ContinuationState's nudge/blocked decision is on the diff alone,
-    // so the empty set keeps the streak counter correct. The
-    // blocker_signature follow-up will replace this with the real
-    // set of read paths from this iteration.
-    let read_paths = std::collections::HashSet::new();
-    let Some(kind) = state.continuation.on_iteration_end(&state.turn_diff, read_paths) else {
-        return false;
-    };
-
-    if state.total_continuation_turns >= config.max_continuation_turns {
-        // task_blocked: there is no dedicated `AgentLoopResult` variant
-        // for "blocked-after-N-continuations" today, so we co-opt the
-        // existing failure shape — `stalled = true` + an `llm_error`
-        // string with the canonical `task_blocked:` prefix so the
-        // harness / dashboards can grep for it. Follow-up should
-        // introduce a dedicated bool / enum variant.
-        let reason = format!(
-            "task_blocked: max_continuation_turns ({}) exceeded without a write at iteration {}",
-            config.max_continuation_turns, iteration
-        );
-        warn!(
-            iteration,
-            consecutive_no_write = state.continuation.consecutive_no_write,
-            total_continuation_turns = state.total_continuation_turns,
-            "{reason}"
-        );
-        state.result.stalled = true;
-        if state.result.llm_error.is_none() {
-            state.result.llm_error = Some(reason.clone());
-        }
-        streaming::emit(event_tx, AgentLoopEvent::Warning(reason));
-        return true;
-    }
-
-    let body = continuation::render(
-        kind,
-        iteration,
-        state.continuation.consecutive_no_write,
-    );
-    helpers::append_warning(&mut state.messages, &body);
-    streaming::emit(event_tx, AgentLoopEvent::Warning(body));
-    state.total_continuation_turns = state.total_continuation_turns.saturating_add(1);
-    false
-}
-
-fn is_cancelled(token: Option<&CancellationToken>) -> bool {
+/// Layer E.1 helper retained as a free function (rather than a
+/// `Option::is_some_and` call at each site) so that
+/// [`sampling::run_sampling_request`], [`turn::run_turn`], and the
+/// pre-E.1 entry points all share one branch-free probe.
+pub(crate) fn is_cancelled(token: Option<&CancellationToken>) -> bool {
     token.is_some_and(CancellationToken::is_cancelled)
 }
 
