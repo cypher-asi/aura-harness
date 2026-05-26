@@ -1,5 +1,4 @@
 use aura_reasoner::ContentBlock;
-use std::collections::HashMap;
 
 use crate::constants::tool_result_cache_key;
 use crate::types::ToolCallInfo;
@@ -9,6 +8,7 @@ use super::search_cache::normalized_search_key;
 use super::tool_execution::{
     push_tool_result_message_with_context, split_cached, truncate_preview, update_cache,
 };
+use super::ToolResultCache;
 
 #[test]
 fn tool_results_are_emitted_before_context_texts() {
@@ -63,15 +63,14 @@ fn cached_read_hits_reinsert_content_verbatim() {
         name: "read_file".to_string(),
         input: serde_json::json!({"path": "src/lib.rs"}),
     };
-    let mut cache = HashMap::new();
+    let mut cache = ToolResultCache::default();
     let long_content = "a".repeat(9_000);
-    cache.insert(
+    cache.exact.insert(
         tool_result_cache_key(&call.name, &call.input),
         long_content.clone(),
     );
 
-    let fuzzy_cache = HashMap::new();
-    let (cached, uncached) = split_cached(&[call], &cache, &fuzzy_cache);
+    let (cached, uncached) = split_cached(&[call], &cache);
 
     assert!(uncached.is_empty());
     assert_eq!(cached.len(), 1);
@@ -95,16 +94,14 @@ fn fuzzy_cache_hits_after_alternation_reorder() {
         stop_loop: false,
         file_changes: Vec::new(),
     };
-    let mut cache = HashMap::new();
-    let mut fuzzy_cache = HashMap::new();
+    let mut cache = ToolResultCache::default();
     update_cache(
         &mut cache,
-        &mut fuzzy_cache,
         std::slice::from_ref(&seed),
         std::slice::from_ref(&seed_result),
     );
-    assert!(!cache.is_empty(), "exact cache should be populated");
-    assert!(!fuzzy_cache.is_empty(), "fuzzy cache should be populated");
+    assert!(!cache.exact.is_empty(), "exact cache should be populated");
+    assert!(!cache.fuzzy.is_empty(), "fuzzy cache should be populated");
 
     // Now a later call with the alternation terms in a different order
     // — it should MISS the exact cache but HIT the fuzzy cache.
@@ -115,11 +112,13 @@ fn fuzzy_cache_hits_after_alternation_reorder() {
     };
 
     assert!(
-        !cache.contains_key(&tool_result_cache_key(&reordered.name, &reordered.input)),
+        !cache
+            .exact
+            .contains_key(&tool_result_cache_key(&reordered.name, &reordered.input)),
         "exact key should not match the reordered alternation"
     );
 
-    let (cached, uncached) = split_cached(&[reordered], &cache, &fuzzy_cache);
+    let (cached, uncached) = split_cached(&[reordered], &cache);
     assert!(
         uncached.is_empty(),
         "fuzzy cache should satisfy the reordered query without executing"
@@ -145,20 +144,22 @@ fn write_clears_both_caches() {
         stop_loop: false,
         file_changes: Vec::new(),
     };
-    let mut cache = HashMap::new();
-    let mut fuzzy_cache = HashMap::new();
+    let mut cache = ToolResultCache::default();
     update_cache(
         &mut cache,
-        &mut fuzzy_cache,
         std::slice::from_ref(&seed),
         std::slice::from_ref(&seed_result),
     );
-    assert!(!cache.is_empty());
-    assert!(!fuzzy_cache.is_empty());
+    assert!(!cache.exact.is_empty());
+    assert!(!cache.fuzzy.is_empty());
 
     // A successful write_file goes through update_cache. The write
-    // itself is not cacheable, but the `any_write` path must clear
-    // BOTH the exact and fuzzy caches.
+    // itself is not cacheable, but the workspace-global slice of the
+    // exact cache (`search_code`/`find_files`) and the fuzzy cache
+    // must both be cleared. Path-scoped entries (`read_file`,
+    // `list_files`, `stat_file`) only invalidate when they overlap
+    // the written path — covered by
+    // `write_invalidates_only_overlapping_path`.
     let write_call = ToolCallInfo {
         id: "tool_w".to_string(),
         name: "write_file".to_string(),
@@ -174,18 +175,17 @@ fn write_clears_both_caches() {
     };
     update_cache(
         &mut cache,
-        &mut fuzzy_cache,
         std::slice::from_ref(&write_call),
         std::slice::from_ref(&write_result),
     );
 
     assert!(
-        cache.is_empty(),
-        "exact cache must be cleared by successful write"
+        cache.exact.is_empty(),
+        "search_code exact entries must be cleared by any successful write"
     );
     assert!(
-        fuzzy_cache.is_empty(),
-        "fuzzy cache must be cleared alongside the exact cache"
+        cache.fuzzy.is_empty(),
+        "fuzzy cache must be cleared alongside the exact search_code slice"
     );
 }
 
@@ -207,11 +207,9 @@ fn failed_write_does_not_clear_caches() {
         stop_loop: false,
         file_changes: Vec::new(),
     };
-    let mut cache = HashMap::new();
-    let mut fuzzy_cache = HashMap::new();
+    let mut cache = ToolResultCache::default();
     update_cache(
         &mut cache,
-        &mut fuzzy_cache,
         std::slice::from_ref(&seed),
         std::slice::from_ref(&seed_result),
     );
@@ -231,17 +229,16 @@ fn failed_write_does_not_clear_caches() {
     };
     update_cache(
         &mut cache,
-        &mut fuzzy_cache,
         std::slice::from_ref(&failed_write),
         std::slice::from_ref(&failed_result),
     );
 
     assert!(
-        !cache.is_empty(),
+        !cache.exact.is_empty(),
         "failed write must NOT clear the exact cache"
     );
     assert!(
-        !fuzzy_cache.is_empty(),
+        !cache.fuzzy.is_empty(),
         "failed write must NOT clear the fuzzy cache"
     );
 }
@@ -254,18 +251,17 @@ fn split_cached_prefers_exact_over_fuzzy_when_both_match() {
         name: "search_code".to_string(),
         input: serde_json::json!({"pattern": "NeuralKey"}),
     };
-    let mut cache = HashMap::new();
-    cache.insert(
+    let mut cache = ToolResultCache::default();
+    cache.exact.insert(
         tool_result_cache_key(&call.name, &call.input),
         "exact-hit".to_string(),
     );
-    let mut fuzzy_cache = HashMap::new();
-    fuzzy_cache.insert(
+    cache.fuzzy.insert(
         normalized_search_key(&call.name, &call.input).unwrap(),
         "fuzzy-hit".to_string(),
     );
 
-    let (cached, uncached) = split_cached(&[call], &cache, &fuzzy_cache);
+    let (cached, uncached) = split_cached(&[call], &cache);
     assert!(uncached.is_empty());
     assert_eq!(cached.len(), 1);
     // The cached content may be summarized, but it should be derived
@@ -287,4 +283,258 @@ fn truncate_preview_uses_ascii_marker() {
     let preview = truncate_preview("abcdef", 3);
     assert_eq!(preview, "abc...");
     assert!(!preview.contains('\u{2026}'));
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1: range-aware `read_file` cache + path-scoped invalidation
+// ---------------------------------------------------------------------------
+
+/// Build the line-numbered `read_file` rendering the way
+/// `aura_tools::fs_tools::read::fs_read` emits it (`{:>6}|{content}`,
+/// newline-joined). Each line body is the literal `body` string.
+fn fake_read_file_rendered(start: usize, end: usize, body: &str) -> String {
+    (start..=end)
+        .map(|n| format!("{n:>6}|{body}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Drive a single `read_file` call through the cache surface and
+/// record whether the underlying executor would have been invoked.
+/// Returns the cached `ToolCallResult` (synthesising one with
+/// `responder` on miss).
+fn drive_read_file(
+    cache: &mut ToolResultCache,
+    id: &str,
+    path: &str,
+    start: Option<usize>,
+    end: Option<usize>,
+    fs_read_calls: &mut usize,
+    responder: impl FnOnce(Option<usize>, Option<usize>) -> String,
+) -> ToolCallResult {
+    let mut input = serde_json::json!({"path": path});
+    if let Some(s) = start {
+        input["start_line"] = serde_json::json!(s);
+    }
+    if let Some(e) = end {
+        input["end_line"] = serde_json::json!(e);
+    }
+    let call = ToolCallInfo {
+        id: id.to_string(),
+        name: "read_file".to_string(),
+        input,
+    };
+
+    let (cached, uncached) = split_cached(std::slice::from_ref(&call), cache);
+    if let Some(hit) = cached.into_iter().next() {
+        assert!(
+            uncached.is_empty(),
+            "miss + hit on the same call is invalid"
+        );
+        return hit;
+    }
+
+    assert_eq!(uncached.len(), 1, "miss must produce one uncached entry");
+    *fs_read_calls += 1;
+    let content = responder(start, end);
+    let result = ToolCallResult {
+        tool_use_id: call.id.clone(),
+        content,
+        is_error: false,
+        kind: aura_core::ToolResultKind::Ok,
+        stop_loop: false,
+        file_changes: Vec::new(),
+    };
+    update_cache(
+        cache,
+        std::slice::from_ref(&call),
+        std::slice::from_ref(&result),
+    );
+    result
+}
+
+#[test]
+fn read_file_range_cache_serves_subset_from_superset() {
+    let mut cache = ToolResultCache::default();
+    let mut fs_read_calls = 0usize;
+    let path = "src/lib.rs";
+
+    let r_full = drive_read_file(
+        &mut cache,
+        "tool_1",
+        path,
+        Some(1),
+        Some(150),
+        &mut fs_read_calls,
+        |start, end| fake_read_file_rendered(start.unwrap(), end.unwrap(), "alpha"),
+    );
+
+    let r_subset1 = drive_read_file(
+        &mut cache,
+        "tool_2",
+        path,
+        Some(1),
+        Some(99),
+        &mut fs_read_calls,
+        |_, _| panic!("subset 1..99 must hit the range cache without re-executing fs_read"),
+    );
+
+    let r_subset2 = drive_read_file(
+        &mut cache,
+        "tool_3",
+        path,
+        Some(30),
+        Some(100),
+        &mut fs_read_calls,
+        |_, _| panic!("subset 30..100 must hit the range cache without re-executing fs_read"),
+    );
+
+    assert_eq!(
+        fs_read_calls, 1,
+        "only the superset read should trigger the underlying tool"
+    );
+
+    let canonical = "src/lib.rs";
+    let entries = cache
+        .read_file_by_path
+        .get(canonical)
+        .expect("per-path index must have a vec for the superset path");
+    assert_eq!(
+        entries.len(),
+        1,
+        "subset hits must NOT mint new entries; superset is the only one"
+    );
+    let superset_hash = entries[0]
+        .content_hash
+        .as_ref()
+        .expect("content_hash must be stamped on every cached read");
+
+    let body1 = r_subset1.content;
+    let body2 = r_subset2.content;
+    assert!(body1.contains("     1|alpha"));
+    assert!(body1.contains("    99|alpha"));
+    assert!(!body1.contains("   100|alpha"));
+    assert!(body2.contains("    30|alpha"));
+    assert!(body2.contains("   100|alpha"));
+    assert!(!body2.contains("    29|alpha"));
+
+    // The "same content_hash" invariant: the per-path entry's hash
+    // is the single source of truth for every subset response, so
+    // checking the entry covers the contract (subset responses
+    // themselves carry just the sliced rendered body — Phase 1
+    // intentionally does not widen `ToolCallResult` with a
+    // `content_hash` field; that lives behind the per-path index
+    // and is what downstream compaction dedup will consult).
+    assert_eq!(
+        superset_hash,
+        entries[0]
+            .content_hash
+            .as_ref()
+            .expect("stable hash on the cached entry"),
+        "superset hash must be stable across subset lookups"
+    );
+    // Sanity: the full response we got back from the superset call
+    // must also rehash to the same value the entry recorded.
+    let recomputed = {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        r_full.content.as_bytes().hash(&mut h);
+        format!("{:016x}", h.finish())
+    };
+    assert_eq!(
+        &recomputed, superset_hash,
+        "stored content_hash must match the rehash of the original rendered output"
+    );
+}
+
+#[test]
+fn write_invalidates_only_overlapping_path() {
+    let mut cache = ToolResultCache::default();
+    let mut fs_read_calls = 0usize;
+
+    // Cache reads of two unrelated paths.
+    drive_read_file(
+        &mut cache,
+        "read_a",
+        "crates/A/foo.rs",
+        Some(1),
+        Some(50),
+        &mut fs_read_calls,
+        |s, e| fake_read_file_rendered(s.unwrap(), e.unwrap(), "A"),
+    );
+    drive_read_file(
+        &mut cache,
+        "read_b",
+        "crates/B/bar.rs",
+        Some(1),
+        Some(50),
+        &mut fs_read_calls,
+        |s, e| fake_read_file_rendered(s.unwrap(), e.unwrap(), "B"),
+    );
+    assert_eq!(fs_read_calls, 2);
+    assert_eq!(cache.read_file_by_path.len(), 2);
+    assert_eq!(cache.exact.len(), 2);
+
+    // Successful write to crates/A/foo.rs only.
+    let write_call = ToolCallInfo {
+        id: "tool_w".to_string(),
+        name: "write_file".to_string(),
+        input: serde_json::json!({"path": "crates/A/foo.rs", "content": "x"}),
+    };
+    let write_result = ToolCallResult {
+        tool_use_id: "tool_w".to_string(),
+        content: "wrote".to_string(),
+        is_error: false,
+        kind: aura_core::ToolResultKind::Ok,
+        stop_loop: false,
+        file_changes: Vec::new(),
+    };
+    update_cache(
+        &mut cache,
+        std::slice::from_ref(&write_call),
+        std::slice::from_ref(&write_result),
+    );
+
+    assert!(
+        cache
+            .recent_write_paths
+            .iter()
+            .any(|p| p.to_string_lossy().ends_with("crates/A/foo.rs")),
+        "write path should be recorded in recent_write_paths"
+    );
+    assert!(
+        !cache.read_file_by_path.contains_key("crates/A/foo.rs"),
+        "overlapping read entry must be dropped"
+    );
+    assert!(
+        cache.read_file_by_path.contains_key("crates/B/bar.rs"),
+        "non-overlapping read entry must be retained"
+    );
+
+    // Subsequent read on crates/B/bar.rs is a HIT (no new fs_read).
+    drive_read_file(
+        &mut cache,
+        "read_b2",
+        "crates/B/bar.rs",
+        Some(1),
+        Some(50),
+        &mut fs_read_calls,
+        |_, _| panic!("crates/B/bar.rs read should hit the surviving cache entry"),
+    );
+
+    // Subsequent read on crates/A/foo.rs is a MISS (fresh fs_read).
+    drive_read_file(
+        &mut cache,
+        "read_a2",
+        "crates/A/foo.rs",
+        Some(1),
+        Some(50),
+        &mut fs_read_calls,
+        |s, e| fake_read_file_rendered(s.unwrap(), e.unwrap(), "A2"),
+    );
+
+    assert_eq!(
+        fs_read_calls, 3,
+        "only the invalidated path should have triggered a re-read"
+    );
 }

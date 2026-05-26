@@ -41,7 +41,8 @@ mod tests;
 #[cfg(test)]
 mod tests_advanced;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -802,10 +803,30 @@ impl AgentLoop {
 /// Tool-result memoization shared by [`super::tool_execution`] and the
 /// fuzzy-search lookup in [`super::search_cache`].
 ///
-/// Both maps are invalidated together whenever any successful write
-/// tool runs; pulling them out of [`LoopState`] makes that invariant
-/// visible at the type level (`update_cache` can take `&mut ToolResultCache`
-/// directly) and lets the rest of the loop ignore the cache plumbing.
+/// The `exact` / `fuzzy` maps remain the primary read-side hits.
+/// Phase 1 of the reread-efficiency plan adds two extra indices:
+///
+/// * [`Self::read_file_by_path`] is a per-path range index over
+///   `read_file` results. On an exact-key miss for `read_file`, the
+///   loop consults this vec for a previously-cached window that
+///   *contains* the requested `start_line..=end_line`, and slices it
+///   in-memory instead of re-running the tool. The slicing layer is
+///   intentionally conservative: it does not touch the disk, and it
+///   re-uses the superset entry's `content_hash` so downstream
+///   compaction dedup can fold the subset response back into the
+///   original read.
+/// * [`Self::recent_write_paths`] records absolute(ish) paths of every
+///   successful write tool result observed by `update_cache`. The set
+///   is not consulted in Phase 1; it is the seed for future passes
+///   (e.g. path-aware invalidation of `search_code` / `find_files`
+///   entries) and exists so the write-side instrumentation is wired
+///   exactly once.
+///
+/// Path-scoped invalidation (Phase 1B): on a successful write,
+/// `update_cache` no longer wipes both maps wholesale. It drops only
+/// the cache entries whose path equals, parents, or descends the
+/// written path; `search_code` / `find_files` entries still invalidate
+/// workspace-wide because their results are not path-scoped.
 #[derive(Default)]
 pub(crate) struct ToolResultCache {
     /// Exact-key cache: `tool_name + canonical_input_json`.
@@ -814,9 +835,45 @@ pub(crate) struct ToolResultCache {
     /// that collapses alternation-order and trivial whitespace
     /// variants. Populated alongside `exact` in `update_cache`;
     /// consulted only on a miss of the exact key. Cleared together
-    /// with `exact` on any successful write so the "write
-    /// invalidates cache" invariant is preserved.
+    /// with the workspace-global slice of `exact` on any successful
+    /// write so the "write invalidates search" invariant is preserved.
     pub(crate) fuzzy: HashMap<String, String>,
+    /// Per-path range index over `read_file` results. Keyed by the
+    /// canonical (forward-slash, no trailing slash, `./` stripped)
+    /// path string. Each entry records the window the call returned
+    /// plus the rendered tool output and its `content_hash` so a
+    /// later subset request can be served without disk I/O.
+    pub(crate) read_file_by_path: HashMap<String, Vec<ReadRangeEntry>>,
+    /// Canonicalised paths of every successful write observed by
+    /// `update_cache`. Not consulted in Phase 1 — kept so the next
+    /// phase can teach `search_code` / `find_files` invalidation to
+    /// be path-aware without re-plumbing the write detector.
+    pub(crate) recent_write_paths: HashSet<PathBuf>,
+}
+
+/// One cached `read_file` result, indexed by path in
+/// [`ToolResultCache::read_file_by_path`].
+///
+/// The Phase 1 trade-off: we store the rendered tool output (the
+/// exact bytes the model saw) plus the original `content_hash`
+/// stamped by [`aura_tools::fs_tools::read::fs_read`]. Slicing for a
+/// subset request lifts lines out of `rendered` by their leading
+/// `{:>6}|` line-number prefix — no `fs::read` call, no second pass
+/// through the tool. Whole-file entries (`start_line` and `end_line`
+/// both `None`) carry the raw bytes in `rendered` and are re-rendered
+/// in memory on demand. The `content_hash` is propagated verbatim so
+/// downstream dedup can recognise a subset as a re-read of the same
+/// disk contents.
+#[derive(Debug, Clone)]
+pub(crate) struct ReadRangeEntry {
+    pub(crate) start_line: Option<usize>,
+    pub(crate) end_line: Option<usize>,
+    /// Phase 1 stores the hash but only the test suite reads it back
+    /// today; the production read-path consumers will land in Phase 2
+    /// when compaction dedup learns about it.
+    #[allow(dead_code)]
+    pub(crate) content_hash: Option<String>,
+    pub(crate) rendered: String,
 }
 
 /// Per-iteration response-token budget and the one-shot "skip the

@@ -391,11 +391,8 @@ pub(super) async fn drive_stream(
                     // returns it in submission order; the executor is
                     // NOT invoked (codex parity for read-only tools).
                     let single = std::slice::from_ref(&call);
-                    let (cached_results, uncached_calls) = super::tool_execution::split_cached(
-                        single,
-                        &state.tool_cache.exact,
-                        &state.tool_cache.fuzzy,
-                    );
+                    let (cached_results, uncached_calls) =
+                        super::tool_execution::split_cached(single, &state.tool_cache);
                     if !cached_results.is_empty() {
                         cached_pairs.push((
                             submission_index,
@@ -526,12 +523,7 @@ pub(super) async fn drive_stream(
         .filter(|(c, _)| spawned_calls.iter().any(|sc| sc.id == c.id))
         .map(|(_, r)| r.clone())
         .collect();
-    super::tool_execution::update_cache(
-        &mut state.tool_cache.exact,
-        &mut state.tool_cache.fuzzy,
-        &spawned_calls,
-        &spawned_results,
-    );
+    super::tool_execution::update_cache(&mut state.tool_cache, &spawned_calls, &spawned_results);
 
     let response = synthesize_response(
         &text_chunks,

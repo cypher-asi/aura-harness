@@ -233,6 +233,13 @@ async fn pipeline_write_success_clears_cache() {
         call_count: Arc::clone(&counter),
     };
 
+    // Phase 1B: a successful write only invalidates cache entries
+    // whose path overlaps the written one. To keep the original
+    // "write clears the read cache, so the second read_file
+    // re-executes" assertion, target the write at the same path
+    // the read cached. The path-isolation half of the new contract
+    // is covered by `write_invalidates_only_overlapping_path` in
+    // `tool_execution_tests`.
     let provider = MockProvider::new()
         .with_response(MockResponse::tool_use(
             "t1",
@@ -242,7 +249,7 @@ async fn pipeline_write_success_clears_cache() {
         .with_response(MockResponse::tool_use(
             "t2",
             "write_file",
-            serde_json::json!({"path": "out.rs", "content": "fn main() {}"}),
+            serde_json::json!({"path": "test.txt", "content": "fn main() {}"}),
         ))
         .with_response(MockResponse::tool_use(
             "t3",
@@ -264,7 +271,7 @@ async fn pipeline_write_success_clears_cache() {
     assert_eq!(
         counter.load(Ordering::SeqCst),
         3,
-        "read_file executed twice (cache cleared by write) + one write = 3 total"
+        "read_file executed twice (cache cleared by write to same path) + one write = 3 total"
     );
 }
 
