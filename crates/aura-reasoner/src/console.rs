@@ -91,19 +91,13 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
     let header = "→ POST /v1/messages".cyan().bold();
     let tag = destination_tag(req.destination, Some(req.destination_host));
     out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
+    out.push_str(&wrap_row("model", req.model));
+    out.push_str(&wrap_row("kind", req.kind));
+    out.push_str(&wrap_row("body", &human_bytes(req.body_bytes)));
+    out.push_str(&wrap_row("msgs", &req.messages_count.to_string()));
     out.push_str(&wrap_row(
-        "model",
-        &format!("{:<24} kind  {}", req.model, req.kind),
-    ));
-    out.push_str(&wrap_row(
-        "body",
-        &format!(
-            "{:<14} msgs {:<3}    tools {} ({})",
-            human_bytes(req.body_bytes),
-            req.messages_count,
-            req.tools_count,
-            req.tool_choice
-        ),
+        "tools",
+        &format!("{} ({})", req.tools_count, req.tool_choice),
     ));
     out.push_str(&wrap_row(
         "thinking",
@@ -115,13 +109,8 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
             req.last_user_hash.unwrap_or("-"),
         ),
     ));
-    out.push_str(&wrap_row(
-        "headers",
-        &format!(
-            "{:<14} request_hash {}",
-            req.headers_present, req.request_hash
-        ),
-    ));
+    out.push_str(&wrap_row("headers", req.headers_present));
+    out.push_str(&wrap_row("request_hash", req.request_hash));
     out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
 }
@@ -344,7 +333,10 @@ mod tests {
             extract_host("http://localhost:8080/v1/messages"),
             "localhost:8080"
         );
-        assert_eq!(extract_host("aura-router.onrender.com"), "aura-router.onrender.com");
+        assert_eq!(
+            extract_host("aura-router.onrender.com"),
+            "aura-router.onrender.com"
+        );
     }
 
     #[test]

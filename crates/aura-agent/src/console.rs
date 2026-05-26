@@ -70,19 +70,13 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
     let header = "→ POST /v1/messages".cyan().bold();
     let tag = destination_tag(req.destination, Some(req.destination_host));
     out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
+    out.push_str(&wrap_row("model", req.model));
+    out.push_str(&wrap_row("kind", req.kind));
+    out.push_str(&wrap_row("body", &human_bytes(req.body_bytes)));
+    out.push_str(&wrap_row("msgs", &req.messages_count.to_string()));
     out.push_str(&wrap_row(
-        "model",
-        &format!("{:<24} kind  {}", req.model, req.kind),
-    ));
-    out.push_str(&wrap_row(
-        "body",
-        &format!(
-            "{:<14} msgs {:<3}    tools {} ({})",
-            human_bytes(req.body_bytes),
-            req.messages_count,
-            req.tools_count,
-            req.tool_choice
-        ),
+        "tools",
+        &format!("{} ({})", req.tools_count, req.tool_choice),
     ));
     out.push_str(&wrap_row(
         "thinking",
@@ -94,13 +88,8 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
             req.last_user_hash.unwrap_or("-"),
         ),
     ));
-    out.push_str(&wrap_row(
-        "headers",
-        &format!(
-            "{:<14} request_hash {}",
-            req.headers_present, req.request_hash
-        ),
-    ));
+    out.push_str(&wrap_row("headers", req.headers_present));
+    out.push_str(&wrap_row("request_hash", req.request_hash));
     out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
 }
@@ -154,11 +143,7 @@ pub fn tools_block(
         cached_ids.len(),
         executed,
     );
-    out.push_str(&format!(
-        "{} {}\n",
-        "┌─".dimmed(),
-        header.blue().bold(),
-    ));
+    out.push_str(&format!("{} {}\n", "┌─".dimmed(), header.blue().bold(),));
 
     for call in calls {
         let result = results.iter().find(|r| r.tool_use_id == call.id);
@@ -485,10 +470,7 @@ mod tests {
         let chunks = wrap_value_chunks("alpha beta gamma delta epsilon zeta", 12);
         assert!(chunks.len() > 1, "expected wrap, got {chunks:?}");
         for chunk in &chunks {
-            assert!(
-                chunk.chars().count() <= 12,
-                "chunk over budget: {chunk:?}"
-            );
+            assert!(chunk.chars().count() <= 12, "chunk over budget: {chunk:?}");
         }
         // Leading whitespace is consumed at chunk boundaries.
         for chunk in &chunks {
