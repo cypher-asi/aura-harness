@@ -26,6 +26,7 @@ use crate::build;
 use crate::constants::WRITE_FILE_CHUNK_BYTES;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
+use crate::session::goal_runtime::PARTIAL_PROGRESS_STEER;
 use crate::types::{
     AgentLoopResult, AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
@@ -271,13 +272,18 @@ pub(super) fn partition_circling_duplicate_reads(
         };
         let path_buf = PathBuf::from(path);
         if state.session_read_paths.contains(&path_buf) {
+            let partial_progress_note = if state.had_any_file_write {
+                format!("\n{PARTIAL_PROGRESS_STEER}")
+            } else {
+                String::new()
+            };
             blocked.push(ToolCallResult {
                 tool_use_id: tool.id.clone(),
                 content: format!(
                     "You already read `{path}` this session. Circling detected.\n\
                      Your next action must be write_file / edit_file / delete_file, \
                      or task_done with no_changes_needed: true and notes explaining \
-                     why the task is already satisfied."
+                     why the task is already satisfied.{partial_progress_note}"
                 ),
                 is_error: true,
                 kind: ToolResultKind::AgentError,
@@ -492,7 +498,10 @@ fn track_tool_effects(
             }
 
             let path_arg = tool.input.get("path").and_then(|v| v.as_str());
-            if path_arg.is_some() {
+            if let Some(path) = path_arg {
+                if let Some(cache) = session_read_paths.as_deref_mut() {
+                    cache.remove(&PathBuf::from(path));
+                }
                 any_write_success = true;
                 *had_any_write = true;
                 for change in &exec_result.file_changes {
@@ -508,6 +517,9 @@ fn track_tool_effects(
                 // light up the same way they do for the granular
                 // write tools.
                 for change in &exec_result.file_changes {
+                    if let Some(cache) = session_read_paths.as_deref_mut() {
+                        cache.remove(&PathBuf::from(&change.path));
+                    }
                     result.record_file_change(change.clone());
                     record_into_turn_diff(turn_diff, change);
                 }
@@ -711,6 +723,22 @@ mod track_tool_effects_tests {
         }
     }
 
+    fn mk_write_result(tool_use_id: &str, path: &str) -> ToolCallResult {
+        ToolCallResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: "ok".to_string(),
+            is_error: false,
+            kind: aura_core::ToolResultKind::Ok,
+            stop_loop: false,
+            file_changes: vec![crate::types::FileChange {
+                path: path.to_string(),
+                kind: crate::types::FileChangeKind::Modify,
+                lines_added: 1,
+                lines_removed: 0,
+            }],
+        }
+    }
+
     /// Priority A: an `edit_file` whose needle missed must surface
     /// on `turn_diff.failed_write_attempts()` (in submission order)
     /// so the next continuation's recovery body can echo the
@@ -851,6 +879,36 @@ mod track_tool_effects_tests {
     }
 
     #[test]
+    fn successful_write_removes_path_from_session_read_cache() {
+        let mut exploration_state = ExplorationState::default();
+        let mut result = AgentLoopResult::default();
+        let mut had_any_write = false;
+        let mut turn_diff = super::super::turn_diff::TurnDiff::default();
+        let mut session_read_paths = HashSet::from([PathBuf::from("src/inbox.rs")]);
+
+        let to_execute = vec![mk_write_tool("toolu_write", "edit_file", "src/inbox.rs")];
+        let executed = vec![mk_write_result("toolu_write", "src/inbox.rs")];
+
+        let any_success = track_tool_effects(
+            &to_execute,
+            &executed,
+            &mut result,
+            &mut exploration_state,
+            &mut had_any_write,
+            &mut turn_diff,
+            None,
+            Some(&mut session_read_paths),
+        );
+
+        assert!(any_success);
+        assert!(had_any_write);
+        assert!(
+            !session_read_paths.contains(&PathBuf::from("src/inbox.rs")),
+            "writing a file must allow one fresh re-read of that path"
+        );
+    }
+
+    #[test]
     fn circling_gate_rejects_duplicate_read_file_paths() {
         let config = super::super::AgentLoopConfig::for_agent("claude-test-model");
         let mut state = super::super::LoopState::new(&config, Vec::new());
@@ -871,5 +929,24 @@ mod track_tool_effects_tests {
         assert!(blocked[0].content.contains("no_changes_needed: true"));
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, fresh.id);
+    }
+
+    #[test]
+    fn circling_gate_mentions_partial_progress_after_a_write() {
+        let config = super::super::AgentLoopConfig::for_agent("claude-test-model");
+        let mut state = super::super::LoopState::new(&config, Vec::new());
+        state.circling_latched = true;
+        state.had_any_file_write = true;
+        state
+            .session_read_paths
+            .insert(PathBuf::from("src/inbox.rs"));
+
+        let duplicate = mk_read_tool("toolu_dup", "src/inbox.rs");
+        let (blocked, remaining) = partition_circling_duplicate_reads(&[duplicate], &state);
+
+        assert_eq!(blocked.len(), 1);
+        assert!(remaining.is_empty());
+        assert!(blocked[0].content.contains("already wrote"));
+        assert!(blocked[0].content.contains("additional methods or exports"));
     }
 }

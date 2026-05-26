@@ -48,7 +48,7 @@ use tracing::instrument;
 
 use crate::console;
 use crate::events::AgentLoopEvent;
-use crate::session::goal_runtime::{GoalRuntimeEvent, TaskRestart};
+use crate::session::goal_runtime::{BlockReason, GoalRuntimeEvent, TaskRestart};
 use crate::session::input_queue::InputQueue;
 use crate::session::{Session, UserInput};
 use crate::types::AgentToolExecutor;
@@ -434,6 +434,7 @@ async fn delegate_continuation_to_goal_runtime(
     let snapshot = session.goal_runtime.snapshot().await;
     state.continuation.consecutive_no_write = snapshot.consecutive_no_write;
     state.total_continuation_turns = snapshot.total_continuation_turns;
+    state.no_write_after_successful_write = snapshot.no_write_after_successful_write;
     state.circling_latched = session.goal_runtime.is_circling().await;
 
     let Some(restart) = restart else {
@@ -483,19 +484,27 @@ async fn delegate_continuation_to_goal_runtime(
             configured_max,
             effective_max,
             circling,
+            reason: block_reason,
         } => {
-            let reason = if configured_max == effective_max {
-                format!(
-                    "task_blocked: max_continuation_turns ({effective_max}) exceeded without a write at iteration {iteration}"
-                )
-            } else if circling {
-                format!(
-                    "task_blocked: max_continuation_turns (effective {effective_max} due to circling, configured {configured_max}) exceeded without a write at iteration {iteration}"
-                )
-            } else {
-                format!(
-                    "task_blocked: max_continuation_turns (effective {effective_max}, configured {configured_max}) exceeded without a write at iteration {iteration}"
-                )
+            let reason = match block_reason {
+                BlockReason::PartialProgressStalled => format!(
+                    "task_blocked: partial_progress_stalled after {effective_max} no-write turns following a successful write at iteration {iteration}"
+                ),
+                BlockReason::ContinuationBudget if configured_max == effective_max => {
+                    format!(
+                        "task_blocked: max_continuation_turns ({effective_max}) exceeded without a write at iteration {iteration}"
+                    )
+                }
+                BlockReason::ContinuationBudget if circling => {
+                    format!(
+                        "task_blocked: max_continuation_turns (effective {effective_max} due to circling, configured {configured_max}) exceeded without a write at iteration {iteration}"
+                    )
+                }
+                BlockReason::ContinuationBudget => {
+                    format!(
+                        "task_blocked: max_continuation_turns (effective {effective_max}, configured {configured_max}) exceeded without a write at iteration {iteration}"
+                    )
+                }
             };
             tracing::warn!(
                 session_id = %blocked_session,

@@ -120,6 +120,23 @@ pub(crate) const CIRCLING_PATH_OVERLAP_THRESHOLD: f64 = 0.6;
 /// Tight continuation cap applied when [`detect_circling`] is true.
 pub(crate) const CIRCLING_MAX_CONTINUATION_TURNS: u32 = 6;
 
+/// Number of consumed continuation slots forgiven by a successful write.
+///
+/// A write is real progress, but not necessarily task completion. Repaying a
+/// bounded slice avoids punishing explore -> write -> verify flows while still
+/// letting partial-write stalls eventually trip the blocker.
+pub(crate) const SUCCESSFUL_WRITE_CONTINUATION_REPAYMENT: u32 = 2;
+
+/// No-write turns allowed after at least one successful write before treating
+/// the task as partial-progress stalled.
+pub(crate) const POST_WRITE_NO_WRITE_STALL_TURNS: u32 = 4;
+
+pub(crate) const PARTIAL_PROGRESS_STEER: &str =
+    "If you already wrote to files this task and the spec calls for additional \
+     methods or exports, your next call must append the missing surface with \
+     write_file / edit_file / delete_file. Only call task_done with \
+     no_changes_needed: true if the codebase already satisfies the task.";
+
 /// True when the last two no-write turns read largely the same paths.
 pub(crate) fn detect_circling(recent_no_write_paths: &[HashSet<PathBuf>]) -> bool {
     if recent_no_write_paths.len() < 2 {
@@ -264,7 +281,15 @@ pub(crate) enum TaskRestart {
         effective_max: u32,
         /// True when repeated read paths caused the lower circling cap.
         circling: bool,
+        /// Why the runtime stopped the task.
+        reason: BlockReason,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockReason {
+    ContinuationBudget,
+    PartialProgressStalled,
 }
 
 /// Soft / hard escalation taxonomy for continuation prompts.
@@ -341,6 +366,10 @@ pub(crate) struct ContinuationState {
     /// The runtime escalates to [`TaskRestart::Blocked`] once this
     /// reaches [`GoalRuntime::max_continuation_turns`].
     pub(crate) total_continuation_turns: u32,
+    /// Whether any successful write has landed in this session.
+    pub(crate) has_successful_write: bool,
+    /// Consecutive no-write turns after the first successful write.
+    pub(crate) no_write_after_successful_write: u32,
     /// Last (up to 3) read-path sets from no-write iterations. Used by
     /// [`detect_circling`] and the enriched blocked continuation body.
     pub(crate) recent_no_write_paths: Vec<HashSet<PathBuf>>,
@@ -390,21 +419,19 @@ impl ContinuationState {
             WriteAttemptKind::SuccessfulWrite => {
                 self.consecutive_no_write = 0;
                 self.recent_no_write_paths.clear();
-                // A write refills the cumulative budget. `max_continuation_turns`
-                // is designed as a "no progress after N consecutive nudges"
-                // ceiling — keeping `total_continuation_turns` monotonic
-                // across writes punished the textbook explore -> write ->
-                // verify -> SELF-REVIEW retry sequence with a `task_blocked`
-                // failure even when the agent was making forward progress.
-                // Resetting both counters on a write restores the original
-                // intent: each no-write burst gets up to
-                // `max_continuation_turns` nudges; a successful write
-                // forgives the past burn.
-                self.total_continuation_turns = 0;
+                self.total_continuation_turns = self
+                    .total_continuation_turns
+                    .saturating_sub(SUCCESSFUL_WRITE_CONTINUATION_REPAYMENT);
+                self.has_successful_write = true;
+                self.no_write_after_successful_write = 0;
                 None
             }
             WriteAttemptKind::OnlyRejectedWrites => {
                 self.consecutive_no_write = self.consecutive_no_write.saturating_add(1);
+                if self.has_successful_write {
+                    self.no_write_after_successful_write =
+                        self.no_write_after_successful_write.saturating_add(1);
+                }
                 self.recent_no_write_paths.push(read_paths);
                 while self.recent_no_write_paths.len() > 3 {
                     self.recent_no_write_paths.remove(0);
@@ -418,6 +445,10 @@ impl ContinuationState {
             }
             WriteAttemptKind::NoWriteAttempted => {
                 self.consecutive_no_write = self.consecutive_no_write.saturating_add(1);
+                if self.has_successful_write {
+                    self.no_write_after_successful_write =
+                        self.no_write_after_successful_write.saturating_add(1);
+                }
                 self.recent_no_write_paths.push(read_paths);
                 while self.recent_no_write_paths.len() > 3 {
                     self.recent_no_write_paths.remove(0);
@@ -530,6 +561,7 @@ impl GoalRuntime {
         ContinuationSnapshot {
             consecutive_no_write: guard.consecutive_no_write,
             total_continuation_turns: guard.total_continuation_turns,
+            no_write_after_successful_write: guard.no_write_after_successful_write,
         }
     }
 
@@ -623,6 +655,24 @@ impl GoalRuntime {
                 } else {
                     self.max_continuation_turns
                 };
+                if cont.no_write_after_successful_write >= POST_WRITE_NO_WRITE_STALL_TURNS {
+                    warn!(
+                        session_id = %self.session_id,
+                        task_id = %task_id,
+                        streak,
+                        post_write_no_write_turns = cont.no_write_after_successful_write,
+                        "partial-progress stall exceeded; escalating to TaskBlocked"
+                    );
+                    return Ok(Some(TaskRestart::Blocked {
+                        task_id,
+                        session_id: self.session_id,
+                        streak,
+                        configured_max: POST_WRITE_NO_WRITE_STALL_TURNS,
+                        effective_max: POST_WRITE_NO_WRITE_STALL_TURNS,
+                        circling,
+                        reason: BlockReason::PartialProgressStalled,
+                    }));
+                }
                 if cont.total_continuation_turns >= effective_max {
                     warn!(
                         session_id = %self.session_id,
@@ -640,6 +690,7 @@ impl GoalRuntime {
                         configured_max: self.max_continuation_turns,
                         effective_max,
                         circling,
+                        reason: BlockReason::ContinuationBudget,
                     }));
                 }
                 // Render reads the session-scoped failure buffer so
@@ -702,6 +753,8 @@ pub(crate) struct ContinuationSnapshot {
     pub(crate) consecutive_no_write: u32,
     /// Total continuation prompts injected this session.
     pub(crate) total_continuation_turns: u32,
+    /// Consecutive no-write turns after the first successful write.
+    pub(crate) no_write_after_successful_write: u32,
 }
 
 /// Render the continuation envelope injected before the next sampling
@@ -740,7 +793,8 @@ pub(crate) fn render(
                      no_changes_needed: true and notes explaining why the task \
                      is already satisfied.\n\
                      If this is a module task, create the missing module file now and mirror \
-                     the sibling reference already shown in context.\n",
+                     the sibling reference already shown in context.\n\
+                     {PARTIAL_PROGRESS_STEER}\n",
                     listed.join(", ")
                 )
             });
@@ -848,28 +902,26 @@ mod tests {
         );
         let snap_after = runtime.snapshot().await;
         assert_eq!(
-            snap_after.total_continuation_turns, 0,
-            "Layer B: a write must also reset the cumulative continuation budget — \
-             a monotonic counter punished explore -> write -> SELF-REVIEW retry sequences \
-             even when the agent was making forward progress"
+            snap_after.total_continuation_turns,
+            snap_before
+                .total_continuation_turns
+                .saturating_sub(SUCCESSFUL_WRITE_CONTINUATION_REPAYMENT),
+            "a write must repay only a bounded slice of the cumulative continuation budget"
+        );
+        assert_eq!(
+            snap_after.no_write_after_successful_write, 0,
+            "a write must reset the post-write no-write stall counter"
         );
     }
 
-    /// Layer B regression guard: the canonical dev-loop flow
-    /// (5 no-write exploration turns → 1 successful write →
-    /// 5 more no-write turns for verification / SELF-REVIEW
-    /// retry) must run end-to-end without tripping
-    /// `TaskRestart::Blocked`. Pre-Layer B the cumulative counter
-    /// crossed `max_continuation_turns = 6` on the 6th total
-    /// no-write turn even though the streak had been reset by a
-    /// write in between, falsely failing tasks that were actually
-    /// progressing.
+    /// A write repays some continuation budget, but it does not grant a
+    /// completely fresh unlimited no-write runway. This keeps small partial
+    /// writes from indefinitely postponing `task_blocked`.
     #[tokio::test]
-    async fn explore_write_explore_budget_resets() {
-        let runtime = fresh_runtime(6);
+    async fn successful_write_repays_budget_without_zeroing_it() {
+        let runtime = fresh_runtime(10);
         let task = TaskId::new_v4();
 
-        // Five exploration turns with no write.
         for i in 0..5 {
             let restart = runtime
                 .handle_event(GoalRuntimeEvent::TurnCompleted {
@@ -887,8 +939,6 @@ mod tests {
             );
         }
 
-        // One write lands — Layer B: total_continuation_turns must
-        // reset to 0 so the subsequent no-write burst starts fresh.
         let none = runtime
             .handle_event(GoalRuntimeEvent::TurnCompleted {
                 task_id: task,
@@ -899,13 +949,12 @@ mod tests {
             .await
             .unwrap();
         assert!(none.is_none(), "a write turn must produce None");
+        assert_eq!(
+            runtime.snapshot().await.total_continuation_turns,
+            5 - SUCCESSFUL_WRITE_CONTINUATION_REPAYMENT
+        );
 
-        // Five more no-write turns: verification (cargo check),
-        // SELF-REVIEW rejection, retry, etc. Pre-Layer B the 1st of
-        // these would land on `total >= 6` and trip Blocked; post-B
-        // the budget has been refilled by the write so all five must
-        // produce Continuation.
-        for i in 0..5 {
+        for i in 0..3 {
             let restart = runtime
                 .handle_event(GoalRuntimeEvent::TurnCompleted {
                     task_id: task,
@@ -918,9 +967,55 @@ mod tests {
                 .expect("post-write no-write turn must still yield a Continuation");
             assert!(
                 matches!(restart, TaskRestart::Continuation { .. }),
-                "post-write no-write turn {i} must not block (got {restart:?}) — \
-                 Layer B's cumulative-counter reset on a write is the contract under test",
+                "bounded post-write no-write turn {i} must not block (got {restart:?})",
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_progress_stalls_after_post_write_no_write_budget() {
+        let runtime = fresh_runtime(100);
+        let task = TaskId::new_v4();
+
+        runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: true,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        for _ in 0..(POST_WRITE_NO_WRITE_STALL_TURNS - 1) {
+            let restart = runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap()
+                .expect("post-write no-write should continue before stall cap");
+            assert!(matches!(restart, TaskRestart::Continuation { .. }));
+        }
+
+        let blocked = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap()
+            .expect("post-write no-write cap should block");
+        match blocked {
+            TaskRestart::Blocked { reason, .. } => {
+                assert_eq!(reason, BlockReason::PartialProgressStalled);
+            }
+            other => panic!("expected partial-progress Blocked, got {other:?}"),
         }
     }
 
@@ -1290,6 +1385,7 @@ mod tests {
         let snap = runtime.snapshot().await;
         assert_eq!(snap.consecutive_no_write, 1);
         assert_eq!(snap.total_continuation_turns, 1);
+        assert_eq!(snap.no_write_after_successful_write, 0);
     }
 
     // ----------------------------------------------------------------

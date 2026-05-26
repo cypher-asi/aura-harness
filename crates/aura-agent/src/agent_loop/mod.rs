@@ -690,14 +690,15 @@ impl AgentLoop {
     /// `run_turn_stop_hooks` so `GoalRuntime` sees the no-write turn
     /// and gets a chance to nudge / escalate.
     ///
-    /// Predicate is `dev_loop_completion_required && no writes yet &&
-    /// no successful task_done`. Once either latch flips the
-    /// short-circuit returns to normal: the dev-loop is allowed to
-    /// exit cleanly on the next clean termination.
+    /// Predicate is `dev_loop_completion_required && no successful
+    /// task_done && (no writes yet || post-write no-write streak active)`.
+    /// After a write lands, a clean `task_done` is still the preferred
+    /// completion path; otherwise the goal runtime gets a chance to detect
+    /// partial-progress stalls instead of trusting the first `EndTurn`.
     pub(crate) fn should_intercept_empty_termination(&self, state: &LoopState) -> bool {
         self.config.dev_loop_completion_required
-            && !state.had_any_file_write
             && !state.task_done_completed
+            && (!state.had_any_file_write || state.no_write_after_successful_write > 0)
     }
 
     /// Dispatch on the model's stop reason. Returns `true` if the loop should break.
@@ -985,6 +986,10 @@ pub struct LoopState {
     /// this run. The loop fails the task with `task_blocked` once
     /// this hits [`AgentLoopConfig::max_continuation_turns`].
     pub(crate) total_continuation_turns: u32,
+    /// Goal-runtime shadow counter for no-write turns after the first
+    /// successful write. Keeps the dev-loop intercept armed during
+    /// partial-progress stalls.
+    pub(crate) no_write_after_successful_write: u32,
     /// Per-turn tracker for identical-byte re-reads (Phase 3b).
     pub(crate) repeated_read_tracker: crate::prompts::steering::RepeatedReadTracker,
     /// Paths successfully read this session; used by the circling read gate.
@@ -1023,6 +1028,7 @@ impl LoopState {
             turn_diff: turn_diff::TurnDiff::default(),
             continuation: continuation::ContinuationState::default(),
             total_continuation_turns: 0,
+            no_write_after_successful_write: 0,
             repeated_read_tracker: crate::prompts::steering::RepeatedReadTracker::new(),
             session_read_paths: std::collections::HashSet::new(),
             circling_latched: false,
