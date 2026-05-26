@@ -394,6 +394,7 @@ impl AnthropicProvider {
         // field-by-field log is preserved at `debug!` below so
         // operators can still grep / pivot on individual fields when
         // chasing WAF / cap regressions.
+        let destination_host = crate::console::extract_host(&self.config.base_url);
         crate::console::anthropic_request_block(crate::console::AnthropicRequestView {
             model,
             kind: &request_kind_label,
@@ -407,6 +408,8 @@ impl AnthropicProvider {
             last_user_hash: request_summary.last_user_text_hash.as_deref(),
             headers_present: &headers_present_str,
             request_hash: &request_summary.body_hash,
+            destination: "aura-network",
+            destination_host,
         });
 
         debug!(
@@ -1845,7 +1848,7 @@ fn parse_retry_after_prose(text: &str) -> Option<Duration> {
 fn build_api_request(
     request: &ModelRequest,
     model: &str,
-    system: &serde_json::Value,
+    system: Option<&serde_json::Value>,
     prompt_caching_enabled: bool,
     anthropic_features_enabled: bool,
     openai_cache_key: Option<String>,
@@ -1859,7 +1862,7 @@ fn build_api_request(
         .flatten();
     ApiRequest {
         model: model.to_string(),
-        system: system.clone(),
+        system: system.cloned(),
         messages: convert_messages_to_api(&request.messages, prompt_caching_enabled),
         tools: if request.tools.is_empty() {
             None
@@ -2331,7 +2334,7 @@ impl ModelProvider for AnthropicProvider {
                 let api_request = build_api_request(
                     request_ref,
                     &model,
-                    &system,
+                    system.as_ref(),
                     prompt_caching_enabled,
                     anthropic_features_enabled,
                     openai_cache_key,

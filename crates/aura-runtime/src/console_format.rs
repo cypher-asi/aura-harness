@@ -9,10 +9,21 @@
 //! Every other event falls back to a compact one-line format that
 //! keeps the span chain (`agent{id}:worker:task{id}:turn{T}:sampling{I}`)
 //! visible as a prefix.
+//!
+//! ## Colors
+//!
+//! Both branches colorize via the [`colored`] crate, which auto-
+//! disables when stdout is not a TTY and honors `NO_COLOR`. The
+//! visual-block branch only colorizes the leading timestamp — the
+//! block body arrives pre-styled from the emitter and is passed
+//! through verbatim. The compact branch dims the timestamp, applies
+//! a severity color to the level token, dims the span chain and the
+//! field `key=value` payload.
 
 use std::fmt::Write;
 
-use tracing::{Event, Subscriber};
+use colored::Colorize;
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields, FormattedFields};
@@ -82,7 +93,7 @@ where
             timer.format_time(&mut ts_writer).ok();
             let timestamp = ts_buf.trim_end();
             if !timestamp.is_empty() {
-                write!(writer, "{timestamp}  ")?;
+                write!(writer, "{}  ", timestamp.dimmed())?;
             }
             let mut visitor = MessageVisitor::default();
             event.record(&mut visitor);
@@ -94,10 +105,17 @@ where
         let mut ts_buf = String::new();
         let mut ts_writer = Writer::new(&mut ts_buf);
         timer.format_time(&mut ts_writer).ok();
-        write!(writer, "{}  ", ts_buf.trim_end())?;
+        write!(writer, "{}  ", ts_buf.trim_end().dimmed())?;
 
         let level = metadata.level();
-        write!(writer, "{level:>5}  ")?;
+        let level_str = format!("{level:>5}");
+        let colored_level = match *level {
+            Level::ERROR => level_str.red().bold(),
+            Level::WARN => level_str.yellow().bold(),
+            Level::INFO => level_str.green(),
+            Level::DEBUG | Level::TRACE => level_str.cyan(),
+        };
+        write!(writer, "{colored_level}  ")?;
 
         // Span chain: `agent{id=…}:worker:task{id=…}:turn{0}:sampling{4}`.
         // Walk leaf → root via `ctx.event_scope()` and stitch them with
@@ -119,12 +137,36 @@ where
                 }
             }
             if !chain.is_empty() {
-                write!(writer, "{chain}  ")?;
+                write!(writer, "{}  ", chain.cyan().dimmed())?;
             }
         }
 
-        ctx.field_format().format_fields(writer.by_ref(), event)?;
-        writeln!(writer)
+        // Render the event message and field tail into a side buffer
+        // so we can apply a single dimmed style to the whole `field=…`
+        // payload while keeping the primary message at default
+        // brightness. This mirrors what `tracing-subscriber`'s own
+        // default formatter does when ANSI is on, but our custom
+        // formatter would otherwise emit the fields uncolored.
+        let mut tail = String::new();
+        let tail_writer = Writer::new(&mut tail);
+        ctx.field_format().format_fields(tail_writer, event)?;
+        // The default field formatter writes `message=…` for the
+        // primary message and `key=value` pairs for the rest, with
+        // the message tokenized first and the fields following.
+        // Splitting on the first space cleanly separates the message
+        // from the trailing key=value pairs in the common case; when
+        // there are no fields the whole string is the message and the
+        // split is a no-op.
+        if let Some((msg, fields)) = tail.split_once(' ') {
+            if fields.is_empty() {
+                writeln!(writer, "{msg}")?;
+            } else {
+                writeln!(writer, "{msg} {}", fields.dimmed())?;
+            }
+        } else {
+            writeln!(writer, "{tail}")?;
+        }
+        Ok(())
     }
 }
 
@@ -164,6 +206,16 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
+    /// `colored::control::set_override` flips a process-global atomic
+    /// that every `.red()` / `.dimmed()` call below reads. `cargo
+    /// test` runs unit tests in parallel by default, so any test
+    /// that depends on the override value MUST hold this mutex for
+    /// the entire window in which it sets the override, formats a
+    /// message, and asserts on the result. Otherwise a sibling
+    /// test's `unset_override()` can land between this test's `set`
+    /// and `assert` and flip the formatter's behaviour mid-run.
+    static COLOR_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn collect(write_fn: impl FnOnce()) -> String {
         // Capture output via a `MakeWriter` that pushes into a shared
         // `Vec<u8>` so the assertion can inspect the rendered bytes.
@@ -199,18 +251,22 @@ mod tests {
 
     #[test]
     fn console_target_renders_message_verbatim() {
+        let _guard = COLOR_OVERRIDE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        colored::control::set_override(false);
         let out = collect(|| {
             tracing::info!(
                 target: "aura::console",
                 "┌─ → POST /v1/messages\n│   model  claude-opus-4-6\n└─"
             );
         });
+        colored::control::unset_override();
         assert!(
             out.contains("┌─ → POST /v1/messages"),
             "expected box header, got: {out}"
         );
         assert!(out.contains("└─"), "expected box footer, got: {out}");
-        // No level / target prefix should appear:
         assert!(!out.contains("INFO"), "unexpected level prefix: {out}");
         assert!(
             !out.contains("aura::console"),
@@ -220,9 +276,14 @@ mod tests {
 
     #[test]
     fn ordinary_event_keeps_compact_format() {
+        let _guard = COLOR_OVERRIDE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        colored::control::set_override(false);
         let out = collect(|| {
             tracing::event!(Level::INFO, foo = "bar", "ordinary message");
         });
+        colored::control::unset_override();
         assert!(
             out.contains("ordinary message"),
             "expected message, got: {out}"
@@ -232,5 +293,25 @@ mod tests {
             "expected field, got: {out}"
         );
         assert!(out.contains("INFO"), "expected level prefix, got: {out}");
+    }
+
+    #[test]
+    fn colorize_when_forced_wraps_level_in_ansi_sgr() {
+        let _guard = COLOR_OVERRIDE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        colored::control::set_override(true);
+        let out = collect(|| {
+            tracing::event!(Level::ERROR, "boom");
+        });
+        colored::control::unset_override();
+        // The level token should be wrapped in an ANSI SGR escape
+        // (`\u{1b}[`) when colors are forced on.
+        assert!(
+            out.contains("\u{1b}["),
+            "expected ANSI escape in forced-color output, got: {out:?}"
+        );
+        // And the message should still render.
+        assert!(out.contains("boom"), "expected message body, got: {out:?}");
     }
 }

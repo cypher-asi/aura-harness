@@ -31,6 +31,8 @@ bytes = { workspace = true }
 dashmap = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+colored = { workspace = true }
+terminal_size = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 which = { workspace = true }

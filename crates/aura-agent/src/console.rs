@@ -12,11 +12,27 @@
 //! message verbatim — without level / target / field noise — while
 //! every other log line keeps the default compact format.
 //!
-//! The block helpers are pure string builders; they do not touch any
-//! shared state. They are kept here (rather than inside individual
-//! callers) so the rendering rules stay in one place and snapshot
-//! tests can pin the exact byte layout.
+//! ## Layout
+//!
+//! Standard rows use [`wrap_row`], which renders
+//! `│   <label padded to 14> <value>` and pre-wraps long values so
+//! that continuation lines start at column 19 (directly under the
+//! value column) instead of letting the terminal soft-wrap them back
+//! to column 0. The wrap is gated on TTY detection — when stdout is
+//! not a terminal (e.g. piped to a file) the helper falls back to a
+//! single-line render so log files stay byte-identical to the pre-
+//! wrap layout.
+//!
+//! ## Colors
+//!
+//! Borders / labels / header lines are styled with [`colored`].
+//! `colored` auto-disables when stdout is not a TTY and honors the
+//! `NO_COLOR` env var, so colorization is opt-out for free on
+//! redirected output. Value tokens are deliberately *not* colored
+//! inline — that would inject ANSI escape bytes into the value
+//! string and confuse [`wrap_row`]'s column math.
 
+use colored::Colorize;
 use tracing::info;
 
 use crate::types::{ToolCallInfo, ToolCallResult};
@@ -24,15 +40,26 @@ use crate::types::{ToolCallInfo, ToolCallResult};
 /// Tracing target the custom formatter recognises and renders verbatim.
 pub const CONSOLE_TARGET: &str = "aura::console";
 
+/// Width of the padded label column in [`wrap_row`].
+const LABEL_WIDTH: usize = 14;
+
+/// Display columns before the value chunk starts:
+/// `│` (1) + three spaces (3) + padded label (14) + separator space (1) = 19.
+const ROW_INDENT_COLS: usize = 1 + 3 + LABEL_WIDTH + 1;
+
+/// Minimum value column room before wrap is even attempted. If the
+/// terminal is narrower than this, fall back to single-line rendering
+/// rather than emit a wrap that's mostly continuation prefix.
+const MIN_VALUE_ROOM: usize = 16;
+
 /// Render `─── task <8> turn N sampling I ───` as a separator at the
 /// top of every sampling request. Emitted by
 /// [`crate::agent_loop::sampling::run_sampling_request`].
 pub fn sampling_boundary(task_id: &str, turn: u32, iter: usize) {
     let short = short_task_id(task_id);
-    let line = format!(
-        "─── task {short} · turn {turn} · sampling {iter} ──────────────────────────────"
-    );
-    info!(target: CONSOLE_TARGET, "{line}");
+    let line =
+        format!("─── task {short} · turn {turn} · sampling {iter} ──────────────────────────────");
+    info!(target: CONSOLE_TARGET, "{}", line.bright_cyan());
 }
 
 /// Render the request half of an Anthropic call as a multi-line block.
@@ -40,9 +67,14 @@ pub fn sampling_boundary(task_id: &str, turn: u32, iter: usize) {
 /// not redact or truncate.
 pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
     let mut out = String::new();
-    out.push_str("┌─ → POST /v1/messages\n");
-    out.push_str(&row("model", &format!("{:<24} kind  {}", req.model, req.kind)));
-    out.push_str(&row(
+    let header = "→ POST /v1/messages".cyan().bold();
+    let tag = destination_tag(req.destination, Some(req.destination_host));
+    out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
+    out.push_str(&wrap_row(
+        "model",
+        &format!("{:<24} kind  {}", req.model, req.kind),
+    ));
+    out.push_str(&wrap_row(
         "body",
         &format!(
             "{:<14} msgs {:<3}    tools {} ({})",
@@ -52,7 +84,7 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
             req.tool_choice
         ),
     ));
-    out.push_str(&row(
+    out.push_str(&wrap_row(
         "thinking",
         &format!(
             "{:<14} system {:<6} last_user {} / {}",
@@ -62,14 +94,14 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
             req.last_user_hash.unwrap_or("-"),
         ),
     ));
-    out.push_str(&row(
+    out.push_str(&wrap_row(
         "headers",
         &format!(
             "{:<14} request_hash {}",
             req.headers_present, req.request_hash
         ),
     ));
-    out.push_str("└─");
+    out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
 }
 
@@ -77,8 +109,15 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
 /// [`anthropic_request_block`].
 pub fn anthropic_response_block(resp: AnthropicResponseView<'_>) {
     let mut out = String::new();
-    out.push_str(&format!("┌─ ← {} {}\n", resp.status_code, resp.status_text));
-    out.push_str(&row(
+    let header_text = format!("← {} {}", resp.status_code, resp.status_text);
+    let header = match resp.status_code {
+        200..=299 => header_text.green().bold(),
+        300..=399 => header_text.yellow().bold(),
+        _ => header_text.red().bold(),
+    };
+    let tag = destination_tag(resp.destination, None);
+    out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
+    out.push_str(&wrap_row(
         "stop",
         &format!(
             "{:<14} elapsed {:>7}",
@@ -86,14 +125,14 @@ pub fn anthropic_response_block(resp: AnthropicResponseView<'_>) {
             human_duration_ms(resp.elapsed_ms)
         ),
     ));
-    out.push_str(&row(
+    out.push_str(&wrap_row(
         "tokens",
         &format!("in {} / out {}", resp.input_tokens, resp.output_tokens),
     ));
     if let Some(req_id) = resp.request_id {
-        out.push_str(&row("request_id", req_id));
+        out.push_str(&wrap_row("request_id", req_id));
     }
-    out.push_str("└─");
+    out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
 }
 
@@ -109,35 +148,42 @@ pub fn tools_block(
 ) {
     let executed = calls.len() - cached_ids.len();
     let mut out = String::new();
-    out.push_str(&format!(
-        "┌─ tools  ({} requested · {} cached · {} to execute)\n",
+    let header = format!(
+        "tools  ({} requested · {} cached · {} to execute)",
         calls.len(),
         cached_ids.len(),
         executed,
+    );
+    out.push_str(&format!(
+        "{} {}\n",
+        "┌─".dimmed(),
+        header.blue().bold(),
     ));
 
     for call in calls {
         let result = results.iter().find(|r| r.tool_use_id == call.id);
-        let glyph = match result {
-            None => '·',
-            Some(r) if r.is_error => '✗',
-            Some(_) if cached_ids.contains(&call.id) => '↺',
-            Some(_) if blocked_ids.contains(&call.id) => '⊘',
-            Some(_) => '✓',
+        let (glyph, glyph_color): (char, colored::Color) = match result {
+            None => ('·', colored::Color::BrightBlack),
+            Some(r) if r.is_error => ('✗', colored::Color::Red),
+            Some(_) if cached_ids.contains(&call.id) => ('↺', colored::Color::Yellow),
+            Some(_) if blocked_ids.contains(&call.id) => ('⊘', colored::Color::Yellow),
+            Some(_) => ('✓', colored::Color::Green),
         };
         let short_id = short_tool_use_id(&call.id);
         let len_str = result.map_or_else(String::new, |r| human_bytes(r.content.len()));
         let error_note = result
             .filter(|r| r.is_error)
-            .map(|r| format!("  {}", truncate_inline(&r.content, 140)))
+            .map(|r| format!("  {}", truncate_inline(&r.content, 140).red()))
             .unwrap_or_default();
         out.push_str(&format!(
-            "│   {glyph} {name:<14} [{short_id}]  {len:>8}{error_note}\n",
+            "{}   {} {name:<14} [{short_id}]  {len:>8}{error_note}\n",
+            "│".dimmed(),
+            glyph.to_string().color(glyph_color),
             name = call.name,
             len = len_str,
         ));
     }
-    out.push_str("└─");
+    out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
 }
 
@@ -148,7 +194,7 @@ pub fn task_start_banner(task_id: &str, max_turns: u32, max_iterations_per_task:
     let line = format!(
         "═══ task {short} started · max_turns {max_turns} · max_iterations {max_iterations_per_task} ═══"
     );
-    info!(target: CONSOLE_TARGET, "{line}");
+    info!(target: CONSOLE_TARGET, "{}", line.bright_green().bold());
 }
 
 /// Inputs to [`anthropic_request_block`]. Passing a borrowed view
@@ -166,6 +212,13 @@ pub struct AnthropicRequestView<'a> {
     pub last_user_hash: Option<&'a str>,
     pub headers_present: &'a str,
     pub request_hash: &'a str,
+    /// Short semantic label for the network destination (e.g.
+    /// `"aura-network"` for any call routed through the LLM proxy).
+    pub destination: &'a str,
+    /// Host portion of the target URL (e.g.
+    /// `"aura-router.onrender.com"`). Surfaced alongside
+    /// [`Self::destination`] in the request header.
+    pub destination_host: &'a str,
 }
 
 /// Inputs to [`anthropic_response_block`].
@@ -177,14 +230,120 @@ pub struct AnthropicResponseView<'a> {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub request_id: Option<&'a str>,
+    /// Short semantic label for the network destination (e.g.
+    /// `"aura-network"`). Host is omitted on the response side to
+    /// keep the header line scannable — the request header above
+    /// already carries the full host.
+    pub destination: &'a str,
 }
 
 // ----------------------------------------------------------------------
 // Formatting primitives
 // ----------------------------------------------------------------------
 
-fn row(label: &str, value: &str) -> String {
-    format!("│   {label:<14} {value}\n")
+/// Render `[destination · host]` (host optional) styled as dim cyan
+/// so it sits subtly next to the bold header text without fighting
+/// the status-family color.
+fn destination_tag(destination: &str, host: Option<&str>) -> String {
+    let body = match host {
+        Some(h) if !h.is_empty() => format!("[{destination} · {h}]"),
+        _ => format!("[{destination}]"),
+    };
+    body.cyan().dimmed().to_string()
+}
+
+/// Render a labeled row, wrapping long values so continuation lines
+/// stay indented under the value column (column [`ROW_INDENT_COLS`]).
+///
+/// When stdout is not a TTY (or [`terminal_size`] reports nothing),
+/// this falls back to the original single-line behaviour so log files
+/// stay byte-identical to the pre-wrap layout.
+fn wrap_row(label: &str, value: &str) -> String {
+    let padded_label = format!("{label:<LABEL_WIDTH$}");
+    let first_prefix = format!("{}   {} ", "│".dimmed(), padded_label.bold());
+    let cont_prefix = format!("{}{}", "│".dimmed(), " ".repeat(ROW_INDENT_COLS - 1));
+
+    let Some(term_width) = detect_term_width() else {
+        return format!("{first_prefix}{value}\n");
+    };
+    if term_width <= ROW_INDENT_COLS + MIN_VALUE_ROOM {
+        return format!("{first_prefix}{value}\n");
+    }
+    let value_room = term_width - ROW_INDENT_COLS;
+
+    if value.chars().count() <= value_room {
+        return format!("{first_prefix}{value}\n");
+    }
+
+    let chunks = wrap_value_chunks(value, value_room);
+    let mut out = String::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if i == 0 {
+            out.push_str(&first_prefix);
+        } else {
+            out.push_str(&cont_prefix);
+        }
+        out.push_str(chunk);
+        out.push('\n');
+    }
+    out
+}
+
+/// Detect terminal width in columns. Returns `None` when stdout is
+/// not a TTY (e.g. piped to a file) so callers can skip wrapping.
+fn detect_term_width() -> Option<usize> {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    terminal_size::terminal_size().map(|(terminal_size::Width(w), _)| w as usize)
+}
+
+/// Split `value` into chunks of at most `max` chars, preferring to
+/// break after the last comma or whitespace in the window so that
+/// comma-separated lists (e.g. the `headers` row) wrap cleanly
+/// between items. Falls back to a hard split when no preferred
+/// break point is found.
+fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
+    if max == 0 {
+        return vec![value.to_string()];
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let remaining = chars.len() - start;
+        if remaining <= max {
+            chunks.push(chars[start..].iter().collect());
+            break;
+        }
+        let window_end = start + max;
+        // Prefer last comma inside the window (split *after* the comma
+        // so the punctuation stays attached to the preceding token).
+        let split_at = chars[start..window_end]
+            .iter()
+            .rposition(|c| *c == ',')
+            .map(|pos| start + pos + 1)
+            .or_else(|| {
+                chars[start..window_end]
+                    .iter()
+                    .rposition(|c| c.is_whitespace())
+                    .map(|pos| start + pos + 1)
+            })
+            .unwrap_or(window_end);
+        // Defensive: never make zero progress.
+        let split_at = split_at.max(start + 1);
+        let chunk: String = chars[start..split_at].iter().collect();
+        chunks.push(chunk.trim_end().to_string());
+        // Skip any whitespace at the start of the next chunk so the
+        // continuation lines up cleanly under the value column.
+        let mut next = split_at;
+        while next < chars.len() && chars[next].is_whitespace() {
+            next += 1;
+        }
+        start = next;
+    }
+    chunks
 }
 
 fn human_bytes(n: usize) -> String {
@@ -227,7 +386,14 @@ fn short_tool_use_id(id: &str) -> String {
     if id.len() <= 12 {
         return id.to_string();
     }
-    let last4: String = id.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let last4: String = id
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     let prefix = id.get(..6).unwrap_or(id);
     format!("{prefix}…{last4}")
 }
@@ -296,6 +462,72 @@ mod tests {
         let out = truncate_inline(s, 30);
         assert!(out.starts_with("hello world 'quoted'"));
         assert!(out.ends_with('…') || out.len() <= 30);
+    }
+
+    #[test]
+    fn wrap_value_breaks_on_comma_preference() {
+        // Width 30 forces a wrap; expect breaks AFTER commas, not
+        // mid-token.
+        let chunks = wrap_value_chunks("aaa,bbb,ccc,ddd,eee,fff,ggg", 12);
+        // Every non-final chunk should end with a comma (proves the
+        // preferred break point was used).
+        for chunk in &chunks[..chunks.len() - 1] {
+            assert!(
+                chunk.ends_with(','),
+                "expected comma-terminated chunk, got {chunk:?}"
+            );
+        }
+        assert_eq!(chunks.join(""), "aaa,bbb,ccc,ddd,eee,fff,ggg");
+    }
+
+    #[test]
+    fn wrap_value_breaks_on_whitespace_when_no_comma() {
+        let chunks = wrap_value_chunks("alpha beta gamma delta epsilon zeta", 12);
+        assert!(chunks.len() > 1, "expected wrap, got {chunks:?}");
+        for chunk in &chunks {
+            assert!(
+                chunk.chars().count() <= 12,
+                "chunk over budget: {chunk:?}"
+            );
+        }
+        // Leading whitespace is consumed at chunk boundaries.
+        for chunk in &chunks {
+            assert!(
+                !chunk.starts_with(' '),
+                "leading whitespace not trimmed: {chunk:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wrap_value_hard_splits_when_no_break() {
+        let chunks = wrap_value_chunks("aaaaaaaaaaaaaaaaa", 5);
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 5);
+        }
+        assert_eq!(chunks.concat(), "aaaaaaaaaaaaaaaaa");
+    }
+
+    #[test]
+    fn wrap_row_no_tty_returns_single_line() {
+        // In `cargo test` stdout is captured (not a TTY), so
+        // `detect_term_width` returns None and we get the legacy
+        // single-line layout — with colors disabled so the assertion
+        // can match plain bytes.
+        colored::control::set_override(false);
+        let out = wrap_row("model", "claude-opus-4-6");
+        assert_eq!(out, "│   model          claude-opus-4-6\n");
+        colored::control::unset_override();
+    }
+
+    #[test]
+    fn destination_tag_renders_host_when_present() {
+        colored::control::set_override(false);
+        let tag = destination_tag("aura-network", Some("aura-router.onrender.com"));
+        assert_eq!(tag, "[aura-network · aura-router.onrender.com]");
+        let tag = destination_tag("aura-network", None);
+        assert_eq!(tag, "[aura-network]");
+        colored::control::unset_override();
     }
 
     #[test]

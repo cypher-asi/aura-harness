@@ -11,13 +11,36 @@
 //! `debug!` as part of the same change — operators get a clean
 //! transcript by default and can opt back into the full field dump
 //! with `RUST_LOG=aura_reasoner=debug`.
+//!
+//! ## Layout & colors
+//!
+//! See the matching module doc on `aura-agent::console` for the
+//! shared layout / color philosophy. The wrap helper here is a
+//! deliberate duplicate of the one in `aura-agent` — both crates
+//! render block rows independently, so the helper lives next to its
+//! callers rather than being promoted to a shared crate. A follow-up
+//! can consolidate both copies into `aura-runtime::console_format`
+//! once the shared surface settles.
 
+use colored::Colorize;
 use tracing::info;
 
 use crate::types::ModelResponse;
 
 /// Tracing target the runtime's custom formatter renders verbatim.
 pub const CONSOLE_TARGET: &str = "aura::console";
+
+/// Width of the padded label column in [`wrap_row`].
+const LABEL_WIDTH: usize = 14;
+
+/// Display columns before the value chunk starts:
+/// `│` (1) + three spaces (3) + padded label (14) + separator space (1) = 19.
+const ROW_INDENT_COLS: usize = 1 + 3 + LABEL_WIDTH + 1;
+
+/// Minimum value column room before wrap is attempted. Narrower
+/// terminals fall back to single-line rendering rather than emit a
+/// wrap that's mostly continuation prefix.
+const MIN_VALUE_ROOM: usize = 16;
 
 /// View into the request data the multi-line block needs. Borrowing
 /// avoids a string-clone storm at the call site (the values come
@@ -36,6 +59,12 @@ pub struct AnthropicRequestView<'a> {
     pub last_user_hash: Option<&'a str>,
     pub headers_present: &'a str,
     pub request_hash: &'a str,
+    /// Short semantic label for the network destination (e.g.
+    /// `"aura-network"` for any call routed through the LLM proxy).
+    pub destination: &'a str,
+    /// Host portion of the target URL (e.g.
+    /// `"aura-router.onrender.com"`).
+    pub destination_host: &'a str,
 }
 
 /// Mirror view for the response side. Populated from the wire status,
@@ -49,14 +78,24 @@ pub struct AnthropicResponseView<'a> {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub request_id: Option<&'a str>,
+    /// Short semantic label for the network destination (e.g.
+    /// `"aura-network"`). Host is omitted on the response side to
+    /// keep the header line scannable — the request header above
+    /// already carries the full host.
+    pub destination: &'a str,
 }
 
 /// Render the request half of an Anthropic call as a multi-line block.
 pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
     let mut out = String::new();
-    out.push_str("┌─ → POST /v1/messages\n");
-    out.push_str(&row("model", &format!("{:<24} kind  {}", req.model, req.kind)));
-    out.push_str(&row(
+    let header = "→ POST /v1/messages".cyan().bold();
+    let tag = destination_tag(req.destination, Some(req.destination_host));
+    out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
+    out.push_str(&wrap_row(
+        "model",
+        &format!("{:<24} kind  {}", req.model, req.kind),
+    ));
+    out.push_str(&wrap_row(
         "body",
         &format!(
             "{:<14} msgs {:<3}    tools {} ({})",
@@ -66,7 +105,7 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
             req.tool_choice
         ),
     ));
-    out.push_str(&row(
+    out.push_str(&wrap_row(
         "thinking",
         &format!(
             "{:<14} system {:<6} last_user {} / {}",
@@ -76,14 +115,14 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
             req.last_user_hash.unwrap_or("-"),
         ),
     ));
-    out.push_str(&row(
+    out.push_str(&wrap_row(
         "headers",
         &format!(
             "{:<14} request_hash {}",
             req.headers_present, req.request_hash
         ),
     ));
-    out.push_str("└─");
+    out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
 }
 
@@ -91,6 +130,11 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
 /// wall-clock latency and emit the matching response block. Shared
 /// between [`crate::AnthropicProvider::complete`] and the streaming
 /// finalizer in `aura-agent::agent_loop::streaming`.
+///
+/// All callers in the harness target the LLM proxy, so the
+/// destination is hard-coded to `"aura-network"` here. If a future
+/// caller targets a different service tier, lift this to an explicit
+/// parameter.
 pub fn emit_response_block(
     response: &ModelResponse,
     elapsed_ms: u64,
@@ -106,6 +150,7 @@ pub fn emit_response_block(
         input_tokens: response.usage.input_tokens,
         output_tokens: response.usage.output_tokens,
         request_id: response.trace.provider_request_id.as_deref(),
+        destination: "aura-network",
     });
 }
 
@@ -113,8 +158,15 @@ pub fn emit_response_block(
 /// [`anthropic_request_block`].
 pub fn anthropic_response_block(resp: AnthropicResponseView<'_>) {
     let mut out = String::new();
-    out.push_str(&format!("┌─ ← {} {}\n", resp.status_code, resp.status_text));
-    out.push_str(&row(
+    let header_text = format!("← {} {}", resp.status_code, resp.status_text);
+    let header = match resp.status_code {
+        200..=299 => header_text.green().bold(),
+        300..=399 => header_text.yellow().bold(),
+        _ => header_text.red().bold(),
+    };
+    let tag = destination_tag(resp.destination, None);
+    out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
+    out.push_str(&wrap_row(
         "stop",
         &format!(
             "{:<14} elapsed {:>7}",
@@ -122,23 +174,121 @@ pub fn anthropic_response_block(resp: AnthropicResponseView<'_>) {
             human_duration_ms(resp.elapsed_ms)
         ),
     ));
-    out.push_str(&row(
+    out.push_str(&wrap_row(
         "tokens",
         &format!("in {} / out {}", resp.input_tokens, resp.output_tokens),
     ));
     if let Some(req_id) = resp.request_id {
-        out.push_str(&row("request_id", req_id));
+        out.push_str(&wrap_row("request_id", req_id));
     }
-    out.push_str("└─");
+    out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
+}
+
+/// Derive a short host label from a base URL (e.g.
+/// `"https://aura-router.onrender.com"` → `"aura-router.onrender.com"`).
+/// Returns the input unchanged when no scheme prefix is found.
+#[must_use]
+pub fn extract_host(base_url: &str) -> &str {
+    let after_scheme = base_url
+        .strip_prefix("https://")
+        .or_else(|| base_url.strip_prefix("http://"))
+        .unwrap_or(base_url);
+    after_scheme.split('/').next().unwrap_or(after_scheme)
 }
 
 // ----------------------------------------------------------------------
 // Formatting primitives
 // ----------------------------------------------------------------------
 
-fn row(label: &str, value: &str) -> String {
-    format!("│   {label:<14} {value}\n")
+/// Render `[destination · host]` (host optional) styled as dim cyan
+/// so it sits subtly next to the bold header text.
+fn destination_tag(destination: &str, host: Option<&str>) -> String {
+    let body = match host {
+        Some(h) if !h.is_empty() => format!("[{destination} · {h}]"),
+        _ => format!("[{destination}]"),
+    };
+    body.cyan().dimmed().to_string()
+}
+
+/// Render a labeled row, wrapping long values so continuation lines
+/// stay indented under the value column (column [`ROW_INDENT_COLS`]).
+/// See `aura-agent::console::wrap_row` for the design notes — this
+/// is a deliberate duplicate kept next to its callers.
+fn wrap_row(label: &str, value: &str) -> String {
+    let padded_label = format!("{label:<LABEL_WIDTH$}");
+    let first_prefix = format!("{}   {} ", "│".dimmed(), padded_label.bold());
+    let cont_prefix = format!("{}{}", "│".dimmed(), " ".repeat(ROW_INDENT_COLS - 1));
+
+    let Some(term_width) = detect_term_width() else {
+        return format!("{first_prefix}{value}\n");
+    };
+    if term_width <= ROW_INDENT_COLS + MIN_VALUE_ROOM {
+        return format!("{first_prefix}{value}\n");
+    }
+    let value_room = term_width - ROW_INDENT_COLS;
+
+    if value.chars().count() <= value_room {
+        return format!("{first_prefix}{value}\n");
+    }
+
+    let chunks = wrap_value_chunks(value, value_room);
+    let mut out = String::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        if i == 0 {
+            out.push_str(&first_prefix);
+        } else {
+            out.push_str(&cont_prefix);
+        }
+        out.push_str(chunk);
+        out.push('\n');
+    }
+    out
+}
+
+fn detect_term_width() -> Option<usize> {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    terminal_size::terminal_size().map(|(terminal_size::Width(w), _)| w as usize)
+}
+
+fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
+    if max == 0 {
+        return vec![value.to_string()];
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let remaining = chars.len() - start;
+        if remaining <= max {
+            chunks.push(chars[start..].iter().collect());
+            break;
+        }
+        let window_end = start + max;
+        let split_at = chars[start..window_end]
+            .iter()
+            .rposition(|c| *c == ',')
+            .map(|pos| start + pos + 1)
+            .or_else(|| {
+                chars[start..window_end]
+                    .iter()
+                    .rposition(|c| c.is_whitespace())
+                    .map(|pos| start + pos + 1)
+            })
+            .unwrap_or(window_end);
+        let split_at = split_at.max(start + 1);
+        let chunk: String = chars[start..split_at].iter().collect();
+        chunks.push(chunk.trim_end().to_string());
+        let mut next = split_at;
+        while next < chars.len() && chars[next].is_whitespace() {
+            next += 1;
+        }
+        start = next;
+    }
+    chunks
 }
 
 fn human_bytes(n: usize) -> String {
@@ -185,6 +335,59 @@ mod tests {
     }
 
     #[test]
+    fn extract_host_strips_scheme_and_path() {
+        assert_eq!(
+            extract_host("https://aura-router.onrender.com"),
+            "aura-router.onrender.com"
+        );
+        assert_eq!(
+            extract_host("http://localhost:8080/v1/messages"),
+            "localhost:8080"
+        );
+        assert_eq!(extract_host("aura-router.onrender.com"), "aura-router.onrender.com");
+    }
+
+    #[test]
+    fn destination_tag_renders_host_when_present() {
+        colored::control::set_override(false);
+        let tag = destination_tag("aura-network", Some("aura-router.onrender.com"));
+        assert_eq!(tag, "[aura-network · aura-router.onrender.com]");
+        let tag = destination_tag("aura-network", None);
+        assert_eq!(tag, "[aura-network]");
+        colored::control::unset_override();
+    }
+
+    #[test]
+    fn wrap_value_breaks_on_comma_preference() {
+        let chunks = wrap_value_chunks("aaa,bbb,ccc,ddd,eee", 12);
+        for chunk in &chunks[..chunks.len() - 1] {
+            assert!(
+                chunk.ends_with(','),
+                "expected comma-terminated chunk, got {chunk:?}"
+            );
+        }
+        assert_eq!(chunks.join(""), "aaa,bbb,ccc,ddd,eee");
+    }
+
+    #[test]
+    fn wrap_value_breaks_on_whitespace_when_no_comma() {
+        let chunks = wrap_value_chunks("alpha beta gamma delta epsilon", 12);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 12);
+            assert!(!chunk.starts_with(' '));
+        }
+    }
+
+    #[test]
+    fn wrap_row_no_tty_returns_single_line() {
+        colored::control::set_override(false);
+        let out = wrap_row("model", "claude-opus-4-6");
+        assert_eq!(out, "│   model          claude-opus-4-6\n");
+        colored::control::unset_override();
+    }
+
+    #[test]
     fn request_block_renders_without_panic() {
         anthropic_request_block(AnthropicRequestView {
             model: "claude-opus-4-6",
@@ -199,6 +402,8 @@ mod tests {
             last_user_hash: Some("8c65c4f3"),
             headers_present: "ver auth ct beta proj agent sess org",
             request_hash: "1e62bdae",
+            destination: "aura-network",
+            destination_host: "aura-router.onrender.com",
         });
     }
 
@@ -212,6 +417,7 @@ mod tests {
             input_tokens: 12_345,
             output_tokens: 234,
             request_id: Some("req_01abcd"),
+            destination: "aura-network",
         });
     }
 }

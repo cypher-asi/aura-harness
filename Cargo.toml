@@ -144,6 +144,9 @@ colored = "2.1"
 rpassword = "5.0"
 rustyline = "14.0"
 
+# Terminal size detection for log wrap
+terminal_size = "0.4"
+
 # Environment / config loading
 dotenvy = "0.15.7"
 
