@@ -1,0 +1,70 @@
+[
+  {
+    "_doc": "Phase 6 fixture — reconstructed read_file sequence from the 1.7 Shamir-recovery task. Hand-built from the curated ranges listed in the reread-efficiency plan's 'Evidence from a real task transcript' section. The replay test in `crates/aura-agent/src/agent_loop/shamir_replay_tests.rs` synthesises `result_bytes` and `content_hash` deterministically from the `input` path / start_line / end_line plus a hardcoded per-file line-count map, so the fixture stays compact and `result_bytes` / `content_hash` are documented as derived in test code rather than checked-in verbatim. The 'oracle short-circuit' success bar from the plan (Phase 3 task_already_satisfied) is deferred — Phase 3's RepeatedReadTracker / EarlyTestOracle types are unit-tested but not wired into LoopState::begin_iteration / handle_tool_use yet — so this fixture only pins the three replay floors listed below.",
+    "_floors": [
+      "<= 8 distinct read_file executions through the Phase 1 range-aware ToolResultCache",
+      "compaction dedup folds repeats so prompt-bytes < no-dedup baseline",
+      "steering nudge fires on the third identical content_hash"
+    ],
+    "_files": {
+      "Cargo.toml": 50,
+      "crates/zero-identity/Cargo.toml": 35,
+      "crates/zero-identity/src/lib.rs": 25,
+      "crates/zero-identity/src/error.rs": 40,
+      "crates/zero-identity/src/identity_store.rs": 232,
+      "crates/zero-identity/src/shamir.rs": 320,
+      "crates/zero-identity/src/recover.rs": 80,
+      "crates/zero-identity/tests/recover_test.rs": 60
+    }
+  },
+  { "tool_name": "read_file", "input": {"path": "Cargo.toml"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/Cargo.toml"}, "result_bytes": "", "content_hash": "" },
+
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/lib.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/lib.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/lib.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/lib.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/lib.rs"}, "result_bytes": "", "content_hash": "" },
+
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/error.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/error.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/error.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/error.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/error.rs"}, "result_bytes": "", "content_hash": "" },
+
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 1, "end_line": 100}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 1, "end_line": 99}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 1, "end_line": 150}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 1, "end_line": 130}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 1, "end_line": 232}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 100}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 100, "end_line": 232}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 30, "end_line": 100}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 30, "end_line": 170}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 15, "end_line": 128}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 125}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/identity_store.rs", "start_line": 155}, "result_bytes": "", "content_hash": "" },
+
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 1, "end_line": 200}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 95, "end_line": 200}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 100, "end_line": 200}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 100, "end_line": 220}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 100, "end_line": 235}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 100, "end_line": 260}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 200}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 200, "end_line": 290}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 200, "end_line": 300}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 200, "end_line": 320}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 60, "end_line": 230}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/shamir.rs", "start_line": 180, "end_line": 280}, "result_bytes": "", "content_hash": "" },
+
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/recover.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/recover.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/src/recover.rs"}, "result_bytes": "", "content_hash": "" },
+
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/tests/recover_test.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/tests/recover_test.rs"}, "result_bytes": "", "content_hash": "" },
+  { "tool_name": "read_file", "input": {"path": "crates/zero-identity/tests/recover_test.rs"}, "result_bytes": "", "content_hash": "" }
+]

@@ -792,10 +792,7 @@ fn tool_use_input_path(messages: &[Message], tool_use_id: &str) -> Option<String
         for block in &msg.content {
             if let ContentBlock::ToolUse { id, input, .. } = block {
                 if id == tool_use_id {
-                    return input
-                        .get("path")
-                        .and_then(Value::as_str)
-                        .map(String::from);
+                    return input.get("path").and_then(Value::as_str).map(String::from);
                 }
             }
         }
@@ -841,7 +838,14 @@ fn is_dedup_marker_text(text: &str) -> bool {
 /// dedup markers are detected via [`is_dedup_marker_text`] and skipped
 /// so re-running compaction does not collapse markers into
 /// markers-of-markers.
-pub(crate) fn dedup_read_results_by_content_hash(messages: &mut [Message]) -> usize {
+///
+/// Exposed publicly so the Phase 6 Shamir replay harness in
+/// `aura-agent` can drive the same dedup pass against its captured
+/// transcript without going through the full `compact_messages`
+/// pressure-tier dance. Production callers should still go through
+/// [`compact_messages`], which is the only path that decides whether
+/// dedup should fire for a given pressure.
+pub fn dedup_read_results_by_content_hash(messages: &mut [Message]) -> usize {
     if messages.is_empty() {
         return 0;
     }
@@ -929,7 +933,10 @@ pub fn compact_messages(input: CompactionInput<'_>) -> CompactionReport {
         // (and therefore never re-redacts) an already-folded marker.
         let folded = dedup_read_results_by_content_hash(input.messages);
         if folded > 0 {
-            debug!(folded, "content_hash dedup folded older read-only tool results");
+            debug!(
+                folded,
+                "content_hash dedup folded older read-only tool results"
+            );
         }
         compact_older_messages(input.messages, &tier);
     }
@@ -1833,7 +1840,9 @@ mod tests {
                     assert_eq!(parsed["path"], "src/main.rs");
                     assert_eq!(parsed["note"], "see later identical read");
                     assert!(
-                        parsed["content_hash"].as_str().is_some_and(|h| !h.is_empty()),
+                        parsed["content_hash"]
+                            .as_str()
+                            .is_some_and(|h| !h.is_empty()),
                         "marker must carry the content_hash of the folded read"
                     );
                     assert!(

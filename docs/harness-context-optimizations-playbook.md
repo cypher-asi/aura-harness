@@ -362,6 +362,62 @@ What is still V2:
 - more tool-output shaping
 - longer-horizon regression suites
 
+## Shamir-Recovery Replay Benchmark (Phase 6)
+
+The live static-site benchmark above is an interactive harness exercise that
+takes a few minutes per run. For a deterministic regression gate against the
+same family of inefficiencies, we also ship a Shamir-recovery transcript
+replay that runs as part of `cargo test -p aura-agent`.
+
+### What it pins
+
+The replay drives the captured 1.7 Shamir-recovery `read_file` sequence
+through three already-shipped pieces of the reread-efficiency plan and
+asserts three floors:
+
+1. `shamir_replay_meets_eight_distinct_read_target` — Phase 1's range-aware
+   `ToolResultCache` serves overlapping slice reads from a single superset
+   entry, holding total distinct `read_file` executions at **<= 8** across
+   44 captured reads (down from the 30+ executions the original task
+   transcript observed).
+2. `shamir_replay_compaction_reduces_prompt_bytes` — Phase 2's
+   `aura_compaction::dedup_read_results_by_content_hash` pass folds
+   older identical read-only tool results to a structured `_redacted`
+   marker, so the resulting prompt-bytes footprint is strictly less than
+   the no-dedup baseline (observed: ~17% byte reduction, 14 folds across
+   the fixture).
+3. `shamir_replay_steering_fires_on_repeated_hash` — Phase 3's
+   `RepeatedReadTracker` queues a `SteeringKind::RepeatedRead` nudge as
+   soon as any single `content_hash` is observed three times in one turn.
+
+### How to re-run
+
+```bash
+cd c:\code\aura-harness
+
+cargo test -p aura-agent --lib shamir_replay
+# or, to see the cache / compaction headline numbers inline:
+cargo test -p aura-agent --lib shamir_replay -- --nocapture
+```
+
+The transcript fixture lives at
+`crates/aura-agent/tests/fixtures/shamir_recovery_transcript.json` (hand-built
+from the curated read sequence in the reread-efficiency plan doc; see the
+fixture's `_doc` field for the exact provenance). The replay harness itself
+lives at `crates/aura-agent/src/agent_loop/shamir_replay_tests.rs`.
+
+### Deferred — oracle short-circuit
+
+The plan's original success bar also called for a `task_already_satisfied`
+short-circuit **before any `edit_file`**. Phase 3's `EarlyTestOracle` and
+`RepeatedReadTracker` types are unit-tested today, but neither is wired
+into `LoopState::begin_iteration` / `tool_execution::handle_tool_use` yet,
+so the end-to-end short-circuit is not reachable through a runtime replay.
+The Shamir replay therefore deliberately does **not** assert the oracle
+floor — it pins only the three reachable floors above. The end-to-end
+oracle assertion lands when Phase 3 is integrated into the loop and the
+replay harness can be extended without changing its existing assertions.
+
 ## The Short Version
 
 Before:
