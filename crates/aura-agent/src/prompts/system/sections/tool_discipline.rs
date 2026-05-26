@@ -55,7 +55,8 @@ pub(crate) fn render() -> Option<String> {
     let body = "\
 - Do not re-read a file after a successful `write_file` / `edit_file` / `delete_file`. The tools report failure via `is_error = true` on the tool_result; trust that signal and keep moving.
 - `write_file` rejects content over 32000 bytes per call - the harness short-circuits the call and the change never lands on disk. For larger files, seed with `write_file` (<=32000 bytes: module doc + imports + one stub) and append the rest with `edit_file`.
-- Prior `write_file` / `edit_file` tool_use blocks in the transcript may have their bulky string fields (`content` / `old_text` / `new_text`) stripped to a `_redacted` marker or `<<<AURA_ELIDED_...>>>` placeholder so the transcript fits in context. Always re-emit the real bytes - calls that copy the placeholder verbatim are rejected before anything touches disk.";
+- Prior `write_file` / `edit_file` tool_use blocks in the transcript may have their bulky string fields (`content` / `old_text` / `new_text`) stripped to a `_redacted` marker or `<<<AURA_ELIDED_...>>>` placeholder so the transcript fits in context. Always re-emit the real bytes - calls that copy the placeholder verbatim are rejected before anything touches disk.
+- If `edit_file` returns `is_error=true` with \"needle not found\" or `write_file` returns \"path not found\": re-read the target file ONCE to get the real bytes, then retry with exact text. Do not keep guessing - the file shape may have changed since you last read it.";
     Some(format!("<tool_discipline>\n{body}\n</tool_discipline>"))
 }
 
@@ -107,6 +108,27 @@ mod tests {
         assert!(
             out.contains("re-emit"),
             "redaction bullet must steer the model toward re-emitting the real bytes: {out}"
+        );
+    }
+
+    #[test]
+    fn render_includes_recovery_from_rejection_rule() {
+        let out = render().expect("section renders");
+        // Priority A: the model-shaping companion to the Recovery
+        // continuation body. The runtime gate fires regardless, but
+        // the prompt-side bullet shortens the model's discovery
+        // window so the doom loop doesn't even start.
+        assert!(
+            out.contains("needle not found"),
+            "recovery-from-rejection bullet must name the edit_file failure mode: {out}"
+        );
+        assert!(
+            out.contains("path not found"),
+            "recovery-from-rejection bullet must name the write_file failure mode: {out}"
+        );
+        assert!(
+            out.contains("re-read the target file ONCE"),
+            "recovery-from-rejection bullet must steer the model toward a single re-read: {out}"
         );
     }
 

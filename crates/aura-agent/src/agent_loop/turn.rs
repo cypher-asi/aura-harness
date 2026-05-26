@@ -415,6 +415,13 @@ async fn delegate_continuation_to_goal_runtime(
     // continuation kind (Nudge / Blocked) is computed from the
     // streak alone, so the empty set keeps the decision correct.
     let read_paths = std::collections::HashSet::new();
+    // Priority A: snapshot the per-iteration failed-write attempts
+    // BEFORE `begin_iteration` resets the turn diff at the top of
+    // the next loop iteration. The goal-runtime ring buffer takes
+    // ownership of the slice so the rendered Recovery body can echo
+    // the rejections back to the model on the next continuation.
+    let failed_write_attempts: Vec<crate::agent_loop::turn_diff::FailedWriteAttempt> =
+        state.turn_diff.failed_write_attempts().to_vec();
 
     let restart = session
         .goal_runtime
@@ -422,6 +429,7 @@ async fn delegate_continuation_to_goal_runtime(
             task_id,
             had_write,
             read_paths,
+            failed_write_attempts,
         })
         .await?;
 

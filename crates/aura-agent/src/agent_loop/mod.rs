@@ -17,7 +17,12 @@ mod tool_execution;
 mod tool_execution_tests;
 mod tool_pipeline;
 mod turn;
-mod turn_diff;
+// Priority A: surfaced as `pub(crate)` so the session-scoped
+// `goal_runtime` module can reach `FailedWriteAttempt` via the
+// canonical `crate::agent_loop::turn_diff` path. Other items remain
+// `pub(crate)` and continue to be touched only from within the
+// `agent_loop` subtree.
+pub(crate) mod turn_diff;
 
 pub use task::TaskId;
 

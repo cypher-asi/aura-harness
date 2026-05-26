@@ -338,7 +338,7 @@ fn track_tool_effects(
     had_any_write: &mut bool,
     turn_diff: &mut super::turn_diff::TurnDiff,
 ) -> bool {
-    use super::turn_diff::TurnDiff;
+    use super::turn_diff::{FailedWriteAttempt, TurnDiff, FAILED_WRITE_SNIPPET_MAX_CHARS};
     use crate::types::FileChangeKind;
 
     fn record_into_turn_diff(turn_diff: &mut TurnDiff, change: &crate::types::FileChange) {
@@ -357,6 +357,37 @@ fn track_tool_effects(
         }
     }
 
+    /// Build a `FailedWriteAttempt` defensively. Tool-argument JSON
+    /// can in principle carry a non-string `path` (the model rarely
+    /// emits this, but a fuzzed schema or a future tool surface
+    /// might) — Rule 4.1 forbids `unwrap()` here, so we fall back to
+    /// `None` / `<unparseable>` instead of dropping the record. The
+    /// resulting telemetry is still useful to the model (it sees the
+    /// tool name and the error body).
+    fn build_failed_attempt(
+        tool: &ToolCallInfo,
+        exec_result: &ToolCallResult,
+    ) -> FailedWriteAttempt {
+        let target_path = tool
+            .input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let raw = exec_result.content.trim();
+        let snippet = if raw.is_empty() {
+            "<unparseable>".to_string()
+        } else {
+            raw.chars()
+                .take(FAILED_WRITE_SNIPPET_MAX_CHARS)
+                .collect::<String>()
+        };
+        FailedWriteAttempt {
+            tool: tool.name.clone(),
+            target_path,
+            error_snippet: snippet,
+        }
+    }
+
     let mut any_write_success = false;
 
     for exec_result in executed {
@@ -369,17 +400,30 @@ fn track_tool_effects(
         }
 
         if helpers::is_write_tool(&tool.name) {
+            // Priority A: a rejected write must record into the
+            // turn-diff's failed-attempts channel so the goal-runtime
+            // turn-stop hook can echo it back to the model on the
+            // next continuation, regardless of whether the rejection
+            // came from the tool layer ("needle not found"), the
+            // pre-dispatch chunk guard (oversized `write_file`), or
+            // the compaction redaction guards. The record is taken
+            // before the success branches below so a tool that ran
+            // and failed never leaks into `any_write_success` /
+            // `had_any_write` regardless of the `path` shape.
+            if exec_result.is_error {
+                turn_diff.record_failed_write(build_failed_attempt(tool, exec_result));
+                continue;
+            }
+
             let path_arg = tool.input.get("path").and_then(|v| v.as_str());
             if path_arg.is_some() {
-                if !exec_result.is_error {
-                    any_write_success = true;
-                    *had_any_write = true;
-                    for change in &exec_result.file_changes {
-                        result.record_file_change(change.clone());
-                        record_into_turn_diff(turn_diff, change);
-                    }
+                any_write_success = true;
+                *had_any_write = true;
+                for change in &exec_result.file_changes {
+                    result.record_file_change(change.clone());
+                    record_into_turn_diff(turn_diff, change);
                 }
-            } else if !exec_result.file_changes.is_empty() && !exec_result.is_error {
+            } else if !exec_result.file_changes.is_empty() {
                 // Multi-file write fallback: the tool has no single
                 // `path` argument but the result carries one
                 // `FileChange` per touched file. Each change is
@@ -570,6 +614,121 @@ mod track_tool_effects_tests {
             stop_loop: false,
             file_changes: Vec::new(),
         }
+    }
+
+    fn mk_write_tool(id: &str, name: &str, path: &str) -> ToolCallInfo {
+        ToolCallInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: json!({"path": path}),
+        }
+    }
+
+    fn mk_error_result(tool_use_id: &str, body: &str) -> ToolCallResult {
+        ToolCallResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: body.to_string(),
+            is_error: true,
+            kind: aura_core::ToolResultKind::AgentError,
+            stop_loop: false,
+            file_changes: Vec::new(),
+        }
+    }
+
+    /// Priority A: an `edit_file` whose needle missed must surface
+    /// on `turn_diff.failed_write_attempts()` (in submission order)
+    /// so the next continuation's recovery body can echo the
+    /// rejection back to the model. Pre-A this rejection was
+    /// indistinguishable from a no-write turn — the doom-loop
+    /// root cause.
+    #[test]
+    fn track_tool_effects_records_failed_edit_file() {
+        let mut exploration_state = ExplorationState::default();
+        let mut result = AgentLoopResult::default();
+        let mut had_any_write = false;
+        let mut turn_diff = super::super::turn_diff::TurnDiff::default();
+
+        let body = "The specified text was not found in the file. None of the 4 needle line(s) match any line in the file.";
+        let to_execute = vec![mk_write_tool("toolu_edit_1", "edit_file", "src/foo.rs")];
+        let executed = vec![mk_error_result("toolu_edit_1", body)];
+
+        let any_success = track_tool_effects(
+            &to_execute,
+            &executed,
+            &mut result,
+            &mut exploration_state,
+            &mut had_any_write,
+            &mut turn_diff,
+        );
+
+        assert!(
+            !any_success,
+            "an is_error=true write must NOT count as a success"
+        );
+        assert!(
+            !had_any_write,
+            "had_any_write latch must not flip for a rejected write attempt"
+        );
+        assert!(
+            turn_diff.is_empty(),
+            "is_empty() reflects only successful writes — failed attempts live on the separate channel"
+        );
+
+        let recorded = turn_diff.failed_write_attempts();
+        assert_eq!(recorded.len(), 1, "exactly one failed attempt expected");
+        assert_eq!(recorded[0].tool, "edit_file");
+        assert_eq!(recorded[0].target_path.as_deref(), Some("src/foo.rs"));
+        // The error_snippet must carry the first ~200 chars of the
+        // executor's error body verbatim (after the trim()) so the
+        // model sees the actionable phrase ("needle line(s) match").
+        assert!(
+            recorded[0].error_snippet.starts_with("The specified text"),
+            "snippet must preserve the leading executor message: {:?}",
+            recorded[0].error_snippet
+        );
+        assert!(
+            recorded[0].error_snippet.contains("needle line(s)"),
+            "snippet must preserve the actionable phrase: {:?}",
+            recorded[0].error_snippet
+        );
+        assert!(
+            recorded[0].error_snippet.len()
+                <= super::super::turn_diff::FAILED_WRITE_SNIPPET_MAX_CHARS,
+            "snippet must respect the {}-char cap",
+            super::super::turn_diff::FAILED_WRITE_SNIPPET_MAX_CHARS
+        );
+    }
+
+    /// Long executor errors must be truncated to the published cap
+    /// so a noisy stack-trace cannot itself blow the next sampling
+    /// request's input ceiling when 3 of them get echoed back via
+    /// the Recovery body.
+    #[test]
+    fn track_tool_effects_truncates_long_failed_write_snippet() {
+        let mut exploration_state = ExplorationState::default();
+        let mut result = AgentLoopResult::default();
+        let mut had_any_write = false;
+        let mut turn_diff = super::super::turn_diff::TurnDiff::default();
+
+        let long_body = "x".repeat(super::super::turn_diff::FAILED_WRITE_SNIPPET_MAX_CHARS + 200);
+        let to_execute = vec![mk_write_tool("toolu_w", "write_file", "src/big.rs")];
+        let executed = vec![mk_error_result("toolu_w", &long_body)];
+
+        track_tool_effects(
+            &to_execute,
+            &executed,
+            &mut result,
+            &mut exploration_state,
+            &mut had_any_write,
+            &mut turn_diff,
+        );
+
+        let recorded = turn_diff.failed_write_attempts();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].error_snippet.len(),
+            super::super::turn_diff::FAILED_WRITE_SNIPPET_MAX_CHARS
+        );
     }
 
     /// Pin that `track_tool_effects` increments the exploration

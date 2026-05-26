@@ -73,7 +73,7 @@
 //! structured `session_id`, `task_id`, and `streak` fields. The
 //! rendered continuation body is logged by hash only.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 
 use tokio::sync::Mutex;
@@ -89,6 +89,29 @@ use super::{SessionId, UserInput};
 // goal runtime simply borrows the type to attribute decisions back to
 // the task they came from.
 pub(crate) use crate::agent_loop::TaskId;
+
+// Priority A: `FailedWriteAttempt` is recorded by the per-iteration
+// `TurnDiff` and forwarded through `GoalRuntimeEvent::TurnCompleted`
+// so the session-scoped continuation state can buffer the last few
+// rejections across `TurnDiff::reset()` boundaries (the diff is wiped
+// at the top of every iteration; the goal-runtime buffer is not).
+pub(crate) use crate::agent_loop::turn_diff::FailedWriteAttempt;
+
+/// Capacity of the session-scoped failed-write ring buffer kept on
+/// [`ContinuationState::recent_failures`]. Sized at 2× the default
+/// `max_continuation_turns` (6 vs. 3) so that even after the rolling
+/// window evicts older entries, the model still sees its mistakes
+/// from the immediately preceding two continuation turns when the
+/// runtime decides to render a [`ContinuationKind::Recovery`] body.
+pub(crate) const RECENT_FAILURES_BUFFER_SIZE: usize = 6;
+
+/// Maximum number of failed-write entries echoed into a single
+/// [`ContinuationKind::Recovery`] body. The renderer is the natural
+/// place to clamp because a single batch from the tool pipeline can
+/// legitimately deliver more than 3 rejections (e.g. several
+/// concurrent `edit_file`s all missing on the same stale read), and
+/// echoing all of them would balloon the steering envelope.
+pub(crate) const RECOVERY_RECAP_MAX_ENTRIES: usize = 3;
 
 /// Lifecycle event consumed by the [`GoalRuntime`].
 ///
@@ -126,6 +149,14 @@ pub(crate) enum GoalRuntimeEvent {
         /// blocker-signature audit (codex `goal_spec.rs:79-80`); E.4
         /// does not yet inspect the contents.
         read_paths: HashSet<PathBuf>,
+        /// Write-tool calls that returned `is_error = true` this
+        /// turn, in submission order. Priority A telemetry: the
+        /// runtime classifies a turn whose only write attempts were
+        /// rejected as [`WriteAttemptKind::OnlyRejectedWrites`] and
+        /// echoes the most recent rejections back to the model via
+        /// [`ContinuationKind::Recovery`]. Empty when no write tool
+        /// ran or every write succeeded.
+        failed_write_attempts: Vec<FailedWriteAttempt>,
     },
     /// Session became idle (no active turn, queue empty). Placeholder
     /// for the codex `goals.rs:386-388` analog — wired into a
@@ -196,9 +227,9 @@ pub(crate) enum TaskRestart {
 /// the message envelope shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContinuationKind {
-    /// First two consecutive no-write iterations. Soft push: "either
-    /// emit your next edit now, or call `task_done` with
-    /// `no_changes_needed`".
+    /// First two consecutive no-write iterations *without* any
+    /// rejected write attempt. Soft push: "either emit your next
+    /// edit now, or call `task_done` with `no_changes_needed`".
     Nudge,
     /// Third no-write iteration and beyond — codex's "blocked-after-3"
     /// audit threshold. The runtime escalates the prompt language but
@@ -206,6 +237,42 @@ pub(crate) enum ContinuationKind {
     /// `max_continuation_turns` trips the [`TaskRestart::Blocked`]
     /// path.
     Blocked,
+    /// Priority A: streak advanced because the model attempted a
+    /// write that was rejected by the tool layer (e.g. `edit_file`
+    /// "needle not found", `write_file` "path not found"). The body
+    /// echoes the recent failures back at the model so it can
+    /// course-correct instead of guessing the same needle / path
+    /// again. The streak still advances so the
+    /// `max_continuation_turns` ceiling continues to fire — the
+    /// only difference vs. `Nudge` is the steering text.
+    Recovery,
+}
+
+/// Priority A: tri-state classification of a turn's write activity,
+/// computed from [`crate::agent_loop::turn_diff::TurnDiff`]. Drives
+/// [`ContinuationState::on_iteration_end`]'s
+/// `streak += ?` / `continuation kind = ?` decision so a turn whose
+/// only write attempt was rejected does not produce the same
+/// continuation body as a turn that called no write tool at all.
+///
+/// Pre-A both branches collapsed to "streak += 1 + emit Nudge", which
+/// is precisely what kept the doom-loop alive: the model never saw
+/// its own rejection in the steering text and kept guessing the
+/// same needle until `max_continuation_turns` tripped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteAttemptKind {
+    /// At least one successful write tool ran
+    /// ([`crate::agent_loop::turn_diff::TurnDiff::is_empty`] is
+    /// false). Resets the no-write streak to zero.
+    SuccessfulWrite,
+    /// One or more write tools ran but every result carried
+    /// `is_error = true`. The streak advances and the next
+    /// continuation body becomes [`ContinuationKind::Recovery`] so
+    /// the model can see what it tried last turn.
+    OnlyRejectedWrites,
+    /// No write tool was called at all this turn. The streak
+    /// advances under the existing `Nudge` / `Blocked` taxonomy.
+    NoWriteAttempted,
 }
 
 /// Session-scoped streak / total-continuation tracker.
@@ -217,7 +284,10 @@ pub(crate) enum ContinuationKind {
 #[derive(Debug, Default)]
 pub(crate) struct ContinuationState {
     /// Number of consecutive no-write iterations observed so far.
-    /// Reset to zero the moment a write lands.
+    /// Reset to zero the moment a *successful* write lands. A turn
+    /// whose only writes were rejected by the tool layer advances
+    /// the streak just like a pure no-write turn — see
+    /// [`WriteAttemptKind::OnlyRejectedWrites`] for the rationale.
     pub(crate) consecutive_no_write: u32,
     /// Cumulative count of continuation prompts injected this run.
     /// The runtime escalates to [`TaskRestart::Blocked`] once this
@@ -229,34 +299,108 @@ pub(crate) struct ContinuationState {
     /// shape (and so tests that move over continue to compile).
     #[allow(dead_code)]
     pub(crate) recent_no_write_paths: Vec<HashSet<PathBuf>>,
+    /// Priority A: ring buffer of the most recent rejected write
+    /// attempts across recent turns. Lives on the session-scoped
+    /// state (not on `TurnDiff`) because
+    /// [`crate::agent_loop::turn_diff::TurnDiff::reset`] wipes its
+    /// own `failed_write_attempts` field at the top of every
+    /// iteration, while the goal-runtime continuation body needs
+    /// to recap failures from the immediately preceding turn(s).
+    /// Bounded at [`RECENT_FAILURES_BUFFER_SIZE`] via FIFO eviction
+    /// so a stuck loop cannot grow it without bound.
+    pub(crate) recent_failures: VecDeque<FailedWriteAttempt>,
 }
 
 impl ContinuationState {
-    /// Process one turn end. Returns `None` when a write reset the
-    /// streak (and clears state), `Some(Nudge)` for the first two
-    /// consecutive no-write iterations, `Some(Blocked)` from the
-    /// third onward. Caller is responsible for any
-    /// `total_continuation_turns` ceiling check.
+    /// Process one turn end. Returns `None` when a successful write
+    /// reset the streak (and clears state), `Some(Nudge)` for the
+    /// first two consecutive no-write iterations *without
+    /// rejections*, `Some(Blocked)` from the third no-write-only
+    /// iteration onward, and `Some(Recovery)` when the only writes
+    /// attempted were rejected by the tool layer (Priority A).
+    /// Caller is responsible for any `total_continuation_turns`
+    /// ceiling check.
     pub(crate) fn on_iteration_end(
         &mut self,
-        had_write: bool,
+        attempt_kind: WriteAttemptKind,
         read_paths: HashSet<PathBuf>,
+        failed_write_attempts: Vec<FailedWriteAttempt>,
     ) -> Option<ContinuationKind> {
-        if had_write {
-            self.consecutive_no_write = 0;
-            self.recent_no_write_paths.clear();
-            return None;
+        // Extend the session-scoped ring buffer with any failures
+        // observed this turn *before* the success-reset branch — a
+        // "write succeeded but a sibling write failed" turn (e.g.
+        // two concurrent edit_file calls, one hits, one misses)
+        // still teaches the model something useful, and pre-loading
+        // the buffer here keeps the renderer's contract simple
+        // (always read the last N, regardless of which branch
+        // fired). The success reset below still wipes the streak.
+        for attempt in failed_write_attempts {
+            if self.recent_failures.len() >= RECENT_FAILURES_BUFFER_SIZE {
+                self.recent_failures.pop_front();
+            }
+            self.recent_failures.push_back(attempt);
         }
-        self.consecutive_no_write = self.consecutive_no_write.saturating_add(1);
-        self.recent_no_write_paths.push(read_paths);
-        while self.recent_no_write_paths.len() > 3 {
-            self.recent_no_write_paths.remove(0);
+
+        match attempt_kind {
+            WriteAttemptKind::SuccessfulWrite => {
+                self.consecutive_no_write = 0;
+                self.recent_no_write_paths.clear();
+                // A write refills the cumulative budget. `max_continuation_turns`
+                // is designed as a "no progress after N consecutive nudges"
+                // ceiling — keeping `total_continuation_turns` monotonic
+                // across writes punished the textbook explore -> write ->
+                // verify -> SELF-REVIEW retry sequence with a `task_blocked`
+                // failure even when the agent was making forward progress.
+                // Resetting both counters on a write restores the original
+                // intent: each no-write burst gets up to
+                // `max_continuation_turns` nudges; a successful write
+                // forgives the past burn.
+                self.total_continuation_turns = 0;
+                None
+            }
+            WriteAttemptKind::OnlyRejectedWrites => {
+                self.consecutive_no_write = self.consecutive_no_write.saturating_add(1);
+                self.recent_no_write_paths.push(read_paths);
+                while self.recent_no_write_paths.len() > 3 {
+                    self.recent_no_write_paths.remove(0);
+                }
+                // Recovery body is emitted regardless of the streak
+                // depth — the model needs to see its own rejection
+                // on the very next continuation, not after three
+                // wasted nudges. The `total_continuation_turns`
+                // ceiling still fires the usual way.
+                Some(ContinuationKind::Recovery)
+            }
+            WriteAttemptKind::NoWriteAttempted => {
+                self.consecutive_no_write = self.consecutive_no_write.saturating_add(1);
+                self.recent_no_write_paths.push(read_paths);
+                while self.recent_no_write_paths.len() > 3 {
+                    self.recent_no_write_paths.remove(0);
+                }
+                if self.consecutive_no_write >= 3 {
+                    Some(ContinuationKind::Blocked)
+                } else {
+                    Some(ContinuationKind::Nudge)
+                }
+            }
         }
-        if self.consecutive_no_write >= 3 {
-            Some(ContinuationKind::Blocked)
-        } else {
-            Some(ContinuationKind::Nudge)
-        }
+    }
+}
+
+/// Priority A classifier: collapse the `(had_write, failed_attempts)`
+/// pair into a single tri-state. Centralised so the buffered
+/// turn-stop hook and any future session-idle handler agree on the
+/// rules.
+pub(crate) fn classify_write_attempt(
+    had_write: bool,
+    failed_attempts: &[FailedWriteAttempt],
+) -> WriteAttemptKind {
+    if had_write {
+        WriteAttemptKind::SuccessfulWrite
+    } else if !failed_attempts.is_empty() {
+        WriteAttemptKind::OnlyRejectedWrites
+    } else {
+        WriteAttemptKind::NoWriteAttempted
     }
 }
 
@@ -383,7 +527,11 @@ impl GoalRuntime {
                 task_id,
                 had_write,
                 read_paths,
-            } => self.on_turn_completed(task_id, had_write, read_paths).await,
+                failed_write_attempts,
+            } => {
+                self.on_turn_completed(task_id, had_write, read_paths, failed_write_attempts)
+                    .await
+            }
             GoalRuntimeEvent::SessionIdle | GoalRuntimeEvent::MaybeContinueIfIdle => {
                 self.maybe_start_continuation().await
             }
@@ -397,16 +545,18 @@ impl GoalRuntime {
     }
 
     /// Internal: handle a `TurnCompleted` event. Increments / resets
-    /// the streak, decides whether to nudge / escalate / block, and
-    /// renders the continuation body when a push is required.
+    /// the streak, decides whether to nudge / escalate / block / recover,
+    /// and renders the continuation body when a push is required.
     async fn on_turn_completed(
         &self,
         task_id: TaskId,
         had_write: bool,
         read_paths: HashSet<PathBuf>,
+        failed_write_attempts: Vec<FailedWriteAttempt>,
     ) -> Result<Option<TaskRestart>, AgentError> {
         let mut cont = self.continuation.lock().await;
-        let kind = cont.on_iteration_end(had_write, read_paths);
+        let attempt_kind = classify_write_attempt(had_write, &failed_write_attempts);
+        let kind = cont.on_iteration_end(attempt_kind, read_paths, failed_write_attempts);
         tracing::Span::current().record("streak", cont.consecutive_no_write);
         tracing::Span::current().record("total", cont.total_continuation_turns);
         match kind {
@@ -428,7 +578,14 @@ impl GoalRuntime {
                         streak,
                     }));
                 }
-                let body = render(kind, streak as usize, streak);
+                // Render reads the session-scoped failure buffer so
+                // a Recovery body can recap up to N entries that
+                // span this turn AND the previous one (the in-turn
+                // recorder writes into the buffer before this point
+                // already, so the slice is up-to-date).
+                let recent: Vec<FailedWriteAttempt> =
+                    cont.recent_failures.iter().cloned().collect();
+                let body = render(kind, streak as usize, streak, &recent);
                 cont.total_continuation_turns = cont.total_continuation_turns.saturating_add(1);
                 Ok(Some(TaskRestart::Continuation {
                     task_id,
@@ -464,11 +621,19 @@ pub(crate) struct ContinuationSnapshot {
 }
 
 /// Render the continuation envelope injected before the next sampling
-/// request. Body shape matches the pre-E.4
-/// `crate::agent_loop::continuation::render` verbatim so existing
-/// snapshot / contains assertions continue to hold after the
-/// migration.
-pub(crate) fn render(kind: ContinuationKind, iter: usize, count: u32) -> String {
+/// request. Body shape for [`ContinuationKind::Nudge`] and
+/// [`ContinuationKind::Blocked`] matches the pre-Priority-A renderer
+/// verbatim so existing snapshot / `contains` assertions continue to
+/// hold. `recent_errors` is consumed only by
+/// [`ContinuationKind::Recovery`] and is otherwise inert — callers
+/// always pass the session-scoped failure buffer slice so the
+/// renderer never has to reach back into [`ContinuationState`].
+pub(crate) fn render(
+    kind: ContinuationKind,
+    iter: usize,
+    count: u32,
+    recent_errors: &[FailedWriteAttempt],
+) -> String {
     match kind {
         ContinuationKind::Nudge => format!(
             "<harness_continuation kind=\"nudge\" iteration=\"{iter}\" consecutive_no_write=\"{count}\">\n\
@@ -488,6 +653,36 @@ pub(crate) fn render(kind: ContinuationKind, iter: usize, count: u32) -> String 
              If you continue reading without one of the above, the harness will fail the task with `task_blocked`.\n\
              </harness_continuation>"
         ),
+        ContinuationKind::Recovery => {
+            // Show the *most recent* N entries — when the buffer is
+            // longer than the cap, the operator (and the model) care
+            // about the latest rejections, not the oldest.
+            let take = RECOVERY_RECAP_MAX_ENTRIES.min(recent_errors.len());
+            let start = recent_errors.len().saturating_sub(take);
+            let tail = &recent_errors[start..];
+            let mut recap = String::new();
+            for (i, err) in tail.iter().enumerate() {
+                let path_hint = err
+                    .target_path
+                    .as_deref()
+                    .map_or(String::new(), |p| format!(" (path: {p})"));
+                recap.push_str(&format!(
+                    "  {}. {}{}: {}\n",
+                    i + 1,
+                    err.tool,
+                    path_hint,
+                    err.error_snippet.trim()
+                ));
+            }
+            format!(
+                "<harness_continuation kind=\"recovery\" iteration=\"{iter}\" consecutive_no_write=\"{count}\">\n\
+                 Iteration {iter}. Your recent write attempts were rejected by the tool layer:\n\
+                 {recap}\
+                 \n\
+                 Re-read the target file ONCE to get the real bytes, then retry with exact text. Do not keep guessing needles or paths. If the file shape has changed since you last read it, the codebase is authoritative.\n\
+                 </harness_continuation>"
+            )
+        }
     }
 }
 
@@ -518,15 +713,24 @@ mod tests {
                 task_id: task,
                 had_write: false,
                 read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
             })
             .await
             .unwrap();
         assert_eq!(runtime.current_streak().await, 1);
+        // One no-write turn must have burned a cumulative slot so we can
+        // verify the write-driven reset actually wipes it.
+        let snap_before = runtime.snapshot().await;
+        assert!(
+            snap_before.total_continuation_turns >= 1,
+            "no-write turn must advance total_continuation_turns; got snapshot = {snap_before:?}",
+        );
         runtime
             .handle_event(GoalRuntimeEvent::TurnCompleted {
                 task_id: task,
                 had_write: true,
                 read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
             })
             .await
             .unwrap();
@@ -535,6 +739,82 @@ mod tests {
             0,
             "a write must reset the session-scoped streak"
         );
+        let snap_after = runtime.snapshot().await;
+        assert_eq!(
+            snap_after.total_continuation_turns, 0,
+            "Layer B: a write must also reset the cumulative continuation budget — \
+             a monotonic counter punished explore -> write -> SELF-REVIEW retry sequences \
+             even when the agent was making forward progress"
+        );
+    }
+
+    /// Layer B regression guard: the canonical dev-loop flow
+    /// (5 no-write exploration turns → 1 successful write →
+    /// 5 more no-write turns for verification / SELF-REVIEW
+    /// retry) must run end-to-end without tripping
+    /// `TaskRestart::Blocked`. Pre-Layer B the cumulative counter
+    /// crossed `max_continuation_turns = 6` on the 6th total
+    /// no-write turn even though the streak had been reset by a
+    /// write in between, falsely failing tasks that were actually
+    /// progressing.
+    #[tokio::test]
+    async fn explore_write_explore_budget_resets() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+
+        // Five exploration turns with no write.
+        for i in 0..5 {
+            let restart = runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap()
+                .expect("no-write turn must yield a Continuation");
+            assert!(
+                matches!(restart, TaskRestart::Continuation { .. }),
+                "exploration turn {i} must not block (got {restart:?})",
+            );
+        }
+
+        // One write lands — Layer B: total_continuation_turns must
+        // reset to 0 so the subsequent no-write burst starts fresh.
+        let none = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: true,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert!(none.is_none(), "a write turn must produce None");
+
+        // Five more no-write turns: verification (cargo check),
+        // SELF-REVIEW rejection, retry, etc. Pre-Layer B the 1st of
+        // these would land on `total >= 6` and trip Blocked; post-B
+        // the budget has been refilled by the write so all five must
+        // produce Continuation.
+        for i in 0..5 {
+            let restart = runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap()
+                .expect("post-write no-write turn must still yield a Continuation");
+            assert!(
+                matches!(restart, TaskRestart::Continuation { .. }),
+                "post-write no-write turn {i} must not block (got {restart:?}) — \
+                 Layer B's cumulative-counter reset on a write is the contract under test",
+            );
+        }
     }
 
     #[tokio::test]
@@ -548,6 +828,7 @@ mod tests {
                     task_id: task,
                     had_write: false,
                     read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
                 })
                 .await
                 .unwrap()
@@ -590,6 +871,7 @@ mod tests {
                     task_id: task,
                     had_write: false,
                     read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
                 })
                 .await
                 .unwrap()
@@ -601,6 +883,7 @@ mod tests {
                 task_id: task,
                 had_write: false,
                 read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
             })
             .await
             .unwrap()
@@ -638,6 +921,7 @@ mod tests {
                     task_id: task_a,
                     had_write: false,
                     read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
                 })
                 .await
                 .unwrap();
@@ -669,6 +953,7 @@ mod tests {
                 task_id: task_b,
                 had_write: false,
                 read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
             })
             .await
             .unwrap()
@@ -702,6 +987,7 @@ mod tests {
                 task_id: task,
                 had_write: false,
                 read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
             })
             .await
             .unwrap()
@@ -748,7 +1034,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_nudge_includes_envelope_and_iteration() {
-        let body = render(ContinuationKind::Nudge, 4, 1);
+        let body = render(ContinuationKind::Nudge, 4, 1, &[]);
         assert!(body.contains("<harness_continuation kind=\"nudge\""));
         assert!(body.contains("iteration=\"4\""));
         assert!(body.contains("consecutive_no_write=\"1\""));
@@ -758,7 +1044,7 @@ mod tests {
 
     #[tokio::test]
     async fn render_blocked_includes_envelope_and_options() {
-        let body = render(ContinuationKind::Blocked, 7, 3);
+        let body = render(ContinuationKind::Blocked, 7, 3, &[]);
         assert!(body.contains("<harness_continuation kind=\"blocked\""));
         assert!(body.contains("iteration=\"7\""));
         assert!(body.contains("consecutive_no_write=\"3\""));
@@ -775,11 +1061,393 @@ mod tests {
                 task_id: task,
                 had_write: false,
                 read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
             })
             .await
             .unwrap();
         let snap = runtime.snapshot().await;
         assert_eq!(snap.consecutive_no_write, 1);
         assert_eq!(snap.total_continuation_turns, 1);
+    }
+
+    // ----------------------------------------------------------------
+    // Priority A mandatory tests
+    // ----------------------------------------------------------------
+
+    fn mk_failed_attempt(tool: &str, path: &str, snippet: &str) -> FailedWriteAttempt {
+        FailedWriteAttempt {
+            tool: tool.to_string(),
+            target_path: Some(path.to_string()),
+            error_snippet: snippet.to_string(),
+        }
+    }
+
+    /// Priority A: a turn that attempted an `edit_file` whose needle
+    /// missed (i.e. the only writes returned `is_error = true`) must
+    /// advance the streak AND emit a [`ContinuationKind::Recovery`]
+    /// whose body echoes the failed needle back to the model. This
+    /// is the doom-loop fix: pre-A the same turn would emit a plain
+    /// `Nudge` and the model would re-issue the same broken needle
+    /// indefinitely.
+    #[tokio::test]
+    async fn failed_edit_advances_streak_with_recovery_variant() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+        let snippet =
+            "The specified text was not found in the file. None of the 4 needle line(s) match.";
+        let restart = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: vec![mk_failed_attempt(
+                    "edit_file",
+                    "spec/01-foundation-identity.md",
+                    snippet,
+                )],
+            })
+            .await
+            .unwrap()
+            .expect("rejected-only write turn must produce a Continuation");
+        assert_eq!(
+            runtime.current_streak().await,
+            1,
+            "rejected-only writes must advance the streak just like a pure no-write turn"
+        );
+        match restart {
+            TaskRestart::Continuation { kind, input, .. } => {
+                assert_eq!(kind, ContinuationKind::Recovery);
+                match input {
+                    UserInput::Steer { instruction } => {
+                        assert!(
+                            instruction.contains("kind=\"recovery\""),
+                            "Recovery body must tag the envelope: {instruction}"
+                        );
+                        assert!(
+                            instruction.contains("edit_file"),
+                            "Recovery body must name the rejected tool: {instruction}"
+                        );
+                        assert!(
+                            instruction.contains("spec/01-foundation-identity.md"),
+                            "Recovery body must surface the target path hint: {instruction}"
+                        );
+                        assert!(
+                            instruction.contains("needle line(s) match"),
+                            "Recovery body must surface the actionable executor phrase: {instruction}"
+                        );
+                        assert!(
+                            instruction.contains("Re-read the target file"),
+                            "Recovery body must include the steering advice: {instruction}"
+                        );
+                    }
+                    other => panic!("expected UserInput::Steer, got {other:?}"),
+                }
+            }
+            other => panic!("expected Continuation, got {other:?}"),
+        }
+    }
+
+    /// Priority A regression: a real `write_file` success must still
+    /// reset `consecutive_no_write` to zero — the tri-state classifier
+    /// must not regress the existing `SuccessfulWrite` arm.
+    #[tokio::test]
+    async fn successful_write_resets_streak() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+        // Burn the streak up with two no-write turns.
+        for _ in 0..2 {
+            runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(runtime.current_streak().await, 2);
+        // A real write must flip the streak back to zero (and the
+        // total-continuation budget too — see the rationale in
+        // `ContinuationState::on_iteration_end`).
+        let outcome = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: true,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            outcome.is_none(),
+            "a successful write returns no TaskRestart"
+        );
+        assert_eq!(
+            runtime.current_streak().await,
+            0,
+            "a successful write must reset consecutive_no_write to 0"
+        );
+        let snap = runtime.snapshot().await;
+        assert_eq!(
+            snap.total_continuation_turns, 0,
+            "a successful write must also reset total_continuation_turns"
+        );
+    }
+
+    /// Priority A: the Recovery body must include only the last N
+    /// failures (the most recent N when more than N are buffered).
+    /// Push 5 failures across 3 separate turns so the session-scoped
+    /// ring buffer accumulates them across `TurnDiff::reset()`
+    /// boundaries; the rendered body must show exactly 3 entries,
+    /// and they must be the *most recent* ones.
+    #[tokio::test]
+    async fn recovery_variant_echoes_up_to_three_recent_errors() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+        // Turn 1: two failures.
+        runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: vec![
+                    mk_failed_attempt("edit_file", "a.rs", "needle miss A"),
+                    mk_failed_attempt("edit_file", "b.rs", "needle miss B"),
+                ],
+            })
+            .await
+            .unwrap();
+        // Turn 2: one failure.
+        runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: vec![mk_failed_attempt(
+                    "write_file",
+                    "c.rs",
+                    "path not found C",
+                )],
+            })
+            .await
+            .unwrap();
+        // Turn 3: two more failures. After this, the buffer holds 5
+        // entries (cap is 6), so all 5 are retained; the renderer
+        // will clamp to the last 3.
+        let restart = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: vec![
+                    mk_failed_attempt("edit_file", "d.rs", "needle miss D"),
+                    mk_failed_attempt("edit_file", "e.rs", "needle miss E"),
+                ],
+            })
+            .await
+            .unwrap()
+            .expect("rejected-only third turn must produce a Continuation");
+        let body = match restart {
+            TaskRestart::Continuation { input, .. } => match input {
+                UserInput::Steer { instruction } => instruction,
+                other => panic!("expected Steer, got {other:?}"),
+            },
+            other => panic!("expected Continuation, got {other:?}"),
+        };
+        // Exactly three numbered entries (`1.` / `2.` / `3.`) — and
+        // they must be the latest three: `c.rs`, `d.rs`, `e.rs`.
+        assert!(
+            body.contains("  1. write_file"),
+            "first recap entry: {body}"
+        );
+        assert!(
+            body.contains("path not found C"),
+            "first entry must be the third-most-recent (c.rs): {body}"
+        );
+        assert!(
+            body.contains("  2. edit_file (path: d.rs)"),
+            "second entry: {body}"
+        );
+        assert!(
+            body.contains("  3. edit_file (path: e.rs)"),
+            "third entry: {body}"
+        );
+        assert!(
+            !body.contains("  4."),
+            "Recovery body must clamp at exactly three entries: {body}"
+        );
+        // Oldest two entries (a.rs / b.rs) MUST NOT appear in the
+        // recap — they have been bumped past the renderer's window
+        // by the more recent rejections.
+        assert!(
+            !body.contains("needle miss A"),
+            "oldest entry (a.rs) must be evicted from the recap window: {body}"
+        );
+        assert!(
+            !body.contains("needle miss B"),
+            "older entry (b.rs) must be evicted from the recap window: {body}"
+        );
+    }
+
+    /// Priority A regression: a turn with NEITHER successful writes
+    /// NOR rejected writes (the classic "no write tool was called at
+    /// all" case) must still emit the existing `Nudge` body — the
+    /// Recovery branch must not steal cases that legitimately belong
+    /// to the no-write arm.
+    #[tokio::test]
+    async fn pure_no_write_keeps_existing_nudge_variant() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+        let restart = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap()
+            .expect("no-write turn must produce a Continuation");
+        match restart {
+            TaskRestart::Continuation { kind, input, .. } => {
+                assert_eq!(kind, ContinuationKind::Nudge);
+                match input {
+                    UserInput::Steer { instruction } => {
+                        assert!(
+                            instruction.contains("kind=\"nudge\""),
+                            "pure no-write must still emit the nudge envelope: {instruction}"
+                        );
+                        assert!(
+                            !instruction.contains("kind=\"recovery\""),
+                            "pure no-write must NEVER emit a recovery body: {instruction}"
+                        );
+                    }
+                    other => panic!("expected Steer, got {other:?}"),
+                }
+            }
+            other => panic!("expected Continuation, got {other:?}"),
+        }
+    }
+
+    /// Priority A regression: the codex-style "blocked after 3
+    /// consecutive no-writes" threshold must continue to fire on the
+    /// pure no-write path. The new Recovery arm must not break the
+    /// existing escalation; the third *pure* no-write iteration still
+    /// produces `ContinuationKind::Blocked` and the streak is 3 (not
+    /// recovered, not nudged).
+    #[tokio::test]
+    async fn blocked_threshold_unchanged_for_no_write_path() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+        let mut kinds = Vec::new();
+        for _ in 0..3 {
+            let restart = runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: empty_read_paths(),
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap()
+                .expect("no-write must produce Continuation");
+            match restart {
+                TaskRestart::Continuation { kind, .. } => kinds.push(kind),
+                other => panic!("expected Continuation, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            kinds,
+            vec![
+                ContinuationKind::Nudge,
+                ContinuationKind::Nudge,
+                ContinuationKind::Blocked,
+            ],
+            "three consecutive *pure* no-write iterations must still escalate to Blocked, NOT Recovery"
+        );
+    }
+
+    /// Priority A: `classify_write_attempt` collapses the
+    /// `(had_write, failed_attempts)` pair correctly. Pure unit
+    /// coverage so the wiring tests above can stay focused on
+    /// behaviour rather than enumeration.
+    #[test]
+    fn classify_write_attempt_truth_table() {
+        let one = vec![mk_failed_attempt("edit_file", "x.rs", "miss")];
+        assert_eq!(
+            classify_write_attempt(true, &one),
+            WriteAttemptKind::SuccessfulWrite,
+            "a successful write trumps any sibling rejections"
+        );
+        assert_eq!(
+            classify_write_attempt(true, &[]),
+            WriteAttemptKind::SuccessfulWrite
+        );
+        assert_eq!(
+            classify_write_attempt(false, &one),
+            WriteAttemptKind::OnlyRejectedWrites
+        );
+        assert_eq!(
+            classify_write_attempt(false, &[]),
+            WriteAttemptKind::NoWriteAttempted
+        );
+    }
+
+    /// Priority A: the session-scoped failure ring buffer evicts via
+    /// FIFO at the published cap so a stuck loop cannot grow it
+    /// without bound. The buffer is consulted by the Recovery body
+    /// renderer, so the boundary behaviour is observable.
+    #[tokio::test]
+    async fn recent_failures_buffer_caps_at_published_size() {
+        let runtime = fresh_runtime(64);
+        let task = TaskId::new_v4();
+        // Push more failures than the buffer can hold across several
+        // turns. The renderer clamps to 3 entries, so peek at the
+        // buffer through a public snapshot path: the streak is the
+        // proxy here (each turn is OnlyRejectedWrites and the streak
+        // never resets), then we render and assert the most-recent
+        // entries survive.
+        for i in 0..(RECENT_FAILURES_BUFFER_SIZE + 2) {
+            let label = format!("miss-{i}");
+            runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: empty_read_paths(),
+                    failed_write_attempts: vec![mk_failed_attempt("edit_file", "x.rs", &label)],
+                })
+                .await
+                .unwrap();
+        }
+        // Trigger one more rejected-only turn so the renderer fires
+        // on the freshest entry and we can grep the body.
+        let restart = runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: empty_read_paths(),
+                failed_write_attempts: vec![mk_failed_attempt("edit_file", "x.rs", "miss-final")],
+            })
+            .await
+            .unwrap()
+            .expect("final turn must produce a Continuation");
+        let body = match restart {
+            TaskRestart::Continuation { input, .. } => match input {
+                UserInput::Steer { instruction } => instruction,
+                other => panic!("expected Steer, got {other:?}"),
+            },
+            other => panic!("expected Continuation, got {other:?}"),
+        };
+        // The very oldest entries (miss-0, miss-1) must have been
+        // evicted; the freshest one must appear.
+        assert!(
+            body.contains("miss-final"),
+            "newest entry must survive: {body}"
+        );
+        assert!(
+            !body.contains("miss-0"),
+            "oldest entry must have been FIFO-evicted: {body}"
+        );
     }
 }
