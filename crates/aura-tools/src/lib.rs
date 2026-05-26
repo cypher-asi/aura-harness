@@ -153,10 +153,7 @@ impl CommandPolicy {
         Self {
             enabled: true,
             command_allowlist: vec![],
-            binary_allowlist: DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES
-                .iter()
-                .map(|binary| (*binary).to_string())
-                .collect(),
+            binary_allowlist: default_autonomous_dev_loop_binaries(),
             allow_shell: true,
             allowed_shell_scripts: vec![],
             allow_unrestricted_full_access: true,
@@ -169,6 +166,10 @@ impl CommandPolicy {
 /// bootstraps. This list replaces the removed env-based command allowlist for
 /// node/runtime startup; callers that need a narrower execution surface can
 /// still build a custom [`ToolConfig`] explicitly.
+///
+/// Platform-specific entries are appended by
+/// [`default_autonomous_dev_loop_binaries`] so Windows does not advertise Unix
+/// shims such as `ls` that are not guaranteed to resolve as binaries.
 pub const DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
     "bash",
     "bun",
@@ -179,7 +180,6 @@ pub const DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
     "dir",
     "git",
     "go",
-    "ls",
     "node",
     "npm",
     "npx",
@@ -197,6 +197,22 @@ pub const DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
     "where",
     "yarn",
 ];
+
+#[cfg(unix)]
+const PLATFORM_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &["ls"];
+
+#[cfg(not(unix))]
+const PLATFORM_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[];
+
+/// Build the effective autonomous dev-loop binary allowlist for this platform.
+#[must_use]
+pub fn default_autonomous_dev_loop_binaries() -> Vec<String> {
+    DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES
+        .iter()
+        .chain(PLATFORM_AUTONOMOUS_DEV_LOOP_BINARIES.iter())
+        .map(|binary| (*binary).to_string())
+        .collect()
+}
 
 /// Tool execution configuration.
 #[derive(Debug, Clone)]
@@ -374,6 +390,30 @@ mod default_tests {
         assert!(
             cfg.command.allow_unrestricted_full_access,
             "autonomous full-access sessions may bypass command allowlists"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dev_loop_binary_allowlist_excludes_ls_on_windows() {
+        let cfg = ToolConfig::for_autonomous_dev_loop();
+        assert!(
+            !cfg.command.binary_allowlist.contains(&"ls".to_string()),
+            "Windows dev-loop policy must not advertise an unresolved Unix ls binary"
+        );
+        assert!(
+            cfg.command.binary_allowlist.contains(&"dir".to_string()),
+            "Windows dev-loop policy should retain dir as the platform listing command"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dev_loop_binary_allowlist_includes_ls_on_unix() {
+        let cfg = ToolConfig::for_autonomous_dev_loop();
+        assert!(
+            cfg.command.binary_allowlist.contains(&"ls".to_string()),
+            "Unix dev-loop policy should retain ls"
         );
     }
 }
