@@ -127,11 +127,6 @@ pub enum AutomatonEvent {
         task_id: String,
         reason: String,
     },
-    TaskRetrying {
-        task_id: String,
-        attempt: u32,
-        reason: String,
-    },
     /// Mid-stream `tool_use` request was interrupted and the agent is
     /// retrying with exponential backoff. 1:1 projection of
     /// [`aura_agent::AgentLoopEvent::ToolCallRetrying`]; the

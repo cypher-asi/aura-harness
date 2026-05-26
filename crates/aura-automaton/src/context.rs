@@ -108,7 +108,6 @@ fn event_kind(event: &AutomatonEvent) -> &'static str {
         AutomatonEvent::TaskCompleted { .. } => "task_completed",
         AutomatonEvent::TaskFailed { .. } => "task_failed",
         AutomatonEvent::CommitSkipped { .. } => "commit_skipped",
-        AutomatonEvent::TaskRetrying { .. } => "task_retrying",
         AutomatonEvent::ToolCallRetrying { .. } => "tool_call_retrying",
         AutomatonEvent::ToolCallFailed { .. } => "tool_call_failed",
         AutomatonEvent::LoopFinished { .. } => "loop_finished",
@@ -160,7 +159,6 @@ fn is_protocol_event(event: &AutomatonEvent) -> bool {
             | AutomatonEvent::TaskStarted { .. }
             | AutomatonEvent::TaskCompleted { .. }
             | AutomatonEvent::TaskFailed { .. }
-            | AutomatonEvent::TaskRetrying { .. }
             | AutomatonEvent::CommitSkipped { .. }
             | AutomatonEvent::LoopFinished { .. }
             | AutomatonEvent::TokenUsage { .. }
