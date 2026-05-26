@@ -1089,7 +1089,7 @@ Recommendations grouped by priority. Each carries: rationale, scope (S/M/L), fil
 
 #### R-TOOL-1: `apply_patch` tool with V4A-format parser
 
-- **Rationale**: **SUPERSEDED — see Layer 0 doom-loop fix.** 15-30% token savings on file-mutating turns; format is well-specified and easy to parse.
+- **Rationale**: **CLOSED 2026-05 — Codex-parity dev-loop strip.** The follow-up doom-loop fix landed as a four-commit series that removes the EndTurn intercept, the in-loop continuation injection, the `task_done` test-gate retry budget, and the dev-loop automaton's `task_blocked` retry. The harness now trusts `EndTurn` (codex-rs/core/src/tasks/regular.rs:73-88), runs the project test suite once on `task_done` as a `TestSuiteWarning` event rather than a hard gate, and the dev-loop automaton stops on first failure instead of requeueing with a decomposition prompt. See commits `fix(harness): trust EndTurn, strip in-loop continuation injection`, `fix(agent): drop task_done test gate (codex parity)`, `fix(automaton): drop task_blocked retry from dev_loop`, and `chore(prompts): trim dev_loop_workflow exit clause and resnapshot`.
 - **Scope**: S (1-2 weeks).
 - **Files to touch**:
   - New crate `crates/aura-apply-patch/` (parser + format).
@@ -1098,7 +1098,7 @@ Recommendations grouped by priority. Each carries: rationale, scope (S/M/L), fil
   - `crates/aura-tools/src/definitions.rs` add tool spec.
 - **Success metric**: median input-token spend per file-edit turn drops 15% on the existing benchmark suite ([`docs/context-benchmark-suite.md`](./context-benchmark-suite.md)).
 
-Post-2026-05 evidence (Task 5.7 doom loop) showed apply_patch's atomically-all-or-nothing envelope and mandatory context-line derivation created a tool-shape gradient biasing the agent toward exploratory reads. The token-efficiency win on the success path was the wrong objective to optimize for; failure-mode shape on the uncertainty path dominates. apply_patch impl stays compilable for opt-in callers but is no longer in the dev-loop bundle.
+Post-2026-05 evidence (Task 5.7 doom loop) showed apply_patch's atomically-all-or-nothing envelope and mandatory context-line derivation created a tool-shape gradient biasing the agent toward exploratory reads. The token-efficiency win on the success path was the wrong objective to optimize for; failure-mode shape on the uncertainty path dominates. apply_patch impl stays compilable for opt-in callers but is no longer in the dev-loop bundle. The follow-up Codex-parity strip cited above closes the root-cause path that R-TOOL-1 was originally going to paper over: with the harness no longer manufacturing `task_blocked` envelopes, the agent has a single, stable termination contract and there is nothing left for `apply_patch` to mitigate from the doom-loop angle.
 
 #### R-ARCH-1: UDS + JSON-RPC v2 transport
 
