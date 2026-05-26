@@ -408,8 +408,7 @@ static CONSOLE_CAPTURE_INIT: std::sync::Once = std::sync::Once::new();
 /// Thread ID of the test currently holding [`CONSOLE_CAPTURE_LOCK`].
 /// `0` means "no test is capturing" — the writer drops the event in
 /// that state, so we don't accumulate events from unrelated tests.
-static CAPTURE_THREAD_ID: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static CAPTURE_THREAD_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn current_thread_id_u64() -> u64 {
     use std::hash::{Hash, Hasher};

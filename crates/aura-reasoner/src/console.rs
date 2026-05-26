@@ -53,6 +53,12 @@ pub struct AnthropicRequestView<'a> {
     pub messages_count: usize,
     pub tools_count: usize,
     pub tool_choice: &'a str,
+    /// Comma-joined list of tool names attached to the request, taken
+    /// straight from the serialized body. Empty when the request
+    /// shipped without any tools (e.g. `kind: Auxiliary` sub-prompts);
+    /// the renderer skips the `tool_names` row in that case so the
+    /// block stays tight.
+    pub tool_names: &'a str,
     pub thinking_label: &'a str,
     pub system_bytes: usize,
     pub last_user_bytes: usize,
@@ -99,10 +105,17 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
         "tools",
         &format!("{} ({})", req.tools_count, req.tool_choice),
     ));
+    if !req.tool_names.is_empty() {
+        out.push_str(&wrap_row("tool_names", req.tool_names));
+    }
     out.push_str(&wrap_row(
         "thinking",
+        // Widen the inline padding to fit the richer label format
+        // (e.g. `on(medium · enabled · b=4096)`); the legacy 14-col
+        // pad was sized for `on` / `off` and would smash the system
+        // / last_user tail against the label on every thinking turn.
         &format!(
-            "{:<14} system {:<6} last_user {} / {}",
+            "{:<32} system {:<6} last_user {} / {}",
             req.thinking_label,
             human_bytes(req.system_bytes),
             human_bytes(req.last_user_bytes),
@@ -539,12 +552,40 @@ mod tests {
             messages_count: 7,
             tools_count: 15,
             tool_choice: "auto",
-            thinking_label: "on(b=1024)",
+            tool_names: "Read,Write,Edit,Glob,Grep,Shell,SemanticSearch",
+            thinking_label: "on(medium · enabled · b=4096)",
             system_bytes: 3823,
             last_user_bytes: 932,
             last_user_hash: Some("8c65c4f3"),
             headers_present: "ver auth ct beta proj agent sess org",
             request_hash: "1e62bdae",
+            destination: "aura-network",
+            destination_host: "aura-router.onrender.com",
+        });
+    }
+
+    #[test]
+    fn request_block_skips_tool_names_when_empty() {
+        // Auxiliary-style request (no tools attached): we still want
+        // the block to render, but the `tool_names` row should not
+        // appear since there's nothing to enumerate. Asserting via
+        // direct construction here — the renderer logs to a tracing
+        // target so this is a smoke test that no panic / format
+        // misalignment fires when the field is empty.
+        anthropic_request_block(AnthropicRequestView {
+            model: "claude-opus-4-6",
+            kind: "Auxiliary",
+            body_bytes: 12_345,
+            messages_count: 1,
+            tools_count: 0,
+            tool_choice: "n/a",
+            tool_names: "",
+            thinking_label: "off",
+            system_bytes: 162,
+            last_user_bytes: 14_700,
+            last_user_hash: Some("511e97e8"),
+            headers_present: "ver auth ct beta proj agent sess org",
+            request_hash: "d5d47e97",
             destination: "aura-network",
             destination_host: "aura-router.onrender.com",
         });

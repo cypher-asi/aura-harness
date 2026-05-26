@@ -9,7 +9,8 @@ use super::{AnthropicProvider, ApiError};
 use crate::error::ReasonerError;
 use crate::{
     emit_retry, response_output_shape, stream_from_response, ModelContentProfile, ModelProvider,
-    ModelRequest, ModelResponse, ProviderTrace, RetryInfo, StopReason, StreamEventStream, Usage,
+    ModelRequest, ModelResponse, ProviderTrace, RetryInfo, StopReason, StreamEventStream,
+    ThinkingEffort, Usage,
 };
 use async_trait::async_trait;
 use serde::Serialize;
@@ -384,11 +385,12 @@ impl AnthropicProvider {
             .as_deref()
             .map(strip_tool_choice_braces)
             .unwrap_or_else(|| "n/a".to_string());
-        let thinking_label = if request_summary.has_thinking {
-            "on"
-        } else {
-            "off"
-        };
+        let thinking_label = format_thinking_label(
+            request_summary.has_thinking,
+            request_ctx.thinking_effort,
+            request_summary.thinking_type.as_deref(),
+            request_summary.thinking_budget_tokens,
+        );
 
         // Visual block for human-scannable transcripts. The forensic
         // field-by-field log is preserved at `debug!` below so
@@ -402,7 +404,8 @@ impl AnthropicProvider {
             messages_count,
             tools_count: request_summary.tools_count,
             tool_choice: &tool_choice_label,
-            thinking_label,
+            tool_names: &request_summary.tool_names,
+            thinking_label: &thinking_label,
             system_bytes: request_summary.system_bytes,
             last_user_bytes: request_summary.last_user_text_bytes,
             last_user_hash: request_summary.last_user_text_hash.as_deref(),
@@ -965,6 +968,53 @@ fn debug_log_response_received(
 }
 // #endregion
 
+/// Build the human-readable `thinking` row label for the request
+/// block. Combines the caller's [`ThinkingEffort`] intent with the
+/// wire-level `thinking.{type, budget_tokens}` actually serialized
+/// into the outbound body, so the transcript reflects both the
+/// configured effort knob and the resolved budget Anthropic will see.
+///
+/// Output shape:
+///
+/// - `"off"` when `has_thinking == false`.
+/// - `"on(<parts>)"` otherwise, where `<parts>` is a ` · `-joined
+///   subset of: the caller's effort label (`low`/`medium`/`high`),
+///   the wire type (`enabled`/`adaptive`/…), and `b=<n>` for the
+///   budget.
+/// - `"on"` (parts empty) is only reachable if `has_thinking=true`
+///   but neither effort nor wire fields are populated — defensive.
+fn format_thinking_label(
+    has_thinking: bool,
+    effort: Option<ThinkingEffort>,
+    wire_type: Option<&str>,
+    budget: Option<u64>,
+) -> String {
+    if !has_thinking {
+        return "off".to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    match effort {
+        Some(ThinkingEffort::Low) => parts.push("low".to_string()),
+        Some(ThinkingEffort::Medium) => parts.push("medium".to_string()),
+        Some(ThinkingEffort::High) => parts.push("high".to_string()),
+        // `Off` cannot reach this branch (would produce no thinking
+        // config); `None` means the legacy max_tokens-coupled path
+        // fired and there's no caller-level label to surface.
+        _ => {}
+    }
+    if let Some(t) = wire_type {
+        parts.push(t.to_string());
+    }
+    if let Some(b) = budget {
+        parts.push(format!("b={b}"));
+    }
+    if parts.is_empty() {
+        "on".to_string()
+    } else {
+        format!("on({})", parts.join(" · "))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RequestDiagnosticsSummary {
     body_hash: String,
@@ -978,6 +1028,14 @@ struct RequestDiagnosticsSummary {
     tool_names: String,
     tool_choice: Option<String>,
     has_thinking: bool,
+    /// Wire-level `thinking.type` (e.g. `"enabled"` / `"adaptive"`),
+    /// captured straight from the serialized request body so the
+    /// transcript reflects exactly what Anthropic receives — not what
+    /// the caller intended pre-`resolve_thinking`.
+    thinking_type: Option<String>,
+    /// Wire-level `thinking.budget_tokens`. Present only for
+    /// `type == "enabled"`; the `adaptive` mode rejects this field.
+    thinking_budget_tokens: Option<u64>,
     has_output_config: bool,
 }
 
@@ -1000,6 +1058,8 @@ fn summarize_anthropic_request(body_bytes: &[u8]) -> RequestDiagnosticsSummary {
             tool_names: "<invalid-json>".to_string(),
             tool_choice: None,
             has_thinking: false,
+            thinking_type: None,
+            thinking_budget_tokens: None,
             has_output_config: false,
         };
     };
@@ -1035,7 +1095,15 @@ fn summarize_anthropic_request(body_bytes: &[u8]) -> RequestDiagnosticsSummary {
 
     let (tools_count, tool_names) = summarize_tools(value.get("tools"));
     let tool_choice = value.get("tool_choice").map(compact_json_for_log);
-    let has_thinking = value.get("thinking").is_some();
+    let thinking_value = value.get("thinking");
+    let has_thinking = thinking_value.is_some();
+    let thinking_type = thinking_value
+        .and_then(|t| t.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let thinking_budget_tokens = thinking_value
+        .and_then(|t| t.get("budget_tokens"))
+        .and_then(serde_json::Value::as_u64);
     let has_output_config = value.get("output_config").is_some();
 
     RequestDiagnosticsSummary {
@@ -1050,6 +1118,8 @@ fn summarize_anthropic_request(body_bytes: &[u8]) -> RequestDiagnosticsSummary {
         tool_names,
         tool_choice,
         has_thinking,
+        thinking_type,
+        thinking_budget_tokens,
         has_output_config,
     }
 }
@@ -3618,7 +3688,29 @@ mod request_diagnostics_tests {
         assert_eq!(summary.tool_names, "read_file,write_file");
         assert_eq!(summary.tool_choice, Some(r#"{"type":"auto"}"#.to_string()));
         assert!(summary.has_thinking);
+        assert_eq!(summary.thinking_type.as_deref(), Some("enabled"));
+        assert_eq!(summary.thinking_budget_tokens, Some(1024));
         assert!(summary.has_output_config);
+    }
+
+    #[test]
+    fn summarize_anthropic_request_extracts_adaptive_thinking_without_budget() {
+        // Adaptive thinking mode rejects `budget_tokens` on the wire
+        // (`build_thinking_config` skips the field), so the summary
+        // should surface `type=adaptive` with `budget_tokens=None`.
+        let body = serde_json::to_vec(&json!({
+            "model": "aura-claude-opus-4-7",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4096,
+            "thinking": {"type": "adaptive"}
+        }))
+        .unwrap();
+
+        let summary = summarize_anthropic_request(&body);
+
+        assert!(summary.has_thinking);
+        assert_eq!(summary.thinking_type.as_deref(), Some("adaptive"));
+        assert_eq!(summary.thinking_budget_tokens, None);
     }
 
     #[test]
@@ -3628,6 +3720,69 @@ mod request_diagnostics_tests {
         assert_eq!(summary.top_level_keys, "<invalid-json>");
         assert_eq!(summary.tool_names, "<invalid-json>");
         assert_eq!(summary.last_user_text_hash, None);
+        assert_eq!(summary.thinking_type, None);
+        assert_eq!(summary.thinking_budget_tokens, None);
+    }
+
+    #[test]
+    fn format_thinking_label_off_when_no_thinking() {
+        let s = format_thinking_label(
+            false,
+            Some(ThinkingEffort::Medium),
+            Some("enabled"),
+            Some(4096),
+        );
+        assert_eq!(s, "off");
+    }
+
+    #[test]
+    fn format_thinking_label_joins_effort_type_and_budget() {
+        let s = format_thinking_label(
+            true,
+            Some(ThinkingEffort::Medium),
+            Some("enabled"),
+            Some(4096),
+        );
+        assert_eq!(s, "on(medium · enabled · b=4096)");
+    }
+
+    #[test]
+    fn format_thinking_label_renders_high_effort_with_clamped_budget() {
+        let s = format_thinking_label(
+            true,
+            Some(ThinkingEffort::High),
+            Some("enabled"),
+            Some(16000),
+        );
+        assert_eq!(s, "on(high · enabled · b=16000)");
+    }
+
+    #[test]
+    fn format_thinking_label_skips_budget_for_adaptive_mode() {
+        // Adaptive mode never carries a budget; the renderer should
+        // emit just `on(<effort> · adaptive)` so operators can
+        // distinguish it at a glance from the enabled path.
+        let s = format_thinking_label(true, Some(ThinkingEffort::Low), Some("adaptive"), None);
+        assert_eq!(s, "on(low · adaptive)");
+    }
+
+    #[test]
+    fn format_thinking_label_handles_legacy_path_without_effort() {
+        // Non-migrated callers (`thinking_effort: None`) fall through
+        // to the legacy max_tokens-coupled auto-enable; in that case
+        // we only have the wire fields to surface.
+        let s = format_thinking_label(true, None, Some("enabled"), Some(2048));
+        assert_eq!(s, "on(enabled · b=2048)");
+    }
+
+    #[test]
+    fn format_thinking_label_defensive_when_no_parts_resolved() {
+        // Should not happen in practice (has_thinking=true implies a
+        // serialized thinking block), but guard against future
+        // upstream shape changes by emitting a bare `on` instead of
+        // an empty-parens `on()`.
+        let s = format_thinking_label(true, None, None, None);
+        assert_eq!(s, "on");
     }
 
     #[test]
