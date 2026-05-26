@@ -279,6 +279,10 @@ pub fn engine_specific_tools() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {
                     "notes": { "type": "string", "description": "Summary of what was done" },
+                    "no_changes_needed": {
+                        "type": "boolean",
+                        "description": "Set true only when the task is already satisfied and no write_file/edit_file/delete_file changes are required; explain why in notes."
+                    },
                     "follow_ups": {
                         "type": "array",
                         "description": "Optional follow-up task suggestions",
@@ -402,6 +406,34 @@ mod tests {
             read.eager_input_streaming, None,
             "read_file has nothing large to stream; should not set the flag"
         );
+    }
+
+    #[test]
+    fn task_done_schema_exposes_no_changes_needed_escape_hatch() {
+        let tools = engine_specific_tools();
+        let task_done = tools
+            .iter()
+            .find(|tool| tool.name == "task_done")
+            .expect("task_done schema exists");
+        let props = task_done
+            .input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("task_done has properties");
+
+        assert_eq!(
+            props
+                .get("no_changes_needed")
+                .and_then(|schema| schema.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("boolean")
+        );
+        assert!(props
+            .get("no_changes_needed")
+            .and_then(|schema| schema.get("description"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .contains("no write_file/edit_file/delete_file changes are required"));
     }
 
     #[test]

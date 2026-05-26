@@ -135,6 +135,14 @@ fn task_done_no_changes(notes: &str) -> ToolCallInfo {
     }
 }
 
+fn read_file_call(path: &str) -> ToolCallInfo {
+    ToolCallInfo {
+        id: "read_1".to_string(),
+        name: "read_file".to_string(),
+        input: serde_json::json!({ "path": path }),
+    }
+}
+
 // ------------------------------------------------------------------
 // task_done guard tests
 // ------------------------------------------------------------------
@@ -161,6 +169,41 @@ async fn task_done_rejects_when_no_file_ops() {
         body.contains("no_changes_needed"),
         "rejection must keep the no_changes_needed escape hatch: {body}"
     );
+}
+
+#[tokio::test]
+async fn task_done_no_writes_rejection_blocks_exploration_detours() {
+    let executor = make_executor();
+    let rejected = executor
+        .execute(&[task_done_call("already implemented")])
+        .await;
+    assert!(rejected[0].is_error);
+
+    let detour = executor.execute(&[read_file_call("src/lib.rs")]).await;
+    assert_eq!(detour.len(), 1);
+    assert!(detour[0].is_error);
+    assert!(detour[0]
+        .content
+        .contains("task_done was just rejected because no file changes were produced"));
+    assert!(detour[0].content.contains("no_changes_needed: true"));
+}
+
+#[tokio::test]
+async fn task_done_no_changes_still_passes_after_no_write_rejection() {
+    let executor = make_executor();
+    let rejected = executor
+        .execute(&[task_done_call("already implemented")])
+        .await;
+    assert!(rejected[0].is_error);
+
+    let done = executor
+        .execute(&[task_done_no_changes(
+            "outbox CF is already implemented and wired",
+        )])
+        .await;
+    assert_eq!(done.len(), 1);
+    assert!(!done[0].is_error);
+    assert!(done[0].stop_loop);
 }
 
 /// Parity check after the strip: an exploring-phase executor produces
@@ -754,6 +797,51 @@ async fn task_done_test_gate_honors_disable_flag() {
         *runner.calls.lock().await,
         0,
         "test runner must not be called when the disable flag is set"
+    );
+}
+
+#[tokio::test]
+async fn task_done_no_changes_skips_test_gate_when_no_file_ops() {
+    let runner = Arc::new(MockTestRunner::always_fail());
+    let executor = make_executor_with_runner(runner.clone());
+
+    let results = executor
+        .execute(&[task_done_no_changes(
+            "task was already satisfied by existing implementation",
+        )])
+        .await;
+
+    assert!(!results[0].is_error, "{}", results[0].content);
+    assert!(results[0].stop_loop);
+    assert_eq!(
+        *runner.calls.lock().await,
+        0,
+        "no-change completions without file ops should not run the DoD test gate"
+    );
+}
+
+#[tokio::test]
+async fn task_done_no_changes_with_file_ops_still_runs_test_gate() {
+    let runner = Arc::new(MockTestRunner::always_fail());
+    let executor = make_executor_with_runner(runner.clone());
+    seed_with_file_op(&executor).await;
+
+    let results = executor
+        .execute(&[task_done_no_changes(
+            "changed code while also marking no_changes_needed",
+        )])
+        .await;
+
+    assert!(results[0].is_error);
+    assert!(
+        results[0].content.contains("Definition-of-Done test gate"),
+        "{}",
+        results[0].content
+    );
+    assert_eq!(
+        *runner.calls.lock().await,
+        1,
+        "real file edits must still pass through the DoD test gate"
     );
 }
 

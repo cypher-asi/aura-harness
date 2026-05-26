@@ -129,6 +129,17 @@ impl TaskToolExecutor {
             return;
         }
 
+        if self.should_skip_test_gate_for_no_change_completion().await {
+            results.push(Self::tool_result(
+                tc,
+                r#"{"status":"completed"}"#,
+                false,
+                true,
+            ));
+            *stop = true;
+            return;
+        }
+
         // Final gate: the full project test suite must be green. Pre-existing
         // failures count — the agent owns them as part of this task. The
         // `check_all_tests_pass` helper handles its own retry budget, the
@@ -259,7 +270,18 @@ impl TaskToolExecutor {
         if no_changes {
             return None;
         }
+        self.recent_tool_outcomes
+            .lock()
+            .await
+            .task_done_no_writes_rejected = true;
         Some(SteeringInjector::render(&SteeringKind::TaskDoneNoWrites))
+    }
+
+    async fn should_skip_test_gate_for_no_change_completion(&self) -> bool {
+        if !*self.no_changes_needed.lock().await {
+            return false;
+        }
+        self.tracked_file_ops.lock().await.is_empty()
     }
 
     /// Run the full project test suite and translate the outcome into a

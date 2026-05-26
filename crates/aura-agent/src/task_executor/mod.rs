@@ -230,6 +230,10 @@ pub(crate) struct RecentToolOutcomes {
     /// returned a non-zero exit. Policy-denied commands *do not* set
     /// this flag because nothing ran.
     pub(crate) last_command_failed: bool,
+    /// Set after `task_done` is rejected only because no writes landed and
+    /// `no_changes_needed` was omitted. While set, exploratory detours are
+    /// blocked so the next useful action is a write or corrected task_done.
+    pub(crate) task_done_no_writes_rejected: bool,
 }
 
 impl RecentToolOutcomes {
@@ -273,7 +277,15 @@ impl RecentToolOutcomes {
     pub fn reset(&mut self) {
         self.entries.clear();
         self.last_command_failed = false;
+        self.task_done_no_writes_rejected = false;
     }
+}
+
+fn allowed_after_no_write_task_done_reject(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "task_done" | "write_file" | "edit_file" | "delete_file"
+    )
 }
 
 /// Heuristic: does this tool-result content look like a policy denial
@@ -301,11 +313,38 @@ fn is_policy_denial(content: &str) -> bool {
 impl AgentToolExecutor for TaskToolExecutor {
     async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
         let mut delegated_indices: Vec<usize> = Vec::new();
+        let mut blocked_results: std::collections::HashMap<usize, ToolCallResult> =
+            std::collections::HashMap::new();
+        let block_exploration_after_no_write_reject = self
+            .recent_tool_outcomes
+            .lock()
+            .await
+            .task_done_no_writes_rejected;
 
         for (i, tc) in tool_calls.iter().enumerate() {
+            if block_exploration_after_no_write_reject
+                && !allowed_after_no_write_task_done_reject(&tc.name)
+            {
+                blocked_results.insert(
+                    i,
+                    ToolCallResult {
+                        tool_use_id: tc.id.clone(),
+                        content: "task_done was just rejected because no file changes were produced. Your next action must be write_file / edit_file / delete_file, or task_done with no_changes_needed: true and notes explaining why the task is already satisfied.".to_string(),
+                        is_error: true,
+                        kind: aura_core::ToolResultKind::AgentError,
+                        stop_loop: false,
+                        file_changes: Vec::new(),
+                    },
+                );
+                continue;
+            }
             match tc.name.as_str() {
                 "task_done" | "get_task_context" | "submit_plan" => {}
                 "write_file" | "edit_file" | "delete_file" => {
+                    self.recent_tool_outcomes
+                        .lock()
+                        .await
+                        .task_done_no_writes_rejected = false;
                     self.track_file_op(&tc.name, &tc.input).await;
                     if let Some(path) = tc.input.get("path").and_then(|v| v.as_str()) {
                         self.self_review.lock().await.record_write(path);
@@ -339,7 +378,11 @@ impl AgentToolExecutor for TaskToolExecutor {
         let mut results = Vec::with_capacity(tool_calls.len());
         let mut stop = false;
 
-        for tc in tool_calls.iter() {
+        for (i, tc) in tool_calls.iter().enumerate() {
+            if let Some(result) = blocked_results.remove(&i) {
+                results.push(result);
+                continue;
+            }
             match tc.name.as_str() {
                 "task_done" => {
                     self.handle_task_done(tc, &mut results, &mut stop).await;

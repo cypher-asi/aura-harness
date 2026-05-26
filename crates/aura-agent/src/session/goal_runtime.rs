@@ -258,6 +258,12 @@ pub(crate) enum TaskRestart {
         session_id: SessionId,
         /// Consecutive-no-write streak at the moment of escalation.
         streak: u32,
+        /// Configured continuation ceiling before runtime adjustments.
+        configured_max: u32,
+        /// Effective ceiling used for this decision. Circling lowers it.
+        effective_max: u32,
+        /// True when repeated read paths caused the lower circling cap.
+        circling: bool,
     },
 }
 
@@ -528,11 +534,11 @@ impl GoalRuntime {
     }
 
     /// Whether the agent is in a read-only circling phase (overlap across
-    /// recent no-write turns, or a deep no-write streak). Drives the
-    /// session read dedup gate on [`crate::agent_loop::LoopState`].
+    /// recent no-write turns). Drives the session read dedup gate on
+    /// [`crate::agent_loop::LoopState`].
     pub(crate) async fn is_circling(&self) -> bool {
         let guard = self.continuation.lock().await;
-        detect_circling(&guard.recent_no_write_paths) || guard.consecutive_no_write >= 2
+        detect_circling(&guard.recent_no_write_paths)
     }
 
     /// Dispatch one lifecycle event. Returns `Some(_)` when the task
@@ -631,6 +637,9 @@ impl GoalRuntime {
                         task_id,
                         session_id: self.session_id,
                         streak,
+                        configured_max: self.max_continuation_turns,
+                        effective_max,
+                        circling,
                     }));
                 }
                 // Render reads the session-scoped failure buffer so
@@ -640,13 +649,18 @@ impl GoalRuntime {
                 // already, so the slice is up-to-date).
                 let recent: Vec<FailedWriteAttempt> =
                     cont.recent_failures.iter().cloned().collect();
-                let overlap = if circling && kind == ContinuationKind::Blocked {
+                let overlap = if circling {
                     overlapping_read_paths(&cont.recent_no_write_paths)
                 } else {
                     Vec::new()
                 };
+                let render_kind = if circling && kind == ContinuationKind::Nudge {
+                    ContinuationKind::Blocked
+                } else {
+                    kind
+                };
                 let body = render(
-                    kind,
+                    render_kind,
                     streak as usize,
                     streak,
                     &recent,
@@ -721,8 +735,12 @@ pub(crate) fn render(
                     .collect();
                 format!(
                     "\nCircling detected — repeated reads on: {}.\n\
-                     Create the missing module file now; mirror the sibling reference \
-                     shown in pre-resolved context. Do not read these paths again.\n",
+                     Do not read these paths again. Your next tool call must be \
+                     write_file / edit_file / delete_file, or task_done with \
+                     no_changes_needed: true and notes explaining why the task \
+                     is already satisfied.\n\
+                     If this is a module task, create the missing module file now and mirror \
+                     the sibling reference already shown in context.\n",
                     listed.join(", ")
                 )
             });
@@ -951,6 +969,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn circling_latch_requires_repeated_read_path_overlap() {
+        let runtime = fresh_runtime(6);
+        let task = TaskId::new_v4();
+
+        for paths in [
+            read_paths(&["src/inbox.rs"]),
+            read_paths(&["src/outbox.rs", "src/lib.rs"]),
+        ] {
+            runtime
+                .handle_event(GoalRuntimeEvent::TurnCompleted {
+                    task_id: task,
+                    had_write: false,
+                    read_paths: paths,
+                    failed_write_attempts: Vec::new(),
+                })
+                .await
+                .unwrap();
+        }
+        assert!(
+            !runtime.is_circling().await,
+            "a no-write streak alone must not hard-block duplicate reads"
+        );
+
+        runtime
+            .handle_event(GoalRuntimeEvent::TurnCompleted {
+                task_id: task,
+                had_write: false,
+                read_paths: read_paths(&["src/outbox.rs", "src/lib.rs", "src/main.rs"]),
+                failed_write_attempts: Vec::new(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            runtime.is_circling().await,
+            "overlapping no-write read paths should still latch circling"
+        );
+    }
+
+    #[tokio::test]
     async fn circling_lowers_effective_max_to_six() {
         let runtime = fresh_runtime(100);
         let task = TaskId::new_v4();
@@ -983,7 +1040,19 @@ mod tests {
             .await
             .unwrap()
             .expect("seventh circling turn should block under effective cap 6");
-        assert!(matches!(blocked, TaskRestart::Blocked { .. }));
+        match blocked {
+            TaskRestart::Blocked {
+                configured_max,
+                effective_max,
+                circling,
+                ..
+            } => {
+                assert_eq!(configured_max, 100);
+                assert_eq!(effective_max, CIRCLING_MAX_CONTINUATION_TURNS);
+                assert!(circling);
+            }
+            other => panic!("expected circling TaskRestart::Blocked, got {other:?}"),
+        }
     }
 
     // --- mandatory E.4 tests ----------------------------------------
@@ -1029,6 +1098,7 @@ mod tests {
                 task_id,
                 session_id: blocked_session,
                 streak,
+                ..
             } => {
                 assert_eq!(task_id, task);
                 assert_eq!(blocked_session, session_id);
@@ -1186,6 +1256,22 @@ mod tests {
         assert!(body.contains("consecutive_no_write=\"3\""));
         assert!(body.contains("task_blocked"));
         assert!(body.contains("</harness_continuation>"));
+    }
+
+    #[tokio::test]
+    async fn render_blocked_with_circling_paths_forces_write_or_done() {
+        let paths = vec![
+            PathBuf::from("crates/zero-storage/src/inbox.rs"),
+            PathBuf::from("crates/zero-storage/src/storage.rs"),
+        ];
+        let body = render(ContinuationKind::Blocked, 3, 2, &[], Some(&paths));
+
+        assert!(body.contains("Circling detected"));
+        assert!(body.contains("Do not read these paths again"));
+        assert!(body.contains("Your next tool call must be"));
+        assert!(body.contains("write_file / edit_file / delete_file"));
+        assert!(body.contains("no_changes_needed: true"));
+        assert!(body.contains("crates/zero-storage/src/inbox.rs"));
     }
 
     #[tokio::test]

@@ -275,7 +275,9 @@ pub(super) fn partition_circling_duplicate_reads(
                 tool_use_id: tool.id.clone(),
                 content: format!(
                     "You already read `{path}` this session. Circling detected.\n\
-                     Your next action must be write_file / edit_file / delete_file or task_done."
+                     Your next action must be write_file / edit_file / delete_file, \
+                     or task_done with no_changes_needed: true and notes explaining \
+                     why the task is already satisfied."
                 ),
                 is_error: true,
                 kind: ToolResultKind::AgentError,
@@ -866,6 +868,7 @@ mod track_tool_effects_tests {
         assert_eq!(blocked[0].tool_use_id, "toolu_dup");
         assert!(blocked[0].is_error);
         assert!(blocked[0].content.contains("Circling detected"));
+        assert!(blocked[0].content.contains("no_changes_needed: true"));
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, fresh.id);
     }

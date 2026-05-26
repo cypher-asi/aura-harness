@@ -526,8 +526,12 @@ fn decomposition_retry_prompt(task: &TaskDescriptor) -> String {
     );
     if module.as_deref() == Some("outbox") {
         prompt.push_str(
-            "\nFor this task: add the outbox module mirroring the inbox pattern; define OutboxEntry; \
-             wire put_outbox/get_outbox or equivalent storage APIs required by the local codebase.",
+            "\nFor this task: create `crates/zero-storage/src/outbox.rs` first, mirroring \
+             `crates/zero-storage/src/inbox.rs` for codec style. Define `OutboxEntry`, \
+             then wire the storage APIs in `crates/zero-storage/src/storage.rs` and export \
+             the module/types from `crates/zero-storage/src/lib.rs`. Do not call read_file \
+             on `inbox.rs` or `storage.rs` again before the first write unless the exact \
+             bytes are required for an edit_file needle.",
         );
     }
     prompt
@@ -614,6 +618,10 @@ mod classify_tests {
         assert!(prompt.contains("outbox"));
         assert!(prompt.contains("inbox"));
         assert!(prompt.contains("write_file"));
+        assert!(prompt.contains("crates/zero-storage/src/outbox.rs"));
+        assert!(prompt.contains("crates/zero-storage/src/storage.rs"));
+        assert!(prompt.contains("crates/zero-storage/src/lib.rs"));
+        assert!(prompt.contains("Do not call read_file"));
     }
 
     // NOTE: a third case — non-empty `file_ops` classifies as success —

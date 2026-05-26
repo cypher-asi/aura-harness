@@ -480,17 +480,32 @@ async fn delegate_continuation_to_goal_runtime(
             task_id: blocked_task,
             session_id: blocked_session,
             streak,
+            configured_max,
+            effective_max,
+            circling,
         } => {
-            let reason = format!(
-                "task_blocked: max_continuation_turns ({}) exceeded without a write at iteration {}",
-                config.max_continuation_turns, iteration
-            );
+            let reason = if configured_max == effective_max {
+                format!(
+                    "task_blocked: max_continuation_turns ({effective_max}) exceeded without a write at iteration {iteration}"
+                )
+            } else if circling {
+                format!(
+                    "task_blocked: max_continuation_turns (effective {effective_max} due to circling, configured {configured_max}) exceeded without a write at iteration {iteration}"
+                )
+            } else {
+                format!(
+                    "task_blocked: max_continuation_turns (effective {effective_max}, configured {configured_max}) exceeded without a write at iteration {iteration}"
+                )
+            };
             tracing::warn!(
                 session_id = %blocked_session,
                 task_id = %blocked_task,
                 iteration,
                 consecutive_no_write = streak,
                 total_continuation_turns = state.total_continuation_turns,
+                configured_max_continuation_turns = configured_max,
+                effective_max_continuation_turns = effective_max,
+                circling,
                 "{reason}"
             );
             state.result.stalled = true;
