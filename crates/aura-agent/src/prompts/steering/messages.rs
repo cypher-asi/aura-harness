@@ -23,6 +23,10 @@ pub(super) fn render(kind: &SteeringKind) -> String {
         SteeringKind::TaskAlreadySatisfiedHint { test_command } => {
             task_already_satisfied_hint(test_command)
         }
+        SteeringKind::ImplementNow {
+            exploration_count,
+            sample_paths,
+        } => implement_now(*exploration_count, sample_paths),
     }
 }
 
@@ -54,6 +58,22 @@ fn repeated_read(content_hash: &str) -> String {
         "You've already read these exact bytes (content_hash={short}) 3 times this turn. \
          Use `start_line`/`end_line` to narrow the request, or move on — the file hasn't \
          changed."
+    )
+}
+
+fn implement_now(exploration_count: usize, sample_paths: &[String]) -> String {
+    let paths_line = if sample_paths.is_empty() {
+        "none recorded yet".to_string()
+    } else {
+        sample_paths.join(", ")
+    };
+    format!(
+        "You have read enough ({exploration_count} exploration tools, no file writes yet; \
+         paths already inspected: {paths_line}). Your next tool calls must be `write_file` or \
+         `edit_file` (or `delete_file` if appropriate). Do not call read_file, list_files, \
+         find_files, stat_file, or search_code until you have created or changed at least one \
+         file. If this task is already satisfied, call `task_done` with \
+         `\"no_changes_needed\": true` and explain why in `\"notes\"`."
     )
 }
 

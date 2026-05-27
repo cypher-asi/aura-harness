@@ -110,6 +110,31 @@ fn inject_after_assistant_message_pushes_new_user_message() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn render_implement_now_wraps_body_and_preserves_wording() {
+    let rendered = SteeringInjector::render(&SteeringKind::ImplementNow {
+        exploration_count: 12,
+        sample_paths: vec!["src/a.rs".into(), "src/b.rs".into()],
+    });
+    assert_envelope(&rendered, "implement_now");
+    assert!(
+        rendered.contains("12 exploration tools"),
+        "exploration count wording drifted:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("src/a.rs, src/b.rs"),
+        "sample paths wording drifted:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("write_file` or `edit_file"),
+        "write directive drifted:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("\"no_changes_needed\": true"),
+        "escape-hatch wording drifted:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_repeated_read_wraps_body_and_surfaces_short_hash() {
     let rendered = SteeringInjector::render(&SteeringKind::RepeatedRead {
         content_hash: "deadbeefcafef00d".into(),

@@ -38,6 +38,7 @@
 //! pre-PR-D inline `format!` blocks; PR D only adds the envelope.
 
 mod early_oracle;
+mod implement_now_gate;
 mod injector;
 mod messages;
 mod repeated_read;
@@ -46,5 +47,8 @@ mod repeated_read;
 mod tests;
 
 pub use early_oracle::EarlyTestOracle;
+pub use implement_now_gate::{
+    evaluate_implement_now, IMPLEMENT_NOW_DEFAULT_THRESHOLD,
+};
 pub use injector::{SteeringInjector, SteeringKind};
 pub use repeated_read::{RepeatedReadTracker, REPEATED_READ_THRESHOLD};

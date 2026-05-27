@@ -71,6 +71,13 @@ pub enum SteeringKind {
         /// invoke).
         test_command: String,
     },
+    /// Dev-loop read spiral: enough exploration tools ran with no
+    /// cumulative file writes. Steers the model to mutate files on the
+    /// next tool batch without ending the turn or blocking reads.
+    ImplementNow {
+        exploration_count: usize,
+        sample_paths: Vec<String>,
+    },
 }
 
 impl SteeringKind {
@@ -85,6 +92,7 @@ impl SteeringKind {
             Self::StubDetected { .. } => "stub_detected",
             Self::RepeatedRead { .. } => "repeated_read",
             Self::TaskAlreadySatisfiedHint { .. } => "task_already_satisfied",
+            Self::ImplementNow { .. } => "implement_now",
         }
     }
 }

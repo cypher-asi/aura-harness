@@ -909,6 +909,9 @@ pub struct LoopState {
     /// Per-path read budget granted after a successful write to that path.
     /// Lets the agent inspect changed regions while repairing malformed edits.
     pub(crate) read_after_write_allowances: std::collections::HashMap<PathBuf, u8>,
+    /// One-shot latch: [`crate::prompts::steering::evaluate_implement_now`] fired
+    /// for this run.
+    pub(crate) implement_now_injected: bool,
 }
 
 impl LoopState {
@@ -942,7 +945,14 @@ impl LoopState {
             repeated_read_tracker: crate::prompts::steering::RepeatedReadTracker::new(),
             session_read_paths: std::collections::HashSet::new(),
             read_after_write_allowances: std::collections::HashMap::new(),
+            implement_now_injected: false,
         }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn new_for_tests(config: &AgentLoopConfig, messages: Vec<Message>) -> Self {
+        Self::new(config, messages)
     }
 
     #[allow(
@@ -961,6 +971,11 @@ impl LoopState {
 
         for kind in self.repeated_read_tracker.begin_turn() {
             crate::prompts::steering::SteeringInjector::inject(&mut self.messages, kind);
+        }
+
+        if let Some(kind) = crate::prompts::steering::evaluate_implement_now(config, self) {
+            crate::prompts::steering::SteeringInjector::inject(&mut self.messages, kind);
+            self.implement_now_injected = true;
         }
 
         // One-shot extended-thinking disable flag is re-evaluated each
