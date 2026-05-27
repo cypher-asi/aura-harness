@@ -117,6 +117,23 @@ pub enum AutomatonEvent {
         task_id: String,
         reason: String,
     },
+    /// Emitted just before the harness asks the configured model
+    /// provider to refine a task description against its spec. Paired
+    /// with [`AutomatonEvent::TaskDescriptionRefined`] when the
+    /// refinement persists successfully; suppressed entirely on the
+    /// idempotency short-circuit (description already carries the
+    /// `<!-- aura-refined:v1 -->` marker) and on the dev-loop
+    /// build-retry second pass.
+    TaskDescriptionRefining {
+        task_id: String,
+    },
+    /// Emitted after the refined description has been persisted via
+    /// `DomainApi::update_task`. Best-effort: provider/update failures
+    /// emit a `LogLine` instead and the task continues with the
+    /// pre-refinement description.
+    TaskDescriptionRefined {
+        task_id: String,
+    },
     /// Emitted when a task completed but the per-task aggregate shows
     /// no file changes and no build/test/fmt/lint verification
     /// evidence. In that case the dev-loop / task-run builtins skip

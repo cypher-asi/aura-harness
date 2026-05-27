@@ -107,6 +107,8 @@ fn event_kind(event: &AutomatonEvent) -> &'static str {
         AutomatonEvent::TaskStarted { .. } => "task_started",
         AutomatonEvent::TaskCompleted { .. } => "task_completed",
         AutomatonEvent::TaskFailed { .. } => "task_failed",
+        AutomatonEvent::TaskDescriptionRefining { .. } => "task_description_refining",
+        AutomatonEvent::TaskDescriptionRefined { .. } => "task_description_refined",
         AutomatonEvent::CommitSkipped { .. } => "commit_skipped",
         AutomatonEvent::ToolCallRetrying { .. } => "tool_call_retrying",
         AutomatonEvent::ToolCallFailed { .. } => "tool_call_failed",

@@ -75,6 +75,16 @@ struct TaskRunConfig {
     task_id: String,
     #[allow(dead_code)]
     agent_instance_id: String,
+    /// Model identifier from the dispatch JSON. Mirrors the dev-loop
+    /// path, which extracts the model from its own `from_json` so
+    /// pre-implementation task refinement can issue a typed
+    /// `ModelRequest` without reaching into `AgentRunner` internals.
+    /// Optional here (defaults to empty) because pre-refinement
+    /// rollouts of the single-task path may install a `TaskRunAutomaton`
+    /// without populating the field; an empty model deliberately
+    /// short-circuits refinement (the helper logs and falls back to
+    /// the original description) rather than failing the tick.
+    model: String,
     /// Identity envelope parsed off the dispatch JSON. Reuses the
     /// `AgentIdentityEnvelope` from `dev_loop` so the two automatons
     /// share a single parser + render pathway. Stays empty
@@ -118,6 +128,13 @@ impl TaskRunConfig {
             .and_then(|v| v.as_str())
             .unwrap_or("default")
             .to_string();
+        let model = config
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default()
+            .to_string();
         let agent_identity = super::dev_loop::AgentIdentityEnvelope::from_json(config);
         let early_test_oracle = config
             .get("early_test_oracle")
@@ -127,6 +144,7 @@ impl TaskRunConfig {
             project_id,
             task_id,
             agent_instance_id,
+            model,
             agent_identity,
             early_test_oracle,
         })
@@ -215,6 +233,20 @@ impl TaskRunAutomaton {
         spec: &aura_tools::domain_tools::SpecDescriptor,
         task: &aura_tools::domain_tools::TaskDescriptor,
     ) -> Result<aura_agent::agent_runner::TaskExecutionResult, AutomatonError> {
+        // Pre-implementation refinement. The single-task path has no
+        // build-retry wrapper (unlike the dev loop), so we always
+        // attempt refinement here; the helper's idempotency marker
+        // makes repeated runs of the same task safe.
+        let task_owned = crate::builtins::task_refinement::refine_task_description(
+            self.domain.as_ref(),
+            self.provider.as_ref(),
+            &cfg.model,
+            spec,
+            task,
+            Some(&ctx.event_tx),
+        )
+        .await?;
+
         let effective_path = ctx
             .workspace_root
             .as_ref()
@@ -235,8 +267,8 @@ impl TaskRunAutomaton {
             markdown_contents: &spec.content,
         };
         let task_info = TaskInfo {
-            title: &task.title,
-            description: &task.description,
+            title: &task_owned.title,
+            description: &task_owned.description,
             execution_notes: "",
             files_changed: &[],
         };
@@ -277,7 +309,7 @@ impl TaskRunAutomaton {
         let _forwarder = super::dev_loop::spawn_agent_event_forwarder(
             ctx.event_tx.clone(),
             event_rx,
-            Some(task.id.clone()),
+            Some(task_owned.id.clone()),
         );
 
         let cancel = ctx.cancellation_token().clone();

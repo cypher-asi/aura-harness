@@ -2,6 +2,7 @@ mod chat;
 pub mod dev_loop;
 mod noop_executor;
 mod spec_gen;
+mod task_refinement;
 mod task_run;
 
 pub use chat::ChatAutomaton;

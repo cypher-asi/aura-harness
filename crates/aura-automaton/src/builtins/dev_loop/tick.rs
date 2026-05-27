@@ -355,6 +355,27 @@ impl DevLoopAutomaton {
             .await
             .map_err(|e| AutomatonError::DomainApi(e.to_string()))?;
 
+        // Pre-implementation refinement. Only run on the first pass
+        // (`build_retry_note.is_none()`); the build-retry second
+        // pass would otherwise re-refine the description that
+        // already had the compiler-output appended below, doubling
+        // up the marker and confusing the agent. The helper carries
+        // its own idempotency marker (`<!-- aura-refined:v1 -->`)
+        // as a second safety net for ambient re-claims.
+        let task_owned = if build_retry_note.is_none() {
+            crate::builtins::task_refinement::refine_task_description(
+                self.domain.as_ref(),
+                self.provider.as_ref(),
+                &cfg.model,
+                &spec,
+                task,
+                Some(&ctx.event_tx),
+            )
+            .await?
+        } else {
+            task.clone()
+        };
+
         let effective_path = ctx
             .workspace_root
             .as_ref()
@@ -362,7 +383,7 @@ impl DevLoopAutomaton {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| project.path.clone());
 
-        let mut task_description = task.description.clone();
+        let mut task_description = task_owned.description.clone();
         if let Some(note) = build_retry_note {
             task_description.push_str("\n\n---\n\nBuild still failing after your last pass:\n\n");
             task_description.push_str(&note);
@@ -381,7 +402,7 @@ impl DevLoopAutomaton {
             markdown_contents: &spec.content,
         };
         let task_info = TaskInfo {
-            title: &task.title,
+            title: &task_owned.title,
             description: &task_description,
             execution_notes: "",
             files_changed: &[],
