@@ -24,7 +24,25 @@ use crate::AgentError;
 
 use super::driver::drive_stream;
 use super::AgentLoopConfig;
-use super::StreamPumpOutcome;
+use super::{StreamPumpCtx, StreamPumpOutcome};
+
+/// Phase 8 test helper: build a [`StreamPumpCtx`] for the
+/// driver-scope unit tests without forcing every call site to
+/// repeat the five-field literal. The four optional fields default
+/// to `None`; positional `cancellation_token` / `input_queue` /
+/// `event_tx` may be supplied via the explicit constructors below.
+fn test_ctx<'a>(
+    config: &'a AgentLoopConfig,
+    executor: &'a dyn AgentToolExecutor,
+) -> StreamPumpCtx<'a> {
+    StreamPumpCtx {
+        config,
+        executor,
+        cancellation_token: None,
+        input_queue: None,
+        event_tx: None,
+    }
+}
 
 #[derive(Default)]
 struct CountingExecutor {
@@ -76,12 +94,8 @@ async fn pump_drains_in_fifo_submission_order() {
     let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
 
     let outcome = drive_stream(
-        &config,
-        &executor,
+        test_ctx(&config, &executor),
         stream,
-        None,
-        None,
-        None,
         &mut state,
         "test-model",
     )
@@ -108,12 +122,11 @@ async fn pump_cancellation_yields_atomic_no_write() {
     let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
 
     let outcome = drive_stream(
-        &config,
-        &executor,
+        StreamPumpCtx {
+            cancellation_token: Some(&cancel),
+            ..test_ctx(&config, &executor)
+        },
         stream,
-        Some(&cancel),
-        None,
-        None,
         &mut state,
         "test-model",
     )
@@ -150,12 +163,11 @@ async fn pump_per_outputitemdone_input_drain() {
     let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
 
     let outcome = drive_stream(
-        &config,
-        &executor,
+        StreamPumpCtx {
+            input_queue: Some(&queue),
+            ..test_ctx(&config, &executor)
+        },
         stream,
-        None,
-        Some(&queue),
-        None,
         &mut state,
         "test-model",
     )
@@ -186,12 +198,8 @@ async fn pump_stream_event_timeout_surfaces_typed_error() {
     let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
 
     let outcome = drive_stream(
-        &config,
-        &executor,
+        test_ctx(&config, &executor),
         stream,
-        None,
-        None,
-        None,
         &mut state,
         "test-model",
     )
@@ -239,14 +247,9 @@ async fn pump_overlaps_concurrent_tools() {
     let notify_clone = Arc::clone(&notify);
 
     let driver = tokio::spawn(async move {
-        // Drive the pump to completion. Returns the outcome.
         let outcome = drive_stream(
-            &config,
-            &executor,
+            test_ctx(&config, &executor),
             stream,
-            None,
-            None,
-            None,
             &mut state,
             "test-model",
         )
@@ -331,12 +334,8 @@ async fn pump_per_tool_timeout_does_not_poison_fifo() {
 
     let driver = tokio::spawn(async move {
         drive_stream(
-            &config,
-            &executor,
+            test_ctx(&config, &executor),
             stream,
-            None,
-            None,
-            None,
             &mut state,
             "test-model",
         )
@@ -405,12 +404,11 @@ async fn pump_emits_per_delta_events() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
 
     let outcome = drive_stream(
-        &config,
-        &executor,
+        StreamPumpCtx {
+            event_tx: Some(&tx),
+            ..test_ctx(&config, &executor)
+        },
         stream,
-        None,
-        None,
-        Some(&tx),
         &mut state,
         "test-model",
     )
@@ -486,12 +484,8 @@ async fn pump_cache_hit_short_circuits_tool_spawn() {
     let stream = mk_stream(events);
 
     let outcome = drive_stream(
-        &config,
-        &executor,
+        test_ctx(&config, &executor),
         stream,
-        None,
-        None,
-        None,
         &mut state,
         "test-model",
     )

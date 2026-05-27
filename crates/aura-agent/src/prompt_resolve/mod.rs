@@ -93,8 +93,7 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
         .flatten();
         let head_line_count = head
             .as_deref()
-            .map(|s| s.lines().count())
-            .unwrap_or(caps.max_lines_per_path);
+            .map_or(caps.max_lines_per_path, |s| s.lines().count());
         resolved_paths.push(ResolvedPath {
             path: path.clone(),
             head,

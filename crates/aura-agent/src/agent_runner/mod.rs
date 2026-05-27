@@ -33,6 +33,48 @@ use crate::verify::{
 };
 
 // ---------------------------------------------------------------------------
+// Internal call-shape helpers
+// ---------------------------------------------------------------------------
+
+/// Phase 8 bundle of the per-call options that distinguish the
+/// `execute_task` and `execute_task_tracked` entry points when both
+/// funnel through [`AgentRunner::execute_task_inner`]. Carries the
+/// optional phase-reset signal (tracked path), the optional
+/// pre-built task context bundle (tracked path), and the per-call
+/// `early_test_oracle` toggle (either runner default or per-task
+/// override). Bundling keeps `execute_task_inner` under the
+/// `too-many-arguments` ceiling without flattening the optional
+/// fields into the public API.
+struct TaskInnerOptions {
+    phase_reset_signal: Option<Arc<AtomicBool>>,
+    prebuilt_task_ctx: Option<String>,
+    early_test_oracle: bool,
+}
+
+/// Phase 8 bundle of the prompt-shaping inputs for
+/// [`AgentRunner::execute_chat`]. Both fields feed the chat-system
+/// prompt builder; grouping them keeps the public `execute_chat`
+/// signature under the clippy ceiling without losing the per-caller
+/// flexibility (the wider call sites still pass an owned
+/// [`ProjectInfo`] and a `&str` prompt body).
+pub struct ChatPromptCtx<'a> {
+    pub project: &'a ProjectInfo<'a>,
+    pub custom_system_prompt: &'a str,
+}
+
+/// Phase 8 bundle of the optional coordination handles for
+/// [`AgentRunner::execute_chat`]. Pairs the streaming
+/// [`AgentLoopEvent`] sink with the external cancellation signal so
+/// the public `execute_chat` signature stays under the
+/// `clippy::too_many_arguments` ceiling without forcing every
+/// caller to thread two trailing `Option<…>` arguments.
+#[derive(Default)]
+pub struct ChatHooks {
+    pub event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
+    pub cancel: Option<CancellationToken>,
+}
+
+// ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
 
@@ -323,14 +365,15 @@ impl AgentRunner {
             params,
             event_tx,
             cancel,
-            None,
-            None,
-            self.config.early_test_oracle,
+            TaskInnerOptions {
+                phase_reset_signal: None,
+                prebuilt_task_ctx: None,
+                early_test_oracle: self.config.early_test_oracle,
+            },
         )
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn execute_task_inner(
         &self,
         provider: &dyn ModelProvider,
@@ -338,10 +381,13 @@ impl AgentRunner {
         params: &AgenticTaskParams<'_>,
         event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
-        phase_reset_signal: Option<Arc<AtomicBool>>,
-        prebuilt_task_ctx: Option<String>,
-        early_test_oracle: bool,
+        options: TaskInnerOptions,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
+        let TaskInnerOptions {
+            phase_reset_signal,
+            prebuilt_task_ctx,
+            early_test_oracle,
+        } = options;
         let complexity = classify_task_complexity(params.task.title, params.task.description);
 
         let test_command_override = aura_config::agent().verify.test_command_override.clone();
@@ -495,9 +541,11 @@ impl AgentRunner {
                 params,
                 event_tx,
                 cancel,
-                Some(reset_signal),
-                Some(full_task_ctx),
-                early_test_oracle,
+                TaskInnerOptions {
+                    phase_reset_signal: Some(reset_signal),
+                    prebuilt_task_ctx: Some(full_task_ctx),
+                    early_test_oracle,
+                },
             )
             .await?;
 
@@ -506,18 +554,20 @@ impl AgentRunner {
     }
 
     /// Execute a chat interaction using the agent loop.
-    #[allow(clippy::too_many_arguments)]
     pub async fn execute_chat(
         &self,
         provider: &dyn ModelProvider,
         executor: &dyn AgentToolExecutor,
-        project: &ProjectInfo<'_>,
-        custom_system_prompt: &str,
+        prompt: ChatPromptCtx<'_>,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-        event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
-        cancel: Option<CancellationToken>,
+        hooks: ChatHooks,
     ) -> Result<AgentLoopResult, crate::AgentError> {
+        let ChatHooks { event_tx, cancel } = hooks;
+        let ChatPromptCtx {
+            project,
+            custom_system_prompt,
+        } = prompt;
         let system_prompt = {
             let project_id = project.project_id.map(str::to_owned);
             let name = project.name.to_owned();

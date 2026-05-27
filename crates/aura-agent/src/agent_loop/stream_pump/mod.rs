@@ -93,6 +93,32 @@ pub(in crate::agent_loop) use retry::stream_retry_params;
 use driver::drive_stream;
 use retry::{update_partial_retry_state, PartialRetryState};
 
+/// Phase 8 context wrapper bundling the long-lived borrows that the
+/// streaming pump driver and its inner event-loop helpers all carry.
+///
+/// Previously every helper in `stream_pump/` (`run_stream_pump`,
+/// `drive_stream`, `handle_tool_use_event`) took the same five
+/// borrows as separate parameters and lived under a
+/// `clippy::too-many-arguments` allow. Bundling them into a
+/// single `&'a` borrow at the transport seam keeps every helper
+/// under the clippy ceiling without adding a `Clone` impl: every
+/// field is itself a borrow so the wrapper is `Copy` for free.
+///
+/// `provider` is intentionally NOT in the bundle: it is only
+/// consumed by [`run_stream_pump`] to open the
+/// [`aura_reasoner::ResponseEventStream`]; once the stream is open
+/// the driver never touches the provider again. Keeping it out lets
+/// the driver-scope unit tests construct a `StreamPumpCtx` without
+/// having to stub a full `ModelProvider`.
+#[derive(Clone, Copy)]
+pub(super) struct StreamPumpCtx<'a> {
+    pub(super) config: &'a AgentLoopConfig,
+    pub(super) executor: &'a dyn AgentToolExecutor,
+    pub(super) cancellation_token: Option<&'a CancellationToken>,
+    pub(super) input_queue: Option<&'a InputQueue>,
+    pub(super) event_tx: Option<&'a Sender<AgentLoopEvent>>,
+}
+
 /// Outcome of [`run_stream_pump`].
 ///
 /// `Completed` carries a synthesised [`ModelResponse`] (so downstream
@@ -137,17 +163,17 @@ pub(super) enum StreamPumpOutcome {
 /// with per-event timeout, biased cancellation, and per-tool
 /// concurrency via [`futures_util::stream::FuturesOrdered`]. See the
 /// module-level docs for the full invariant list.
-#[allow(clippy::too_many_arguments)] // E.4 added event_tx + input_queue; documented per Rule 1.4.
 pub(super) async fn run_stream_pump(
-    config: &AgentLoopConfig,
+    ctx: StreamPumpCtx<'_>,
     provider: &dyn ModelProvider,
-    executor: &dyn AgentToolExecutor,
     request: ModelRequest,
-    cancellation_token: Option<&CancellationToken>,
-    input_queue: Option<&InputQueue>,
-    event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut super::LoopState,
 ) -> StreamPumpOutcome {
+    let StreamPumpCtx {
+        cancellation_token,
+        event_tx,
+        ..
+    } = ctx;
     let model_name = request.model.as_ref().to_string();
     let (max_retries, backoff_initial_ms, backoff_cap_ms) = stream_retry_params();
     let mut retry_state: Option<PartialRetryState> = None;
@@ -220,18 +246,7 @@ pub(super) async fn run_stream_pump(
             Err(err) => return StreamPumpOutcome::Error(AgentError::Reason(err)),
         };
 
-        match drive_stream(
-            config,
-            executor,
-            stream,
-            cancellation_token,
-            input_queue,
-            event_tx,
-            state,
-            &model_name,
-        )
-        .await
-        {
+        match drive_stream(ctx, stream, state, &model_name).await {
             StreamPumpOutcome::AbortedWithPartial {
                 reason,
                 partial_tool_use,

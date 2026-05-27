@@ -137,8 +137,7 @@ pub fn cmd_spawn(
         #[cfg(windows)]
         {
             windows_resolve_program(program, fresh_path.as_deref(), &working_dir)
-                .map(std::path::PathBuf::into_os_string)
-                .unwrap_or_else(|| program.into())
+                .map_or_else(|| program.into(), std::path::PathBuf::into_os_string)
         }
         #[cfg(not(windows))]
         {
@@ -766,7 +765,7 @@ fn check_binary_allowlist(
     if Path::new(program).components().count() == 1
         && !allowlist
             .iter()
-            .any(|allowed| allowed == &strip_windows_executable_suffix(program))
+            .any(|allowed| allowed == strip_windows_executable_suffix(program))
     {
         return Err(ToolError::Forbidden(format!(
             "program '{program}' is not present in ToolConfig::command.binary_allowlist"

@@ -752,8 +752,10 @@ mod tests {
 
     #[tokio::test]
     async fn falls_back_on_update_task_error() {
-        let mut domain = RecordingDomain::default();
-        domain.update_should_fail = true;
+        let domain = RecordingDomain {
+            update_should_fail: true,
+            ..Default::default()
+        };
         let provider = CountingProvider::with_text("Refined body.");
         let (tx, mut rx) = mpsc::channel::<AutomatonEvent>(8);
         let spec = sample_spec();

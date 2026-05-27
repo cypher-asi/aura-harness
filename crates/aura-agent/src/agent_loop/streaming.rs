@@ -21,6 +21,25 @@ use super::event_sink;
 use super::iteration::LlmCallError;
 use super::AgentLoop;
 
+/// Phase 8 bundle of the borrowed coordination state threaded
+/// through [`AgentLoop::finalize_after_stream`].
+///
+/// The post-pump finalisation step needs five borrows that all
+/// flow from the same `complete_with_streaming` caller (the optional
+/// event sink, the optional cancellation token, the per-call start
+/// timestamp, and the provider/model name pair used for tracing
+/// and telemetry). Bundling them into one struct keeps
+/// `finalize_after_stream` under the clippy `too_many_arguments`
+/// ceiling without diluting the per-step argument list with
+/// "ambient" identifiers.
+pub(super) struct FinalizeStreamCtx<'a> {
+    pub(super) event_tx: Option<&'a Sender<AgentLoopEvent>>,
+    pub(super) cancellation_token: Option<&'a CancellationToken>,
+    pub(super) start: Instant,
+    pub(super) provider_name: &'a str,
+    pub(super) model_name: &'a str,
+}
+
 /// Send an event through the channel if present.
 ///
 /// Phase 4: thin re-export of [`event_sink::emit`] so legacy
@@ -301,7 +320,7 @@ impl AgentLoop {
                 let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let err_str = e.to_string();
                 aura_reasoner::console::anthropic_failure_block(
-                    aura_reasoner::console::AnthropicFailureView {
+                    &aura_reasoner::console::AnthropicFailureView {
                         status_code: Some(200),
                         status_text: "OK",
                         class: "sse_transport",
@@ -325,12 +344,14 @@ impl AgentLoop {
                 self.finalize_after_stream(
                     provider,
                     request,
-                    event_tx,
-                    cancellation_token,
                     *accumulator,
-                    start,
-                    provider_name,
-                    &model_name,
+                    FinalizeStreamCtx {
+                        event_tx,
+                        cancellation_token,
+                        start,
+                        provider_name,
+                        model_name: &model_name,
+                    },
                 )
                 .await
             }
@@ -347,18 +368,26 @@ impl AgentLoop {
     /// 3. `Err(retryable)` — fall back to the non-streaming
     ///    `provider.complete()` path via [`complete_and_emit_as_deltas`].
     /// 4. Anything else — propagate as a fatal LLM call error.
-    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation)]
     async fn finalize_after_stream(
         &self,
         provider: &dyn ModelProvider,
         request: ModelRequest,
-        event_tx: Option<&Sender<AgentLoopEvent>>,
-        cancellation_token: Option<&CancellationToken>,
         accumulator: StreamAccumulator,
-        start: Instant,
-        provider_name: &str,
-        model_name: &str,
+        ctx: FinalizeStreamCtx<'_>,
     ) -> Result<ModelResponse, LlmCallError> {
+        let FinalizeStreamCtx {
+            event_tx,
+            cancellation_token,
+            start,
+            provider_name,
+            model_name,
+        } = ctx;
+        // The streaming pump's per-iteration latency is driven by the
+        // wall-clock since the pump kicked off, capped at `u64::MAX`
+        // ms (the pump never runs longer than that). The cap is
+        // documented and the truncation is benign — `latency_ms` is
+        // observability-only.
+        #[allow(clippy::cast_possible_truncation)]
         let latency_ms = start.elapsed().as_millis() as u64;
         match accumulator.into_response(0, latency_ms) {
             Ok(response) => {
@@ -640,7 +669,7 @@ impl super::AgentLoop {
                 let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let err_str = e.to_string();
                 aura_reasoner::console::anthropic_failure_block(
-                    aura_reasoner::console::AnthropicFailureView {
+                    &aura_reasoner::console::AnthropicFailureView {
                         status_code: Some(200),
                         status_text: "OK",
                         class: "sse_transport",

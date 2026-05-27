@@ -35,27 +35,25 @@
 //!   without the silent-cancel regression that the 25-iteration cap
 //!   used to cause.
 //!
-//! Both ceilings surface an [`AgentError::TurnBudgetExceeded`] with
-//! structured context so the UI / dashboards can correlate the
-//! failure with the task that produced it.
+//! Phase 8 split the per-task budget surface into two sibling
+//! [`AgentError`] variants — one carries the `max_turns_per_task`
+//! limit (as [`AgentError::TurnBudgetExceeded`]) and one the
+//! `max_iterations_per_task` limit (as
+//! [`AgentError::IterationBudgetExceeded`]) — so callers no longer
+//! need to re-derive which ceiling fired when surfacing the failure.
 
-use std::sync::Arc;
-
-use aura_reasoner::{Message, ModelProvider, ToolDefinition};
-use tokio::sync::mpsc::Sender;
-use tokio_util::sync::CancellationToken;
+use aura_reasoner::{Message, ToolDefinition};
 use tracing::{field, instrument, Span};
 use uuid::Uuid;
 
 use crate::console;
-use crate::events::AgentLoopEvent;
 use crate::session::input_queue::InputQueue;
-use crate::session::Session;
-use crate::types::{AgentLoopResult, AgentToolExecutor};
+use crate::types::AgentLoopResult;
 use crate::AgentError;
 
+use super::cx::{RunCtx, TurnCtx};
 use super::turn::{run_turn, TurnOutcome};
-use super::{AgentLoop, LoopState};
+use super::LoopState;
 
 /// Newtype wrapper around a `Uuid` identifying one in-flight task.
 ///
@@ -102,14 +100,12 @@ fn short_id(task_id: &str) -> &str {
 
 /// Drive one task to completion.
 ///
-/// E.1 wired the codex-shaped nesting (task → turn → sampling). E.2
-/// wires the optional [`InputQueue`] into the outer loop so that
-/// mid-task user inputs cause the task shell to spin another turn
-/// after the active turn drains the queue. When no queue is supplied
-/// (`input_queue == None`), the loop falls through to the
-/// `terminated_cleanly` short-circuit and the task runs at most one
-/// turn — preserving the E.1 single-turn-per-task semantic for
-/// callers that opt out of mid-task steering.
+/// Phase 8 collapsed the previous 8-parameter signature into a
+/// single [`RunCtx`] borrow plus the per-run conversation inputs
+/// (`messages`, `tools`). The `RunCtx` carries the model provider,
+/// tool executor, optional event sink, optional cancellation token,
+/// and the shared [`crate::session::Session`] handle; the inner loop
+/// re-bundles those into a [`TurnCtx`] for each turn iteration.
 ///
 /// `iteration_offset` accumulates by the per-tool-batch count
 /// (`turn_outcome.sampling_count`) across turns, since input-queue
@@ -126,47 +122,38 @@ fn short_id(task_id: &str) -> &str {
 /// other failure mode is materialised on `state.result` (so the
 /// pre-E.1 caller contract — "`run` always returns `Ok` with errors
 /// folded into the result" — survives).
-#[allow(clippy::too_many_arguments)]
 #[instrument(
     name = "task",
     skip_all,
     fields(id = field::Empty),
 )]
 pub(crate) async fn run_task(
-    agent: &AgentLoop,
-    provider: &dyn ModelProvider,
-    executor: &dyn AgentToolExecutor,
+    ctx: &RunCtx<'_>,
     messages: Vec<Message>,
     tools: Vec<ToolDefinition>,
-    event_tx: Option<Sender<AgentLoopEvent>>,
-    cancellation_token: Option<CancellationToken>,
-    session: Arc<Session>,
 ) -> Result<AgentLoopResult, AgentError> {
     let task_id = TaskId::new_v4();
     let task_id_str = task_id.to_string();
     Span::current().record("id", field::display(short_id(&task_id_str)));
 
-    let mut state = LoopState::new(&agent.config, messages);
-    state.build_baseline = executor.capture_build_baseline().await;
+    let mut state = LoopState::new(&ctx.agent.config, messages);
+    state.build_baseline = ctx.executor.capture_build_baseline().await;
 
     console::task_start_banner(
         &task_id_str,
-        agent.config.max_turns_per_task,
-        agent.config.max_iterations_per_task,
+        ctx.agent.config.max_turns_per_task,
+        ctx.agent.config.max_iterations_per_task,
     );
     tracing::debug!(
         task_id = %task_id,
-        session_id = %session.id,
-        max_iterations = agent.config.max_iterations,
-        max_turns_per_task = agent.config.max_turns_per_task,
-        max_iterations_per_task = agent.config.max_iterations_per_task,
+        session_id = %ctx.session.id,
+        max_iterations = ctx.agent.config.max_iterations,
+        max_turns_per_task = ctx.agent.config.max_turns_per_task,
+        max_iterations_per_task = ctx.agent.config.max_iterations_per_task,
         "Starting agent task"
     );
 
-    let event_tx_ref = event_tx.as_ref();
-    let cancellation_ref = cancellation_token.as_ref();
-    let input_queue_arc: Arc<InputQueue> = Arc::clone(&session.input_queue);
-    let input_queue_ref: &InputQueue = input_queue_arc.as_ref();
+    let input_queue_ref: &InputQueue = ctx.session.input_queue.as_ref();
 
     // E.2: turn_index / iteration_offset accumulate across turns so
     // the `max_turns_per_task` / `max_iterations_per_task` caps trip
@@ -178,37 +165,34 @@ pub(crate) async fn run_task(
     let mut iteration_offset: u32 = 0;
 
     loop {
-        // Hard ceiling: surface a typed error per Rule 4.3 instead of
+        // Hard ceilings: surface a typed error per Rule 4.3 instead of
         // silently terminating. Trip before the next `run_turn` call
-        // so we never half-execute another turn past the cap.
-        if turn_index >= agent.config.max_turns_per_task {
+        // so we never half-execute another turn past the cap. Phase 8
+        // split this into two sibling variants so callers can
+        // distinguish which ceiling tripped without re-deriving from
+        // `turn_index`.
+        if turn_index >= ctx.agent.config.max_turns_per_task {
             return Err(AgentError::TurnBudgetExceeded {
                 task_id,
-                turn_index,
+                limit: ctx.agent.config.max_turns_per_task as usize,
             });
         }
-        if iteration_offset >= agent.config.max_iterations_per_task {
-            return Err(AgentError::TurnBudgetExceeded {
+        if iteration_offset >= ctx.agent.config.max_iterations_per_task {
+            return Err(AgentError::IterationBudgetExceeded {
                 task_id,
-                turn_index,
+                limit: ctx.agent.config.max_iterations_per_task as usize,
             });
         }
 
-        let turn_outcome: TurnOutcome = run_turn(
-            agent,
-            provider,
-            executor,
-            &tools,
-            event_tx_ref,
-            cancellation_ref,
-            &mut state,
+        let turn_ctx = TurnCtx {
+            run: ctx,
+            tools: &tools,
             task_id,
             turn_index,
             iteration_offset,
-            Some(input_queue_ref),
-            &session,
-        )
-        .await?;
+            input_queue: Some(input_queue_ref),
+        };
+        let turn_outcome: TurnOutcome = run_turn(&turn_ctx, &mut state).await?;
 
         // Accumulate per-turn sampling count into the per-task
         // counters BEFORE any early-break paths so the post-turn
@@ -239,7 +223,7 @@ pub(crate) async fn run_task(
 
     state.result.messages = state.messages;
 
-    for observer in &agent.config.observers {
+    for observer in &ctx.agent.config.observers {
         observer.on_turn_complete(&state.result).await;
     }
 

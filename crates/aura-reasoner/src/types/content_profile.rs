@@ -155,8 +155,12 @@ impl ModelContentProfile {
         )
     }
 
-    #[must_use]
-    pub fn validate(self) -> Result<Self, ModelRequestContractViolation> {
+    /// Drop into either `Ok(self)` (accept/warn) or
+    /// `Err(Box<ModelRequestContractViolation>)` (block). Boxed to
+    /// keep the carrier under 128 bytes — `ModelContentProfile` is
+    /// large enough on its own that the unboxed `Result` trips
+    /// `clippy::result_large_err` everywhere.
+    pub fn validate(self) -> Result<Self, Box<ModelRequestContractViolation>> {
         if self.verdict != ModelContractVerdict::Block {
             return Ok(self);
         }
@@ -165,11 +169,11 @@ impl ModelContentProfile {
             .first()
             .copied()
             .unwrap_or(ModelContractViolationReason::UnknownRequestKind);
-        Err(ModelRequestContractViolation {
+        Err(Box::new(ModelRequestContractViolation {
             reason,
             message: format!("model request contract blocked: {}", self.summary()),
             profile: self,
-        })
+        }))
     }
 
     fn apply_contract(&mut self) {

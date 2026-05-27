@@ -17,8 +17,8 @@ use crate::helpers;
 /// Render `kind` and append the resulting envelope to the live
 /// user-message stream via [`helpers::append_warning`]. Returns the
 /// wrapped string so callers can also emit it on a stream channel.
-pub fn inject(messages: &mut Vec<Message>, kind: SteeringKind) -> String {
-    let wrapped = SteeringRenderer::render(&kind);
+pub fn inject(messages: &mut Vec<Message>, kind: &SteeringKind) -> String {
+    let wrapped = SteeringRenderer::render(kind);
     helpers::append_warning(messages, &wrapped);
     wrapped
 }
@@ -47,7 +47,7 @@ mod tests {
     #[test]
     fn appends_envelope_to_user_message_via_append_warning() {
         let mut messages = vec![Message::user("hello")];
-        let returned = inject(&mut messages, SteeringKind::TaskDoneNoWrites);
+        let returned = inject(&mut messages, &SteeringKind::TaskDoneNoWrites);
 
         let opener = task_done_envelope_opener();
         assert!(
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn after_assistant_message_pushes_new_user_message() {
         let mut messages = vec![Message::assistant("hi")];
-        let _returned = inject(&mut messages, SteeringKind::TaskDoneNoWrites);
+        let _returned = inject(&mut messages, &SteeringKind::TaskDoneNoWrites);
 
         assert_eq!(
             messages.len(),

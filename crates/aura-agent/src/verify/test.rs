@@ -84,8 +84,10 @@ pub async fn run_full_test_suite(
 /// Run the test suite and attempt a fix if needed.
 ///
 /// Used by the legacy [`super::build::verify_and_fix_build`] loop. Returns
-/// `(tests_passed, input_tokens, output_tokens)`.
-#[allow(clippy::too_many_arguments)]
+/// `(tests_passed, input_tokens, output_tokens)`. Exactly seven args
+/// (the default clippy ceiling) — splitting further would only
+/// fragment a single linear "drive one test attempt" call site, so
+/// it is kept flat per Rule 1.4.
 pub async fn run_and_handle_tests(
     base_path: &Path,
     test_command: &str,
@@ -150,12 +152,14 @@ pub async fn run_and_handle_tests(
 
     apply_fix_and_record(
         base_path,
-        &response,
-        attempt,
-        &test_result.stderr,
+        super::common::FixAttempt {
+            response: &response,
+            attempt,
+            stderr: &test_result.stderr,
+            fix_kind: "test-fix",
+        },
         prior_test_attempts,
         all_fix_ops,
-        "test-fix",
         fix_provider,
     )
     .await?;

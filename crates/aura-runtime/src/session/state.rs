@@ -406,7 +406,10 @@ impl Session {
             // automaton bridge.
             request_kind: ModelRequestKind::Chat,
             max_tokens: self.max_tokens,
-            max_context_tokens: self.context_window_tokens as usize,
+            // Context windows top out near 1M tokens; the `u64` →
+            // `usize` cast is bounds-safe on every target we ship to
+            // (64-bit only). The saturate is defensive.
+            max_context_tokens: usize::try_from(self.context_window_tokens).unwrap_or(usize::MAX),
             auth_token: self.auth_token.clone(),
         }
     }
@@ -580,12 +583,10 @@ fn build_typed_chat_system_prompt(
     agent_system_prompt: Option<&str>,
     project_wire: Option<&ChatProjectInfoWire>,
 ) -> Option<String> {
-    let identity_populated = identity_wire.map(|w| !w.is_empty()).unwrap_or(false);
+    let identity_populated = identity_wire.is_some_and(|w| !w.is_empty());
     let skills_populated = skills.iter().any(|s| !s.trim().is_empty());
-    let agent_prompt_populated = agent_system_prompt
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-    let project_populated = project_wire.map(|w| !w.is_empty()).unwrap_or(false);
+    let agent_prompt_populated = agent_system_prompt.is_some_and(|s| !s.trim().is_empty());
+    let project_populated = project_wire.is_some_and(|w| !w.is_empty());
 
     if !identity_populated && !skills_populated && !agent_prompt_populated && !project_populated {
         return None;

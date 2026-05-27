@@ -120,11 +120,12 @@ impl CompactionPolicy {
         estimated_context_tokens: u64,
         reserved_output_tokens: u64,
     ) -> Self {
-        let mut policy = Self::default();
-        policy.max_context_tokens = max_context_tokens;
-        policy.estimated_context_tokens = estimated_context_tokens;
-        policy.reserved_output_tokens = reserved_output_tokens;
-        policy
+        Self {
+            max_context_tokens,
+            estimated_context_tokens,
+            reserved_output_tokens,
+            ..Self::default()
+        }
     }
 
     const fn default_values() -> Self {
@@ -500,14 +501,12 @@ pub fn effective_pressure(input: &CompactionInput<'_>) -> f64 {
             pressure_tokens as f64 / max_ctx as f64
         }
     });
-    let request_cap_pressure = request_body_cap(policy)
-        .map(|cap| {
-            let raw_bytes = policy
-                .raw_message_bytes
-                .unwrap_or_else(|| estimate_message_chars(input.messages));
-            cap_pressure(raw_bytes, cap)
-        })
-        .unwrap_or(0.0);
+    let request_cap_pressure = request_body_cap(policy).map_or(0.0, |cap| {
+        let raw_bytes = policy
+            .raw_message_bytes
+            .unwrap_or_else(|| estimate_message_chars(input.messages));
+        cap_pressure(raw_bytes, cap)
+    });
 
     context_pressure.max(request_cap_pressure).min(1.0)
 }
@@ -599,7 +598,7 @@ fn summary_target_total_chars(policy: CompactionPolicy, before_chars: usize) -> 
         target = target.min(cap.saturating_mul(8) / 10);
     }
 
-    target.min(SUMMARY_TARGET_CEILING).max(1_024)
+    target.clamp(1_024, SUMMARY_TARGET_CEILING)
 }
 
 fn message_tool_use_ids(message: &Message) -> Vec<&str> {

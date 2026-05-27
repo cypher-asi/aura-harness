@@ -626,9 +626,7 @@ async fn prepare_turn_context(
                         }
                     };
                     let header = att.name.as_deref().unwrap_or("document");
-                    blocks.push(ContentBlock::text(&format!(
-                        "[File: {header}]\n\n{decoded}"
-                    )));
+                    blocks.push(ContentBlock::text(format!("[File: {header}]\n\n{decoded}")));
                 }
             }
             if blocks.is_empty() {

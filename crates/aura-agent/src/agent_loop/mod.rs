@@ -42,6 +42,7 @@ mod cache;
 mod compaction_summary;
 mod config;
 mod context;
+mod cx;
 mod event_sink;
 mod iteration;
 mod run;
@@ -79,6 +80,7 @@ mod tests;
 mod tests_advanced;
 
 pub use config::AgentLoopConfig;
+pub use cx::RunOptions;
 pub use task::TaskId;
 
 pub(crate) use cache::{ReadRangeEntry, ToolResultCache};

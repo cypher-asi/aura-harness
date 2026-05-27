@@ -143,8 +143,7 @@ fn spawn_build_child(
         // wrap every command in `cmd /C`.
         #[cfg(target_os = "windows")]
         let program: std::ffi::OsString = windows_resolve_program(parts[0], project_dir)
-            .map(std::path::PathBuf::into_os_string)
-            .unwrap_or_else(|| parts[0].into());
+            .map_or_else(|| parts[0].into(), std::path::PathBuf::into_os_string);
         #[cfg(not(target_os = "windows"))]
         let program: std::ffi::OsString = parts[0].into();
 

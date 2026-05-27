@@ -70,21 +70,37 @@ pub fn build_codebase_snapshot(project_folder: &str, budget: usize) -> String {
     })
 }
 
+/// Phase 8 wrapper around the immutable inputs that drive a single
+/// fix-application attempt — the LLM response, the failing stderr,
+/// the attempt counter, and the label used in log records.
+/// Grouping these four keeps [`apply_fix_and_record`] under the
+/// clippy ceiling while leaving the two mutable history sinks
+/// (`prior_attempts`, `all_fix_ops`) as ordinary `&mut` borrows so
+/// callers retain in-place mutation.
+pub struct FixAttempt<'a> {
+    pub response: &'a str,
+    pub attempt: u32,
+    pub stderr: &'a str,
+    pub fix_kind: &'a str,
+}
+
 /// Parse an LLM fix response, apply file operations to disk, and record the
 /// attempt in the history for stagnation detection.
 ///
 /// Returns `true` when the fix was successfully applied.
-#[allow(clippy::too_many_arguments)]
 pub async fn apply_fix_and_record(
     base_path: &Path,
-    response: &str,
-    attempt: u32,
-    stderr: &str,
+    fix: FixAttempt<'_>,
     prior_attempts: &mut Vec<BuildFixAttemptRecord>,
     all_fix_ops: &mut Vec<FileOp>,
-    fix_kind: &str,
     fix_provider: &dyn FixProvider,
 ) -> anyhow::Result<bool> {
+    let FixAttempt {
+        response,
+        attempt,
+        stderr,
+        fix_kind,
+    } = fix;
     match fix_provider.parse_fix_response(response) {
         Ok(fix_ops) => {
             if let Err(e) = file_ops::apply_file_ops(base_path, &fix_ops).await {

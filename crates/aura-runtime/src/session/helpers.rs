@@ -600,7 +600,8 @@ async fn send_outbound_with_backpressure(
         Err(_) => {
             warn!(
                 context,
-                timeout_ms = OUTBOUND_DELIVERY_TIMEOUT.as_millis() as u64,
+                timeout_ms =
+                    u64::try_from(OUTBOUND_DELIVERY_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
                 "Timed out delivering outbound message"
             );
             false
@@ -772,13 +773,13 @@ async fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id
     .await;
     send_outbound_with_backpressure(
         outbound_tx,
-        OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
+        OutboundMessage::AssistantMessageEnd(Box::new(AssistantMessageEnd {
             message_id: message_id.to_string(),
             stop_reason: "error".into(),
             usage: SessionUsage::default(),
             files_changed: FilesChanged::default(),
             originating_user_id: None,
-        }),
+        })),
         "turn_panic_end",
     )
     .await;
@@ -838,7 +839,7 @@ pub(super) async fn apply_turn_result(
 
     send_outbound_with_backpressure(
         outbound_tx,
-        OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
+        OutboundMessage::AssistantMessageEnd(Box::new(AssistantMessageEnd {
             message_id: message_id.to_string(),
             stop_reason: stop_reason.into(),
             usage: SessionUsage {
@@ -859,7 +860,7 @@ pub(super) async fn apply_turn_result(
             },
             files_changed,
             originating_user_id: None,
-        }),
+        })),
         "assistant_message_end",
     )
     .await;

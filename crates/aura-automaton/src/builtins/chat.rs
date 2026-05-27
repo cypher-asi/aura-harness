@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tracing::{error, info};
 
-use aura_agent::agent_runner::{AgentRunner, AgentRunnerConfig};
+use aura_agent::agent_runner::{AgentRunner, AgentRunnerConfig, ChatHooks, ChatPromptCtx};
 use aura_prompts::ProjectInfo;
 use aura_reasoner::{Message, ModelProvider};
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
@@ -221,12 +221,16 @@ impl ChatAutomaton {
             .execute_chat(
                 self.provider.as_ref(),
                 &executor,
-                &project_info,
-                &cfg.custom_system_prompt,
+                ChatPromptCtx {
+                    project: &project_info,
+                    custom_system_prompt: &cfg.custom_system_prompt,
+                },
                 api_messages,
                 tools,
-                Some(event_tx),
-                Some(cancel),
+                ChatHooks {
+                    event_tx: Some(event_tx),
+                    cancel: Some(cancel),
+                },
             )
             .await
             .map_err(|e| AutomatonError::agent_execution(None, e))?;

@@ -92,7 +92,7 @@ pub struct AnthropicResponseView<'a> {
 }
 
 /// Render the request half of an Anthropic call as a multi-line block.
-pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
+pub fn anthropic_request_block(req: &AnthropicRequestView<'_>) {
     let mut out = String::new();
     let header = "→ POST /v1/messages".cyan().bold();
     let tag = destination_tag(req.destination, Some(req.destination_host));
@@ -144,7 +144,7 @@ pub fn emit_response_block(
     status_text: &str,
 ) {
     let stop_label = format!("{:?}", response.stop_reason);
-    anthropic_response_block(AnthropicResponseView {
+    anthropic_response_block(&AnthropicResponseView {
         status_code,
         status_text,
         stop_reason: &stop_label,
@@ -158,7 +158,7 @@ pub fn emit_response_block(
 
 /// Render the response half of an Anthropic call symmetric to
 /// [`anthropic_request_block`].
-pub fn anthropic_response_block(resp: AnthropicResponseView<'_>) {
+pub fn anthropic_response_block(resp: &AnthropicResponseView<'_>) {
     let mut out = String::new();
     let header_text = format!("← {} {}", resp.status_code, resp.status_text);
     let header = match resp.status_code {
@@ -237,7 +237,7 @@ pub enum RetryDecisionView<'a> {
 /// Symmetric to [`anthropic_response_block`]: same destination tag,
 /// same row layout, same target — operators reading the transcript
 /// see one paired box per round-trip regardless of outcome.
-pub fn anthropic_failure_block(view: AnthropicFailureView<'_>) {
+pub fn anthropic_failure_block(view: &AnthropicFailureView<'_>) {
     let mut out = String::new();
     let header_text = match view.status_code {
         Some(code) => format!("← {} {}", code, view.status_text),
@@ -274,17 +274,16 @@ pub fn anthropic_failure_block(view: AnthropicFailureView<'_>) {
 /// continuation line — sits between the failure block and the next
 /// request block so the transcript shows what the harness will do
 /// about the block without hunting through `warn!` lines.
-pub fn anthropic_retry_decision_line(decision: RetryDecisionView<'_>) {
-    let body = match decision {
+pub fn anthropic_retry_decision_line(decision: &RetryDecisionView<'_>) {
+    let body = match *decision {
         RetryDecisionView::Retry {
             attempt_that_failed,
             max_retries,
             sleep_ms,
             body_cap_bytes,
         } => {
-            let cap = body_cap_bytes
-                .map(|c| format!(" · cap {}", human_bytes(c)))
-                .unwrap_or_default();
+            let cap =
+                body_cap_bytes.map_or_else(String::new, |c| format!(" · cap {}", human_bytes(c)));
             // Attempt counts are 1-based for human readability:
             // `attempt_that_failed` is the 0-based index of the call
             // that just failed, so the *next* attempt is +2 of N.
@@ -423,6 +422,11 @@ fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
 }
 
 fn human_bytes(n: usize) -> String {
+    // Lossy `usize as f64` casts are intentional here: this helper
+    // only formats orders of magnitude on a transcript so a
+    // sub-mantissa rounding error on truly huge values is
+    // indistinguishable in the rendered output.
+    #[allow(clippy::cast_precision_loss)]
     if n < 1024 {
         format!("{n} B")
     } else if n < 1024 * 1024 {
@@ -457,6 +461,10 @@ fn collapse_for_row(content: &str, limit: usize) -> String {
 }
 
 fn human_duration_ms(ms: u64) -> String {
+    // `u64 as f64` is precision-losing for ~292 million-year wall
+    // clocks but the values formatted here are bounded by network
+    // request timeouts; the rendered output is unaffected.
+    #[allow(clippy::cast_precision_loss)]
     if ms < 1000 {
         format!("{ms} ms")
     } else if ms < 60_000 {
@@ -545,7 +553,7 @@ mod tests {
 
     #[test]
     fn request_block_renders_without_panic() {
-        anthropic_request_block(AnthropicRequestView {
+        anthropic_request_block(&AnthropicRequestView {
             model: "claude-opus-4-6",
             kind: "DevLoopContinuation",
             body_bytes: 24_656,
@@ -572,7 +580,7 @@ mod tests {
         // direct construction here — the renderer logs to a tracing
         // target so this is a smoke test that no panic / format
         // misalignment fires when the field is empty.
-        anthropic_request_block(AnthropicRequestView {
+        anthropic_request_block(&AnthropicRequestView {
             model: "claude-opus-4-6",
             kind: "Auxiliary",
             body_bytes: 12_345,
@@ -593,7 +601,7 @@ mod tests {
 
     #[test]
     fn response_block_renders_without_panic() {
-        anthropic_response_block(AnthropicResponseView {
+        anthropic_response_block(&AnthropicResponseView {
             status_code: 200,
             status_text: "OK",
             stop_reason: "ToolUse",
@@ -607,7 +615,7 @@ mod tests {
 
     #[test]
     fn failure_block_renders_403_cloudflare() {
-        anthropic_failure_block(AnthropicFailureView {
+        anthropic_failure_block(&AnthropicFailureView {
             status_code: Some(403),
             status_text: "Forbidden",
             class: "cloudflare_block",
@@ -623,7 +631,7 @@ mod tests {
 
     #[test]
     fn failure_block_renders_429_with_retry_after() {
-        anthropic_failure_block(AnthropicFailureView {
+        anthropic_failure_block(&AnthropicFailureView {
             status_code: Some(429),
             status_text: "Too Many Requests",
             class: "rate_limited_429",
@@ -637,7 +645,7 @@ mod tests {
 
     #[test]
     fn failure_block_renders_transport() {
-        anthropic_failure_block(AnthropicFailureView {
+        anthropic_failure_block(&AnthropicFailureView {
             status_code: None,
             status_text: "transport failed",
             class: "transport",
@@ -651,7 +659,7 @@ mod tests {
 
     #[test]
     fn failure_block_renders_parse() {
-        anthropic_failure_block(AnthropicFailureView {
+        anthropic_failure_block(&AnthropicFailureView {
             status_code: Some(200),
             status_text: "OK",
             class: "parse",
@@ -665,22 +673,22 @@ mod tests {
 
     #[test]
     fn retry_decision_line_renders_each_variant() {
-        anthropic_retry_decision_line(RetryDecisionView::Retry {
+        anthropic_retry_decision_line(&RetryDecisionView::Retry {
             attempt_that_failed: 0,
             max_retries: 2,
             sleep_ms: 1500,
             body_cap_bytes: Some(192 * 1024),
         });
-        anthropic_retry_decision_line(RetryDecisionView::Retry {
+        anthropic_retry_decision_line(&RetryDecisionView::Retry {
             attempt_that_failed: 1,
             max_retries: 2,
             sleep_ms: 3000,
             body_cap_bytes: None,
         });
-        anthropic_retry_decision_line(RetryDecisionView::Fallback {
+        anthropic_retry_decision_line(&RetryDecisionView::Fallback {
             next_model: "claude-haiku-4-6",
         });
-        anthropic_retry_decision_line(RetryDecisionView::Propagate {
+        anthropic_retry_decision_line(&RetryDecisionView::Propagate {
             reason: "retries exhausted",
         });
     }

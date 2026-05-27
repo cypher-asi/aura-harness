@@ -65,7 +65,7 @@ pub fn sampling_boundary(task_id: &str, turn: u32, iter: usize) {
 /// Render the request half of an Anthropic call as a multi-line block.
 /// Field arguments are passed verbatim and trusted; the helper does
 /// not redact or truncate.
-pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
+pub fn anthropic_request_block(req: &AnthropicRequestView<'_>) {
     let mut out = String::new();
     let header = "→ POST /v1/messages".cyan().bold();
     let tag = destination_tag(req.destination, Some(req.destination_host));
@@ -96,7 +96,7 @@ pub fn anthropic_request_block(req: AnthropicRequestView<'_>) {
 
 /// Render the response half of an Anthropic call symmetric to
 /// [`anthropic_request_block`].
-pub fn anthropic_response_block(resp: AnthropicResponseView<'_>) {
+pub fn anthropic_response_block(resp: &AnthropicResponseView<'_>) {
     let mut out = String::new();
     let header_text = format!("← {} {}", resp.status_code, resp.status_text);
     let header = match resp.status_code {

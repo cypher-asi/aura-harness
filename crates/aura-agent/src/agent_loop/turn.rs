@@ -24,21 +24,27 @@
 //!   over any newly-queued user input. The message-append step that
 //!   follows the drain is atomic with respect to that cancellation —
 //!   there is no half-written message state.
+//!
+//! Phase 8 collapsed the previous 12-parameter signature on
+//! `run_turn` into a single [`TurnCtx`] borrow plus the mutable
+//! [`LoopState`]. The context carries the run-scoped service refs
+//! (provider, executor, event sink, cancellation token, session) plus
+//! the turn-scoped identity (task_id, turn_index, iteration_offset,
+//! input_queue, tools) that the loop body needs.
 
-use aura_reasoner::{Message, ModelProvider, ToolDefinition};
+use aura_reasoner::Message;
 use tokio::sync::mpsc::Sender;
-use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::console;
 use crate::events::AgentLoopEvent;
 use crate::session::input_queue::InputQueue;
-use crate::session::{Session, UserInput};
-use crate::types::AgentToolExecutor;
+use crate::session::UserInput;
 use crate::{helpers, AgentError};
 
+use super::cx::TurnCtx;
 use super::sampling::{run_sampling_request, SamplingRequestResult};
-use super::{context, AgentLoop, LoopState, TaskId};
+use super::{context, LoopState};
 
 /// Result of a single turn.
 ///
@@ -79,9 +85,10 @@ pub(crate) struct StopHookOutcome {
 /// signal OR pending user input). When the answer is `false` the
 /// turn terminates; otherwise the loop continues.
 ///
-/// `iteration_offset` is the running sampling-request counter shared
-/// with the task shell so that `state.result.iterations` keeps a
-/// monotonically-increasing total across turns.
+/// `iteration_offset` from the [`TurnCtx`] is the running
+/// sampling-request counter shared with the task shell so that
+/// `state.result.iterations` keeps a monotonically-increasing total
+/// across turns.
 ///
 /// `input_queue` is the optional mid-task user steering buffer. When
 /// `Some`, the queue is drained at the top of every sampling
@@ -91,40 +98,29 @@ pub(crate) struct StopHookOutcome {
 /// the user is still feeding it work. When `None`, behaviour
 /// collapses to one drain-free sampling loop until the model
 /// signals stop.
-#[allow(clippy::too_many_arguments)]
 #[instrument(
     name = "turn",
     skip_all,
-    fields(idx = turn_index, iter_offset = iteration_offset),
+    fields(idx = ctx.turn_index, iter_offset = ctx.iteration_offset),
 )]
 pub(crate) async fn run_turn(
-    agent: &AgentLoop,
-    provider: &dyn ModelProvider,
-    executor: &dyn AgentToolExecutor,
-    tools: &[ToolDefinition],
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    cancellation_token: Option<&CancellationToken>,
+    ctx: &TurnCtx<'_>,
     state: &mut LoopState,
-    task_id: TaskId,
-    turn_index: u32,
-    iteration_offset: u32,
-    input_queue: Option<&InputQueue>,
-    session: &Session,
 ) -> Result<TurnOutcome, AgentError> {
     let mut sampling_count: u32 = 0;
     let mut terminated_cleanly = false;
     let mut broke_for_error = false;
 
     loop {
-        let iteration =
-            usize::try_from(iteration_offset.saturating_add(sampling_count)).unwrap_or(usize::MAX);
+        let iteration = usize::try_from(ctx.iteration_offset.saturating_add(sampling_count))
+            .unwrap_or(usize::MAX);
 
         // Drain pending user input BEFORE the budget check so the
         // cancel branch of the biased select! unwinds without
         // counting against the per-task ceilings. Cancellation
         // observed here is the in-band `UserInput::Cancel` path.
-        if let Some(queue) = input_queue {
-            match drain_pending_input(queue, cancellation_token).await {
+        if let Some(queue) = ctx.input_queue {
+            match drain_pending_input(queue, ctx.run.cancellation_token).await {
                 DrainOutcome::Drained(inputs) => {
                     if !inputs.is_empty() {
                         apply_user_inputs_to_messages(&mut state.messages, inputs);
@@ -140,29 +136,22 @@ pub(crate) async fn run_turn(
         // Hard ceiling: max_iterations is the global cap (default
         // `usize::MAX`). Trip it BEFORE the next sampling so we never
         // pay for one more model call past the budget.
-        if agent.config.max_iterations != usize::MAX && iteration >= agent.config.max_iterations {
-            return Err(AgentError::TurnBudgetExceeded {
-                task_id,
-                turn_index,
+        if ctx.run.agent.config.max_iterations != usize::MAX
+            && iteration >= ctx.run.agent.config.max_iterations
+        {
+            return Err(AgentError::IterationBudgetExceeded {
+                task_id: ctx.task_id,
+                limit: ctx.run.agent.config.max_iterations,
             });
         }
 
         // Visual separator at the top of each sampling iteration so
         // operators can scan a single log file and immediately see
         // where one round-trip ends and the next begins.
-        console::sampling_boundary(&task_id.to_string(), turn_index, iteration);
+        console::sampling_boundary(&ctx.task_id.to_string(), ctx.turn_index, iteration);
 
-        let sampling_result: SamplingRequestResult = run_sampling_request(
-            agent,
-            provider,
-            executor,
-            tools,
-            event_tx,
-            cancellation_token,
-            state,
-            iteration,
-        )
-        .await;
+        let sampling_result: SamplingRequestResult =
+            run_sampling_request(ctx, state, iteration).await;
 
         sampling_count = sampling_count.saturating_add(1);
 
@@ -177,7 +166,7 @@ pub(crate) async fn run_turn(
         // checkpoint side-effects only.
         if sampling_result.needs_follow_up {
             let stop_outcome =
-                run_turn_stop_hooks(&agent.config, event_tx, state, iteration, task_id, session)
+                run_turn_stop_hooks(&ctx.run.agent.config, ctx.run.event_tx, state, iteration)
                     .await?;
             if stop_outcome.should_break {
                 broke_for_error = true;
@@ -190,7 +179,7 @@ pub(crate) async fn run_turn(
         // turn loop alive — the next iteration's drain will pull the
         // queued context into `state.messages` and feed it to a
         // fresh sampling request.
-        if input_queue.is_some_and(InputQueue::has_pending) {
+        if ctx.input_queue.is_some_and(InputQueue::has_pending) {
             continue;
         }
 
@@ -226,7 +215,7 @@ enum DrainOutcome {
 /// runs unconditionally (no select! at all).
 async fn drain_pending_input(
     queue: &InputQueue,
-    cancellation_token: Option<&CancellationToken>,
+    cancellation_token: Option<&tokio_util::sync::CancellationToken>,
 ) -> DrainOutcome {
     match cancellation_token {
         Some(token) => {
@@ -289,8 +278,6 @@ pub(crate) async fn run_turn_stop_hooks(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut LoopState,
     iteration: usize,
-    _task_id: TaskId,
-    _session: &Session,
 ) -> Result<StopHookOutcome, AgentError> {
     let mut outcome = StopHookOutcome::default();
 

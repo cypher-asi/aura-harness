@@ -28,6 +28,32 @@ const CLOUDFLARE_RETRY_SHRINK_NUMER: usize = 3;
 const CLOUDFLARE_RETRY_SHRINK_DENOM: usize = 4;
 static OUTBOUND_REQUEST_THROTTLE: OnceLock<tokio::sync::Mutex<Option<Instant>>> = OnceLock::new();
 
+/// Saturating cast from a `Duration::as_millis()` result (`u128`) into
+/// the `u64` shape every observability frame in this crate emits.
+/// Wall-clock elapsed values are bounded by request timeouts, so the
+/// cast is bounds-safe; the saturate keeps the function infallible
+/// without forcing every call site to repeat the rationale.
+#[allow(clippy::cast_possible_truncation)] // saturate-on-overflow above; rationale on the function.
+const fn millis_as_u64(elapsed: u128) -> u64 {
+    if elapsed > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        elapsed as u64
+    }
+}
+
+/// Saturating cast from a `Duration::as_millis()` result (`u128`) to
+/// the `i64` epoch-style fields some observability frames carry. Same
+/// bounds rationale as [`millis_as_u64`].
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // saturate-on-overflow.
+const fn millis_as_i64(elapsed: u128) -> i64 {
+    if elapsed > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        elapsed as i64
+    }
+}
+
 /// Set of ASCII bytes that frequently appear in code-pattern WAF
 /// signatures (Python slicing, comparison/assignment operators,
 /// boolean ops, function calls, array indexing, etc.). When the
@@ -73,7 +99,7 @@ impl serde_json::ser::Formatter for WafSafeFormatter {
                 if start < i {
                     writer.write_all(&bytes[start..i])?;
                 }
-                let escape = format!("\\u{:04x}", b as u32);
+                let escape = format!("\\u{:04x}", u32::from(b));
                 writer.write_all(escape.as_bytes())?;
                 start = i + 1;
             }
@@ -383,8 +409,7 @@ impl AnthropicProvider {
         let tool_choice_label = request_summary
             .tool_choice
             .as_deref()
-            .map(strip_tool_choice_braces)
-            .unwrap_or_else(|| "n/a".to_string());
+            .map_or_else(|| "n/a".to_string(), strip_tool_choice_braces);
         let thinking_label = format_thinking_label(
             request_summary.has_thinking,
             request_ctx.thinking_effort,
@@ -397,7 +422,7 @@ impl AnthropicProvider {
         // operators can still grep / pivot on individual fields when
         // chasing WAF / cap regressions.
         let destination_host = crate::console::extract_host(&self.config.base_url);
-        crate::console::anthropic_request_block(crate::console::AnthropicRequestView {
+        crate::console::anthropic_request_block(&crate::console::AnthropicRequestView {
             model,
             kind: &request_kind_label,
             body_bytes: final_bytes.len(),
@@ -463,8 +488,9 @@ impl AnthropicProvider {
         let response = match req_builder.send().await {
             Ok(resp) => resp,
             Err(e) => {
-                let elapsed_ms = send_started_at.elapsed().as_millis() as u64;
+                let elapsed_ms = millis_as_u64(send_started_at.elapsed().as_millis());
                 // #region agent log
+                let send_error_text = format!("send_error: {e}");
                 debug_log_response_received(
                     request_ctx,
                     model,
@@ -474,7 +500,7 @@ impl AnthropicProvider {
                     None,
                     None,
                     None,
-                    Some(format!("send_error: {e}")),
+                    Some(send_error_text.as_str()),
                 );
                 // #endregion
                 error!(error = %e, "Anthropic API request failed");
@@ -486,7 +512,7 @@ impl AnthropicProvider {
                 } else {
                     "transport failed"
                 };
-                crate::console::anthropic_failure_block(crate::console::AnthropicFailureView {
+                crate::console::anthropic_failure_block(&crate::console::AnthropicFailureView {
                     status_code: None,
                     status_text,
                     class,
@@ -518,7 +544,7 @@ impl AnthropicProvider {
         // discriminate between body-content WAF rules, retry-rate
         // accumulation, and per-edge Cloudflare behavior, all of
         // which are observable from the response side here.
-        let elapsed_ms = send_started_at.elapsed().as_millis() as u64;
+        let elapsed_ms = millis_as_u64(send_started_at.elapsed().as_millis());
         let status_code = response.status().as_u16();
         let cf_ray = response
             .headers()
@@ -563,7 +589,7 @@ impl AnthropicProvider {
                 Some(&content_profile),
             )
             .await;
-            crate::console::anthropic_failure_block(crate::console::AnthropicFailureView {
+            crate::console::anthropic_failure_block(&crate::console::AnthropicFailureView {
                 status_code: Some(meta.status_code),
                 status_text: &meta.status_text,
                 class: meta.class,
@@ -627,18 +653,25 @@ impl AnthropicProvider {
              trimmed in place to stay under the proactive Cloudflare safety budget"
         );
         // #region agent log
+        let cap_detail = format!("mode={mode},dropped_messages={dropped_messages}");
         debug_log_body_cap_fired(
             model,
             original_len,
             capped.len(),
             cap,
             true,
-            Some(format!("mode={mode},dropped_messages={dropped_messages}")),
+            Some(cap_detail.as_str()),
         );
         // #endregion
         capped
     }
 
+    // The function is infallible today but kept on a `Result` shape
+    // because every caller threads it through `?`; converting to a
+    // plain return would force the callers to drop or re-wrap the
+    // result and the current shape leaves room to surface
+    // header/body validation errors without a downstream churn.
+    #[allow(clippy::unnecessary_wraps)]
     fn build_request(
         &self,
         request_ctx: &ModelRequest,
@@ -721,7 +754,7 @@ fn debug_log_cf_403_details(
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| millis_as_i64(d.as_millis()))
         .unwrap_or(0);
     let mut cf_headers: Vec<(String, String)> = Vec::new();
     for (name, value) in headers.iter() {
@@ -778,13 +811,13 @@ fn debug_log_body_cap_fired(
     final_bytes: usize,
     cap_bytes: usize,
     truncated_ok: bool,
-    error: Option<String>,
+    error: Option<&str>,
 ) {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| millis_as_i64(d.as_millis()))
         .unwrap_or(0);
     let line = serde_json::json!({
         "sessionId": "95fd5c",
@@ -816,7 +849,7 @@ fn debug_log_waf_safe_serialization(model: &str, body_len: usize) {
     let enabled = waf_safe_json_enabled();
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| millis_as_i64(d.as_millis()))
         .unwrap_or(0);
     let line = serde_json::json!({
         "sessionId": "95fd5c",
@@ -849,17 +882,16 @@ fn debug_log_outbound_request(
 ) {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
-    let prompt_caching_will_be_added = request_ctx
-        .upstream_provider_family
-        .as_deref()
-        .map(|f| f.eq_ignore_ascii_case("anthropic"))
-        .unwrap_or_else(|| {
+    let prompt_caching_will_be_added = request_ctx.upstream_provider_family.as_deref().map_or_else(
+        || {
             let m = model.trim().to_ascii_lowercase();
             m.starts_with("claude") || m.starts_with("aura-claude")
-        });
+        },
+        |f| f.eq_ignore_ascii_case("anthropic"),
+    );
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| millis_as_i64(d.as_millis()))
         .unwrap_or(0);
     let line = serde_json::json!({
         "sessionId": "95fd5c",
@@ -874,13 +906,13 @@ fn debug_log_outbound_request(
             "auth_token_len": auth_token.len(),
             "auth_token_first8": auth_token.chars().take(8).collect::<String>(),
             "has_aura_project_id": request_ctx.aura_project_id.is_some(),
-            "aura_project_id_len": request_ctx.aura_project_id.as_deref().map(str::len).unwrap_or(0),
+            "aura_project_id_len": request_ctx.aura_project_id.as_deref().map_or(0, str::len),
             "has_aura_agent_id": request_ctx.aura_agent_id.is_some(),
-            "aura_agent_id_len": request_ctx.aura_agent_id.as_deref().map(str::len).unwrap_or(0),
+            "aura_agent_id_len": request_ctx.aura_agent_id.as_deref().map_or(0, str::len),
             "has_aura_session_id": request_ctx.aura_session_id.is_some(),
-            "aura_session_id_len": request_ctx.aura_session_id.as_deref().map(str::len).unwrap_or(0),
+            "aura_session_id_len": request_ctx.aura_session_id.as_deref().map_or(0, str::len),
             "has_aura_org_id": request_ctx.aura_org_id.is_some(),
-            "aura_org_id_len": request_ctx.aura_org_id.as_deref().map(str::len).unwrap_or(0),
+            "aura_org_id_len": request_ctx.aura_org_id.as_deref().map_or(0, str::len),
             "has_upstream_provider_family": request_ctx
                 .upstream_provider_family
                 .as_deref()
@@ -912,14 +944,13 @@ fn debug_log_response_received(
     cf_ray: Option<&str>,
     server_header: Option<&str>,
     content_type: Option<&str>,
-    error_text: Option<String>,
+    error_text: Option<&str>,
 ) {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| millis_as_i64(d.as_millis()));
     let id_first8 = |opt: Option<&String>| -> String {
         opt.map(|s| s.chars().take(8).collect::<String>())
             .unwrap_or_default()
@@ -1064,14 +1095,14 @@ fn summarize_anthropic_request(body_bytes: &[u8]) -> RequestDiagnosticsSummary {
         };
     };
 
-    let top_level_keys = value
-        .as_object()
-        .map(|obj| {
+    let top_level_keys = value.as_object().map_or_else(
+        || "<not-object>".to_string(),
+        |obj| {
             let mut keys = obj.keys().map(String::as_str).collect::<Vec<_>>();
             keys.sort_unstable();
             keys.join(",")
-        })
-        .unwrap_or_else(|| "<not-object>".to_string());
+        },
+    );
     let stream = value
         .get("stream")
         .and_then(serde_json::Value::as_bool)
@@ -1407,9 +1438,8 @@ fn fit_body_under_cap(body_bytes: &[u8], cap_bytes: usize) -> (Vec<u8>, usize, B
         }
         dropped += 2;
 
-        let candidate = match serialize_request_body(&value) {
-            Ok(bytes) => bytes,
-            Err(_) => break,
+        let Ok(candidate) = serialize_request_body(&value) else {
+            break;
         };
         if candidate.len() <= cap_bytes {
             return (candidate, dropped, BodyFitMode::DroppedOldestPairs);
@@ -1422,7 +1452,7 @@ fn fit_body_under_cap(body_bytes: &[u8], cap_bytes: usize) -> (Vec<u8>, usize, B
     }
 
     // Last resort: collapse the entire message history.
-    let collapsed_bytes = collapse_messages_to_marker(&body_bytes.to_vec(), cap_bytes);
+    let collapsed_bytes = collapse_messages_to_marker(body_bytes, cap_bytes);
     (collapsed_bytes, dropped, BodyFitMode::Collapsed)
 }
 
@@ -1840,9 +1870,10 @@ async fn classify_api_error(
             }
         }
         let request_id_label = request_id.as_deref().unwrap_or("unknown");
-        let profile_label = content_profile
-            .map(ModelContentProfile::summary)
-            .unwrap_or_else(|| "profile=unavailable".to_string());
+        let profile_label = content_profile.map_or_else(
+            || "profile=unavailable".to_string(),
+            ModelContentProfile::summary,
+        );
         let err = ApiError::CloudflareBlock(format!(
             "LLM proxy returned Cloudflare block ({status}; request_id={request_id_label}; \
              aura_org_id={}; aura_session_id={}; {profile_label})",
@@ -2138,7 +2169,7 @@ fn classify_retry_action(
             // u64::MAX; truncation cannot happen. `warn!` field value expressions
             // can't carry attributes directly, so bind first.
             #[allow(clippy::cast_possible_truncation)]
-            let backoff_ms = sleep.as_millis() as u64;
+            let backoff_ms = millis_as_u64(sleep.as_millis());
             // Shrink the body cap by 25% per attempt. When the cap is
             // disabled (0) we still produce an override so the next
             // attempt has *some* ceiling — pick a generous starting
@@ -2182,7 +2213,7 @@ fn classify_retry_action(
                 sleep_for_overloaded(attempt, *retry_after, backoff_initial_ms, backoff_cap_ms);
             // 60s cap on `sleep_for_overloaded` means u128 -> u64 is safe here.
             #[allow(clippy::cast_possible_truncation)]
-            let backoff_ms = sleep.as_millis() as u64;
+            let backoff_ms = millis_as_u64(sleep.as_millis());
             warn!(
                 model = %model,
                 attempt,
@@ -2218,7 +2249,7 @@ fn classify_retry_action(
         ApiError::TransientServer { status, message } if attempt < max_retries => {
             let sleep = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
             #[allow(clippy::cast_possible_truncation)]
-            let backoff_ms = sleep.as_millis() as u64;
+            let backoff_ms = millis_as_u64(sleep.as_millis());
             warn!(
                 model = %model,
                 attempt,
@@ -2377,9 +2408,9 @@ where
                         } => {
                             emit_retry_observation(&e, sleep, try_n, model);
                             #[allow(clippy::cast_possible_truncation)]
-                            let sleep_ms = sleep.as_millis() as u64;
+                            let sleep_ms = millis_as_u64(sleep.as_millis());
                             crate::console::anthropic_retry_decision_line(
-                                crate::console::RetryDecisionView::Retry {
+                                &crate::console::RetryDecisionView::Retry {
                                     attempt_that_failed: try_n,
                                     max_retries: config.max_retries,
                                     sleep_ms,
@@ -2402,18 +2433,16 @@ where
                             }
                         }
                         RetryAction::FallbackModel => {
-                            let next_model = models
-                                .get(model_idx + 1)
-                                .map(String::as_str)
-                                .unwrap_or("(none)");
+                            let next_model =
+                                models.get(model_idx + 1).map_or("(none)", String::as_str);
                             crate::console::anthropic_retry_decision_line(
-                                crate::console::RetryDecisionView::Fallback { next_model },
+                                &crate::console::RetryDecisionView::Fallback { next_model },
                             );
                             continue 'outer;
                         }
                         RetryAction::Propagate => {
                             crate::console::anthropic_retry_decision_line(
-                                crate::console::RetryDecisionView::Propagate {
+                                &crate::console::RetryDecisionView::Propagate {
                                     reason: retry_reason_for(&e),
                                 },
                             );
@@ -2425,7 +2454,7 @@ where
         }
     }
 
-    crate::console::anthropic_retry_decision_line(crate::console::RetryDecisionView::Propagate {
+    crate::console::anthropic_retry_decision_line(&crate::console::RetryDecisionView::Propagate {
         reason: "all models exhausted",
     });
     Err(last_err.unwrap_or_else(|| {
@@ -2567,7 +2596,7 @@ impl ModelProvider for AnthropicProvider {
                         error!(error = %e, "Failed to parse Anthropic response");
                         let err_str = e.to_string();
                         crate::console::anthropic_failure_block(
-                            crate::console::AnthropicFailureView {
+                            &crate::console::AnthropicFailureView {
                                 status_code: Some(200),
                                 status_text: "OK",
                                 class: "parse",

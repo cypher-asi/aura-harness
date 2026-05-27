@@ -95,11 +95,7 @@ impl TaskTool {
         let parent_agent_id = ctx.caller_agent_id.ok_or_else(|| {
             ToolError::InvalidArguments("task requires caller_agent_id on the tool context".into())
         })?;
-        if ctx
-            .parent_chain
-            .iter()
-            .any(|ancestor| *ancestor == parent_agent_id)
-        {
+        if ctx.parent_chain.contains(&parent_agent_id) {
             return Err(ToolError::InvalidArguments(
                 "permissions: ancestor cycle detected in parent_chain".into(),
             ));

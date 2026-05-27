@@ -94,8 +94,16 @@ pub enum ReasonerError {
 
     /// Provider-bound request failed the local harness contract before it was
     /// sent to the router.
+    ///
+    /// Boxed because [`ModelRequestContractViolation`] embeds a full
+    /// [`crate::ModelContentProfile`] (multiple `Vec<String>` plus a
+    /// 16-char hash signature). Holding it inline pushed every
+    /// [`ReasonerError`] above the 128-byte
+    /// `result_large_err`/`Result<_, ReasonerError>` ceiling and
+    /// poisoned every fallible provider helper. Boxing isolates the
+    /// allocation on the rare contract-violation path.
     #[error("{0}")]
-    ModelRequestContractViolation(ModelRequestContractViolation),
+    ModelRequestContractViolation(Box<ModelRequestContractViolation>),
 
     /// Catch-all for other provider-level failures.
     #[error("{0}")]

@@ -156,8 +156,7 @@ pub fn cap_bootstrap_task_context(task_context: &mut String) {
         .char_indices()
         .take_while(|(idx, ch)| idx + ch.len_utf8() <= keep)
         .last()
-        .map(|(idx, ch)| idx + ch.len_utf8())
-        .unwrap_or(0);
+        .map_or(0, |(idx, ch)| idx + ch.len_utf8());
     task_context.truncate(cut);
     task_context.push_str(marker);
 }
@@ -432,8 +431,12 @@ mod tests {
 
     #[test]
     fn test_extract_codebase_conventions_no_matches() {
+        // Phase 8: stripped the stdout-print literal out of the
+        // sample so the workspace-wide audit (`rg eprintln|println`)
+        // stays clean. The extractor only cares that the snippet
+        // has none of the convention regex hits.
         assert_eq!(
-            extract_codebase_conventions("fn main() { println!(\"hello\"); }"),
+            extract_codebase_conventions("fn main() { let _ = \"hello\"; }"),
             String::new(),
         );
     }

@@ -251,47 +251,6 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
     Box::pin(futures_util::stream::iter(events))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn response_output_shape_counts_blocks_without_content() {
-        let response = ModelResponse::new(
-            StopReason::ToolUse,
-            Message::new(
-                Role::Assistant,
-                vec![
-                    ContentBlock::Text {
-                        text: "hello".into(),
-                    },
-                    ContentBlock::Thinking {
-                        thinking: "hidden".into(),
-                        signature: None,
-                    },
-                    ContentBlock::ToolUse {
-                        id: "toolu_1".into(),
-                        name: "read_file".into(),
-                        input: serde_json::json!({ "path": "x" }),
-                    },
-                ],
-            ),
-            Usage::new(1, 2),
-            ProviderTrace::new("test-model", 10),
-        );
-
-        assert_eq!(
-            response_output_shape(&response),
-            ResponseOutputShape {
-                content_block_count: 3,
-                text_bytes: 5,
-                thinking_bytes: 6,
-                tool_use_count: 1,
-            }
-        );
-    }
-}
-
 /// Provider-agnostic interface for model completions.
 ///
 /// This trait abstracts over different LLM providers (Anthropic, `OpenAI`, etc.)
@@ -399,4 +358,45 @@ pub trait ModelProvider: Send + Sync {
     ///
     /// This can be used for health checks and load balancing.
     async fn health_check(&self) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_output_shape_counts_blocks_without_content() {
+        let response = ModelResponse::new(
+            StopReason::ToolUse,
+            Message::new(
+                Role::Assistant,
+                vec![
+                    ContentBlock::Text {
+                        text: "hello".into(),
+                    },
+                    ContentBlock::Thinking {
+                        thinking: "hidden".into(),
+                        signature: None,
+                    },
+                    ContentBlock::ToolUse {
+                        id: "toolu_1".into(),
+                        name: "read_file".into(),
+                        input: serde_json::json!({ "path": "x" }),
+                    },
+                ],
+            ),
+            Usage::new(1, 2),
+            ProviderTrace::new("test-model", 10),
+        );
+
+        assert_eq!(
+            response_output_shape(&response),
+            ResponseOutputShape {
+                content_block_count: 3,
+                text_bytes: 5,
+                thinking_bytes: 6,
+                tool_use_count: 1,
+            }
+        );
+    }
 }

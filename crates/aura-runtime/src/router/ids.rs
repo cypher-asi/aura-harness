@@ -40,7 +40,7 @@ use aura_core::AgentId;
 /// Errors return [`ApiError::bad_request`] with `400 Bad Request` and a
 /// JSON body `{ "error": "invalid agent_id: <reason>" }`.
 pub(crate) fn parse_agent_id(s: &str) -> Result<AgentId, ApiError> {
-    let head = s.split_once("::").map(|(h, _)| h).unwrap_or(s);
+    let head = s.split_once("::").map_or(s, |(h, _)| h);
     if let Ok(uuid) = uuid::Uuid::parse_str(head) {
         return Ok(AgentId::from_uuid(uuid));
     }

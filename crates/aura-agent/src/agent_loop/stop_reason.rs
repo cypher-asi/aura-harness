@@ -14,20 +14,23 @@
 //!   the loop). Renders the user prompt via
 //!   [`aura_prompts::auxiliary::compaction`] per the Phase 2 prompts
 //!   boundary contract.
-//! - [`AgentLoop::retry_after_context_overflow`] — two-tier
-//!   compaction retry path consulted from
-//!   [`super::transport::BufferedTransport`] when a single sampling
-//!   call surfaces `PromptTooLong`.
+//!
+//! Phase 7 deleted the pre-pump `retry_after_context_overflow`
+//! ladder along with the `BufferedTransport` it served. The pump
+//! transport surfaces `PromptTooLong` as a fatal model error today;
+//! reintroducing pump-level overflow recovery should rebuild the
+//! ladder against the active transport rather than resurrect the
+//! buffered helper.
 
 use aura_compaction as compaction;
 use aura_config::CHARS_PER_TOKEN;
 use aura_reasoner::{
-    ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ModelResponse,
-    ThinkingEffort, ToolChoice, ToolDefinition,
+    ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ThinkingEffort,
+    ToolChoice, ToolDefinition,
 };
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::events::AgentLoopEvent;
 
@@ -36,7 +39,7 @@ use super::config::parse_cache_retention;
 use super::config::AgentLoopConfig;
 use super::run::is_cancelled;
 use super::state::LoopState;
-use super::{context, iteration, streaming, AgentLoop};
+use super::{context, iteration, AgentLoop};
 
 impl AgentLoop {
     /// Drive the auxiliary "compaction-summary" model call when the
@@ -153,65 +156,6 @@ impl AgentLoop {
         .request_kind(ModelRequestKind::Auxiliary)
         .try_build()
         .map_err(crate::AgentError::from)
-    }
-
-    /// Two-tier compaction retry path. Pre-Phase-7 this was the
-    /// `BufferedTransport`'s `PromptTooLong` recovery ladder; with
-    /// the buffered transport gone the pump-only sampling path
-    /// surfaces `PromptTooLong` as a fatal error and the loop
-    /// breaks. The helper is retained as a typed seam so a future
-    /// pump-level overflow-recovery path can re-enter it without
-    /// re-implementing the aggressive → micro tier choice.
-    #[allow(clippy::too_many_arguments)] // Phase 8 will collapse retry inputs behind a `RetryCtx` struct.
-    #[allow(dead_code)]
-    pub(super) async fn retry_after_context_overflow(
-        &self,
-        provider: &dyn ModelProvider,
-        tools: &[ToolDefinition],
-        iteration: usize,
-        event_tx: Option<&Sender<AgentLoopEvent>>,
-        cancellation_token: Option<&CancellationToken>,
-        state: &mut LoopState,
-        initial_error: String,
-    ) -> Result<ModelResponse, iteration::LlmCallError> {
-        let recovery_steps = [
-            (
-                compaction::CompactionConfig::aggressive(),
-                "Context limit reached; compacting older context, trimming response budget, and retrying.",
-            ),
-            (
-                compaction::CompactionConfig::micro(),
-                "Context is still too large; applying emergency compaction, trimming response budget again, and retrying.",
-            ),
-        ];
-        let mut last_error = initial_error;
-
-        for (tier, warning) in recovery_steps {
-            if !context::compact_for_overflow(&self.config, state, tier, tools) {
-                debug!("Skipping overflow retry because compaction made no progress");
-                continue;
-            }
-
-            state.thinking.budget =
-                (state.thinking.budget / 2).max(self.config.thinking_min_budget);
-            streaming::emit(event_tx, AgentLoopEvent::Warning(warning.to_string()));
-
-            let request = state
-                .build_request(&self.config, tools, iteration)
-                .map_err(|e| iteration::LlmCallError::Fatal(e.to_string()))?;
-            match self
-                .call_model(provider, request, event_tx, cancellation_token)
-                .await
-            {
-                Ok(response) => return Ok(response),
-                Err(iteration::LlmCallError::PromptTooLong(msg)) => {
-                    last_error = msg;
-                }
-                Err(other) => return Err(other),
-            }
-        }
-
-        Err(iteration::LlmCallError::PromptTooLong(last_error))
     }
 }
 

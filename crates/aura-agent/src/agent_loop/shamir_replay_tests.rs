@@ -258,13 +258,16 @@ fn shamir_replay_meets_eight_distinct_read_target() {
         transcript.len(),
     );
 
-    // Surface the headline number so developers running the replay
-    // (`cargo test -p aura-agent --lib shamir_replay -- --nocapture`)
-    // see the cache's actual distinct-execution count next to the
-    // floor.
-    println!(
-        "shamir_replay cache: {distinct_executions} distinct executions across {} reads (floor <= {SHAMIR_REPLAY_MAX_DISTINCT_EXECUTIONS})",
-        transcript.len(),
+    // Surface the headline number through `tracing::info!` so
+    // developers running the replay (`cargo test -p aura-agent --lib
+    // shamir_replay -- --nocapture`) see the cache's actual
+    // distinct-execution count next to the floor without resorting
+    // to stdout prints (Rule 8.1, audited workspace-wide in Phase 8).
+    tracing::info!(
+        distinct_executions,
+        reads = transcript.len(),
+        floor = SHAMIR_REPLAY_MAX_DISTINCT_EXECUTIONS,
+        "shamir_replay cache replay summary"
     );
 }
 
@@ -338,14 +341,19 @@ fn shamir_replay_compaction_reduces_prompt_bytes() {
         "compaction dedup must reduce prompt bytes ({after_bytes} bytes after vs {baseline_bytes} baseline)"
     );
 
-    // Surface the percentage reduction in the test output so the
-    // developer running the replay sees it in `cargo test --
-    // --nocapture` without needing extra plumbing.
+    // Surface the percentage reduction through `tracing::info!` so
+    // developers running the replay see the saving without
+    // resorting to stdout prints (Rule 8.1, audited workspace-wide
+    // in Phase 8).
     let saved = baseline_bytes - after_bytes;
     #[allow(clippy::cast_precision_loss)]
     let saved_pct = (saved as f64) * 100.0 / (baseline_bytes as f64);
-    println!(
-        "shamir_replay compaction: {folded} folds, {saved} bytes saved ({saved_pct:.1}% of {baseline_bytes} baseline)"
+    tracing::info!(
+        folded,
+        saved,
+        saved_pct,
+        baseline_bytes,
+        "shamir_replay compaction summary"
     );
 }
 

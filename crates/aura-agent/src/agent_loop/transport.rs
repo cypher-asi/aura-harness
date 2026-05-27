@@ -68,7 +68,7 @@ use crate::session::input_queue::InputQueue;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 
 use super::iteration::LlmCallError;
-use super::stream_pump::{run_stream_pump, StreamPumpOutcome};
+use super::stream_pump::{run_stream_pump, StreamPumpCtx, StreamPumpOutcome};
 use super::{AgentLoop, LoopState};
 
 /// Bundle of borrowed per-sample dependencies handed to
@@ -119,11 +119,21 @@ pub(crate) struct SamplingCtx<'a> {
 /// NOT have any in-flight tool_use blocks to repair (otherwise the
 /// pump path folds `[CANCELLED]` tool_results into `Streamed`).
 pub(crate) enum TransportOutcome {
-    Streamed {
-        response: ModelResponse,
-        pre_executed: Vec<(ToolCallInfo, ToolCallResult)>,
-    },
+    /// Boxed because the `Streamed` payload is ~700+ bytes
+    /// (`ModelResponse` carries a full `Message` + `Usage` +
+    /// `ProviderTrace`) and the sibling `Cancelled` variant is unit,
+    /// which trips `clippy::large_enum_variant`. Box keeps every
+    /// transport return value on the stack-friendly side; the
+    /// allocation only fires on the success path.
+    Streamed(Box<StreamedOutcome>),
     Cancelled,
+}
+
+/// Payload of [`TransportOutcome::Streamed`]; see the boxing
+/// rationale on the enum.
+pub(crate) struct StreamedOutcome {
+    pub response: ModelResponse,
+    pub pre_executed: Vec<(ToolCallInfo, ToolCallResult)>,
 }
 
 /// The keystone trait: one method, one outcome enum.
@@ -180,13 +190,15 @@ impl ModelTransport for PumpTransport {
         } = ctx;
 
         let outcome = run_stream_pump(
-            &agent.config,
+            StreamPumpCtx {
+                config: &agent.config,
+                executor,
+                cancellation_token,
+                input_queue,
+                event_tx,
+            },
             provider,
-            executor,
             request,
-            cancellation_token,
-            input_queue,
-            event_tx,
             state,
         )
         .await;
@@ -195,10 +207,10 @@ impl ModelTransport for PumpTransport {
             StreamPumpOutcome::Completed {
                 response,
                 tool_results,
-            } => Ok(TransportOutcome::Streamed {
+            } => Ok(TransportOutcome::Streamed(Box::new(StreamedOutcome {
                 response,
                 pre_executed: tool_results,
-            }),
+            }))),
             StreamPumpOutcome::Cancelled => Ok(TransportOutcome::Cancelled),
             StreamPumpOutcome::Error(err) => {
                 let llm_err = match err {

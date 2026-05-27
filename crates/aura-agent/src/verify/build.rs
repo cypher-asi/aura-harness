@@ -224,14 +224,16 @@ pub async fn verify_and_fix_build(
         }
 
         let should_return = handle_build_failure(
-            params,
-            &build_cmd,
-            &br,
+            BuildAttemptCtx {
+                params,
+                build_cmd: &build_cmd,
+                br: &br,
+                config,
+                pre_fix_snapshots: &pre_fix_snapshots,
+                fix_provider,
+                event_tx,
+            },
             attempt,
-            config,
-            &pre_fix_snapshots,
-            fix_provider,
-            event_tx,
             &mut st,
         )
         .await?;
@@ -312,18 +314,36 @@ async fn handle_build_success(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Phase 8 wrapper carrying the per-attempt borrows that
+/// [`handle_build_failure`] consumes alongside the running
+/// [`FixLoopState`]. Bundling these four references keeps the
+/// helper under the clippy ceiling without dragging the long-lived
+/// state into the same struct (it stays `&mut` for in-place
+/// mutation).
+struct BuildAttemptCtx<'a> {
+    params: &'a BuildVerifyParams<'a>,
+    build_cmd: &'a str,
+    br: &'a runner::BuildResult,
+    config: &'a VerifyConfig,
+    pre_fix_snapshots: &'a [FileSnapshot],
+    fix_provider: &'a dyn FixProvider,
+    event_tx: Option<&'a tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
+}
+
 async fn handle_build_failure(
-    params: &BuildVerifyParams<'_>,
-    build_cmd: &str,
-    br: &runner::BuildResult,
+    ctx: BuildAttemptCtx<'_>,
     attempt: u32,
-    config: &VerifyConfig,
-    pre_fix_snapshots: &[FileSnapshot],
-    fix_provider: &dyn FixProvider,
-    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
     st: &mut FixLoopState,
 ) -> anyhow::Result<Option<BuildVerifyResult>> {
+    let BuildAttemptCtx {
+        params,
+        build_cmd,
+        br,
+        config,
+        pre_fix_snapshots,
+        fix_provider,
+        event_tx,
+    } = ctx;
     st.last_stderr.clone_from(&br.stderr);
     emit(
         event_tx,
@@ -362,12 +382,14 @@ async fn handle_build_failure(
 
     apply_fix_and_record(
         params.project_root,
-        &response,
-        attempt,
-        &br.stderr,
+        super::common::FixAttempt {
+            response: &response,
+            attempt,
+            stderr: &br.stderr,
+            fix_kind: "build-fix",
+        },
         &mut st.prior,
         &mut st.fix_ops,
-        "build-fix",
         fix_provider,
     )
     .await?;

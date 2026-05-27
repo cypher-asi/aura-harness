@@ -204,7 +204,11 @@ impl AutomatonBridge {
             prompt_cache_retention: None,
             request_kind,
             max_tokens: 16384,
-            max_context_tokens: crate::session::context_window_for_model(model) as usize,
+            // Anthropic context windows top out around 1M tokens; the
+            // `u64` → `usize` cast is bounds-safe on every target
+            // architecture we ship to (64-bit only).
+            max_context_tokens: usize::try_from(crate::session::context_window_for_model(model))
+                .unwrap_or(usize::MAX),
             auth_token: auth_token.map(String::from),
         };
         scheduler.identity_registry().register(agent_id, identity);

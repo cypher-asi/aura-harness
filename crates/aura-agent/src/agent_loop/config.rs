@@ -189,7 +189,7 @@ pub struct AgentLoopConfig {
     /// Companion to [`Self::max_iterations`] (per-turn) and
     /// [`Self::max_turns_per_task`] (turn count); all three default to
     /// [`aura_core::MAX_TURNS`]. Trips surface as
-    /// [`AgentError::TurnBudgetExceeded`](crate::AgentError::TurnBudgetExceeded).
+    /// [`AgentError::IterationBudgetExceeded`](crate::AgentError::IterationBudgetExceeded).
     pub max_iterations_per_task: u32,
     /// Layer E.3: per-event boundary timeout for the streaming
     /// sampling pump (Rule 6.2). Each `stream.try_next().await`

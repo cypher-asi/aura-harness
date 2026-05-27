@@ -22,17 +22,15 @@ use std::time::Duration;
 use aura_reasoner::{OutputItem, ResponseEvent, ResponseEventStream, Usage};
 use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
-use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::events::AgentLoopEvent;
-use crate::session::input_queue::InputQueue;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use crate::AgentError;
 
 use super::synthesize::synthesize_response;
-use super::{emit_event, AgentLoopConfig, StreamPumpOutcome};
+use super::{emit_event, StreamPumpOutcome};
 
 /// Boxed per-tool future spawned into [`FuturesOrdered`] inside the
 /// pump. Carries the originating [`ToolCallInfo`] alongside the
@@ -49,17 +47,18 @@ type ToolFuture<'a> =
 /// `AbortedWithPartial` / `Error` on the matching short-circuit
 /// arms. Per the module-level invariants in [`super`], no
 /// state.messages mutation happens on the cancel or error arms.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn drive_stream(
-    config: &AgentLoopConfig,
-    executor: &dyn AgentToolExecutor,
+    ctx: super::StreamPumpCtx<'_>,
     mut stream: ResponseEventStream,
-    cancellation_token: Option<&CancellationToken>,
-    input_queue: Option<&InputQueue>,
-    event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut super::super::LoopState,
     model_name: &str,
 ) -> StreamPumpOutcome {
+    let super::StreamPumpCtx {
+        config,
+        cancellation_token,
+        event_tx,
+        ..
+    } = ctx;
     let mut in_flight: FuturesOrdered<ToolFuture<'_>> = FuturesOrdered::new();
     let mut text_chunks: Vec<String> = Vec::new();
     let mut thinking_chunks: Vec<(String, Option<String>)> = Vec::new();
@@ -100,17 +99,17 @@ pub(super) async fn drive_stream(
                 if tool_calls_seen.is_empty() {
                     return StreamPumpOutcome::Cancelled;
                 }
-                return cancelled_outcome(
-                    &text_chunks,
-                    &thinking_chunks,
-                    &tool_calls_seen,
-                    &cached_pairs,
-                    &spawned_indices,
-                    Vec::new(),
+                let snap = CancelledSnapshot {
+                    text_chunks: &text_chunks,
+                    thinking_chunks: &thinking_chunks,
+                    tool_calls_seen: &tool_calls_seen,
+                    cached_pairs: &cached_pairs,
+                    spawned_indices: &spawned_indices,
                     end_turn,
-                    &usage,
+                    usage: &usage,
                     model_name,
-                );
+                };
+                return cancelled_outcome(&snap, Vec::new());
             }
             StreamStep::TimedOut => {
                 return StreamPumpOutcome::Error(AgentError::StreamTimeout {
@@ -136,15 +135,15 @@ pub(super) async fn drive_stream(
             StreamStep::Event(event) => match event {
                 ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
                     if let Some(err) = handle_tool_use_event(
-                        executor,
+                        ctx,
                         ToolCallInfo { id, name, input },
-                        &mut tool_calls_seen,
-                        &mut cached_pairs,
-                        &mut spawned_indices,
-                        &mut in_flight,
+                        DriveLocals {
+                            tool_calls_seen: &mut tool_calls_seen,
+                            cached_pairs: &mut cached_pairs,
+                            spawned_indices: &mut spawned_indices,
+                            in_flight: &mut in_flight,
+                        },
                         per_tool_timeout,
-                        input_queue,
-                        event_tx,
                         state,
                     )
                     .await
@@ -229,17 +228,17 @@ pub(super) async fn drive_stream(
                 // bare `Cancelled` and let `executor.execute(...)` run
                 // to natural completion — the regression contract is
                 // `pipeline_cancellation_mid_tool_execution_aborts_loop`.
-                return cancelled_outcome(
-                    &text_chunks,
-                    &thinking_chunks,
-                    &tool_calls_seen,
-                    &cached_pairs,
-                    &spawned_indices,
-                    spawned_pairs,
+                let snap = CancelledSnapshot {
+                    text_chunks: &text_chunks,
+                    thinking_chunks: &thinking_chunks,
+                    tool_calls_seen: &tool_calls_seen,
+                    cached_pairs: &cached_pairs,
+                    spawned_indices: &spawned_indices,
                     end_turn,
-                    &usage,
+                    usage: &usage,
                     model_name,
-                );
+                };
+                return cancelled_outcome(&snap, spawned_pairs);
             }
             DrainStep::Done => break,
             DrainStep::Result(pair) => {
@@ -300,6 +299,20 @@ pub(super) async fn drive_stream(
     }
 }
 
+/// Phase 8 wrapper bundling the four mutable cursor buffers that
+/// [`drive_stream`] hands to [`handle_tool_use_event`]: the running
+/// `tool_calls_seen` FIFO, the synchronously materialised cache
+/// hits, the per-call spawn-index trace, and the `FuturesOrdered`
+/// itself. Grouping them keeps the helper under the clippy ceiling
+/// without splitting the FIFO ordering invariant across helpers —
+/// every field stays a borrowed mutation target.
+pub(super) struct DriveLocals<'a, 'b> {
+    pub(super) tool_calls_seen: &'b mut Vec<ToolCallInfo>,
+    pub(super) cached_pairs: &'b mut Vec<(usize, (ToolCallInfo, ToolCallResult))>,
+    pub(super) spawned_indices: &'b mut Vec<usize>,
+    pub(super) in_flight: &'b mut FuturesOrdered<ToolFuture<'a>>,
+}
+
 /// Handle one `OutputItemDone(ToolUse)` event: circling-read gate,
 /// per-run cache lookup, spawn-or-serve, and per-tool-result
 /// input-queue drain. Returns `Some(StreamPumpOutcome)` only when an
@@ -307,19 +320,26 @@ pub(super) async fn drive_stream(
 /// (e.g. the per-run cache partition contract is broken). On the
 /// happy path returns `None` and pushes the call into the FIFO /
 /// cached_pairs bookkeeping.
-#[allow(clippy::too_many_arguments)] // Helper extracted to keep drive_stream under the 120-line cap.
-async fn handle_tool_use_event<'a>(
-    executor: &'a dyn AgentToolExecutor,
+async fn handle_tool_use_event<'a, 'b>(
+    ctx: super::StreamPumpCtx<'a>,
     call: ToolCallInfo,
-    tool_calls_seen: &mut Vec<ToolCallInfo>,
-    cached_pairs: &mut Vec<(usize, (ToolCallInfo, ToolCallResult))>,
-    spawned_indices: &mut Vec<usize>,
-    in_flight: &mut FuturesOrdered<ToolFuture<'a>>,
+    locals: DriveLocals<'a, 'b>,
     per_tool_timeout: Duration,
-    input_queue: Option<&InputQueue>,
-    event_tx: Option<&Sender<AgentLoopEvent>>,
     state: &mut super::super::LoopState,
 ) -> Option<StreamPumpOutcome> {
+    let super::StreamPumpCtx {
+        config: _,
+        executor,
+        cancellation_token: _,
+        input_queue,
+        event_tx,
+    } = ctx;
+    let DriveLocals {
+        tool_calls_seen,
+        cached_pairs,
+        spawned_indices,
+        in_flight,
+    } = locals;
     let submission_index = tool_calls_seen.len();
     tool_calls_seen.push(call.clone());
 
@@ -489,19 +509,38 @@ async fn drain_next<'a>(
 /// adjacency contract on a mid-tool cancel — a bare `Cancelled` would
 /// leave an orphaned assistant `tool_use` block at the tail of the
 /// transcript and the next sampling call would be structurally invalid.
-#[allow(clippy::too_many_arguments)] // Folds the drive_stream local state in one place; documented per Rule 1.4.
-fn cancelled_outcome(
-    text_chunks: &[String],
-    thinking_chunks: &[(String, Option<String>)],
-    tool_calls_seen: &[ToolCallInfo],
-    cached_pairs: &[(usize, (ToolCallInfo, ToolCallResult))],
-    spawned_indices: &[usize],
-    mut spawned_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))>,
+/// Phase 8 wrapper around the immutable observations [`drive_stream`]
+/// accumulated before a mid-flight cancellation. Bundles the four
+/// `&[…]` slices plus the response-synthesis state needed to fold a
+/// partial transcript into a [`StreamPumpOutcome::Completed`] with
+/// `[CANCELLED]` tool_results. Owned `spawned_pairs` stays a
+/// positional argument so it can be moved into the merge step.
+struct CancelledSnapshot<'a> {
+    text_chunks: &'a [String],
+    thinking_chunks: &'a [(String, Option<String>)],
+    tool_calls_seen: &'a [ToolCallInfo],
+    cached_pairs: &'a [(usize, (ToolCallInfo, ToolCallResult))],
+    spawned_indices: &'a [usize],
     end_turn: Option<bool>,
-    usage: &Usage,
-    model_name: &str,
+    usage: &'a Usage,
+    model_name: &'a str,
+}
+
+fn cancelled_outcome(
+    snap: &CancelledSnapshot<'_>,
+    mut spawned_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))>,
 ) -> StreamPumpOutcome {
     use std::collections::HashSet;
+    let &CancelledSnapshot {
+        text_chunks,
+        thinking_chunks,
+        tool_calls_seen,
+        cached_pairs,
+        spawned_indices,
+        end_turn,
+        usage,
+        model_name,
+    } = snap;
 
     let already: HashSet<usize> = cached_pairs
         .iter()

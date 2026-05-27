@@ -278,7 +278,7 @@ mod tests {
         let result = fs_read(&sandbox, "test.txt", max_bytes, None, None).unwrap();
         assert!(result.ok, "truncation must surface as a successful result");
         let expected_marker = truncation_marker(content.len() - max_bytes, content.len());
-        let expected_len = max_bytes + expected_marker.as_bytes().len();
+        let expected_len = max_bytes + expected_marker.len();
         assert_eq!(
             result.stdout.len(),
             expected_len,
@@ -316,7 +316,7 @@ mod tests {
         let result = fs_read(&sandbox, "big.txt", max_bytes, None, None).unwrap();
         assert!(result.ok);
         let expected_marker = truncation_marker(total - max_bytes, total);
-        let expected_len = max_bytes + expected_marker.as_bytes().len();
+        let expected_len = max_bytes + expected_marker.len();
         assert_eq!(
             result.stdout.len(),
             expected_len,

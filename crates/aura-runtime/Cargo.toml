@@ -46,7 +46,6 @@ governor = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 blake3 = { workspace = true }
-hex = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true }

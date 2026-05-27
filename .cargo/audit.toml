@@ -1,0 +1,32 @@
+# Cargo audit configuration.
+#
+# Phase 8 documented two upstream "unmaintained" advisories that
+# arrive as deep transitive dependencies of crates we cannot upgrade
+# without significant collateral churn. Both are marker advisories
+# (no known CVE, no known exploitable path); we ignore them
+# explicitly so `cargo audit` stays a green gate while the upstream
+# replacement work tracks separately.
+#
+# IMPORTANT: never silently extend this list. Each entry must
+# include the upstream advisory ID, the offending crate version,
+# the inbound dep that pulls it in, and a one-line rationale. Drop
+# entries the moment we no longer ship the offending version.
+[advisories]
+ignore = [
+    # RUSTSEC-2025-0134 — `rustls-pemfile 1.0.4` is unmaintained.
+    # Pulled in by `reqwest 0.11.27` (still the workspace HTTP
+    # client). Migrating to `reqwest 0.12` is an invasive change
+    # because we'd flip every `reqwest::Client` builder + every
+    # provider's TLS plumbing in one PR; it's tracked separately
+    # rather than rolled into this refactor's polish pass.
+    "RUSTSEC-2025-0134",
+
+    # RUSTSEC-2017-0008 — `serial 0.4.0` is unmaintained.
+    # Pulled in by `portable-pty 0.8.1` (the embedded PTY layer
+    # that the `aura` terminal helper uses for `aura-runtime` PTY
+    # spawning). `portable-pty` has no drop-in replacement and the
+    # `serial` dep is only the legacy fallback for serial-port
+    # consoles we never spawn — risk surface is empty, so we
+    # document and move on.
+    "RUSTSEC-2017-0008",
+]

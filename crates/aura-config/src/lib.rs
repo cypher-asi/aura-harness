@@ -25,8 +25,8 @@
 //! - [`install_for_test`] — RAII guard that swaps the singleton for
 //!   the lifetime of the returned [`ConfigGuard`] so unit tests can
 //!   override behavior uniformly without racing the process env.
-//! - Sub-crate accessor helpers: [`agent`] (shortcut for
-//!   `loaded().agent`) and [`reasoner`] (shortcut for
+//! - Sub-crate accessor helpers: [`agent()`] (shortcut for
+//!   `loaded().agent`) and [`reasoner()`] (shortcut for
 //!   `loaded().reasoner`).
 //!
 //! ## Owned env vars

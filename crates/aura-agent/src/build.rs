@@ -84,6 +84,11 @@ pub enum ErrorCategory {
     RustBorrowCheck,
     RustStructFieldMismatch,
     RustMissingImport,
+    // Reserved for a planned classifier that detects systematic API
+    // hallucinations (multiple invented methods on the same type).
+    // The guidance arm below is intentionally kept so the classifier
+    // can be wired up later without re-deriving the prompt copy.
+    #[allow(dead_code)]
     RustApiHallucination,
     NpmDependency,
     NpmTypeScript,

@@ -46,13 +46,11 @@ struct RouterRequestSummary {
 impl RouterRequestSummary {
     fn from_request(req: &GenerationRequest, body: &serde_json::Value) -> Self {
         Self {
-            body_bytes: serde_json::to_vec(body)
-                .map(|bytes| bytes.len())
-                .unwrap_or(0),
-            prompt_bytes: req.prompt.as_ref().map(|prompt| prompt.len()).unwrap_or(0),
+            body_bytes: serde_json::to_vec(body).map_or(0, |bytes| bytes.len()),
+            prompt_bytes: req.prompt.as_ref().map_or(0, String::len),
             model: req.model.clone(),
             size: req.size.clone(),
-            image_count: req.images.as_ref().map(|images| images.len()).unwrap_or(0),
+            image_count: req.images.as_ref().map_or(0, Vec::len),
             has_project_id: req.project_id.is_some(),
         }
     }
@@ -124,16 +122,16 @@ pub(super) fn start_generation(
     );
 
     let join_handle = tokio::spawn(async move {
-        run_generation_proxy(
-            &session_id,
-            &request_id,
-            &url,
-            &auth_token,
-            &body,
-            &mode,
-            &outbound,
-            cancel_for_task,
-        )
+        run_generation_proxy(GenerationProxyCtx {
+            session_id: &session_id,
+            request_id: &request_id,
+            url: &url,
+            jwt: &auth_token,
+            body: &body,
+            mode: &mode,
+            outbound: &outbound,
+            cancel: cancel_for_task,
+        })
         .await;
     });
 
@@ -215,16 +213,34 @@ fn build_router_request(
     }
 }
 
-async fn run_generation_proxy(
-    session_id: &str,
-    request_id: &str,
-    url: &str,
-    jwt: &str,
-    body: &serde_json::Value,
-    mode: &str,
-    outbound: &mpsc::Sender<OutboundMessage>,
+/// Borrowed-everything context for a single generation proxy run.
+///
+/// Bundling the eight call-site parameters under one struct keeps
+/// the function signature under the `clippy::too_many_arguments`
+/// ceiling without cloning anything — every field is a `&'a`
+/// borrow that lives at least as long as the `await`.
+struct GenerationProxyCtx<'a> {
+    session_id: &'a str,
+    request_id: &'a str,
+    url: &'a str,
+    jwt: &'a str,
+    body: &'a serde_json::Value,
+    mode: &'a str,
+    outbound: &'a mpsc::Sender<OutboundMessage>,
     cancel: CancellationToken,
-) {
+}
+
+async fn run_generation_proxy(ctx: GenerationProxyCtx<'_>) {
+    let GenerationProxyCtx {
+        session_id,
+        request_id,
+        url,
+        jwt,
+        body,
+        mode,
+        outbound,
+        cancel,
+    } = ctx;
     // Declared-Exception surface (see `docs/invariants.md`): this proxy is a
     // pure router-side SSE pipe, so we do not route through the kernel. We
     // still apply bounded connect / handshake timeouts so a hung upstream
@@ -256,7 +272,7 @@ async fn run_generation_proxy(
         %request_id,
         %mode,
         url = %url,
-        body_bytes = serde_json::to_vec(body).map(|bytes| bytes.len()).unwrap_or(0),
+        body_bytes = serde_json::to_vec(body).map_or(0, |bytes| bytes.len()),
         handshake_timeout_secs = GENERATION_REQUEST_TIMEOUT.as_secs(),
         stream_idle_timeout_secs = GENERATION_STREAM_IDLE_TIMEOUT.as_secs(),
         "Generation proxy: sending upstream request"

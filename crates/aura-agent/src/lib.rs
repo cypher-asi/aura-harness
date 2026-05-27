@@ -69,7 +69,7 @@ pub mod session_bootstrap;
 pub(crate) mod task_context;
 pub(crate) mod task_executor;
 
-pub use agent_loop::{AgentLoop, AgentLoopConfig, TaskId};
+pub use agent_loop::{AgentLoop, AgentLoopConfig, RunOptions, TaskId};
 pub use aura_config::{tool_result_cache_key, CACHEABLE_TOOLS};
 pub use events::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, TurnEventSink};
 pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
@@ -126,17 +126,36 @@ pub enum AgentError {
     #[error("build failed: {0}")]
     BuildFailed(String),
     /// Layer E.1: emitted when the outer task shell exhausts its
-    /// per-task safety net (`max_turns_per_task` or
-    /// `max_iterations_per_task` on [`AgentLoopConfig`]). Carries the
-    /// originating `task_id` and `turn_index` so the surfacing
-    /// surface (CLI, dashboards) can correlate the failure with the
-    /// session that produced it (Rule 4.3).
-    #[error("turn budget exceeded on task {task_id}: cap reached at turn {turn_index}")]
+    /// per-task turn ceiling (`max_turns_per_task` on
+    /// [`AgentLoopConfig`]). The `limit` field carries the ceiling
+    /// that tripped so callers can surface it without round-tripping
+    /// through the config (Rule 4.3).
+    ///
+    /// Phase 8 split the previous monolithic
+    /// `TurnBudgetExceeded` variant so dashboards / CLIs can
+    /// distinguish "ran too many turns" from "ran too many sampling
+    /// iterations" without parsing the formatted message.
+    #[error("turn budget exceeded on task {task_id}: max_turns_per_task={limit} reached")]
     TurnBudgetExceeded {
         /// Identifier of the task whose budget was exhausted.
         task_id: TaskId,
-        /// 0-based index of the turn that tripped the cap.
-        turn_index: u32,
+        /// The `max_turns_per_task` value that tripped the cap.
+        limit: usize,
+    },
+    /// Layer E.1: emitted when the outer task shell exhausts its
+    /// per-task sampling-iteration ceiling
+    /// (`max_iterations_per_task` on [`AgentLoopConfig`]) or the
+    /// global `max_iterations` ceiling, whichever trips first. The
+    /// `limit` field carries the ceiling that fired.
+    ///
+    /// Split from [`Self::TurnBudgetExceeded`] in Phase 8 so callers
+    /// can report which budget actually fired.
+    #[error("iteration budget exceeded on task {task_id}: max_iterations={limit} reached")]
+    IterationBudgetExceeded {
+        /// Identifier of the task whose budget was exhausted.
+        task_id: TaskId,
+        /// The iteration ceiling that tripped the cap.
+        limit: usize,
     },
     /// Layer E.2: pushed when a caller tries to enqueue a
     /// [`UserInput`](crate::UserInput) onto an

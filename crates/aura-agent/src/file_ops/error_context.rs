@@ -66,8 +66,6 @@ pub fn resolve_error_context(base_path: &Path, refs: &ErrorReferences) -> String
     output
 }
 
-pub use aura_config::ERROR_SOURCE_BUDGET;
-
 /// Read the actual source files where compiler errors occur (from
 /// `ErrorReferences.source_locations`), deduplicated by file path.
 pub fn resolve_error_source_files(

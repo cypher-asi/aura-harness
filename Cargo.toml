@@ -26,10 +26,8 @@ tracing = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 colored = { workspace = true }
 rpassword = { workspace = true }
-dirs = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-blake3 = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

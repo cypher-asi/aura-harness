@@ -25,7 +25,7 @@ pub mod validation;
 pub mod workspace_map;
 
 pub use apply::apply_file_ops;
-pub use error_context::{resolve_error_context, resolve_error_source_files, ERROR_SOURCE_BUDGET};
+pub use error_context::{resolve_error_context, resolve_error_source_files};
 pub use source_parser::{extract_definition_block, extract_pub_signatures};
 pub use stub_detection::*;
 pub use task_relevance::*;

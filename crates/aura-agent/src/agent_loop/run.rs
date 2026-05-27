@@ -6,6 +6,11 @@
 //! [`super::stop_reason`]; this file owns the `run_inner` /
 //! `retry_after_context_overflow` orchestration and the synchronous
 //! cancellation probe.
+//!
+//! Phase 8 collapsed the previous 8-parameter `run_with_session` /
+//! `run_inner` signatures into a single [`super::cx::RunCtx`] that
+//! threads the per-run service borrows down to [`super::task::run_task`]
+//! and beyond.
 
 use std::sync::Arc;
 
@@ -18,6 +23,7 @@ use crate::events::{AgentLoopEvent, DebugEvent};
 use crate::types::{AgentLoopResult, AgentToolExecutor};
 
 use super::config::AgentLoopConfig;
+use super::cx::{RunCtx, RunOptions};
 use super::{task, AgentLoop};
 
 impl AgentLoop {
@@ -86,9 +92,11 @@ impl AgentLoop {
             executor,
             messages,
             tools,
-            event_tx,
-            cancellation_token,
-            None,
+            RunOptions {
+                event_tx,
+                cancellation_token,
+                handle: None,
+            },
         )
         .await
     }
@@ -108,30 +116,29 @@ impl AgentLoop {
     /// [`Self::run_with_events`] (single-turn-per-task semantic from
     /// E.1).
     ///
+    /// Phase 8 collapsed the previous 7-borrow signature on the
+    /// internal `run_inner` helper into a single [`RunCtx`] that
+    /// threads through the entire `task → turn → sampling` topology
+    /// without a `too_many_arguments` allow.
+    ///
     /// # Errors
     ///
     /// Returns error if a model call or tool execution fails
     /// fatally, or if the per-task `max_turns_per_task` /
     /// `max_iterations_per_task` ceilings trip.
-    // E.2: 8 parameters (one over the default 7 clippy ceiling). The
-    // new `handle` is the only addition vs `run_with_events`;
-    // bundling provider / executor / messages / tools / event_tx /
-    // cancellation into a `RunCtx` struct would force every call
-    // site (`agent_runner::execute_chat`, `execute_task_inner`, the
-    // mock-driven tests) to introduce a one-shot wrapper just to
-    // make space for the new optional arg. Documented per Rule 1.4
-    // and tracked for Phase 8 cleanup.
-    #[allow(clippy::too_many_arguments)]
     pub async fn run_with_session(
         &self,
         provider: &dyn ModelProvider,
         executor: &dyn AgentToolExecutor,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-        event_tx: Option<Sender<AgentLoopEvent>>,
-        cancellation_token: Option<CancellationToken>,
-        handle: Option<&crate::AgentRunnerHandle>,
+        options: RunOptions<'_>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
+        let RunOptions {
+            event_tx,
+            cancellation_token,
+            handle,
+        } = options;
         // ALWAYS instantiate an internal [`Session`] so the agent
         // loop has a unified handle to the `InputQueue` regardless
         // of whether the caller supplied an [`AgentRunnerHandle`].
@@ -140,10 +147,6 @@ impl AgentLoop {
         // mint a fresh session id + queue paired with either the
         // supplied `cancellation_token` or a freshly created one so
         // in-band cancel + external cancel still share a signal.
-        // This is the resolution for E.2's open question:
-        // [`crate::agent_runner::AgentRunner::execute_task`] +
-        // friends remain the public entry points; everything goes
-        // through a session internally.
         let cancellation = cancellation_token.clone().unwrap_or_default();
         let session = match handle {
             Some(h) => crate::session::Session::from_handle(h, cancellation.clone()),
@@ -176,37 +179,26 @@ impl AgentLoop {
             }) as aura_reasoner::RetryObserver
         });
 
-        let fut = self.run_inner(
+        let ctx = RunCtx {
+            agent: self,
             provider,
             executor,
-            messages,
-            tools,
-            event_tx,
-            cancellation_token,
-            session,
-        );
+            event_tx: event_tx.as_ref(),
+            cancellation_token: cancellation_token.as_ref(),
+            session: session.as_ref(),
+        };
+        let fut = self.run_inner(&ctx, messages, tools);
         match observer {
             Some(obs) => aura_reasoner::DEBUG_RETRY_OBSERVER.scope(obs, fut).await,
             None => fut.await,
         }
     }
 
-    // 8 parameters (one over the default 7 clippy ceiling). The
-    // `session` parameter is the unified handle to the [`InputQueue`]
-    // for the in-flight session; packing the rest into a struct
-    // would force every helper inside this module to learn a new
-    // wrapper type. Documented per Rule 1.4 and tracked for Phase 8
-    // `RunCtx` consolidation.
-    #[allow(clippy::too_many_arguments)]
     async fn run_inner(
         &self,
-        provider: &dyn ModelProvider,
-        executor: &dyn AgentToolExecutor,
+        ctx: &RunCtx<'_>,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
-        event_tx: Option<Sender<AgentLoopEvent>>,
-        cancellation_token: Option<CancellationToken>,
-        session: Arc<crate::session::Session>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
         // Layer E.1 + E.2 + E.4: delegate to the nested task → turn →
         // sampling topology. The session carries the input queue and
@@ -214,17 +206,7 @@ impl AgentLoop {
         // [`super::turn::run_turn_stop_hooks`] to drive the codex-parity
         // continuation logic. See `agent_loop/turn.rs`'s module-level
         // docs for the topology diagram.
-        task::run_task(
-            self,
-            provider,
-            executor,
-            messages,
-            tools,
-            event_tx,
-            cancellation_token,
-            session,
-        )
-        .await
+        task::run_task(ctx, messages, tools).await
     }
 }
 

@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_outbound_assistant_message_end() {
-        let msg = OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
+        let msg = OutboundMessage::AssistantMessageEnd(Box::new(AssistantMessageEnd {
             message_id: "msg_1".to_string(),
             stop_reason: "end_turn".to_string(),
             usage: SessionUsage {
@@ -401,7 +401,7 @@ mod tests {
                 diffs: vec![],
             },
             originating_user_id: None,
-        });
+        }));
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["type"], "assistant_message_end");
         assert_eq!(json["message_id"], "msg_1");
@@ -652,13 +652,13 @@ mod tests {
                 is_error: false,
                 tool_use_id: None,
             }),
-            OutboundMessage::AssistantMessageEnd(AssistantMessageEnd {
+            OutboundMessage::AssistantMessageEnd(Box::new(AssistantMessageEnd {
                 message_id: "m".into(),
                 stop_reason: "s".into(),
                 usage: SessionUsage::default(),
                 files_changed: FilesChanged::default(),
                 originating_user_id: None,
-            }),
+            })),
             OutboundMessage::Error(ErrorMsg {
                 code: "c".into(),
                 message: "m".into(),

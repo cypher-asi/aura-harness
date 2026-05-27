@@ -34,7 +34,15 @@ pub enum OutboundMessage {
     /// Ask the client to approve or deny a live tool call.
     ToolApprovalPrompt(ToolApprovalPrompt),
     /// End of an assistant message (turn complete).
-    AssistantMessageEnd(AssistantMessageEnd),
+    ///
+    /// Boxed because [`AssistantMessageEnd`] carries a full
+    /// [`SessionUsage`] (including [`ContextBreakdown`]) plus a
+    /// [`FilesChanged`] payload. Holding it inline would make every
+    /// other variant 360+ bytes wide via Rust's union layout, even
+    /// though most (`TextDelta`, `ToolUseStart`, `ProgressMsg`) are
+    /// far smaller. Boxing isolates the cost on the rarer terminal
+    /// frame.
+    AssistantMessageEnd(Box<AssistantMessageEnd>),
     /// An error occurred.
     Error(ErrorMsg),
     /// Progress heartbeat. Strictly additive: the harness emits these

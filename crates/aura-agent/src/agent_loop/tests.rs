@@ -1057,8 +1057,8 @@ async fn turn_budget_exceeded_surfaces_typed_error_when_max_turns_zero() {
         .expect_err("max_turns_per_task=0 must trip TurnBudgetExceeded");
 
     match err {
-        crate::AgentError::TurnBudgetExceeded { turn_index, .. } => {
-            assert_eq!(turn_index, 0, "zero-budget cap trips at turn 0");
+        crate::AgentError::TurnBudgetExceeded { limit, .. } => {
+            assert_eq!(limit, 0, "zero-budget cap exposes the tripped limit");
         }
         other => panic!("expected TurnBudgetExceeded, got {other:?}"),
     }
@@ -1157,9 +1157,11 @@ async fn pending_input_extends_turn_loop() {
             &executor,
             vec![Message::user("kick off")],
             vec![],
-            None,
-            Some(cancel.clone()),
-            Some(&handle),
+            crate::agent_loop::RunOptions {
+                event_tx: None,
+                cancellation_token: Some(cancel.clone()),
+                handle: Some(&handle),
+            },
         )
         .await
         .expect("E.2 happy path must succeed");
@@ -1304,9 +1306,11 @@ async fn cancel_unwinds_active_turn() {
                 "Read a file",
                 serde_json::json!({"type": "object"}),
             )],
-            None,
-            Some(cancel.clone()),
-            Some(&handle),
+            crate::agent_loop::RunOptions {
+                event_tx: None,
+                cancellation_token: Some(cancel.clone()),
+                handle: Some(&handle),
+            },
         )
         .await
         .expect("cancel must unwind cleanly, not propagate as Err");

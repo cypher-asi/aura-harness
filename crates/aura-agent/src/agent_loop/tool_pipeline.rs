@@ -30,17 +30,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::budget::ExplorationState;
 use crate::build;
 use crate::console;
 use crate::dup_audit;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
-use crate::types::{
-    AgentLoopResult, AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult,
-};
-
-use super::steering::SteeringRegistry;
+use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
 use aura_config::{READS_AFTER_WRITE_ALLOWANCE, TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES};
 use aura_reasoner::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
 use tokio::sync::mpsc::Sender;
@@ -334,17 +329,7 @@ pub(crate) async fn process_tool_results(
     // the per-source telemetry; the path-cache + allowance maps stay
     // on `LoopState` because the circling-read gate consults them
     // directly.
-    let any_write_success = track_tool_effects(
-        &tool_calls,
-        &all_results,
-        &mut state.result,
-        &mut state.exploration_state,
-        &mut state.had_any_write,
-        &mut state.turn_diff,
-        &mut state.steering,
-        &mut state.session_read_paths,
-        &mut state.read_after_write_allowances,
-    );
+    let any_write_success = track_tool_effects(&tool_calls, &all_results, state);
 
     if any_write_success && state.build_cooldown == 0 {
         if let Some(build_text) = run_auto_build(
@@ -754,23 +739,20 @@ fn partition_oversized_writes(
     (oversized, remaining)
 }
 
-// Phase 5: the three previously-threaded `Option<&mut ...>` trackers
-// (repeated-read, session-read-paths, read-after-write-allowances)
-// collapsed into a single `&mut SteeringRegistry` borrow plus the
-// still-needed path-cache / allowance borrows. The registry handles
-// per-source telemetry; the path-cache + allowance maps stay on
-// `LoopState` because the circling-read gate consults them directly.
-#[allow(clippy::too_many_arguments)]
+// Phase 8: the previously-threaded seven `&mut` field borrows
+// (`result`, `exploration_state`, `had_any_write`, `turn_diff`,
+// `steering`, `session_read_paths`, `read_after_write_allowances`)
+// collapse into a single `state: &mut LoopState` borrow. Every
+// borrow this function takes is a disjoint field on `LoopState`, so
+// the field-projection pattern keeps the borrow checker happy
+// without sacrificing the "this is the per-batch effect surface"
+// boundary. Phase 5 already collapsed the steering trackers into
+// `state.steering`; Phase 8 finishes the consolidation by removing
+// the last six explicit `&mut` field arguments at the call site.
 fn track_tool_effects(
     to_execute: &[ToolCallInfo],
     executed: &[ToolCallResult],
-    result: &mut AgentLoopResult,
-    exploration_state: &mut ExplorationState,
-    had_any_write: &mut bool,
-    turn_diff: &mut super::turn_diff::TurnDiff,
-    steering: &mut SteeringRegistry,
-    session_read_paths: &mut HashSet<PathBuf>,
-    read_after_write_allowances: &mut std::collections::HashMap<PathBuf, u8>,
+    state: &mut LoopState,
 ) -> bool {
     use super::turn_diff::TurnDiff;
     use crate::types::FileChangeKind;
@@ -807,23 +789,23 @@ fn track_tool_effects(
         // transports both reach `track_tool_effects` so this single
         // call site keeps the registry behaviour identical across
         // transports — the contract pinned by `transport_parity`.
-        steering.observe_tool(tool, exec_result);
+        state.steering.observe_tool(tool, exec_result);
 
         if helpers::is_exploration_tool(&tool.name) {
-            exploration_state.count += 1;
+            state.exploration_state.count += 1;
             if !exec_result.is_error {
                 if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
                     let path_buf = PathBuf::from(path);
-                    turn_diff.record_read(path_buf.clone());
-                    session_read_paths.insert(path_buf);
+                    state.turn_diff.record_read(path_buf.clone());
+                    state.session_read_paths.insert(path_buf);
                     let key = PathBuf::from(path);
                     let mut exhausted = false;
-                    if let Some(remaining) = read_after_write_allowances.get_mut(&key) {
+                    if let Some(remaining) = state.read_after_write_allowances.get_mut(&key) {
                         *remaining = remaining.saturating_sub(1);
                         exhausted = *remaining == 0;
                     }
                     if exhausted {
-                        read_after_write_allowances.remove(&key);
+                        state.read_after_write_allowances.remove(&key);
                     }
                 }
             }
@@ -841,13 +823,15 @@ fn track_tool_effects(
             let path_arg = tool.input.get("path").and_then(|v| v.as_str());
             if let Some(path) = path_arg {
                 let path_buf = PathBuf::from(path);
-                session_read_paths.remove(&path_buf);
-                read_after_write_allowances.insert(path_buf, READS_AFTER_WRITE_ALLOWANCE);
+                state.session_read_paths.remove(&path_buf);
+                state
+                    .read_after_write_allowances
+                    .insert(path_buf, READS_AFTER_WRITE_ALLOWANCE);
                 any_write_success = true;
-                *had_any_write = true;
+                state.had_any_write = true;
                 for change in &exec_result.file_changes {
-                    result.record_file_change(change.clone());
-                    record_into_turn_diff(turn_diff, change);
+                    state.result.record_file_change(change.clone());
+                    record_into_turn_diff(&mut state.turn_diff, change);
                 }
             } else if !exec_result.file_changes.is_empty() {
                 // Multi-file write fallback: the tool has no single
@@ -859,13 +843,15 @@ fn track_tool_effects(
                 // write tools.
                 for change in &exec_result.file_changes {
                     let path_buf = PathBuf::from(&change.path);
-                    session_read_paths.remove(&path_buf);
-                    read_after_write_allowances.insert(path_buf, READS_AFTER_WRITE_ALLOWANCE);
-                    result.record_file_change(change.clone());
-                    record_into_turn_diff(turn_diff, change);
+                    state.session_read_paths.remove(&path_buf);
+                    state
+                        .read_after_write_allowances
+                        .insert(path_buf, READS_AFTER_WRITE_ALLOWANCE);
+                    state.result.record_file_change(change.clone());
+                    record_into_turn_diff(&mut state.turn_diff, change);
                 }
                 any_write_success = true;
-                *had_any_write = true;
+                state.had_any_write = true;
             }
         }
     }
@@ -918,27 +904,9 @@ mod chunk_guard_tests {
             "write_file",
             json!({"path": "src/big.rs", "content": huge}),
         );
-        eprintln!(
-            "DEBUG: content_len={}, chunk_cap={}",
-            huge.len(),
-            WRITE_FILE_CHUNK_BYTES
-        );
-        eprintln!(
-            "DEBUG: tool.name={}, input_content_len={:?}",
-            call.name,
-            call.input
-                .get("content")
-                .and_then(|v| v.as_str())
-                .map(|s| s.len())
-        );
         let mut side_messages: Vec<String> = Vec::new();
         let (oversized, remaining) =
             partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
-        eprintln!(
-            "DEBUG: oversized={}, remaining={}",
-            oversized.len(),
-            remaining.len()
-        );
 
         assert_eq!(
             oversized.len(),
@@ -1010,7 +978,6 @@ mod chunk_guard_tests {
 mod track_tool_effects_tests {
     use super::*;
     use serde_json::json;
-    use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
     /// Serialize tests that swap the installed `aura_config` via
@@ -1163,74 +1130,51 @@ mod track_tool_effects_tests {
     fn exploration_count_is_incremented_by_track_tool_effects() {
         const CALLS: usize = 12;
 
-        let mut exploration_state = ExplorationState::default();
-        let mut result = AgentLoopResult::default();
-        let mut had_any_write = false;
-        let mut turn_diff = super::super::turn_diff::TurnDiff::default();
-        let mut steering = SteeringRegistry::new();
-        let mut session_read_paths = HashSet::new();
-        let mut read_after_write_allowances = HashMap::new();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
+        let mut state = LoopState::new_for_tests(&config, vec![]);
 
         for i in 0..CALLS {
             let tool_id = format!("toolu_explore_{i}");
             let path = format!("src/file_{i}.rs");
             let to_execute = vec![mk_read_tool(&tool_id, &path)];
             let executed = vec![mk_read_result(&tool_id)];
-            track_tool_effects(
-                &to_execute,
-                &executed,
-                &mut result,
-                &mut exploration_state,
-                &mut had_any_write,
-                &mut turn_diff,
-                &mut steering,
-                &mut session_read_paths,
-                &mut read_after_write_allowances,
-            );
+            track_tool_effects(&to_execute, &executed, &mut state);
         }
 
-        assert_eq!(exploration_state.count, CALLS);
-        assert!(!had_any_write, "no writes were issued in this test");
+        assert_eq!(state.exploration_state.count, CALLS);
+        assert!(!state.had_any_write, "no writes were issued in this test");
         assert!(
-            turn_diff.writes.is_empty(),
+            state.turn_diff.writes.is_empty(),
             "read_file calls must not count as writes in the turn diff"
         );
-        assert_eq!(turn_diff.read_paths.len(), CALLS);
+        assert_eq!(state.turn_diff.read_paths.len(), CALLS);
     }
 
     #[test]
     fn successful_write_removes_path_from_session_read_cache() {
-        let mut exploration_state = ExplorationState::default();
-        let mut result = AgentLoopResult::default();
-        let mut had_any_write = false;
-        let mut turn_diff = super::super::turn_diff::TurnDiff::default();
-        let mut steering = SteeringRegistry::new();
-        let mut session_read_paths = HashSet::from([PathBuf::from("src/inbox.rs")]);
-        let mut read_after_write_allowances = HashMap::new();
+        let config = AgentLoopConfig::for_agent("claude-test-model");
+        let mut state = LoopState::new_for_tests(&config, vec![]);
+        state
+            .session_read_paths
+            .insert(PathBuf::from("src/inbox.rs"));
 
         let to_execute = vec![mk_write_tool("toolu_write", "edit_file", "src/inbox.rs")];
         let executed = vec![mk_write_result("toolu_write", "src/inbox.rs")];
 
-        let any_success = track_tool_effects(
-            &to_execute,
-            &executed,
-            &mut result,
-            &mut exploration_state,
-            &mut had_any_write,
-            &mut turn_diff,
-            &mut steering,
-            &mut session_read_paths,
-            &mut read_after_write_allowances,
-        );
+        let any_success = track_tool_effects(&to_execute, &executed, &mut state);
 
         assert!(any_success);
-        assert!(had_any_write);
+        assert!(state.had_any_write);
         assert!(
-            !session_read_paths.contains(&PathBuf::from("src/inbox.rs")),
+            !state
+                .session_read_paths
+                .contains(&PathBuf::from("src/inbox.rs")),
             "writing a file must allow one fresh re-read of that path"
         );
         assert_eq!(
-            read_after_write_allowances.get(&PathBuf::from("src/inbox.rs")),
+            state
+                .read_after_write_allowances
+                .get(&PathBuf::from("src/inbox.rs")),
             Some(&READS_AFTER_WRITE_ALLOWANCE)
         );
     }

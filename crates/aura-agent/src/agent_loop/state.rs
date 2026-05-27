@@ -205,7 +205,7 @@ impl LoopState {
         // `evaluate_implement_now` calls are gone.
         self.steering.begin_turn();
         for kind in self.steering.drain_for_next_turn() {
-            steering::inject(&mut self.messages, kind);
+            steering::inject(&mut self.messages, &kind);
         }
         // Mirror the registry's `implement_now_injected` latch back
         // onto `LoopState` so the pre-dispatch circling-read gate in

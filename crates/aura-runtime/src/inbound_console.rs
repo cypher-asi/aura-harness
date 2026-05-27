@@ -257,6 +257,11 @@ fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
     chunks
 }
 
+// Lossy `usize`/`u64` → `f64` casts are intentional: this helper
+// only formats orders of magnitude on the inbound transcript. The
+// observable output rounds to 1–2 decimals so a sub-mantissa
+// rounding error on truly enormous values is indistinguishable.
+#[allow(clippy::cast_precision_loss)]
 fn human_bytes(n: usize) -> String {
     if n < 1024 {
         format!("{n} B")
@@ -269,6 +274,10 @@ fn human_bytes(n: usize) -> String {
     }
 }
 
+// Same precision-loss rationale as `human_bytes` above; durations
+// formatted here are bounded by request timeouts so the cast is
+// observably exact in practice.
+#[allow(clippy::cast_precision_loss)]
 fn human_duration_ms(ms: u64) -> String {
     if ms < 1000 {
         format!("{ms} ms")
