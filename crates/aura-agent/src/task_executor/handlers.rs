@@ -308,7 +308,7 @@ impl TaskToolExecutor {
         } else {
             self.emit_text(format!(
                 "\n[post-task_done test run: FAILED — {summary}; \
-                 task_done still succeeded (Codex-parity: warning, not gate)]\n",
+                 task_done still succeeded (suite is a warning, not a gate)]\n",
                 summary = outcome.summary,
             ));
         }
@@ -479,4 +479,3 @@ impl TaskToolExecutor {
         }
     }
 }
-
