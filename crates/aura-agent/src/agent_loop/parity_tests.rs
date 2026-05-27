@@ -251,15 +251,15 @@ async fn policy_deny_returns_error_result() {
 }
 
 /// Layer E.3: drive a full `AgentLoop::run` through the streaming
-/// sampling pump (`use_stream_pump = true`) so we get end-to-end
-/// coverage of the pump → sampling-driver → turn loop → task shell
-/// stack. The fake provider scripts a `tool_use` response followed
-/// by a `text` finish; the kernel-backed executor returns
-/// `ok:read_file` for each call. We assert that the loop terminates,
-/// records the right number of iterations, and emits the synthetic
-/// final message — the same shape the legacy `call_model` path
-/// produces. This guards against pump-vs-buffered drift in the
-/// post-sampling accumulator / dispatch sequence.
+/// sampling pump (the production default since Phase 7) so we get
+/// end-to-end coverage of the pump → sampling-driver → turn loop →
+/// task shell stack. The fake provider scripts a `tool_use`
+/// response followed by a `text` finish; the kernel-backed executor
+/// returns `ok:read_file` for each call. We assert that the loop
+/// terminates, records the right number of iterations, and emits
+/// the synthetic final message — the contract previously shared
+/// with the legacy `call_model` path before the buffered transport
+/// was retired.
 #[tokio::test]
 async fn stream_pump_path_completes_two_iteration_run() {
     let harness = build_kernel(stub_router(), KernelConfig::default());
@@ -271,7 +271,6 @@ async fn stream_pump_path_completes_two_iteration_run() {
 
     let config = AgentLoopConfig {
         system_prompt: "test".to_string(),
-        use_stream_pump: true,
         ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);

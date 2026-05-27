@@ -31,12 +31,6 @@ impl AgentToolExecutor for MockExecutor {
     }
 }
 
-struct OverflowThenSuccessProvider {
-    failures_before_success: usize,
-    call_count: AtomicUsize,
-    seen_max_tokens: Mutex<Vec<u32>>,
-}
-
 struct SummaryThenFinalProvider {
     call_count: AtomicUsize,
     request_kinds: Mutex<Vec<Option<ModelRequestKind>>>,
@@ -64,38 +58,6 @@ impl ModelProvider for SummaryThenFinalProvider {
             Message::assistant(text),
             Usage::new(100, 20),
             ProviderTrace::new("summary-mock", 0),
-        ))
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-}
-
-#[async_trait::async_trait]
-impl ModelProvider for OverflowThenSuccessProvider {
-    fn name(&self) -> &'static str {
-        "overflow-then-success"
-    }
-
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
-        self.seen_max_tokens
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(request.max_tokens.get());
-        let call = self.call_count.fetch_add(1, Ordering::SeqCst);
-        if call < self.failures_before_success {
-            return Err(ReasonerError::Api {
-                status: 400,
-                message: "input length and max_tokens exceed context limit".to_string(),
-            });
-        }
-
-        Ok(ModelResponse::new(
-            StopReason::EndTurn,
-            Message::assistant("Recovered after overflow."),
-            Usage::new(400, 120),
-            ProviderTrace::new("overflow-mock", 0),
         ))
     }
 
@@ -361,152 +323,12 @@ async fn test_context_estimate_includes_cache_tokens() {
     assert_eq!(result.estimated_context_tokens, 114_000);
 }
 
-#[tokio::test]
-async fn test_prompt_overflow_retries_after_compaction() {
-    let config = AgentLoopConfig {
-        max_context_tokens: Some(20_000),
-        // PromptTooLong retry + emergency compaction live on the
-        // legacy buffered sampling path. The pump path port is a
-        // follow-up; pin this test to the legacy path until then.
-        use_stream_pump: false,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    };
-    let agent = AgentLoop::new(config);
-    let executor = MockExecutor { results: vec![] };
-    let provider = OverflowThenSuccessProvider {
-        failures_before_success: 1,
-        call_count: AtomicUsize::new(0),
-        seen_max_tokens: Mutex::new(Vec::new()),
-    };
-    let large = "history ".repeat(1_200);
-    let messages = vec![
-        Message::user(large.clone()),
-        Message::assistant(large.clone()),
-        Message::user(large.clone()),
-        Message::assistant(large.clone()),
-        Message::user("Please continue"),
-    ];
-
-    let result = agent
-        .run(&provider, &executor, messages, vec![])
-        .await
-        .unwrap();
-
-    assert_eq!(provider.call_count.load(Ordering::SeqCst), 2);
-    assert!(result.llm_error.is_none());
-    assert_eq!(result.iterations, 1);
-    assert!(result.total_text.contains("Recovered after overflow."));
-}
-
-#[tokio::test]
-async fn test_prompt_overflow_fails_fast_when_compaction_cannot_help() {
-    let config = AgentLoopConfig {
-        max_context_tokens: Some(20_000),
-        use_stream_pump: false,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    };
-    let agent = AgentLoop::new(config);
-    let executor = MockExecutor { results: vec![] };
-    let provider = OverflowThenSuccessProvider {
-        failures_before_success: usize::MAX,
-        call_count: AtomicUsize::new(0),
-        seen_max_tokens: Mutex::new(Vec::new()),
-    };
-    let messages = vec![Message::user("hello")];
-
-    let result = agent
-        .run(&provider, &executor, messages, vec![])
-        .await
-        .unwrap();
-
-    assert_eq!(provider.call_count.load(Ordering::SeqCst), 1);
-    assert!(result.total_text.is_empty());
-    assert!(result.llm_error.is_some());
-}
-
-#[tokio::test]
-async fn test_prompt_overflow_uses_emergency_compaction_when_aggressive_cannot_help() {
-    let config = AgentLoopConfig {
-        max_context_tokens: Some(20_000),
-        use_stream_pump: false,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    };
-    let agent = AgentLoop::new(config);
-    let executor = MockExecutor { results: vec![] };
-    let provider = OverflowThenSuccessProvider {
-        failures_before_success: 1,
-        call_count: AtomicUsize::new(0),
-        seen_max_tokens: Mutex::new(Vec::new()),
-    };
-    let large = "history ".repeat(1_200);
-    let messages = vec![
-        Message::user(large.clone()),
-        Message::assistant(large.clone()),
-        Message::user(large.clone()),
-        Message::assistant(large.clone()),
-        Message::user("Please continue"),
-    ];
-    let (tx, mut rx) = mpsc::channel(16);
-
-    let result = agent
-        .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
-        .await
-        .unwrap();
-
-    let mut warnings = Vec::new();
-    while let Ok(event) = rx.try_recv() {
-        if let AgentLoopEvent::Warning(msg) = event {
-            warnings.push(msg);
-        }
-    }
-
-    assert_eq!(provider.call_count.load(Ordering::SeqCst), 2);
-    assert!(result.llm_error.is_none());
-    assert!(result.total_text.contains("Recovered after overflow."));
-    assert!(warnings
-        .iter()
-        .any(|msg| msg.contains("emergency compaction")));
-}
-
-#[tokio::test]
-async fn test_prompt_overflow_retry_reduces_response_budget() {
-    let config = AgentLoopConfig {
-        max_context_tokens: Some(20_000),
-        max_tokens: 16_384,
-        use_stream_pump: false,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    };
-    let agent = AgentLoop::new(config);
-    let executor = MockExecutor { results: vec![] };
-    let provider = OverflowThenSuccessProvider {
-        failures_before_success: 1,
-        call_count: AtomicUsize::new(0),
-        seen_max_tokens: Mutex::new(Vec::new()),
-    };
-    let large = "history ".repeat(1_200);
-    let messages = vec![
-        Message::user(large.clone()),
-        Message::assistant(large.clone()),
-        Message::user(large.clone()),
-        Message::assistant(large.clone()),
-        Message::user("Please continue"),
-    ];
-
-    let result = agent
-        .run(&provider, &executor, messages, vec![])
-        .await
-        .unwrap();
-    let seen_max_tokens = provider
-        .seen_max_tokens
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-
-    assert!(result.llm_error.is_none());
-    assert_eq!(seen_max_tokens.len(), 2);
-    assert!(seen_max_tokens[1] < seen_max_tokens[0]);
-    assert_eq!(seen_max_tokens[1], 8_192);
-}
+// Phase 7 removed the buffered-only prompt-overflow / emergency
+// compaction tests: the `PromptTooLong` retry ladder lived on
+// `BufferedTransport` and was deleted alongside `use_stream_pump`.
+// The pump path surfaces `PromptTooLong` as a fatal model error
+// today; a future pump-level recovery is tracked outside this
+// phase.
 
 #[tokio::test]
 async fn test_agent_loop_handles_summary_compaction() {
@@ -725,129 +547,16 @@ fn begin_iteration_no_op_when_no_signal_configured() {
 // ------------------------------------------------------------------
 // Phase 3 — parallel tool calls per assistant turn
 // ------------------------------------------------------------------
-
-/// Three `read_file` `tool_use` blocks in a single assistant turn
-/// must all execute in one loop iteration. Confirms aura's existing
-/// `extract_tool_calls` already iterates `Vec<ContentBlock::ToolUse>`
-/// — Phase 3 only had to enable the wire flag; the pipeline side
-/// was already correct. The `track_tool_effects` integration from
-/// Phase 1.A was wired into the same multi-tool pipeline, so this
-/// also pins that 3 tool_results land back in the message history
-/// without splitting across iterations.
-#[tokio::test]
-async fn three_read_file_calls_execute_in_one_iteration() {
-    use aura_reasoner::{ContentBlock, ToolResultContent};
-
-    let executor = MockExecutor {
-        results: vec![
-            ToolCallResult {
-                tool_use_id: "placeholder".to_string(),
-                content: "ok-1".to_string(),
-                is_error: false,
-                kind: aura_core::ToolResultKind::Ok,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            },
-            ToolCallResult {
-                tool_use_id: "placeholder".to_string(),
-                content: "ok-2".to_string(),
-                is_error: false,
-                kind: aura_core::ToolResultKind::Ok,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            },
-            ToolCallResult {
-                tool_use_id: "placeholder".to_string(),
-                content: "ok-3".to_string(),
-                is_error: false,
-                kind: aura_core::ToolResultKind::Ok,
-                stop_loop: false,
-                file_changes: Vec::new(),
-            },
-        ],
-    };
-
-    // Single assistant turn with three parallel tool_use blocks.
-    let parallel_response = MockResponse {
-        stop_reason: StopReason::ToolUse,
-        content: vec![
-            ContentBlock::tool_use("toolu_1", "read_file", serde_json::json!({"path": "a.rs"})),
-            ContentBlock::tool_use("toolu_2", "read_file", serde_json::json!({"path": "b.rs"})),
-            ContentBlock::tool_use("toolu_3", "read_file", serde_json::json!({"path": "c.rs"})),
-        ],
-        usage: Usage::new(100, 30),
-    };
-
-    let provider = MockProvider::new()
-        .with_response(parallel_response)
-        .with_response(MockResponse::text("Done after one parallel batch."));
-
-    let config = AgentLoopConfig {
-        system_prompt: "You are a test agent".to_string(),
-        // The buffered path calls `execute()` once per batch of
-        // tool_use blocks, so the MockExecutor's positional zip
-        // returns [ok-1, ok-2, ok-3]. The pump path spawns each
-        // tool individually (matching codex's stream-level overlap)
-        // which would re-trigger the executor once per call and
-        // collapse the positional zip to [ok-1, ok-1, ok-1] —
-        // covered by the pump-side parity_tests instead.
-        use_stream_pump: false,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    };
-    let agent = AgentLoop::new(config);
-    let messages = vec![Message::user("Read three files.")];
-    let tools = vec![ToolDefinition::new(
-        "read_file",
-        "Read a file",
-        serde_json::json!({"type": "object"}),
-    )];
-
-    let result = agent
-        .run(&provider, &executor, messages, tools)
-        .await
-        .unwrap();
-
-    // Two iterations total: one tool-use turn (carrying all three
-    // calls) + one final EndTurn. NOT four — the regression the
-    // Phase 3 wire flag prevents is the agent emitting one tool per
-    // iteration and ballooning the iteration count.
-    assert_eq!(
-        result.iterations, 2,
-        "three parallel tool_use blocks must execute in a single iteration; got {} iterations",
-        result.iterations
-    );
-
-    // All three tool results must land in the message history.
-    let tool_result_count: usize = result
-        .messages
-        .iter()
-        .flat_map(|m| m.content.iter())
-        .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
-        .count();
-    assert_eq!(
-        tool_result_count, 3,
-        "all three tool_use blocks must produce tool_result messages in the same iteration"
-    );
-
-    // And their contents must match the per-call executor outputs
-    // (no batching collisions / clobbered results).
-    let result_contents: std::collections::HashSet<String> = result
-        .messages
-        .iter()
-        .flat_map(|m| m.content.iter())
-        .filter_map(|b| {
-            if let ContentBlock::ToolResult { content, .. } = b {
-                if let ToolResultContent::Text(s) = content {
-                    return Some(s.clone());
-                }
-            }
-            None
-        })
-        .collect();
-    assert!(result_contents.contains("ok-1"), "result ok-1 missing");
-    assert!(result_contents.contains("ok-2"), "result ok-2 missing");
-    assert!(result_contents.contains("ok-3"), "result ok-3 missing");
-}
+//
+// Phase 7 removed `three_read_file_calls_execute_in_one_iteration`:
+// the test depended on the buffered transport's batched
+// `execute(tool_calls)` so `MockExecutor`'s positional-zip returned
+// distinct ok-1 / ok-2 / ok-3 results. With the pump as the sole
+// transport, each `tool_use` block spawns its own
+// `execute(&[single_call])` and the positional zip collapses to
+// ok-1 / ok-1 / ok-1. The pump-side regression contract (three
+// parallel tool_use blocks land three tool_result blocks in the
+// same iteration) lives in `agent_loop::parity_tests::*`.
 
 // ------------------------------------------------------------------
 // Phase 2 — `compute_thinking_effort` dev-loop policy

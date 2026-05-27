@@ -206,11 +206,9 @@ impl PushPolicy {
 /// Outcome of [`git_commit_push_impl`].
 ///
 /// The commit half and the push half are reported independently so a
-/// push-only failure does not mask a successful commit. The orchestrator
-/// (dev-loop automaton) uses this to emit `GitCommitted` alongside
-/// `GitPushFailed` when the commit landed locally but the push timed
-/// out — preserving the commit SHA in the task history instead of
-/// pretending the work never happened.
+/// push-only failure does not mask a successful commit. Callers
+/// preserve the commit SHA in the task history instead of pretending
+/// the work never happened when only the push half fails.
 #[derive(Debug)]
 pub struct CommitPushOutcome {
     /// Commit SHA from the local `git commit`, or `None` when there
@@ -514,9 +512,8 @@ fn log_commit_push_dispatch(ctx: &ToolContext, parsed: &CommitPushArgs) {
 ///   Surface this as a success-with-warning so callers (the dev-loop
 ///   automaton) can preserve the commit SHA in their event stream
 ///   instead of dropping the work. The tool-level result reports
-///   `pushed: false` + `push_error` so the agent can see what happened
-///   and the automaton dispatcher can emit both `GitCommitted` and
-///   `GitPushFailed`.
+///   `pushed: false` + `push_error` so the agent and downstream
+///   dispatcher can see exactly which half failed.
 fn assemble_commit_push_result(outcome: CommitPushOutcome) -> ToolResult {
     let CommitPushOutcome {
         commit_sha,

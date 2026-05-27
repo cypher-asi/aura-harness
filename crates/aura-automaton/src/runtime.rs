@@ -9,7 +9,7 @@ use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
 use crate::handle::AutomatonHandle;
-use crate::schedule::Schedule;
+use crate::metadata::Schedule;
 use crate::state::AutomatonState;
 use crate::types::{AutomatonId, AutomatonInfo, AutomatonStatus};
 

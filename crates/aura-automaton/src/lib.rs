@@ -12,8 +12,8 @@ mod context;
 mod error;
 mod events;
 mod handle;
+mod metadata;
 mod runtime;
-mod schedule;
 mod state;
 mod types;
 
@@ -28,11 +28,11 @@ pub(crate) use error::AutomatonError;
 pub use events::AutomatonEvent;
 pub use handle::AutomatonHandle;
 pub use runtime::{Automaton, AutomatonRuntime, TickOutcome};
-// `Schedule`, `AutomatonStatus`, `ChatAutomaton` are internal to the
-// crate; nothing outside `aura-automaton` references them by name.
-// Their underlying `pub` definitions stay reachable through
-// `AutomatonInfo` fields / trait return types without being part of
-// the crate's named public surface.
+// `Schedule` (in `crate::metadata`), `AutomatonStatus`, `ChatAutomaton`
+// are internal to the crate; nothing outside `aura-automaton` references
+// them by name. Their underlying `pub` definitions stay reachable
+// through `AutomatonInfo` fields / trait return types without being
+// part of the crate's named public surface.
 pub use state::AutomatonState;
 pub use types::{AutomatonId, AutomatonInfo};
 

@@ -346,9 +346,9 @@ async fn handle_tool_use_event<'a>(
     );
 
     // Circling read gate: before cache lookup or executor spawn,
-    // reject duplicate `read_file` paths once GoalRuntime has
-    // latched a read-only loop. This keeps the streaming pump in
-    // lockstep with the buffered dispatcher.
+    // reject duplicate `read_file` paths once the steering layer
+    // has latched a read-only loop. This keeps the streaming pump
+    // in lockstep with the buffered dispatcher.
     let single = std::slice::from_ref(&call);
     let (blocked_reads, allowed_calls) =
         super::super::tool_pipeline::partition_circling_duplicate_reads(single, state);

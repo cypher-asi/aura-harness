@@ -1,6 +1,21 @@
+//! Streaming-path test coverage retained after the Phase 7
+//! buffered-transport deletion.
+//!
+//! The four `StreamReset` tests that lived here pre-Phase-7 pinned a
+//! `BufferedTransport`-only contract: when the streaming SSE drain
+//! threw mid-message, the buffered path would re-call `complete()`
+//! (non-streaming) and synthesise a single `StreamReset` event before
+//! re-emitting the authoritative text. The pump path has no such
+//! fallback (`provider.complete_response_stream` is the only call
+//! site), so those tests went away with `BufferedTransport`.
+//!
+//! The per-tool-call retry coverage below stays — it pins the
+//! `StreamAbortedWithPartial` recovery the pump driver does in
+//! [`super::stream_pump::driver`].
+
 use aura_reasoner::{
-    ContentBlock, Message, MockProvider, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
-    ReasonerError, StopReason, StreamContentType, StreamEvent, StreamEventStream, Usage,
+    Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, ReasonerError, StopReason,
+    StreamContentType, StreamEvent, StreamEventStream, Usage,
 };
 use futures_util::stream;
 use tokio::sync::mpsc;
@@ -21,132 +36,9 @@ impl AgentToolExecutor for NoOpExecutor {
     }
 }
 
-struct StreamErrorProvider {
-    fallback_text: String,
-}
-
-impl StreamErrorProvider {
-    fn new(text: &str) -> Self {
-        Self {
-            fallback_text: text.to_string(),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ModelProvider for StreamErrorProvider {
-    fn name(&self) -> &'static str {
-        "stream-error-test"
-    }
-
-    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
-        Ok(ModelResponse::new(
-            StopReason::EndTurn,
-            Message::assistant(&self.fallback_text),
-            Usage::new(10, 5),
-            ProviderTrace::new("test", 0),
-        ))
-    }
-
-    async fn complete_streaming(
-        &self,
-        _request: ModelRequest,
-    ) -> Result<StreamEventStream, ReasonerError> {
-        let events = vec![
-            Ok(StreamEvent::MessageStart {
-                message_id: "msg_err".to_string(),
-                model: "test".to_string(),
-                input_tokens: Some(10),
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: None,
-            }),
-            Ok(StreamEvent::ContentBlockStart {
-                index: 0,
-                content_type: StreamContentType::Text,
-            }),
-            Ok(StreamEvent::TextDelta {
-                text: "partial...".to_string(),
-            }),
-            Err(ReasonerError::Internal("Connection lost".to_string())),
-        ];
-        Ok(Box::pin(stream::iter(events)))
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-}
-
-struct SuccessStreamProvider {
-    inner: MockProvider,
-}
-
-#[async_trait::async_trait]
-impl ModelProvider for SuccessStreamProvider {
-    fn name(&self) -> &'static str {
-        "success-stream-test"
-    }
-
-    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
-        self.inner.complete(request).await
-    }
-
-    async fn complete_streaming(
-        &self,
-        request: ModelRequest,
-    ) -> Result<StreamEventStream, ReasonerError> {
-        let response = self.inner.complete(request).await?;
-        let mut events: Vec<Result<StreamEvent, ReasonerError>> = Vec::new();
-
-        events.push(Ok(StreamEvent::MessageStart {
-            message_id: "msg_ok".to_string(),
-            model: "mock-model".to_string(),
-            input_tokens: Some(response.usage.input_tokens),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: None,
-        }));
-
-        for (idx, block) in response.message.content.iter().enumerate() {
-            let index = idx as u32;
-            if let ContentBlock::Text { text } = block {
-                events.push(Ok(StreamEvent::ContentBlockStart {
-                    index,
-                    content_type: StreamContentType::Text,
-                }));
-                events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
-                events.push(Ok(StreamEvent::ContentBlockStop { index }));
-            }
-        }
-
-        events.push(Ok(StreamEvent::MessageDelta {
-            stop_reason: Some(response.stop_reason),
-            output_tokens: response.usage.output_tokens,
-        }));
-        events.push(Ok(StreamEvent::MessageStop));
-
-        Ok(Box::pin(stream::iter(events)))
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-}
-
-fn default_config() -> AgentLoopConfig {
-    AgentLoopConfig {
-        system_prompt: "streaming test agent".to_string(),
-        // These tests exercise the legacy buffered-streaming path's
-        // `StreamReset` non-streaming fallback flow. The partial
-        // tool-use retry tests below opt back into the pump path.
-        use_stream_pump: false,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    }
-}
-
 fn pump_config() -> AgentLoopConfig {
     AgentLoopConfig {
         system_prompt: "streaming test agent".to_string(),
-        use_stream_pump: true,
         ..AgentLoopConfig::for_agent("claude-test-model")
     }
 }
@@ -157,116 +49,6 @@ async fn collect_events(mut rx: mpsc::Receiver<AgentLoopEvent>) -> Vec<AgentLoop
         events.push(event);
     }
     events
-}
-
-#[tokio::test]
-async fn stream_error_emits_reset_before_fallback() {
-    let provider = StreamErrorProvider::new("Complete fallback response");
-    let executor = NoOpExecutor;
-    let agent = AgentLoop::new(default_config());
-    let (tx, rx) = mpsc::channel(1024);
-    let messages = vec![Message::user("hello")];
-
-    let result = agent
-        .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
-        .await
-        .unwrap();
-
-    assert_eq!(result.iterations, 1);
-
-    let events = collect_events(rx).await;
-    let reset_pos = events
-        .iter()
-        .position(|e| matches!(e, AgentLoopEvent::StreamReset { .. }));
-    assert!(reset_pos.is_some(), "StreamReset event must be emitted");
-
-    let has_text_after_reset = events[reset_pos.unwrap()..]
-        .iter()
-        .any(|e| matches!(e, AgentLoopEvent::TextDelta(_)));
-    assert!(
-        has_text_after_reset,
-        "TextDelta must follow StreamReset with complete content"
-    );
-}
-
-#[tokio::test]
-async fn stream_reset_followed_by_complete_content() {
-    let fallback_text = "The authoritative fallback text";
-    let provider = StreamErrorProvider::new(fallback_text);
-    let executor = NoOpExecutor;
-    let agent = AgentLoop::new(default_config());
-    let (tx, rx) = mpsc::channel(1024);
-    let messages = vec![Message::user("hello")];
-
-    agent
-        .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
-        .await
-        .unwrap();
-
-    let events = collect_events(rx).await;
-    let reset_idx = events
-        .iter()
-        .position(|e| matches!(e, AgentLoopEvent::StreamReset { .. }))
-        .expect("StreamReset must be present");
-
-    let post_reset_text: String = events[reset_idx..]
-        .iter()
-        .filter_map(|e| match e {
-            AgentLoopEvent::TextDelta(t) => Some(t.as_str()),
-            _ => None,
-        })
-        .collect();
-
-    assert_eq!(post_reset_text, fallback_text);
-}
-
-#[tokio::test]
-async fn successful_stream_no_reset() {
-    let provider = SuccessStreamProvider {
-        inner: MockProvider::simple_response("Success!"),
-    };
-    let executor = NoOpExecutor;
-    let agent = AgentLoop::new(default_config());
-    let (tx, rx) = mpsc::channel(1024);
-    let messages = vec![Message::user("hello")];
-
-    agent
-        .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
-        .await
-        .unwrap();
-
-    let events = collect_events(rx).await;
-    let has_reset = events
-        .iter()
-        .any(|e| matches!(e, AgentLoopEvent::StreamReset { .. }));
-    assert!(
-        !has_reset,
-        "No StreamReset should be emitted on a successful stream"
-    );
-}
-
-#[tokio::test]
-async fn stream_error_emits_exactly_one_reset() {
-    let provider = StreamErrorProvider::new("Fallback");
-    let executor = NoOpExecutor;
-    let agent = AgentLoop::new(default_config());
-    let (tx, rx) = mpsc::channel(1024);
-    let messages = vec![Message::user("hello")];
-
-    agent
-        .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
-        .await
-        .unwrap();
-
-    let events = collect_events(rx).await;
-    let reset_count = events
-        .iter()
-        .filter(|e| matches!(e, AgentLoopEvent::StreamReset { .. }))
-        .count();
-    assert_eq!(
-        reset_count, 1,
-        "Exactly one StreamReset should be emitted per fallback"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -320,11 +102,8 @@ impl ModelProvider for FlakyPartialProvider {
             .fail_count
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         if remaining == 0 {
-            // Hold the counter at 0 so subsequent retries (if any) still hit
-            // the success path rather than underflowing into usize::MAX.
             self.fail_count
                 .store(0, std::sync::atomic::Ordering::SeqCst);
-            // Success path: one text-only response.
             let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
                 Ok(StreamEvent::MessageStart {
                     message_id: "msg_ok".to_string(),
@@ -349,9 +128,6 @@ impl ModelProvider for FlakyPartialProvider {
             ];
             return Ok(Box::pin(stream::iter(events)));
         }
-        // Failure path: start a tool_use, drop a partial input_json_delta,
-        // then emit an SSE Error event before the stream ends. No
-        // content_block_stop -> accumulator will see an in-flight tool.
         let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
             Ok(StreamEvent::MessageStart {
                 message_id: "msg_fail".to_string(),
@@ -399,10 +175,6 @@ fn install_retry(max_retries: u32, initial_ms: u64, cap_ms: u64) -> aura_config:
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // intentional: serializes env var edits across async awaits
 async fn stream_aborted_with_partial_retries_then_succeeds() {
-    // Provider fails twice with StreamAbortedWithPartial, then
-    // succeeds. The retry loop must emit two ToolCallRetrying events
-    // (one before each retry sleep) and finally return the success
-    // response. The backoff envs are pinned tiny so the test is fast.
     let _lock = STREAM_RETRY_ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -435,8 +207,6 @@ async fn stream_aborted_with_partial_retries_then_succeeds() {
         .any(|e| matches!(e, AgentLoopEvent::ToolCallFailed { .. }));
     assert!(!failed, "success path must not emit ToolCallFailed");
 
-    // Sanity-check the partial tool identity is preserved across
-    // retries: both retry events should name the write_file tool.
     let any_write_file_retry = events.iter().any(|e| match e {
         AgentLoopEvent::ToolCallRetrying { tool_name, .. } => tool_name == "write_file",
         _ => false,
@@ -450,8 +220,6 @@ async fn stream_aborted_with_partial_retries_then_succeeds() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // intentional: serializes env var edits across async awaits
 async fn stream_aborted_with_partial_exhausts_and_fails() {
-    // Provider always fails. With max_retries=2 the loop must emit 2
-    // retries then a final ToolCallFailed and surface the error.
     let _lock = STREAM_RETRY_ENV_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -466,11 +234,7 @@ async fn stream_aborted_with_partial_exhausts_and_fails() {
     let result = agent
         .run_with_events(&provider, &executor, messages, vec![], Some(tx), None)
         .await;
-    // The agent loop surfaces the final error through AgentLoopResult
-    // rather than the outer Result (the model error is recorded, not
-    // returned). Either shape is acceptable -- we just need
-    // ToolCallFailed to have been emitted.
-    let _ = result; // silence unused warning on the Ok path
+    let _ = result;
 
     let events = collect_events(rx).await;
     let retrying = events

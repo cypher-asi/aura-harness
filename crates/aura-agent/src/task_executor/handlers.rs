@@ -433,21 +433,26 @@ impl TaskToolExecutor {
         self.emit_text(marker);
     }
 
-    /// Merge tracked executor state (file ops, notes, follow-ups) into a
-    /// [`TaskExecutionResult`] so that downstream consumers see real evidence
-    /// instead of hardcoded defaults.
+    /// Merge tracked executor state (notes, follow-ups) into a
+    /// [`TaskExecutionResult`] so downstream consumers see real
+    /// evidence instead of hardcoded defaults.
+    ///
+    /// Phase 7 dropped the `file_ops` / `no_changes_needed` /
+    /// `reached_implementing` mirrors onto `TaskExecutionResult`
+    /// because the automaton finalizer never consumed them and the
+    /// `FileOpsApplied` / `CommitSkipped` events that would have
+    /// were also pruned. The internal tracking state on
+    /// `TaskToolExecutor` is still maintained (it drives the
+    /// `task_done` rejection / no-changes-needed escape hatch
+    /// inside the agent loop); only the cross-layer copies were
+    /// removed.
     #[allow(clippy::assigning_clones)] // clone_from doesn't work through MutexGuard
     pub async fn merge_into_result(&self, exec: &mut crate::agent_runner::TaskExecutionResult) {
-        exec.file_ops = self.tracked_file_ops.lock().await.clone();
         let task_notes = self.notes.lock().await.clone();
         if !task_notes.is_empty() {
             exec.notes = task_notes;
         }
         exec.follow_up_tasks = self.follow_ups.lock().await.clone();
-        exec.no_changes_needed = *self.no_changes_needed.lock().await;
-        let phase = self.task_phase.lock().await;
-        exec.reached_implementing =
-            matches!(*phase, crate::planning::TaskPhase::Implementing { .. });
     }
 
     pub(super) fn emit_text(&self, text: String) {

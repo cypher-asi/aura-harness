@@ -42,8 +42,8 @@ use crate::builtins::common::{
 use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
+use crate::metadata::Schedule;
 use crate::runtime::{Automaton, TickOutcome};
-use crate::schedule::Schedule;
 
 /// Single blob holding all per-tick scratch state. Replaces the
 /// pre-Phase-6 set of magic-string `AutomatonState` keys
@@ -311,26 +311,22 @@ impl DevLoopAutomaton {
             .await
             .map_err(|e| AutomatonError::domain_api(Some(task.id.clone()), e))?;
 
-        // Pre-implementation refinement. Only run on the first pass
-        // (`build_retry_note.is_none()`); the build-retry second
-        // pass would otherwise re-refine the description that
-        // already had the compiler-output appended below, doubling
-        // up the marker and confusing the agent. The helper carries
-        // its own idempotency marker (`<!-- aura-refined:v1 -->`)
-        // as a second safety net for ambient re-claims.
-        let task_owned = if build_retry_note.is_none() {
-            crate::builtins::task_refinement::refine_task_description(
-                self.domain.as_ref(),
-                self.provider.as_ref(),
-                &cfg.model,
-                &spec,
-                task,
-                Some(ctx.event_sender()),
-            )
-            .await?
-        } else {
-            task.clone()
-        };
+        // Pre-implementation refinement. Phase 7 dropped the
+        // outer `build_retry_note.is_none()` gate: the helper's
+        // `<!-- aura-refined:v1 -->` marker is the single
+        // authoritative idempotency check, and it already covers
+        // both the build-retry second pass (the refined body
+        // persisted on pass one starts with the marker) and
+        // ambient re-claims after a process restart.
+        let task_owned = crate::builtins::task_refinement::refine_task_description(
+            self.domain.as_ref(),
+            self.provider.as_ref(),
+            &cfg.model,
+            &spec,
+            task,
+            Some(ctx.event_sender()),
+        )
+        .await?;
 
         run_tracked_task(TaskExecutionRequest {
             ctx,

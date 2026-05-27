@@ -378,9 +378,10 @@ async fn pump_per_tool_timeout_does_not_poison_fifo() {
 /// for a finished `OutputItem::Message`, a `ThinkingDelta` +
 /// `ThinkingComplete` for `OutputItem::Thinking`, and a
 /// `ToolStart` + `ToolInputSnapshot` pair for an
-/// `OutputItem::ToolUse`. This is the gate that lets the
+/// `OutputItem::ToolUse`. This was the gate that let the
 /// `use_stream_pump` default flip without regressing the
-/// chat-stream UX (see audit note).
+/// chat-stream UX (see audit note); Phase 7 retired the toggle so
+/// this test now pins the production contract directly.
 #[tokio::test(start_paused = true)]
 async fn pump_emits_per_delta_events() {
     let executor = CountingExecutor::default();

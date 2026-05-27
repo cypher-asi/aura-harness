@@ -1,26 +1,25 @@
-//! Unified tool-execution pipeline (Phase 4).
+//! Unified tool-execution pipeline (Phase 4 + Phase 7).
 //!
 //! Phase 4 collapsed the two pre-existing tool-dispatch entry points
 //! (the buffered path's `tool_execution::handle_tool_use` and the
 //! pump path's `stream_pump::dispatch::handle_streamed_tool_use`)
-//! behind one async function: [`process_tool_results`]. Both paths
-//! now run the same chain — circling-read gate, chunk guard,
-//! optional executor call (Live batches only), `track_tool_effects`,
-//! auto-build, console/event emission, and the trailing
-//! `tool_result`-bearing user message push — regardless of which
-//! transport produced the batch.
+//! behind one async function: [`process_tool_results`]. Phase 7
+//! then dropped the legacy buffered transport entirely, so today
+//! every batch arrives pre-executed from the streaming pump.
 //!
-//! The batch is wrapped in [`ToolBatch`]:
+//! The batch is still wrapped in [`ToolBatch`]:
 //!
-//! - [`ToolBatch::Live`] is a fresh `Vec<ToolCallInfo>` that still
-//!   needs to be executed. The buffered transport routes here after
-//!   `tool_calls(response)`.
 //! - [`ToolBatch::PreExecuted`] is `Vec<(ToolCallInfo, ToolCallResult)>`
 //!   the pump driver already executed against its
-//!   [`futures_util::stream::FuturesOrdered`] drain. The unified
-//!   pipeline takes the pre-executed pairs as a pass-through —
+//!   [`futures_util::stream::FuturesOrdered`] drain. The pipeline
+//!   takes the pre-executed pairs as a pass-through —
 //!   `track_tool_effects` / auto-build / message push still run so
 //!   the pump path participates in the same telemetry contract.
+//!
+//! The enum stays even though there is only one variant today so a
+//! future transport (an offline cassette transport for replay, for
+//! example) can be slotted in as a fresh variant without rewriting
+//! the dispatch tail.
 //!
 //! Each call site builds a [`ToolEffectCtx`] (executor, event_tx,
 //! cancellation_token) for the small set of per-dispatch parameters
@@ -59,6 +58,13 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 /// `aura_config` boundaries). Same value the aura-os side reads, so
 /// the harness emits a heartbeat well inside the server's
 /// sliding-idle window (`AURA_TURN_MAX_TIMEOUT_SECS`, default 180s).
+///
+/// Phase 7 dropped the only production caller (the buffered
+/// transport's `prepare_live_batch`); the heartbeat infrastructure
+/// is kept for the buffered-style helpers' unit-test coverage and
+/// for any future transport (e.g. cassette replay) that needs
+/// inline executor calls.
+#[allow(dead_code)]
 pub(crate) fn tool_heartbeat_interval() -> Duration {
     aura_config::agent().tools.heartbeat_interval
 }
@@ -79,6 +85,7 @@ pub(crate) fn tool_heartbeat_interval() -> Duration {
 /// `event_tx` is `None` for the headless code path (no event channel,
 /// e.g. unit tests in non-streaming mode); the spawn is skipped and
 /// the returned guard is a no-op so the call site stays branch-free.
+#[allow(dead_code)]
 pub(super) fn spawn_tool_heartbeat(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     to_execute: &[ToolCallInfo],
@@ -132,6 +139,7 @@ pub(super) fn spawn_tool_heartbeat(
 /// on drop so a panicking executor or an early `?`-return at the
 /// caller doesn't leak the periodic emission past the tool's
 /// lifetime.
+#[allow(dead_code)]
 pub(super) struct HeartbeatGuard {
     handle: Option<JoinHandle<()>>,
 }
@@ -146,17 +154,14 @@ impl Drop for HeartbeatGuard {
 
 /// One batch of tool calls handed to [`process_tool_results`].
 ///
-/// The variant tracks whether the batch still needs to be executed
-/// against the [`AgentToolExecutor`] (buffered transport) or whether
-/// the streaming pump already executed it inside its
-/// [`futures_util::stream::FuturesOrdered`] drain (pump transport).
-/// The downstream pipeline runs the same chain regardless — the
-/// only branch is "spawn the executor + heartbeat" vs "pass results
-/// straight through to tracking".
+/// Phase 4 introduced the `Live` / `PreExecuted` split so the two
+/// transports could share a single dispatch tail. Phase 7 then
+/// dropped the buffered transport entirely (parity proven), so the
+/// enum now only ever carries the `PreExecuted` shape produced by
+/// the streaming pump. Kept as an enum so a future transport (an
+/// offline cassette transport, for example) can be reintroduced as
+/// `Live` without rewriting every match arm.
 pub(crate) enum ToolBatch {
-    /// Buffered transport: fresh tool calls extracted from
-    /// [`tool_calls`] that still need execution.
-    Live(Vec<ToolCallInfo>),
     /// Pump transport: tool calls already executed inside the
     /// pump driver, paired with their [`ToolCallResult`] in
     /// submission order.
@@ -168,7 +173,6 @@ impl ToolBatch {
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         match self {
-            Self::Live(v) => v.is_empty(),
             Self::PreExecuted(v) => v.is_empty(),
         }
     }
@@ -193,6 +197,13 @@ impl ToolBatch {
 pub(crate) struct ToolEffectCtx<'a> {
     pub(crate) executor: &'a dyn AgentToolExecutor,
     pub(crate) event_tx: Option<&'a Sender<AgentLoopEvent>>,
+    /// Cancellation token threaded through to
+    /// [`execute_with_cancellation`]. Phase 7 lost the only
+    /// production consumer when the buffered transport's
+    /// `prepare_live_batch` was deleted; kept on the struct for the
+    /// `pipeline_tests` / `stream_pump::tests` constructors and any
+    /// future transport that adds an inline executor call.
+    #[allow(dead_code)]
     pub(crate) cancellation_token: Option<&'a CancellationToken>,
 }
 
@@ -296,7 +307,6 @@ pub(crate) async fn process_tool_results(
     }
 
     let prepared = match batch {
-        ToolBatch::Live(calls) => prepare_live_batch(state, &calls, &ctx).await,
         ToolBatch::PreExecuted(pairs) => prepare_pre_executed_batch(pairs),
     };
 
@@ -408,103 +418,6 @@ struct PreparedBatch {
     cached_ids: HashSet<String>,
 }
 
-async fn prepare_live_batch(
-    state: &mut LoopState,
-    tool_calls: &[ToolCallInfo],
-    ctx: &ToolEffectCtx<'_>,
-) -> PreparedBatch {
-    if tool_calls.is_empty() {
-        return PreparedBatch {
-            tool_calls: Vec::new(),
-            all_results: Vec::new(),
-            side_messages: Vec::new(),
-            blocked_ids: HashSet::new(),
-            cached_ids: HashSet::new(),
-        };
-    }
-
-    debug!(
-        tool_count = tool_calls.len(),
-        "Processing tool_use stop reason"
-    );
-    for tc in tool_calls {
-        debug!(
-            tool_use_id = %tc.id,
-            tool_name = %tc.name,
-            is_write = helpers::is_write_tool(&tc.name),
-            "Tool requested by model"
-        );
-    }
-
-    let mut side_messages: Vec<String> = Vec::new();
-    let (circling_reads, cacheable_calls) = partition_circling_duplicate_reads(tool_calls, state);
-    let circling_blocked_ids: HashSet<String> = circling_reads
-        .iter()
-        .map(|r| r.tool_use_id.clone())
-        .collect();
-
-    let (cached_results, uncached_calls) =
-        super::tool_execution::split_cached(&cacheable_calls, &state.tool_cache);
-    let cached_ids: HashSet<String> = cached_results
-        .iter()
-        .map(|r| r.tool_use_id.clone())
-        .collect();
-
-    debug!(
-        cached_count = cached_results.len(),
-        execute_count = uncached_calls.len(),
-        "Resolved cached vs executable tool calls"
-    );
-
-    // Chunk guard runs only on the uncached subset — cached entries
-    // were vetted on the original execution turn, and circling-blocked
-    // entries never reach a write path.
-    let (oversized_writes, after_oversized) =
-        partition_oversized_writes(&uncached_calls, &mut side_messages, ctx.event_tx);
-
-    let executed = if after_oversized.is_empty() {
-        Vec::new()
-    } else {
-        // Phase 6 of agent-stuck-and-reset: spawn a periodic
-        // `progress: tool_running` heartbeat so aura-os's
-        // sliding-idle watchdog (and the client-side stuck-stream
-        // watchdog) see forward motion during a long tool call
-        // and don't trip `turn_timeout` on a turn that is actively
-        // working. The guard's `Drop` aborts the heartbeat task as
-        // soon as `executor.execute` returns.
-        let _heartbeat =
-            spawn_tool_heartbeat(ctx.event_tx, &after_oversized, tool_heartbeat_interval());
-        execute_with_cancellation(ctx.executor, &after_oversized, ctx.cancellation_token).await
-    };
-
-    super::tool_execution::update_cache(&mut state.tool_cache, &after_oversized, &executed);
-
-    let blocked_ids: HashSet<String> = oversized_writes
-        .iter()
-        .map(|r| r.tool_use_id.clone())
-        .chain(circling_blocked_ids)
-        .collect();
-
-    // Ordering: circling-blocked first (the model emitted these
-    // first conceptually), then cached, then oversized synthetic
-    // errors, then live executed. The codex-parity adjacency
-    // contract only requires that EVERY `tool_use` has a paired
-    // `tool_result`, not that the order matches submission, so this
-    // grouping is purely cosmetic for the trailing user message.
-    let mut all_results: Vec<ToolCallResult> = circling_reads;
-    all_results.extend(cached_results);
-    all_results.extend(oversized_writes);
-    all_results.extend(executed);
-
-    PreparedBatch {
-        tool_calls: tool_calls.to_vec(),
-        all_results,
-        side_messages,
-        blocked_ids,
-        cached_ids,
-    }
-}
-
 fn prepare_pre_executed_batch(pairs: Vec<(ToolCallInfo, ToolCallResult)>) -> PreparedBatch {
     let mut tool_calls: Vec<ToolCallInfo> = Vec::with_capacity(pairs.len());
     let mut all_results: Vec<ToolCallResult> = Vec::with_capacity(pairs.len());
@@ -519,9 +432,10 @@ fn prepare_pre_executed_batch(pairs: Vec<(ToolCallInfo, ToolCallResult)>) -> Pre
         // The pump driver knows which entries were cached or
         // circling-blocked but does not currently surface that
         // metadata into the dispatch tail; both sets stay empty so
-        // the console block labels everything as `executor`. Phase 7
-        // (legacy buffered deletion) can refine this once the
-        // buffered path is gone.
+        // the console block labels everything as `executor`. A
+        // follow-up can plumb the per-entry classification through
+        // `StreamPumpOutcome` so the console block matches the
+        // pre-Phase-7 buffered shape.
         blocked_ids: HashSet::new(),
         cached_ids: HashSet::new(),
     }
@@ -693,6 +607,7 @@ pub(crate) async fn dispatch(
 /// (every `tool_use` in the prior assistant message gets a paired
 /// `tool_result` block) so we can break cleanly without leaving the
 /// transcript in a structurally-invalid state.
+#[allow(dead_code)]
 pub(super) fn cancelled_results_for(to_execute: &[ToolCallInfo]) -> Vec<ToolCallResult> {
     to_execute
         .iter()
@@ -721,6 +636,7 @@ pub(super) fn cancelled_results_for(to_execute: &[ToolCallInfo]) -> Vec<ToolCall
 /// (potentially multi-minute) tool round-trip alive — see
 /// `pipeline_cancellation_mid_tool_execution_aborts_loop` for the
 /// regression contract.
+#[allow(dead_code)]
 async fn execute_with_cancellation(
     executor: &dyn AgentToolExecutor,
     to_execute: &[ToolCallInfo],
@@ -782,6 +698,7 @@ pub(super) fn partition_circling_duplicate_reads(
 /// as a side-message and emitted through the event stream as
 /// [`AgentLoopEvent::Warning`] so it is visible to humans watching the
 /// run.
+#[allow(dead_code)]
 fn partition_oversized_writes(
     tool_calls: &[ToolCallInfo],
     side_messages: &mut Vec<String>,

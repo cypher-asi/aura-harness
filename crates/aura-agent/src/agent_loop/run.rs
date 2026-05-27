@@ -132,15 +132,15 @@ impl AgentLoop {
         cancellation_token: Option<CancellationToken>,
         handle: Option<&crate::AgentRunnerHandle>,
     ) -> Result<AgentLoopResult, crate::AgentError> {
-        // Layer E.4: ALWAYS instantiate an internal [`Session`] so the
-        // agent loop has a unified handle to the `InputQueue` +
-        // `GoalRuntime` regardless of whether the caller supplied an
-        // [`AgentRunnerHandle`]. When `handle` is `Some`, the new
-        // session shares the handle's backing queue (and session id);
-        // when `None`, we mint a fresh session id + queue paired with
-        // either the supplied `cancellation_token` or a freshly
-        // created one so in-band cancel + external cancel still share
-        // a signal. This is the resolution for E.2's open question:
+        // ALWAYS instantiate an internal [`Session`] so the agent
+        // loop has a unified handle to the `InputQueue` regardless
+        // of whether the caller supplied an [`AgentRunnerHandle`].
+        // When `handle` is `Some`, the new session shares the
+        // handle's backing queue (and session id); when `None`, we
+        // mint a fresh session id + queue paired with either the
+        // supplied `cancellation_token` or a freshly created one so
+        // in-band cancel + external cancel still share a signal.
+        // This is the resolution for E.2's open question:
         // [`crate::agent_runner::AgentRunner::execute_task`] +
         // friends remain the public entry points; everything goes
         // through a session internally.
@@ -191,12 +191,12 @@ impl AgentLoop {
         }
     }
 
-    // E.4: 8 parameters (one over the default 7 clippy ceiling). The
-    // new `session` parameter is the unified handle to the
-    // [`InputQueue`] + [`GoalRuntime`] for the in-flight session;
-    // packing the rest into a struct would force every helper inside
-    // this module to learn a new wrapper type. Documented per
-    // Rule 1.4.
+    // 8 parameters (one over the default 7 clippy ceiling). The
+    // `session` parameter is the unified handle to the [`InputQueue`]
+    // for the in-flight session; packing the rest into a struct
+    // would force every helper inside this module to learn a new
+    // wrapper type. Documented per Rule 1.4 and tracked for Phase 8
+    // `RunCtx` consolidation.
     #[allow(clippy::too_many_arguments)]
     async fn run_inner(
         &self,

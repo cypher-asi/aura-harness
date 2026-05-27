@@ -1,7 +1,6 @@
-//! Phase 4 keystone — single [`ModelTransport`] trait collapsing the
-//! buffered ([`super::streaming::complete_with_streaming`]) and
+//! Phase 4 keystone — single [`ModelTransport`] trait around the
 //! streaming pump ([`super::stream_pump::run_stream_pump`]) sampling
-//! paths behind one async surface.
+//! path.
 //!
 //! # Why
 //!
@@ -11,29 +10,31 @@
 //! 80% of the body was shared — cancellation probe,
 //! `accumulate_response`, `emit_iteration_complete`,
 //! `dispatch_stop_reason` — but the two duplicated retry, error
-//! mapping, and tool-batch handoff. The duplication was the
-//! single biggest source of dual-path parity bugs.
+//! mapping, and tool-batch handoff. The duplication was the single
+//! biggest source of dual-path parity bugs.
 //!
-//! Phase 4 folds the model-sampling step into a trait so the
-//! enclosing sampling driver runs the
-//! cancellation / accumulate / iteration_complete / dispatch tail
-//! exactly once regardless of transport. The
-//! [`TransportOutcome`] variants carry the only thing the two
-//! paths legitimately produce differently (a pre-executed tool batch
-//! for the pump path) and downstream `process_tool_results` consumes
-//! either via [`super::tool_pipeline::ToolBatch::Live`] (buffered) or
-//! [`super::tool_pipeline::ToolBatch::PreExecuted`] (pump).
+//! Phase 4 folded the model-sampling step into a trait so the
+//! enclosing sampling driver runs the cancellation / accumulate /
+//! iteration_complete / dispatch tail exactly once regardless of
+//! transport. Phase 7 then deleted the legacy [`BufferedTransport`]
+//! after parity tests proved the pump was production-ready and no
+//! caller flipped `use_stream_pump` to `false` outside tests. The
+//! trait is kept as a stable seam for future transports (an offline
+//! cassette transport for replay, for example) without re-opening
+//! the dual-path complexity.
+//!
+//! The [`TransportOutcome`] variants carry the only thing the
+//! transport legitimately produces (an optional pre-executed tool
+//! batch) and downstream `process_tool_results` consumes it via
+//! [`super::tool_pipeline::ToolBatch::PreExecuted`].
 //!
 //! # SamplingCtx vs ToolEffectCtx
 //!
 //! [`SamplingCtx`] bundles the per-sample arguments — agent,
 //! provider, executor, tools, event channel, cancellation token,
 //! input queue, mutable loop state, and the freshly-built request.
-//! Both transports take it by value (move) so the `&mut LoopState`
-//! borrow inside is single-use per sample; the unified
-//! `run_sampling_request` rebuilds a fresh ctx if it ever needs a
-//! second pass (overflow retry inside the buffered transport
-//! handles its own rebuild internally).
+//! The transport takes it by value (move) so the `&mut LoopState`
+//! borrow inside is single-use per sample.
 //!
 //! [`super::tool_pipeline::ToolEffectCtx`] is a *separate*, much
 //! smaller bundle threaded through `process_tool_results` (executor,
@@ -44,10 +45,8 @@
 //!
 //! # Cancellation contract
 //!
-//! Pre-Phase-4 each transport had its own bailout: the buffered
-//! path returned `LlmCallError::Fatal("Cancelled")`; the pump
-//! returned [`super::stream_pump::StreamPumpOutcome::Cancelled`].
-//! [`TransportOutcome::Cancelled`] now unifies these into a single
+//! [`TransportOutcome::Cancelled`] surfaces the
+//! `StreamPumpOutcome::Cancelled` short-circuit as a single
 //! "no llm_error, broke_for_error = true" signal so the sampling
 //! driver can short-circuit without applying a synthetic
 //! `llm_error` string to the result.
@@ -90,33 +89,36 @@ pub(crate) struct SamplingCtx<'a> {
     pub(crate) agent: &'a AgentLoop,
     pub(crate) provider: &'a dyn ModelProvider,
     pub(crate) executor: &'a dyn AgentToolExecutor,
+    /// Tool catalog handed to the model. Kept on the ctx for the
+    /// future `cassette` transport (the pump consumes the catalog
+    /// through the pre-built `request`).
+    #[allow(dead_code)]
     pub(crate) tools: &'a [ToolDefinition],
     pub(crate) event_tx: Option<&'a Sender<AgentLoopEvent>>,
     pub(crate) cancellation_token: Option<&'a CancellationToken>,
     pub(crate) input_queue: Option<&'a InputQueue>,
     pub(crate) state: &'a mut LoopState,
     pub(crate) request: ModelRequest,
+    /// 0-based sampling iteration index. Kept on the ctx for
+    /// transports that need to drive iteration-keyed telemetry; the
+    /// pump consumes the counter through `state.result.iterations`.
+    #[allow(dead_code)]
     pub(crate) iteration: usize,
 }
 
 /// One sampling round-trip outcome.
 ///
-/// `Buffered` carries the model response only: tool execution
-/// happens later through [`super::tool_pipeline::process_tool_results`]
-/// against a fresh `ToolBatch::Live` batch.
-///
 /// `Streamed` carries the response plus the FIFO-ordered
 /// pre-executed tool batch the pump already ran inside the streaming
-/// driver. The same `process_tool_results` entry point consumes it
-/// as `ToolBatch::PreExecuted` — `track_tool_effects` / `auto-build`
-/// / message-push still run uniformly on both paths.
+/// driver. `process_tool_results` consumes it as
+/// `ToolBatch::PreExecuted` — `track_tool_effects` / `auto-build` /
+/// message-push then run on top.
 ///
 /// `Cancelled` is the "no llm_error, just break" short-circuit. It
 /// fires when the cancellation token observed during sampling did
 /// NOT have any in-flight tool_use blocks to repair (otherwise the
 /// pump path folds `[CANCELLED]` tool_results into `Streamed`).
 pub(crate) enum TransportOutcome {
-    Buffered(ModelResponse),
     Streamed {
         response: ModelResponse,
         pre_executed: Vec<(ToolCallInfo, ToolCallResult)>,
@@ -124,20 +126,20 @@ pub(crate) enum TransportOutcome {
     Cancelled,
 }
 
-/// The keystone trait: one method, one outcome enum, two
-/// implementations ([`BufferedTransport`] / [`PumpTransport`]).
+/// The keystone trait: one method, one outcome enum.
 ///
-/// Implementations live in this module; the trait stays
-/// `pub(crate)` per Rule 3.1 — no external consumer plugs in their
-/// own transport today (the surface would also need to model
-/// retry/backoff for that to be useful).
+/// Phase 7 collapsed the implementation set from two
+/// (`BufferedTransport` + `PumpTransport`) to one ([`PumpTransport`])
+/// after parity tests confirmed the pump as the production default.
+/// The trait stays `pub(crate)` per Rule 3.1 so the seam is preserved
+/// for future transports (offline cassette replay, mock transports
+/// for property tests) without re-opening the dual-path complexity.
 #[async_trait::async_trait]
 pub(crate) trait ModelTransport: Send + Sync {
     /// Drive one sampling request to terminal completion.
     ///
-    /// Returns [`TransportOutcome::Buffered`] for the legacy
-    /// `complete_with_streaming` path, [`TransportOutcome::Streamed`]
-    /// for the pump path (with the pre-executed tool batch), or
+    /// Returns [`TransportOutcome::Streamed`] for the pump path
+    /// (with the pre-executed tool batch), or
     /// [`TransportOutcome::Cancelled`] when the cancellation token
     /// fired before any tool_use blocks were emitted.
     ///
@@ -145,69 +147,8 @@ pub(crate) trait ModelTransport: Send + Sync {
     ///
     /// Returns the structured [`LlmCallError`] for fatal model
     /// errors (rate-limit, prompt-too-long, insufficient credits,
-    /// transport blowups). The buffered transport handles its own
-    /// `PromptTooLong` retry ladder inside `sample` so the outer
-    /// driver never needs to know whether retry succeeded.
+    /// transport blowups).
     async fn sample(&self, ctx: SamplingCtx<'_>) -> Result<TransportOutcome, LlmCallError>;
-}
-
-/// Buffered transport: wraps the legacy
-/// [`AgentLoop::complete_with_streaming`] path.
-///
-/// Internally drives `provider.complete_streaming(...)` (or
-/// `provider.complete(...)` when `event_tx` is `None`), accumulates
-/// the full response, and returns it in [`TransportOutcome::Buffered`].
-/// The Phase 7 plan tracks deleting this implementation once pump
-/// parity is fully proven in production; until then it remains the
-/// fallback path (toggle via [`super::AgentLoopConfig::use_stream_pump`]).
-pub(crate) struct BufferedTransport;
-
-#[async_trait::async_trait]
-impl ModelTransport for BufferedTransport {
-    async fn sample(&self, ctx: SamplingCtx<'_>) -> Result<TransportOutcome, LlmCallError> {
-        let SamplingCtx {
-            agent,
-            provider,
-            tools,
-            event_tx,
-            cancellation_token,
-            state,
-            request,
-            iteration,
-            ..
-        } = ctx;
-
-        let response = match agent
-            .call_model(provider, request, event_tx, cancellation_token)
-            .await
-        {
-            Ok(r) => r,
-            Err(LlmCallError::PromptTooLong(msg)) => {
-                // Two-tier overflow-recovery ladder lives on
-                // [`AgentLoop::retry_after_context_overflow`]. It
-                // rebuilds the request after aggressive / micro
-                // compaction and re-enters `call_model`, so the
-                // recovery path stays inside the buffered transport
-                // (mixing it with the pump would not work — the
-                // overflow detection only surfaces from
-                // `provider.complete` / `complete_streaming`).
-                agent
-                    .retry_after_context_overflow(
-                        provider,
-                        tools,
-                        iteration,
-                        event_tx,
-                        cancellation_token,
-                        state,
-                        msg,
-                    )
-                    .await?
-            }
-            Err(e) => return Err(e),
-        };
-
-        Ok(TransportOutcome::Buffered(response))
-    }
 }
 
 /// Streaming pump transport: wraps the
@@ -273,18 +214,13 @@ impl ModelTransport for PumpTransport {
     }
 }
 
-/// Resolve the active transport for `config`.
+/// Hand back the singleton pump transport reference.
 ///
-/// Returns a reference to a static instance so the sampling driver
-/// can hand `&dyn ModelTransport` to `sample` without per-turn
-/// allocation. The toggle reads [`super::AgentLoopConfig::use_stream_pump`]
-/// directly so flipping the flag at runtime (e.g. by test fixtures
-/// that disable the pump for parity checks) takes effect on the
-/// very next sample.
-pub(crate) fn select_transport(config: &super::AgentLoopConfig) -> &'static dyn ModelTransport {
-    if config.use_stream_pump {
-        &PumpTransport
-    } else {
-        &BufferedTransport
-    }
+/// Returns a `&'static dyn ModelTransport` so the sampling driver
+/// can call `sample` without per-turn allocation. Phase 7 collapsed
+/// the previous `select_transport(config)` toggle into this
+/// no-argument helper after `use_stream_pump` and the buffered
+/// transport were removed.
+pub(crate) fn active_transport() -> &'static dyn ModelTransport {
+    &PumpTransport
 }

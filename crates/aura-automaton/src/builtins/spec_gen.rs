@@ -15,8 +15,8 @@ use aura_tools::domain_tools::DomainApi;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
+use crate::metadata::Schedule;
 use crate::runtime::{Automaton, TickOutcome};
-use crate::schedule::Schedule;
 
 pub struct SpecGenAutomaton {
     domain: Arc<dyn DomainApi>,

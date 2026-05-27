@@ -18,8 +18,8 @@ use super::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
+use crate::metadata::Schedule;
 use crate::runtime::{Automaton, TickOutcome};
-use crate::schedule::Schedule;
 
 pub struct ChatAutomaton {
     domain: Arc<dyn DomainApi>,

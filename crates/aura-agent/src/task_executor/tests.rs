@@ -315,15 +315,8 @@ async fn task_done_rejects_when_build_command_fails() {
 // ------------------------------------------------------------------
 
 #[tokio::test]
-async fn merge_into_result_populates_all_fields() {
+async fn merge_into_result_populates_notes_and_follow_ups() {
     let executor = make_executor();
-    {
-        let mut ops = executor.tracked_file_ops.lock().await;
-        ops.push(FileOp::Create {
-            path: "new.rs".to_string(),
-            content: "code".to_string(),
-        });
-    }
     {
         let mut n = executor.notes.lock().await;
         *n = "executor notes".to_string();
@@ -339,11 +332,9 @@ async fn merge_into_result_populates_all_fields() {
     let mut result = TaskExecutionResult::default();
     executor.merge_into_result(&mut result).await;
 
-    assert_eq!(result.file_ops.len(), 1);
     assert_eq!(result.notes, "executor notes");
     assert_eq!(result.follow_up_tasks.len(), 1);
     assert_eq!(result.follow_up_tasks[0].title, "next step");
-    assert!(!result.no_changes_needed);
 }
 
 #[tokio::test]
@@ -356,17 +347,6 @@ async fn merge_preserves_loop_notes_when_executor_notes_empty() {
     executor.merge_into_result(&mut result).await;
 
     assert_eq!(result.notes, "loop generated notes");
-}
-
-#[tokio::test]
-async fn merge_sets_no_changes_needed_flag() {
-    let executor = make_executor();
-    *executor.no_changes_needed.lock().await = true;
-
-    let mut result = TaskExecutionResult::default();
-    executor.merge_into_result(&mut result).await;
-
-    assert!(result.no_changes_needed);
 }
 
 // ------------------------------------------------------------------
@@ -944,16 +924,19 @@ async fn write_file_then_task_done_succeeds_without_submit_plan() {
 
     // The executor must have NEVER seen a submit_plan tool call. The
     // only way `task_done` can have succeeded is if the write-gate is
-    // gone, which is the headline Phase 1 contract.
+    // gone, which is the headline Phase 1 contract. The tracked
+    // file-op count is checked against the executor's internal
+    // mutex directly because Phase 7 dropped the cross-layer mirror
+    // on `TaskExecutionResult`.
     let mut result = TaskExecutionResult::default();
     executor.merge_into_result(&mut result).await;
     assert_eq!(
-        result.file_ops.len(),
+        executor.tracked_file_ops.lock().await.len(),
         1,
-        "merge_into_result must propagate the tracked write",
+        "executor must have tracked the write-gate-less write",
     );
     assert!(
-        !result.no_changes_needed,
+        !*executor.no_changes_needed.lock().await,
         "no_changes_needed must stay false on the write path",
     );
 }

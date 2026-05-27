@@ -30,8 +30,8 @@ use super::common::{
 use crate::context::TickContext;
 use crate::error::AutomatonError;
 use crate::events::AutomatonEvent;
+use crate::metadata::Schedule;
 use crate::runtime::{Automaton, TickOutcome};
-use crate::schedule::Schedule;
 
 pub struct TaskRunAutomaton {
     domain: Arc<dyn DomainApi>,

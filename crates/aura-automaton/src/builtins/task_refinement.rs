@@ -14,9 +14,11 @@
 //! 1. If the incoming `task.description` already starts with
 //!    [`REFINED_MARKER`] we return immediately with `task.clone()` —
 //!    no provider call, no `update_task`, no events. This is the
-//!    idempotency guard that combines with the dev-loop
-//!    `build_retry_note.is_none()` gate to ensure refinement runs at
-//!    most once per task.
+//!    single authoritative idempotency guard — Phase 7 dropped the
+//!    redundant dev-loop `build_retry_note.is_none()` outer gate
+//!    because the marker is already persisted on the description
+//!    after pass one, so the build-retry second pass and any
+//!    ambient re-claim both short-circuit here uniformly.
 //! 2. We emit [`AutomatonEvent::TaskDescriptionRefining`] on a
 //!    best-effort basis (`event_tx` may be `None`, send failures are
 //!    swallowed; observability is nice-to-have, never blocking).
@@ -80,10 +82,11 @@ pub(crate) async fn refine_task_description(
     event_tx: Option<&mpsc::Sender<AutomatonEvent>>,
 ) -> Result<TaskDescriptor, AutomatonError> {
     // Idempotency: a previous run already persisted a refined body.
-    // Skip silently — no provider call, no events. The dev-loop
-    // `build_retry_note.is_none()` gate handles the same skip for
-    // the build-retry second pass; this guard covers the case where
-    // the task is re-claimed after a process restart.
+    // Skip silently — no provider call, no events. This is the
+    // single authoritative gate now that Phase 7 removed the
+    // dev-loop `build_retry_note.is_none()` outer check; it covers
+    // both the build-retry second pass and ambient re-claims after
+    // a process restart.
     if task.description.trim_start().starts_with(REFINED_MARKER) {
         debug!(
             task_id = %task.id,
@@ -815,5 +818,60 @@ mod tests {
         assert!(body.contains("> Line one."));
         assert!(body.contains("> Line two."));
         assert!(body.contains("> Line three."));
+    }
+
+    /// Phase 7 contract: after Phase 7 dropped the dev-loop
+    /// `build_retry_note.is_none()` outer gate, the
+    /// [`REFINED_MARKER`] short-circuit is the single authoritative
+    /// idempotency check. This regression test simulates the
+    /// build-retry second pass directly — call once, take the
+    /// persisted refined description, call again with that body —
+    /// and asserts the provider is invoked exactly once.
+    ///
+    /// If a future patch reintroduces the redundant outer gate or
+    /// removes the marker, this test will fail loudly because the
+    /// second call will issue a second provider request.
+    #[tokio::test]
+    async fn refinement_runs_at_most_once_per_task_across_retries() {
+        let domain = RecordingDomain::default();
+        let provider = CountingProvider::with_text("Refined: rotate every 15m.");
+        let spec = sample_spec();
+        let first = sample_task("Rotate tokens.");
+
+        let after_first =
+            refine_task_description(&domain, &provider, "test-model", &spec, &first, None)
+                .await
+                .expect("first refinement must succeed");
+
+        assert_eq!(provider.calls(), 1, "first pass must call the provider");
+        assert!(
+            after_first.description.starts_with(REFINED_MARKER),
+            "first pass must persist the marker"
+        );
+
+        // Second pass emulates a build-retry: re-enter
+        // `refine_task_description` with the now-marker-prefixed
+        // description (this is what the dev-loop would do when
+        // re-claiming the same task with a build_retry_note).
+        let after_second =
+            refine_task_description(&domain, &provider, "test-model", &spec, &after_first, None)
+                .await
+                .expect("second refinement must succeed via short-circuit");
+
+        assert_eq!(
+            provider.calls(),
+            1,
+            "second pass must NOT call the provider — the marker is the only gate, \
+             so re-entry on a refined body short-circuits silently"
+        );
+        assert_eq!(
+            after_second.description, after_first.description,
+            "marker short-circuit must return the input description unchanged"
+        );
+        assert_eq!(
+            domain.updates().len(),
+            1,
+            "update_task must have been called only on the first pass"
+        );
     }
 }

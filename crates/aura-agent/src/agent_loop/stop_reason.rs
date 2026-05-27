@@ -155,11 +155,15 @@ impl AgentLoop {
         .map_err(crate::AgentError::from)
     }
 
-    /// Two-tier compaction retry path consulted from
-    /// [`super::sampling::run_sampling_request`] when a single sampling
-    /// call surfaces `PromptTooLong`. The tiers are aggressive →
-    /// micro; if both miss, the original error propagates.
+    /// Two-tier compaction retry path. Pre-Phase-7 this was the
+    /// `BufferedTransport`'s `PromptTooLong` recovery ladder; with
+    /// the buffered transport gone the pump-only sampling path
+    /// surfaces `PromptTooLong` as a fatal error and the loop
+    /// breaks. The helper is retained as a typed seam so a future
+    /// pump-level overflow-recovery path can re-enter it without
+    /// re-implementing the aggressive → micro tier choice.
     #[allow(clippy::too_many_arguments)] // Phase 8 will collapse retry inputs behind a `RetryCtx` struct.
+    #[allow(dead_code)]
     pub(super) async fn retry_after_context_overflow(
         &self,
         provider: &dyn ModelProvider,

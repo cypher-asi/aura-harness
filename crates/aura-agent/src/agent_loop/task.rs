@@ -18,10 +18,10 @@
 //! The `input_queue` is always present today (session-scoped, allocated
 //! by [`crate::session::Session`]); the `has_pending()` probe at the
 //! end of every turn decides whether to spin another turn or return
-//! to the caller. The pre-codex-parity continuation runtime that
-//! lived in `session::goal_runtime` is gone — there is no
-//! `GoalRuntime::continuation` accumulator; the only persistent
-//! cross-turn state is the conversation history on [`super::LoopState`].
+//! to the caller. The pre-codex-parity continuation runtime is gone
+//! (Phase 7 deleted the placeholder `GoalRuntime`); the only
+//! persistent cross-turn state is the conversation history on
+//! [`super::LoopState`].
 //!
 //! The task shell owns two safety nets per Rule 4.3:
 //!
@@ -49,7 +49,6 @@ use uuid::Uuid;
 
 use crate::console;
 use crate::events::AgentLoopEvent;
-use crate::session::goal_runtime::GoalRuntimeEvent;
 use crate::session::input_queue::InputQueue;
 use crate::session::Session;
 use crate::types::{AgentLoopResult, AgentToolExecutor};
@@ -164,19 +163,6 @@ pub(crate) async fn run_task(
         "Starting agent task"
     );
 
-    // Layer E.4: notify the goal runtime that a new goal has started
-    // so subsequent `TurnCompleted` events can be attributed to this
-    // task. The streak is session-scoped, so this does NOT reset
-    // `ContinuationState::consecutive_no_write` (codex parity).
-    let objective = first_user_text(&state.messages).unwrap_or_default();
-    if let Err(err) = session
-        .goal_runtime
-        .handle_event(GoalRuntimeEvent::GoalStarted { task_id, objective })
-        .await
-    {
-        tracing::warn!(error = %err, "goal_runtime::GoalStarted failed; continuing");
-    }
-
     let event_tx_ref = event_tx.as_ref();
     let cancellation_ref = cancellation_token.as_ref();
     let input_queue_arc: Arc<InputQueue> = Arc::clone(&session.input_queue);
@@ -242,10 +228,9 @@ pub(crate) async fn run_task(
         // entries. The queue is session-scoped (always present), so
         // the gate is a single `has_pending()` probe — codex parity
         // with `tasks::regular::run`. The pre-codex-parity
-        // continuation accumulator on `GoalRuntime` is gone: the
-        // only cross-turn state is the conversation history on
-        // [`super::LoopState`], so no streak counter needs to be
-        // inherited here.
+        // continuation accumulator is gone: the only cross-turn
+        // state is the conversation history on [`super::LoopState`],
+        // so no streak counter needs to be inherited here.
         if input_queue_ref.has_pending() {
             continue;
         }
@@ -259,20 +244,4 @@ pub(crate) async fn run_task(
     }
 
     Ok(state.result)
-}
-
-/// Pull the first user-role text content from `messages` for the
-/// `GoalStarted` objective field. Returns the empty string when the
-/// first user message is missing or carries non-text blocks only.
-fn first_user_text(messages: &[Message]) -> Option<String> {
-    for msg in messages {
-        if matches!(msg.role, aura_reasoner::Role::User) {
-            for block in &msg.content {
-                if let aura_reasoner::ContentBlock::Text { text } = block {
-                    return Some(text.clone());
-                }
-            }
-        }
-    }
-    None
 }

@@ -2,9 +2,9 @@
 //! group the dev-loop relies on.
 //!
 //! Reports commit and push outcomes independently so a push-only
-//! failure does not mask a successful commit. The orchestrator uses
-//! this to emit `GitCommitted` alongside `GitPushFailed` when the
-//! commit landed locally but the push timed out.
+//! failure does not mask a successful commit. Callers see the split
+//! outcome and can decide whether the commit-landed-but-push-failed
+//! state warrants a follow-up.
 
 use std::time::Duration;
 

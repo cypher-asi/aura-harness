@@ -1,23 +1,23 @@
-//! Session-scoped subsystems (Layer E.2 + E.4).
+//! Session-scoped subsystems (Layer E.2).
 //!
 //! A *session* is the long-lived container around one or more `Task`s
 //! that an `AgentRunner` drives. E.2 introduced the first session-
 //! scoped subsystem — the [`InputQueue`] — which lets the user steer
-//! the agent mid-task without aborting the conversation. E.4 adds the
-//! [`GoalRuntime`](goal_runtime::GoalRuntime) (out-of-loop
-//! continuation driver, codex parity) and pulls both subsystems
-//! behind a single [`Session`] handle that the agent loop borrows for
-//! the lifetime of one or more tasks.
+//! the agent mid-task without aborting the conversation. Phase 7
+//! deleted the placeholder `GoalRuntime` out-of-loop continuation
+//! driver (E.4) after the May 2026 codex-parity sweep left
+//! `handle_event` as a no-op with no consumer; the loop now trusts
+//! the model's `EndTurn` stop reason and the session-scoped
+//! [`InputQueue::has_pending`] probe as the only termination signals.
 //!
 //! ## Invariants enforced here
 //!
 //! - [`SessionId`] is a [`Uuid`] newtype (Rule 5.1) so error contexts
 //!   never accept a raw string / `Uuid` by accident.
 //! - All public types in this module carry `///` docs (Rule 3.3).
-//! - The [`InputQueue`] and [`GoalRuntime`](goal_runtime::GoalRuntime)
-//!   are `pub(crate)`: external callers reach them only via
-//!   [`AgentRunnerHandle`] (Rule 3.1). The [`Session`] type itself is
-//!   also `pub(crate)` — callers build one via
+//! - The [`InputQueue`] is `pub(crate)`: external callers reach it
+//!   only via [`AgentRunnerHandle`] (Rule 3.1). The [`Session`] type
+//!   itself is also `pub(crate)` — callers build one via
 //!   [`Session::new`] and pass it through
 //!   [`crate::AgentLoop::run_with_session`].
 //!
@@ -32,13 +32,7 @@
 //! - [`UserInput::Cancel`] is the in-band cancellation signal: pushing
 //!   one also fires the wrapped [`CancellationToken`] so the active
 //!   turn unwinds via the same path as an external Ctrl-C (Rule 6.3).
-//! - The [`GoalRuntime`](goal_runtime::GoalRuntime) propagates
-//!   [`AgentError`](crate::AgentError) through `?` — never panics on
-//!   `max_continuation_turns` overflow; instead returns a typed
-//!   `TaskRestart::Blocked` so the caller can mark the task
-//!   `stalled` / `task_blocked`.
 
-pub(crate) mod goal_runtime;
 pub(crate) mod input_queue;
 
 use std::sync::Arc;
@@ -48,7 +42,6 @@ use uuid::Uuid;
 
 pub use input_queue::{AgentRunnerHandle, UserInput};
 
-pub(crate) use goal_runtime::GoalRuntime;
 pub(crate) use input_queue::InputQueue;
 
 /// Newtype around [`Uuid`] identifying one in-flight agent session.
@@ -56,9 +49,7 @@ pub(crate) use input_queue::InputQueue;
 /// Generated per session (typically one per chat / per task-runner
 /// instantiation) and threaded through the [`InputQueue`] so any
 /// error originating from queue operations can attribute itself to
-/// the session that produced it (Rule 4.3, Rule 5.1). E.4 also
-/// threads it through every [`GoalRuntime`] decision so the
-/// `task_blocked` escalation carries a session attribution.
+/// the session that produced it (Rule 4.3, Rule 5.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionId(pub Uuid);
 
@@ -82,8 +73,8 @@ impl std::fmt::Display for SessionId {
     }
 }
 
-/// One agent session: owns the [`InputQueue`] and the
-/// [`GoalRuntime`] for the lifetime of one or more tasks.
+/// One agent session: owns the [`InputQueue`] for the lifetime of
+/// one or more tasks.
 ///
 /// `Session` itself is `pub(crate)` (Rule 3.1): external callers
 /// build it via [`Session::new`] from outside the crate by way of the
@@ -98,10 +89,6 @@ pub(crate) struct Session {
     /// Mid-task user steering buffer. Shared with
     /// [`AgentRunnerHandle`] clones.
     pub(crate) input_queue: Arc<InputQueue>,
-    /// Out-of-loop continuation driver (E.4). Shared with the agent
-    /// loop via [`Arc`] so the turn stop hook can call
-    /// [`GoalRuntime::handle_event`] without taking ownership.
-    pub(crate) goal_runtime: Arc<GoalRuntime>,
     /// Cancellation token shared with the [`InputQueue`] and the
     /// agent loop. Cloned on construction so the caller's original
     /// token stays usable.
@@ -117,11 +104,9 @@ impl Session {
     /// so this no longer takes a `max_continuation_turns` parameter.
     pub(crate) fn new(id: SessionId, cancellation: CancellationToken) -> Self {
         let input_queue = InputQueue::new(id, cancellation.clone());
-        let goal_runtime = Arc::new(GoalRuntime::new(id));
         Self {
             id,
             input_queue,
-            goal_runtime,
             cancellation,
         }
     }
@@ -139,11 +124,9 @@ impl Session {
     pub(crate) fn from_handle(handle: &AgentRunnerHandle, cancellation: CancellationToken) -> Self {
         let input_queue = handle.queue();
         let id = input_queue.session_id();
-        let goal_runtime = Arc::new(GoalRuntime::new(id));
         Self {
             id,
             input_queue,
-            goal_runtime,
             cancellation,
         }
     }

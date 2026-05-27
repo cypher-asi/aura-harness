@@ -16,7 +16,6 @@ use aura_reasoner::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
-use crate::file_ops::FileOp;
 use crate::planning::{TaskPhase, TaskPlan};
 use aura_prompts::bootstrap::build_agentic_task_context;
 use aura_prompts::{
@@ -38,22 +37,25 @@ use crate::verify::{
 // ---------------------------------------------------------------------------
 
 /// Result of executing an agentic task.
+///
+/// Phase 7 dropped the `no_changes_needed`, `file_ops`, and
+/// `reached_implementing` fields: the automaton finalizer
+/// (`builtins::common::finalize::finalize_task_outcome`) only
+/// consumes `notes` + `input_tokens` + `output_tokens` on the
+/// success path, and the corresponding `CommitSkipped` /
+/// `FileOpsApplied` events that would have consumed the dropped
+/// fields had no emitters or external consumers in this workspace.
+/// The internal `TaskToolExecutor.tracked_file_ops` /
+/// `no_changes_needed` / `task_phase` state still drives the
+/// `task_done` rejection semantics inside the loop — that surface
+/// is independent of this struct.
 #[derive(Debug, Clone, Default)]
 pub struct TaskExecutionResult {
     pub notes: String,
-    pub file_ops: Vec<FileOp>,
     pub follow_up_tasks: Vec<FollowUpSuggestion>,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub files_already_applied: bool,
-    /// When true, the agent explicitly declared that no file changes were
-    /// required for this task. Automatons use this to distinguish legitimate
-    /// no-op completions from false-positive successes.
-    pub no_changes_needed: bool,
-    /// When true, the agent progressed past the exploration phase and
-    /// submitted a plan. Automatons use this to distinguish "never tried"
-    /// from "tried but was interrupted" when `file_ops` is empty.
-    pub reached_implementing: bool,
     /// Final message history from the agent loop. Downstream validators use
     /// this to build recovery hints (e.g. which file paths the agent tried
     /// to write before truncation).
@@ -802,13 +804,10 @@ fn finalize_loop_result(result: AgentLoopResult) -> TaskExecutionResult {
     };
     TaskExecutionResult {
         notes,
-        file_ops: Vec::new(),
         follow_up_tasks: Vec::new(),
         input_tokens: total_input_tokens,
         output_tokens: total_output_tokens,
         files_already_applied: true,
-        no_changes_needed: false,
-        reached_implementing: false,
         messages,
     }
 }

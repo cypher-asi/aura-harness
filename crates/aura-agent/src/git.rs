@@ -25,9 +25,9 @@ use tracing::debug;
 const GIT_READ_TIMEOUT: Duration = Duration::from_secs(aura_config::GIT_READ_TIMEOUT_SECS);
 
 /// Lightweight record of a single commit surfaced by
-/// [`list_unpushed_commits`]. Kept stable so aura-os / dev-loop events
-/// that emit `GitPushed { commits }` do not churn when the push helper
-/// is moved to `aura-tools`.
+/// [`list_unpushed_commits`]. Kept stable so external consumers
+/// (aura-os run-log forwarder) that key off the commits payload do
+/// not churn when the push helper is moved to `aura-tools`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub sha: String,

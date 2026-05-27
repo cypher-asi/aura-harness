@@ -211,33 +211,6 @@ pub struct AgentLoopConfig {
     /// the existing reasoner-side `stream_timeout` so long shell /
     /// build commands keep working while a runaway tool is bounded.
     pub per_tool_timeout: Duration,
-    /// Layer E.4: switch for the streaming sampling pump
-    /// (`agent_loop::stream_pump`). When `true` (default), sampling
-    /// drives `provider.complete_response_stream(…)` and overlaps
-    /// tool execution at `OutputItemDone` boundaries via
-    /// [`futures_util::stream::FuturesOrdered`]. When `false`,
-    /// sampling uses the legacy buffered `call_model` +
-    /// `dispatch_stop_reason` path.
-    ///
-    /// # Default flipped to `true` in E.4
-    ///
-    /// E.3 shipped the pump opt-in because three parity gaps
-    /// blocked promotion to the production path: per-delta event
-    /// emission (`TextDelta` / `ThinkingDelta` / `ToolInputSnapshot`),
-    /// tool-result caching (`split_cached` / `update_cache`), and
-    /// pump-triggered auto-build (`run_auto_build`). E.4 wired all
-    /// three through the pump (per-`OutputItemDone` block deltas via
-    /// the `event_tx` channel, cache consulted at submission time,
-    /// auto-build fired in `handle_streamed_tool_use`) so this
-    /// flag now defaults to `true`.
-    ///
-    /// # Remaining caveats
-    ///
-    /// Sub-block per-token deltas remain on the buffered path — the
-    /// pump emits one delta per finished block, which is sufficient
-    /// for chat UX continuity but coarser than the per-token feel of
-    /// the buffered path.
-    pub use_stream_pump: bool,
     /// Per-task config for the early test-gate oracle (Phase 3a of
     /// the reread-efficiency plan, wired in Phase 5 of the core-loop
     /// architecture refactor).
@@ -321,13 +294,6 @@ impl AgentLoopConfig {
             max_iterations_per_task: aura_core::MAX_TURNS,
             stream_event_timeout: Duration::from_secs(90),
             per_tool_timeout: Duration::from_secs(300),
-            // E.4 flipped this to `true`. The pump now emits per-
-            // `OutputItemDone` block deltas, consults the per-run
-            // tool cache, and fires auto-build on writes — closing
-            // the parity gaps that kept the pump opt-in in E.3.
-            // Operators that need to fall back to the legacy buffered
-            // path can flip this back to `false` per call site.
-            use_stream_pump: true,
             // Off by default — chat / generic callers do not declare
             // a project test command. The dev-loop / TaskRun path
             // populates `Some(EarlyTestOracleConfig { enabled: true,

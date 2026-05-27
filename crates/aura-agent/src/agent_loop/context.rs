@@ -239,6 +239,14 @@ pub(super) fn apply_summary_output(
 
 /// Apply a specific compaction tier after a provider rejects the request for
 /// being too large. Returns `true` when the prompt was actually reduced.
+///
+/// Phase 7 dropped the only production caller
+/// ([`super::AgentLoop::retry_after_context_overflow`], itself a
+/// `BufferedTransport`-only ladder). The helper is retained so a
+/// future caller — most likely an inline overflow-recovery path
+/// added to the pump driver — can reuse the tier mechanics without
+/// re-deriving the chars/tokens accounting.
+#[allow(dead_code)]
 pub(super) fn compact_for_overflow(
     config: &AgentLoopConfig,
     state: &mut LoopState,

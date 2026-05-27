@@ -134,16 +134,6 @@ pub enum AutomatonEvent {
     TaskDescriptionRefined {
         task_id: String,
     },
-    /// Emitted when a task completed but the per-task aggregate shows
-    /// no file changes and no build/test/fmt/lint verification
-    /// evidence. In that case the dev-loop / task-run builtins skip
-    /// dispatching `git_commit` / `git_commit_push` to avoid creating
-    /// orphan commits that the server-side DoD gate would later have
-    /// to roll back.
-    CommitSkipped {
-        task_id: String,
-        reason: String,
-    },
     /// Mid-stream `tool_use` request was interrupted and the agent is
     /// retrying with exponential backoff. 1:1 projection of
     /// [`aura_agent::AgentLoopEvent::ToolCallRetrying`]; the
@@ -181,58 +171,6 @@ pub enum AutomatonEvent {
     },
     SpecsSummary {
         summary: String,
-    },
-
-    // Build / test
-    BuildVerificationStarted,
-    BuildVerificationPassed,
-    BuildVerificationFailed {
-        error_count: u32,
-    },
-    TestVerificationStarted,
-    TestVerificationPassed,
-    TestVerificationFailed {
-        failure_count: u32,
-    },
-    BuildFixAttempt {
-        attempt: u32,
-        max_attempts: u32,
-    },
-    TestFixAttempt {
-        attempt: u32,
-        max_attempts: u32,
-    },
-
-    // File ops
-    FileOpsApplied {
-        files_written: u32,
-        files_deleted: u32,
-    },
-
-    // Git
-    GitCommitted {
-        task_id: String,
-        commit_sha: String,
-    },
-    GitCommitFailed {
-        task_id: String,
-        reason: String,
-    },
-    GitPushed {
-        task_id: String,
-        repo: String,
-        branch: String,
-        commits: Vec<serde_json::Value>,
-    },
-    GitPushFailed {
-        task_id: String,
-        reason: String,
-    },
-
-    // Session
-    SessionRolledOver {
-        old_session_id: String,
-        new_session_id: String,
     },
 
     // Token usage
@@ -353,27 +291,12 @@ impl AutomatonEvent {
             Self::TaskFailed { .. } => "task_failed",
             Self::TaskDescriptionRefining { .. } => "task_description_refining",
             Self::TaskDescriptionRefined { .. } => "task_description_refined",
-            Self::CommitSkipped { .. } => "commit_skipped",
             Self::ToolCallRetrying { .. } => "tool_call_retrying",
             Self::ToolCallFailed { .. } => "tool_call_failed",
             Self::LoopFinished { .. } => "loop_finished",
             Self::SpecSaved { .. } => "spec_saved",
             Self::SpecsTitle { .. } => "specs_title",
             Self::SpecsSummary { .. } => "specs_summary",
-            Self::BuildVerificationStarted => "build_verification_started",
-            Self::BuildVerificationPassed => "build_verification_passed",
-            Self::BuildVerificationFailed { .. } => "build_verification_failed",
-            Self::TestVerificationStarted => "test_verification_started",
-            Self::TestVerificationPassed => "test_verification_passed",
-            Self::TestVerificationFailed { .. } => "test_verification_failed",
-            Self::BuildFixAttempt { .. } => "build_fix_attempt",
-            Self::TestFixAttempt { .. } => "test_fix_attempt",
-            Self::FileOpsApplied { .. } => "file_ops_applied",
-            Self::GitCommitted { .. } => "git_committed",
-            Self::GitCommitFailed { .. } => "git_commit_failed",
-            Self::GitPushed { .. } => "git_pushed",
-            Self::GitPushFailed { .. } => "git_push_failed",
-            Self::SessionRolledOver { .. } => "session_rolled_over",
             Self::TokenUsage { .. } => "token_usage",
             Self::MessageSaved { .. } => "message_saved",
             Self::AgentInstanceUpdated { .. } => "agent_instance_updated",
@@ -410,7 +333,6 @@ impl AutomatonEvent {
                 | Self::TaskStarted { .. }
                 | Self::TaskCompleted { .. }
                 | Self::TaskFailed { .. }
-                | Self::CommitSkipped { .. }
                 | Self::LoopFinished { .. }
                 | Self::TokenUsage { .. }
                 | Self::Done

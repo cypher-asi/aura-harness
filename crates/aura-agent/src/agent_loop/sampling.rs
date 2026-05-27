@@ -1,16 +1,18 @@
-//! Single sampling request driver (Phase 4 unified).
+//! Single sampling request driver (Phase 4 unified, Phase 7 pruned).
 //!
 //! A *sampling request* is one round-trip with the model provider:
 //! one pre-call compaction pass, one
-//! [`super::transport::ModelTransport::sample`] call (buffered or
-//! pump, chosen by [`super::transport::select_transport`]), one
-//! response-accumulation pass, one `iteration_complete` event, and
-//! one unified [`super::tool_pipeline::dispatch`] step that may
+//! [`super::transport::ModelTransport::sample`] call (the pump
+//! transport returned by [`super::transport::active_transport`]),
+//! one response-accumulation pass, one `iteration_complete` event,
+//! and one unified [`super::tool_pipeline::dispatch`] step that may
 //! execute (or pass through) one batch of tool calls.
 //!
 //! Phase 4 collapsed the previously-duplicated
 //! `run_sampling_request` / `run_sampling_request_streaming` pair
-//! behind a single function. Both transports run the same tail:
+//! behind a single function. Phase 7 then deleted the legacy
+//! buffered transport (parity proven, no caller flipped off the
+//! pump) so the single tail now runs:
 //! cancellation check → `accumulate_response` →
 //! `emit_iteration_complete` → `tool_pipeline::dispatch`.
 //!
@@ -142,12 +144,12 @@ pub(crate) async fn run_sampling_request(
         }
     };
 
-    // Phase 4: pick the active transport once per sample and route
-    // the model call through `ModelTransport::sample`. Both impls
-    // produce a [`TransportOutcome`] that flattens to a
+    // Phase 4 + 7: route the model call through the pump transport
+    // returned by `active_transport`. The transport produces a
+    // [`TransportOutcome`] that flattens to a
     // `(ModelResponse, ToolBatch)` pair so the post-sample tail
-    // runs identically.
-    let transport_impl = transport::select_transport(&agent.config);
+    // stays uniform.
+    let transport_impl = transport::active_transport();
     let sampling_ctx = SamplingCtx {
         agent,
         provider,
@@ -172,10 +174,6 @@ pub(crate) async fn run_sampling_request(
     };
 
     let (response, batch) = match outcome {
-        TransportOutcome::Buffered(response) => {
-            let calls = tool_pipeline::tool_calls(&response);
-            (response, ToolBatch::Live(calls))
-        }
         TransportOutcome::Streamed {
             response,
             pre_executed,
