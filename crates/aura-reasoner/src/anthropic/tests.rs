@@ -908,6 +908,47 @@ fn test_resolve_output_config_only_for_claude_4_thinking_models() {
     assert!(sonnet_37_output.is_none());
 }
 
+/// Regression for Anthropic's May 2026 removal of `thinking.type.enabled`
+/// on the Claude 4 family. Dev-loop runs used to escalate the adaptive
+/// thinking mode for opus-4 / sonnet-4 to coax visible thinking blocks,
+/// which now 400s with
+/// `"thinking.type.enabled" is not supported for this model.
+///  Use "thinking.type.adaptive" and "output_config.effort" to control
+///  thinking behavior.` Every dev-loop ModelRequestKind on an adaptive
+/// model must therefore stay on `adaptive` (no `budget_tokens`) and lean
+/// on `output_config.effort: "high"` instead.
+#[test]
+fn dev_loop_kinds_on_adaptive_model_stay_adaptive_with_effort_high() {
+    for kind in [
+        ModelRequestKind::DevLoopBootstrap,
+        ModelRequestKind::DevLoopContinuation,
+        ModelRequestKind::ProjectToolTaskExtract,
+        ModelRequestKind::ProjectToolSpecGen,
+    ] {
+        let request = ModelRequest::builder(TEST_DEFAULT_MODEL, "system")
+            .max_tokens(8192)
+            .request_kind(kind)
+            .try_build()
+            .unwrap();
+        let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL)
+            .unwrap_or_else(|| panic!("{kind:?} should still emit a thinking config"));
+        assert_eq!(
+            thinking.thinking_type, "adaptive",
+            "{kind:?} must NOT escalate to thinking.type=enabled on opus-4/sonnet-4; Anthropic rejects that combination"
+        );
+        assert_eq!(
+            thinking.budget_tokens, None,
+            "{kind:?}: adaptive mode rejects budget_tokens",
+        );
+        let output = resolve_output_config(&request, TEST_DEFAULT_MODEL)
+            .unwrap_or_else(|| panic!("{kind:?} should pair adaptive with output_config.effort"));
+        assert_eq!(
+            output.effort, "high",
+            "{kind:?} must keep effort=high so adaptive still produces visible thinking",
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_proxy_mode_sends_caching_beta_header() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

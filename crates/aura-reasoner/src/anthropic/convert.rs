@@ -37,6 +37,17 @@ fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
 }
 
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
+    // Historical note: dev-loop requests used to escalate
+    // [`ThinkingMode::Adaptive`] to [`ThinkingMode::Enabled`] to coax
+    // visible `ThinkingDelta` frames out of opus-4 / sonnet-4, gated by
+    // the `AURA_DEV_LOOP_ENABLED_THINKING` kill switch. Anthropic
+    // removed `enabled` mode for the Claude 4 family in May 2026 —
+    // requests now 400 with `"thinking.type.enabled" is not supported
+    // for this model. Use "thinking.type.adaptive" and
+    // "output_config.effort" to control thinking behavior.` Adaptive
+    // plus `output_config.effort: "high"` (set by
+    // `resolve_output_config` below) is the replacement, so the
+    // escalation and its kill switch were dropped.
     let thinking_mode = thinking_mode_for_model(model)?;
 
     // Phase 2: explicit reasoning-effort knob takes precedence over the
