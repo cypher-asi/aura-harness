@@ -49,9 +49,7 @@ Core ideas:
 
 `aura-harness` is a self-contained Cargo workspace; every crate it depends on (including the WebSocket `aura-protocol` types) lives under [`crates/`](crates). There is no sibling-repo checkout step.
 
-RocksDB builds require LLVM/Clang; see [`docs/PROGRESS.md`](docs/PROGRESS.md) for platform notes.
-
-On Linux, the `keyring` crate's Secret Service backend links against `libdbus-1`, so the workspace also needs `libdbus-1-dev` and `pkg-config` at build time (e.g. `sudo apt install libdbus-1-dev pkg-config` on Debian/Ubuntu, `sudo dnf install dbus-devel pkgconf-pkg-config` on Fedora). macOS and Windows builds need no extra system packages for keyring.
+RocksDB builds require LLVM/Clang. On Linux, the `keyring` crate's Secret Service backend links against `libdbus-1`, so the workspace also needs `libdbus-1-dev` and `pkg-config` at build time (e.g. `sudo apt install libdbus-1-dev pkg-config` on Debian/Ubuntu, `sudo dnf install dbus-devel pkgconf-pkg-config` on Fedora). macOS and Windows builds need no extra system packages for keyring.
 
 ## Quick Start
 
@@ -88,7 +86,7 @@ This workspace ships two binaries:
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
 | `aura` | [`src/main.rs`](src/main.rs) | **Canonical CLI entry point.** TUI by default; headless node with `run --ui none`; also hosts `login` / `logout` / `whoami` / `hello`. |
-| `aura-node` | [`crates/aura-runtime/src/main.rs`](crates/aura-runtime/src/main.rs) | Standalone headless server (HTTP + WebSocket API). Binary name `aura-node` shipped from the `aura-runtime` crate (renamed in Phase 0.5). |
+| `aura-node` | [`crates/aura-runtime/src/main.rs`](crates/aura-runtime/src/main.rs) | Standalone headless server (HTTP + WebSocket API). Binary name `aura-node` shipped from the `aura-runtime` crate (the HTTP/WS gateway + composition root). Orchestration lives in [`crates/aura-engine/`](crates/aura-engine), HTTP `DomainApi` in [`crates/aura-domain-http/`](crates/aura-domain-http), and the concrete subagent dispatcher in [`crates/aura-fleet-subagent/`](crates/aura-fleet-subagent). |
 
 > **Historical:** earlier design drafts and the v0.1.0 specs referred
 > to a separate `aura-cli` crate. That crate was retired in Wave 4 of
@@ -150,8 +148,8 @@ plugin  <  exec  <  agent   <  fleet  <  surface
 | plugin   | Plugin manifest schema, in-process API, hooks, MCP, connectors.                  | `aura-plugin-api`, `aura-plugin-core`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`. |
 | exec     | Tool catalog, runner, sandbox, policy, isolation, conflict locks.                | `aura-exec-conflict`, `aura-exec-isolation`, `aura-exec-policy`, `aura-exec-sandbox`, `aura-exec-tools`, `aura-exec-runner`, `aura-tools`. |
 | agent    | Deterministic kernel + AgentLoop + steering + subagent derivation.               | `aura-agent-kernel`, `aura-agent-loop`, `aura-agent-steering`, `aura-agent-subagent`, `aura-agent`, `aura-kernel`. |
-| fleet    | Multi-agent registry, spawn, dispatch, quota, mailbox, daemon.                   | `aura-fleet-registry`, `aura-fleet-spawn`, `aura-fleet-dispatch`, `aura-fleet-quota`, `aura-fleet-mailbox`, `aura-fleet-daemon`. |
-| surface  | Composition roots: CLI, TUI, SDK, automaton, auth, HTTP/WS runtime.              | `aura-surface-cli`, `aura-surface-sdk`, `aura-surface-terminal`, `aura-surface-automaton`, `aura-surface-auth`, `aura-runtime`, `aura-terminal`, `aura-automaton`, `aura-auth`. |
+| fleet    | Multi-agent registry, spawn, dispatch, quota, mailbox, daemon, subagent dispatcher. | `aura-fleet-registry`, `aura-fleet-spawn`, `aura-fleet-dispatch`, `aura-fleet-quota`, `aura-fleet-mailbox`, `aura-fleet-daemon`, `aura-fleet-subagent`. |
+| surface  | Composition roots: CLI, TUI, SDK, automaton, auth, HTTP/WS gateway, orchestration engine, domain HTTP client. | `aura-surface-cli`, `aura-surface-sdk`, `aura-surface-terminal`, `aura-surface-automaton`, `aura-surface-auth`, `aura-runtime`, `aura-engine`, `aura-domain-http`, `aura-terminal`, `aura-automaton`, `aura-auth`. |
 
 Full per-crate reference (purpose, key types, modules) lives in [`docs/architecture.md`](docs/architecture.md). All members are declared in [`Cargo.toml`](Cargo.toml) under `[workspace].members`.
 
@@ -164,15 +162,12 @@ aura-harness/
   .env.example              # environment variable template
   index.html                # landing page
   src/                      # `aura` binary entry (CLI body lives in aura-surface-cli)
-  crates/                   # 55 crates organized into the 10 layers above
+  crates/                   # 58 crates organized into the 10 layers above
                             #   (see docs/architecture.md for the per-crate reference)
   tests/                    # workspace integration, e2e, proptest, pipeline tests
   docs/                     # supplementary documentation
     architecture.md         #   full layered crate reference + user flows
-    invariants.md           #   the 12 architectural invariants + enforcement map
-    PROGRESS.md             #   implementation status / build notes
-    specs/                  #   design specifications (v0.1.0, v0.1.1)
-    refactoring/            #   refactoring checklists
+    invariants.md           #   the architectural invariants + enforcement map
   docker/                   # docker build assets
   scripts/                  # check_invariants.sh + helpers
   .github/                  # CI workflows (ci.yml, security.yml, invariants.yml)
@@ -234,7 +229,7 @@ The kernel boundary cuts at the `agent` layer; everything below it is downward-o
 
 ## HTTP / WebSocket API
 
-All routes are defined in `crates/aura-runtime/src/router/build.rs` (`create_router`); the shared `RouterState` lives in `crates/aura-runtime/src/router/state.rs`. Names use Axum path-parameter syntax.
+All routes are defined in `crates/aura-runtime/src/gateway/middleware.rs` (`create_router`), grouped under `crates/aura-runtime/src/gateway/handlers/`; the shared `RouterState` lives in `crates/aura-runtime/src/gateway/state.rs`. Names use Axum path-parameter syntax.
 
 ### Health & workspace
 
@@ -254,15 +249,17 @@ All routes are defined in `crates/aura-runtime/src/router/build.rs` (`create_rou
 | GET  | `/agents/:agent_id/head` | Latest record sequence for an agent. |
 | GET  | `/agents/:agent_id/record` | Paginated record scan. |
 
-### Automaton
+### Runs (chat / dev-loop / task-run)
+
+A "run" is the canonical entry point — any chat session, dev-loop automaton, or single-task automaton is started by POSTing an [`aura_protocol::RuntimeRequest`](crates/aura-protocol/src/runtime_request.rs) to `/v1/run`. The response carries a `run_id` plus the WS path the client should open to receive events (and, on chat runs, to send user messages).
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/automaton/start` | Start an automaton. |
-| GET  | `/automaton/list` | List automatons. |
-| GET  | `/automaton/:automaton_id/status` | Status for one automaton. |
-| POST | `/automaton/:automaton_id/pause` | Pause an automaton. |
-| POST | `/automaton/:automaton_id/stop` | Stop an automaton. |
+| POST | `/v1/run` | Start a run (chat / dev-loop / task-run). Body is `RuntimeRequest`; returns `{ run_id, event_stream_url }`. |
+| GET  | `/v1/run/list` | List active runs. |
+| GET  | `/v1/run/:run_id/status` | Status for one run. |
+| POST | `/v1/run/:run_id/pause` | Pause a run. |
+| POST | `/v1/run/:run_id/stop` | Stop a run. |
 
 ### Memory
 
@@ -293,8 +290,7 @@ Legacy harness aliases for skill list/install/uninstall are mounted under `/api/
 | Path | Purpose |
 |------|---------|
 | `/ws/terminal` | Terminal bridge used by the TUI. |
-| `/stream` | Primary session stream (session init, messages, events, approvals). |
-| `/stream/automaton/:automaton_id` | Stream events for a specific automaton. |
+| `/stream/:run_id` | Per-run event stream. Bidirectional on `Chat` runs (user messages in, deltas / tool calls / approvals out); event-only on `DevLoop` / `TaskRun` runs. The `run_id` is the value returned synchronously by `POST /v1/run`. |
 
 ## Memory
 
@@ -348,7 +344,7 @@ All LLM traffic flows through the AURA router (proxy) using a per-request JWT. T
 | `ORBIT_URL` | `https://orbit-sfvu.onrender.com` | Orbit service URL. |
 | `AURA_STORAGE_URL` | `https://aura-storage.onrender.com` | Aura Storage service URL. |
 | `AURA_NETWORK_URL` | `https://aura-network.onrender.com` | Aura Network service URL. |
-| `AURA_NODE_REQUIRE_AUTH` | `false` | Opt-in bearer-token gate. When off, the router does not attach `require_bearer_mw`, the `/stream/automaton/:id` WebSocket skips its inline check, and the embedded TUI API server mounts its routes without auth. Set `1` / `true` to re-enable shared-secret enforcement. |
+| `AURA_NODE_REQUIRE_AUTH` | `false` | Opt-in bearer-token gate. When off, the gateway does not attach `require_bearer_mw`, the `/stream/:run_id` WebSocket skips its inline check, and the embedded TUI API server mounts its routes without auth. Set `1` / `true` to re-enable shared-secret enforcement. |
 | `AURA_NODE_AUTH_TOKEN` | — | Shared-secret bearer token consumed when `AURA_NODE_REQUIRE_AUTH=1`. When unset, the node reads (or mints) `$AURA_DATA_DIR/auth_token` and prints it to stderr on first launch. Ignored when auth is disabled. |
 
 ### Authentication
@@ -367,7 +363,7 @@ will:
    `$AURA_DATA_DIR/auth_token` (mode `0600` on Unix), then a freshly
    minted 32-byte hex value printed to stderr on first run.
 2. Attach `require_bearer_mw` to the protected sub-router.
-3. Keep the belt-and-suspenders check in `/stream/automaton/:id`.
+3. Keep the belt-and-suspenders check in `/stream/:run_id`.
 4. Print the embedded `aura` TUI API server token to stderr so a
    browser or curl can copy it.
 
@@ -397,8 +393,8 @@ cargo check -p aura-core -p aura-kernel -p aura-reasoner
 Further reading:
 
 - [`docs/architecture.md`](docs/architecture.md) — full architecture reference.
-- [`docs/PROGRESS.md`](docs/PROGRESS.md) — implementation status and platform notes.
-- [`docs/specs/`](docs/specs) — design specifications.
+- [`docs/invariants.md`](docs/invariants.md) — architectural invariants + enforcement map.
+- [`CHANGELOG.md`](CHANGELOG.md) — per-phase refactor log.
 
 ## License
 

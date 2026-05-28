@@ -7,6 +7,116 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Architecture refactor — aura-runtime gateway refactor (Phases A–C)
+
+Phases A through C of the `aura-runtime gateway refactor` plan
+(`.cursor/plans/aura-runtime_gateway_refactor_09dbd8ab.plan.md`)
+collapse `aura-runtime` into a thin HTTP/WS gateway + composition
+root by (1) unifying the two divergent session-start request
+shapes into one canonical wire-level `RuntimeRequest`, (2) lifting
+the orchestration engine + subagent dispatcher out of the gateway
+crate, and (3) reorganizing the remaining gateway files into a
+handler-grouped layout. Each phase ended green on
+`cargo fmt --check`, `cargo clippy -D warnings`, `cargo check
+--workspace`, `cargo test --all --all-features`, and the
+end-to-end smoke check (`POST /v1/run` → `WS /stream/:run_id`
+round-trip).
+
+#### Phase A — Wire-shape unification (commits `ce1cbaf` + `7fe0229`)
+
+##### Breaking changes
+
+- Collapse `SessionInit` + `AutomatonStartRequest` into a single
+  canonical [`aura_protocol::RuntimeRequest`] shape. The wire
+  surface moves from `WS /stream` + first-frame `session_init`
+  and `POST /automaton/start` to `POST /v1/run` +
+  `WS /stream/:run_id`. The legacy types and endpoints are
+  deleted with no aliases. External consumers of `aura-protocol`
+  (e.g. `aura-os`) must migrate; the sibling-repo migration
+  landed back-to-back in `aura-os` on its own `main`.
+- Rename `aura_protocol::AgentIdentityWire` to
+  `aura_protocol::AgentPersona`, now nested as the `persona`
+  field inside the new `AgentIdentity` wrapper.
+- Remove `InboundMessage::SessionInit` variant. WS-protocol
+  tests that exercised the deleted first-frame contract are
+  deleted.
+- Lifecycle endpoints rename for consistency: `/automaton/list`
+  / `/automaton/:id/status` / `/automaton/:id/pause` /
+  `/automaton/:id/stop` become `/v1/run/list` /
+  `/v1/run/:id/status` / `/v1/run/:id/pause` /
+  `/v1/run/:id/stop`.
+
+#### Phase B — Engine extraction + subagent into agent layer (commit `97fcce6`)
+
+##### Internal refactor
+
+- Extract orchestration engine into new `aura-engine` crate
+  (surface layer): `scheduler.rs`, `worker.rs`,
+  `automaton/{mod,build,dispatch,event_channel}.rs`,
+  `memory_observer.rs`, `capabilities.rs` (formerly
+  `runtime_capabilities.rs`), `executor.rs` (formerly
+  `executor_factory.rs`), `model_context.rs`, plus the
+  surface-layer `RuntimeChildRunner` impl of
+  [`aura_fleet_spawn::ChildRunner`].
+- Split subagent dispatch across three layers: `aura-tools`
+  (exec) still declares `SubagentDispatchHook`;
+  `aura-agent-subagent` (agent) absorbs `SubagentRegistry` +
+  bundled kinds + the pure-data adapter helpers
+  (`parent_context_from_request`, `overrides_from_request`,
+  `narrow_permissions`, `legacy_permissions_to_modes`,
+  `core_to_modes_*`); new `aura-fleet-subagent` (fleet) owns
+  the concrete `FleetSubagentDispatcher` impl. All edges
+  remain downward — no new `WARN_ONLY_UPWARD_EDGES` entries.
+  The `task_tool_*` integration tests move with the dispatcher
+  into `crates/aura-fleet-subagent/tests/`.
+- Move top-level `tool_permissions.rs` helpers
+  (`load_agent_tool_context`, `validate_*`) into
+  `aura-tools::permissions` (the router-layer HTTP handler
+  stays in `aura-runtime`).
+- `aura-surface-cli` import paths updated:
+  `aura_runtime::memory_observer::MemoryTurnObserver` →
+  `aura_engine::MemoryTurnObserver`. `aura_runtime::*::*`
+  legacy paths preserved via thin re-export modules in
+  `aura-runtime/src/lib.rs` (`scheduler`, `memory_observer`).
+
+#### Phase C — Infrastructure extraction + gateway reorg (commit `2a4ec67`)
+
+##### Internal refactor
+
+- Pull HTTP `DomainApi` (`domain.rs` + `jwt_domain.rs`) into a
+  new `aura-domain-http` crate (surface layer); `aura-runtime`
+  no longer depends on `reqwest` for domain calls. (Note:
+  `reqwest` is retained as a direct dep of `aura-runtime`
+  because `gateway/session/cross_agent_hook.rs` still issues
+  outbound HTTP for the cross-agent callback path.)
+- Move terminal PTY WebSocket handler from
+  `aura-runtime/src/terminal.rs` to `aura-terminal/src/ws.rs`;
+  gateway keeps a one-line `terminal_ws_handler` in
+  `gateway/middleware.rs` that delegates to
+  `aura_terminal::ws::handle_terminal_ws`. `portable-pty`
+  drops out of the `aura-runtime` deps.
+- Reorganize `aura-runtime/src/router/` into
+  `aura-runtime/src/gateway/`:
+  `mod.rs` (module declarations + `pub use`),
+  `middleware.rs` (`create_router` + middleware stack +
+  health + terminal-WS delegate), `state.rs`
+  (`RouterState` + `RouterStateConfig`), `handlers/*`
+  (per-endpoint bundles: `run.rs`, `run_ws.rs`, `files.rs`,
+  `tx.rs`, `memory/`, `skills.rs`, `tool_permissions.rs`,
+  `util.rs`), `session/*` (per-WebSocket-connection protocol
+  layer: `chat.rs`, `cross_agent_hook.rs`, `generation.rs`,
+  `helpers.rs`, `partial_json.rs`, `state.rs`, `tool_approval.rs`).
+- Workspace `Cargo.toml`: add `aura-engine`, `aura-domain-http`,
+  `aura-fleet-subagent` to `[workspace].members` with matching
+  `KNOWN_CRATES` entries and `//! Layer:` doc-tags. Trim
+  `aura-runtime/Cargo.toml` deps that moved out (`aura-fleet-*`
+  for spawn/registry/quota, `aura-memory`, `aura-automaton`,
+  `aura-skills`, `aura-agent-subagent` reached only via the
+  engine, `aura-prompts`, `aura-context-skills`,
+  `aura-reasoner`, `aura-kernel`, `portable-pty`, `which`);
+  add the new surface deps (`aura-engine`, `aura-domain-http`,
+  `aura-terminal`, `aura-fleet-subagent`).
+
 ### Architecture refactor — Phase 10 residual cleanup
 
 `refactor(arch-phase-10)` consolidates the five carve-outs the
