@@ -6,6 +6,9 @@
 //!   for a given `server_id` owns the slot. Subsequent registrations
 //!   error with [`McpError::DuplicateServer`] (the caller may choose
 //!   to downgrade to a warn-log).
+//! - Each client is spawned with the request timeout from
+//!   [`crate::ServerConfig`]. Timeout kills the child and returns
+//!   [`McpError::TimedOut`] so a silent server cannot pin the pool.
 //! - `with_client` runs a caller closure against the live client
 //!   inside the same lock as the slot lookup. This keeps the
 //!   borrow-graph honest without exposing `&mut McpClient` outside
@@ -59,7 +62,8 @@ impl McpConnectionManager {
         if guard.contains_key(&cfg.server_id) {
             return Err(McpError::DuplicateServer(cfg.server_id));
         }
-        let client = McpClient::spawn(&cfg.command, &cfg.args, &cfg.env)?;
+        let client =
+            McpClient::spawn_with_timeout(&cfg.command, &cfg.args, &cfg.env, cfg.request_timeout)?;
         guard.insert(cfg.server_id, client);
         Ok(())
     }
@@ -123,6 +127,7 @@ mod tests {
             command: "this-binary-does-not-exist-aura-mcp-test".to_string(),
             args: vec![],
             env: BTreeMap::new(),
+            request_timeout: crate::DEFAULT_MCP_REQUEST_TIMEOUT,
         }
     }
 

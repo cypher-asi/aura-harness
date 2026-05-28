@@ -345,7 +345,11 @@ fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let mut end = max_len;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
@@ -523,6 +527,12 @@ mod tests {
         assert!(prompt.contains("## Active skills"));
         assert!(prompt.contains("- obsidian"));
         assert!(prompt.contains("- git"));
+    }
+
+    #[test]
+    fn truncate_does_not_split_utf8() {
+        let truncated = truncate("abc\u{1F980}def", 5);
+        assert_eq!(truncated, "abc...");
     }
 
     #[test]

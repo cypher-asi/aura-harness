@@ -18,8 +18,8 @@
 //! Mirrors the Codex `RawPluginManifest` shape from the plan, scoped
 //! down to what Phase 4b needs: identity, version, optional metadata,
 //! and a [`ContributesSection`] of contribution lists. Each
-//! contribution shape is intentionally minimal in V1 — the runtime
-//! crates landing in Phase 4c flesh out the wire formats.
+//! contribution shape is intentionally minimal in V1; runtime crates
+//! own the execution-time semantics for those entries.
 
 use std::collections::BTreeMap;
 

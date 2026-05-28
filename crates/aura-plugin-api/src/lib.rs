@@ -8,8 +8,8 @@
 //! It defines the Rust trait surface that first-party plugins compile
 //! against. On-disk plugin manifests (`.aura-plugin`, `.codex-plugin`,
 //! `.claude-plugin`) flow through `aura-plugin-core` and contribute
-//! via the runtime integration crates landing in Phase 4c
-//! (`aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`).
+//! via the runtime integration crates (`aura-plugin-hooks`,
+//! `aura-plugin-mcp`, `aura-plugin-connectors`).
 //!
 //! ## Invariants ([rules.md §13])
 //!

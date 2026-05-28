@@ -300,7 +300,7 @@ Hook engine: closed `HookEvent` taxonomy (10 Codex/Claude-aligned lifecycle even
 
 #### [`aura-plugin-mcp`](../crates/aura-plugin-mcp)
 
-Stdio MCP JSON-RPC client and a first-active-wins connection manager keyed by server id. Notable types: `McpClient`, `McpConnectionManager`, `ServerConfig`, `McpError`. Phase 8 wires MCP servers into the tool catalog.
+Stdio MCP JSON-RPC client and a first-active-wins connection manager keyed by server id. Notable types: `McpClient`, `McpConnectionManager`, `ServerConfig`, `McpError`. The manager clears child environments before spawn and applies a per-request timeout so silent plugin-owned servers cannot pin the pool indefinitely.
 
 #### [`aura-plugin-connectors`](../crates/aura-plugin-connectors)
 

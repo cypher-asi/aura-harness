@@ -300,7 +300,7 @@ Legacy harness aliases for skill list/install/uninstall are mounted under `/api/
 - **Events** — episodic events with time index (`MEMORY_EVENTS`, `MEMORY_EVENT_INDEX`).
 - **Procedures** — repeated step sequences detected over time (`MEMORY_PROCEDURES`).
 
-Writes flow through a two-stage pipeline (heuristic extractor + optional LLM refiner, see [`crates/aura-memory/src/write_pipeline.rs`](crates/aura-memory/src/write_pipeline.rs) and [`crates/aura-memory/src/refinement.rs`](crates/aura-memory/src/refinement.rs)). `MemoryRetriever` injects a size-budgeted slice of memory into the kernel context on each turn.
+Writes flow through a two-stage pipeline (heuristic extractor + optional LLM refiner, see [`crates/aura-context-memory/src/write_pipeline.rs`](crates/aura-context-memory/src/write_pipeline.rs) and [`crates/aura-context-memory/src/refinement.rs`](crates/aura-context-memory/src/refinement.rs)). `MemoryRetriever` injects a size-budgeted slice of memory into the kernel context on each turn.
 
 ## Skills
 
@@ -312,7 +312,7 @@ Writes flow through a two-stage pipeline (heuristic extractor + optional LLM ref
 4. Extra directories from config
 5. Bundled skills shipped with the runtime
 
-`SkillManager` exposes activation and prompt injection; `SkillInstallStore` persists per-agent installs in the `AGENT_SKILLS` column family. See [`crates/aura-skills/src/lib.rs`](crates/aura-skills/src/lib.rs).
+`SkillManager` exposes activation and prompt injection; `SkillInstallStore` persists per-agent installs in the `AGENT_SKILLS` column family. See [`crates/aura-context-skills/src/lib.rs`](crates/aura-context-skills/src/lib.rs).
 
 ## Configuration
 

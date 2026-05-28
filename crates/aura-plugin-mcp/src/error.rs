@@ -16,6 +16,14 @@ pub enum McpError {
     /// surfaces this so the caller can decide.
     #[error("MCP transport disconnected")]
     Disconnected,
+    /// The server did not answer within the configured per-request
+    /// deadline. The child is killed before this error is returned so
+    /// the manager does not keep a wedged stdio transport around.
+    #[error("MCP request timed out after {timeout_ms}ms")]
+    TimedOut {
+        /// Configured request timeout in milliseconds.
+        timeout_ms: u64,
+    },
     /// Server response was not valid JSON or did not conform to the
     /// JSON-RPC 2.0 shape. The carried string is the underlying
     /// parse error message.

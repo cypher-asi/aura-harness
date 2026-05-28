@@ -10,6 +10,8 @@
 //!   manager owns that policy in Phase 8+.
 //! - The child env is explicitly cleared and re-populated from
 //!   [`crate::ServerConfig::env`]. No parent-env inheritance.
+//! - Every request has a wall-clock timeout. On timeout the child is
+//!   killed so a silent server cannot wedge the manager indefinitely.
 //!
 //! ## Phase scope
 //!
@@ -21,18 +23,21 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::config::DEFAULT_MCP_REQUEST_TIMEOUT;
 use crate::error::McpError;
 
 /// Stdio JSON-RPC client. One client owns one child process.
 pub struct McpClient {
     child: Child,
     writer: ChildStdin,
-    reader: BufReader<ChildStdout>,
+    reader: Arc<Mutex<BufReader<ChildStdout>>>,
     next_id: Mutex<u64>,
+    request_timeout: Duration,
 }
 
 impl std::fmt::Debug for McpClient {
@@ -64,6 +69,22 @@ impl McpClient {
         args: &[String],
         env: &BTreeMap<String, String>,
     ) -> Result<Self, McpError> {
+        Self::spawn_with_timeout(command, args, env, DEFAULT_MCP_REQUEST_TIMEOUT)
+    }
+
+    /// Spawn a child process with an explicit per-request timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::Io`] for spawn failures and
+    /// [`McpError::Disconnected`] if the child's stdio handles cannot
+    /// be claimed.
+    pub fn spawn_with_timeout(
+        command: &str,
+        args: &[String],
+        env: &BTreeMap<String, String>,
+        request_timeout: Duration,
+    ) -> Result<Self, McpError> {
         let mut cmd = Command::new(command);
         cmd.args(args).env_clear();
         for (k, v) in env {
@@ -78,8 +99,9 @@ impl McpClient {
         Ok(Self {
             child,
             writer,
-            reader,
+            reader: Arc::new(Mutex::new(reader)),
             next_id: Mutex::new(1),
+            request_timeout,
         })
     }
 
@@ -90,6 +112,8 @@ impl McpClient {
     /// - [`McpError::Io`] on pipe write / read failures.
     /// - [`McpError::Disconnected`] when the server closes its
     ///   stdout without sending a response.
+    /// - [`McpError::TimedOut`] when the server does not answer before
+    ///   the configured deadline.
     /// - [`McpError::InvalidResponse`] when the response is not
     ///   valid JSON.
     /// - [`McpError::ServerError`] when the response carries an
@@ -116,8 +140,31 @@ impl McpClient {
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
 
-        let mut buf = String::new();
-        let n = self.reader.read_line(&mut buf)?;
+        let (tx, rx) = mpsc::channel();
+        let reader = Arc::clone(&self.reader);
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let read_result = {
+                let mut guard = reader
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.read_line(&mut buf)
+            };
+            let _ = tx.send((read_result, buf));
+        });
+
+        let (read_result, buf) = match rx.recv_timeout(self.request_timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.kill();
+                let timeout_ms =
+                    u64::try_from(self.request_timeout.as_millis()).unwrap_or(u64::MAX);
+                return Err(McpError::TimedOut { timeout_ms });
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(McpError::Disconnected),
+        };
+
+        let n = read_result?;
         if n == 0 {
             return Err(McpError::Disconnected);
         }

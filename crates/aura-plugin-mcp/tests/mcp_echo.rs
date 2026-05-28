@@ -6,11 +6,18 @@
 //! server is pure Rust (no per-OS shell script fixtures).
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use aura_plugin_mcp::{McpClient, McpConnectionManager, McpError, ServerConfig};
+use aura_plugin_mcp::{
+    McpClient, McpConnectionManager, McpError, ServerConfig, DEFAULT_MCP_REQUEST_TIMEOUT,
+};
 
 fn echo_binary_path() -> &'static str {
     env!("CARGO_BIN_EXE_echo_mcp_server")
+}
+
+fn silent_binary_path() -> &'static str {
+    env!("CARGO_BIN_EXE_silent_mcp_server")
 }
 
 #[test]
@@ -61,6 +68,7 @@ fn manager_registers_and_runs_request() {
         command: echo_binary_path().to_string(),
         args: vec![],
         env: BTreeMap::new(),
+        request_timeout: DEFAULT_MCP_REQUEST_TIMEOUT,
     })
     .expect("register echo server");
     assert!(mgr.contains("echo"));
@@ -84,6 +92,7 @@ fn manager_rejects_duplicate_server_id() {
         command: echo_binary_path().to_string(),
         args: vec![],
         env: BTreeMap::new(),
+        request_timeout: DEFAULT_MCP_REQUEST_TIMEOUT,
     })
     .expect("first register ok");
 
@@ -96,7 +105,24 @@ fn manager_rejects_duplicate_server_id() {
             command: echo_binary_path().to_string(),
             args: vec![],
             env: BTreeMap::new(),
+            request_timeout: DEFAULT_MCP_REQUEST_TIMEOUT,
         })
         .expect_err("duplicate register must fail");
     assert!(matches!(err, McpError::DuplicateServer(id) if id == "echo"));
+}
+
+#[test]
+fn silent_server_request_times_out() {
+    let mut client = McpClient::spawn_with_timeout(
+        silent_binary_path(),
+        &[],
+        &BTreeMap::new(),
+        Duration::from_millis(50),
+    )
+    .expect("spawn silent server");
+
+    let err = client
+        .request("ping", &serde_json::json!({}))
+        .expect_err("silent server must time out");
+    assert!(matches!(err, McpError::TimedOut { timeout_ms } if timeout_ms == 50));
 }

@@ -19,14 +19,20 @@
 //!
 //! ## Invariants ([rules.md §13])
 //!
+//! - **Trust-gated activation**: a plugin must be both `enabled` and
+//!   `trusted` in operator config before its hooks, MCP servers,
+//!   connectors, or skills materialise. Installed-but-untrusted plugins
+//!   remain inert.
 //! - **Per-plugin best-effort load**: a single plugin failing to
 //!   load (manifest invalid, MCP server spawn failure, hook event
 //!   unknown, etc.) MUST NOT abort the load. The failure is
 //!   recorded in [`PluginRuntime::load_failures`] and the loop
 //!   continues with the remaining plugins.
-//! - **First-active-wins** for MCP and connector merges: the
-//!   first plugin (in enable order) keeps the slot; subsequent
-//!   contributions log a `WARN` and become a load-failure entry.
+//! - **MCP first-active-wins**: the first plugin (in enable order)
+//!   keeps a server-id slot; subsequent contributions log a `WARN`
+//!   and are skipped.
+//! - **Connector last-wins**: plugin-supplied connector contributions
+//!   replace earlier entries through [`ConnectorRegistry::replace`].
 //! - **Hook chain order**: hooks for the same event run in the
 //!   order they were registered. The load loop walks plugins in
 //!   the user's enable order (sorted lexicographically by id for
@@ -43,7 +49,9 @@ use std::sync::Arc;
 use aura_config::PluginsConfig;
 use aura_plugin_connectors::{ConnectorEntry, ConnectorRegistry};
 use aura_plugin_hooks::{HookEngine, HookEvent, PluginLoadFailure, PluginRef, RegisteredHook};
-use aura_plugin_mcp::{McpConnectionManager, ServerConfig as McpServerConfig};
+use aura_plugin_mcp::{
+    McpConnectionManager, ServerConfig as McpServerConfig, DEFAULT_MCP_REQUEST_TIMEOUT,
+};
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
@@ -144,10 +152,13 @@ pub fn load_enabled_plugins(
     let mut failures = Vec::new();
 
     for plugin_id in plugin_ids {
-        // Honour [plugins] config: a plugin must be both installed
-        // AND enabled to participate.
+        // Honour [plugins] config: a plugin must be installed,
+        // enabled, and trusted to participate.
         if !plugin_enabled(&plugin_id, plugins_config) {
-            debug!(plugin_id, "plugin not enabled in config; skipping");
+            debug!(
+                plugin_id,
+                "plugin not enabled + trusted in config; skipping"
+            );
             continue;
         }
 
@@ -215,12 +226,11 @@ pub fn load_enabled_plugins(
 fn plugin_enabled(plugin_id: &str, cfg: &PluginsConfig) -> bool {
     // Match either the bare `id` or the `id@market` qualified key.
     if let Some(row) = cfg.table.0.get(plugin_id) {
-        return row.enabled;
+        return row.enabled && row.trusted;
     }
-    cfg.table
-        .0
-        .iter()
-        .any(|(k, row)| row.enabled && (k == plugin_id || k.starts_with(&format!("{plugin_id}@"))))
+    cfg.table.0.iter().any(|(k, row)| {
+        row.enabled && row.trusted && (k == plugin_id || k.starts_with(&format!("{plugin_id}@")))
+    })
 }
 
 fn read_manifest(path: &Path) -> Result<PluginManifest, String> {
@@ -282,6 +292,7 @@ fn materialise_one(
             command: resolve_command_for_spawn(&mcp_entry.command, plugin_root),
             args: mcp_entry.args.clone(),
             env: mcp_entry.env.clone(),
+            request_timeout: DEFAULT_MCP_REQUEST_TIMEOUT,
         };
         if let Err(err) = mcp.register(cfg) {
             warn!(
@@ -431,6 +442,31 @@ path = "./skills/hello.md"
         write_minimal_plugin(home.path(), "off", "0.1.0", false);
         let runtime =
             load_enabled_plugins(home.path(), &PluginsConfig::default()).expect("load ok");
+        assert!(runtime.enabled.is_empty());
+        assert!(runtime.load_failures.is_empty());
+    }
+
+    #[test]
+    fn enabled_but_untrusted_plugin_is_skipped() {
+        let home = TempDir::new().unwrap();
+        write_minimal_plugin(home.path(), "untrusted", "0.1.0", false);
+        let mut table: Map<String, PluginConfig> = Map::new();
+        table.insert(
+            "untrusted".into(),
+            PluginConfig {
+                enabled: true,
+                trusted: false,
+                version: None,
+            },
+        );
+        let runtime = load_enabled_plugins(
+            home.path(),
+            &PluginsConfig {
+                table: PluginsTable(table),
+            },
+        )
+        .expect("load ok");
+
         assert!(runtime.enabled.is_empty());
         assert!(runtime.load_failures.is_empty());
     }

@@ -3,10 +3,10 @@
 //! Layer: plugin
 //!
 //! Stdio Model-Context-Protocol client + first-active-wins connection
-//! manager for first-party Aura plugins. Phase 4c deliverable: ships
-//! the in-process pool wrapping a child process per server id. No
-//! caller in the agent loop instantiates the manager yet (Phase 8
-//! wires the per-session contribution flow).
+//! manager for first-party Aura plugins. Phase 4c delivered the
+//! in-process pool wrapping a child process per server id; later
+//! phases materialise enabled, trusted manifest contributions into the
+//! manager.
 //!
 //! ## Surfaces
 //!
@@ -37,6 +37,9 @@
 //!   env populated only from [`ServerConfig::env`]. There is no
 //!   parent-env inheritance — operator secrets must not leak into a
 //!   third-party MCP server.
+//! - Every JSON-RPC request has a per-request timeout
+//!   ([`DEFAULT_MCP_REQUEST_TIMEOUT`] by default). On timeout the
+//!   child is killed before [`McpError::TimedOut`] is returned.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
@@ -47,6 +50,6 @@ pub mod error;
 pub mod manager;
 
 pub use client::McpClient;
-pub use config::ServerConfig;
+pub use config::{ServerConfig, DEFAULT_MCP_REQUEST_TIMEOUT};
 pub use error::McpError;
 pub use manager::McpConnectionManager;

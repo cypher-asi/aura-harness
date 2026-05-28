@@ -1,14 +1,22 @@
 //! Server configuration mirrored from a manifest `[[contributes.mcp]]`
-//! entry.
+//! entry plus runtime-owned guardrails.
 //!
 //! The shape lives in this crate (rather than re-using
 //! `aura_plugin_core::McpContribution` directly) so the runtime
 //! manager doesn't need to pull `aura-plugin-core` as a dependency.
-//! The bridge from the manifest entry to a [`ServerConfig`] is the
-//! caller's responsibility — Phase 8 will land that bridge inside
-//! the runtime contribution loader.
+//! The bridge from the manifest entry to a [`ServerConfig`] lives in
+//! the plugin runtime contribution loader.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
+
+/// Default wall-clock deadline for one MCP JSON-RPC request.
+///
+/// MCP servers are plugin-owned subprocesses. A silent server must not
+/// be able to block the plugin manager indefinitely, so callers should
+/// prefer this default unless an operator-owned config surface supplies
+/// a tighter deadline.
+pub const DEFAULT_MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// MCP server contribution as the manager understands it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,4 +36,7 @@ pub struct ServerConfig {
     /// and populates it only from this map. Operator secrets must
     /// not leak into a third-party MCP server.
     pub env: BTreeMap<String, String>,
+    /// Per-request wall-clock deadline. A timeout kills the child and
+    /// returns [`crate::McpError::TimedOut`].
+    pub request_timeout: Duration,
 }

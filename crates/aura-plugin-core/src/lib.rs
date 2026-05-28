@@ -3,9 +3,9 @@
 //! Layer: plugin
 //!
 //! Declarative plugin manifest parse + install + cache layout +
-//! marketplace lookup. Phase 4b deliverable: the on-disk pipeline is
-//! end-to-end but **inert** — no agent-loop wiring (that's Phase 4c
-//! for hooks/MCP/connectors and Phase 8 for full integration).
+//! marketplace lookup. Phase 4b delivered the on-disk pipeline; later
+//! phases wire enabled, trusted plugin contributions into the runtime
+//! via [`runtime::load_enabled_plugins`].
 //!
 //! ## Surfaces
 //!

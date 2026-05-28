@@ -3,16 +3,17 @@
 //! Layer: plugin
 //!
 //! Connector registry for plugin-contributed external endpoints.
-//! Phase 4c ships registration + lookup; no agent-loop wiring yet
-//! (Phase 8 will land the consumer side that surfaces connectors to
-//! tools / kernels).
+//! Phase 4c shipped registration + lookup; later phases materialise
+//! enabled, trusted manifest contributions into the registry.
 //!
 //! ## Surfaces
 //!
 //! - [`ConnectorEntry`] — opaque registry value carrying the
 //!   connector id, contributing plugin id, and endpoint string.
 //! - [`ConnectorRegistry`] — thread-safe in-process registry.
-//!   Duplicate ids error with [`ConnectorError::AlreadyRegistered`].
+//!   `register` preserves first-contributor-wins by returning
+//!   [`ConnectorError::AlreadyRegistered`]; `replace` is the
+//!   runtime materialiser's last-wins API for plugin overrides.
 //! - Error type: [`ConnectorError`].
 //!
 //! ## Invariants ([rules.md §13])
@@ -21,10 +22,10 @@
 //!   returns entries in deterministic id-sorted order — important
 //!   for diagnostics (`aura plugins list` derivatives) and for
 //!   future replay-determinism tests.
-//! - Connector ids are global across the entire registry. Multiple
-//!   plugins contributing the same id collide. The first contributor
-//!   wins; the second registration returns
-//!   [`ConnectorError::AlreadyRegistered`].
+//! - Connector ids are global across the entire registry.
+//!   Callers choose merge policy explicitly: [`ConnectorRegistry::register`]
+//!   rejects duplicates, while [`ConnectorRegistry::replace`] overwrites
+//!   an existing entry and returns the displaced connector for audit logs.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
