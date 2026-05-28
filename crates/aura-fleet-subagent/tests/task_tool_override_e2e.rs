@@ -22,7 +22,6 @@ use aura_core::{
     AgentId, AgentPermissions, AgentScope, Capability, SubagentBudget, SubagentDispatchRequest,
     SubagentExit, UserToolDefaults,
 };
-use aura_store::ReadStore;
 use aura_tools::SubagentDispatchHook;
 use serde_json::Value;
 use std::sync::Arc;

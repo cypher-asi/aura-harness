@@ -118,10 +118,13 @@ pub enum SpawnMode {
     #[default]
     Wait,
     /// Child runs in the background; parent receives a handle
-    /// immediately. Lifetime tied to the parent session.
+    /// immediately. Parent cancellation does not propagate; fleet
+    /// shutdown still cancels it, and an orphan record keeps it
+    /// inspectable/reapable after parent death.
     Detached,
-    /// Background and decoupled from parent lifetime — survives
-    /// parent termination, suitable for long-running batch jobs.
+    /// One or more children run under an explicit [`JoinPolicy`].
+    /// Parent cancellation propagates for `All` / `Any`; abandoned
+    /// batches are promoted through the orphan path.
     Batch,
 }
 

@@ -8,12 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_agent_subagent::SubagentOverrides;
+use aura_core::SubagentExit;
 use aura_core_modes::{AgentMode, SpawnMode};
 use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;
 use aura_fleet_spawn::{
     FleetSpawner, FleetSpawnerConfig, ParentLeaseRegistry, SpawnHandle, SpawnRequest,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::common::{open_test_orphan_store, open_test_store, parent_at, FakeChildRunner};
 
@@ -75,4 +77,51 @@ async fn detached_spawn_returns_immediately_and_completes_in_background() {
     assert!(matches!(result.exit, aura_core::SubagentExit::Completed));
     assert_eq!(result.child_agent_id, Some(child_id));
     assert_eq!(runner.invocation_count(), 1);
+}
+
+#[tokio::test]
+async fn detached_spawn_ignores_parent_cancellation() {
+    let parent = parent_at(AgentMode::Agent, 0);
+    let (store, _store_keep) = open_test_store();
+    let (orphans, _orphan_keep) = open_test_orphan_store();
+    let registry = Arc::new(FleetRegistry::new());
+    let quota = Arc::new(QuotaPool::new());
+    let leases = Arc::new(ParentLeaseRegistry::new());
+    let runner = Arc::new(FakeChildRunner::with_delay(Duration::from_millis(40)));
+    let cancellation = CancellationToken::new();
+
+    let spawner = FleetSpawner::with_default_derivation(
+        store,
+        registry,
+        quota,
+        leases,
+        orphans,
+        runner,
+        FleetSpawnerConfig::default(),
+    );
+
+    let handle = spawner
+        .spawn(
+            SpawnRequest {
+                parent,
+                overrides: SubagentOverrides::default(),
+                prompt: "detached-child".to_string(),
+                originating_user_id: Some("user".to_string()),
+                tool_call_id: None,
+                cancellation: Some(cancellation.clone()),
+            },
+            SpawnMode::Detached,
+        )
+        .await
+        .expect("detached spawn ok");
+    cancellation.cancel();
+
+    let SpawnHandle::Detached(detached) = handle else {
+        panic!("expected SpawnHandle::Detached");
+    };
+    let result = detached.join().await.expect("child sent result");
+    assert!(
+        matches!(result.exit, SubagentExit::Completed),
+        "detached children must survive parent cancellation"
+    );
 }
