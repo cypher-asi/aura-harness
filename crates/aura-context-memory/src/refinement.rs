@@ -6,7 +6,6 @@
 use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, RefinedCandidate};
-use aura_agent::KernelModelGateway;
 use aura_reasoner::{Message, ModelProvider, ModelRequest};
 use std::fmt::Write;
 use std::sync::Arc;
@@ -15,11 +14,15 @@ const MAX_TURN_TEXT_LEN: usize = 3000;
 
 /// LLM-assisted memory refiner.
 ///
-/// Routes completions through the kernel gateway (Invariant §3) so every
-/// memory extraction / refinement LLM call is recorded in the kernel's
-/// append-only log.
+/// Accepts any [`ModelProvider`] but production wiring MUST pass a
+/// recording-capable provider (e.g. `aura_agent::KernelModelGateway`).
+/// The runtime composition root in `aura_runtime::node` is the single
+/// place that knows about the kernel gateway, and it is responsible for
+/// upholding Invariant §3 ("Every LLM Call Is Recorded") by passing a
+/// kernel-mediated provider here. The context layer cannot enforce this
+/// structurally without re-introducing an upward edge into `aura-agent`.
 pub struct LlmRefiner {
-    provider: Arc<KernelModelGateway>,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
     config: RefinerConfig,
 }
 
@@ -38,7 +41,16 @@ impl Default for RefinerConfig {
 }
 
 impl LlmRefiner {
-    pub fn new(provider: Arc<KernelModelGateway>, config: RefinerConfig) -> Self {
+    /// Construct a refiner that routes all refinement / extraction
+    /// completions through `provider`.
+    ///
+    /// `provider` must be a recording-capable [`ModelProvider`] —
+    /// typically `aura_agent::KernelModelGateway` — so Invariant §3
+    /// ("Every LLM Call Is Recorded") is preserved end-to-end. The
+    /// context layer accepts the abstract trait object to keep the
+    /// crate free of any upward edge into `aura-agent`; the runtime
+    /// composition root is responsible for picking the right impl.
+    pub fn new(provider: Arc<dyn ModelProvider + Send + Sync>, config: RefinerConfig) -> Self {
         Self { provider, config }
     }
 

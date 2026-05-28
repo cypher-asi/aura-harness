@@ -750,12 +750,15 @@ async fn prepare_turn_context(
     }
     if let Some(ref mm) = ctx.memory_manager {
         let mem_id = session.memory_agent_id();
-        mm.prepare_context(mem_id, &mut config).await;
-        config.observers.push(mm.turn_observer_with_skills(
-            mem_id,
-            session.auth_token.clone(),
-            active_skill_names,
-        ));
+        mm.prepare_context(mem_id, &mut config.system_prompt).await;
+        config
+            .observers
+            .push(crate::memory_observer::MemoryTurnObserver::new(
+                Arc::clone(mm),
+                mem_id,
+                session.auth_token.clone(),
+                active_skill_names,
+            ));
     }
 
     let tools = session.tool_definitions.clone();

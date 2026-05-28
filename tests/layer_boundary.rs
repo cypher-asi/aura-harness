@@ -1,17 +1,18 @@
-//! Advisory workspace boundary test for the layered crate architecture.
+//! Workspace boundary test for the layered crate architecture.
 //!
 //! Phase 1 deliverable: walks every `crates/*/Cargo.toml`, builds a
 //! `crate → layer` map from the new `aura-<layer>-<name>` naming
 //! convention (and an explicit `KNOWN_CRATES` table for the legacy
-//! pre-refactor crate names), and prints a WARN line for every
+//! pre-refactor crate names), and emits a line for every
 //! workspace-internal dependency edge that points "upward" in the
 //! layer stack.
 //!
-//! This test never panics. Strict (CI-failing) enforcement lands in
-//! Phase 9. The intent today is observability — eyeballing the
-//! warnings shows how much pre-refactor cross-layer coupling exists
-//! and lets us track progress as later phases rename crates onto the
-//! layered scheme.
+//! Phase 6c (context-memory inversion) promotes the
+//! `aura-context-memory -> aura-agent` edge from warn-only to
+//! fail-on-detect. Every other upward edge that pre-existed is kept
+//! warn-only (see [`WARN_ONLY_UPWARD_EDGES`]) until its own phase
+//! retires it. Phase 9 will promote the remaining warn-only edges to
+//! strict mode.
 //!
 //! ## Layer order (lowest → highest)
 //!
@@ -45,6 +46,24 @@ const LAYER_ORDER: &[&str] = &[
 /// `aura-<layer>-<name>` convention yet. Empty string means "no
 /// layer assigned — skip from the warnings" (most legacy crates fall
 /// here today; later phases rename them and remove the entry).
+/// Upward dependency edges that have not yet been retired but are
+/// accepted for now (warn-only) because they belong to a future phase.
+///
+/// Each entry is `(consumer, dependency)` matching exactly how the
+/// edge appears in the `crates/*/Cargo.toml` files. Adding to this
+/// list requires a phase reference and a TODO so it can be retired.
+///
+/// Phase 6c (context-memory inversion) deliberately omits any
+/// `("aura-context-memory", "aura-agent")` entry: that edge is now
+/// fail-on-detect. Phase 9 promotes the remaining warn-only edges
+/// to strict mode.
+const WARN_ONLY_UPWARD_EDGES: &[(&str, &str)] = &[
+    // Phase 5 exec layer split left `aura-tools` (a re-export shell
+    // that still pulls in the legacy `aura-kernel` crate) as the one
+    // unavoidable cross-layer edge. Tracked for cleanup in Phase 9.
+    ("aura-tools", "aura-kernel"),
+];
+
 const KNOWN_CRATES: &[(&str, &str)] = &[
     // Root binary + dev/CI stuff — not a crate-layer thing.
     ("aura", "surface"),
@@ -157,6 +176,7 @@ fn warn_on_upward_layer_dependencies() {
     }
 
     let mut warnings = 0usize;
+    let mut failures: Vec<String> = Vec::new();
 
     for (consumer, manifest) in &manifests {
         let Ok(contents) = fs::read_to_string(manifest) else {
@@ -173,15 +193,36 @@ fn warn_on_upward_layer_dependencies() {
             };
             let dep_rank = rank_of(dep_layer);
             if dep_rank > consumer_rank {
-                eprintln!(
-                    "LAYER WARN: {consumer} ({consumer_layer}) depends on {dep} ({dep_layer}) — upward edge"
-                );
-                warnings += 1;
+                let is_warn_only = WARN_ONLY_UPWARD_EDGES
+                    .iter()
+                    .any(|(c, d)| *c == consumer.as_str() && *d == dep.as_str());
+                if is_warn_only {
+                    eprintln!(
+                        "LAYER WARN: {consumer} ({consumer_layer}) depends on {dep} \
+                         ({dep_layer}) — upward edge (allowlisted, see WARN_ONLY_UPWARD_EDGES)"
+                    );
+                    warnings += 1;
+                } else {
+                    failures.push(format!(
+                        "{consumer} ({consumer_layer}) depends on {dep} ({dep_layer}) — \
+                         upward edge not in WARN_ONLY_UPWARD_EDGES allowlist"
+                    ));
+                }
             }
         }
     }
 
-    eprintln!("LAYER INFO: {} crates classified, {warnings} advisory warning(s) — phase 1 is observability only, never fails", layer_map.len());
+    eprintln!(
+        "LAYER INFO: {} crates classified, {warnings} allowlisted warning(s), {} new violation(s)",
+        layer_map.len(),
+        failures.len()
+    );
+
+    assert!(
+        failures.is_empty(),
+        "Layer boundary violations:\n  - {}",
+        failures.join("\n  - ")
+    );
 }
 
 fn workspace_root() -> PathBuf {

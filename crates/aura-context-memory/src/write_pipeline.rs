@@ -4,8 +4,8 @@ use crate::error::MemoryError;
 use crate::extraction::{ConversationTurn, HeuristicExtractor};
 use crate::refinement::LlmRefiner;
 use crate::store::MemoryStoreApi;
+use crate::turn_summary::TurnSummary;
 use crate::types::{AgentEvent, CandidateType, Fact, FactSource, Procedure, RefinedCandidate};
-use aura_agent::AgentLoopResult;
 use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ impl MemoryWritePipeline {
         }
     }
 
-    /// Ingest an `AgentLoopResult` through the pipeline.
+    /// Ingest a [`TurnSummary`] through the pipeline.
     ///
     /// Stage 1: free heuristic extraction on assistant text.
     /// Stage 2: LLM call (Haiku) that sees the full conversation turn and
@@ -71,27 +71,27 @@ impl MemoryWritePipeline {
     pub async fn ingest(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
         turn: Option<&ConversationTurn>,
     ) -> Result<WriteReport, MemoryError> {
-        self.ingest_with_token(agent_id, result, turn, None).await
+        self.ingest_with_token(agent_id, summary, turn, None).await
     }
 
     pub async fn ingest_with_token(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
         turn: Option<&ConversationTurn>,
         auth_token: Option<String>,
     ) -> Result<WriteReport, MemoryError> {
-        self.ingest_with_context(agent_id, result, turn, auth_token, &[])
+        self.ingest_with_context(agent_id, summary, turn, auth_token, &[])
             .await
     }
 
     pub async fn ingest_with_context(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
         turn: Option<&ConversationTurn>,
         auth_token: Option<String>,
         active_skills: &[String],
@@ -99,7 +99,7 @@ impl MemoryWritePipeline {
         let mut report = WriteReport::default();
 
         // Stage 1: Heuristic extraction (free, no LLM)
-        let candidates = self.extractor.extract(result);
+        let candidates = self.extractor.extract(summary);
         report.candidates_extracted = candidates.len();
 
         if candidates.is_empty() && turn.is_none() {

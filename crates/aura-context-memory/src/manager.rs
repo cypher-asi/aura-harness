@@ -7,12 +7,12 @@ use crate::procedures::{ProcedureConfig, ProcedureExtractor, StepSequence};
 use crate::refinement::{LlmRefiner, RefinerConfig};
 use crate::retrieval::{MemoryRetriever, RetrievalConfig};
 use crate::store::{MemoryStore, MemoryStoreApi};
+use crate::turn_summary::TurnSummary;
 use crate::types::{MemoryPacket, Procedure};
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
-use async_trait::async_trait;
-use aura_agent::{AgentLoopResult, KernelModelGateway};
 use aura_core::AgentId;
 use aura_core::ProcedureId;
+use aura_reasoner::ModelProvider;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 
@@ -29,12 +29,17 @@ pub struct MemoryManager {
 impl MemoryManager {
     /// Create a new `MemoryManager` backed by a shared `RocksDB` instance.
     ///
-    /// `provider` must be a [`KernelModelGateway`] so LLM calls performed
-    /// during memory refinement and consolidation are recorded in the
-    /// kernel's append-only log (Invariant §3).
+    /// `provider` must be a recording-capable [`ModelProvider`] —
+    /// production wiring passes `aura_agent::KernelModelGateway`, which
+    /// routes every completion through the kernel's append-only log so
+    /// Invariant §3 ("Every LLM Call Is Recorded") holds. The context
+    /// layer accepts the abstract trait object to keep this crate free
+    /// of any upward edge into `aura-agent`; the runtime composition
+    /// root (`aura_runtime::node`) is the single place that knows how
+    /// to construct a recording provider.
     pub fn new(
         db: Arc<DBWithThreadMode<MultiThreaded>>,
-        provider: Arc<KernelModelGateway>,
+        provider: Arc<dyn ModelProvider + Send + Sync>,
         refiner_config: RefinerConfig,
         write_config: WriteConfig,
         retrieval_config: RetrievalConfig,
@@ -66,44 +71,44 @@ impl MemoryManager {
         self.retriever.retrieve(agent_id).await
     }
 
-    /// Ingest an agent loop result through the write pipeline.
+    /// Ingest a finished turn through the write pipeline.
     ///
     /// # Errors
     /// Returns error on extraction, refinement, or storage failure.
     pub async fn ingest(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
     ) -> Result<WriteReport, MemoryError> {
-        let turn = ConversationTurn::from_messages(&result.messages, &result.total_text);
-        self.pipeline.ingest(agent_id, result, turn.as_ref()).await
+        let turn = ConversationTurn::from_messages(&summary.messages, &summary.total_text);
+        self.pipeline.ingest(agent_id, summary, turn.as_ref()).await
     }
 
-    /// Inject agent memory into the system prompt of an `AgentLoopConfig`.
+    /// Inject agent memory into the given system prompt string.
     ///
     /// Called before the agent loop starts a turn. Strips any existing
-    /// `<agent_memory>` block to ensure idempotency, then appends a fresh one.
-    pub async fn prepare_context(
-        &self,
-        agent_id: AgentId,
-        config: &mut aura_agent::AgentLoopConfig,
-    ) {
-        if let Some(idx) = config.system_prompt.find("\n<agent_memory>") {
-            config.system_prompt.truncate(idx);
+    /// `<agent_memory>` block to ensure idempotency, then appends a
+    /// fresh one. Operating on `&mut String` (rather than `&mut
+    /// AgentLoopConfig`) keeps this crate free of any upward edge into
+    /// `aura-agent` — callers in `aura-runtime` pass
+    /// `&mut config.system_prompt` explicitly.
+    pub async fn prepare_context(&self, agent_id: AgentId, system_prompt: &mut String) {
+        if let Some(idx) = system_prompt.find("\n<agent_memory>") {
+            system_prompt.truncate(idx);
         }
 
         match self.retrieve(agent_id).await {
             Ok(packet) => {
                 let block = packet.format_for_prompt();
                 if !block.is_empty() {
-                    config.system_prompt.push_str(&block);
+                    system_prompt.push_str(&block);
                 }
             }
             Err(e) => {
-                // Phase 5 (error-handling polish): keep this best-effort
-                // (memory retrieval is non-critical for the agent loop)
-                // but include `agent_id` so operators can correlate
-                // prompt-injection misses with the affected agent.
+                // Best-effort: memory retrieval is non-critical for the
+                // agent loop. Include `agent_id` so operators can
+                // correlate prompt-injection misses with the affected
+                // agent.
                 tracing::warn!(
                     error = %e,
                     agent_id = ?agent_id,
@@ -113,7 +118,7 @@ impl MemoryManager {
         }
     }
 
-    /// Process an agent loop result through the write pipeline.
+    /// Process a turn summary through the write pipeline.
     ///
     /// Extracts the last conversation turn from message history and feeds
     /// both heuristic and LLM extraction.
@@ -123,9 +128,10 @@ impl MemoryManager {
     pub async fn process_result(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
     ) -> Result<WriteReport, MemoryError> {
-        self.process_result_with_token(agent_id, result, None).await
+        self.process_result_with_token(agent_id, summary, None)
+            .await
     }
 
     /// Like [`process_result`](Self::process_result) but with an explicit
@@ -133,10 +139,10 @@ impl MemoryManager {
     pub async fn process_result_with_token(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
         auth_token: Option<String>,
     ) -> Result<WriteReport, MemoryError> {
-        self.process_result_with_context(agent_id, result, auth_token, &[])
+        self.process_result_with_context(agent_id, summary, auth_token, &[])
             .await
     }
 
@@ -146,13 +152,13 @@ impl MemoryManager {
     pub async fn process_result_with_context(
         &self,
         agent_id: AgentId,
-        result: &AgentLoopResult,
+        summary: &TurnSummary,
         auth_token: Option<String>,
         active_skills: &[String],
     ) -> Result<WriteReport, MemoryError> {
-        let turn = ConversationTurn::from_messages(&result.messages, &result.total_text);
+        let turn = ConversationTurn::from_messages(&summary.messages, &summary.total_text);
         self.pipeline
-            .ingest_with_context(agent_id, result, turn.as_ref(), auth_token, active_skills)
+            .ingest_with_context(agent_id, summary, turn.as_ref(), auth_token, active_skills)
             .await
     }
 
@@ -219,72 +225,5 @@ impl MemoryManager {
     #[must_use]
     pub fn store(&self) -> &Arc<dyn MemoryStoreApi> {
         &self.store
-    }
-
-    /// Create a `TurnObserver` that feeds completed turns into this manager.
-    ///
-    /// The `auth_token` is the session JWT needed for proxy-mode LLM calls
-    /// (used by the Haiku extraction model). `active_skills` are the skill
-    /// names injected into the session so the refiner can tag extracted
-    /// procedures with the relevant skill.
-    ///
-    /// Attach the returned observer to `AgentLoopConfig::observers` so memory
-    /// ingestion fires automatically inside the agent loop.
-    pub fn turn_observer(
-        self: &Arc<Self>,
-        agent_id: AgentId,
-        auth_token: Option<String>,
-    ) -> Arc<dyn aura_agent::TurnObserver> {
-        self.turn_observer_with_skills(agent_id, auth_token, Vec::new())
-    }
-
-    pub fn turn_observer_with_skills(
-        self: &Arc<Self>,
-        agent_id: AgentId,
-        auth_token: Option<String>,
-        active_skills: Vec<String>,
-    ) -> Arc<dyn aura_agent::TurnObserver> {
-        Arc::new(MemoryTurnObserver {
-            manager: Arc::clone(self),
-            agent_id,
-            auth_token,
-            active_skills,
-        })
-    }
-}
-
-/// Adapter that implements [`aura_agent::TurnObserver`] by delegating to
-/// [`MemoryManager::process_result`].
-struct MemoryTurnObserver {
-    manager: Arc<MemoryManager>,
-    agent_id: AgentId,
-    auth_token: Option<String>,
-    active_skills: Vec<String>,
-}
-
-#[async_trait]
-impl aura_agent::TurnObserver for MemoryTurnObserver {
-    async fn on_turn_complete(&self, result: &AgentLoopResult) {
-        if let Err(e) = self
-            .manager
-            .process_result_with_context(
-                self.agent_id,
-                result,
-                self.auth_token.clone(),
-                &self.active_skills,
-            )
-            .await
-        {
-            // Phase 5 (error-handling polish): the observer is
-            // intentionally best-effort — a failed memory write must
-            // not abort the conversation — but the warning gains an
-            // `agent_id` field so a flapping ingest pipeline is
-            // greppable in the structured-log stream.
-            tracing::warn!(
-                error = %e,
-                agent_id = ?self.agent_id,
-                "Memory ingestion failed after turn"
-            );
-        }
     }
 }

@@ -8,21 +8,15 @@
 //!
 //! Layer: context
 //!
-//! Phase 6a status (TIGHTENED prompt redo): the upward edges into
-//! `aura-agent` — `AgentLoopResult`, `AgentLoopConfig`,
-//! `KernelModelGateway`, and the `TurnObserver` trait — still hold.
-//! A partial inversion (a layer-neutral `TurnSummary` mirror +
-//! injecting `Arc<dyn ModelProvider>` into `MemoryConsolidator` /
-//! `LlmRefiner` / `MemoryManager`) was prototyped this phase and
-//! reverted because relocating the `MemoryTurnObserver`
-//! `TurnObserver` impl plus the
-//! `prepare_context(&mut AgentLoopConfig)` site to `aura-agent`
-//! requires touching three crates (`aura-context-memory`,
-//! `aura-agent`, `aura-runtime::node`) and is incompatible with
-//! Phase 6a's audit-tier-focused scope. The inversion is tracked
-//! as `Phase 6c — context-memory inversion` in the architecture
-//! plan. The advisory `tests/layer_boundary.rs` check continues to
-//! WARN about the edge, not fail.
+//! Phase 6c (context-memory inversion) completed the inversion that was
+//! prototyped and reverted during Phase 6a: this crate no longer depends
+//! on `aura-agent`. The pipeline now consumes the layer-neutral
+//! [`TurnSummary`] mirror, and the [`MemoryManager`] / [`LlmRefiner`] /
+//! [`MemoryConsolidator`] take `Arc<dyn aura_reasoner::ModelProvider>`
+//! directly. The runtime-side adapter that bridges the agent loop's
+//! `AgentLoopResult` + `TurnObserver` to this crate lives in
+//! `aura_runtime::memory_observer`. `tests/layer_boundary.rs` now
+//! fails on any `aura-context-memory -> aura-agent` edge.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
@@ -37,20 +31,19 @@ mod refinement;
 mod retrieval;
 mod salience;
 mod store;
+mod turn_summary;
 mod types;
 mod write_pipeline;
-
-#[cfg(test)]
-mod test_kernel;
 
 pub use consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 pub use error::MemoryError;
 pub use extraction::ConversationTurn;
 pub use manager::MemoryManager;
 pub use procedures::{compute_skill_relevance, ProcedureConfig, ProcedureExtractor, StepSequence};
-pub use refinement::RefinerConfig;
+pub use refinement::{LlmRefiner, RefinerConfig};
 pub use retrieval::{MemoryRetriever, RetrievalConfig};
 pub use salience::{estimate_tokens, score_event, score_fact, score_procedure};
 pub use store::{MemoryStats, MemoryStore, MemoryStoreApi};
+pub use turn_summary::TurnSummary;
 pub use types::{AgentEvent, Fact, FactSource, MemoryCandidate, MemoryPacket, Procedure};
 pub use write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};

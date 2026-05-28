@@ -428,7 +428,14 @@ impl Scheduler {
 
         let mut config = config;
         if let Some(ref mm) = self.memory_manager {
-            config.observers.push(mm.turn_observer(agent_id, None));
+            config
+                .observers
+                .push(crate::memory_observer::MemoryTurnObserver::new(
+                    Arc::clone(mm),
+                    agent_id,
+                    None,
+                    Vec::new(),
+                ));
         }
         let agent_loop = AgentLoop::new(config);
 

@@ -42,6 +42,7 @@ pub(crate) mod executor_factory;
 pub mod files_api;
 pub mod inbound_console;
 pub(crate) mod jwt_domain;
+pub mod memory_observer;
 mod node;
 pub(crate) mod protocol;
 pub(crate) mod router;

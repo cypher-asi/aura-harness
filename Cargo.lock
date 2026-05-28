@@ -334,10 +334,7 @@ dependencies = [
 name = "aura-context-memory"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "aura-agent",
  "aura-core",
- "aura-kernel",
  "aura-reasoner",
  "aura-store",
  "chrono",

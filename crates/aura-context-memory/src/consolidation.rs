@@ -8,7 +8,6 @@
 use crate::error::MemoryError;
 use crate::store::MemoryStoreApi;
 use crate::types::{AgentEvent, Fact, FactSource};
-use aura_agent::KernelModelGateway;
 use aura_core::{AgentEventId, AgentId, FactId};
 use aura_reasoner::{Message, ModelProvider, ModelRequest};
 use chrono::Utc;
@@ -86,21 +85,31 @@ pub struct ConsolidationReport {
 
 /// Post-session consolidator that prunes, compresses, and evolves agent memories.
 ///
-/// LLM calls for compression and fact evolution route through a
-/// [`KernelModelGateway`] so they are recorded in the kernel's append-only
-/// log (Invariant §3).
+/// LLM calls for compression and fact evolution go through the injected
+/// [`ModelProvider`]. Production wiring MUST pass a recording-capable
+/// provider (e.g. `aura_agent::KernelModelGateway`) so Invariant §3
+/// ("Every LLM Call Is Recorded") holds. The context layer accepts the
+/// abstract trait object to avoid an upward edge into `aura-agent`; the
+/// runtime composition root in `aura_runtime::node` is the single place
+/// responsible for picking the right impl.
 pub struct MemoryConsolidator {
     store: Arc<dyn MemoryStoreApi>,
-    provider: Arc<KernelModelGateway>,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
     config: ConsolidationConfig,
 }
 
 impl MemoryConsolidator {
-    /// Create a new consolidator backed by the given store and kernel gateway.
+    /// Create a new consolidator backed by the given store and model
+    /// provider.
+    ///
+    /// `provider` must be a recording-capable [`ModelProvider`] (in
+    /// production, `aura_agent::KernelModelGateway`) so the LLM calls
+    /// the compress / evolve phases issue are persisted in the kernel's
+    /// append-only log per Invariant §3.
     #[must_use]
     pub fn new(
         store: Arc<dyn MemoryStoreApi>,
-        provider: Arc<KernelModelGateway>,
+        provider: Arc<dyn ModelProvider + Send + Sync>,
         config: ConsolidationConfig,
     ) -> Self {
         Self {
