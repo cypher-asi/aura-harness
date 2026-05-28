@@ -5,9 +5,9 @@
 //! construction time and transparently injects it whenever the caller passes
 //! `None`.
 //!
-//! Phase B / Commit 3 keeps this alongside the engine because the
-//! automaton bridge is its only caller. Phase C lifts both this and
-//! the HTTP `DomainApi` impl into a dedicated `aura-domain-http` crate.
+//! Phase C / Commit 4 relocates this here alongside the HTTP
+//! `DomainApi` impl. The automaton bridge in `aura-engine` now imports
+//! [`JwtDomainApi`] from this crate.
 
 use std::sync::Arc;
 

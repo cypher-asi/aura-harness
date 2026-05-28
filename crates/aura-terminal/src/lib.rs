@@ -40,6 +40,7 @@ pub mod events;
 pub mod input;
 pub mod layout;
 pub mod themes;
+pub mod ws;
 
 mod app;
 mod renderer;

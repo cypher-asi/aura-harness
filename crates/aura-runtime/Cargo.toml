@@ -1,6 +1,6 @@
 [package]
 name = "aura-runtime"
-description = "Runtime crate for Aura - router, scheduler, workers"
+description = "HTTP/WS gateway crate for Aura — composes aura-engine + aura-domain-http into the aura-node binary"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,6 +39,13 @@ aura-compaction = { path = "../aura-compaction" }
 # `node.rs` instantiates the engine (scheduler + automaton bridge +
 # child runner) and hands it to the gateway router.
 aura-engine = { path = "../aura-engine" }
+# Phase C / Commit 4: HTTP `DomainApi` impl moved out of the gateway.
+# `node.rs` constructs `HttpDomainApi` from here.
+aura-domain-http = { path = "../aura-domain-http" }
+# Phase C / Commit 4: PTY WebSocket handler moved out of the gateway.
+# The `/ws/terminal` upgrade handler is a thin delegate over
+# `aura_terminal::ws::handle_terminal_ws`.
+aura-terminal = { path = "../aura-terminal" }
 # Phase B / Commit 3 / Step 3a: the fleet-layer task dispatcher impl.
 # Wired into the engine's `RuntimeChildRunner` at composition time.
 aura-fleet-subagent = { path = "../aura-fleet-subagent" }
@@ -65,21 +72,24 @@ tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 axum = { workspace = true }
+# Phase C / Commit 4 note: the HTTP `DomainApi` impl moved to
+# `aura-domain-http` (which now owns the `reqwest`-feature surface
+# the gateway used to import directly). `reqwest` stays as a
+# direct dep here because `gateway/session/cross_agent_hook.rs`
+# still issues outbound HTTP from the WS-session layer for the
+# Aura-OS cross-agent callback path.
 reqwest = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tower_governor = { workspace = true }
 governor = { workspace = true }
 dashmap = { workspace = true }
-parking_lot = { workspace = true }
 blake3 = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true }
 futures-util = { workspace = true }
 dotenvy = { workspace = true }
-portable-pty = { workspace = true }
-which = { workspace = true }
 dirs = { workspace = true }
 colored = { workspace = true }
 terminal_size = { workspace = true }

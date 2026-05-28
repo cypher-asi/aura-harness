@@ -1,12 +1,12 @@
 //! Node runtime.
 
 use crate::config::NodeConfig;
-use crate::domain::HttpDomainApi;
-use crate::router::{create_router, RouterState};
+use crate::gateway::{create_router, RouterState};
 use anyhow::Context;
 use aura_agent::KernelModelGateway;
 use aura_automaton::AutomatonRuntime;
 use aura_core::AgentId;
+use aura_domain_http::HttpDomainApi;
 use aura_engine::automaton::AutomatonBridge;
 use aura_engine::scheduler::Scheduler;
 use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
@@ -213,7 +213,7 @@ impl Node {
 
         let router_url = std::env::var("AURA_ROUTER_URL").ok();
 
-        let state = RouterState::new(crate::router::RouterStateConfig {
+        let state = RouterState::new(crate::gateway::RouterStateConfig {
             store,
             scheduler,
             config: self.config.clone(),

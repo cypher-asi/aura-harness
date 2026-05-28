@@ -1,13 +1,19 @@
 //! Terminal WebSocket handler.
 //!
-//! Exposes a single WebSocket endpoint (`/ws/terminal`) that manages the
-//! full PTY lifecycle within a single connection:
+//! Exposes the PTY-backed WebSocket protocol used by the gateway's
+//! `/ws/terminal` upgrade. Manages the full PTY lifecycle within a
+//! single connection:
 //!
 //! 1. Client sends `{"type":"spawn","cols":80,"rows":24}`.
 //! 2. Server spawns a PTY, sends `{"type":"spawned","shell":"..."}`.
 //! 3. Bidirectional I/O: `input`/`output`/`resize`/`exit` JSON frames,
 //!    with binary data base64-encoded — same protocol as aura-os.
 //! 4. Closing the WebSocket kills the PTY.
+//!
+//! Phase C / Commit 4 moves this out of `aura-runtime` so the gateway
+//! crate no longer pulls in `portable-pty` / `which` directly. The
+//! gateway keeps a thin delegating handler that forwards the upgrade
+//! to [`handle_terminal_ws`].
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -67,14 +73,12 @@ struct ClientMsg {
 
 /// Handle a terminal WebSocket connection.
 pub async fn handle_terminal_ws(mut socket: WebSocket) {
-    let spawn = match wait_for_spawn(&mut socket).await {
-        Some(s) => s,
-        None => return,
+    let Some(spawn) = wait_for_spawn(&mut socket).await else {
+        return;
     };
 
-    let (shell, master, reader, writer) = match open_pty(&mut socket, &spawn).await {
-        Some(t) => t,
-        None => return,
+    let Some((shell, master, reader, writer)) = open_pty(&mut socket, &spawn).await else {
+        return;
     };
 
     let _ = send_json(
@@ -287,6 +291,12 @@ async fn send_json(socket: &mut WebSocket, value: &serde_json::Value) -> Result<
     socket.send(Message::Text(value.to_string())).await
 }
 
+// `output_tx` and `exit_tx` are intentionally passed by value:
+// `read_pty_loop` runs inside `tokio::task::spawn_blocking`, which
+// requires `'static` captures, so the closure has to own its
+// senders. Dropping them on loop exit also closes the channel ends
+// and lets the WS bridge tear down cleanly.
+#[allow(clippy::needless_pass_by_value)]
 fn read_pty_loop(
     mut reader: Box<dyn Read + Send>,
     output_tx: mpsc::Sender<Vec<u8>>,

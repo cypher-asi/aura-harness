@@ -1,6 +1,6 @@
-use super::errors::ApiError;
-use super::ids::parse_agent_id;
-use super::*;
+use super::super::errors::ApiError;
+use super::super::*;
+use super::util::parse_agent_id;
 use crate::tool_permissions::{
     append_agent_tool_permissions_entry, effective_tool_infos, enforce_monotonic_update,
     load_agent_tool_context, validate_agent_tool_permissions, validate_user_defaults,
@@ -9,22 +9,22 @@ use crate::tool_permissions::{
 use aura_core::{AgentToolPermissions, UserToolDefaults};
 
 #[derive(Debug, Deserialize)]
-pub(super) struct AgentToolsQuery {
+pub(in crate::gateway) struct AgentToolsQuery {
     #[serde(default)]
     user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct AgentToolPermissionsResponse {
+pub(in crate::gateway) struct AgentToolPermissionsResponse {
     tool_permissions: Option<AgentToolPermissions>,
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct AgentToolsResponse {
+pub(in crate::gateway) struct AgentToolsResponse {
     tools: Vec<EffectiveToolInfo>,
 }
 
-pub(super) async fn get_user_tool_defaults_handler(
+pub(in crate::gateway) async fn get_user_tool_defaults_handler(
     State(state): State<RouterState>,
     Path(user_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -36,7 +36,7 @@ pub(super) async fn get_user_tool_defaults_handler(
     Ok(Json(defaults))
 }
 
-pub(super) async fn put_user_tool_defaults_handler(
+pub(in crate::gateway) async fn put_user_tool_defaults_handler(
     State(state): State<RouterState>,
     Path(user_id): Path<String>,
     Json(defaults): Json<UserToolDefaults>,
@@ -49,7 +49,7 @@ pub(super) async fn put_user_tool_defaults_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn get_agent_tool_permissions_handler(
+pub(in crate::gateway) async fn get_agent_tool_permissions_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -60,7 +60,7 @@ pub(super) async fn get_agent_tool_permissions_handler(
     }))
 }
 
-pub(super) async fn put_agent_tool_permissions_handler(
+pub(in crate::gateway) async fn put_agent_tool_permissions_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
     Json(next): Json<AgentToolPermissions>,
@@ -95,7 +95,7 @@ pub(super) async fn put_agent_tool_permissions_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn get_agent_tools_handler(
+pub(in crate::gateway) async fn get_agent_tools_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
     Query(query): Query<AgentToolsQuery>,

@@ -7,7 +7,7 @@
 //! [`super::RouterState::pending_chat_runs`]; automaton runs are
 //! tracked by the [`aura_engine::automaton::AutomatonBridge`].
 
-use super::*;
+use super::super::*;
 use axum::response::Response;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -15,10 +15,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 /// serve at once. Each live socket holds a tokio task plus terminal /
 /// session state; capping the count bounds the "slow-client task
 /// exhaustion" worst case flagged by the H5 audit finding.
-pub(super) const MAX_WS_CONNS_PER_NODE: usize = 128;
+pub(in crate::gateway) const MAX_WS_CONNS_PER_NODE: usize = 128;
 
 /// Try to reserve a WebSocket connection slot.
-pub(super) fn try_acquire_ws_slot(sem: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+pub(in crate::gateway) fn try_acquire_ws_slot(
+    sem: &Arc<Semaphore>,
+) -> Option<OwnedSemaphorePermit> {
     Arc::clone(sem).try_acquire_owned().ok()
 }
 
@@ -32,7 +34,7 @@ pub(super) fn try_acquire_ws_slot(sem: &Arc<Semaphore>) -> Option<OwnedSemaphore
 /// guard prevents a regression if a future contributor wires the
 /// handler up to a fresh `Router` that does not inherit the
 /// middleware layer.
-pub(super) async fn run_ws_handler(
+pub(in crate::gateway) async fn run_ws_handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
     Path(run_id): Path<String>,
@@ -90,10 +92,10 @@ pub(super) async fn run_ws_handler(
             );
             return StatusCode::CONFLICT.into_response();
         };
-        let ctx = crate::session::WsContext::from_state(&state, auth_token);
+        let ctx = crate::gateway::session::WsContext::from_state(&state, auth_token);
         return ws
             .on_upgrade(move |socket| async move {
-                crate::session::handle_chat_ws_connection(socket, session, ctx).await;
+                crate::gateway::session::handle_chat_ws_connection(socket, session, ctx).await;
                 drop(permit);
             })
             .into_response();

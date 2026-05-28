@@ -56,7 +56,7 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         require_auth: true,
         ..NodeConfig::default()
     };
-    RouterState::new(crate::router::RouterStateConfig {
+    RouterState::new(crate::gateway::RouterStateConfig {
         store,
         scheduler,
         config,
@@ -570,7 +570,7 @@ fn test_router_state_with_managers() -> RouterState {
         require_auth: true,
         ..NodeConfig::default()
     };
-    RouterState::new(crate::router::RouterStateConfig {
+    RouterState::new(crate::gateway::RouterStateConfig {
         store,
         scheduler,
         config,
@@ -1340,7 +1340,7 @@ async fn test_rejects_when_server_auth_token_empty() {
         require_auth: true,
         ..NodeConfig::default()
     };
-    let state = RouterState::new(crate::router::RouterStateConfig {
+    let state = RouterState::new(crate::gateway::RouterStateConfig {
         store,
         scheduler,
         config,
@@ -1432,7 +1432,7 @@ fn test_router_state_with_workspace() -> (RouterState, tempfile::TempDir) {
         data_dir,
         ..NodeConfig::default()
     };
-    let state = RouterState::new(crate::router::RouterStateConfig {
+    let state = RouterState::new(crate::gateway::RouterStateConfig {
         store,
         scheduler,
         config,
@@ -1640,7 +1640,7 @@ async fn test_tx_rate_limit_returns_429_under_flood() {
 /// handlers short-circuit to `503` on the `None` return.
 #[test]
 fn test_ws_slot_semaphore_rejects_over_capacity() {
-    use super::ws::try_acquire_ws_slot;
+    use super::handlers::run_ws::try_acquire_ws_slot;
     use tokio::sync::Semaphore;
 
     let sem = Arc::new(Semaphore::new(3));

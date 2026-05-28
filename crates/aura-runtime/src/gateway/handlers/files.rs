@@ -1,9 +1,9 @@
-use super::*;
+use super::super::*;
 use crate::config::PathError;
 use crate::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ListFilesQuery {
+pub(in crate::gateway) struct ListFilesQuery {
     #[serde(default = "default_files_path")]
     path: String,
     #[serde(default = "default_files_depth")]
@@ -92,7 +92,7 @@ fn path_error_response(err: &PathError) -> (StatusCode, Json<serde_json::Value>)
     }
 }
 
-pub(super) async fn list_files_handler(
+pub(in crate::gateway) async fn list_files_handler(
     State(state): State<RouterState>,
     Query(query): Query<ListFilesQuery>,
 ) -> impl IntoResponse {
@@ -144,11 +144,11 @@ pub(super) async fn list_files_handler(
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ReadFileQuery {
+pub(in crate::gateway) struct ReadFileQuery {
     path: String,
 }
 
-pub(super) async fn read_file_handler(
+pub(in crate::gateway) async fn read_file_handler(
     State(state): State<RouterState>,
     Query(query): Query<ReadFileQuery>,
 ) -> impl IntoResponse {
@@ -221,11 +221,11 @@ pub(super) async fn read_file_handler(
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ResolveWorkspaceQuery {
+pub(in crate::gateway) struct ResolveWorkspaceQuery {
     project_name: String,
 }
 
-pub(super) async fn resolve_workspace_handler(
+pub(in crate::gateway) async fn resolve_workspace_handler(
     State(state): State<RouterState>,
     Query(query): Query<ResolveWorkspaceQuery>,
 ) -> impl IntoResponse {

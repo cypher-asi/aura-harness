@@ -8,12 +8,12 @@
 //! engine surface based on the run kind. Chat runs are prepared
 //! synchronously and stashed in [`super::RouterState::pending_chat_runs`]
 //! so the follow-up `WS /stream/:run_id` finds an already-applied
-//! [`crate::session::Session`]. DevLoop / TaskRun runs are handed to
+//! [`crate::gateway::session::Session`]. DevLoop / TaskRun runs are handed to
 //! the automaton bridge and exposed via the same `/stream/:run_id`
 //! route in event-only mode.
 
-use super::*;
-use crate::session::{prepare_chat_session, ChatRequestError};
+use super::super::*;
+use crate::gateway::session::{prepare_chat_session, ChatRequestError};
 use aura_protocol::{AgentPermissionsWire, RuntimeRequest, RuntimeRequestType, RuntimeRunResponse};
 use uuid::Uuid;
 
@@ -22,7 +22,7 @@ use uuid::Uuid;
 /// Returns `{ run_id, event_stream_url }`. The caller follows up with
 /// `WS /stream/:run_id` to either drive a chat session bidirectionally
 /// or receive event-only stream for the automaton runs.
-pub(super) async fn run_start_handler(
+pub(in crate::gateway) async fn run_start_handler(
     headers: HeaderMap,
     State(state): State<RouterState>,
     Json(req): Json<RuntimeRequest>,
@@ -53,7 +53,7 @@ async fn start_chat_run(
     if auth_token.is_some() {
         req.auth_jwt = auth_token.clone();
     }
-    let ctx = crate::session::WsContext::from_state(&state, auth_token);
+    let ctx = crate::gateway::session::WsContext::from_state(&state, auth_token);
     let session =
         prepare_chat_session(req, &ctx)
             .await
@@ -264,7 +264,7 @@ fn automaton_bridge(
 }
 
 fn wire_permissions_to_core(wire: AgentPermissionsWire) -> aura_core::AgentPermissions {
-    crate::session::agent_permissions_from_wire(wire)
+    crate::gateway::session::agent_permissions_from_wire(wire)
 }
 
 fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
@@ -292,7 +292,7 @@ fn run_start_error_response(e: String) -> (StatusCode, Json<serde_json::Value>) 
 /// `{"status": "pending_attach"}`. Active chat runs return
 /// `{"status": "chat_active"}`. Automaton runs delegate to the
 /// existing bridge status.
-pub(super) async fn run_status_handler(
+pub(in crate::gateway) async fn run_status_handler(
     State(state): State<RouterState>,
     Path(run_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -315,7 +315,7 @@ pub(super) async fn run_status_handler(
 ///
 /// Chat runs aren't enumerated today because they're per-WebSocket and
 /// hold no server-side identity beyond the pending-attach map entry.
-pub(super) async fn run_list_handler(
+pub(in crate::gateway) async fn run_list_handler(
     State(state): State<RouterState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let bridge = automaton_bridge(&state)?;
@@ -326,7 +326,7 @@ pub(super) async fn run_list_handler(
 }
 
 /// `POST /v1/run/:run_id/pause` — pause an active automaton run.
-pub(super) async fn run_pause_handler(
+pub(in crate::gateway) async fn run_pause_handler(
     State(state): State<RouterState>,
     Path(run_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -345,7 +345,7 @@ pub(super) async fn run_pause_handler(
 /// For chat runs awaiting attachment, removes the pending entry so the
 /// matching `WS /stream/:run_id` 404s instead of attaching to a zombie
 /// session. Automaton runs delegate to the bridge.
-pub(super) async fn run_stop_handler(
+pub(in crate::gateway) async fn run_stop_handler(
     State(state): State<RouterState>,
     Path(run_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {

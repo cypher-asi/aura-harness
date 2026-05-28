@@ -32,13 +32,13 @@
 //!   the automaton bridge during dev-loop / task-run bootstrap.
 //! - [`executor`] — shared `ToolResolver` / `ExecutorRouter`
 //!   construction helpers.
-//! - [`jwt_domain`] — `JwtDomainApi` wrapper used by the automaton
-//!   bridge to inject the per-run JWT into `DomainApi` calls. Phase C
-//!   relocates this to a dedicated `aura-domain-http` crate alongside
-//!   the HTTP `DomainApi` impl; for Phase B it travels with the
-//!   automaton bridge to keep the engine self-contained.
 //! - [`model_context`] — `context_window_for_model` lookup used by the
 //!   automaton bridge and the gateway-side session config.
+//!
+//! Phase C / Commit 4 moved the `JwtDomainApi` wrapper (and the
+//! HTTP `DomainApi` impl that used to live in the gateway) into the
+//! dedicated `aura-domain-http` crate; the automaton bridge imports
+//! it from there now.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
@@ -66,7 +66,6 @@ pub mod automaton;
 pub mod capabilities;
 pub mod child_runner;
 pub mod executor;
-pub mod jwt_domain;
 pub mod memory_observer;
 pub mod model_context;
 pub mod scheduler;

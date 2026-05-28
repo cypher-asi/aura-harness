@@ -52,8 +52,8 @@ use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::ToolConfig;
 
-use crate::jwt_domain::JwtDomainApi;
 use crate::scheduler::Scheduler;
+use aura_domain_http::JwtDomainApi;
 
 pub(crate) use event_channel::EventChannel;
 pub use event_channel::EventSubscription;

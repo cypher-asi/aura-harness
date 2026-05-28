@@ -450,6 +450,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aura-domain-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aura-tools",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aura-engine"
 version = "0.1.0"
 dependencies = [
@@ -462,6 +477,7 @@ dependencies = [
  "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-domain-http",
  "aura-fleet-spawn",
  "aura-kernel",
  "aura-memory",
@@ -805,6 +821,7 @@ dependencies = [
  "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-domain-http",
  "aura-engine",
  "aura-fleet-daemon",
  "aura-fleet-quota",
@@ -820,6 +837,7 @@ dependencies = [
  "aura-reasoner",
  "aura-skills",
  "aura-store",
+ "aura-terminal",
  "aura-tools",
  "axum",
  "base64 0.22.1",
@@ -833,8 +851,6 @@ dependencies = [
  "futures-util",
  "governor",
  "insta",
- "parking_lot",
- "portable-pty",
  "reqwest",
  "serde",
  "serde_json",
@@ -849,7 +865,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "which",
 ]
 
 [[package]]
@@ -991,8 +1006,13 @@ dependencies = [
 name = "aura-terminal"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
  "chrono",
  "crossterm 0.28.1",
+ "dirs",
+ "futures-util",
+ "portable-pty",
  "ratatui",
  "serde",
  "serde_json",
@@ -1001,6 +1021,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width",
+ "which",
 ]
 
 [[package]]

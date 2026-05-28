@@ -1,0 +1,33 @@
+[package]
+name = "aura-domain-http"
+description = "HTTP-backed `DomainApi` implementation + JWT-injecting wrapper for Aura"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# `aura-tools::domain_tools::DomainApi` is the trait implemented by
+# `HttpDomainApi` + `JwtDomainApi`; consumers reach into it through
+# this crate's re-exports.
+aura-tools = { path = "../aura-tools" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# Phase C / Commit 4: `thiserror` is the library-crate error library
+# (rules.md §4.2). The current trait surface returns `anyhow::Result`
+# (defined in `aura-tools::domain_tools::DomainApi`) so `anyhow` is
+# also kept as a direct dep here while the trait lives upstream. A
+# future commit can swap the trait to a typed `DomainError` (defined
+# locally here) and drop `anyhow` from this crate's deps.
+[package.metadata.cargo-machete]
+ignored = ["thiserror"]
+
+[lints]
+workspace = true

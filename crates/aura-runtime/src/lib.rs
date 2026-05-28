@@ -17,14 +17,25 @@
 //!
 //! Phase B / Commit 3 extracted the orchestration engine into the
 //! `aura-engine` crate. The scheduler, worker, automaton bridge,
-//! memory observer, runtime capabilities, executor factory, JWT
-//! domain wrapper, and `RuntimeChildRunner` live there now. The
-//! subagent dispatcher impl moved to the new `aura-fleet-subagent`
-//! crate (fleet layer); the bundled registry + pure-data adapter
-//! helpers moved to `aura-agent-subagent` (agent layer).
+//! memory observer, runtime capabilities, executor factory, and
+//! `RuntimeChildRunner` live there now. The subagent dispatcher
+//! impl moved to the new `aura-fleet-subagent` crate (fleet layer);
+//! the bundled registry + pure-data adapter helpers moved to
+//! `aura-agent-subagent` (agent layer).
+//!
+//! Phase C / Commit 4 pulled the HTTP `DomainApi` impl into the
+//! `aura-domain-http` crate (along with the JWT-injecting wrapper
+//! that Phase B had parked in `aura-engine`) and lifted the PTY
+//! WebSocket handler into `aura-terminal`. The former
+//! `crate::router` module was renamed to `crate::gateway` and
+//! reorganized into a handler-grouped layout
+//! (`gateway::handlers::{run, run_ws, files, tx, memory, skills,
+//! tool_permissions}`) plus `gateway::session::*` for the
+//! per-WebSocket-connection protocol layer; the middleware-stack
+//! assembly lives in `gateway::middleware::create_router`.
 //!
 //! Provides:
-//! - HTTP router for transaction submission + management endpoints.
+//! - HTTP gateway for `POST /v1/run` + management endpoints.
 //! - WS handlers attached to a [`aura_engine::Scheduler`].
 //! - Auth, config, files-api helpers shared with surface-cli.
 
@@ -53,15 +64,19 @@
 pub mod auth;
 mod config;
 pub mod console_format;
-pub(crate) mod domain;
 pub mod files_api;
+pub(crate) mod gateway;
 pub mod inbound_console;
 mod node;
 pub(crate) mod protocol;
-pub(crate) mod router;
-pub(crate) mod session;
-pub(crate) mod terminal;
 pub(crate) mod tool_permissions;
+/// Phase C / Commit 4: legacy `crate::terminal::handle_terminal_ws`
+/// import path inside the gateway points at this re-export so the
+/// terminal-upgrade handler keeps reading naturally even though the
+/// implementation now lives in `aura-terminal`.
+pub(crate) mod terminal {
+    pub(crate) use aura_terminal::ws::handle_terminal_ws;
+}
 
 pub use config::NodeConfig;
 pub use node::Node;
@@ -190,7 +205,7 @@ pub use aura_protocol::{
 
 #[cfg(feature = "test-support")]
 pub mod test_support {
-    pub use crate::router::{create_router, RouterState, RouterStateConfig};
+    pub use crate::gateway::{create_router, RouterState, RouterStateConfig};
     pub use aura_engine::scheduler::Scheduler;
 }
 

@@ -12,7 +12,7 @@
 //! on a [`RuntimeRequest`] over HTTP and the session is fully
 //! initialized before the WebSocket attaches.
 
-use crate::session::ToolApprovalBroker;
+use crate::gateway::session::ToolApprovalBroker;
 use aura_agent::AgentLoopConfig;
 use aura_core::{
     AgentId, AgentPermissions, AgentScope, AgentToolPermissions, Capability,

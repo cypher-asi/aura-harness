@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-pub(in crate::router) struct CreateFactBody {
+pub(in crate::gateway) struct CreateFactBody {
     pub key: String,
     pub value: serde_json::Value,
     #[serde(default = "default_confidence")]
@@ -20,16 +20,16 @@ pub(in crate::router) struct CreateFactBody {
     pub importance: f32,
 }
 
-pub(in crate::router) fn default_confidence() -> f32 {
+pub(in crate::gateway) fn default_confidence() -> f32 {
     1.0
 }
 
-pub(in crate::router) fn default_importance() -> f32 {
+pub(in crate::gateway) fn default_importance() -> f32 {
     0.5
 }
 
 #[derive(Deserialize)]
-pub(in crate::router) struct CreateEventBody {
+pub(in crate::gateway) struct CreateEventBody {
     pub event_type: String,
     pub summary: String,
     #[serde(default)]
@@ -39,18 +39,18 @@ pub(in crate::router) struct CreateEventBody {
 }
 
 #[derive(Deserialize)]
-pub(in crate::router) struct BulkDeleteEventsBody {
+pub(in crate::gateway) struct BulkDeleteEventsBody {
     pub before: DateTime<Utc>,
 }
 
 #[derive(Deserialize, Default)]
-pub(in crate::router) struct ProcedureListParams {
+pub(in crate::gateway) struct ProcedureListParams {
     pub skill: Option<String>,
     pub min_relevance: Option<f32>,
 }
 
 #[derive(Deserialize)]
-pub(in crate::router) struct CreateProcedureBody {
+pub(in crate::gateway) struct CreateProcedureBody {
     pub name: String,
     pub trigger: String,
     #[serde(default)]
@@ -64,7 +64,7 @@ pub(in crate::router) struct CreateProcedureBody {
 }
 
 #[derive(Deserialize)]
-pub(in crate::router) struct UpdateProcedureBody {
+pub(in crate::gateway) struct UpdateProcedureBody {
     pub name: String,
     pub trigger: String,
     #[serde(default)]

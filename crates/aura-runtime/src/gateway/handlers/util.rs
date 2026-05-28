@@ -7,7 +7,7 @@
 //! form (matching the tx + tool-permissions surface) so every router
 //! endpoint speaks the same agent-id grammar.
 
-use super::errors::ApiError;
+use super::super::errors::ApiError;
 use aura_core::AgentId;
 
 /// Parse an agent id from a path or body field.
@@ -22,7 +22,7 @@ use aura_core::AgentId;
 ///   noticed they're routing through aura-os' `harness_agent_id`
 ///   partition still resolve to the underlying template id (the
 ///   harness keys long-term memory by template, not partition — see
-///   [`crate::session::Session::memory_agent_id`]).
+///   [`crate::gateway::session::Session::memory_agent_id`]).
 ///
 /// The partition key also supports a **three-segment** form
 /// `"{template}::{instance}::{session}"` which aura-os emits on chat

@@ -80,6 +80,11 @@ members = [
     # `aura-engine`; `aura-runtime` is shrinking toward the gateway-only
     # composition root.
     "crates/aura-engine",
+    # Phase C / Commit 4 surface-layer extraction: HTTP `DomainApi`
+    # implementation (formerly `aura-runtime::domain`) plus the
+    # JWT-injecting wrapper (formerly `aura-engine::jwt_domain`) live
+    # here so the gateway crate no longer depends on `reqwest`.
+    "crates/aura-domain-http",
     "crates/aura-runtime",
     "crates/aura-protocol",
     # Phase 4b plugin layer (in-process API + on-disk manifest pipeline)

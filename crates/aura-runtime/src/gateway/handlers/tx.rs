@@ -1,23 +1,23 @@
-use super::errors::ApiError;
-use super::ids::parse_agent_id;
-use super::*;
+use super::super::errors::ApiError;
+use super::super::*;
+use super::util::parse_agent_id;
 
 #[derive(Debug, Deserialize)]
-pub(super) struct SubmitTxRequest {
+pub(in crate::gateway) struct SubmitTxRequest {
     agent_id: String,
     kind: String,
     payload: String,
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct SubmitTxResponse {
+pub(in crate::gateway) struct SubmitTxResponse {
     accepted: bool,
     tx_id: String,
 }
 
 /// Accept a transaction submission, enqueue it, and schedule the agent for processing.
 #[instrument(skip(state, request))]
-pub(super) async fn submit_tx_handler(
+pub(in crate::gateway) async fn submit_tx_handler(
     State(state): State<RouterState>,
     Json(request): Json<SubmitTxRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -121,14 +121,14 @@ fn carries_agent_permissions_mutation(payload: &[u8]) -> bool {
 // === Tx Status ===
 
 #[derive(Debug, Serialize)]
-pub(super) struct TxStatusResponse {
+pub(in crate::gateway) struct TxStatusResponse {
     tx_id: String,
     status: String,
 }
 
 /// Check the processing status of a previously submitted transaction.
 #[instrument(skip(state))]
-pub(super) async fn tx_status_handler(
+pub(in crate::gateway) async fn tx_status_handler(
     State(state): State<RouterState>,
     Path((agent_id_hex, tx_id_hex)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -200,14 +200,14 @@ pub(super) async fn tx_status_handler(
 // === Get Head ===
 
 #[derive(Debug, Serialize)]
-pub(super) struct GetHeadResponse {
+pub(in crate::gateway) struct GetHeadResponse {
     agent_id: String,
     head_seq: u64,
 }
 
 /// Return the current head sequence number for a given agent.
 #[instrument(skip(state))]
-pub(super) async fn get_head_handler(
+pub(in crate::gateway) async fn get_head_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -229,7 +229,7 @@ pub(super) async fn get_head_handler(
 // === Scan Record ===
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ScanRecordQuery {
+pub(in crate::gateway) struct ScanRecordQuery {
     #[serde(default = "default_from_seq")]
     from_seq: u64,
     #[serde(default = "default_limit")]
@@ -246,7 +246,7 @@ const fn default_limit() -> usize {
 
 /// Scan an agent's record from a given sequence number, returning up to `limit` entries.
 #[instrument(skip(state))]
-pub(super) async fn scan_record_handler(
+pub(in crate::gateway) async fn scan_record_handler(
     State(state): State<RouterState>,
     Path(agent_id_hex): Path<String>,
     Query(query): Query<ScanRecordQuery>,

@@ -1,14 +1,14 @@
 //! Helper functions for WebSocket session management: init, executor
 //! construction, event forwarding, and turn finalization.
 
-use super::ws_handler::populate_tool_definitions;
+use super::chat::populate_tool_definitions;
 use super::{Session, WsContext};
+use crate::gateway::session::cross_agent_hook::{AuraServerAgentHook, AuraServerSpawnHook};
 use crate::protocol::{
     tool_info_from_definition_with_state, AssistantMessageEnd, ContextBreakdown, ErrorMsg,
     FileDiff, FilesChanged, OutboundMessage, SessionReady, SessionUsage, SkillInfo, TextDelta,
     ThinkingDelta, ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
 };
-use crate::session::cross_agent_hook::{AuraServerAgentHook, AuraServerSpawnHook};
 use async_trait::async_trait;
 use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
@@ -217,8 +217,8 @@ pub(super) async fn emit_session_ready(
     // the worker path 429s with `aura_org_id="missing"
     // aura_session_id="missing"`. See
     // `crates/aura-runtime/src/scheduler.rs` for the registry
-    // contract and `crates/aura-runtime/src/router/tx.rs` /
-    // `crates/aura-runtime/src/router/tool_permissions.rs` for the
+    // contract and `crates/aura-runtime/src/gateway/handlers/tx.rs` /
+    // `crates/aura-runtime/src/gateway/handlers/tool_permissions.rs` for the
     // worker fan-out callers.
     ctx.scheduler
         .identity_registry()
@@ -900,8 +900,8 @@ mod tests {
         prepare_chat_session, resolve_session_workspace, session_scoped_tool_config,
         summarize_files_changed,
     };
+    use crate::gateway::session::{Session, WsContext};
     use crate::protocol::{OutboundMessage, TextDelta};
-    use crate::session::{Session, WsContext};
     use aura_agent::{AgentLoopEvent, AgentLoopResult, FileChange, FileChangeKind};
     use aura_core::{AgentToolPermissions, ToolState, UserToolDefaults};
     use aura_engine::scheduler::Scheduler;

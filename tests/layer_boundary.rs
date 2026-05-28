@@ -153,6 +153,12 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // the surface layer — aura-runtime is the HTTP/WS gateway, aura-engine
     // is the reusable orchestration core the gateway composes.
     ("aura-engine", "surface"),
+    // Phase C / Commit 4 surface-layer extraction: HTTP `DomainApi`
+    // implementation + JWT wrapper pulled out of aura-runtime /
+    // aura-engine. Stays at the surface layer because it composes
+    // lower-layer types (aura-tools::domain_tools::DomainApi) into a
+    // deployable HTTP edge.
+    ("aura-domain-http", "surface"),
     ("aura-runtime", "surface"),
     ("aura-protocol", "core"),
     // Phase 4b plugin layer:

@@ -1,26 +1,35 @@
-//! HTTP and WebSocket router for the node API.
+//! HTTP/WS gateway for the `aura-node` binary.
 //!
-//! The dispatch root only owns the module declarations and re-exports
-//! the public router surface. Implementation lives in dedicated
-//! siblings:
+//! Phase C / Commit 4 renamed the former `router/` module to
+//! `gateway/` and grouped per-endpoint handlers under `handlers/`.
+//! Layout:
 //!
-//! - [`state`] — [`RouterState`] + [`RouterStateConfig`] and the
-//!   `Clone` / `new` plumbing the per-feature handlers thread through.
-//! - [`build`] — `create_router` + the middleware-stack assembly,
-//!   per-route body limits, governor / CORS / connect-info helpers,
-//!   `/health`, `/ws/terminal`.
-//! - [`auth`], [`automaton`], [`errors`], [`files`], [`ids`],
-//!   [`memory`], [`skills`], [`tool_permissions`], [`tx`], [`ws`] —
-//!   per-feature handler bundles already split out before this phase.
+//! - [`state`] — [`RouterState`] + [`RouterStateConfig`] threaded
+//!   through every handler.
+//! - [`middleware`] — `create_router`, the middleware-stack assembly
+//!   (CORS / governor / body-limit / connect-info / observer /
+//!   timeout / trace), the terminal-upgrade delegate, and the
+//!   `/health` handler. Split out of the old `router/build.rs`.
+//! - [`handlers`] — per-endpoint handler bundles:
+//!   [`handlers::run`] (`POST /v1/run`, `/v1/run/list`,
+//!   `/v1/run/:id/{status,pause,stop}`), [`handlers::files`],
+//!   [`handlers::tx`], [`handlers::memory`], [`handlers::skills`],
+//!   [`handlers::tool_permissions`], [`handlers::run_ws`]
+//!   (`WS /stream/:run_id`).
+//! - [`session`] — per-WebSocket-connection state: chat-session
+//!   bootstrap, tool-approval broker, partial-JSON repair.
+//! - [`auth_mw`] — bearer-token enforcing axum middleware shared
+//!   across protected routes.
+//! - [`errors`] — `ApiError`, the canonical JSON failure shape.
 //!
-//! Sibling modules (and `tests.rs`) pull common dependencies via
-//! `use super::*;` — keep the broad `use` block below in sync with
-//! whatever those callers expect, so the diff for them stays empty.
+//! Sibling modules pull common dependencies via `use super::*;` —
+//! keep the broad `use` block below in sync with whatever those
+//! callers expect, so the diff for them stays empty.
 
 #[allow(unused_imports)]
 use crate::config::NodeConfig;
 #[allow(unused_imports)]
-use crate::session::{handle_chat_ws_connection, WsContext};
+use crate::gateway::session::{handle_chat_ws_connection, WsContext};
 #[allow(unused_imports)]
 use crate::terminal;
 #[allow(unused_imports)]
@@ -77,21 +86,15 @@ use tower_http::{
 #[allow(unused_imports)]
 use tracing::{error, info, instrument, warn, Level};
 
-mod auth;
-mod automaton;
-mod build;
-mod errors;
-mod files;
-mod ids;
-mod memory;
-mod skills;
-mod state;
-mod tool_permissions;
-mod tx;
-mod ws;
+pub(crate) mod auth_mw;
+pub(crate) mod errors;
+pub(crate) mod handlers;
+pub(crate) mod middleware;
+pub(crate) mod session;
+pub(crate) mod state;
 
 #[cfg(test)]
 mod tests;
 
-pub use build::create_router;
+pub use middleware::create_router;
 pub use state::{RouterState, RouterStateConfig};

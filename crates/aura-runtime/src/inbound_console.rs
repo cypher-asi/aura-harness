@@ -14,7 +14,7 @@
 //! a `StatusCode::into_response()` with no log at all (auth-middleware
 //! 401, governor 429, body-limit 413, timeout 408, WS slot full,
 //! oversized `SessionInit` open-then-close — see the comment on
-//! [`crate::session::ws_handler::classify_ws_frame`]). This module
+//! [`crate::gateway::session::chat::classify_ws_frame`]). This module
 //! gives those rejections a shared visual surface so an operator
 //! scanning a single log file sees the same `→ in` / `← out` pairing
 //! for inbound traffic that already exists for outbound calls.

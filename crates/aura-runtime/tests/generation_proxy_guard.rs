@@ -1,6 +1,6 @@
 //! Regression guard for the **generation-proxy declared exception**.
 //!
-//! The module `crates/aura-runtime/src/session/generation.rs` is documented in
+//! The module `crates/aura-runtime/src/gateway/session/generation.rs` is documented in
 //! `docs/invariants.md` as an explicit exception to the "all LLM calls go
 //! through the kernel gateway" invariant. The exception is narrow: the
 //! module is a pure SSE pass-through that proxies image / 3D generation
@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 
 /// Path (relative to the crate root) of the module the guard watches.
-const GENERATION_SRC_REL: &str = "src/session/generation.rs";
+const GENERATION_SRC_REL: &str = "src/gateway/session/generation.rs";
 
 /// Identifiers that, if they appear in the generation-proxy source,
 /// indicate the module has started doing something the declared

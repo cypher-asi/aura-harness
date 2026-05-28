@@ -22,6 +22,10 @@ aura-automaton = { path = "../aura-automaton" }
 aura-compaction = { path = "../aura-compaction" }
 aura-prompts = { path = "../aura-prompts" }
 aura-fleet-spawn = { path = "../aura-fleet-spawn" }
+# Phase C / Commit 4: the JWT-injecting `DomainApi` wrapper moved
+# into `aura-domain-http` alongside the HTTP impl. The automaton
+# bridge imports `JwtDomainApi` from there.
+aura-domain-http = { path = "../aura-domain-http" }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }

@@ -30,6 +30,18 @@ tracing = { workspace = true }
 # Unicode display width
 unicode-width = { workspace = true }
 
+# Phase C / Commit 4: PTY WebSocket handler moved here from
+# aura-runtime. Pulls in the axum WS types, base64, futures-util,
+# portable-pty, `which` (for default-shell lookup on Windows), and
+# `dirs` (for the default cwd) — same deps the file used in the
+# previous home.
+axum = { workspace = true }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+portable-pty = { workspace = true }
+dirs = { workspace = true }
+which = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

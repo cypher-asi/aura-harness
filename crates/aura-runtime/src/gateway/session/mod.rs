@@ -14,7 +14,8 @@
 //! - [`ws_handler`] — top-level WebSocket handler and turn orchestration.
 //! - [`tests`] — unit tests extracted alongside the state split.
 
-mod cross_agent_hook;
+mod chat;
+pub(crate) mod cross_agent_hook;
 mod generation;
 mod helpers;
 mod partial_json;
@@ -22,13 +23,12 @@ mod state;
 #[cfg(test)]
 mod tests;
 mod tool_approval;
-mod ws_handler;
 
+pub(crate) use chat::handle_chat_ws_connection;
 pub(crate) use helpers::{prepare_chat_session, ChatRequestError};
 pub(crate) use state::agent_permissions_from_wire;
 pub use state::Session;
 pub(crate) use tool_approval::ToolApprovalBroker;
-pub(crate) use ws_handler::handle_chat_ws_connection;
 
 use aura_engine::scheduler::Scheduler;
 use aura_reasoner::ModelProvider;
@@ -86,11 +86,11 @@ pub(crate) struct WsContext {
 }
 
 impl WsContext {
-    /// Build a [`WsContext`] from a [`crate::router::RouterState`]
+    /// Build a [`WsContext`] from a [`crate::gateway::RouterState`]
     /// snapshot plus the auth token resolved at the
-    /// [`crate::router::RouterState`] entry point.
+    /// [`crate::gateway::RouterState`] entry point.
     pub(crate) fn from_state(
-        state: &crate::router::RouterState,
+        state: &crate::gateway::RouterState,
         auth_token: Option<String>,
     ) -> Self {
         Self {

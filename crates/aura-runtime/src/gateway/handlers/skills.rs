@@ -1,7 +1,7 @@
 //! Skills CRUD API endpoints — list, get, create, activate, and per-agent install/uninstall.
 
-use super::ids::parse_agent_id;
-use super::RouterState;
+use super::super::RouterState;
+use super::util::parse_agent_id;
 use aura_skills::{
     SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource,
 };
@@ -37,7 +37,7 @@ fn require_skills(
 
 /// Response for a single skill (frontmatter + body).
 #[derive(Serialize)]
-pub(super) struct SkillDetail {
+pub(in crate::gateway) struct SkillDetail {
     name: String,
     description: String,
     source: SkillSource,
@@ -47,7 +47,7 @@ pub(super) struct SkillDetail {
 
 /// Response for skill activation.
 #[derive(Serialize)]
-pub(super) struct ActivationResponse {
+pub(in crate::gateway) struct ActivationResponse {
     skill_name: String,
     rendered_content: String,
     allowed_tools: Vec<String>,
@@ -68,7 +68,9 @@ impl From<SkillActivation> for ActivationResponse {
 }
 
 /// `GET /api/skills` — list all skills (metadata only).
-pub(super) async fn list_skills(State(state): State<RouterState>) -> ApiResult<Vec<SkillMeta>> {
+pub(in crate::gateway) async fn list_skills(
+    State(state): State<RouterState>,
+) -> ApiResult<Vec<SkillMeta>> {
     let mgr = require_skills(&state)?;
     let guard = mgr.read().map_err(|_| {
         (
@@ -80,7 +82,7 @@ pub(super) async fn list_skills(State(state): State<RouterState>) -> ApiResult<V
 }
 
 /// `GET /api/skills/:name` — get full skill details.
-pub(super) async fn get_skill(
+pub(in crate::gateway) async fn get_skill(
     State(state): State<RouterState>,
     Path(name): Path<String>,
 ) -> ApiResult<SkillDetail> {
@@ -103,13 +105,13 @@ pub(super) async fn get_skill(
 
 /// Request body for skill activation.
 #[derive(Deserialize)]
-pub(super) struct ActivateBody {
+pub(in crate::gateway) struct ActivateBody {
     #[serde(default)]
     pub arguments: String,
 }
 
 /// `POST /api/skills/:name/activate` — activate a skill with arguments.
-pub(super) async fn activate_skill(
+pub(in crate::gateway) async fn activate_skill(
     State(state): State<RouterState>,
     Path(name): Path<String>,
     Json(body): Json<ActivateBody>,
@@ -129,7 +131,7 @@ pub(super) async fn activate_skill(
 
 /// Request body for creating a new skill.
 #[derive(Deserialize)]
-pub(super) struct CreateSkillBody {
+pub(in crate::gateway) struct CreateSkillBody {
     pub name: String,
     pub description: String,
     #[serde(default)]
@@ -139,7 +141,7 @@ pub(super) struct CreateSkillBody {
 }
 
 /// `POST /api/skills` — create a new skill (writes SKILL.md to personal dir).
-pub(super) async fn create_skill(
+pub(in crate::gateway) async fn create_skill(
     State(state): State<RouterState>,
     Json(body): Json<CreateSkillBody>,
 ) -> Result<(StatusCode, Json<SkillDetail>), (StatusCode, Json<serde_json::Value>)> {
@@ -174,7 +176,7 @@ pub(super) async fn create_skill(
 
 /// Request body for installing a skill for an agent.
 #[derive(Deserialize)]
-pub(super) struct InstallBody {
+pub(in crate::gateway) struct InstallBody {
     pub name: String,
     #[serde(default)]
     pub source_url: Option<String>,
@@ -185,7 +187,7 @@ pub(super) struct InstallBody {
 }
 
 /// `GET /api/agents/:agent_id/skills` — list skills installed for an agent.
-pub(super) async fn list_agent_skills(
+pub(in crate::gateway) async fn list_agent_skills(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
 ) -> ApiResult<Vec<SkillInstallation>> {
@@ -202,7 +204,7 @@ pub(super) async fn list_agent_skills(
 }
 
 /// `POST /api/agents/:agent_id/skills` — install a skill for an agent.
-pub(super) async fn install_agent_skill(
+pub(in crate::gateway) async fn install_agent_skill(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
     Json(body): Json<InstallBody>,
@@ -228,7 +230,7 @@ pub(super) async fn install_agent_skill(
 }
 
 /// `DELETE /api/agents/:agent_id/skills/:name` — uninstall a skill from an agent.
-pub(super) async fn uninstall_agent_skill(
+pub(in crate::gateway) async fn uninstall_agent_skill(
     State(state): State<RouterState>,
     Path((agent_hex, name)): Path<(String, String)>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {

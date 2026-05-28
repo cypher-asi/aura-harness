@@ -1,14 +1,24 @@
-//! `create_router` and the route-mounting / middleware-stack assembly.
+//! `create_router` + the middleware-stack assembly for the gateway.
 //!
-//! Split out of `mod.rs` so the dispatch root only re-exports the
-//! [`super::RouterState`] type and `create_router` entry point, while
-//! the per-feature handler bundles continue to live in their own
-//! sibling modules (`automaton.rs`, `tx.rs`, `files.rs`, `memory/`,
-//! `skills.rs`, `tool_permissions.rs`, `ws.rs`, …). The middleware
-//! helpers (`build_global_governor`, `build_strict_governor`,
-//! `build_cors_layer`, `is_loopback_origin`, `ensure_connect_info`)
-//! are kept here next to their only call site to avoid a separate
-//! `middleware.rs` for what is effectively `create_router` plumbing.
+//! Renamed from `router/build.rs` in Phase C / Commit 4 so the
+//! dispatch root [`super`] only owns module declarations and the
+//! re-exports of [`super::RouterState`] / [`create_router`]. The
+//! per-endpoint handler bundles live under
+//! [`super::handlers`] and are pulled in here purely as imports —
+//! no handler logic lives in this file.
+//!
+//! Co-located with the route-mounting layer:
+//!
+//! - [`create_router`] — splits the public sub-router (just
+//!   `/health`) from the protected sub-router (everything else)
+//!   so the auth middleware applies uniformly.
+//! - Middleware helpers: [`build_cors_layer`],
+//!   [`is_loopback_origin`], [`build_global_governor`],
+//!   [`build_strict_governor`], [`ensure_connect_info`],
+//!   [`inbound_failure_observer_mw`].
+//! - The terminal-upgrade delegate [`terminal_ws_handler`] (forwards
+//!   to `aura_terminal::ws::handle_terminal_ws` — see
+//!   `crate::terminal` re-export) and the `/health` handler.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,17 +49,22 @@ use tracing::{warn, Level};
 
 use crate::terminal;
 
-use super::automaton::{
+use super::auth_mw;
+use super::handlers::files::{list_files_handler, read_file_handler, resolve_workspace_handler};
+use super::handlers::memory;
+use super::handlers::run::{
     run_list_handler, run_pause_handler, run_start_handler, run_status_handler, run_stop_handler,
 };
-use super::files::{list_files_handler, read_file_handler, resolve_workspace_handler};
-use super::tool_permissions::{
+use super::handlers::run_ws::{self, run_ws_handler};
+use super::handlers::skills;
+use super::handlers::tool_permissions::{
     get_agent_tool_permissions_handler, get_agent_tools_handler, get_user_tool_defaults_handler,
     put_agent_tool_permissions_handler, put_user_tool_defaults_handler,
 };
-use super::tx::{get_head_handler, scan_record_handler, submit_tx_handler, tx_status_handler};
-use super::ws::{self, run_ws_handler};
-use super::{auth, memory, skills, RouterState};
+use super::handlers::tx::{
+    get_head_handler, scan_record_handler, submit_tx_handler, tx_status_handler,
+};
+use super::RouterState;
 
 /// Create the router.
 ///
@@ -265,7 +280,7 @@ pub fn create_router(state: RouterState) -> Router {
     let protected = if state.config.require_auth {
         protected.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            auth::require_bearer_mw,
+            auth_mw::require_bearer_mw,
         ))
     } else {
         protected
@@ -415,15 +430,15 @@ async fn terminal_ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<RouterState>,
 ) -> axum::response::Response {
-    let Some(permit) = ws::try_acquire_ws_slot(&state.ws_slots) else {
+    let Some(permit) = run_ws::try_acquire_ws_slot(&state.ws_slots) else {
         warn!(
-            cap = ws::MAX_WS_CONNS_PER_NODE,
+            cap = run_ws::MAX_WS_CONNS_PER_NODE,
             "Refusing /ws/terminal upgrade: WS connection cap reached"
         );
         inbound_console::ws_rejection_line(
             "upgrade.terminal",
             "slot_full",
-            Some(&format!("cap={}", ws::MAX_WS_CONNS_PER_NODE)),
+            Some(&format!("cap={}", run_ws::MAX_WS_CONNS_PER_NODE)),
         );
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
