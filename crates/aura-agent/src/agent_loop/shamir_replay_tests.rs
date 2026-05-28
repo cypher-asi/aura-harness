@@ -40,6 +40,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
+use aura_agent_steering::TurnSteering;
 use aura_compaction::dedup_read_results_by_content_hash;
 use aura_reasoner::{ContentBlock, Message, Role, ToolResultContent};
 use serde::Deserialize;
@@ -381,17 +382,18 @@ fn shamir_replay_steering_fires_on_repeated_hash() {
         nudges_fired >= 1,
         "third identical content_hash must trigger at least one nudge (REPEATED_READ_THRESHOLD = {})", aura_config::REPEATED_READ_THRESHOLD
     );
-    assert_eq!(
-        tracker.pending_count(),
-        nudges_fired,
-        "every threshold-crossing record() call should queue exactly one pending nudge"
-    );
 
-    // Draining via `begin_turn` is the contract the agent loop's
-    // future Phase 3 wiring will use; this assertion locks in that
-    // the queued nudges materialise as `SteeringKind::RepeatedRead`
-    // values keyed by the firing `content_hash`.
-    let drained = tracker.begin_turn();
+    // Draining via the `TurnSteering` trait API is the contract the
+    // agent loop's per-turn wiring uses. Phase 6a relocated the
+    // tracker to `aura-agent-steering`, so this cross-crate test
+    // exercises the public surface (trait `begin_turn` resets
+    // per-turn counts, `drain_for_next_turn` returns the queued
+    // `SteeringKind`s) rather than the now-internal inherent
+    // helpers. The assertion locks in that the queued nudges
+    // materialise as `SteeringKind::RepeatedRead` values keyed by
+    // the firing `content_hash`.
+    TurnSteering::begin_turn(&mut tracker);
+    let drained = tracker.drain_for_next_turn();
     assert_eq!(drained.len(), nudges_fired);
     for kind in &drained {
         match kind {
@@ -404,9 +406,9 @@ fn shamir_replay_steering_fires_on_repeated_hash() {
             other => panic!("expected RepeatedRead, got {other:?}"),
         }
     }
-    assert_eq!(
-        tracker.pending_count(),
-        0,
-        "begin_turn must drain every queued nudge"
+    let leftover = tracker.drain_for_next_turn();
+    assert!(
+        leftover.is_empty(),
+        "begin_turn + drain_for_next_turn must empty every queued nudge"
     );
 }
