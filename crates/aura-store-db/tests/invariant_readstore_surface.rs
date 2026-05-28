@@ -23,7 +23,7 @@
 
 #![cfg(feature = "test-support")]
 
-use aura_store::{ReadStore, RocksStore, Store, WriteStore};
+use aura_store_db::{ReadStore, RocksStore, Store, WriteStore};
 use std::sync::Arc;
 
 // Positive: `RocksStore` implements every layer of the trait tower.

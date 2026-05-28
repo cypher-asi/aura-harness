@@ -56,7 +56,15 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-core", "core"),
     ("aura-config", "config"),
     ("aura-prompts", "context"),
+    // Phase 2 store layer split:
+    //   aura-store        — compatibility shell over aura-store-db
+    //   aura-store-db     — RocksDB-backed durable storage impl
+    //   aura-store-record — append-only record-log domain types + RecordLog trait
+    //   aura-store-snapshot — content-addressed snapshot store (V1 no-op stub)
     ("aura-store", "store"),
+    ("aura-store-db", "store"),
+    ("aura-store-record", "store"),
+    ("aura-store-snapshot", "store"),
     ("aura-tools", "exec"),
     ("aura-compaction", "context"),
     ("aura-reasoner", "model"),

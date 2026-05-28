@@ -483,7 +483,15 @@ dependencies = [
 name = "aura-store"
 version = "0.1.0"
 dependencies = [
+ "aura-store-db",
+]
+
+[[package]]
+name = "aura-store-db"
+version = "0.1.0"
+dependencies = [
  "aura-core",
+ "aura-store-record",
  "bytes",
  "futures-util",
  "proptest",
@@ -494,6 +502,27 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aura-store-record"
+version = "0.1.0"
+dependencies = [
+ "aura-core",
+ "aura-core-types",
+ "bytes",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "aura-store-snapshot"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

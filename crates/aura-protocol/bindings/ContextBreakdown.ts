@@ -17,4 +17,21 @@
  *   tool results and assistant turns. This is the same number as
  *   `estimated_context_tokens` minus the static buckets above.
  */
-export type ContextBreakdown = { system_prompt_tokens: bigint, tools_tokens: bigint, skills_tokens: bigint, mcp_tokens: bigint, subagents_tokens: bigint, conversation_tokens: bigint, cache_read_tokens?: bigint, cache_creation_tokens?: bigint, };
+export type ContextBreakdown = { system_prompt_tokens: bigint, tools_tokens: bigint, skills_tokens: bigint, mcp_tokens: bigint, subagents_tokens: bigint, conversation_tokens: bigint, 
+/**
+ * Tokens served from the upstream provider's prompt cache during
+ * the most recent turn (Anthropic's `cache_read_input_tokens` or
+ * OpenAI's `prompt_tokens_details.cached_tokens`). Describes what
+ * fraction of the *conversation* bucket was a cache hit; not a
+ * separate context bucket, so excluded from [`Self::total`] and
+ * [`Self::is_empty`].
+ */
+cache_read_tokens: bigint, 
+/**
+ * Tokens written to the upstream provider's prompt cache during
+ * the most recent turn (Anthropic's `cache_creation_input_tokens`,
+ * or the cache-miss portion of OpenAI's responses). See
+ * [`Self::cache_read_tokens`] for why this is NOT included in
+ * [`Self::total`] / [`Self::is_empty`].
+ */
+cache_creation_tokens: bigint, };

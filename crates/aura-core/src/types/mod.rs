@@ -23,7 +23,7 @@ pub use identity::Identity;
 pub use process::{ActionResultPayload, ProcessPending};
 pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
 pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
-pub use record::RecordEntry;
+pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 pub use status::AgentStatus;
 pub use subagent::{
     SubagentBudget, SubagentDispatchRequest, SubagentExit, SubagentKindSpec, SubagentResult,

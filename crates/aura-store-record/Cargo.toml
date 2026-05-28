@@ -1,0 +1,25 @@
+[package]
+name = "aura-store-record"
+description = "Append-only record-log domain types and trait (Phase 2: extracted from aura-core / aura-kernel)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Phase 2 transitional dep: RecordEntry / RecordEntryBuilder / KERNEL_VERSION
+# are still physically defined in aura-core and re-exported here. The dep
+# direction is downward (store -> core), which is layer-safe. Phase 6+
+# inverts this when the rest of aura-core's record-side types migrate.
+aura-core = { path = "../aura-core" }
+aura-core-types = { path = "../aura-core-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

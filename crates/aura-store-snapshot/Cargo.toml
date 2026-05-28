@@ -1,0 +1,14 @@
+[package]
+name = "aura-store-snapshot"
+description = "Content-addressed snapshot store contract (Phase 2: no-op V1 stub)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

@@ -3,4 +3,26 @@
 /**
  * Payload for `error`.
  */
-export type ErrorMsg = { code: string, message: string, recoverable: boolean, };
+export type ErrorMsg = { code: string, message: string, recoverable: boolean, 
+/**
+ * Short opaque id (12 lowercase hex chars) used to correlate this
+ * error across server logs, client breadcrumbs, and user-pasted
+ * support reports. Strictly additive on the wire:
+ *
+ * - Older clients that don't know the field deserialize fine
+ *   (`#[serde(default)]` keeps the field optional inbound), and
+ *   the sender omits it from the JSON when `None`
+ *   (`skip_serializing_if = "Option::is_none"`) so older receivers
+ *   never see an unexpected key.
+ * - Older harness builds simply leave it `None`. The aura-os SSE
+ *   remap boundary in `apps/aura-os-server/src/handlers/agents/chat/errors.rs`
+ *   keeps stamping a `(support_id=<id>)` suffix into `message`
+ *   for that case so existing clients still get a usable id.
+ * - Newer harness in-process emit sites (e.g. the watchdog
+ *   `stream_stalled` / `turn_timeout` synth, the agent loop's
+ *   `agent_stalled` terminal event) can pre-populate the field so
+ *   the same id appears on both the structured field and the
+ *   message suffix; the SSE remap path leaves a prepopulated id
+ *   untouched.
+ */
+support_id: string | null, };

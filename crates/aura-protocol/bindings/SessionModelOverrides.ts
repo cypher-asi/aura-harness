@@ -35,10 +35,10 @@ prompt_caching_enabled: boolean | null,
  * blocks rather than a key) — the harness only emits the field on
  * outbound requests when the upstream family is OpenAI.
  */
-prompt_cache_key?: string, 
+prompt_cache_key: string | null, 
 /**
  * Optional retention hint paired with [`Self::prompt_cache_key`].
  * Wire values are `"in_memory"` (default, ~5–10 min) or `"24h"`
  * (extended retention on newer OpenAI models).
  */
-prompt_cache_retention?: string, };
+prompt_cache_retention: string | null, };

@@ -21,7 +21,7 @@
 #![cfg(feature = "test-support")]
 
 use aura_core::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};
-use aura_store::{FaultAt, ReadStore, RocksStore, Store, StoreError, WriteStore};
+use aura_store_db::{FaultAt, ReadStore, RocksStore, Store, StoreError, WriteStore};
 use std::sync::Arc;
 use tempfile::TempDir;
 
