@@ -139,6 +139,60 @@ pub struct DecodedToolResult {
     pub line_diff: Option<aura_core::LineDiff>,
 }
 
+/// Resolve a command exit code from either the typed `exit_code` field
+/// (set on command failures) or the `exit_code` metadata entry (set on
+/// command successes). Returns `None` for non-command tools.
+fn command_exit_code(tool_result: &ToolResult) -> Option<i32> {
+    tool_result.exit_code.or_else(|| {
+        tool_result
+            .metadata
+            .get("exit_code")
+            .and_then(|code| code.parse::<i32>().ok())
+    })
+}
+
+/// Build the user-visible content string for a committed tool effect.
+///
+/// Command-style tools (`run_command`, or anything carrying an exit code)
+/// are encoded as the structured envelope the dashboard understands —
+/// `{ ok, exit_code, stdout, stderr }` — so the UI can render stdout,
+/// stderr, and an exit-code badge separately instead of collapsing a real
+/// run into a lossy one-line summary like `"Success (no output)"`. The
+/// stdout/stderr payloads are kept as plain UTF-8 (not base64) so the
+/// autonomous agent loop can still read compiler/test output from its own
+/// tool-result context.
+///
+/// Every other tool keeps its readable text (stdout, then stderr) so file
+/// and spec tool cards are unchanged.
+fn decode_committed_content(tool_result: &ToolResult) -> String {
+    let exit_code = command_exit_code(tool_result);
+    let is_command = tool_result.tool == "run_command" || exit_code.is_some();
+
+    if is_command {
+        let stdout = String::from_utf8_lossy(&tool_result.stdout);
+        let stderr = String::from_utf8_lossy(&tool_result.stderr);
+        return serde_json::json!({
+            "ok": tool_result.ok,
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+        })
+        .to_string();
+    }
+
+    if !tool_result.ok && !tool_result.stderr.is_empty() {
+        return String::from_utf8_lossy(&tool_result.stderr).to_string();
+    }
+    if !tool_result.stdout.is_empty() {
+        return String::from_utf8_lossy(&tool_result.stdout).to_string();
+    }
+    if tool_result.ok {
+        "Success (no output)".to_string()
+    } else {
+        "Tool execution failed (no details)".to_string()
+    }
+}
+
 /// Decode a tool execution [`Effect`] into text content, error status, and metadata.
 ///
 /// Used by the agent loop's `KernelToolGateway` to convert kernel effects
@@ -148,17 +202,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
     if effect.status == EffectStatus::Committed {
         match serde_json::from_slice::<ToolResult>(&effect.payload) {
             Ok(tool_result) => {
-                let content = if !tool_result.ok && !tool_result.stderr.is_empty() {
-                    String::from_utf8_lossy(&tool_result.stderr).to_string()
-                } else if tool_result.stdout.is_empty() {
-                    if tool_result.ok {
-                        "Success (no output)".to_string()
-                    } else {
-                        "Tool execution failed (no details)".to_string()
-                    }
-                } else {
-                    String::from_utf8_lossy(&tool_result.stdout).to_string()
-                };
+                let content = decode_committed_content(&tool_result);
                 DecodedToolResult {
                     content,
                     is_error: !tool_result.ok,
