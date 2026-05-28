@@ -504,6 +504,84 @@ dependencies = [
 ]
 
 [[package]]
+name = "aura-fleet-daemon"
+version = "0.1.0"
+dependencies = [
+ "aura-core",
+ "aura-core-modes",
+ "aura-fleet-dispatch",
+ "aura-fleet-quota",
+ "aura-fleet-registry",
+ "aura-fleet-spawn",
+ "aura-store",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "aura-fleet-dispatch"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-core",
+ "aura-core-modes",
+ "aura-fleet-spawn",
+ "futures-util",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aura-fleet-quota"
+version = "0.1.0"
+dependencies = [
+ "aura-core",
+ "parking_lot",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "aura-fleet-registry"
+version = "0.1.0"
+dependencies = [
+ "aura-core",
+ "aura-core-modes",
+ "aura-core-permissions",
+ "chrono",
+ "parking_lot",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "aura-fleet-spawn"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-agent-kernel",
+ "aura-agent-subagent",
+ "aura-core",
+ "aura-core-modes",
+ "aura-core-permissions",
+ "aura-fleet-quota",
+ "aura-fleet-registry",
+ "aura-store",
+ "aura-store-db",
+ "bytes",
+ "chrono",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aura-kernel"
 version = "0.1.0"
 dependencies = [
@@ -622,9 +700,16 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-subagent",
  "aura-automaton",
  "aura-compaction",
  "aura-core",
+ "aura-core-modes",
+ "aura-core-permissions",
+ "aura-fleet-daemon",
+ "aura-fleet-quota",
+ "aura-fleet-registry",
+ "aura-fleet-spawn",
  "aura-kernel",
  "aura-memory",
  "aura-prompts",
@@ -644,6 +729,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "governor",
+ "insta",
  "parking_lot",
  "portable-pty",
  "reqwest",
@@ -1109,6 +1195,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1420,6 +1517,12 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "encode_unicode"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
@@ -2049,6 +2152,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "insta"
+version = "1.47.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
+dependencies = [
+ "console",
+ "once_cell",
+ "pest",
+ "pest_derive",
+ "serde",
+ "similar",
+ "tempfile",
 ]
 
 [[package]]

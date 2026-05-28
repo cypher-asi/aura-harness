@@ -1,0 +1,14 @@
+---
+source: crates/aura-runtime/tests/task_tool_subagent_result_snapshot.rs
+expression: json
+---
+{
+  "child_agent_id": "[child_agent_id]",
+  "exit": {
+    "kind": "completed"
+  },
+  "files_changed": [],
+  "final_message": "snapshot child output",
+  "total_input_tokens": 100,
+  "total_output_tokens": 50
+}

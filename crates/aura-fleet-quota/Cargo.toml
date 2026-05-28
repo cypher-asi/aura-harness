@@ -1,0 +1,17 @@
+[package]
+name = "aura-fleet-quota"
+description = "Fleet-layer concurrency + resource budgets — tracking-only in Phase 7a (Phase 7b enforces)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core = { path = "../aura-core" }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

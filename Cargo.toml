@@ -105,6 +105,17 @@ members = [
     "crates/aura-plugin-hooks",
     "crates/aura-plugin-mcp",
     "crates/aura-plugin-connectors",
+    # Phase 7a fleet layer:
+    #   aura-fleet-registry — RwLock<HashMap<AgentId, AgentSlot>>
+    #   aura-fleet-quota    — QuotaPool + BudgetTicket (tracking-only in 7a)
+    #   aura-fleet-spawn    — FleetSpawner + ParentLeaseRegistry
+    #   aura-fleet-dispatch — FleetDispatcher (task-tool source only in 7a)
+    #   aura-fleet-daemon   — composition root wiring all four
+    "crates/aura-fleet-registry",
+    "crates/aura-fleet-quota",
+    "crates/aura-fleet-spawn",
+    "crates/aura-fleet-dispatch",
+    "crates/aura-fleet-daemon",
 ]
 
 [profile.dev]
@@ -166,6 +177,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tempfile = "3.10"
 proptest = "1.4"
 tokio-tungstenite = "0.26"
+# Phase 7a: insta snapshot tests for the task-tool SubagentResult
+# byte-identical shape pin (json + redactions for non-deterministic
+# child agent ids).
+insta = { version = "1.40", features = ["json", "redactions"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }

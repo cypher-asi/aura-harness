@@ -1,0 +1,34 @@
+[package]
+name = "aura-fleet-spawn"
+description = "Fleet-layer subagent spawn mechanics + per-parent audit-append lease (Phase 7a)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core = { path = "../aura-core" }
+aura-core-modes = { path = "../aura-core-modes" }
+aura-core-permissions = { path = "../aura-core-permissions" }
+aura-agent-subagent = { path = "../aura-agent-subagent" }
+aura-agent-kernel = { path = "../aura-agent-kernel" }
+aura-store = { path = "../aura-store" }
+aura-fleet-registry = { path = "../aura-fleet-registry" }
+aura-fleet-quota = { path = "../aura-fleet-quota" }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+aura-store-db = { path = "../aura-store-db" }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "sync"] }
+
+[lints]
+workspace = true

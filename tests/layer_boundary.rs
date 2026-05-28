@@ -141,6 +141,24 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-plugin-hooks", "plugin"),
     ("aura-plugin-mcp", "plugin"),
     ("aura-plugin-connectors", "plugin"),
+    // Phase 7a fleet layer (5 new crates):
+    //   aura-fleet-registry — in-memory agent slot directory
+    //   aura-fleet-quota    — tracking-only quota pool (Phase 7b enforces)
+    //   aura-fleet-spawn    — spawn mechanics + per-parent audit lease
+    //   aura-fleet-dispatch — Phase 7a single-source job adapter
+    //   aura-fleet-daemon   — composition root for the four above
+    //
+    // Fleet sits ABOVE agent and BELOW surface in the layer stack.
+    // Fleet crates may depend on agent/exec/plugin/context/model/
+    // store/config/core crates (downward); agent crates MUST NOT
+    // depend on fleet crates (upward). The auto-classification
+    // already maps `aura-fleet-*` correctly via `LAYER_ORDER`, but
+    // the explicit entries below keep the table self-documenting.
+    ("aura-fleet-registry", "fleet"),
+    ("aura-fleet-quota", "fleet"),
+    ("aura-fleet-spawn", "fleet"),
+    ("aura-fleet-dispatch", "fleet"),
+    ("aura-fleet-daemon", "fleet"),
 ];
 
 #[test]

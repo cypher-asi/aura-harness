@@ -6,9 +6,16 @@
 //! [`crate::SubagentSpec`] against the parent context.
 
 use aura_core_modes::{AgentMode, JoinPolicy, KernelMode, ReplayMode, SpawnMode};
+use serde::{Deserialize, Serialize};
 
 /// Single explicit override entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Serialize` + `Deserialize` derives land in Phase 7a so the
+/// fleet-layer spawn writes the manifest into the audit log
+/// (`RecordKind::SubagentSpawn` payload) via
+/// `aura-agent-kernel::write_system_record`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "field", content = "value", rename_all = "snake_case")]
 pub enum OverriddenField {
     /// Mode was narrowed from `from` to `to`.
     Mode {
@@ -60,7 +67,11 @@ pub enum OverriddenField {
 
 /// Manifest of fields a caller explicitly overrode during
 /// derivation.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// `Serialize` + `Deserialize` derives land in Phase 7a so the
+/// fleet-layer spawn writes the manifest into the audit log via
+/// `aura-agent-kernel::write_system_record`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverrideManifest {
     /// Applied overrides in declaration order.
     pub applied: Vec<OverriddenField>,
