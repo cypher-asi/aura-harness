@@ -1111,11 +1111,13 @@ mod stub_domain {
                 content: String::new(),
                 order: 0,
                 parent_id: None,
+                content_hash: None,
             })
         }
         async fn update_spec(
             &self,
             _: &str,
+            _: Option<&str>,
             _: Option<&str>,
             _: Option<&str>,
             _: Option<&str>,

@@ -39,6 +39,13 @@ pub struct SpecDescriptor {
     pub order: u32,
     #[serde(alias = "parentId", default)]
     pub parent_id: Option<String>,
+    /// Optimistic-concurrency token (blake3 hex of `markdown_contents`)
+    /// returned by aura-os-server. Surfaced to the LLM by `get_spec` and
+    /// passed back as `if_match` on `update_spec` / `update_spec_section` /
+    /// `append_to_spec` so a stale edit is refused. `None` when the
+    /// backend does not advertise a hash.
+    #[serde(alias = "contentHash", alias = "content_hash", default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +152,8 @@ pub struct TaskUpdate {
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
+    pub order_index: Option<u32>,
+    pub dependency_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -198,8 +207,39 @@ pub trait DomainApi: Send + Sync {
         spec_id: &str,
         title: Option<&str>,
         content: Option<&str>,
+        if_match: Option<&str>,
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor>;
+    /// Replace a single `## ` section of a spec without re-sending the
+    /// whole body. Defaults to an error so only backends that support
+    /// granular edits (the HTTP impl) need to implement it.
+    async fn update_spec_section(
+        &self,
+        spec_id: &str,
+        section_heading: &str,
+        new_body: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        let _ = (spec_id, section_heading, new_body, if_match, jwt);
+        Err(anyhow::anyhow!(
+            "update_spec_section is not supported by this DomainApi implementation"
+        ))
+    }
+    /// Append a markdown block to a spec without re-sending the body.
+    /// Defaults to an error for the same reason as `update_spec_section`.
+    async fn append_to_spec(
+        &self,
+        spec_id: &str,
+        markdown: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        let _ = (spec_id, markdown, if_match, jwt);
+        Err(anyhow::anyhow!(
+            "append_to_spec is not supported by this DomainApi implementation"
+        ))
+    }
     async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()>;
 
     // Tasks — JWT auth via /api/ routes

@@ -58,6 +58,7 @@ impl DomainApi for KernelDomainGateway {
         spec_id: &str,
         title: Option<&str>,
         content: Option<&str>,
+        if_match: Option<&str>,
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         with_recording!(
@@ -67,8 +68,50 @@ impl DomainApi for KernelDomainGateway {
                 "spec_id": spec_id,
                 "title_set": title.is_some(),
                 "content_bytes": content.map(str::len),
+                "if_match_set": if_match.is_some(),
             }),
-            self.inner.update_spec(spec_id, title, content, jwt)
+            self.inner.update_spec(spec_id, title, content, if_match, jwt)
+        )
+    }
+
+    async fn update_spec_section(
+        &self,
+        spec_id: &str,
+        section_heading: &str,
+        new_body: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        with_recording!(
+            self,
+            "update_spec_section",
+            json!({
+                "spec_id": spec_id,
+                "section_heading": section_heading,
+                "new_body_bytes": new_body.len(),
+                "if_match_set": if_match.is_some(),
+            }),
+            self.inner
+                .update_spec_section(spec_id, section_heading, new_body, if_match, jwt)
+        )
+    }
+
+    async fn append_to_spec(
+        &self,
+        spec_id: &str,
+        markdown: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        with_recording!(
+            self,
+            "append_to_spec",
+            json!({
+                "spec_id": spec_id,
+                "markdown_bytes": markdown.len(),
+                "if_match_set": if_match.is_some(),
+            }),
+            self.inner.append_to_spec(spec_id, markdown, if_match, jwt)
         )
     }
 

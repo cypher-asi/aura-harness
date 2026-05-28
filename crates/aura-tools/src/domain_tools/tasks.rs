@@ -4,7 +4,9 @@ use serde_json::{json, Value};
 use tracing::debug;
 
 use super::api::{DomainApi, TaskUpdate};
-use super::helpers::{domain_err, domain_ok, require_str, str_array, str_field};
+use super::helpers::{
+    domain_err, domain_ok, opt_str_array, require_str, str_array, str_field, u32_field,
+};
 
 pub async fn get_task(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
     debug!("domain_tools: get_task");
@@ -94,6 +96,8 @@ pub async fn update_task(api: &dyn DomainApi, _project_id: &str, input: &Value) 
         title: str_field(input, "title"),
         description: str_field(input, "description"),
         status: str_field(input, "status"),
+        order_index: u32_field(input, "order_index"),
+        dependency_ids: opt_str_array(input, "dependency_ids"),
     };
     let jwt = str_field(input, "jwt");
     match api.update_task(&task_id, updates, jwt.as_deref()).await {

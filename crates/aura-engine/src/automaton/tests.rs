@@ -63,6 +63,7 @@ impl DomainApi for UnusedDomain {
         _id: &str,
         _t: Option<&str>,
         _c: Option<&str>,
+        _if_match: Option<&str>,
         _j: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         unimplemented!("UnusedDomain")

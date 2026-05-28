@@ -56,3 +56,20 @@ pub(crate) fn str_array(input: &Value, key: &str) -> Vec<String> {
         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
         .unwrap_or_default()
 }
+
+/// Extract an optional list of strings, distinguishing "field absent"
+/// (`None`, leave unchanged) from "field present" (`Some`, replace) so
+/// partial updates don't clobber an existing list with an empty one.
+pub(crate) fn opt_str_array(input: &Value, key: &str) -> Option<Vec<String>> {
+    input
+        .get(key)
+        .map(|v| serde_json::from_value::<Vec<String>>(v.clone()).unwrap_or_default())
+}
+
+/// Extract an optional `u32` field (accepts JSON numbers).
+pub(crate) fn u32_field(input: &Value, key: &str) -> Option<u32> {
+    input
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+}

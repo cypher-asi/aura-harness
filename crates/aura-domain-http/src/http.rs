@@ -248,6 +248,7 @@ impl DomainApi for HttpDomainApi {
         spec_id: &str,
         title: Option<&str>,
         content: Option<&str>,
+        if_match: Option<&str>,
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
@@ -255,8 +256,43 @@ impl DomainApi for HttpDomainApi {
         let body = serde_json::json!({
             "title": title,
             "markdownContents": content,
+            "ifMatch": if_match,
         });
         self.api_put(&url, &body, jwt).await
+    }
+
+    async fn update_spec_section(
+        &self,
+        spec_id: &str,
+        section_heading: &str,
+        new_body: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        let jwt = Self::require_jwt(jwt)?;
+        let url = format!("{}/api/specs/{spec_id}/section", self.specs_tasks_base_url());
+        let body = serde_json::json!({
+            "sectionHeading": section_heading,
+            "newBody": new_body,
+            "ifMatch": if_match,
+        });
+        self.api_put(&url, &body, jwt).await
+    }
+
+    async fn append_to_spec(
+        &self,
+        spec_id: &str,
+        markdown: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        let jwt = Self::require_jwt(jwt)?;
+        let url = format!("{}/api/specs/{spec_id}/append", self.specs_tasks_base_url());
+        let body = serde_json::json!({
+            "markdown": markdown,
+            "ifMatch": if_match,
+        });
+        self.api_post(&url, &body, jwt).await
     }
 
     async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
@@ -322,6 +358,8 @@ impl DomainApi for HttpDomainApi {
             "title": updates.title,
             "description": updates.description,
             "status": updates.status,
+            "orderIndex": updates.order_index,
+            "dependencyIds": updates.dependency_ids,
         });
         self.api_put(&url, &body, jwt).await
     }

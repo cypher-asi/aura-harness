@@ -58,6 +58,11 @@ fn build_spec_json(s: &SpecDescriptor) -> Value {
         "order": s.order,
         "parent_id": s.parent_id,
     });
+    if let Some(hash) = &s.content_hash {
+        // Surface the optimistic-concurrency token so the LLM can pass it
+        // back as `if_match` on the next edit.
+        spec["content_hash"] = json!(hash);
+    }
     if truncated {
         spec["truncated_markdown"] = json!(true);
         spec["total_markdown_bytes"] = json!(total);
@@ -133,6 +138,7 @@ pub async fn update_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) 
     };
     let title = str_field(input, "title");
     let content = str_field(input, "markdown_contents").or_else(|| str_field(input, "content"));
+    let if_match = str_field(input, "if_match");
     let jwt = str_field(input, "jwt");
 
     match api
@@ -140,8 +146,63 @@ pub async fn update_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) 
             &spec_id,
             title.as_deref(),
             content.as_deref(),
+            if_match.as_deref(),
             jwt.as_deref(),
         )
+        .await
+    {
+        Ok(s) => domain_ok(json!({ "spec": s })),
+        Err(e) => domain_err(e),
+    }
+}
+
+pub async fn update_spec_section(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
+    debug!("domain_tools: update_spec_section");
+    let spec_id = match require_str(input, "spec_id") {
+        Ok(id) => id,
+        Err(e) => return domain_err(&e),
+    };
+    let section_heading = match require_str(input, "section_heading") {
+        Ok(h) => h,
+        Err(e) => return domain_err(&e),
+    };
+    let new_body = match require_str(input, "new_body") {
+        Ok(b) => b,
+        Err(e) => return domain_err(&e),
+    };
+    let if_match = str_field(input, "if_match");
+    let jwt = str_field(input, "jwt");
+
+    match api
+        .update_spec_section(
+            &spec_id,
+            &section_heading,
+            &new_body,
+            if_match.as_deref(),
+            jwt.as_deref(),
+        )
+        .await
+    {
+        Ok(s) => domain_ok(json!({ "spec": s })),
+        Err(e) => domain_err(e),
+    }
+}
+
+pub async fn append_to_spec(api: &dyn DomainApi, _project_id: &str, input: &Value) -> String {
+    debug!("domain_tools: append_to_spec");
+    let spec_id = match require_str(input, "spec_id") {
+        Ok(id) => id,
+        Err(e) => return domain_err(&e),
+    };
+    let markdown = match require_str(input, "markdown") {
+        Ok(m) => m,
+        Err(e) => return domain_err(&e),
+    };
+    let if_match = str_field(input, "if_match");
+    let jwt = str_field(input, "jwt");
+
+    match api
+        .append_to_spec(&spec_id, &markdown, if_match.as_deref(), jwt.as_deref())
         .await
     {
         Ok(s) => domain_ok(json!({ "spec": s })),
@@ -229,6 +290,7 @@ mod tests {
         async fn update_spec(
             &self,
             _: &str,
+            _: Option<&str>,
             _: Option<&str>,
             _: Option<&str>,
             _: Option<&str>,
@@ -369,6 +431,7 @@ mod tests {
             content,
             order: 0,
             parent_id: None,
+            content_hash: None,
         }
     }
 

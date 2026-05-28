@@ -63,10 +63,34 @@ impl DomainApi for JwtDomainApi {
         spec_id: &str,
         title: Option<&str>,
         content: Option<&str>,
+        if_match: Option<&str>,
         jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         self.inner
-            .update_spec(spec_id, title, content, self.jwt_or(jwt))
+            .update_spec(spec_id, title, content, if_match, self.jwt_or(jwt))
+            .await
+    }
+    async fn update_spec_section(
+        &self,
+        spec_id: &str,
+        section_heading: &str,
+        new_body: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        self.inner
+            .update_spec_section(spec_id, section_heading, new_body, if_match, self.jwt_or(jwt))
+            .await
+    }
+    async fn append_to_spec(
+        &self,
+        spec_id: &str,
+        markdown: &str,
+        if_match: Option<&str>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<SpecDescriptor> {
+        self.inner
+            .append_to_spec(spec_id, markdown, if_match, self.jwt_or(jwt))
             .await
     }
     async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {

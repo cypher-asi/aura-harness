@@ -371,6 +371,7 @@ mod tests {
             _id: &str,
             _t: Option<&str>,
             _c: Option<&str>,
+            _if_match: Option<&str>,
             _j: Option<&str>,
         ) -> anyhow::Result<SpecDescriptor> {
             unimplemented!("RecordingDomain")
@@ -534,6 +535,7 @@ mod tests {
             content: "Implement token-based auth with rotating refresh tokens.".into(),
             order: 0,
             parent_id: None,
+            content_hash: None,
         }
     }
 

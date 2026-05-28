@@ -59,6 +59,7 @@ impl DomainApi for MockDomain {
             content: String::new(),
             order: 0,
             parent_id: None,
+            content_hash: None,
         })
     }
     async fn create_spec(
@@ -80,6 +81,7 @@ impl DomainApi for MockDomain {
             content: content.to_string(),
             order,
             parent_id: None,
+            content_hash: None,
         })
     }
     async fn update_spec(
@@ -87,6 +89,7 @@ impl DomainApi for MockDomain {
         spec_id: &str,
         _title: Option<&str>,
         _content: Option<&str>,
+        _if_match: Option<&str>,
         _jwt: Option<&str>,
     ) -> anyhow::Result<SpecDescriptor> {
         self.record("update_spec");
@@ -97,6 +100,7 @@ impl DomainApi for MockDomain {
             content: String::new(),
             order: 0,
             parent_id: None,
+            content_hash: None,
         })
     }
     async fn delete_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<()> {

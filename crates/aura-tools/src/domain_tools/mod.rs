@@ -62,6 +62,8 @@ const DOMAIN_TOOL_NAMES: &[&str] = &[
     "get_spec",
     "create_spec",
     "update_spec",
+    "update_spec_section",
+    "append_to_spec",
     "delete_spec",
     "list_tasks",
     "get_task",
@@ -185,6 +187,12 @@ impl DomainToolExecutor {
             "get_spec" => specs::get_spec(self.api.as_ref(), project_id, &input).await,
             "create_spec" => specs::create_spec(self.api.as_ref(), project_id, &input).await,
             "update_spec" => specs::update_spec(self.api.as_ref(), project_id, &input).await,
+            "update_spec_section" => {
+                specs::update_spec_section(self.api.as_ref(), project_id, &input).await
+            }
+            "append_to_spec" => {
+                specs::append_to_spec(self.api.as_ref(), project_id, &input).await
+            }
             "delete_spec" => specs::delete_spec(self.api.as_ref(), project_id, &input).await,
 
             // Tasks
