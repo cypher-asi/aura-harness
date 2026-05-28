@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 aura-core = { path = "../aura-core" }
+dirs = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -35,6 +35,29 @@ pub const AURA_LLM_BACKOFF_INITIAL_MS: &str = "AURA_LLM_BACKOFF_INITIAL_MS";
 pub const AURA_LLM_BACKOFF_CAP_MS: &str = "AURA_LLM_BACKOFF_CAP_MS";
 pub const AURA_DEV_LOOP_ENABLED_THINKING: &str = "AURA_DEV_LOOP_ENABLED_THINKING";
 
+// Phase 4a — fleet / subagent / conflict env-var names. These knobs
+// land in `aura-config` ahead of the actual fleet/subagent/exec-conflict
+// implementations (Phases 5+); the owning crate is `aura-config` so the
+// future call sites read them through `aura_config::loaded().fleet.*`
+// (etc.) rather than via `std::env::var(...)`.
+pub const AURA_FLEET_EMBEDDED_DAEMON: &str = "AURA_FLEET_EMBEDDED_DAEMON";
+pub const AURA_FLEET_MAX_CONCURRENT_AGENTS: &str = "AURA_FLEET_MAX_CONCURRENT_AGENTS";
+pub const AURA_FLEET_SHUTDOWN_GRACE_MS: &str = "AURA_FLEET_SHUTDOWN_GRACE_MS";
+pub const AURA_FLEET_ORPHAN_ON_PARENT_DEATH: &str = "AURA_FLEET_ORPHAN_ON_PARENT_DEATH";
+pub const AURA_SUBAGENT_MAX_DEPTH: &str = "AURA_SUBAGENT_MAX_DEPTH";
+pub const AURA_SUBAGENT_DEFAULT_MAX_TOKENS: &str = "AURA_SUBAGENT_DEFAULT_MAX_TOKENS";
+pub const AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS: &str = "AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS";
+pub const AURA_SUBAGENT_DEFAULT_TIMEOUT_MS: &str = "AURA_SUBAGENT_DEFAULT_TIMEOUT_MS";
+pub const AURA_CONFLICT_ENABLED: &str = "AURA_CONFLICT_ENABLED";
+pub const AURA_CONFLICT_DEFAULT_WAIT_MS: &str = "AURA_CONFLICT_DEFAULT_WAIT_MS";
+
+// Phase 4a — AURA_HOME resolution. `CODEX_HOME` is a read-only compat
+// alias used only by `crate::aura_home::AuraHome::resolve`; it is
+// listed here so the boundary test enforces that no other crate reads
+// it directly either.
+pub const AURA_HOME: &str = "AURA_HOME";
+pub const CODEX_HOME: &str = "CODEX_HOME";
+
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
 /// any of these names.
@@ -53,6 +76,18 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_LLM_BACKOFF_INITIAL_MS,
     AURA_LLM_BACKOFF_CAP_MS,
     AURA_DEV_LOOP_ENABLED_THINKING,
+    AURA_FLEET_EMBEDDED_DAEMON,
+    AURA_FLEET_MAX_CONCURRENT_AGENTS,
+    AURA_FLEET_SHUTDOWN_GRACE_MS,
+    AURA_FLEET_ORPHAN_ON_PARENT_DEATH,
+    AURA_SUBAGENT_MAX_DEPTH,
+    AURA_SUBAGENT_DEFAULT_MAX_TOKENS,
+    AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS,
+    AURA_SUBAGENT_DEFAULT_TIMEOUT_MS,
+    AURA_CONFLICT_ENABLED,
+    AURA_CONFLICT_DEFAULT_WAIT_MS,
+    AURA_HOME,
+    CODEX_HOME,
 ];
 
 // ---------------------------------------------------------------------------
@@ -161,3 +196,19 @@ pub(crate) fn lookup_bool(
 /// negation logic.
 pub(crate) const TRUTHY_LITERALS: &[&str] = &["1", "true", "yes", "on"];
 pub(crate) const FALSY_LITERALS: &[&str] = &["0", "false", "no", "off"];
+
+// ---------------------------------------------------------------------------
+// Cross-module test serialisation
+// ---------------------------------------------------------------------------
+
+/// Crate-wide test lock for env-mutating tests.
+///
+/// `aura-config`'s `from_env`-style tests all share the same
+/// process-wide env. Without coordination, a parallel test that
+/// sets `AURA_SUBAGENT_MAX_DEPTH = "not-a-number"` will trip the
+/// root `AuraConfig::from_env` happy-path test running in another
+/// thread. Every env-touching test in this crate (including the
+/// `lib.rs` smoke tests) acquires this mutex before mutating any
+/// owned env var.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -129,6 +129,7 @@ dependencies = [
  "aura-agent",
  "aura-auth",
  "aura-automaton",
+ "aura-config",
  "aura-core",
  "aura-kernel",
  "aura-memory",
@@ -256,6 +257,8 @@ name = "aura-config"
 version = "0.1.0"
 dependencies = [
  "aura-core",
+ "dirs",
+ "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tracing",

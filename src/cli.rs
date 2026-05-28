@@ -1,6 +1,6 @@
 //! CLI argument definitions and parsing.
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -25,6 +25,21 @@ pub enum Commands {
     Whoami,
     /// Print "Hello, World!" and exit (Spec 01).
     Hello,
+    /// Phase 4a stub: migrate aura state (no-op today).
+    ///
+    /// Future phases will populate this with Codex → Aura state
+    /// migration. The stub exists so the CLI surface is stable when
+    /// `aura-store-db` and `aura-plugin-core` (Phase 4b+) start
+    /// producing migration-aware on-disk layouts.
+    Migrate(MigrateArgs),
+}
+
+/// Arguments for the `migrate` subcommand (Phase 4a stub).
+#[derive(Args, Debug)]
+pub struct MigrateArgs {
+    /// Run as a dry preview without making changes.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// Arguments for the `run` subcommand (also the default behaviour).

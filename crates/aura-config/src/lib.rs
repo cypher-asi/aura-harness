@@ -100,12 +100,17 @@
 #![warn(clippy::all)]
 
 pub mod agent;
+pub mod aura_home;
 pub mod automaton;
 pub mod compaction;
+pub mod conflict;
 pub mod env;
+pub mod fleet;
+pub mod plugins;
 pub mod prompts;
 pub mod reasoner;
 pub mod steering;
+pub mod subagent;
 pub mod thinking;
 pub mod tools;
 pub mod verify;
@@ -113,12 +118,17 @@ pub mod verify;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 pub use agent::AgentConfig;
+pub use aura_home::{AuraHome, AuraHomeError, AuraHomeSource};
 pub use automaton::AutomatonConfig;
 pub use compaction::CompactionConfig;
+pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
+pub use fleet::FleetConfig;
+pub use plugins::{PluginConfig, PluginsConfig, PluginsTable};
 pub use prompts::PromptsConfig;
 pub use reasoner::{LlmRetryConfig, ReasonerConfig, ReasonerThinkingConfig};
 pub use steering::{EarlyTestOracleConfig, SteeringConfig};
+pub use subagent::SubagentConfig;
 pub use thinking::ThinkingConfig;
 pub use tools::ToolsConfig;
 pub use verify::VerifyConfig;
@@ -170,12 +180,29 @@ pub use verify::{
 /// `aura-automaton`, and the future `aura-prompts` crate) and the
 /// [`ReasonerConfig`] sub-tree (consumed by `aura-reasoner` and the
 /// agent streaming retry paths).
+///
+/// Phase 4a added the [`FleetConfig`], [`SubagentConfig`],
+/// [`ConflictConfig`], and [`PluginsConfig`] sub-trees. They are
+/// populated from env overrides today; the on-disk TOML schema
+/// landed in Phase 4b.
 #[derive(Debug, Clone)]
 pub struct AuraConfig {
     /// Agent / prompts / automaton knobs.
     pub agent: AgentConfig,
     /// Shared LLM retry and thinking knobs.
     pub reasoner: ReasonerConfig,
+    /// Fleet daemon + spawn knobs (Phase 4a; consumed by future
+    /// fleet plumbing).
+    pub fleet: FleetConfig,
+    /// Subagent derivation + budget knobs (Phase 4a; consumed by the
+    /// Phase 6a derivation path).
+    pub subagent: SubagentConfig,
+    /// Conflict-lock knobs (Phase 4a; consumed by future
+    /// `aura-exec-conflict`).
+    pub conflict: ConflictConfig,
+    /// Plugin enable/disable + per-plugin overrides (Phase 4a;
+    /// populated from operator config in Phase 4b).
+    pub plugins: PluginsConfig,
 }
 
 impl AuraConfig {
@@ -185,6 +212,10 @@ impl AuraConfig {
         Self {
             agent: AgentConfig::defaults(),
             reasoner: ReasonerConfig::defaults(),
+            fleet: FleetConfig::defaults(),
+            subagent: SubagentConfig::defaults(),
+            conflict: ConflictConfig::defaults(),
+            plugins: PluginsConfig::defaults(),
         }
     }
 
@@ -199,6 +230,13 @@ impl AuraConfig {
         Ok(Self {
             agent: AgentConfig::from_env()?,
             reasoner: ReasonerConfig::from_env()?,
+            fleet: FleetConfig::from_env()?,
+            subagent: SubagentConfig::from_env()?,
+            conflict: ConflictConfig::from_env()?,
+            // Plugin config has no env-var surface today; it loads
+            // from the on-disk TOML in Phase 4b. Default = empty
+            // (no plugins active), which matches V1 behaviour.
+            plugins: PluginsConfig::defaults(),
         })
     }
 }
@@ -316,12 +354,7 @@ pub fn current() -> AuraConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Tests that install_for_test serialize through this mutex so
-    /// the process-wide slot they share doesn't race when cargo runs
-    /// the tests in parallel.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    use crate::env::ENV_TEST_LOCK;
 
     #[test]
     fn defaults_are_const_evaluable() {
@@ -330,12 +363,16 @@ mod tests {
 
     #[test]
     fn from_env_returns_a_config() {
+        // Hold the crate-wide env lock so submodule tests that
+        // intentionally set malformed env values for their own
+        // parse-error assertions don't race this happy-path probe.
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = AuraConfig::from_env().expect("from_env defaults must succeed");
     }
 
     #[test]
     fn install_for_test_restores_previous_on_drop() {
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = current();
         {
             let mut overridden = AuraConfig::defaults();
@@ -361,7 +398,7 @@ mod tests {
 
     #[test]
     fn install_for_test_is_observable_through_accessors() {
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let baseline = current();
         let mut overridden = baseline.clone();
         overridden.agent.compaction.disabled = !baseline.agent.compaction.disabled;

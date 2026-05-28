@@ -10,7 +10,7 @@ mod event_loop;
 mod record_loader;
 mod session_helpers;
 
-use cli::{Cli, Commands, RunArgs, UiMode};
+use cli::{Cli, Commands, MigrateArgs, RunArgs, UiMode};
 
 use anyhow::Context;
 use aura_agent::{
@@ -59,9 +59,25 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Login) => cmd_login().await,
         Some(Commands::Logout) => cmd_logout().await,
         Some(Commands::Whoami) => cmd_whoami(),
+        Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Run(args)) => run_with_args(args).await,
         None => run_with_args(RunArgs::default()).await,
     }
+}
+
+/// `aura migrate` (Phase 4a stub).
+///
+/// Intentionally a no-op today. Future phases will populate this
+/// with the Codex → Aura state migration (config, credentials,
+/// session history). Documented in the plan
+/// (`phase-4a-config-aura-home`) so the CLI surface is stable when
+/// later phases land the real migration logic.
+fn cmd_migrate(args: MigrateArgs) -> anyhow::Result<()> {
+    eprintln!(
+        "aura migrate stub - Phase 4a placeholder; no migration actions performed (dry_run={})",
+        args.dry_run
+    );
+    Ok(())
 }
 
 async fn run_with_args(args: RunArgs) -> anyhow::Result<()> {
