@@ -53,6 +53,12 @@ fn map_head_seq_error(agent_id: &AgentId, err: &StoreError) -> RecordLogError {
     ))
 }
 
+fn map_scan_error(agent_id: &AgentId, from_seq: u64, err: &StoreError) -> RecordLogError {
+    RecordLogError::Backend(format!(
+        "RocksStore::scan_record(agent_id={agent_id}, from_seq={from_seq}): {err}"
+    ))
+}
+
 impl RecordLog for RocksStore {
     fn append(&self, agent_id: &AgentId, entry: &RecordEntry) -> Result<(), RecordLogError> {
         WriteStore::append_entry_direct(self, *agent_id, entry.seq, entry)
@@ -62,5 +68,15 @@ impl RecordLog for RocksStore {
     fn head_seq(&self, agent_id: &AgentId) -> Result<u64, RecordLogError> {
         crate::store::ReadStore::get_head_seq(self, *agent_id)
             .map_err(|err| map_head_seq_error(agent_id, &err))
+    }
+
+    fn scan(
+        &self,
+        agent_id: &AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, RecordLogError> {
+        crate::store::ReadStore::scan_record(self, *agent_id, from_seq, limit)
+            .map_err(|err| map_scan_error(agent_id, from_seq, &err))
     }
 }

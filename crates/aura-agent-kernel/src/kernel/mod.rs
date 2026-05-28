@@ -26,6 +26,7 @@
 //! - [`tests`]   — integration tests that exercise the full `Kernel` surface.
 
 use crate::policy::{Policy, PolicyConfig};
+use crate::replay::{ReplayConsumer, ReplayReport};
 use crate::ExecutorRouter;
 use async_trait::async_trait;
 use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, ToolState};
@@ -33,6 +34,7 @@ use aura_core_modes::KernelMode;
 use aura_reasoner::ModelProvider;
 use aura_store::Store;
 use aura_store_record::DEFAULT_SUMMARY_CHUNK_BYTES;
+use aura_store_snapshot::{NoopSnapshotStore, SnapshotStore};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -60,8 +62,36 @@ pub struct KernelConfig {
     pub workspace_base: PathBuf,
     /// When true, use `workspace_base` directly instead of appending `agent_id`.
     pub use_workspace_base_as_root: bool,
-    /// Whether we're in replay mode (skip reasoner/tools)
-    pub replay_mode: bool,
+    /// Phase 6b replay anchor.
+    ///
+    /// - `None` (default) — live mode: the kernel calls the live
+    ///   reasoner and executor as usual.
+    /// - `Some(from_seq)` — replay mode: at construction the kernel
+    ///   runs a [`crate::ReplayConsumer`] over its store's record log
+    ///   for `agent_id`, starting at `from_seq` (inclusive), to
+    ///   replay every historical [`aura_core::RecordEntry`] in
+    ///   forward `seq` order. The replay validates each entry's
+    ///   `context_hash` against a fresh recomputation through
+    ///   [`crate::hash_tx_with_window`] and, for AuditedLite
+    ///   entries whose effect payloads were summarised, validates
+    ///   the `full_hash` against [`KernelConfig::snapshot_store`].
+    ///   On success the [`crate::ReplayReport`] is stashed on the
+    ///   kernel and exposed via [`Kernel::replay_report`]. On
+    ///   failure the constructor returns
+    ///   [`crate::KernelError::Replay`] and no further processing
+    ///   is permitted from that instance.
+    ///
+    /// Wiring this field replaces the Phase 6a `replay_mode: bool`
+    /// placeholder that had no consumer.
+    pub replay_from: Option<u64>,
+    /// Snapshot-store backend consulted during replay for
+    /// AuditedLite payloads. Defaults to
+    /// [`aura_store_snapshot::NoopSnapshotStore`] (always returns
+    /// `None`), so replay of an AuditedLite turn surfaces
+    /// [`crate::ReplayError::SnapshotMissing`] unless a real
+    /// content-addressed backend is wired here. The stub is the
+    /// V1 default per the architecture plan.
+    pub snapshot_store: Arc<dyn SnapshotStore>,
     /// Timeout for reasoner proposals in milliseconds.
     pub proposal_timeout_ms: u64,
     /// Per-tool execution timeout in milliseconds. Each individual tool in
@@ -98,7 +128,8 @@ impl Default for KernelConfig {
             policy: PolicyConfig::default(),
             workspace_base: PathBuf::from("./workspaces"),
             use_workspace_base_as_root: false,
-            replay_mode: false,
+            replay_from: None,
+            snapshot_store: Arc::new(NoopSnapshotStore),
             proposal_timeout_ms: 120_000,
             tool_timeout_ms: 120_000,
             tool_approval_prompter: None,
@@ -263,16 +294,31 @@ pub struct Kernel {
     /// Agent this kernel instance is bound to.
     pub agent_id: AgentId,
     pub(super) seq: Arc<Mutex<u64>>,
+    /// Phase 6b replay outcome — `Some(report)` after a successful
+    /// replay sweep at construction time when
+    /// [`KernelConfig::replay_from`] is `Some`; `None` for live-mode
+    /// kernels. Exposed read-only via [`Kernel::replay_report`].
+    pub(super) replay_report: Option<ReplayReport>,
 }
 
 impl Kernel {
     /// Create a new kernel bound to a specific agent.
     ///
     /// Reads the current head sequence from the store so the internal counter
-    /// starts at `head_seq + 1`.
+    /// starts at `head_seq + 1`. When [`KernelConfig::replay_from`] is
+    /// `Some(from_seq)` the constructor additionally runs a
+    /// [`ReplayConsumer`] over the existing record log for
+    /// `agent_id`, starting at `from_seq` (inclusive), and stashes
+    /// the resulting [`ReplayReport`]. The kernel will not begin
+    /// accepting new transactions until that replay completes — see
+    /// the [`KernelConfig::replay_from`] docs.
     ///
     /// # Errors
-    /// Returns error if the store cannot be read.
+    ///
+    /// - [`crate::KernelError::Store`] if the store cannot be read.
+    /// - [`crate::KernelError::Replay`] if replay is configured and
+    ///   the replay consumer surfaces a [`ReplayError`] (context
+    ///   divergence, missing snapshot, store failure, etc.).
     pub fn new(
         store: Arc<dyn Store>,
         provider: Arc<dyn ModelProvider + Send + Sync>,
@@ -284,6 +330,24 @@ impl Kernel {
             .get_head_seq(agent_id)
             .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
         let policy = Policy::new(config.policy.clone());
+
+        // Phase 6b: run replay BEFORE the kernel becomes available for
+        // any process_*() call. The constructor surfaces a typed
+        // ReplayError so callers can distinguish replay failures from
+        // generic kernel/store errors without string-matching.
+        let replay_report = if let Some(from_seq) = config.replay_from {
+            let consumer = ReplayConsumer::new(
+                store.clone(),
+                config.snapshot_store.clone(),
+                agent_id,
+                from_seq,
+                config.record_window_size,
+            );
+            Some(consumer.run()?)
+        } else {
+            None
+        };
+
         Ok(Self {
             store,
             provider,
@@ -292,7 +356,19 @@ impl Kernel {
             config,
             agent_id,
             seq: Arc::new(Mutex::new(head_seq + 1)),
+            replay_report,
         })
+    }
+
+    /// Returns the replay report produced at construction time when
+    /// [`KernelConfig::replay_from`] was set.
+    ///
+    /// `None` for live-mode kernels (no replay configured). The
+    /// returned reference is read-only; the kernel does not re-run
+    /// replay after the constructor.
+    #[must_use]
+    pub fn replay_report(&self) -> Option<&ReplayReport> {
+        self.replay_report.as_ref()
     }
 
     /// Get a reference to the underlying store.

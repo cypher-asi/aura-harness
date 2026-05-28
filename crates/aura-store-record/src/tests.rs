@@ -192,6 +192,32 @@ impl RecordLog for MemRecordLog {
         let len = guard.get(agent_id).map_or(0, Vec::len) as u64;
         Ok(len)
     }
+
+    fn scan(
+        &self,
+        agent_id: &AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, RecordLogError> {
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|e| RecordLogError::Backend(format!("mutex poisoned: {e}")))?;
+        let Some(log) = guard.get(agent_id) else {
+            return Ok(Vec::new());
+        };
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let start = from_seq.max(1);
+        let entries: Vec<RecordEntry> = log
+            .iter()
+            .filter(|e| e.seq >= start)
+            .take(limit)
+            .cloned()
+            .collect();
+        Ok(entries)
+    }
 }
 
 #[test]
@@ -206,6 +232,36 @@ fn record_log_mock_appends_and_reports_head() {
     log.append(&agent_id, &build_entry(3)).unwrap();
 
     assert_eq!(log.head_seq(&agent_id).unwrap(), 3);
+}
+
+#[test]
+fn record_log_mock_scan_returns_entries_in_seq_order() {
+    // Phase 6b: replay consumer relies on the scan API to walk
+    // historical entries in forward seq order. Pin the contract on
+    // the in-memory mock so backend implementations have an
+    // executable reference.
+    let log = MemRecordLog::default();
+    let agent_id = AgentId::generate();
+
+    log.append(&agent_id, &build_entry(1)).unwrap();
+    log.append(&agent_id, &build_entry(2)).unwrap();
+    log.append(&agent_id, &build_entry(3)).unwrap();
+    log.append(&agent_id, &build_entry(4)).unwrap();
+
+    let all = log.scan(&agent_id, 1, 10).unwrap();
+    assert_eq!(
+        all.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+
+    let mid = log.scan(&agent_id, 2, 2).unwrap();
+    assert_eq!(mid.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2, 3]);
+
+    let zero_limit = log.scan(&agent_id, 1, 0).unwrap();
+    assert!(zero_limit.is_empty());
+
+    let other_agent = log.scan(&AgentId::generate(), 1, 10).unwrap();
+    assert!(other_agent.is_empty());
 }
 
 #[test]

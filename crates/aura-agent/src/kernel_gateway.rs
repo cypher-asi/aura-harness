@@ -31,6 +31,7 @@ fn kernel_error_to_reasoner_error(e: KernelError) -> ReasonerError {
         KernelError::Timeout(_) => ReasonerError::Timeout,
         other @ (KernelError::Store(_)
         | KernelError::Serialization(_)
+        | KernelError::Replay(_)
         | KernelError::Internal(_)) => {
             ReasonerError::Internal(format!("kernel reason error: {other}"))
         }

@@ -213,6 +213,7 @@ dependencies = [
  "aura-reasoner",
  "aura-store",
  "aura-store-record",
+ "aura-store-snapshot",
  "blake3",
  "bytes",
  "futures-util",

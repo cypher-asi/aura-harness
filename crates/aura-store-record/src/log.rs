@@ -93,6 +93,37 @@ pub trait RecordLog: Send + Sync {
     /// Returns [`RecordLogError::Backend`] if the storage backend
     /// reports a read failure.
     fn head_seq(&self, agent_id: &AgentId) -> Result<u64, RecordLogError>;
+
+    /// Forward seq-ordered scan of `agent_id`'s record log.
+    ///
+    /// Phase 6b carve-out: the replay consumer in `aura-agent-kernel`
+    /// needs to walk the historical record entries in monotonic
+    /// `seq` order starting at `from_seq`. We keep the API minimal —
+    /// no cursors, no descending order, no random access — because
+    /// every replay path today is a single forward sweep over the
+    /// recorded turn. Richer iteration (cursors / chunked replay)
+    /// is left for the eventual `replay_from` cursor in the
+    /// architecture plan §4.
+    ///
+    /// `limit` caps the number of returned entries so a bounded
+    /// memory budget is preserved when the consumer chooses to
+    /// stream a long agent log in batches. A `limit` of `0` returns
+    /// the empty vector. Implementations MUST return entries in
+    /// strictly ascending `seq` order with no gaps relative to what
+    /// is durably persisted; if an entry is missing inside the
+    /// requested range, the implementation truncates the result at
+    /// the gap rather than fabricating placeholders.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecordLogError::Backend`] when the storage backend
+    /// reports a read failure.
+    fn scan(
+        &self,
+        agent_id: &AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, RecordLogError>;
 }
 
 /// Blanket impl so any `Arc<T: RecordLog + ?Sized>` (most importantly
@@ -108,5 +139,14 @@ impl<T: RecordLog + ?Sized> RecordLog for Arc<T> {
 
     fn head_seq(&self, agent_id: &AgentId) -> Result<u64, RecordLogError> {
         (**self).head_seq(agent_id)
+    }
+
+    fn scan(
+        &self,
+        agent_id: &AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<RecordEntry>, RecordLogError> {
+        (**self).scan(agent_id, from_seq, limit)
     }
 }

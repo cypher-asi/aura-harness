@@ -29,6 +29,7 @@ mod context;
 pub(crate) mod executor;
 mod kernel;
 mod policy;
+mod replay;
 pub(crate) mod router;
 pub(crate) mod spawn_hook;
 
@@ -43,6 +44,7 @@ pub use kernel::{
     ToolApprovalRemember, ToolApprovalResponse, ToolDecision, ToolOutput,
 };
 pub use policy::{Policy, PolicyConfig, PolicyResult, PolicyVerdict};
+pub use replay::{ReplayConsumer, ReplayError, ReplayReport};
 pub use router::ExecutorRouter;
 pub use spawn_hook::{
     ChildAgentSpec, KernelSpawnHook, NoopSpawnHook, SpawnError, SpawnHook, SpawnOutcome,
@@ -69,6 +71,15 @@ pub enum KernelError {
     Timeout(String),
     #[error("serialization error: {0}")]
     Serialization(String),
+    /// Phase 6b replay failure surfaced when
+    /// [`KernelConfig::replay_from`] is `Some` and the
+    /// [`ReplayConsumer`] aborts the pre-process sweep. The inner
+    /// [`ReplayError`] is preserved so callers can branch on the
+    /// variant (`ContextDivergence`, `SnapshotMissing`, `Store`,
+    /// `Deserialization`) rather than string-matching the formatted
+    /// message.
+    #[error("replay error: {0}")]
+    Replay(#[from] ReplayError),
     #[error("{0}")]
     Internal(String),
 }

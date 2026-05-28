@@ -47,7 +47,12 @@ pub enum SnapshotError {
 
 /// Content-addressed snapshot store. See the crate docs for
 /// invariants, assumptions, and failure modes.
-pub trait SnapshotStore: Send + Sync {
+///
+/// Requires `Debug` so trait objects are diagnosable from
+/// `#[derive(Debug)]` containers (notably
+/// `aura_agent_kernel::KernelConfig` in Phase 6b, which needs to
+/// log its config under `tracing`).
+pub trait SnapshotStore: std::fmt::Debug + Send + Sync {
     /// Store `bytes` under the content address `hash`. Idempotent: a
     /// second put for the same hash is a no-op.
     ///
