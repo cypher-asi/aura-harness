@@ -46,16 +46,55 @@ use common::{
 };
 use serde_json::{json, Value};
 
+// Local wrapper around `common::require_llm_token` that first gates on
+// `AURA_RUN_LIVE_E2E`. Mirrors the shadowing macro in `tests/e2e_live.rs`
+// so the live-LLM suites share one opt-in switch: without
+// `AURA_RUN_LIVE_E2E=1` every test that needs a reachable model + valid
+// JWT skips (returns early) instead of failing against an unreachable or
+// unauthenticated router. Calling the function directly (rather than the
+// `#[macro_export]` sibling) sidesteps macro-resolution recursion.
+macro_rules! require_llm {
+    () => {{
+        let enabled = std::env::var("AURA_RUN_LIVE_E2E")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false);
+        if !enabled {
+            eprintln!("skipping live LLM test: set AURA_RUN_LIVE_E2E=1 to enable it");
+            return;
+        }
+        $crate::common::require_llm_token()
+    }};
+}
+
 // ============================================================================
 // Suite 1: REST API Data Flow (no LLM needed)
 // ============================================================================
 
 #[tokio::test]
 async fn rest_tx_then_record_visible() {
-    let server = TestServer::start().await;
+    // Post-refactor the scheduler only processes agents whose identity
+    // is registered (see `Scheduler::schedule_agent_with_overrides`), so
+    // a raw `/tx` for a never-seen agent is a no-op. Bootstrap a chat run
+    // first, pinning the session `agent_id` via `partition_id` so the
+    // same id is both registered (the bootstrap also records
+    // `session_start` + capability entries) and addressable over the
+    // REST record/head endpoints. Mock provider → deterministic, no net.
+    let server = start_mock_server().await;
     let client = http_client();
     let agent_id = AgentId::generate();
     let hex = agent_id.to_hex();
+
+    let ws_path = server.workspaces_path().join("rest-record-visible");
+    std::fs::create_dir_all(&ws_path).unwrap();
+    let payload = chat_request_payload_extended(
+        &ws_path,
+        ChatRequestOpts {
+            partition_id: Some(&hex),
+            ..Default::default()
+        },
+    );
+    // Hold the attach for the test's duration so the run isn't reaped.
+    let _ws = open_chat_run(&server, &payload).await;
 
     let payload_b64 = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
@@ -76,7 +115,7 @@ async fn rest_tx_then_record_visible() {
     assert_eq!(resp.status(), 202);
 
     // Give the scheduler a moment to process
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     let resp = client
         .get(format!(
@@ -97,10 +136,24 @@ async fn rest_tx_then_record_visible() {
 
 #[tokio::test]
 async fn rest_tx_increments_head() {
-    let server = TestServer::start().await;
+    // See `rest_tx_then_record_visible`: register the agent identity via
+    // the chat-run bootstrap (pinning `agent_id` through `partition_id`)
+    // before exercising the raw `/tx` + `/head` REST surface.
+    let server = start_mock_server().await;
     let client = http_client();
     let agent_id = AgentId::generate();
     let hex = agent_id.to_hex();
+
+    let ws_path = server.workspaces_path().join("rest-head-increments");
+    std::fs::create_dir_all(&ws_path).unwrap();
+    let payload = chat_request_payload_extended(
+        &ws_path,
+        ChatRequestOpts {
+            partition_id: Some(&hex),
+            ..Default::default()
+        },
+    );
+    let _ws = open_chat_run(&server, &payload).await;
 
     for i in 0..3 {
         let payload_b64 = base64::Engine::encode(

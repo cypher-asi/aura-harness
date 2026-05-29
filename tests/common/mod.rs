@@ -340,6 +340,9 @@ pub fn chat_request_payload_extended(workspace: &Path, opts: ChatRequestOpts<'_>
     if let Some(sp) = opts.system_prompt {
         request["agent_identity"]["system_prompt"] = json!(sp);
     }
+    if let Some(pid) = opts.partition_id {
+        request["agent_identity"]["partition_id"] = json!(pid);
+    }
     if let Some(m) = opts.model {
         request["model"]["id"] = json!(m);
     }
@@ -383,6 +386,12 @@ pub struct ChatRequestOpts<'a> {
     pub user_id: Option<&'a str>,
     /// Override the default full-access `agent_permissions` payload.
     pub agent_permissions: Option<Value>,
+    /// Pin the session's `agent_id` via `agent_identity.partition_id`.
+    /// The runtime parses this as a hex `AgentId` (falling back to a
+    /// blake3 hash of the string), so a test can both register an
+    /// identity for, and later address `/tx` / `/record` / `/head` to,
+    /// the same agent.
+    pub partition_id: Option<&'a str>,
 }
 
 /// `POST /v1/run` with the given body and return the parsed

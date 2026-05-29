@@ -34,7 +34,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::{Session, WsContext};
-use crate::protocol::{InboundMessage, OutboundMessage};
+use crate::protocol::{ErrorMsg, InboundMessage, OutboundMessage};
 
 /// Live broadcast ring capacity. A slow attached client that lags past
 /// this many buffered messages observes `RecvError::Lagged`; the WS
@@ -262,6 +262,12 @@ pub(crate) async fn handle_chat_ws_attach(
         "Chat run WS attached"
     );
 
+    // Per-attach control channel: lets the reader push frames addressed
+    // to *this* socket only (e.g. a `parse_error` for malformed inbound
+    // JSON) without broadcasting them into the run's shared replay
+    // history, which every other attached client would otherwise see.
+    let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<OutboundMessage>(8);
+
     // Reader task: forward inbound frames to the driver. On WS close it
     // signals `attach_closed` (so the writer stops) but does NOT cancel
     // the turn.
@@ -287,6 +293,22 @@ pub(crate) async fn handle_chat_ws_attach(
                                 "parse_error",
                                 Some(&format!("run_id={read_run_id} {e}")),
                             );
+                            // Tell *this* client its frame was rejected.
+                            // Recoverable: the socket stays open so the
+                            // client can resend a well-formed message.
+                            if ctrl_tx
+                                .send(OutboundMessage::Error(ErrorMsg {
+                                    code: "parse_error".into(),
+                                    message: format!("failed to parse inbound message: {e}"),
+                                    recoverable: true,
+                                    support_id: None,
+                                }))
+                                .await
+                                .is_err()
+                            {
+                                // Writer gone; nothing left to notify.
+                                break;
+                            }
                         }
                     }
                 }
@@ -313,6 +335,13 @@ pub(crate) async fn handle_chat_ws_attach(
             tokio::select! {
                 biased;
                 () = attach_closed.cancelled() => break,
+                // Per-attach control frames (e.g. `parse_error`) go only
+                // to this socket, ahead of live broadcast traffic.
+                Some(ctrl) = ctrl_rx.recv() => {
+                    if send_outbound_frame(&mut ws_tx, &ctrl).await.is_err() {
+                        break;
+                    }
+                }
                 recv = live.recv() => match recv {
                     Ok(msg) => {
                         if send_outbound_frame(&mut ws_tx, &msg).await.is_err() {
@@ -362,7 +391,9 @@ mod tests {
     use crate::protocol::{AssistantMessageStart, TextDelta};
 
     fn text(s: &str) -> OutboundMessage {
-        OutboundMessage::TextDelta(TextDelta { text: s.to_string() })
+        OutboundMessage::TextDelta(TextDelta {
+            text: s.to_string(),
+        })
     }
 
     #[test]
@@ -426,9 +457,11 @@ mod tests {
         let ch = ChatEventChannel::new();
         let tx = spawn_event_forwarder(ch.clone());
 
-        tx.send(OutboundMessage::AssistantMessageStart(AssistantMessageStart {
-            message_id: "m1".into(),
-        }))
+        tx.send(OutboundMessage::AssistantMessageStart(
+            AssistantMessageStart {
+                message_id: "m1".into(),
+            },
+        ))
         .await
         .unwrap();
 
