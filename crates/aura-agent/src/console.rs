@@ -170,6 +170,13 @@ pub fn tools_block(
             name = call.name,
             len = len_str,
         ));
+        if let Some(summary) = tool_arg_summary(&call.name, &call.input) {
+            out.push_str(&format!(
+                "{}      {}\n",
+                "│".dimmed(),
+                truncate_inline(&summary, 160).bright_black(),
+            ));
+        }
     }
     out.push_str(&format!("{}", "└─".dimmed()));
     info!(target: CONSOLE_TARGET, "{out}");
@@ -466,6 +473,42 @@ fn short_tool_use_id(id: &str) -> String {
     format!("{prefix}…{last4}")
 }
 
+/// Extract the primary argument for a tool call so the console can
+/// show *what* a call operated on (the command, path, pattern, …) on
+/// its own line beneath the tool name. Returns `None` for tools with
+/// no single meaningful scalar argument.
+fn tool_arg_summary(name: &str, input: &serde_json::Value) -> Option<String> {
+    let str_field = |key: &str| input.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    match name {
+        "read_file" | "write_file" | "edit_file" | "delete_file" | "list_files" | "stat_file" => {
+            str_field("path")
+        }
+        "search_code" | "find_files" => str_field("pattern"),
+        "git_commit" | "git_commit_push" => str_field("message"),
+        "git_push" => str_field("branch").or_else(|| str_field("remote_url")),
+        "run_command" => run_command_summary(input),
+        _ => None,
+    }
+}
+
+/// Reconstruct the command line for a `run_command` call, mirroring
+/// `parse_run_args` in `aura-tools`: prefer `program` + `args`, then
+/// fall back to `shell_script`, then the legacy `command` alias.
+fn run_command_summary(input: &serde_json::Value) -> Option<String> {
+    if let Some(program) = input.get("program").and_then(|v| v.as_str()) {
+        let mut parts = vec![program.to_string()];
+        if let Some(args) = input.get("args").and_then(|v| v.as_array()) {
+            parts.extend(args.iter().filter_map(|a| a.as_str().map(str::to_string)));
+        }
+        return Some(parts.join(" "));
+    }
+    input
+        .get("shell_script")
+        .and_then(|v| v.as_str())
+        .or_else(|| input.get("command").and_then(|v| v.as_str()))
+        .map(str::to_string)
+}
+
 /// Collapse control chars / whitespace / quotes into a single inline
 /// preview for error messages embedded in a block row.
 fn truncate_inline(content: &str, limit: usize) -> String {
@@ -622,6 +665,49 @@ mod tests {
             thinking_bytes: 0,
             text_bytes: 0,
         });
+    }
+
+    #[test]
+    fn run_command_summary_joins_program_and_args() {
+        let input = serde_json::json!({
+            "program": "cargo",
+            "args": ["build", "--release"]
+        });
+        assert_eq!(
+            run_command_summary(&input),
+            Some("cargo build --release".to_string())
+        );
+    }
+
+    #[test]
+    fn run_command_summary_falls_back_to_shell_and_legacy_command() {
+        let shell = serde_json::json!({ "shell_script": "echo hi && ls" });
+        assert_eq!(
+            run_command_summary(&shell),
+            Some("echo hi && ls".to_string())
+        );
+        let legacy = serde_json::json!({ "command": "make test" });
+        assert_eq!(run_command_summary(&legacy), Some("make test".to_string()));
+    }
+
+    #[test]
+    fn tool_arg_summary_maps_each_tool_to_its_primary_field() {
+        assert_eq!(
+            tool_arg_summary("read_file", &serde_json::json!({ "path": "src/lib.rs" })),
+            Some("src/lib.rs".to_string())
+        );
+        assert_eq!(
+            tool_arg_summary("search_code", &serde_json::json!({ "pattern": "fn main" })),
+            Some("fn main".to_string())
+        );
+        assert_eq!(
+            tool_arg_summary("git_commit", &serde_json::json!({ "message": "fix bug" })),
+            Some("fix bug".to_string())
+        );
+        assert_eq!(
+            tool_arg_summary("get_task_context", &serde_json::json!({})),
+            None
+        );
     }
 
     #[test]
