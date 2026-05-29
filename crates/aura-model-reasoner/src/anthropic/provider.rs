@@ -754,8 +754,7 @@ fn debug_log_cf_403_details(
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| millis_as_i64(d.as_millis()))
-        .unwrap_or(0);
+        .map_or(0, |d| millis_as_i64(d.as_millis()));
     let mut cf_headers: Vec<(String, String)> = Vec::new();
     for (name, value) in headers.iter() {
         let n = name.as_str().to_ascii_lowercase();
@@ -817,8 +816,7 @@ fn debug_log_body_cap_fired(
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| millis_as_i64(d.as_millis()))
-        .unwrap_or(0);
+        .map_or(0, |d| millis_as_i64(d.as_millis()));
     let line = serde_json::json!({
         "sessionId": "95fd5c",
         "hypothesisId": "H_BODY_SIZE",
@@ -849,8 +847,7 @@ fn debug_log_waf_safe_serialization(model: &str, body_len: usize) {
     let enabled = waf_safe_json_enabled();
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| millis_as_i64(d.as_millis()))
-        .unwrap_or(0);
+        .map_or(0, |d| millis_as_i64(d.as_millis()));
     let line = serde_json::json!({
         "sessionId": "95fd5c",
         "hypothesisId": "H_WAF_UNICODE_ESCAPE",
@@ -891,8 +888,7 @@ fn debug_log_outbound_request(
     );
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| millis_as_i64(d.as_millis()))
-        .unwrap_or(0);
+        .map_or(0, |d| millis_as_i64(d.as_millis()));
     let line = serde_json::json!({
         "sessionId": "95fd5c",
         "hypothesisId": "H1-H5-harness-wire",
@@ -1228,8 +1224,7 @@ fn dump_request_body_if_enabled(model: &str, body_hash: &str, body_bytes: &[u8])
 
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_millis());
     let file_name = format!(
         "llm-request-{ts}-{}-{body_hash}.json",
         sanitize_filename_segment(model)
