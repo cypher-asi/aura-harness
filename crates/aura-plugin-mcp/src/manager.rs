@@ -73,8 +73,7 @@ impl McpConnectionManager {
     pub fn contains(&self, server_id: &str) -> bool {
         self.inner
             .lock()
-            .map(|g| g.contains_key(server_id))
-            .unwrap_or(false)
+            .is_ok_and(|g| g.contains_key(server_id))
     }
 
     /// Snapshot of currently-registered server ids (unordered).

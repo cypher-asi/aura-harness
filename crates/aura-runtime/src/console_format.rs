@@ -186,8 +186,7 @@ impl tracing::field::Visit for MessageVisitor {
             let trimmed = formatted
                 .strip_prefix('"')
                 .and_then(|s| s.strip_suffix('"'))
-                .map(|s| s.replace("\\n", "\n").replace("\\\"", "\""))
-                .unwrap_or(formatted);
+                .map_or(formatted, |s| s.replace("\\n", "\n").replace("\\\"", "\""));
             self.message = trimmed;
         }
     }

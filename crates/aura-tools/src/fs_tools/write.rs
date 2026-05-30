@@ -140,7 +140,7 @@ pub fn fs_write(
         String::new()
     };
     let existing_size = if file_existed {
-        usize::try_from(fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0)).unwrap_or(usize::MAX)
+        usize::try_from(fs::metadata(&resolved).map_or(0, |m| m.len())).unwrap_or(usize::MAX)
     } else {
         0
     };
@@ -182,7 +182,7 @@ pub fn fs_write(
     })?;
 
     // Post-write verification
-    let on_disk_size = usize::try_from(fs::metadata(&resolved).map(|m| m.len()).unwrap_or(0))
+    let on_disk_size = usize::try_from(fs::metadata(&resolved).map_or(0, |m| m.len()))
         .unwrap_or(usize::MAX);
     if on_disk_size != content.len() {
         return Err(ToolError::InvalidArguments(format!(

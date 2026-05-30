@@ -61,8 +61,7 @@ pub(crate) fn check_module_link(
 
     let linked = inspected.iter().any(|candidate| {
         std::fs::read_to_string(candidate)
-            .map(|text| contains_mod_declaration(&text, &stem))
-            .unwrap_or(false)
+            .is_ok_and(|text| contains_mod_declaration(&text, &stem))
     });
 
     if linked {

@@ -11,7 +11,7 @@ jobs:
     name: rg-band enforcement
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ripgrep is already present on ubuntu-latest runners, but pin it
       # so future image changes don't silently disable the check.
