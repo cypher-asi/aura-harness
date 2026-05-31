@@ -11,13 +11,13 @@
 
 use super::state::agent_loop_stream_timeout;
 use super::Session;
-use aura_compaction::{compact_for_storage, SESSION_TOOL_BLOB_MAX_BYTES};
-use aura_core::{AgentPermissions, Capability};
+use aura_context_compaction::{compact_for_storage, SESSION_TOOL_BLOB_MAX_BYTES};
+use aura_core_types::{AgentPermissions, Capability};
 use aura_protocol::{
     AgentCapabilities, AgentIdentity, AgentPermissionsWire, ChatProjectInfoWire, ModelSelection,
     ProjectContext, RuntimeRequest, RuntimeRequestType, WorkspaceLocation,
 };
-use aura_reasoner::Message;
+use aura_model_reasoner::Message;
 use std::path::PathBuf;
 
 fn absolute_path(parts: &[&str]) -> PathBuf {
@@ -207,7 +207,7 @@ fn apply_chat_runtime_request_falls_back_to_partition_id_for_skill_lookup() {
 /// yield **distinct** `Session.agent_id`s.
 #[test]
 fn apply_chat_runtime_request_partitions_session_id_per_session_segment() {
-    use aura_core::AgentId;
+    use aura_core_types::AgentId;
 
     let template_uuid = "f74bc868-0a34-4195-9718-bf5ce7f67a55";
     let instance = "abcdef01-2345-6789-abcd-ef0123456789";
@@ -409,7 +409,7 @@ fn apply_chat_runtime_request_typed_fields_path_builds_assembled_prompt() {
 
 #[test]
 fn truncate_messages_for_storage_caps_oversized_tool_result_text() {
-    use aura_reasoner::{ContentBlock, Role, ToolResultContent};
+    use aura_model_reasoner::{ContentBlock, Role, ToolResultContent};
     let big = "Z".repeat(SESSION_TOOL_BLOB_MAX_BYTES + 1_000);
     let mut messages = vec![Message {
         role: Role::User,
@@ -434,7 +434,7 @@ fn truncate_messages_for_storage_caps_oversized_tool_result_text() {
 
 #[test]
 fn truncate_messages_for_storage_is_noop_for_small_blobs() {
-    use aura_reasoner::{ContentBlock, Role, ToolResultContent};
+    use aura_model_reasoner::{ContentBlock, Role, ToolResultContent};
     let small = "ok".to_string();
     let mut messages = vec![Message {
         role: Role::User,
@@ -456,7 +456,7 @@ fn truncate_messages_for_storage_is_noop_for_small_blobs() {
 
 #[test]
 fn truncate_messages_for_storage_caps_oversized_tool_result_json() {
-    use aura_reasoner::{ContentBlock, Role, ToolResultContent};
+    use aura_model_reasoner::{ContentBlock, Role, ToolResultContent};
     let items: Vec<serde_json::Value> = (0..500)
         .map(|i| serde_json::json!({ "id": format!("agent-{i}"), "pad": "X".repeat(200) }))
         .collect();

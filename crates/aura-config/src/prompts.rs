@@ -24,7 +24,7 @@ pub const REPEATED_READ_HASH_DISPLAY_CHARS: usize = 8;
 
 /// Per-block character cap applied while rendering the compaction
 /// summary auxiliary prompt body. Larger blocks get
-/// `aura_compaction::truncate_content`-trimmed.
+/// `aura_context_compaction::truncate_content`-trimmed.
 pub const PROMPT_COMPACTION_MAX_BLOCK_CHARS: usize = 4_000;
 
 // ---------------------------------------------------------------------------

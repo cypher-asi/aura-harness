@@ -8,7 +8,7 @@
 //! in its prompt.
 //!
 //! The kernel additionally enforces the capability at proposal time via
-//! [`aura_kernel::PolicyConfig::tool_capability_requirements`]. The
+//! [`aura_agent_kernel::PolicyConfig::tool_capability_requirements`]. The
 //! policy gate is always on; there is no feature flag or opt-out.
 //!
 //! Production side-effects for `send_to_agent` / `agent_lifecycle` /
@@ -36,7 +36,7 @@ pub use spawn_agent::{SpawnAgentInput, SpawnAgentOutcome, SpawnAgentTool};
 pub use task::{TaskInput, TaskTool};
 
 use crate::tool::Tool;
-use aura_core::{Capability, ToolDefinition};
+use aura_core_types::{Capability, ToolDefinition};
 
 /// Static catalog metadata for the five cross-agent tools. Consumed by
 /// [`crate::ToolCatalog::new`] to register every cross-agent tool

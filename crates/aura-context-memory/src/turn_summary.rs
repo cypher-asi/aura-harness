@@ -85,10 +85,10 @@ pub struct TurnSummary {
 
     /// Final message history at the end of the turn.
     ///
-    /// `aura_reasoner::Message` is a context-layer-friendly dependency
+    /// `aura_model_reasoner::Message` is a context-layer-friendly dependency
     /// (the reasoner sits below `context` in the layer order). The
     /// refiner builds a [`crate::extraction::ConversationTurn`] from
     /// these messages, walking backward to recover the last
     /// user/assistant exchange for the LLM extraction prompt.
-    pub messages: Vec<aura_reasoner::Message>,
+    pub messages: Vec<aura_model_reasoner::Message>,
 }

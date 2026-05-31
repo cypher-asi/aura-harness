@@ -27,7 +27,7 @@
 //!   via the `Arc<dyn ChildRunner>` trait object so the agent layer
 //!   stays free of fleet deps.
 //! - [`memory_observer`] — `TurnObserver` adapter feeding completed
-//!   turns into [`aura_memory::MemoryManager`].
+//!   turns into [`aura_context_memory::MemoryManager`].
 //! - [`capabilities`] — `record_runtime_capabilities` helper called by
 //!   the automaton bridge during dev-loop / task-run bootstrap.
 //! - [`executor`] — shared `ToolResolver` / `ExecutorRouter`

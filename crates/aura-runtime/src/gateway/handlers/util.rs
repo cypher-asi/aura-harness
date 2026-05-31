@@ -8,7 +8,7 @@
 //! endpoint speaks the same agent-id grammar.
 
 use super::super::errors::ApiError;
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 
 /// Parse an agent id from a path or body field.
 ///

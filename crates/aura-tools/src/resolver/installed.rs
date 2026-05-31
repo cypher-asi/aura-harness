@@ -7,7 +7,7 @@
 use super::trusted::{select_runtime_integration, trusted_runtime_spec};
 use super::ToolResolver;
 use crate::error::ToolError;
-use aura_core::{
+use aura_core_types::{
     InstalledToolDefinition, InstalledToolRuntimeExecution, ToolAuth, ToolCall, ToolResult,
 };
 use aura_exec_traits::ExecuteContext;

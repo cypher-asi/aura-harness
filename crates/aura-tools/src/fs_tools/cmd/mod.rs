@@ -2,8 +2,8 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::ToolResult;
-use aura_core::{Capability, ToolDefinition};
+use aura_core_types::ToolResult;
+use aura_core_types::{Capability, ToolDefinition};
 use std::path::Path;
 use tracing::{debug, instrument};
 

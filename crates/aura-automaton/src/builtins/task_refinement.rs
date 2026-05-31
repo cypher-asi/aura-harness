@@ -33,7 +33,7 @@
 //!    [`AutomatonEvent::TaskDescriptionRefined`] and return the
 //!    updated descriptor returned by the domain API.
 
-use aura_reasoner::ModelProvider;
+use aura_model_reasoner::ModelProvider;
 use aura_tools::domain_tools::{DomainApi, SpecDescriptor, TaskDescriptor, TaskUpdate};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -245,7 +245,7 @@ mod tests {
 
     use anyhow::anyhow;
     use async_trait::async_trait;
-    use aura_reasoner::{
+    use aura_model_reasoner::{
         ContentBlock, Message as ReasonerMessage, ModelRequest, ModelResponse, ProviderTrace,
         ReasonerError, Role, StopReason, Usage,
     };

@@ -6,7 +6,7 @@ use crate::refinement::LlmRefiner;
 use crate::store::MemoryStoreApi;
 use crate::turn_summary::TurnSummary;
 use crate::types::{AgentEvent, CandidateType, Fact, FactSource, Procedure, RefinedCandidate};
-use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

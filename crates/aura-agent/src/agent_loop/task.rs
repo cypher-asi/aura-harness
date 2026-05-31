@@ -42,7 +42,7 @@
 //! [`AgentError::IterationBudgetExceeded`]) — so callers no longer
 //! need to re-derive which ceiling fired when surfacing the failure.
 
-use aura_reasoner::{Message, ToolDefinition};
+use aura_model_reasoner::{Message, ToolDefinition};
 use tracing::{field, instrument, Span};
 use uuid::Uuid;
 

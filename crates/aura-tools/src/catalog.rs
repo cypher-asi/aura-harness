@@ -6,7 +6,7 @@
 use crate::definitions;
 use crate::tool::builtin_tools;
 use crate::ToolConfig;
-use aura_core::{
+use aura_core_types::{
     AgentPermissions, Capability, InstalledToolDefinition, Registry, RegistryError, ToolDefinition,
 };
 use std::collections::HashSet;
@@ -412,7 +412,7 @@ fn add_project_id_param(mut td: ToolDefinition) -> ToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{InstalledToolDefinition, ToolAuth};
+    use aura_core_types::{InstalledToolDefinition, ToolAuth};
 
     #[test]
     fn catalog_has_entries() {
@@ -556,9 +556,9 @@ mod tests {
     #[test]
     fn cross_agent_tools_hidden_when_capability_missing() {
         let cat = ToolCatalog::new();
-        let perms = aura_core::AgentPermissions {
-            scope: aura_core::AgentScope::default(),
-            capabilities: vec![aura_core::Capability::ReadAgent],
+        let perms = aura_core_types::AgentPermissions {
+            scope: aura_core_types::AgentScope::default(),
+            capabilities: vec![aura_core_types::Capability::ReadAgent],
         };
         let tools = cat.visible_tools_with_permissions(
             ToolProfile::Agent,
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn cross_agent_tools_visible_to_ceo_preset() {
         let cat = ToolCatalog::new();
-        let perms = aura_core::AgentPermissions::ceo_preset();
+        let perms = aura_core_types::AgentPermissions::ceo_preset();
         let tools = cat.visible_tools_with_permissions(
             ToolProfile::Agent,
             &ToolConfig::default(),

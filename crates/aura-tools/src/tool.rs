@@ -8,7 +8,7 @@ use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     AgentId, AgentMode, AgentPermissions, AgentToolPermissions, Capability, KernelMode,
     SubagentDispatchRequest, SubagentResult, ToolDefinition, ToolResult, UserToolDefaults,
 };
@@ -28,7 +28,7 @@ pub struct ToolContext {
     /// Caller's **external** agent id — the upstream OS UUID that the
     /// outer system (aura-os-server) uses to identify this agent on its
     /// REST surface. Distinct from [`Self::caller_agent_id`], which is the
-    /// harness's internal `aura_core::AgentId` (a 32-byte blake3 hash whose
+    /// harness's internal `aura_core_types::AgentId` (a 32-byte blake3 hash whose
     /// `Display` impl truncates to 16 hex chars and is irreversible to the
     /// upstream UUID).
     ///

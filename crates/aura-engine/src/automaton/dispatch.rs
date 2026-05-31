@@ -20,8 +20,8 @@ use std::sync::Arc;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
-use aura_core::AgentPermissions;
-use aura_kernel::Kernel;
+use aura_core_types::AgentPermissions;
+use aura_agent_kernel::Kernel;
 use aura_protocol::AgentPersona;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
@@ -307,7 +307,7 @@ impl AutomatonBridge {
             aura_session_id.as_deref(),
             aura_agent_id.as_deref(),
             Some(project_id),
-            aura_reasoner::ModelRequestKind::DevLoopBootstrap,
+            aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
         );
         self.record_lifecycle_event(ctx.kernel.agent_id, &automaton_id, "start_dev_loop")
             .await;
@@ -422,7 +422,7 @@ impl AutomatonBridge {
             aura_session_id.as_deref(),
             aura_agent_id.as_deref(),
             Some(project_id),
-            aura_reasoner::ModelRequestKind::Chat,
+            aura_model_reasoner::ModelRequestKind::Chat,
         );
         self.record_lifecycle_event(ctx.kernel.agent_id, &automaton_id, "start_task_run")
             .await;

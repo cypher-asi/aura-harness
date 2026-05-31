@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::WriteStore;
-use aura_core::{Hash, TransactionType};
+use aura_core_types::{Hash, TransactionType};
 use bytes::Bytes;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -295,7 +295,7 @@ fn test_crash_recovery_record_entries_persist() {
             let expected = u8::try_from(i + 1).expect("index fits in u8");
             assert_eq!(
                 entry.context_hash,
-                aura_core::ContextHash::from([expected; 32])
+                aura_core_types::ContextHash::from([expected; 32])
             );
         }
     }

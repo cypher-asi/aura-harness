@@ -231,7 +231,7 @@ async fn tool_executes_commit_via_context() {
 
     let sandbox = Sandbox::new(dir.path()).unwrap();
     let mut ctx = ToolContext::new(sandbox, ToolConfig::default());
-    ctx.caller_agent_id = Some(aura_core::AgentId::generate());
+    ctx.caller_agent_id = Some(aura_core_types::AgentId::generate());
     let result = GitCommitTool
         .execute(&ctx, serde_json::json!({ "message": "e2e" }))
         .await

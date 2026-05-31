@@ -11,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tracing::warn;
 
-use aura_core::{Action, ActionId, AgentId, Effect, EffectStatus, ToolResult};
+use aura_core_types::{Action, ActionId, AgentId, Effect, EffectStatus, ToolResult};
 
 // ---------------------------------------------------------------------------
 // Error
@@ -129,14 +129,14 @@ pub struct DecodedToolResult {
     /// Whether the effect represents an error.
     pub is_error: bool,
     /// Machine-readable result classification.
-    pub kind: aura_core::ToolResultKind,
+    pub kind: aura_core_types::ToolResultKind,
     /// Additional metadata from the tool result, if available.
     pub metadata: HashMap<String, String>,
     /// Optional line diff for file-mutating tools (`fs_write` /
     /// `fs_edit` / `fs_delete`). `None` when the tool didn't compute
     /// counts (every other tool, plus tool failures); consumers must
     /// not interpret `None` as "zero lines changed".
-    pub line_diff: Option<aura_core::LineDiff>,
+    pub line_diff: Option<aura_core_types::LineDiff>,
 }
 
 /// Resolve a command exit code from either the typed `exit_code` field
@@ -221,7 +221,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
                 DecodedToolResult {
                     content: format!("Tool result could not be parsed: {e}. Raw: {raw}"),
                     is_error: true,
-                    kind: aura_core::ToolResultKind::AgentError,
+                    kind: aura_core_types::ToolResultKind::AgentError,
                     metadata: HashMap::new(),
                     line_diff: None,
                 }
@@ -241,7 +241,7 @@ pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
                 } else {
                     raw.to_string()
                 };
-                (content, aura_core::ToolResultKind::AgentError)
+                (content, aura_core_types::ToolResultKind::AgentError)
             };
         DecodedToolResult {
             content,

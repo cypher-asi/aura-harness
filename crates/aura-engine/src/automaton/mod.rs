@@ -44,9 +44,9 @@ use tracing::{info, warn};
 
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_automaton::{AutomatonHandle, AutomatonRuntime};
-use aura_core::{AgentId, SystemKind, Transaction, TransactionType};
-use aura_reasoner::ModelProvider;
-use aura_store::Store;
+use aura_core_types::{AgentId, SystemKind, Transaction, TransactionType};
+use aura_model_reasoner::ModelProvider;
+use aura_store_db::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
@@ -182,7 +182,7 @@ impl AutomatonBridge {
         aura_session_id: Option<&str>,
         aura_agent_id: Option<&str>,
         aura_project_id: Option<&str>,
-        request_kind: aura_reasoner::ModelRequestKind,
+        request_kind: aura_model_reasoner::ModelRequestKind,
     ) {
         let Some(scheduler) = self.scheduler.as_ref() else {
             return;
@@ -303,7 +303,7 @@ impl AutomatonBridge {
         // dev-loop / task-run invocations for the same project onto the
         // same prompt cache. Anthropic caching does not need this — the
         // provider's ephemeral `cache_control` breakpoints in
-        // `aura_reasoner::anthropic::convert` handle prefix reuse based
+        // `aura_model_reasoner::anthropic::convert` handle prefix reuse based
         // on byte-identical system/tools/last-user-block content.
         config.prompt_cache_key = aura_project_id.map(|pid| format!("devloop:{pid}"));
         config
@@ -403,7 +403,7 @@ impl AutomatonController for AutomatonBridge {
             git_branch,
             None,
             None,
-            aura_core::AgentPermissions::full_access(),
+            aura_core_types::AgentPermissions::full_access(),
             None,
             None,
             None,
@@ -478,7 +478,7 @@ impl AutomatonController for AutomatonBridge {
             git_branch,
             None,
             None,
-            aura_core::AgentPermissions::full_access(),
+            aura_core_types::AgentPermissions::full_access(),
             None,
             Vec::new(),
             None,

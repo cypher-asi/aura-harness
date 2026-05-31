@@ -9,15 +9,15 @@
 //! - The real [`fs_workspace::FsWorkspace`] implementation rooted at
 //!   the project's working directory.
 //! - The async [`resolve_hints`] orchestrator that consumes pure
-//!   `aura_prompts::enrichment::ContextHints` and returns
-//!   `aura_prompts::enrichment::ResolvedContext` for rendering.
+//!   `aura_context_prompts::enrichment::ContextHints` and returns
+//!   `aura_context_prompts::enrichment::ResolvedContext` for rendering.
 
 use async_trait::async_trait;
 
-pub use aura_prompts::enrichment::types::{
+pub use aura_context_prompts::enrichment::types::{
     ContextHints, ResolveCaps, ResolvedContext, ResolvedPath, ResolvedSymbol, SymbolHit,
 };
-pub use aura_prompts::enrichment::{default_caps, extract_hints};
+pub use aura_context_prompts::enrichment::{default_caps, extract_hints};
 
 mod fs_workspace;
 

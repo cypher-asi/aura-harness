@@ -181,7 +181,7 @@ No code outside the kernel may:
 - Append to a record log. The record-append family
   (`append_entry_atomic`, `append_entry_dequeued`, `append_entry_direct`,
   their `*_with_runtime_capabilities` variants, and `append_entries_batch`)
-  lives on the **sealed** `aura_store::WriteStore` trait — see §10. Non-kernel
+  lives on the **sealed** `aura_store_db::WriteStore` trait — see §10. Non-kernel
   callers bind to `Arc<dyn ReadStore>` and may still invoke the explicitly-
   allowed inbox/metadata writes (`enqueue_tx`, `set_agent_status`) that live
   on `ReadStore`.
@@ -362,7 +362,7 @@ secrets through approved gateways, but it must not persist org credentials or
 become the catalog authority for integrations.
 
 **Enforcement:** `rg`-band CI gate in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh)
-scopes the `use aura_store::` band to `crates/aura-agent/src/agent_loop/**` and
+scopes the `use aura_store_db::` band to `crates/aura-agent/src/agent_loop/**` and
 excludes test files.
 
 ---
@@ -597,13 +597,13 @@ sequence of append-only entries.
 - The record-append surface (`append_entry_atomic`, `append_entry_dequeued`,
   `append_entry_direct`, and their `*_with_runtime_capabilities` variants,
   plus `append_entries_batch`) lives on the **sealed**
-  [`aura_store::WriteStore`](../crates/aura-store-db/src/store.rs) trait
+  [`aura_store_db::WriteStore`](../crates/aura-store-db/src/store.rs) trait
   (canonical definition in [`aura-store-db`](../crates/aura-store-db/src/store.rs);
   re-exported through the [`aura-store`](../crates/aura-store/src/lib.rs) shell).
-  Non-kernel crates depend only on `aura_store::ReadStore`; the kernel's
+  Non-kernel crates depend only on `aura_store_db::ReadStore`; the kernel's
   `Arc<dyn WriteStore>` is the only path that can commit a record entry.
   New storage backends cannot be written outside the `aura-store-db` crate
-  because the sealing marker (`aura_store::store::sealed::Sealed`) is
+  because the sealing marker (`aura_store_db::store::sealed::Sealed`) is
   crate-private.
 - The abstract per-agent append trait
   [`aura_store_record::RecordLog`](../crates/aura-store-record/src/log.rs) wraps
@@ -721,7 +721,7 @@ header doc comment "Concurrency Model" / "Store-Backed Processing Claims"
 The HTTP-driven non-kernel append in
 [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs)
 (`append_agent_tool_permissions_entry` ~line 172) acquires this same claim
-before calling `aura_kernel::write_system_record` so it serializes correctly
+before calling `aura_agent_kernel::write_system_record` so it serializes correctly
 with concurrent scheduler drains for the same agent.
 
 ### 12.b Per-parent SubagentSpawn audit lease
@@ -916,7 +916,7 @@ The following operations intentionally do NOT route through `Kernel::process_*`:
 | Tool sandbox setup (`sandbox.rs` directory creation in `aura-exec-sandbox` / `aura-tools`) | Infrastructure for the kernel-managed tool pipeline. |
 | Read-only `git` operations in [`crates/aura-agent/src/git.rs`](../crates/aura-agent/src/git.rs) (`git diff`, `git status`, `git log`) | No external side effect. `is_git_repo` filesystem probe and `list_unpushed_commits` (`git log` scan) stay in `aura-agent` as read-only helpers. Every mutating `git` subprocess (`add`, `commit`, `push`) lives behind the `GitExecutor` in [`crates/aura-tools/src/git_tool/`](../crates/aura-tools/src/git_tool/) and routes through the kernel's `ToolExecutor`. Pinned by the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
 | `git worktree add` / `worktree remove` in [`crates/aura-exec-isolation/src/lib.rs`](../crates/aura-exec-isolation/src/lib.rs) (`WorktreeIsolation::provision` / `teardown`) | Workspace-isolation primitive for parallel-safe subagent dispatch. No remote, no commit/push mutation; analogous to sandbox directory creation. Allowlisted in the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
-| HTTP-driven `write_system_record` in [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs) | Tool-permissions PUT handler appends a `System` record entry via `aura_kernel::write_system_record` so the operator's UI write is durable on the response. Acquires the scheduler's per-agent processing claim first (§12.a) so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other non-kernel/non-store `append_entry_*` call is a CI failure. |
+| HTTP-driven `write_system_record` in [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs) | Tool-permissions PUT handler appends a `System` record entry via `aura_agent_kernel::write_system_record` so the operator's UI write is durable on the response. Acquires the scheduler's per-agent processing claim first (§12.a) so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other non-kernel/non-store `append_entry_*` call is a CI failure. |
 | Fleet-spawn `write_system_record` callers in [`crates/aura-fleet-spawn/src/spawner.rs`](../crates/aura-fleet-spawn/src/spawner.rs) (`SubagentSpawn` audit rows, `promote_to_orphan`) | Spawn composition writes audit rows directly via `aura_agent_kernel::write_system_record`. Each call holds the per-parent `ParentLeaseRegistry` lease (§12.b) so sibling spawns of the same parent linearise. Not a raw `append_entry_*` call — the entry is built by the kernel helper and committed via the sealed `WriteStore` surface. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
 | Plugin hook subprocesses ([`crates/aura-plugin-hooks/src/engine.rs`](../crates/aura-plugin-hooks/src/engine.rs)) | Lifecycle hook scripts run with scrubbed env (§14). They never touch `append_entry_*`, `ModelProvider`, or `DomainApi`. Their only kernel-visible effect is the `PermissionRequest` carve-out 5b in §4. |

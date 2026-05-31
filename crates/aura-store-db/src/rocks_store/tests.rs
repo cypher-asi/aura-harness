@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::store::WriteStore;
-use aura_core::{
+use aura_core_types::{
     Decision, Hash, InstalledIntegrationDefinition, InstalledToolCapability,
     InstalledToolIntegrationRequirement, ProposalSet, RuntimeCapabilityInstall, SystemKind,
     TransactionType,
@@ -381,7 +381,7 @@ fn test_record_entry_with_complex_data() {
     let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
 
     let mut decision = Decision::new();
-    let action_id = aura_core::ActionId::generate();
+    let action_id = aura_core_types::ActionId::generate();
     decision.accept(action_id);
     decision.reject(0, "test rejection");
 
@@ -398,7 +398,7 @@ fn test_record_entry_with_complex_data() {
     let retrieved = store.get_record_entry(agent_id, 1).unwrap();
     assert_eq!(
         retrieved.context_hash,
-        aura_core::ContextHash::from([42u8; 32])
+        aura_core_types::ContextHash::from([42u8; 32])
     );
     assert_eq!(retrieved.decision.accepted_action_ids.len(), 1);
     assert_eq!(retrieved.decision.rejected.len(), 1);
@@ -486,7 +486,7 @@ fn test_append_entry_direct() {
     assert_eq!(retrieved.seq, 1);
     assert_eq!(
         retrieved.context_hash,
-        aura_core::ContextHash::from([1u8; 32])
+        aura_core_types::ContextHash::from([1u8; 32])
     );
 }
 
@@ -567,7 +567,7 @@ fn test_append_entries_batch_single() {
     let retrieved = store.get_record_entry(agent_id, 1).unwrap();
     assert_eq!(
         retrieved.context_hash,
-        aura_core::ContextHash::from([1u8; 32])
+        aura_core_types::ContextHash::from([1u8; 32])
     );
 }
 
@@ -594,7 +594,7 @@ fn test_append_entries_batch_multiple() {
         assert_eq!(entry.seq, (i + 1) as u64);
         assert_eq!(
             entry.context_hash,
-            aura_core::ContextHash::from([(i + 1) as u8; 32])
+            aura_core_types::ContextHash::from([(i + 1) as u8; 32])
         );
     }
 }

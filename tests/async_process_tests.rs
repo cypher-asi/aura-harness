@@ -3,7 +3,7 @@
 //! Tests the full async process flow including pending effects and completion transactions.
 
 use aura_agent::ProcessManager;
-use aura_core::{
+use aura_core_types::{
     ActionId, ActionResultPayload, AgentId, Hash, ProcessId, ProcessPending, Transaction,
     TransactionType,
 };

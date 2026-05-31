@@ -22,8 +22,8 @@ use aura_context_memory::{
     AgentEvent, Fact, LlmRefiner, MemoryStats, MemoryStoreApi, MemoryWritePipeline, Procedure,
     RefinerConfig, TurnSummary, WriteConfig,
 };
-use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
-use aura_reasoner::{MockProvider, MockResponse, ModelProvider};
+use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
+use aura_model_reasoner::{MockProvider, MockResponse, ModelProvider};
 use chrono::{DateTime, Utc};
 
 /// Smallest possible in-memory `MemoryStoreApi` fake — keeps the

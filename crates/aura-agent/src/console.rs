@@ -34,7 +34,7 @@
 
 use std::time::Duration;
 
-use aura_reasoner::StreamPhase;
+use aura_model_reasoner::StreamPhase;
 use colored::Colorize;
 use tracing::info;
 
@@ -729,7 +729,7 @@ mod tests {
                 tool_use_id: "toolu_aaaaaaaa1234".into(),
                 content: "ok".into(),
                 is_error: false,
-                kind: aura_core::ToolResultKind::Ok,
+                kind: aura_core_types::ToolResultKind::Ok,
                 stop_loop: false,
                 file_changes: Vec::new(),
             },
@@ -737,7 +737,7 @@ mod tests {
                 tool_use_id: "toolu_bbbbbbbb5678".into(),
                 content: "boom".into(),
                 is_error: true,
-                kind: aura_core::ToolResultKind::Ok,
+                kind: aura_core_types::ToolResultKind::Ok,
                 stop_loop: false,
                 file_changes: Vec::new(),
             },

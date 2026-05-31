@@ -22,8 +22,8 @@
 
 use crate::error::MemoryError;
 use crate::types::{AgentEvent, Fact, Procedure};
-use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
-use aura_store::cf;
+use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
+use aura_store_db::cf;
 use chrono::{DateTime, Utc};
 use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded, WriteBatch};
 use serde::{Deserialize, Serialize};

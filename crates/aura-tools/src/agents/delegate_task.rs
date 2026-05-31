@@ -7,13 +7,13 @@
 //! [`crate::AgentControlHook::delegate_task`] when wired. The tool records
 //! `parent_agent_id` + `originating_user_id` on the outcome so the
 //! billing chain remains intact downstream (see
-//! `aura_kernel::billing::walk_parent_chain`).
+//! `aura_agent_kernel::billing::walk_parent_chain`).
 
 use crate::agents::send_to_agent::{evaluate_control_gate, missing_runtime_hook};
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{Capability, ToolDefinition, ToolResult};
+use aura_core_types::{Capability, ToolDefinition, ToolResult};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -144,7 +144,7 @@ mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
-    use aura_core::{AgentId, AgentPermissions, AgentScope};
+    use aura_core_types::{AgentId, AgentPermissions, AgentScope};
 
     fn ctx(caller: AgentPermissions) -> ToolContext {
         let dir = std::env::temp_dir();

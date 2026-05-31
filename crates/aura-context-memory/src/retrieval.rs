@@ -4,7 +4,7 @@ use crate::error::MemoryError;
 use crate::salience;
 use crate::store::MemoryStoreApi;
 use crate::types::MemoryPacket;
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use chrono::Utc;
 use std::sync::Arc;
 

@@ -1,6 +1,6 @@
 //! Caller-supplied overrides + per-child budget.
 
-use aura_core::{AgentToolPermissions, UserToolDefaults};
+use aura_core_types::{AgentToolPermissions, UserToolDefaults};
 use aura_core_modes::{AgentMode, JoinPolicy, KernelMode, ReplayMode, SpawnMode};
 use aura_core_permissions::Permissions;
 

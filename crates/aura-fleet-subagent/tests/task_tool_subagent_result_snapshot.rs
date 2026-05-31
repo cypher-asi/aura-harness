@@ -3,7 +3,7 @@
 //! be **byte-identical** to the pre-refactor output.
 //!
 //! The legacy in-runtime dispatcher and the new fleet-routed
-//! dispatcher both serialise an [`aura_core::SubagentResult`] and
+//! dispatcher both serialise an [`aura_core_types::SubagentResult`] and
 //! return it to the parent agent. Any drift in field names,
 //! ordering, optionality, or enum tag shape is observable by
 //! every existing client (terminal, IDE adapter, external task
@@ -12,7 +12,7 @@
 //! ## What this snapshot pins
 //!
 //! - Top-level `SubagentResult` keys + ordering.
-//! - The serde representation of [`aura_core::SubagentExit`]
+//! - The serde representation of [`aura_core_types::SubagentExit`]
 //!   (internally tagged via `"kind"`, snake_case discriminants).
 //! - The `child_agent_id` hex format (redacted to a stable token
 //!   here because the value is random per run).
@@ -39,7 +39,7 @@
 
 mod common;
 
-use aura_core::{
+use aura_core_types::{
     AgentId, AgentPermissions, AgentScope, Capability, SubagentDispatchRequest, SubagentResult,
     UserToolDefaults,
 };

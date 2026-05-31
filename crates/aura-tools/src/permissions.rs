@@ -20,11 +20,11 @@
 //!   the REST `/agents/:id/tool_permissions` PUT handler.
 
 use crate::{catalog::ToolProfile, ToolCatalog};
-use aura_core::{
+use aura_core_types::{
     AgentId, AgentPermissions, AgentToolPermissions, Identity, RecordEntry, UserDefaultMode,
     UserToolDefaults,
 };
-use aura_store::ReadStore;
+use aura_store_db::ReadStore;
 use std::collections::HashSet;
 
 /// Replayed snapshot of the per-agent tool-permission state used by
@@ -144,7 +144,7 @@ fn context_from_entries(entries: Vec<RecordEntry>) -> AgentToolContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{AgentScope, Capability, ToolState, Transaction, TransactionType};
+    use aura_core_types::{AgentScope, Capability, ToolState, Transaction, TransactionType};
     use bytes::Bytes;
     use std::collections::BTreeMap;
 

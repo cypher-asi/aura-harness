@@ -14,7 +14,7 @@
 //! the forbidden crates as a dep would fail to compile. This test is
 //! the source-level belt-and-suspenders: it scans
 //! `crates/aura-prompts/src/**/*.rs` for `use aura_agent::|use
-//! aura_automaton::|use aura_runtime::|use aura_reasoner::` and
+//! aura_automaton::|use aura_runtime::|use aura_model_reasoner::` and
 //! fails CI when one slips in (e.g. through a copy-paste from a
 //! migrated module that still carried its old `use` line).
 
@@ -25,8 +25,8 @@ const FORBIDDEN_USE_PATTERNS: &[&str] = &[
     "use aura_agent::",
     "use aura_automaton::",
     "use aura_runtime::",
-    "use aura_reasoner::",
-    "use aura_kernel::",
+    "use aura_model_reasoner::",
+    "use aura_agent_kernel::",
     "use aura_tools::",
 ];
 
@@ -34,7 +34,7 @@ const FORBIDDEN_USE_PATTERNS: &[&str] = &[
 fn aura_prompts_has_no_forbidden_upstream_imports() {
     let prompts_root = workspace_root()
         .join("crates")
-        .join("aura-prompts")
+        .join("aura-context-prompts")
         .join("src");
     let mut offenders: Vec<String> = Vec::new();
     visit_rust_sources(&prompts_root, &mut |path, contents| {
@@ -67,10 +67,10 @@ fn aura_prompts_has_no_forbidden_upstream_imports() {
 fn aura_prompts_cargo_toml_does_not_list_forbidden_deps() {
     let manifest = workspace_root()
         .join("crates")
-        .join("aura-prompts")
+        .join("aura-context-prompts")
         .join("Cargo.toml");
     let contents = fs::read_to_string(&manifest)
-        .unwrap_or_else(|err| panic!("aura-prompts Cargo.toml unreadable: {err}"));
+        .unwrap_or_else(|err| panic!("aura-context-prompts Cargo.toml unreadable: {err}"));
 
     // Strip comments so the human-readable note "Forbidden deps: …"
     // doesn't trip the test.
@@ -84,8 +84,8 @@ fn aura_prompts_cargo_toml_does_not_list_forbidden_deps() {
         "aura-agent",
         "aura-automaton",
         "aura-runtime",
-        "aura-reasoner",
-        "aura-kernel",
+        "aura-model-reasoner",
+        "aura-agent-kernel",
         "aura-tools",
     ] {
         assert!(
@@ -116,7 +116,7 @@ fn old_prompts_module_is_deleted() {
 }
 
 /// Every former `crate::prompts::*` import must now reach the new
-/// boundary crate through `aura_prompts::*`. The scan is restricted
+/// boundary crate through `aura_context_prompts::*`. The scan is restricted
 /// to `crates/aura-agent/src/**/*.rs` so it does not double-count
 /// references inside `aura-prompts` (where the symbol is local).
 #[test]
@@ -138,7 +138,7 @@ fn aura_agent_does_not_reach_into_old_prompts_path() {
             {
                 offenders.push(format!(
                     "{}:{}: references the deleted `crate::prompts::*` path — \
-                     migrate to `aura_prompts::*`",
+                     migrate to `aura_context_prompts::*`",
                     path.display(),
                     idx + 1,
                 ));

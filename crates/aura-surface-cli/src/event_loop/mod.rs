@@ -8,9 +8,9 @@ pub(crate) use agent_events::forward_agent_events;
 pub(crate) use record_ui::send_record_to_ui;
 
 use aura_agent::{AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager};
-use aura_core::{AgentId, Transaction};
-use aura_kernel::Kernel;
-use aura_reasoner::{Message, ToolDefinition};
+use aura_core_types::{AgentId, Transaction};
+use aura_agent_kernel::Kernel;
+use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::{UiCommand, UiEvent};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -31,7 +31,7 @@ pub struct EventLoopContext<'a> {
     pub agent_id: AgentId,
     pub _process_manager: Arc<ProcessManager>,
     /// Optional memory manager for prompt injection and result ingestion.
-    pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -44,7 +44,7 @@ pub(super) struct LoopState<'a> {
     pub(super) tools: &'a [ToolDefinition],
     pub(super) kernel: Arc<Kernel>,
     pub(super) agent_id: AgentId,
-    pub(super) memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    pub(super) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
 }
 
 /// Run the event processing loop.
@@ -265,7 +265,7 @@ async fn drain_stale_inbox(state: &mut LoopState<'_>) {
 async fn enqueue_and_dequeue(
     state: &mut LoopState<'_>,
     text: &str,
-) -> Option<(Transaction, aura_store::DequeueToken)> {
+) -> Option<(Transaction, aura_store_db::DequeueToken)> {
     let store = state.kernel.store();
     let tx = Transaction::user_prompt(state.agent_id, text.to_string());
     if let Err(e) = store.enqueue_tx(&tx) {

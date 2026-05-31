@@ -1,6 +1,6 @@
 //! Visual block helpers for the inbound HTTP / WebSocket transcript.
 //!
-//! Symmetric to [`aura_agent::console`] / [`aura_reasoner::console`]:
+//! Symmetric to [`aura_agent::console`] / [`aura_model_reasoner::console`]:
 //! emits multi-line "blocks" (`┌─ → GET /api/files` / `┌─ ← 401
 //! unauthorized`) and one-line continuation rows under the
 //! dedicated `"aura::console"` tracing target so the custom event

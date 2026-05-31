@@ -1,6 +1,6 @@
 //! Message-history compaction and summarization helpers.
 
-use aura_reasoner::{ContentBlock, Message, ModelRequestKind, Role, ToolResultContent};
+use aura_model_reasoner::{ContentBlock, Message, ModelRequestKind, Role, ToolResultContent};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -1191,7 +1191,7 @@ pub fn compact_for_storage(messages: &mut [Message]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_reasoner::Role;
+    use aura_model_reasoner::Role;
 
     #[test]
     fn test_truncate_below_threshold() {

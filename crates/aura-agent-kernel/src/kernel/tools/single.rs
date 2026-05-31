@@ -13,7 +13,7 @@
 //!    attached. On [`aura_plugin_hooks::HookOutcome::Block`] the
 //!    executor is skipped, a parallel `tool_call_blocked_by_hook`
 //!    System audit row is written, and a synthetic
-//!    [`aura_core::Effect::failed`] is surfaced so the agent loop
+//!    [`aura_core_types::Effect::failed`] is surfaced so the agent loop
 //!    sees a clean rejection.
 //! 5. If approved (and not blocked), execute under the per-tool
 //!    timeout.
@@ -23,7 +23,7 @@
 use super::shared::{record_entry_for_tool_outcome, ToolOutcomeInputs};
 use aura_exec_traits::ExecuteContext;
 use crate::kernel::{Kernel, ProcessResult};
-use aura_core::{
+use aura_core_types::{
     Action, ActionId, ActionKind, ContextHash, Effect, EffectKind, ToolProposal, Transaction,
 };
 use bytes::Bytes;
@@ -112,7 +112,7 @@ pub(super) async fn process_one(
 /// [`Effect`] carries a JSON-discriminated payload of the form
 /// `{"kind": "tool_call_blocked_by_hook", "tool_name": ...,
 /// "tool_use_id": ..., "reason": ...}` and
-/// [`aura_core::EffectStatus::Failed`] as its status. The
+/// [`aura_core_types::EffectStatus::Failed`] as its status. The
 /// discriminator surfaces the Phase 10 schema-v2
 /// [`aura_store_record::RecordKind::ToolCallBlockedByHook`]
 /// taxonomy at the effect-payload level so an auditor can

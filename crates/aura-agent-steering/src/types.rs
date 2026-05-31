@@ -54,7 +54,7 @@ pub struct ToolCallResult {
     /// Whether the tool execution failed.
     pub is_error: bool,
     /// Machine-readable result classification.
-    pub kind: aura_core::ToolResultKind,
+    pub kind: aura_core_types::ToolResultKind,
     /// When true, the loop terminates after processing all results in
     /// this batch. Used by engine tools like `task_done` to signal
     /// task completion.
@@ -71,7 +71,7 @@ impl ToolCallResult {
             tool_use_id: tool_use_id.into(),
             content: content.into(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: Vec::new(),
         }
@@ -84,7 +84,7 @@ impl ToolCallResult {
             tool_use_id: tool_use_id.into(),
             content: content.into(),
             is_error: true,
-            kind: aura_core::ToolResultKind::AgentError,
+            kind: aura_core_types::ToolResultKind::AgentError,
             stop_loop: false,
             file_changes: Vec::new(),
         }
@@ -100,7 +100,7 @@ impl ToolCallResult {
             tool_use_id: tool_use_id.into(),
             content: content.into(),
             is_error: true,
-            kind: aura_core::ToolResultKind::CompactionStructural,
+            kind: aura_core_types::ToolResultKind::CompactionStructural,
             stop_loop: false,
             file_changes: Vec::new(),
         }

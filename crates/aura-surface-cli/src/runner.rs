@@ -14,9 +14,9 @@ use anyhow::Context;
 use aura_agent::{
     AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager, ProcessManagerConfig,
 };
-use aura_core::{Identity, Transaction};
-use aura_kernel::{Kernel, KernelConfig};
-use aura_reasoner::ModelProvider;
+use aura_core_types::{Identity, Transaction};
+use aura_agent_kernel::{Kernel, KernelConfig};
+use aura_model_reasoner::ModelProvider;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use aura_tools::ToolConfig;
 use clap::Parser;
@@ -93,7 +93,7 @@ pub async fn run() -> anyhow::Result<()> {
 /// on-disk orphan view is the durable source of truth across
 /// restarts.
 async fn cmd_agents(args: AgentsCommand) -> anyhow::Result<()> {
-    use aura_core::AgentId;
+    use aura_core_types::AgentId;
     use aura_fleet_spawn::{OrphanRecord, OrphanStore};
     use std::io::Write;
     use std::time::Duration;
@@ -569,10 +569,10 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     // The terminal harness is the one surface that legitimately
     // resolves its model from environment configuration (no WS init,
     // no automaton config to consult). Pin to
-    // `aura_reasoner::ENV_FALLBACK_MODEL` here — higher-level surfaces
+    // `aura_model_reasoner::ENV_FALLBACK_MODEL` here — higher-level surfaces
     // (chat WS, dev-loop, task-run) plumb the user-selected model
     // through their own paths and never reach for the env seed.
-    let config = session_helpers::default_agent_config(aura_reasoner::ENV_FALLBACK_MODEL);
+    let config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
     let agent_loop = AgentLoop::new(config);
 
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
@@ -586,8 +586,8 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     // Anthropic-shaped client for everything else. The legacy
     // `--provider` arg only ever takes `"anthropic"` or `"mock"`.
     let selection = match args.provider.as_str() {
-        "mock" => Ok(aura_reasoner::mock_provider()),
-        _ => aura_reasoner::default_provider_from_env(),
+        "mock" => Ok(aura_model_reasoner::mock_provider()),
+        _ => aura_model_reasoner::default_provider_from_env(),
     }
     .context("building model provider")?;
     if selection.name != "anthropic" {
@@ -597,12 +597,12 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
-        policy: aura_kernel::PolicyConfig::default(),
+        policy: aura_agent_kernel::PolicyConfig::default(),
         ..KernelConfig::default()
     };
     let agent_id = identity.agent_id;
     let kernel = Arc::new(Kernel::new(
-        store.clone() as Arc<dyn aura_store::Store>,
+        store.clone() as Arc<dyn aura_store_db::Store>,
         provider,
         executor_router,
         kernel_config,

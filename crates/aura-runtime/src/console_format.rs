@@ -2,7 +2,7 @@
 //!
 //! Recognises events that opt into the visual-block layout via the
 //! dedicated `"aura::console"` target (set by
-//! [`aura_agent::console`] and [`aura_reasoner::console`]) and writes
+//! [`aura_agent::console`] and [`aura_model_reasoner::console`]) and writes
 //! their message verbatim — no level / target / span list / field
 //! key=value pairs — so the box-drawing blocks render cleanly.
 //!
@@ -31,7 +31,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 /// Targets the formatter recognises as "structured console" events.
 /// Must stay in sync with [`aura_agent::console::CONSOLE_TARGET`],
-/// [`aura_reasoner::console::CONSOLE_TARGET`], and
+/// [`aura_model_reasoner::console::CONSOLE_TARGET`], and
 /// [`crate::inbound_console::CONSOLE_TARGET`].
 const CONSOLE_TARGETS: &[&str] = &["aura::console"];
 

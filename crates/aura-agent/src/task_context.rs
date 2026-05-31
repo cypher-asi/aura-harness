@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use aura_prompts::TaskInfo;
+use aura_context_prompts::TaskInfo;
 
 use crate::file_ops::{self, WorkspaceCache};
 

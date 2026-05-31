@@ -1,5 +1,5 @@
 use super::{ProcessManager, ProcessManagerConfig};
-use aura_core::{ActionId, ActionResultPayload, AgentId, Hash, ProcessId};
+use aura_core_types::{ActionId, ActionResultPayload, AgentId, Hash, ProcessId};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -53,7 +53,7 @@ async fn test_fast_process_completes() {
 
     assert_eq!(
         completion.tx_type,
-        aura_core::TransactionType::ProcessComplete
+        aura_core_types::TransactionType::ProcessComplete
     );
     assert_eq!(completion.reference_tx_hash, Some(reference_hash));
 }
@@ -110,7 +110,7 @@ async fn test_multiple_concurrent_processes() {
     for completion in &completions {
         assert_eq!(
             completion.tx_type,
-            aura_core::TransactionType::ProcessComplete
+            aura_core_types::TransactionType::ProcessComplete
         );
         assert_eq!(completion.reference_tx_hash, Some(reference_hash));
     }
@@ -162,7 +162,7 @@ async fn test_process_timeout() {
 
     assert_eq!(
         completion.tx_type,
-        aura_core::TransactionType::ProcessComplete
+        aura_core_types::TransactionType::ProcessComplete
     );
     assert_eq!(completion.reference_tx_hash, Some(reference_hash));
 
@@ -360,7 +360,7 @@ async fn test_multiple_processes_complete_concurrently() {
 
     assert_eq!(completions.len(), count);
     for c in &completions {
-        assert_eq!(c.tx_type, aura_core::TransactionType::ProcessComplete);
+        assert_eq!(c.tx_type, aura_core_types::TransactionType::ProcessComplete);
     }
 }
 
@@ -406,7 +406,7 @@ async fn test_failed_process_sends_failure() {
 
     assert_eq!(
         completion.tx_type,
-        aura_core::TransactionType::ProcessComplete
+        aura_core_types::TransactionType::ProcessComplete
     );
 
     let payload: ActionResultPayload = serde_json::from_slice(&completion.payload).unwrap();

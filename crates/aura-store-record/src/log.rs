@@ -46,7 +46,7 @@
 
 use std::sync::Arc;
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use thiserror::Error;
 
 use crate::RecordEntry;

@@ -22,24 +22,18 @@ dotenvy = { workspace = true }
 [workspace]
 resolver = "2"
 members = [
-    "crates/aura-core",
     "crates/aura-core-modes",
     "crates/aura-core-permissions",
     "crates/aura-core-types",
     "crates/aura-core-protocol",
     "crates/aura-core-auth",
     "crates/aura-config",
-    # Phase 3 context layer crates + shells
-    "crates/aura-prompts",
+    # Phase 3 context layer crates
     "crates/aura-context-prompts",
-    "crates/aura-compaction",
     "crates/aura-context-compaction",
-    "crates/aura-memory",
     "crates/aura-context-memory",
-    "crates/aura-skills",
     "crates/aura-context-skills",
     # Phase 2 store layer
-    "crates/aura-store",
     "crates/aura-store-db",
     "crates/aura-store-record",
     "crates/aura-store-snapshot",
@@ -60,10 +54,8 @@ members = [
     # Phase 1 refactor: exec-layer executor/spawn traits relocated out
     # of aura-agent-kernel so aura-tools no longer depends upward.
     "crates/aura-exec-traits",
-    # Phase 3 model layer crate + shell
-    "crates/aura-reasoner",
+    # Phase 3 model layer crate
     "crates/aura-model-reasoner",
-    "crates/aura-kernel",
     # Phase 6a agent layer split:
     #   aura-agent-kernel    - deterministic kernel (renamed from aura-kernel)
     #   aura-agent-loop      - agent turn-loop entrypoint shell
@@ -258,10 +250,9 @@ once_cell = "1.19"
 [dev-dependencies]
 aura-runtime = { path = "crates/aura-runtime", features = ["test-support"] }
 aura-config = { path = "crates/aura-config" }
-aura-core = { path = "crates/aura-core" }
-aura-kernel = { path = "crates/aura-kernel" }
-aura-store = { path = "crates/aura-store" }
-aura-reasoner = { path = "crates/aura-reasoner" }
+aura-agent-kernel = { path = "crates/aura-agent-kernel" }
+aura-store-db = { path = "crates/aura-store-db" }
+aura-model-reasoner = { path = "crates/aura-model-reasoner" }
 aura-agent = { path = "crates/aura-agent" }
 aura-automaton = { path = "crates/aura-automaton" }
 aura-tools = { path = "crates/aura-tools" }

@@ -285,10 +285,10 @@ impl AgentToolExecutor for TaskToolExecutor {
                     ToolCallResult {
                         tool_use_id: tc.id.clone(),
                         content:
-                            aura_prompts::model_messages::task_done::NO_WRITES_AFTER_REJECT_BODY
+                            aura_context_prompts::model_messages::task_done::NO_WRITES_AFTER_REJECT_BODY
                                 .to_string(),
                         is_error: true,
-                        kind: aura_core::ToolResultKind::AgentError,
+                        kind: aura_core_types::ToolResultKind::AgentError,
                         stop_loop: false,
                         file_changes: Vec::new(),
                     },
@@ -381,7 +381,7 @@ impl AgentToolExecutor for TaskToolExecutor {
             .map(String::from)
             .or_else(|| infer_default_build_command(project_root))?;
 
-        self.emit_text(aura_prompts::model_messages::auto_build::auto_build_status_line(&cmd));
+        self.emit_text(aura_context_prompts::model_messages::auto_build::auto_build_status_line(&cmd));
 
         match crate::verify::run_build_command(project_root, &cmd, None).await {
             Ok(result) => {

@@ -67,7 +67,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use parking_lot::Mutex;
 use thiserror::Error;
 use tracing::{debug, warn};

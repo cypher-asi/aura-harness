@@ -4,6 +4,6 @@
  * Definition for an installed tool, sent over the wire on
  * [`crate::AgentCapabilities`].
  *
- * Wire-compatible with `aura_core::InstalledToolDefinition`.
+ * Wire-compatible with `aura_core_types::InstalledToolDefinition`.
  */
 export type InstalledToolIntegrationRequirement = { integration_id: string | null, provider: string | null, kind: string | null, };

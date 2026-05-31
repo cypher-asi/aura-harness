@@ -11,7 +11,7 @@ mod tests;
 
 pub use types::{ProcessManagerConfig, ProcessOutput, RunningProcess};
 
-use aura_core::{ActionId, AgentId, Hash, ProcessId, ProcessPending, Transaction};
+use aura_core_types::{ActionId, AgentId, Hash, ProcessId, ProcessPending, Transaction};
 use dashmap::DashMap;
 use std::process::Child;
 use std::sync::Arc;

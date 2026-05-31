@@ -53,7 +53,7 @@ use std::time::Duration;
 
 use aura_config::{FleetConfig, PluginsConfig};
 use aura_context_skills::SkillRegistry;
-use aura_core::{AgentId, Transaction, TransactionType};
+use aura_core_types::{AgentId, Transaction, TransactionType};
 use aura_core_modes::AgentMode;
 use aura_fleet_dispatch::FleetDispatcher;
 use aura_fleet_quota::QuotaPool;
@@ -63,7 +63,7 @@ use aura_fleet_spawn::{
 };
 use aura_plugin_core::{load_enabled_plugins, PluginRuntime};
 use aura_plugin_hooks::{CtxMeta, HookEngine, HookEvent, SessionStartHookCtx};
-use aura_store::Store;
+use aura_store_db::Store;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

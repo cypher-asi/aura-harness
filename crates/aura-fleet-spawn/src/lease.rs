@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aura_core::{AgentId, SubagentResult};
+use aura_core_types::{AgentId, SubagentResult};
 use parking_lot::Mutex as SyncMutex;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 

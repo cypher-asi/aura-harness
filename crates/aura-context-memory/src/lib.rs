@@ -12,7 +12,7 @@
 //! prototyped and reverted during Phase 6a: this crate no longer depends
 //! on `aura-agent`. The pipeline now consumes the layer-neutral
 //! [`TurnSummary`] mirror, and the [`MemoryManager`] / [`LlmRefiner`] /
-//! [`MemoryConsolidator`] take `Arc<dyn aura_reasoner::ModelProvider>`
+//! [`MemoryConsolidator`] take `Arc<dyn aura_model_reasoner::ModelProvider>`
 //! directly. The runtime-side adapter that bridges the agent loop's
 //! `AgentLoopResult` + `TurnObserver` to this crate lives in
 //! `aura_runtime::memory_observer`. `tests/layer_boundary.rs` now

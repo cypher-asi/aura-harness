@@ -3,12 +3,12 @@
 //! The in-process super-agent registers tool schemas in Claude's native
 //! shape (`{name, description, input_schema, eager_input_streaming?}`)
 //! while the harness-side model provider consumes
-//! [`aura_core::ToolDefinition`]. Phase 2 of the super-agent / harness
+//! [`aura_core_types::ToolDefinition`]. Phase 2 of the super-agent / harness
 //! unification plan needs a single-file converter so the portable
 //! super-agent profile (shipped as JSON) can be translated into harness
 //! tools at session boot.
 
-use aura_core::ToolDefinition;
+use aura_core_types::ToolDefinition;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -21,7 +21,7 @@ pub enum SchemaError {
     InvalidType(&'static str, &'static str),
 }
 
-/// Convert a Claude-shaped tool JSON into an [`aura_core::ToolDefinition`].
+/// Convert a Claude-shaped tool JSON into an [`aura_core_types::ToolDefinition`].
 ///
 /// Expected shape:
 /// ```json

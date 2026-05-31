@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use aura_prompts::SteeringKind;
+use aura_context_prompts::SteeringKind;
 
 use crate::helpers::{is_exploration_tool, is_write_tool};
 use crate::registry::TurnSteering;
@@ -165,7 +165,7 @@ mod tests {
             tool_use_id: id.to_string(),
             content: "ok".to_string(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: Vec::new(),
         }

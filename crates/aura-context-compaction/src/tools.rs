@@ -1,6 +1,6 @@
 //! Tool-surface compaction helpers.
 
-use aura_reasoner::ToolDefinition;
+use aura_model_reasoner::ToolDefinition;
 
 /// Report returned after compacting a tool surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

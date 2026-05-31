@@ -7,9 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aura-core = { path = "../aura-core" }
+aura-core-types = { path = "../aura-core-types" }
 aura-core-modes = { path = "../aura-core-modes" }
-aura-store = { path = "../aura-store" }
+aura-store-db = { path = "../aura-store-db" }
 aura-fleet-registry = { path = "../aura-fleet-registry" }
 aura-fleet-spawn = { path = "../aura-fleet-spawn" }
 aura-fleet-dispatch = { path = "../aura-fleet-dispatch" }
@@ -40,7 +40,7 @@ insta = { workspace = true }
 # the layer-boundary test can audit the topology directly from
 # the manifest.
 [package.metadata.cargo-machete]
-ignored = ["aura-core"]
+ignored = ["aura-core-types"]
 
 [lints]
 workspace = true

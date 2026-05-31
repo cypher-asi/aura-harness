@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_agent_subagent::SubagentOverrides;
-use aura_core::SubagentExit;
+use aura_core_types::SubagentExit;
 use aura_core_modes::{AgentMode, SpawnMode};
 use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;
@@ -74,7 +74,7 @@ async fn detached_spawn_returns_immediately_and_completes_in_background() {
     assert_eq!(orphan_record.mode, AgentMode::Agent);
 
     let result = detached.join().await.expect("child sent result");
-    assert!(matches!(result.exit, aura_core::SubagentExit::Completed));
+    assert!(matches!(result.exit, aura_core_types::SubagentExit::Completed));
     assert_eq!(result.child_agent_id, Some(child_id));
     assert_eq!(runner.invocation_count(), 1);
 }

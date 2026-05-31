@@ -8,7 +8,7 @@
 //! relevant fields explicitly via [`SteeringRegistry::for_loop`].
 
 use aura_config::EarlyTestOracleConfig;
-use aura_prompts::SteeringKind;
+use aura_context_prompts::SteeringKind;
 
 use crate::early_oracle::EarlyTestOracle;
 use crate::implement_now::ImplementNowSteering;

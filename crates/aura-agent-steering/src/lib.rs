@@ -15,8 +15,8 @@
 //! - The evaluator family: [`RepeatedReadTracker`],
 //!   [`ImplementNowSteering`], [`EarlyTestOracle`].
 //! - The [`inject`] helper that renders a
-//!   [`aura_prompts::SteeringKind`] and appends it to a
-//!   `Vec<aura_reasoner::Message>` user-message stream.
+//!   [`aura_context_prompts::SteeringKind`] and appends it to a
+//!   `Vec<aura_model_reasoner::Message>` user-message stream.
 //! - The small data shapes the evaluators observe — [`ToolCallInfo`],
 //!   [`ToolCallResult`], [`FileChange`], [`FileChangeKind`] — plus
 //!   the tool-predicate helpers `is_exploration_tool` /

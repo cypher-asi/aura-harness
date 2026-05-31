@@ -14,7 +14,7 @@
 //!   neither name nor satisfy it. (Compile-time proof by construction:
 //!   if we removed the `pub(crate)` qualifier this test would fail to
 //!   parse; because we can only reach the trait through the private
-//!   path `aura_store::store::sealed::Sealed`, no downstream crate
+//!   path `aura_store_db::store::sealed::Sealed`, no downstream crate
 //!   can produce a `WriteStore` impl.)
 //!
 //! A negative `trybuild` compile-fail test would make the seal even
@@ -53,6 +53,6 @@ fn read_store_handle_is_usable() {
     // Smoke-test: a plain `ReadStore` handle can answer a read-only
     // query without any reference to `WriteStore`.
     let _ = read_only
-        .get_inbox_depth(aura_core::AgentId::generate())
+        .get_inbox_depth(aura_core_types::AgentId::generate())
         .expect("inbox depth read succeeds on an empty store");
 }

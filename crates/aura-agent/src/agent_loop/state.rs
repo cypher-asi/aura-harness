@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use aura_config::THINKING_AUTO_ENABLE_THRESHOLD;
-use aura_reasoner::{
+use aura_model_reasoner::{
     Message, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolDefinition,
 };
 
@@ -346,12 +346,12 @@ impl LoopState {
         // streak counter and the force-tool-choice path that rode on
         // top of it. `tool_choice` is always `Auto`; the model picks
         // its own next move.
-        let tool_choice = aura_reasoner::ToolChoice::Auto;
+        let tool_choice = aura_model_reasoner::ToolChoice::Auto;
 
         // Disable extended thinking for this one iteration by clamping
         // `max_tokens` below the reasoner's auto-thinking threshold
         // (`> 2048`, see
-        // `aura_reasoner::anthropic::convert::resolve_thinking`).
+        // `aura_model_reasoner::anthropic::convert::resolve_thinking`).
         // The reasoner does not currently expose a per-request
         // "extended thinking off" toggle for Claude 4.x — it
         // auto-enables thinking whenever `max_tokens > 2048` — so the
@@ -522,10 +522,10 @@ pub(super) fn latest_user_text(messages: &[Message]) -> Option<&str> {
             && msg
                 .content
                 .iter()
-                .any(|b| matches!(b, aura_reasoner::ContentBlock::Text { .. }))
+                .any(|b| matches!(b, aura_model_reasoner::ContentBlock::Text { .. }))
         {
             return msg.content.iter().find_map(|b| match b {
-                aura_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
+                aura_model_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
                 _ => None,
             });
         }
@@ -536,7 +536,7 @@ pub(super) fn latest_user_text(messages: &[Message]) -> Option<&str> {
 #[cfg(test)]
 mod intent_classifier_tests {
     use super::*;
-    use aura_reasoner::ToolDefinition;
+    use aura_model_reasoner::ToolDefinition;
     use aura_tools::IntentClassifier;
     use serde_json::json;
     use std::sync::Arc;
@@ -604,7 +604,7 @@ mod intent_classifier_tests {
             Message::assistant("calling tool"),
             Message::tool_results(vec![(
                 "tu_1".into(),
-                aura_reasoner::ToolResultContent::Text("100".into()),
+                aura_model_reasoner::ToolResultContent::Text("100".into()),
                 false,
             )]),
         ];
@@ -639,7 +639,7 @@ mod intent_classifier_tests {
             Message::assistant("calling tool"),
             Message::tool_results(vec![(
                 "tu_1".into(),
-                aura_reasoner::ToolResultContent::Text("large requirements".into()),
+                aura_model_reasoner::ToolResultContent::Text("large requirements".into()),
                 false,
             )]),
         ];
@@ -655,7 +655,7 @@ mod intent_classifier_tests {
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
 
         assert_eq!(names, vec!["read_file", "create_task"]);
-        assert!(matches!(req.tool_choice, aura_reasoner::ToolChoice::Auto));
+        assert!(matches!(req.tool_choice, aura_model_reasoner::ToolChoice::Auto));
     }
 
     #[test]
@@ -675,7 +675,7 @@ mod intent_classifier_tests {
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
 
         assert_eq!(names, vec!["read_file", "create_task"]);
-        assert!(matches!(req.tool_choice, aura_reasoner::ToolChoice::Auto));
+        assert!(matches!(req.tool_choice, aura_model_reasoner::ToolChoice::Auto));
     }
 
     /// Regression: a `Chat` request with `create_task` in scope must

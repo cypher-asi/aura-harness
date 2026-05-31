@@ -6,7 +6,7 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     AgentMode, AgentPermissions, Capability, SubagentBudget, SubagentDispatchRequest,
     SubagentResult, ToolDefinition, ToolResult,
 };
@@ -241,7 +241,7 @@ impl Tool for TaskTool {
             Ok(result) => result,
             Err(err) => SubagentResult::rejected(format!("task dispatch: {err}")),
         };
-        let ok = matches!(result.exit, aura_core::SubagentExit::Completed);
+        let ok = matches!(result.exit, aura_core_types::SubagentExit::Completed);
         let body = serde_json::to_vec(&result)
             .map_err(|e| ToolError::Serialization(format!("task outcome: {e}")))?;
 
@@ -262,7 +262,7 @@ mod tests {
     use super::*;
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
-    use aura_core::{AgentId, AgentPermissions, AgentScope};
+    use aura_core_types::{AgentId, AgentPermissions, AgentScope};
 
     fn ctx(caller: AgentPermissions) -> ToolContext {
         let dir = std::env::temp_dir();
@@ -339,7 +339,7 @@ mod tests {
         let outcome: SubagentResult = serde_json::from_slice(&result.stderr).unwrap();
         assert!(matches!(
             outcome.exit,
-            aura_core::SubagentExit::Rejected { .. }
+            aura_core_types::SubagentExit::Rejected { .. }
         ));
     }
 }

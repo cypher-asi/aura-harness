@@ -237,7 +237,7 @@ pub struct ModelSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     /// User-selected reasoning-effort tier from the chat model picker's
-    /// thinking-level flyout. Mapped into `aura_reasoner::ThinkingEffort`
+    /// thinking-level flyout. Mapped into `aura_model_reasoner::ThinkingEffort`
     /// and hard-pinned across the turn. Absent for models without effort
     /// tiers and for older clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]

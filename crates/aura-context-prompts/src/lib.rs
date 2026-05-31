@@ -27,7 +27,7 @@
 //!   parsing, and `file_ops::resolve_error_context` stay in
 //!   `aura-agent/src/build/` and `aura-agent/src/file_ops/`.
 //! - No reasoner-message mutation. Steering rendering produces a
-//!   `String` envelope; appending it to `Vec<aura_reasoner::Message>`
+//!   `String` envelope; appending it to `Vec<aura_model_reasoner::Message>`
 //!   is the agent's job (`aura-agent/src/agent_loop/steering/inject.rs`).
 //!
 //! Cargo.toml forbids `aura-agent`, `aura-automaton`, `aura-runtime`,

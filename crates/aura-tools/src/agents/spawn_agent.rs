@@ -21,7 +21,7 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     resolve_effective_permission, AgentId, AgentPermissions, AgentToolPermissions, ToolDefinition,
     ToolResult,
 };
@@ -175,8 +175,8 @@ impl Tool for SpawnAgentTool {
         Self::definition()
     }
 
-    fn required_capabilities(&self) -> Vec<aura_core::Capability> {
-        vec![aura_core::Capability::SpawnAgent]
+    fn required_capabilities(&self) -> Vec<aura_core_types::Capability> {
+        vec![aura_core_types::Capability::SpawnAgent]
     }
 
     async fn execute(
@@ -252,7 +252,7 @@ pub(crate) mod tests {
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
     use async_trait::async_trait;
-    use aura_core::{AgentScope, Capability, Hash};
+    use aura_core_types::{AgentScope, Capability, Hash};
     use aura_exec_traits::{SpawnError, SpawnHook, SpawnOutcome};
     use std::sync::{Arc, Mutex};
 

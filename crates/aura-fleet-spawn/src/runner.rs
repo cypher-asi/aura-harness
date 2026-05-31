@@ -5,14 +5,14 @@
 //! `aura-runtime`. Fleet-spawn invokes the runner once the lease,
 //! quota, audit write, and registry slot are in place.
 //!
-//! The trait deliberately speaks only in [`aura_core`],
+//! The trait deliberately speaks only in [`aura_core_types`],
 //! [`aura_core_permissions`], and [`aura_agent_subagent`] types so
 //! the fleet layer stays free of upward dependencies on agent /
 //! runtime crates.
 
 use async_trait::async_trait;
 use aura_agent_subagent::SubagentSpec;
-use aura_core::{AgentId, SubagentResult};
+use aura_core_types::{AgentId, SubagentResult};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -54,7 +54,7 @@ pub struct ChildRunContext {
     /// Cancellation token the runner MUST poll between safe yield
     /// points. When the token fires the runner is expected to
     /// short-circuit with a [`SubagentResult`] whose
-    /// [`aura_core::SubagentExit::Cancelled`] tag is set.
+    /// [`aura_core_types::SubagentExit::Cancelled`] tag is set.
     pub cancellation: CancellationToken,
     /// Pre-assigned child agent id. The spawner allocates the id
     /// up-front so the spawn audit record and the

@@ -1,6 +1,6 @@
 #![allow(clippy::needless_pass_by_value)]
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use crate::error::SkillError;
 use crate::install::{SkillInstallStore, SkillInstallStoreApi, SkillInstallation};
 use crate::loader::{SkillLoader, SkillLoaderConfig};

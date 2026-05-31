@@ -6,7 +6,7 @@
 use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, RefinedCandidate};
-use aura_reasoner::{Message, ModelProvider, ModelRequest};
+use aura_model_reasoner::{Message, ModelProvider, ModelRequest};
 use std::fmt::Write;
 use std::sync::Arc;
 

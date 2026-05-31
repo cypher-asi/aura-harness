@@ -1,4 +1,4 @@
-use aura_reasoner::ContentBlock;
+use aura_model_reasoner::ContentBlock;
 
 use crate::types::ToolCallInfo;
 use crate::types::ToolCallResult;
@@ -17,7 +17,7 @@ fn tool_results_are_emitted_before_context_texts() {
             tool_use_id: "tool_1".to_string(),
             content: "ok 1".to_string(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: Vec::new(),
         },
@@ -25,7 +25,7 @@ fn tool_results_are_emitted_before_context_texts() {
             tool_use_id: "tool_2".to_string(),
             content: "ok 2".to_string(),
             is_error: true,
-            kind: aura_core::ToolResultKind::AgentError,
+            kind: aura_core_types::ToolResultKind::AgentError,
             stop_loop: false,
             file_changes: Vec::new(),
         },
@@ -35,7 +35,7 @@ fn tool_results_are_emitted_before_context_texts() {
     push_tool_result_message(&mut messages, results, context);
 
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].role, aura_reasoner::Role::User);
+    assert_eq!(messages[0].role, aura_model_reasoner::Role::User);
     assert!(matches!(
         messages[0].content.first(),
         Some(ContentBlock::ToolResult { tool_use_id, .. }) if tool_use_id == "tool_1"
@@ -89,7 +89,7 @@ fn fuzzy_cache_hits_after_alternation_reorder() {
         tool_use_id: "tool_seed".to_string(),
         content: "seed-hits".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     };
@@ -139,7 +139,7 @@ fn write_clears_both_caches() {
         tool_use_id: "tool_s".to_string(),
         content: "hits".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     };
@@ -168,7 +168,7 @@ fn write_clears_both_caches() {
         tool_use_id: "tool_w".to_string(),
         content: "Wrote 5 bytes to x.txt".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     };
@@ -202,7 +202,7 @@ fn failed_write_does_not_clear_caches() {
         tool_use_id: "tool_s".to_string(),
         content: "hits".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     };
@@ -222,7 +222,7 @@ fn failed_write_does_not_clear_caches() {
         tool_use_id: "tool_w".to_string(),
         content: "[CHUNK_GUARD] oversized".to_string(),
         is_error: true,
-        kind: aura_core::ToolResultKind::AgentError,
+        kind: aura_core_types::ToolResultKind::AgentError,
         stop_loop: false,
         file_changes: Vec::new(),
     };
@@ -340,7 +340,7 @@ fn drive_read_file(
         tool_use_id: call.id.clone(),
         content,
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     };
@@ -467,7 +467,7 @@ fn write_invalidates_only_overlapping_path() {
         tool_use_id: "tool_w".to_string(),
         content: "wrote".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     };

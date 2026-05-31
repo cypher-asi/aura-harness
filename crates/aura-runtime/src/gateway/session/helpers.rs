@@ -14,7 +14,7 @@ use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
 };
 use aura_agent_subagent::SubagentRegistry;
-use aura_core::{
+use aura_core_types::{
     is_effectively_full_access, resolve_effective_permission, AgentToolPermissions, ToolState,
     UserToolDefaults,
 };
@@ -23,7 +23,7 @@ use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;
 use aura_fleet_spawn::{OrphanStore, ParentLeaseRegistry};
 use aura_fleet_subagent::FleetSubagentDispatcher;
-use aura_kernel::{Kernel, KernelConfig, PolicyConfig};
+use aura_agent_kernel::{Kernel, KernelConfig, PolicyConfig};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -72,10 +72,10 @@ fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
 fn session_user_defaults(
     session: &Session,
     ctx: &WsContext,
-) -> Result<UserToolDefaults, aura_kernel::KernelError> {
+) -> Result<UserToolDefaults, aura_agent_kernel::KernelError> {
     ctx.store
         .get_user_tool_defaults(&session.user_id)
-        .map_err(|e| aura_kernel::KernelError::Store(format!("get_user_tool_defaults: {e}")))
+        .map_err(|e| aura_agent_kernel::KernelError::Store(format!("get_user_tool_defaults: {e}")))
         .map(|defaults| defaults.unwrap_or_default())
 }
 
@@ -131,14 +131,14 @@ pub(crate) async fn prepare_chat_session(
     let provider_overrides = request.model.provider_overrides.clone();
 
     let resolved_provider_override = if let Some(overrides) = provider_overrides {
-        let reasoner_overrides = aura_reasoner::SessionOverrides {
+        let reasoner_overrides = aura_model_reasoner::SessionOverrides {
             default_model: overrides.default_model.clone(),
             fallback_model: overrides.fallback_model.clone(),
             prompt_caching_enabled: overrides.prompt_caching_enabled,
             prompt_cache_key: overrides.prompt_cache_key.clone(),
             prompt_cache_retention: overrides.prompt_cache_retention.clone(),
         };
-        match aura_reasoner::with_session_overrides(reasoner_overrides) {
+        match aura_model_reasoner::with_session_overrides(reasoner_overrides) {
             Ok(selection) => Some(selection.provider),
             Err(e) => {
                 return Err(ChatRequestError {
@@ -295,7 +295,7 @@ async fn bootstrap_session(session: &Session, ctx: &WsContext) {
     match build_kernel_with_config(session, ctx, &ctx.tool_config).await {
         Ok(kernel) => {
             if let Err(e) = kernel
-                .process_direct(aura_core::Transaction::session_start(session.agent_id))
+                .process_direct(aura_core_types::Transaction::session_start(session.agent_id))
                 .await
             {
                 error!(
@@ -335,7 +335,7 @@ pub(super) async fn build_kernel_with_config(
     session: &Session,
     ctx: &WsContext,
     tool_config: &aura_tools::ToolConfig,
-) -> Result<Arc<Kernel>, aura_kernel::KernelError> {
+) -> Result<Arc<Kernel>, aura_agent_kernel::KernelError> {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
         Arc::new(DomainToolExecutor::with_session_context(
@@ -433,7 +433,7 @@ pub(super) async fn build_kernel_with_config(
             .with_agent_control_hook(hook.clone())
             .with_agent_read_hook(hook);
     } else {
-        resolver = resolver.with_spawn_hook(Arc::new(aura_kernel::KernelSpawnHook::new(
+        resolver = resolver.with_spawn_hook(Arc::new(aura_agent_kernel::KernelSpawnHook::new(
             ctx.store.clone(),
         )));
     }
@@ -480,7 +480,7 @@ pub(super) async fn build_kernel_with_config(
         tool_approval_prompter: session
             .tool_approval_broker
             .clone()
-            .map(|broker| broker as Arc<dyn aura_kernel::ToolApprovalPrompter>),
+            .map(|broker| broker as Arc<dyn aura_agent_kernel::ToolApprovalPrompter>),
         originating_user_id: Some(session.user_id.clone()),
         ..KernelConfig::default()
     };
@@ -827,7 +827,7 @@ pub(super) async fn apply_turn_result(
     session.messages.clone_from(&loop_result.messages);
     // Defense-in-depth: cap oversized tool_use inputs / tool_result content
     // so one large blob does not ride along with every subsequent prompt.
-    aura_compaction::compact_for_storage(&mut session.messages);
+    aura_context_compaction::compact_for_storage(&mut session.messages);
     let files_changed = summarize_files_changed(loop_result);
 
     let input_tokens = loop_result.total_input_tokens;
@@ -917,14 +917,14 @@ mod tests {
     use crate::gateway::session::{Session, WsContext};
     use crate::protocol::{OutboundMessage, TextDelta};
     use aura_agent::{AgentLoopEvent, AgentLoopResult, FileChange, FileChangeKind};
-    use aura_core::{AgentToolPermissions, ToolState, UserToolDefaults};
+    use aura_core_types::{AgentToolPermissions, ToolState, UserToolDefaults};
     use aura_engine::scheduler::Scheduler;
     use aura_protocol::{
         AgentCapabilities, AgentIdentity, AgentPermissionsWire, ModelSelection, RuntimeRequest,
         RuntimeRequestType, SessionModelOverrides, WorkspaceLocation,
     };
-    use aura_reasoner::MockProvider;
-    use aura_store::RocksStore;
+    use aura_model_reasoner::MockProvider;
+    use aura_store_db::RocksStore;
     use aura_tools::{ToolCatalog, ToolConfig};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1420,8 +1420,8 @@ mod tests {
     /// append a `UserPrompt` entry with the user message as payload.
     #[tokio::test]
     async fn session_bootstrap_emits_session_start_and_user_prompt_are_recorded() {
-        use aura_core::{Transaction, TransactionType};
-        use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
+        use aura_core_types::{Transaction, TransactionType};
+        use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 
         let ctx = test_context();
 

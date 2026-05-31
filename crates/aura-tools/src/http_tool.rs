@@ -33,7 +33,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core::{ToolDefinition, ToolResult};
+use aura_core_types::{ToolDefinition, ToolResult};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use reqwest::Method;
@@ -473,7 +473,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc as StdArc;
 
-    use aura_core::{ActionId, AgentId};
+    use aura_core_types::{ActionId, AgentId};
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

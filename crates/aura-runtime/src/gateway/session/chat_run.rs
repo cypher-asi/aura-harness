@@ -539,8 +539,8 @@ mod driver_tests {
         AgentCapabilities, AgentIdentity, AgentPermissionsWire, ModelSelection, RuntimeRequest,
         RuntimeRequestType, WorkspaceLocation,
     };
-    use aura_reasoner::{MockProvider, ModelProvider};
-    use aura_store::RocksStore;
+    use aura_model_reasoner::{MockProvider, ModelProvider};
+    use aura_store_db::RocksStore;
     use aura_tools::{ToolCatalog, ToolConfig};
 
     fn driver_ctx() -> WsContext {

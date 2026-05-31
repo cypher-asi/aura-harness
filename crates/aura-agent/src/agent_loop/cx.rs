@@ -30,7 +30,7 @@
 //! clones at the call site (the borrow lifetimes line up with the
 //! enclosing `async fn`'s body where the source values live).
 
-use aura_reasoner::{ModelProvider, ToolDefinition};
+use aura_model_reasoner::{ModelProvider, ToolDefinition};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 

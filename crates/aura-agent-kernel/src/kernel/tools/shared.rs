@@ -13,7 +13,7 @@ use crate::kernel::{
     ToolApprovalResponse, ToolDecision, ToolOutput,
 };
 use crate::policy::PolicyVerdict;
-use aura_core::{
+use aura_core_types::{
     Action, ActionKind, ContextHash, Decision, Effect, EffectKind, EffectStatus, Proposal,
     ProposalSet, RecordEntry, ToolCall, ToolProposal, ToolState, Transaction, UserDefaultMode,
     UserToolDefaults,
@@ -373,7 +373,7 @@ pub(super) fn record_entry_for_tool_outcome(inputs: ToolOutcomeInputs<'_>) -> Pr
                 tool_use_id,
                 content: denial_reason,
                 is_error: true,
-                kind: aura_core::ToolResultKind::AgentError,
+                kind: aura_core_types::ToolResultKind::AgentError,
                 approval_required,
                 line_diff: None,
             }),
@@ -388,13 +388,13 @@ pub(super) fn record_entry_for_tool_outcome(inputs: ToolOutcomeInputs<'_>) -> Pr
 #[cfg(test)]
 mod summarisation_tests {
     use super::*;
-    use aura_core::{Effect, EffectStatus};
+    use aura_core_types::{Effect, EffectStatus};
     use aura_store_record::RecordPayload;
 
     fn effect_with(payload: Vec<u8>) -> Effect {
         Effect::new(
-            aura_core::ActionId::generate(),
-            aura_core::EffectKind::Agreement,
+            aura_core_types::ActionId::generate(),
+            aura_core_types::EffectKind::Agreement,
             EffectStatus::Committed,
             payload,
         )

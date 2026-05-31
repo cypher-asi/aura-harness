@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aura_core::AgentId;
-use aura_kernel::{ChildAgentSpec, KernelSpawnHook, SpawnError, SpawnHook, SpawnOutcome};
-use aura_store::Store;
+use aura_core_types::AgentId;
+use aura_agent_kernel::{ChildAgentSpec, KernelSpawnHook, SpawnError, SpawnHook, SpawnOutcome};
+use aura_store_db::Store;
 use aura_tools::{AgentControlHook, AgentReadHook};
 
 const CHAT_PERSISTED_HEADER: &str = "x-aura-chat-persisted";

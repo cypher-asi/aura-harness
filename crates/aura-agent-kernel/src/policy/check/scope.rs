@@ -1,10 +1,10 @@
-//! `target_*` arg scope validation against [`aura_core::AgentScope`].
+//! `target_*` arg scope validation against [`aura_core_types::AgentScope`].
 
 /// Inspect `args` for conventional `target_*` keys and verify they fall
 /// within `scope`. Absence of a target key means the tool is not
 /// targeting that axis and the check is skipped.
 pub(super) fn scope_violation(
-    scope: &aura_core::AgentScope,
+    scope: &aura_core_types::AgentScope,
     args: &serde_json::Value,
 ) -> Option<String> {
     if scope.is_universe() {

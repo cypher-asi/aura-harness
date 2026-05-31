@@ -33,15 +33,15 @@ use crate::gateway::session::WsContext;
 #[allow(unused_imports)]
 use crate::terminal;
 #[allow(unused_imports)]
-use aura_core::{Hash, Transaction, TransactionType};
+use aura_core_types::{Hash, Transaction, TransactionType};
 #[allow(unused_imports)]
 use aura_engine::automaton::AutomatonBridge;
 #[allow(unused_imports)]
 use aura_engine::scheduler::Scheduler;
 #[allow(unused_imports)]
-use aura_reasoner::ModelProvider;
+use aura_model_reasoner::ModelProvider;
 #[allow(unused_imports)]
-use aura_store::Store;
+use aura_store_db::Store;
 #[allow(unused_imports)]
 use aura_tools::automaton_tools::AutomatonController;
 #[allow(unused_imports)]

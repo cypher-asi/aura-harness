@@ -33,10 +33,10 @@
 
 use crate::worker::{process_agent_detailed, ProcessedAgent};
 use aura_agent_loop::{AgentLoop, AgentLoopConfig};
-use aura_core::{AgentId, AgentStatus};
-use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
-use aura_reasoner::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
-use aura_store::Store;
+use aura_core_types::{AgentId, AgentStatus};
+use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
+use aura_model_reasoner::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
+use aura_store_db::Store;
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -242,7 +242,7 @@ pub struct Scheduler {
     executors: Vec<Arc<dyn Executor>>,
     tools: Vec<ToolDefinition>,
     kernel_config: KernelConfig,
-    memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
 }
 
 impl Scheduler {
@@ -256,7 +256,7 @@ impl Scheduler {
         executors: Vec<Arc<dyn Executor>>,
         tools: Vec<ToolDefinition>,
         workspace_base: PathBuf,
-        memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+        memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     ) -> Self {
         Self::with_identity_registry(
             store,
@@ -280,7 +280,7 @@ impl Scheduler {
         executors: Vec<Arc<dyn Executor>>,
         tools: Vec<ToolDefinition>,
         workspace_base: PathBuf,
-        memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+        memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
         identity_registry: Arc<AgentIdentityRegistry>,
     ) -> Self {
         let kernel_config = KernelConfig {
@@ -478,9 +478,9 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{Transaction, TransactionType};
-    use aura_reasoner::MockProvider;
-    use aura_store::RocksStore;
+    use aura_core_types::{Transaction, TransactionType};
+    use aura_model_reasoner::MockProvider;
+    use aura_store_db::RocksStore;
     use bytes::Bytes;
     use std::time::Duration;
 

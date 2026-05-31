@@ -13,8 +13,8 @@ use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;
 use aura_fleet_spawn::{ChildRunner, OrphanStore, ParentLeaseRegistry};
 use aura_fleet_subagent::FleetSubagentDispatcher;
-use aura_reasoner::MockProvider;
-use aura_store::{RocksStore, Store};
+use aura_model_reasoner::MockProvider;
+use aura_store_db::{RocksStore, Store};
 use aura_tools::ToolCatalog;
 use std::sync::Arc;
 

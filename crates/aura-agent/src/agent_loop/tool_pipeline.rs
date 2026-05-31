@@ -37,7 +37,7 @@ use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
 use aura_config::{READS_AFTER_WRITE_ALLOWANCE, TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES};
-use aura_reasoner::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
+use aura_model_reasoner::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -396,7 +396,7 @@ pub(crate) async fn process_tool_results(
 
     for result in all_results
         .iter()
-        .filter(|r| r.kind == aura_core::ToolResultKind::CompactionStructural)
+        .filter(|r| r.kind == aura_core_types::ToolResultKind::CompactionStructural)
     {
         warn!(
             target: "compaction",
@@ -579,7 +579,7 @@ pub(crate) async fn dispatch(
     batch: ToolBatch,
     ctx: ToolEffectCtx<'_>,
 ) -> bool {
-    use aura_reasoner::StopReason;
+    use aura_model_reasoner::StopReason;
     match response.stop_reason {
         StopReason::EndTurn | StopReason::StopSequence => true,
         StopReason::MaxTokens => {
@@ -629,7 +629,7 @@ pub(super) fn cancelled_results_for(to_execute: &[ToolCallInfo]) -> Vec<ToolCall
                 "[CANCELLED] Tool execution was cancelled by the user before the tool returned."
                     .to_string(),
             is_error: true,
-            kind: aura_core::ToolResultKind::AgentError,
+            kind: aura_core_types::ToolResultKind::AgentError,
             stop_loop: true,
             file_changes: Vec::new(),
         })
@@ -686,10 +686,10 @@ pub(super) fn partition_circling_duplicate_reads(
         if helpers::is_exploration_tool(&tool.name) {
             blocked.push(ToolCallResult {
                 tool_use_id: tool.id.clone(),
-                content: aura_prompts::model_messages::implement_now::IMPLEMENT_NOW_HARD_BLOCK_BODY
+                content: aura_context_prompts::model_messages::implement_now::IMPLEMENT_NOW_HARD_BLOCK_BODY
                     .to_string(),
                 is_error: true,
-                kind: aura_core::ToolResultKind::AgentError,
+                kind: aura_core_types::ToolResultKind::AgentError,
                 stop_loop: false,
                 file_changes: Vec::new(),
             });
@@ -728,13 +728,13 @@ fn partition_oversized_writes(
                         .get("path")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let msg = aura_prompts::model_messages::chunk_guard::render_chunk_guard_body(
+                    let msg = aura_context_prompts::model_messages::chunk_guard::render_chunk_guard_body(
                         content.len(),
                         WRITE_FILE_CHUNK_BYTES,
                     );
                     let content_msg = format!(
                         "{tag}{msg}",
-                        tag = aura_prompts::model_messages::chunk_guard::CHUNK_GUARD_TAG,
+                        tag = aura_context_prompts::model_messages::chunk_guard::CHUNK_GUARD_TAG,
                     );
                     warn!(
                         tool_use_id = %tool.id,
@@ -752,7 +752,7 @@ fn partition_oversized_writes(
                         tool_use_id: tool.id.clone(),
                         content: content_msg,
                         is_error: true,
-                        kind: aura_core::ToolResultKind::AgentError,
+                        kind: aura_core_types::ToolResultKind::AgentError,
                         stop_loop: false,
                         file_changes: Vec::new(),
                     });
@@ -1034,7 +1034,7 @@ mod track_tool_effects_tests {
             tool_use_id: tool_use_id.to_string(),
             content: "ok".to_string(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: Vec::new(),
         }
@@ -1053,7 +1053,7 @@ mod track_tool_effects_tests {
             tool_use_id: tool_use_id.to_string(),
             content: "ok".to_string(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: vec![crate::types::FileChange {
                 path: path.to_string(),

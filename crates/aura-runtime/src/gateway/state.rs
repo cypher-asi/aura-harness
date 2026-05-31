@@ -13,8 +13,8 @@ use std::sync::{Arc, RwLock};
 use dashmap::DashMap;
 use tokio::sync::Semaphore;
 
-use aura_reasoner::ModelProvider;
-use aura_store::Store;
+use aura_model_reasoner::ModelProvider;
+use aura_store_db::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
@@ -60,9 +60,9 @@ pub struct RouterState {
     /// tx_id (hex) -> error message for scheduling failures after 202 acceptance.
     pub(crate) failed_txs: Arc<DashMap<String, String>>,
     /// Optional memory manager for CRUD API and session injection.
-    pub(crate) memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    pub(crate) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     /// Optional skill manager for skill CRUD API and prompt injection.
-    pub(crate) skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
+    pub(crate) skill_manager: Option<Arc<RwLock<aura_context_skills::SkillManager>>>,
     /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
     pub(crate) router_url: Option<String>,
     /// Bounded pool of WebSocket connection slots.
@@ -103,8 +103,8 @@ pub struct RouterStateConfig {
     pub domain_api: Option<Arc<dyn DomainApi>>,
     pub automaton_controller: Option<Arc<dyn AutomatonController>>,
     pub automaton_bridge: Option<Arc<AutomatonBridge>>,
-    pub memory_manager: Option<Arc<aura_memory::MemoryManager>>,
-    pub skill_manager: Option<Arc<RwLock<aura_skills::SkillManager>>>,
+    pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
+    pub skill_manager: Option<Arc<RwLock<aura_context_skills::SkillManager>>>,
     pub router_url: Option<String>,
 }
 

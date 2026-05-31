@@ -15,8 +15,8 @@ use std::sync::Arc;
 use aura_agent::agent_runner::{
     AgentRunner, AgenticTaskParams, TaskExecutionResult, TaskTrackingConfig,
 };
-use aura_prompts::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
-use aura_reasoner::ModelProvider;
+use aura_context_prompts::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
+use aura_model_reasoner::ModelProvider;
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::{ProjectDescriptor, SpecDescriptor, TaskDescriptor};
 

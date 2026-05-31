@@ -24,37 +24,37 @@ pub enum RuntimeError {
     Internal(String),
 }
 
-impl From<aura_reasoner::ReasonerError> for RuntimeError {
-    fn from(e: aura_reasoner::ReasonerError) -> Self {
+impl From<aura_model_reasoner::ReasonerError> for RuntimeError {
+    fn from(e: aura_model_reasoner::ReasonerError) -> Self {
         match e {
-            aura_reasoner::ReasonerError::Timeout => {
+            aura_model_reasoner::ReasonerError::Timeout => {
                 Self::Timeout("model request timed out".to_string())
             }
-            aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
+            aura_model_reasoner::ReasonerError::InsufficientCredits(msg) => {
                 Self::Model(format!("insufficient credits: {msg}"))
             }
-            aura_reasoner::ReasonerError::RateLimited { message, .. } => {
+            aura_model_reasoner::ReasonerError::RateLimited { message, .. } => {
                 Self::Model(format!("rate limited: {message}"))
             }
-            aura_reasoner::ReasonerError::Transient {
+            aura_model_reasoner::ReasonerError::Transient {
                 status, message, ..
             }
-            | aura_reasoner::ReasonerError::Api { status, message } => {
+            | aura_model_reasoner::ReasonerError::Api { status, message } => {
                 Self::Model(format!("api error ({status}): {message}"))
             }
-            aura_reasoner::ReasonerError::Request(msg) => {
+            aura_model_reasoner::ReasonerError::Request(msg) => {
                 Self::Model(format!("request error: {msg}"))
             }
-            aura_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
-            aura_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
+            aura_model_reasoner::ReasonerError::Parse(msg) => Self::Model(format!("parse error: {msg}")),
+            aura_model_reasoner::ReasonerError::Internal(msg) => Self::Model(msg),
             // Exhausted per-tool-call streaming retries: surface the
             // classified reason through `Model(..)` so the outer
             // loop / server treats it the same as any other
             // provider error (credit accounting, task retry, etc.).
-            aura_reasoner::ReasonerError::StreamAbortedWithPartial { reason, .. } => {
+            aura_model_reasoner::ReasonerError::StreamAbortedWithPartial { reason, .. } => {
                 Self::Model(reason)
             }
-            aura_reasoner::ReasonerError::ModelRequestContractViolation(violation) => {
+            aura_model_reasoner::ReasonerError::ModelRequestContractViolation(violation) => {
                 Self::Model(violation.to_string())
             }
         }

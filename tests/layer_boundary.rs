@@ -81,14 +81,11 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // intended final layer for each. The layer-rank check uses these
     // assignments, so today's warnings show where the as-is graph
     // does not match the intended layering.
-    ("aura-core", "core"),
     ("aura-config", "config"),
     // Phase 2 store layer split:
-    //   aura-store        — compatibility shell over aura-store-db
     //   aura-store-db     — RocksDB-backed durable storage impl
     //   aura-store-record — append-only record-log domain types + RecordLog trait
     //   aura-store-snapshot — content-addressed snapshot store (V1 no-op stub)
-    ("aura-store", "store"),
     ("aura-store-db", "store"),
     ("aura-store-record", "store"),
     ("aura-store-snapshot", "store"),
@@ -109,27 +106,20 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // Phase 1 refactor: low-level executor/spawn traits relocated out
     // of aura-agent-kernel so aura-tools no longer depends upward.
     ("aura-exec-traits", "exec"),
-    // Phase 3 model + context layer renames. The original
-    // `aura-<name>` crates are kept as compatibility shells that
-    // re-export through the layered `aura-<layer>-<name>` crate.
+    // Phase 3 model + context layer crates. Phase 4 deleted the
+    // original `aura-<name>` compatibility shells; consumers now
+    // depend on the layered `aura-<layer>-<name>` crates directly.
     // The `aura-<layer>-<name>` names match the
     // `aura-<layer>-<rest>` auto-classification convention exactly,
     // so they could theoretically be omitted from this table, but
-    // we list them explicitly for clarity and to make Phase 6a
-    // edits surgical.
-    ("aura-compaction", "context"),
+    // we list them explicitly for clarity.
     ("aura-context-compaction", "context"),
-    ("aura-reasoner", "model"),
     ("aura-model-reasoner", "model"),
-    ("aura-memory", "context"),
     ("aura-context-memory", "context"),
-    ("aura-skills", "context"),
     ("aura-context-skills", "context"),
-    ("aura-prompts", "context"),
     ("aura-context-prompts", "context"),
-    // Phase 6a renamed `aura-kernel` to `aura-agent-kernel` and
-    // converted the original crate into a re-export shell.
-    ("aura-kernel", "agent"),
+    // Phase 6a renamed `aura-kernel` to `aura-agent-kernel`; the
+    // shell was removed in Phase 4.
     ("aura-agent-kernel", "agent"),
     ("aura-agent-loop", "agent"),
     ("aura-agent-subagent", "agent"),

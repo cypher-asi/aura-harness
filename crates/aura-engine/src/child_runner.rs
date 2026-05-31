@@ -15,14 +15,14 @@
 use async_trait::async_trait;
 use aura_agent_loop::AgentLoopConfig;
 use aura_agent_subagent::{narrow_permissions, registry::SubagentRegistry};
-use aura_core::{
+use aura_core_types::{
     resolve_effective_permission, AgentPermissions, AgentToolPermissions, SubagentExit,
     SubagentKindSpec, SubagentResult, ToolState, Transaction, TransactionType, UserDefaultMode,
     UserToolDefaults,
 };
 use aura_fleet_spawn::{ChildRunContext, ChildRunError, ChildRunner};
-use aura_kernel::PolicyConfig;
-use aura_store::Store;
+use aura_agent_kernel::PolicyConfig;
+use aura_store_db::Store;
 use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -37,7 +37,7 @@ pub struct RuntimeChildRunner {
     store: Arc<dyn Store>,
     scheduler: Arc<Scheduler>,
     registry: SubagentRegistry,
-    spawn_hook: aura_kernel::KernelSpawnHook,
+    spawn_hook: aura_agent_kernel::KernelSpawnHook,
 }
 
 impl std::fmt::Debug for RuntimeChildRunner {
@@ -58,7 +58,7 @@ impl RuntimeChildRunner {
         registry: SubagentRegistry,
     ) -> Self {
         Self {
-            spawn_hook: aura_kernel::KernelSpawnHook::new(store.clone()),
+            spawn_hook: aura_agent_kernel::KernelSpawnHook::new(store.clone()),
             store,
             scheduler,
             registry,
@@ -112,7 +112,7 @@ impl ChildRunner for RuntimeChildRunner {
             &kind,
         );
         let preassigned_id = ctx.preassigned_agent_id;
-        let child_spec = aura_kernel::ChildAgentSpec {
+        let child_spec = aura_agent_kernel::ChildAgentSpec {
             name: kind.name.clone(),
             role: format!("subagent:{}", kind.name),
             permissions: child_permissions.clone(),
@@ -126,7 +126,7 @@ impl ChildRunner for RuntimeChildRunner {
         };
 
         let spawn_outcome = {
-            use aura_kernel::SpawnHook;
+            use aura_agent_kernel::SpawnHook;
             self.spawn_hook
                 .spawn_child(
                     &ctx.parent_agent_id,
@@ -152,7 +152,7 @@ impl ChildRunner for RuntimeChildRunner {
         let child_model = if child_model.is_empty() {
             kind.default_model
                 .clone()
-                .unwrap_or_else(|| aura_reasoner::ENV_FALLBACK_MODEL.to_string())
+                .unwrap_or_else(|| aura_model_reasoner::ENV_FALLBACK_MODEL.to_string())
         } else {
             child_model
         };
@@ -303,7 +303,7 @@ fn system_prompt_for(kind: &SubagentKindSpec, addendum: Option<&str>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{AgentScope, Capability};
+    use aura_core_types::{AgentScope, Capability};
 
     #[test]
     fn policy_fallback_denies_tools_outside_allowlist() {

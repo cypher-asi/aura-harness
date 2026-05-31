@@ -25,7 +25,7 @@ mod common;
 
 use std::time::Duration;
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use common::{
     assert_stop_reason, chat_request_payload, chat_request_payload_full, collect_text,
     connect_llm_session, find_agent_dir, find_file, has_tool_error, http_client, open_chat_run,
@@ -857,7 +857,7 @@ async fn test_ws_runtime_request_with_model() {
 
     // Pin to the env-fallback model identifier — this end-to-end test
     // exercises the wire-protocol round trip, not model selection logic.
-    let model = aura_reasoner::ENV_FALLBACK_MODEL;
+    let model = aura_model_reasoner::ENV_FALLBACK_MODEL;
     let tok = if token.is_empty() {
         None
     } else {

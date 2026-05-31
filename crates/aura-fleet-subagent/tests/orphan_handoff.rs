@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_agent_subagent::{ParentContext, SubagentLineage, SubagentOverrides};
-use aura_core::{AgentId, SubagentExit, SubagentResult};
+use aura_core_types::{AgentId, SubagentExit, SubagentResult};
 use aura_core_modes::{AgentMode, KernelMode, ModeProfile, ReplayMode, SandboxMode, SpawnMode};
 use aura_core_permissions::{AgentScope, Capability, Permissions};
 use aura_fleet_quota::QuotaPool;
@@ -20,7 +20,7 @@ use aura_fleet_spawn::{
     ChildRunContext, ChildRunError, ChildRunner, FleetSpawner, FleetSpawnerConfig, OrphanStore,
     ParentLeaseRegistry, SpawnHandle, SpawnRequest,
 };
-use aura_store::{RocksStore, Store};
+use aura_store_db::{RocksStore, Store};
 
 struct SlowRunner;
 

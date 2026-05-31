@@ -2,7 +2,7 @@
 
 use super::types::{ProcessOutput, RunningProcess};
 use super::ProcessManager;
-use aura_core::{ActionResultPayload, ProcessId, Transaction};
+use aura_core_types::{ActionResultPayload, ProcessId, Transaction};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};

@@ -1,16 +1,16 @@
 //! Agent-owned helper that renders a [`SteeringKind`] via
 //! [`SteeringRenderer`] and appends the wrapped envelope to a live
-//! `Vec<aura_reasoner::Message>` user-message stream.
+//! `Vec<aura_model_reasoner::Message>` user-message stream.
 //!
 //! `aura-prompts` cannot perform this append itself: its boundary
 //! contract forbids both the reasoner dep and `Vec<Message>`
 //! mutation. So the rendering is delegated to
-//! `aura_prompts::SteeringRenderer::render` (a pure `String`
+//! `aura_context_prompts::SteeringRenderer::render` (a pure `String`
 //! producer) and the appending lives here in `aura-agent-steering`,
 //! where the `aura-reasoner` dep is legal.
 
-use aura_prompts::{SteeringKind, SteeringRenderer};
-use aura_reasoner::Message;
+use aura_context_prompts::{SteeringKind, SteeringRenderer};
+use aura_model_reasoner::Message;
 
 use crate::helpers::append_warning;
 
@@ -26,7 +26,7 @@ pub fn inject(messages: &mut Vec<Message>, kind: &SteeringKind) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_reasoner::{ContentBlock, Role};
+    use aura_model_reasoner::{ContentBlock, Role};
 
     /// Build the canonical envelope opener for `task_done_rejected`
     /// without hardcoding the literal. The `<harness_steering` token

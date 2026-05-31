@@ -38,7 +38,7 @@
 //! `aura-agent-steering` so the steering crate sits strictly below
 //! the agent loop in the layer order.
 
-use aura_prompts::SteeringKind;
+use aura_context_prompts::SteeringKind;
 
 use crate::helpers::{is_exploration_tool, is_write_tool};
 use crate::registry::TurnSteering;

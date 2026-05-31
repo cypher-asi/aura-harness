@@ -1,10 +1,10 @@
 //! Context management: compaction, checkpoints, and budget warnings.
 
-use aura_compaction::{
+use aura_context_compaction::{
     self as compaction, CompactionAction, CompactionInput, CompactionPolicy, SummaryInput,
     SummaryOutput,
 };
-use aura_reasoner::{ModelRequestKind, ToolDefinition};
+use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
 use tokio::sync::mpsc::Sender;
 
 use crate::budget;
@@ -47,7 +47,7 @@ pub(super) fn compaction_disabled_by_env() -> bool {
 /// iteration 0, but the compaction policy reads the stale config field
 /// directly. Bootstrap carries a 24 KiB body cap
 /// (`DEV_LOOP_BOOTSTRAP_TOTAL_TEXT_MAX_BYTES`); continuation has none.
-/// Without this helper, [`aura_compaction::effective_pressure`] keeps
+/// Without this helper, [`aura_context_compaction::effective_pressure`] keeps
 /// applying the bootstrap cap to every continuation iteration and
 /// `cap_pressure` clamps to 1.0 as soon as `state.messages` crosses
 /// ~24 KiB — which fires `NeedsSummary` on every iteration regardless
@@ -88,7 +88,7 @@ fn compaction_pressure_tokens(
         .min(max_ctx)
 }
 
-fn heuristic_context_tokens(messages: &[aura_reasoner::Message]) -> u64 {
+fn heuristic_context_tokens(messages: &[aura_model_reasoner::Message]) -> u64 {
     #[allow(clippy::cast_possible_truncation)]
     {
         (compaction::estimate_message_chars(messages) / CHARS_PER_TOKEN) as u64
@@ -374,8 +374,8 @@ mod tests {
     };
     use crate::agent_loop::AgentLoopConfig;
     use crate::agent_loop::LoopState;
-    use aura_compaction::{pick_stricter_tier, CompactionConfig};
-    use aura_reasoner::{Message, ModelRequestKind, ToolDefinition};
+    use aura_context_compaction::{pick_stricter_tier, CompactionConfig};
+    use aura_model_reasoner::{Message, ModelRequestKind, ToolDefinition};
     use std::sync::{Mutex, OnceLock};
 
     /// Serialize tests that swap `aura_config` to flip the compaction
@@ -451,7 +451,7 @@ mod tests {
         assert!(compact_for_overflow(
             &config,
             &mut state,
-            aura_compaction::CompactionConfig::micro(),
+            aura_context_compaction::CompactionConfig::micro(),
             &[],
         ));
     }
@@ -466,7 +466,7 @@ mod tests {
         assert!(!compact_for_overflow(
             &config,
             &mut state,
-            aura_compaction::CompactionConfig::aggressive(),
+            aura_context_compaction::CompactionConfig::aggressive(),
             &[],
         ));
     }

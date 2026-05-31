@@ -3,7 +3,7 @@
 //! Wave 4 consolidates the duplicated `name -> item` lookups that had
 //! sprouted across the workspace:
 //!
-//! - `aura_skills::SkillRegistry` — in-memory map of loaded skills,
+//! - `aura_context_skills::SkillRegistry` — in-memory map of loaded skills,
 //!   populated from a `SkillLoader`.
 //! - `aura_tools::ToolCatalog` — immutable, compile-time–constructed
 //!   catalog of tool metadata. Implements the read-only slice of

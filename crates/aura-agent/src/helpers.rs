@@ -6,7 +6,7 @@
 //! re-exports them under their historical `crate::helpers::*`
 //! paths so every existing call site keeps working unchanged.
 
-use aura_core::LineDiff;
+use aura_core_types::LineDiff;
 use std::path::Path;
 
 use crate::types::{FileChange, FileChangeKind};
@@ -14,14 +14,14 @@ use crate::types::{FileChange, FileChangeKind};
 pub use aura_agent_steering::{append_warning, is_exploration_tool, is_write_tool};
 
 #[cfg(test)]
-use aura_reasoner::{Message, Role};
+use aura_model_reasoner::{Message, Role};
 
 /// Infer file mutations for a successful write tool call.
 ///
 /// `lines_added` / `lines_removed` are populated from `line_diff` when
 /// the tool layer attached one (the `fs_write` / `fs_edit` /
 /// `fs_delete` tools all do; see
-/// [`aura_core::ToolResult::with_line_diff`]). When `line_diff` is
+/// [`aura_core_types::ToolResult::with_line_diff`]). When `line_diff` is
 /// `None` — e.g. a custom tool that mutates files but doesn't compute
 /// counts — both fields default to 0 and the dashboard treats it as
 /// "unknown".

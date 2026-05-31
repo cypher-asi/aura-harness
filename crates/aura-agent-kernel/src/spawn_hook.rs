@@ -12,12 +12,12 @@
 //! `parent_agent_id` + `originating_user_id`.
 
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     resolve_effective_permission, AgentId, AgentPermissions, AgentToolPermissions, Identity,
     ToolState, Transaction, TransactionType, UserToolDefaults,
 };
 use aura_exec_traits::{ChildAgentSpec, SpawnError, SpawnHook, SpawnOutcome};
-use aura_store::Store;
+use aura_store_db::Store;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -120,7 +120,7 @@ impl SpawnHook for KernelSpawnHook {
             + 1;
         let child_ctx_hash = crate::context::hash_tx_with_window(&child_tx, &[])
             .map_err(|e| SpawnError::Other(format!("context hash(child): {e}")))?;
-        let child_entry = aura_core::RecordEntry::builder(child_seq, child_tx)
+        let child_entry = aura_core_types::RecordEntry::builder(child_seq, child_tx)
             .context_hash(child_ctx_hash)
             .build();
         self.store
@@ -154,7 +154,7 @@ impl SpawnHook for KernelSpawnHook {
             + 1;
         let parent_ctx_hash = crate::context::hash_tx_with_window(&delegate_tx, &[])
             .map_err(|e| SpawnError::Other(format!("context hash(parent): {e}")))?;
-        let parent_entry = aura_core::RecordEntry::builder(parent_seq, delegate_tx)
+        let parent_entry = aura_core_types::RecordEntry::builder(parent_seq, delegate_tx)
             .context_hash(parent_ctx_hash)
             .build();
         self.store
@@ -220,11 +220,11 @@ fn state_label(state: ToolState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::AgentPermissions;
+    use aura_core_types::AgentPermissions;
 
     #[tokio::test]
     async fn kernel_hook_persists_child_and_delegate_entries() {
-        use aura_store::{RocksStore, Store};
+        use aura_store_db::{RocksStore, Store};
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(child_entries.len(), 1);
         assert_eq!(
             child_entries[0].tx.tx_type,
-            aura_core::TransactionType::System
+            aura_core_types::TransactionType::System
         );
 
         // Parent log got the Delegate marker.
@@ -270,12 +270,12 @@ mod tests {
             payload["child_agent_id"],
             serde_json::json!(outcome.child_agent_id)
         );
-        assert_ne!(outcome.delegate_tx_hash, aura_core::Hash::default());
+        assert_ne!(outcome.delegate_tx_hash, aura_core_types::Hash::default());
     }
 
     #[tokio::test]
     async fn kernel_hook_writes_nonzero_context_hashes() {
-        use aura_store::{RocksStore, Store};
+        use aura_store_db::{RocksStore, Store};
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
@@ -305,13 +305,13 @@ mod tests {
         let child_entries = store.scan_record(outcome.child_agent_id, 1, 10).unwrap();
         assert_ne!(
             child_entries[0].context_hash,
-            aura_core::ContextHash::zero(),
+            aura_core_types::ContextHash::zero(),
             "child entry must have a non-zero context_hash"
         );
         let parent_entries = store.scan_record(parent, 1, 10).unwrap();
         assert_ne!(
             parent_entries[0].context_hash,
-            aura_core::ContextHash::zero(),
+            aura_core_types::ContextHash::zero(),
             "parent delegate entry must have a non-zero context_hash"
         );
     }

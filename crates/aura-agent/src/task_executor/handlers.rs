@@ -4,8 +4,8 @@ use super::{
     FollowUpSuggestion, Path, TaskPhase, TaskPlan, TaskToolExecutor, ToolCallInfo, ToolCallResult,
     MAX_STUB_FIX_ATTEMPTS,
 };
-use aura_prompts::model_messages::{auto_build, task_done as task_done_msgs, test_warning};
-use aura_prompts::steering::{SteeringKind, SteeringRenderer, StubReportView};
+use aura_context_prompts::model_messages::{auto_build, task_done as task_done_msgs, test_warning};
+use aura_context_prompts::steering::{SteeringKind, SteeringRenderer, StubReportView};
 
 pub(super) fn enrich_compiler_output_sync(project_folder: &str, raw_output: &str) -> String {
     if !looks_like_compiler_errors(raw_output) {
@@ -46,9 +46,9 @@ impl TaskToolExecutor {
             content: content.into(),
             is_error,
             kind: if is_error {
-                aura_core::ToolResultKind::AgentError
+                aura_core_types::ToolResultKind::AgentError
             } else {
-                aura_core::ToolResultKind::Ok
+                aura_core_types::ToolResultKind::Ok
             },
             stop_loop,
             file_changes: Vec::new(),

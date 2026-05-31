@@ -1,6 +1,6 @@
 //! Types for the process manager.
 
-use aura_core::{ActionId, AgentId, Hash, ProcessId};
+use aura_core_types::{ActionId, AgentId, Hash, ProcessId};
 use std::process::Child;
 use std::time::Instant;
 

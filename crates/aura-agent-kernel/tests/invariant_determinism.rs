@@ -10,7 +10,7 @@
 //! Enforcement target: Invariant §6 in `docs/invariants.md`.
 
 use aura_agent_kernel::hash_tx_with_window;
-use aura_core::{
+use aura_core_types::{
     AgentId, ContextHash, Decision, ProposalSet, RecordEntry, Transaction, TransactionType,
 };
 use proptest::prelude::*;

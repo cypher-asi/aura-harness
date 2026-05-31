@@ -9,10 +9,10 @@ license.workspace = true
 [dependencies]
 aura-agent = { path = "../aura-agent" }
 aura-config = { path = "../aura-config" }
-aura-prompts = { path = "../aura-prompts" }
-aura-core = { path = "../aura-core" }
+aura-context-prompts = { path = "../aura-context-prompts" }
+aura-core-types = { path = "../aura-core-types" }
 aura-tools = { path = "../aura-tools" }
-aura-reasoner = { path = "../aura-reasoner" }
+aura-model-reasoner = { path = "../aura-model-reasoner" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

@@ -18,9 +18,9 @@ use super::AutomatonBridge;
 use crate::scheduler::Scheduler;
 use async_trait::async_trait;
 use aura_automaton::AutomatonRuntime;
-use aura_core::{AgentId, InstalledIntegrationDefinition, TransactionType};
-use aura_reasoner::{MockProvider, ModelProvider};
-use aura_store::{RocksStore, Store};
+use aura_core_types::{AgentId, InstalledIntegrationDefinition, TransactionType};
+use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_store_db::{RocksStore, Store};
 use aura_tools::{
     domain_tools::{
         CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
@@ -292,7 +292,7 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
         None,
         None,
         None,
-        aura_reasoner::ModelRequestKind::DevLoopBootstrap,
+        aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
     );
 
     bridge
@@ -363,7 +363,7 @@ async fn pause_then_stop_records_distinct_lifecycle_entries_in_order() {
         None,
         None,
         None,
-        aura_reasoner::ModelRequestKind::DevLoopBootstrap,
+        aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
     );
 
     bridge

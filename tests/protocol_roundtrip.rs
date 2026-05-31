@@ -6,16 +6,16 @@ use std::collections::HashMap;
 /// ToolAuth: serialize from aura-core, deserialize as aura-protocol, and vice versa.
 #[test]
 fn tool_auth_roundtrip_core_to_protocol() {
-    let variants: Vec<aura_core::ToolAuth> = vec![
-        aura_core::ToolAuth::None,
-        aura_core::ToolAuth::Bearer {
+    let variants: Vec<aura_core_types::ToolAuth> = vec![
+        aura_core_types::ToolAuth::None,
+        aura_core_types::ToolAuth::Bearer {
             token: "sk-test-123".into(),
         },
-        aura_core::ToolAuth::ApiKey {
+        aura_core_types::ToolAuth::ApiKey {
             header: "X-Api-Key".into(),
             key: "key-456".into(),
         },
-        aura_core::ToolAuth::Headers {
+        aura_core_types::ToolAuth::Headers {
             headers: {
                 let mut m = HashMap::new();
                 m.insert("Authorization".into(), "Bearer tok".into());
@@ -30,7 +30,7 @@ fn tool_auth_roundtrip_core_to_protocol() {
         let proto_val: aura_protocol::ToolAuth =
             serde_json::from_str(&json).expect("deserialize as protocol ToolAuth");
         let back_json = serde_json::to_string(&proto_val).expect("re-serialize protocol ToolAuth");
-        let roundtrip: aura_core::ToolAuth =
+        let roundtrip: aura_core_types::ToolAuth =
             serde_json::from_str(&back_json).expect("deserialize back to core ToolAuth");
         assert_eq!(core_val, &roundtrip, "ToolAuth roundtrip failed for {json}");
     }
@@ -58,7 +58,7 @@ fn tool_auth_roundtrip_protocol_to_core() {
 
     for proto_val in &variants {
         let json = serde_json::to_string(proto_val).expect("serialize protocol ToolAuth");
-        let core_val: aura_core::ToolAuth =
+        let core_val: aura_core_types::ToolAuth =
             serde_json::from_str(&json).expect("deserialize as core ToolAuth");
         let back_json = serde_json::to_string(&core_val).expect("re-serialize core ToolAuth");
         let roundtrip: aura_protocol::ToolAuth =
@@ -72,30 +72,30 @@ fn tool_auth_roundtrip_protocol_to_core() {
 
 #[test]
 fn installed_tool_roundtrip_core_to_protocol() {
-    let core_tool = aura_core::InstalledToolDefinition {
+    let core_tool = aura_core_types::InstalledToolDefinition {
         name: "my_tool".into(),
         description: "A test tool".into(),
         input_schema: serde_json::json!({"type": "object", "properties": {"x": {"type": "string"}}}),
         endpoint: "http://localhost:8080/tool".into(),
-        auth: aura_core::ToolAuth::Bearer {
+        auth: aura_core_types::ToolAuth::Bearer {
             token: "tok".into(),
         },
         timeout_ms: Some(5000),
         namespace: Some("ns".into()),
-        required_integration: Some(aura_core::InstalledToolIntegrationRequirement {
+        required_integration: Some(aura_core_types::InstalledToolIntegrationRequirement {
             integration_id: None,
             provider: Some("brave_search".into()),
             kind: Some("workspace_integration".into()),
         }),
-        runtime_execution: Some(aura_core::InstalledToolRuntimeExecution::AppProvider(
-            aura_core::InstalledToolRuntimeProviderExecution {
+        runtime_execution: Some(aura_core_types::InstalledToolRuntimeExecution::AppProvider(
+            aura_core_types::InstalledToolRuntimeProviderExecution {
                 provider: "brave_search".into(),
                 base_url: "https://api.search.brave.com".into(),
                 static_headers: HashMap::new(),
-                integrations: vec![aura_core::InstalledToolRuntimeIntegration {
+                integrations: vec![aura_core_types::InstalledToolRuntimeIntegration {
                     integration_id: "int-1".into(),
                     base_url: None,
-                    auth: aura_core::InstalledToolRuntimeAuth::Header {
+                    auth: aura_core_types::InstalledToolRuntimeAuth::Header {
                         name: "X-Subscription-Token".into(),
                         value: "secret".into(),
                     },
@@ -133,7 +133,7 @@ fn installed_tool_roundtrip_core_to_protocol() {
 
     let back_json =
         serde_json::to_string(&proto_tool).expect("re-serialize protocol InstalledTool");
-    let roundtrip: aura_core::InstalledToolDefinition =
+    let roundtrip: aura_core_types::InstalledToolDefinition =
         serde_json::from_str(&back_json).expect("deserialize back to core InstalledToolDefinition");
 
     assert_eq!(core_tool.name, roundtrip.name);
@@ -192,7 +192,7 @@ fn installed_tool_roundtrip_protocol_to_core() {
     };
 
     let json = serde_json::to_string(&proto_tool).expect("serialize protocol InstalledTool");
-    let core_tool: aura_core::InstalledToolDefinition =
+    let core_tool: aura_core_types::InstalledToolDefinition =
         serde_json::from_str(&json).expect("deserialize as core InstalledToolDefinition");
 
     assert_eq!(proto_tool.name, core_tool.name);

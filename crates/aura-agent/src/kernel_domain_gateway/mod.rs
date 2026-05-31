@@ -5,10 +5,10 @@
 //! through directly — they are declared exceptions per
 //! `docs/invariants.md` §1. Every mutating method records a pre-call
 //! "request snapshot" and a post-call "response" `RecordEntry` by
-//! routing a [`Transaction`](aura_core::Transaction) with
-//! [`TransactionType::System`](aura_core::TransactionType::System) and
-//! [`SystemKind::DomainMutation`](aura_core::SystemKind::DomainMutation)
-//! through [`Kernel::process_direct`](aura_kernel::Kernel::process_direct).
+//! routing a [`Transaction`](aura_core_types::Transaction) with
+//! [`TransactionType::System`](aura_core_types::TransactionType::System) and
+//! [`SystemKind::DomainMutation`](aura_core_types::SystemKind::DomainMutation)
+//! through [`Kernel::process_direct`](aura_agent_kernel::Kernel::process_direct).
 //!
 //! The gateway satisfies Invariant §2 ("every state change is a
 //! transaction") and §8 ("gateway transparency") for the domain API

@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This is the canonical permission type. [`AgentPermissions`] is
 /// retained as a type alias for source compatibility with pre-split
-/// call sites (`aura_core::AgentPermissions`).
+/// call sites (`aura_core_types::AgentPermissions`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Permissions {
     /// Scope (orgs/projects/agent ids).

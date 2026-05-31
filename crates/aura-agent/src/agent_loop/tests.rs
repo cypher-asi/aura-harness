@@ -1,6 +1,6 @@
 //! Core agent loop tests: config defaults, simple runs, error handling, max-tokens.
 
-use aura_reasoner::{
+use aura_model_reasoner::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, ModelRequest,
     ModelRequestKind, ModelResponse, ProviderTrace, ReasonerError, StopReason, ToolDefinition,
     Usage,
@@ -69,15 +69,15 @@ impl ModelProvider for SummaryThenFinalProvider {
 #[test]
 fn test_agent_loop_config_defaults() {
     let config = AgentLoopConfig::for_agent("claude-test-model");
-    // Default flows from `aura_core::MAX_TURNS` — the single source of
+    // Default flows from `aura_core_types::MAX_TURNS` — the single source of
     // truth shared with the runtime session, agent runner, subagent
     // budgets, and integration-test harness. Termination is still
     // driven by `EndTurn`, the credit budget, or cooperative
     // cancellation; this assertion just pins the per-turn cap and the
     // companion E.1 caps to the same canonical value.
-    assert_eq!(config.max_iterations, aura_core::MAX_TURNS as usize);
-    assert_eq!(config.max_turns_per_task, aura_core::MAX_TURNS);
-    assert_eq!(config.max_iterations_per_task, aura_core::MAX_TURNS);
+    assert_eq!(config.max_iterations, aura_core_types::MAX_TURNS as usize);
+    assert_eq!(config.max_turns_per_task, aura_core_types::MAX_TURNS);
+    assert_eq!(config.max_iterations_per_task, aura_core_types::MAX_TURNS);
     assert_eq!(config.auto_build_cooldown, 2);
     assert_eq!(config.thinking_taper_after, 2);
     assert!((config.thinking_taper_factor - 0.6).abs() < f64::EPSILON);
@@ -509,7 +509,7 @@ fn begin_iteration_injects_implement_now_after_exploration_threshold() {
             tool_use_id: tool.id.clone(),
             content: "stub".to_string(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: Vec::new(),
         };
@@ -570,7 +570,7 @@ fn begin_iteration_no_op_when_no_signal_configured() {
 /// codex-style `Off → Medium → Low` taper.
 #[test]
 fn effort_medium_when_disable_thinking_iteration_0() {
-    use aura_reasoner::ThinkingEffort;
+    use aura_model_reasoner::ThinkingEffort;
 
     let config = AgentLoopConfig {
         disable_thinking_iteration_0: true,
@@ -605,7 +605,7 @@ fn effort_medium_when_disable_thinking_iteration_0() {
 /// default `reasoning.effort = medium`.
 #[test]
 fn effort_medium_on_iteration_0_no_disable() {
-    use aura_reasoner::ThinkingEffort;
+    use aura_model_reasoner::ThinkingEffort;
 
     let config = AgentLoopConfig {
         disable_thinking_iteration_0: false,
@@ -623,7 +623,7 @@ fn effort_medium_on_iteration_0_no_disable() {
 /// iterations after forward motion has already happened.
 #[test]
 fn effort_low_after_first_write() {
-    use aura_reasoner::ThinkingEffort;
+    use aura_model_reasoner::ThinkingEffort;
 
     let config = AgentLoopConfig::for_agent("claude-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
@@ -639,7 +639,7 @@ fn effort_low_after_first_write() {
 /// keep effort low during the implementation phase.
 #[test]
 fn effort_low_after_submit_plan() {
-    use aura_reasoner::ThinkingEffort;
+    use aura_model_reasoner::ThinkingEffort;
 
     let config = AgentLoopConfig::for_agent("claude-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
@@ -655,7 +655,7 @@ fn effort_low_after_submit_plan() {
 /// silently fall to `Low` without one of the explicit triggers.
 #[test]
 fn effort_medium_default_after_iteration_zero() {
-    use aura_reasoner::ThinkingEffort;
+    use aura_model_reasoner::ThinkingEffort;
 
     let config = AgentLoopConfig::for_agent("claude-test-model");
     let state = super::LoopState::new(&config, vec![]);
@@ -670,7 +670,7 @@ fn effort_medium_default_after_iteration_zero() {
 /// produce `ToolChoice::Auto` regardless of any internal state.
 #[test]
 fn build_request_always_emits_tool_choice_auto() {
-    use aura_reasoner::{Message, ToolChoice};
+    use aura_model_reasoner::{Message, ToolChoice};
 
     let config = AgentLoopConfig {
         thinking_budget: Some(8_192),
@@ -821,7 +821,7 @@ async fn agentloop_endturn_terminates_after_partial_write() {
             tool_use_id: "call_write".to_string(),
             content: "wrote new.rs".to_string(),
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: vec![crate::types::FileChange {
                 path: "src/new.rs".to_string(),
@@ -1096,7 +1096,7 @@ async fn pending_input_extends_turn_loop() {
     use crate::session::input_queue::InputQueue;
     use crate::session::SessionId;
     use crate::{AgentRunnerHandle, UserInput};
-    use aura_reasoner::{ModelRequest, ModelResponse, ProviderTrace, Usage};
+    use aura_model_reasoner::{ModelRequest, ModelResponse, ProviderTrace, Usage};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
@@ -1221,7 +1221,7 @@ async fn cancel_unwinds_active_turn() {
     use crate::session::input_queue::InputQueue;
     use crate::session::SessionId;
     use crate::{AgentRunnerHandle, UserInput};
-    use aura_reasoner::{ContentBlock, ModelRequest, ModelResponse, ProviderTrace, Usage};
+    use aura_model_reasoner::{ContentBlock, ModelRequest, ModelResponse, ProviderTrace, Usage};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
@@ -1266,7 +1266,7 @@ async fn cancel_unwinds_active_turn() {
             Ok(ModelResponse::new(
                 StopReason::ToolUse,
                 Message {
-                    role: aura_reasoner::Role::Assistant,
+                    role: aura_model_reasoner::Role::Assistant,
                     content: vec![ContentBlock::tool_use(
                         "toolu_cancelled",
                         "read_file",

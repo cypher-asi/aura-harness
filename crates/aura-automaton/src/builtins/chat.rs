@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use aura_agent::agent_runner::{AgentRunner, AgentRunnerConfig, ChatHooks, ChatPromptCtx};
-use aura_prompts::ProjectInfo;
-use aura_reasoner::{Message, ModelProvider};
+use aura_context_prompts::ProjectInfo;
+use aura_model_reasoner::{Message, ModelProvider};
 use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::{DomainApi, MessageDescriptor, SaveMessageParams};
 
@@ -159,7 +159,7 @@ impl ChatAutomaton {
         (
             aura_tools::domain_tools::ProjectDescriptor,
             Vec<Message>,
-            Vec<aura_reasoner::ToolDefinition>,
+            Vec<aura_model_reasoner::ToolDefinition>,
         ),
         AutomatonError,
     > {
@@ -186,7 +186,7 @@ impl ChatAutomaton {
         project: &aura_tools::domain_tools::ProjectDescriptor,
         cfg: &ChatConfig,
         api_messages: Vec<Message>,
-        tools: Vec<aura_reasoner::ToolDefinition>,
+        tools: Vec<aura_model_reasoner::ToolDefinition>,
     ) -> Result<aura_agent::AgentLoopResult, AutomatonError> {
         ctx.emit(AutomatonEvent::Progress {
             task_id: None,
@@ -284,7 +284,7 @@ impl ChatAutomaton {
     }
 }
 
-/// Convert `MessageDescriptor`s from `DomainApi` into `aura_reasoner::Message`s.
+/// Convert `MessageDescriptor`s from `DomainApi` into `aura_model_reasoner::Message`s.
 fn convert_descriptors_to_messages(descriptors: &[MessageDescriptor]) -> Vec<Message> {
     descriptors
         .iter()

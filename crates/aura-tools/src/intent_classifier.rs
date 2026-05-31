@@ -24,7 +24,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use aura_core::ToolDefinition;
+use aura_core_types::ToolDefinition;
 
 /// A single keyword → domain rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]

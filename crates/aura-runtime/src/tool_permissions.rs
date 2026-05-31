@@ -11,7 +11,7 @@
 //!   serialization shape.
 //! - [`effective_tool_definitions`] / [`effective_tool_infos`] — fold
 //!   the user / agent / kind permission stack into per-tool
-//!   [`aura_reasoner::ToolDefinition`] (or [`EffectiveToolInfo`])
+//!   [`aura_model_reasoner::ToolDefinition`] (or [`EffectiveToolInfo`])
 //!   lists. Used by the chat-WS bootstrap path + the REST tools
 //!   handler.
 //! - [`enforce_monotonic_update`] — reject attempts to widen an
@@ -24,13 +24,13 @@
 
 use crate::protocol;
 use crate::scheduler::Scheduler;
-use aura_core::{
+use aura_core_types::{
     installed_integrations_satisfy, AgentId, AgentPermissions, AgentToolPermissions,
     InstalledIntegrationDefinition, InstalledToolDefinition, ToolState, Transaction,
     TransactionType, UserToolDefaults,
 };
-use aura_reasoner::ToolDefinition;
-use aura_store::Store;
+use aura_model_reasoner::ToolDefinition;
+use aura_store_db::Store;
 use aura_tools::{catalog::ToolProfile, ToolCatalog, ToolConfig};
 use bytes::Bytes;
 use std::collections::HashSet;
@@ -65,7 +65,7 @@ pub(crate) fn effective_tool_definitions(
         catalog.visible_tools_with_permissions(ToolProfile::Agent, tool_config, agent_permissions)
     {
         let state =
-            aura_core::resolve_effective_permission(user_default, agent_override, &tool.name);
+            aura_core_types::resolve_effective_permission(user_default, agent_override, &tool.name);
         if state != ToolState::Deny && seen.insert(tool.name.clone()) {
             tools.push((tool, state));
         }
@@ -77,7 +77,7 @@ pub(crate) fn effective_tool_definitions(
             }
         }
         let state =
-            aura_core::resolve_effective_permission(user_default, agent_override, &tool.name);
+            aura_core_types::resolve_effective_permission(user_default, agent_override, &tool.name);
         if state != ToolState::Deny && seen.insert(tool.name.clone()) {
             tools.push((
                 ToolDefinition::new(&tool.name, &tool.description, tool.input_schema.clone()),
@@ -100,7 +100,7 @@ pub(crate) fn effective_tool_infos(
         .into_iter()
         .filter_map(|tool| {
             let state =
-                aura_core::resolve_effective_permission(user_default, agent_override, &tool.name);
+                aura_core_types::resolve_effective_permission(user_default, agent_override, &tool.name);
             (state != ToolState::Deny).then(|| EffectiveToolInfo {
                 name: tool.name,
                 description: tool.description,
@@ -140,14 +140,14 @@ pub(crate) async fn append_agent_tool_permissions_entry(
     // concurrent scheduler drain cannot wedge a different entry at the same
     // seq between our `get_head_seq` and `append_entry_direct`. The
     // scheduler claim is a runtime-side lock; the actual entry build +
-    // store write is delegated to `aura_kernel::write_system_record`
+    // store write is delegated to `aura_agent_kernel::write_system_record`
     // so this code path no longer bypasses the kernel crate (Phase 6a).
     let _claim = scheduler
         .processing_claim(agent_id)
         .await
         .map_err(|e| format!("claim agent processing: {e}"))?;
 
-    aura_kernel::write_system_record(store, agent_id, tx.clone())
+    aura_agent_kernel::write_system_record(store, agent_id, tx.clone())
         .map_err(|e| format!("write_system_record: {e}"))?;
     Ok(tx)
 }
@@ -158,7 +158,7 @@ pub(crate) fn enforce_monotonic_update(
     next: &AgentToolPermissions,
 ) -> Result<(), String> {
     for (tool, next_state) in &next.per_tool {
-        let current_state = aura_core::resolve_effective_permission(user_default, current, tool);
+        let current_state = aura_core_types::resolve_effective_permission(user_default, current, tool);
         if !next_state.is_subset_of(current_state) {
             return Err(format!(
                 "tool '{tool}' cannot be widened from {} to {}",
@@ -181,7 +181,7 @@ fn state_label(state: ToolState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::ToolState;
+    use aura_core_types::ToolState;
     use std::collections::BTreeMap;
 
     fn defaults(entries: &[(&str, ToolState)], fallback: ToolState) -> UserToolDefaults {

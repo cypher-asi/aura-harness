@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use aura_agent::agent_runner::{AgentRunner, AgentRunnerConfig};
-use aura_reasoner::ModelProvider;
+use aura_model_reasoner::ModelProvider;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
 

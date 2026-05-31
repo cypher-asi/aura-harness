@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 
 use crate::event::HookEvent;
 

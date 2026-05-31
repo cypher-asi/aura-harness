@@ -425,7 +425,7 @@ One-paragraph summary per phase:
 - **Phase 6 — Finish & document (this checkpoint).** Wired the
   policy-derived `thinking_budget` through
   `AgentLoopConfig::thinking_budget` into `LoopState::thinking.budget`
-  (capped at `max_tokens`). Tightened `aura_kernel::router::ExecutorRouter::execute`:
+  (capped at `max_tokens`). Tightened `aura_agent_kernel::router::ExecutorRouter::execute`:
   multiple matching executors now `error!`-log, panic under
   `debug_assert!` in debug/test builds, and return
   `Effect::Failed("ambiguous executor routing")` in release. Refreshed

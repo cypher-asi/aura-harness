@@ -4,7 +4,7 @@
 //!
 //! - **Rendering** (this crate): [`SteeringKind`] enum +
 //!   [`SteeringRenderer`]. Stateless. Returns a `String`. No
-//!   `Vec<aura_reasoner::Message>` mutation, no `LoopState`, no
+//!   `Vec<aura_model_reasoner::Message>` mutation, no `LoopState`, no
 //!   evaluator state machines.
 //! - **Evaluation + appending** (`aura-agent/src/agent_loop/steering/`):
 //!   the `repeated_read`, `implement_now`, and `early_oracle`

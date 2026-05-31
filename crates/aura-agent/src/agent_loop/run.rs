@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use aura_plugin_hooks::HookEvent;
-use aura_reasoner::{Message, ModelProvider, ToolDefinition};
+use aura_model_reasoner::{Message, ModelProvider, ToolDefinition};
 use chrono::Utc;
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
@@ -151,14 +151,14 @@ impl AgentLoop {
             if !host.is_empty(HookEvent::UserPromptSubmit) {
                 if let Some(idx) = messages
                     .iter()
-                    .rposition(|m| matches!(m.role, aura_reasoner::Role::User))
+                    .rposition(|m| matches!(m.role, aura_model_reasoner::Role::User))
                 {
                     let prompt_text = messages[idx].text_content();
                     let outcome =
                         host.fire_user_prompt_submit(&prompt_text, Utc::now().to_rfc3339());
                     match &outcome.decision {
                         aura_plugin_hooks::HookOutcome::Replace { new_value } => {
-                            messages[idx] = aura_reasoner::Message::user(new_value);
+                            messages[idx] = aura_model_reasoner::Message::user(new_value);
                         }
                         aura_plugin_hooks::HookOutcome::Block { reason } => {
                             tracing::info!(
@@ -211,9 +211,9 @@ impl AgentLoop {
         // the duration of this turn. The observer forwards through the
         // same channel as UI events so downstream consumers see all
         // `debug.*` frames inline with the streaming text.
-        let observer: Option<aura_reasoner::RetryObserver> = event_tx.as_ref().map(|tx| {
+        let observer: Option<aura_model_reasoner::RetryObserver> = event_tx.as_ref().map(|tx| {
             let tx = tx.clone();
-            Arc::new(move |info: aura_reasoner::RetryInfo| {
+            Arc::new(move |info: aura_model_reasoner::RetryInfo| {
                 let event = AgentLoopEvent::Debug(DebugEvent::Retry {
                     timestamp: Utc::now(),
                     reason: info.reason,
@@ -226,7 +226,7 @@ impl AgentLoop {
                 if let Err(e) = tx.try_send(event) {
                     tracing::warn!("debug.retry channel full or closed: {e}");
                 }
-            }) as aura_reasoner::RetryObserver
+            }) as aura_model_reasoner::RetryObserver
         });
 
         let ctx = RunCtx {
@@ -239,7 +239,7 @@ impl AgentLoop {
         };
         let fut = self.run_inner(&ctx, messages, tools);
         let result = match observer {
-            Some(obs) => aura_reasoner::DEBUG_RETRY_OBSERVER.scope(obs, fut).await,
+            Some(obs) => aura_model_reasoner::DEBUG_RETRY_OBSERVER.scope(obs, fut).await,
             None => fut.await,
         };
         // Phase 8: fire `Stop` when the agent loop completes

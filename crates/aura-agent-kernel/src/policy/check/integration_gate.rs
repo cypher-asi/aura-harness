@@ -3,7 +3,7 @@
 //! ledger or, in fallback mode, the policy config itself.
 
 use super::Policy;
-use aura_core::{installed_integrations_satisfy, RuntimeCapabilityInstall};
+use aura_core_types::{installed_integrations_satisfy, RuntimeCapabilityInstall};
 
 impl Policy {
     /// Returns `Some(reason)` if `tool` requires an integration that is

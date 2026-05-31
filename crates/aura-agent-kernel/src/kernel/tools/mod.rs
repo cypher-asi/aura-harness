@@ -26,7 +26,7 @@ mod shared;
 mod single;
 
 use super::{Kernel, ProcessResult};
-use aura_core::{ContextHash, ToolProposal, Transaction};
+use aura_core_types::{ContextHash, ToolProposal, Transaction};
 use tracing::instrument;
 
 impl Kernel {

@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aura-core = { path = "../aura-core" }
+aura-core-types = { path = "../aura-core-types" }
 aura-core-modes = { path = "../aura-core-modes" }
 aura-fleet-spawn = { path = "../aura-fleet-spawn" }
 async-trait = { workspace = true }

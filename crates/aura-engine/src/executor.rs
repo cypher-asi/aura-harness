@@ -1,6 +1,6 @@
 //! Shared construction helpers for `ToolResolver` and `ExecutorRouter`.
 
-use aura_kernel::ExecutorRouter;
+use aura_agent_kernel::ExecutorRouter;
 use aura_tools::domain_tools::DomainToolExecutor;
 use aura_exec_runner::{ToolCatalog, ToolConfig, ToolResolver};
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub fn build_tool_resolver(
 }
 
 /// Wrap a [`ToolResolver`] in an [`ExecutorRouter`] so it can be handed
-/// to [`aura_kernel::Kernel::new`].
+/// to [`aura_agent_kernel::Kernel::new`].
 pub fn build_executor_router(resolver: ToolResolver) -> ExecutorRouter {
     let mut router = ExecutorRouter::new();
     router.add_executor(Arc::new(resolver));

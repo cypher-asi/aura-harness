@@ -23,18 +23,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use aura_kernel::{
+use aura_agent_kernel::{
     ExecutorRouter, Kernel, KernelConfig, PendingToolPrompt, ToolApprovalError,
     ToolApprovalPrompter, ToolApprovalRemember, ToolApprovalResponse,
 };
 use aura_plugin_hooks::{HookEngine, HookEvent, PluginHookHost, RegisteredHook};
-use aura_reasoner::{MockProvider, ModelProvider};
-use aura_store::{RocksStore, Store};
+use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_store_db::{RocksStore, Store};
 use std::time::Duration;
 use tempfile::TempDir;
 
 use async_trait::async_trait;
-use aura_core::{AgentId, ToolProposal, Transaction, UserToolDefaults};
+use aura_core_types::{AgentId, ToolProposal, Transaction, UserToolDefaults};
 
 /// Tracking [`ToolApprovalPrompter`] that records invocation counts.
 ///
@@ -155,7 +155,7 @@ fn host_with_handler(
 async fn run_ask_tool(
     prompter: Arc<TrackingPrompter>,
     plugin_hooks: Option<Arc<PluginHookHost>>,
-) -> aura_kernel::ProcessResult {
+) -> aura_agent_kernel::ProcessResult {
     let db_dir = TempDir::new().unwrap();
     let ws_dir = TempDir::new().unwrap();
     let agent_id = AgentId::generate();
@@ -164,7 +164,7 @@ async fn run_ask_tool(
         Arc::new(MockProvider::simple_response("noop"));
 
     let policy =
-        aura_kernel::PolicyConfig::default().with_user_default(UserToolDefaults::auto_review());
+        aura_agent_kernel::PolicyConfig::default().with_user_default(UserToolDefaults::auto_review());
     let config = KernelConfig {
         workspace_base: ws_dir.path().to_path_buf(),
         policy,
@@ -204,7 +204,7 @@ async fn permission_request_hook_approve_short_circuits_prompter() {
         .as_ref()
         .expect("tool decision should be set on the tool-proposal path");
     assert!(
-        matches!(decision, aura_kernel::ToolDecision::Allowed),
+        matches!(decision, aura_agent_kernel::ToolDecision::Allowed),
         "hook Approve must produce ToolDecision::Allowed, got {decision:?}"
     );
 }
@@ -232,7 +232,7 @@ async fn permission_request_hook_deny_short_circuits_prompter() {
         .as_ref()
         .expect("tool decision should be set on the tool-proposal path");
     match decision {
-        aura_kernel::ToolDecision::Denied { reason } => {
+        aura_agent_kernel::ToolDecision::Denied { reason } => {
             assert!(
                 reason.contains("denied by policy plugin"),
                 "deny reason must surface the hook's stderr, got: {reason}"
@@ -249,7 +249,7 @@ async fn permission_request_hook_continue_falls_through_to_prompter() {
     // The prompter responds with Deny so the test deterministically
     // sees the interactive prompt was consulted exactly once.
     let prompter = Arc::new(TrackingPrompter::new(Some(ToolApprovalResponse {
-        decision: aura_core::ToolState::Deny,
+        decision: aura_core_types::ToolState::Deny,
         remember: ToolApprovalRemember::Once,
     })));
 
@@ -264,7 +264,7 @@ async fn permission_request_hook_continue_falls_through_to_prompter() {
     assert!(
         matches!(
             result.tool_decision,
-            Some(aura_kernel::ToolDecision::Denied { .. })
+            Some(aura_agent_kernel::ToolDecision::Denied { .. })
         ),
         "interactive deny must surface as ToolDecision::Denied, got {:?}",
         result.tool_decision

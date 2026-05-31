@@ -9,7 +9,7 @@
 use super::scope::scope_violation;
 use super::verdict::{PolicyResult, PolicyVerdict};
 use super::Policy;
-use aura_core::{resolve_effective_permission, ToolCall, ToolState};
+use aura_core_types::{resolve_effective_permission, ToolCall, ToolState};
 
 impl Policy {
     /// Resolve the tri-state `on` / `off` / `ask` [`ToolState`] for

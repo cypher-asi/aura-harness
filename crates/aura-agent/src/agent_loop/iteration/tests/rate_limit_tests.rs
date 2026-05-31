@@ -2,7 +2,7 @@ use crate::agent_loop::iteration::{looks_like_rate_limited, LlmCallError};
 
 #[test]
 fn from_reasoner_error_maps_rate_limited_variant() {
-    let err = aura_reasoner::ReasonerError::RateLimited {
+    let err = aura_model_reasoner::ReasonerError::RateLimited {
         message: "429 too many requests (retry after 7 seconds)".to_string(),
         retry_after: Some(std::time::Duration::from_secs(7)),
     };
@@ -21,7 +21,7 @@ fn from_reasoner_error_classifies_transient_5xx_as_fatal() {
     // retry to, so we still surface it as `Fatal` (`llm_error: ...`)
     // rather than `RateLimited` — the latter would falsely signal
     // "client should wait and retry" to SSE consumers.
-    let err = aura_reasoner::ReasonerError::Transient {
+    let err = aura_model_reasoner::ReasonerError::Transient {
         status: 502,
         message: "bad gateway".to_string(),
         retry_after: None,
@@ -37,7 +37,7 @@ fn from_reasoner_error_recovers_rate_limited_across_kernel_boundary() {
     // Matches what `KernelModelGateway::complete_streaming` produces
     // when the kernel stringifies a rate-limit error:
     //     ReasonerError::Internal("kernel reason_streaming error: reasoner error: Rate limited: ...")
-    let err = aura_reasoner::ReasonerError::Internal(
+    let err = aura_model_reasoner::ReasonerError::Internal(
         "kernel reason_streaming error: reasoner error: Rate limited: \
          Anthropic API error: 429 Too Many Requests - \
          {\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests. Retry after 7 seconds.\"}}"
@@ -54,7 +54,7 @@ fn from_reasoner_error_recovers_rate_limited_across_kernel_boundary() {
 
 #[test]
 fn from_reasoner_error_does_not_confuse_other_errors_with_rate_limited() {
-    let err = aura_reasoner::ReasonerError::Api {
+    let err = aura_model_reasoner::ReasonerError::Api {
         status: 500,
         message: "internal server error".to_string(),
     };

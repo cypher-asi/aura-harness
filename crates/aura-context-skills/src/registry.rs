@@ -3,7 +3,7 @@
 use crate::error::SkillError;
 use crate::loader::SkillLoader;
 use crate::types::{Skill, SkillMeta};
-use aura_core::{Registry, RegistryError};
+use aura_core_types::{Registry, RegistryError};
 use std::collections::HashMap;
 use tracing::{debug, warn};
 
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn registry_trait_basic_ops() {
         use crate::types::SkillSource;
-        use aura_core::Registry;
+        use aura_core_types::Registry;
 
         let mut reg = SkillRegistry::new();
         assert!(Registry::is_empty(&reg));
@@ -378,7 +378,7 @@ mod tests {
 
         let err = Registry::register(&mut reg, "demo".to_string(), skill)
             .expect_err("duplicate insert must error");
-        assert!(matches!(err, aura_core::RegistryError::Duplicate(ref id) if id == "demo"));
+        assert!(matches!(err, aura_core_types::RegistryError::Duplicate(ref id) if id == "demo"));
 
         let ids: Vec<_> = Registry::iter(&reg).into_iter().map(|(k, _)| k).collect();
         assert_eq!(ids, vec!["demo".to_string()]);

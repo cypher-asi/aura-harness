@@ -26,7 +26,7 @@ use crate::protocol::{
 use aura_agent::{
     AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
 };
-use aura_reasoner::{ContentBlock, ImageSource, Message, Role};
+use aura_model_reasoner::{ContentBlock, ImageSource, Message, Role};
 use base64::Engine;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -435,7 +435,7 @@ struct PreparedTurn {
     tool_gateway: KernelToolGateway,
     config: aura_agent::AgentLoopConfig,
     messages: Vec<Message>,
-    tools: Vec<aura_reasoner::ToolDefinition>,
+    tools: Vec<aura_model_reasoner::ToolDefinition>,
 }
 
 /// Prepare and spawn an agent-loop turn as a background task.
@@ -626,7 +626,7 @@ async fn prepare_turn_context(
     };
 
     if let Err(e) = kernel
-        .process_direct(aura_core::Transaction::user_prompt(
+        .process_direct(aura_core_types::Transaction::user_prompt(
             session.agent_id,
             msg.content.clone(),
         ))
@@ -790,13 +790,13 @@ async fn fetch_attachment_data(url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{
+    use aura_core_types::{
         AgentPermissions, Capability, InstalledIntegrationDefinition, InstalledToolDefinition,
         InstalledToolIntegrationRequirement, ToolAuth,
     };
     use aura_engine::scheduler::Scheduler;
-    use aura_reasoner::MockProvider;
-    use aura_store::RocksStore;
+    use aura_model_reasoner::MockProvider;
+    use aura_store_db::RocksStore;
     use aura_tools::{ToolCatalog, ToolConfig};
     use std::collections::HashMap;
     use std::sync::Arc;

@@ -11,7 +11,7 @@ use proptest::prelude::*;
 #[allow(deprecated)]
 mod id_tests {
     use super::*;
-    use aura_core::{ActionId, AgentId, TxId};
+    use aura_core_types::{ActionId, AgentId, TxId};
 
     proptest! {
         /// AgentId roundtrips through hex encoding.
@@ -66,7 +66,7 @@ mod id_tests {
 
 mod hash_tests {
     use super::*;
-    use aura_core::hash;
+    use aura_core_types::hash;
 
     proptest! {
         /// Hashing is deterministic.
@@ -119,8 +119,8 @@ mod hash_tests {
 
 mod key_tests {
     use super::*;
-    use aura_core::AgentId;
-    use aura_store::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};
+    use aura_core_types::AgentId;
+    use aura_store_db::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};
 
     proptest! {
         /// RecordKey roundtrips through encoding.
@@ -202,7 +202,7 @@ mod key_tests {
 
 mod serialization_tests {
     use super::*;
-    use aura_core::{
+    use aura_core_types::{
         ActionKind, AgentId, Decision, Proposal, ToolCall, ToolResult, Transaction, TransactionType,
     };
     use bytes::Bytes;
@@ -289,7 +289,7 @@ mod serialization_tests {
             let mut decision = Decision::new();
 
             for _ in 0..num_accepted {
-                decision.accept(aura_core::ActionId::generate());
+                decision.accept(aura_core_types::ActionId::generate());
             }
 
             for i in 0..num_rejected {
@@ -391,7 +391,7 @@ mod progress_tests {
 
 mod hash_chain_tests {
     use super::*;
-    use aura_core::{Hash, ProcessId};
+    use aura_core_types::{Hash, ProcessId};
 
     proptest! {
         /// Hash is deterministic - same content always produces same hash.
@@ -494,7 +494,7 @@ mod hash_chain_tests {
 
 mod transaction_chain_tests {
     use super::*;
-    use aura_core::{AgentId, Transaction, TransactionType};
+    use aura_core_types::{AgentId, Transaction, TransactionType};
 
     proptest! {
         /// Transaction chain is append-only: modifying middle tx changes downstream hashes.
@@ -529,7 +529,7 @@ mod transaction_chain_tests {
         /// Transactions with reference_tx_hash maintain the reference correctly.
         #[test]
         fn prop_reference_tx_hash_preserved(payload: Vec<u8>) {
-            use aura_core::{ActionId, ActionResultPayload, ProcessId};
+            use aura_core_types::{ActionId, ActionResultPayload, ProcessId};
 
             let agent_id = AgentId::generate();
 

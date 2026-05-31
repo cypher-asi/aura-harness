@@ -2,12 +2,12 @@
 //!
 //! Phase 5 records `parent_agent_id` + `originating_user_id` on every
 //! `Delegate` transaction emitted by cross-agent tools (see
-//! [`aura_core::types::ToolExecution`]). Billing in aura-os consumes those
+//! [`aura_core_types::types::ToolExecution`]). Billing in aura-os consumes those
 //! fields to roll spawned-agent work up to the originating user. This
 //! module is the harness-side primitive aura-os calls to walk the chain.
 
-use aura_core::{AgentId, RecordEntry, ToolExecution};
-use aura_store::ReadStore;
+use aura_core_types::{AgentId, RecordEntry, ToolExecution};
+use aura_store_db::ReadStore;
 
 const LATEST_PARENT_LOOKBACK_LIMIT: usize = 10_000;
 
@@ -25,7 +25,7 @@ const LATEST_PARENT_LOOKBACK_LIMIT: usize = 10_000;
 /// Typical usage from aura-os:
 ///
 /// ```ignore
-/// let chain = aura_kernel::billing::walk_parent_chain(&agent_id, store.as_ref());
+/// let chain = aura_agent_kernel::billing::walk_parent_chain(&agent_id, store.as_ref());
 /// // chain[0] == agent_id (the leaf)
 /// // chain.last() == root (the originating user's first agent)
 /// ```
@@ -111,11 +111,11 @@ fn parent_from_entry(entry: &RecordEntry) -> Option<AgentId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{
+    use aura_core_types::{
         AgentStatus, Effect, EffectKind, EffectStatus, RuntimeCapabilityInstall, ToolGateVerdict,
         Transaction, TransactionType, UserToolDefaults,
     };
-    use aura_store::{DequeueToken, StoreError};
+    use aura_store_db::{DequeueToken, StoreError};
     use bytes::Bytes;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -139,7 +139,7 @@ mod tests {
         }
     }
 
-    impl aura_store::ReadStore for MemStore {
+    impl aura_store_db::ReadStore for MemStore {
         fn enqueue_tx(&self, _tx: &Transaction) -> Result<(), StoreError> {
             Ok(())
         }
@@ -282,7 +282,7 @@ mod tests {
         };
         let effect_payload = serde_json::to_vec(&exec).unwrap();
         let effect = Effect::new(
-            aura_core::ActionId::generate(),
+            aura_core_types::ActionId::generate(),
             EffectKind::Agreement,
             EffectStatus::Committed,
             Bytes::from(effect_payload),

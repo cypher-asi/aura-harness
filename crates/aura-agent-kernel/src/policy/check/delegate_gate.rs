@@ -7,7 +7,7 @@
 
 use super::verdict::PolicyVerdict;
 use super::Policy;
-use aura_core::{RuntimeCapabilityInstall, ToolCall};
+use aura_core_types::{RuntimeCapabilityInstall, ToolCall};
 use tracing::warn;
 
 impl Policy {

@@ -1,4 +1,4 @@
-use aura_reasoner::{ContentBlock, Message, ModelResponse, ProviderTrace, Role, Usage};
+use aura_model_reasoner::{ContentBlock, Message, ModelResponse, ProviderTrace, Role, Usage};
 
 use crate::agent_loop::iteration::handle_max_tokens;
 use crate::agent_loop::{AgentLoopConfig, LoopState};
@@ -17,7 +17,7 @@ fn tool_use_response(tool_name: &str, path: Option<&str>) -> ModelResponse {
         }],
     };
     ModelResponse {
-        stop_reason: aura_reasoner::StopReason::MaxTokens,
+        stop_reason: aura_model_reasoner::StopReason::MaxTokens,
         message,
         usage: Usage::default(),
         trace: ProviderTrace::default(),
@@ -33,8 +33,8 @@ fn find_tool_result_text(state: &LoopState) -> Vec<String> {
         .iter()
         .filter_map(|b| match b {
             ContentBlock::ToolResult { content, .. } => match content {
-                aura_reasoner::ToolResultContent::Text(t) => Some(t.clone()),
-                aura_reasoner::ToolResultContent::Json(v) => Some(v.to_string()),
+                aura_model_reasoner::ToolResultContent::Text(t) => Some(t.clone()),
+                aura_model_reasoner::ToolResultContent::Json(v) => Some(v.to_string()),
             },
             _ => None,
         })

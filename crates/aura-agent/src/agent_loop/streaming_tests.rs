@@ -13,7 +13,7 @@
 //! `StreamAbortedWithPartial` recovery the pump driver does in
 //! [`super::stream_pump::driver`].
 
-use aura_reasoner::{
+use aura_model_reasoner::{
     Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace, ReasonerError, StopReason,
     StreamContentType, StreamEvent, StreamEventStream, Usage,
 };

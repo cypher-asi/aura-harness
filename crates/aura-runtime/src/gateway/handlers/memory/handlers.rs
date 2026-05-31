@@ -2,11 +2,11 @@
 //!
 //! Wire types (`CreateFactBody`, `CreateEventBody`, …) live in
 //! [`super::wire`]; the handlers here convert those into the
-//! `aura_memory` domain types and dispatch to
-//! [`aura_memory::MemoryStoreApi`].
+//! `aura_context_memory` domain types and dispatch to
+//! [`aura_context_memory::MemoryStoreApi`].
 
-use aura_core::{AgentEventId, FactId, ProcedureId};
-use aura_memory::{AgentEvent, Fact, FactSource, MemoryStoreApi, Procedure};
+use aura_core_types::{AgentEventId, FactId, ProcedureId};
+use aura_context_memory::{AgentEvent, Fact, FactSource, MemoryStoreApi, Procedure};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -66,7 +66,7 @@ fn memory_store(
         })
 }
 
-fn store_err(e: aura_memory::MemoryError) -> (StatusCode, Json<serde_json::Value>) {
+fn store_err(e: aura_context_memory::MemoryError) -> (StatusCode, Json<serde_json::Value>) {
     let msg = e.to_string();
     let status = if msg.contains("not found") {
         StatusCode::NOT_FOUND
@@ -375,13 +375,13 @@ pub(in crate::gateway) async fn delete_procedure(
 pub(in crate::gateway) async fn snapshot(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
-) -> ApiResult<aura_memory::MemoryPacket> {
+) -> ApiResult<aura_context_memory::MemoryPacket> {
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
     let facts = store.list_facts(agent_id).map_err(store_err)?;
     let events = store.list_events(agent_id, 1000).map_err(store_err)?;
     let procedures = store.list_procedures(agent_id).map_err(store_err)?;
-    Ok(Json(aura_memory::MemoryPacket {
+    Ok(Json(aura_context_memory::MemoryPacket {
         facts,
         events,
         procedures,
@@ -401,7 +401,7 @@ pub(in crate::gateway) async fn wipe(
 pub(in crate::gateway) async fn stats(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
-) -> ApiResult<aura_memory::MemoryStats> {
+) -> ApiResult<aura_context_memory::MemoryStats> {
     let store = memory_store(&state)?;
     let agent_id = parse_agent_id(&agent_hex)?;
     store.stats(agent_id).map(Json).map_err(store_err)
@@ -414,7 +414,7 @@ pub(in crate::gateway) async fn stats(
 pub(in crate::gateway) async fn consolidate(
     State(state): State<RouterState>,
     Path(agent_hex): Path<String>,
-) -> ApiResult<aura_memory::ConsolidationReport> {
+) -> ApiResult<aura_context_memory::ConsolidationReport> {
     let agent_id = parse_agent_id(&agent_hex)?;
     let mm = state.memory_manager.as_ref().ok_or_else(|| {
         (

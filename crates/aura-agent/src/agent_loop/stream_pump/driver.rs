@@ -19,7 +19,7 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use aura_reasoner::{OutputItem, ResponseEvent, ResponseEventStream, StreamPhase, Usage};
+use aura_model_reasoner::{OutputItem, ResponseEvent, ResponseEventStream, StreamPhase, Usage};
 use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
 use tokio::time::timeout;
@@ -137,7 +137,7 @@ pub(super) async fn drive_stream(
             }
             StreamStep::TransportErr(err) => {
                 return match err {
-                    aura_reasoner::StreamError::StreamAbortedWithPartial {
+                    aura_model_reasoner::StreamError::StreamAbortedWithPartial {
                         reason,
                         partial_tool_use,
                     } => StreamPumpOutcome::AbortedWithPartial {
@@ -201,7 +201,7 @@ pub(super) async fn drive_stream(
                 }
                 ResponseEvent::Error(err) => {
                     return match err {
-                        aura_reasoner::StreamError::StreamAbortedWithPartial {
+                        aura_model_reasoner::StreamError::StreamAbortedWithPartial {
                             reason,
                             partial_tool_use,
                         } => StreamPumpOutcome::AbortedWithPartial {
@@ -463,7 +463,7 @@ enum StreamStep {
     End,
     Cancelled,
     TimedOut,
-    TransportErr(aura_reasoner::StreamError),
+    TransportErr(aura_model_reasoner::StreamError),
 }
 
 async fn next_stream_step(
@@ -592,7 +592,7 @@ fn cancelled_outcome(
                     "[CANCELLED] Tool execution was cancelled by the user before the tool returned."
                         .to_string(),
                 is_error: true,
-                kind: aura_core::ToolResultKind::AgentError,
+                kind: aura_core_types::ToolResultKind::AgentError,
                 stop_loop: true,
                 file_changes: Vec::new(),
             };

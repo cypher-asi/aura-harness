@@ -29,11 +29,11 @@ use crate::policy::{Policy, PolicyConfig};
 use crate::replay::{ReplayConsumer, ReplayReport};
 use crate::ExecutorRouter;
 use async_trait::async_trait;
-use aura_core::{AgentId, RecordEntry, RuntimeCapabilityInstall, ToolState};
+use aura_core_types::{AgentId, RecordEntry, RuntimeCapabilityInstall, ToolState};
 use aura_core_modes::KernelMode;
 use aura_plugin_hooks::PluginHookHost;
-use aura_reasoner::ModelProvider;
-use aura_store::Store;
+use aura_model_reasoner::ModelProvider;
+use aura_store_db::Store;
 use aura_store_record::DEFAULT_SUMMARY_CHUNK_BYTES;
 use aura_store_snapshot::{NoopSnapshotStore, SnapshotStore};
 use std::path::PathBuf;
@@ -70,7 +70,7 @@ pub struct KernelConfig {
     /// - `Some(from_seq)` — replay mode: at construction the kernel
     ///   runs a [`crate::ReplayConsumer`] over its store's record log
     ///   for `agent_id`, starting at `from_seq` (inclusive), to
-    ///   replay every historical [`aura_core::RecordEntry`] in
+    ///   replay every historical [`aura_core_types::RecordEntry`] in
     ///   forward `seq` order. The replay validates each entry's
     ///   `context_hash` against a fresh recomputation through
     ///   [`crate::hash_tx_with_window`] and, for AuditedLite
@@ -170,17 +170,17 @@ pub struct ToolOutput {
     /// Whether the tool execution failed.
     pub is_error: bool,
     /// Machine-readable result classification.
-    pub kind: aura_core::ToolResultKind,
+    pub kind: aura_core_types::ToolResultKind,
     /// Set when the kernel produced this output because the policy
     /// raised [`crate::PolicyVerdict::RequireApproval`].
     pub approval_required: Option<ApprovalRequiredInfo>,
     /// Optional per-file line diff for file-mutating tools (`fs_write`,
     /// `fs_edit`, `fs_delete`). Populated by the kernel boundary from
-    /// the underlying [`aura_core::ToolResult::line_diff`] so the agent
+    /// the underlying [`aura_core_types::ToolResult::line_diff`] so the agent
     /// loop can attach accurate `lines_added` / `lines_removed` counts
     /// to its `FileChange` records without re-reading the filesystem.
     /// `None` for every other tool and for tool failures.
-    pub line_diff: Option<aura_core::LineDiff>,
+    pub line_diff: Option<aura_core_types::LineDiff>,
 }
 
 /// Details about a tool invocation that was denied because it needs an
@@ -290,7 +290,7 @@ pub struct ReasonResult {
     /// The record entry created
     pub entry: RecordEntry,
     /// The model response
-    pub response: aura_reasoner::ModelResponse,
+    pub response: aura_model_reasoner::ModelResponse,
 }
 
 // ============================================================================
@@ -526,7 +526,7 @@ impl Kernel {
 pub fn write_system_record(
     store: &Arc<dyn Store>,
     agent_id: AgentId,
-    tx: aura_core::Transaction,
+    tx: aura_core_types::Transaction,
 ) -> Result<u64, crate::KernelError> {
     let head = store
         .get_head_seq(agent_id)

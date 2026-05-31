@@ -20,7 +20,7 @@
 
 use async_trait::async_trait;
 use aura_agent_subagent::{overrides_from_request, parent_context_from_request, SubagentRegistry};
-use aura_core::{SubagentDispatchRequest, SubagentResult};
+use aura_core_types::{SubagentDispatchRequest, SubagentResult};
 use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;
 use aura_fleet_spawn::{
@@ -54,7 +54,7 @@ impl FleetSubagentDispatcher {
     /// [`OrphanStore`] and an injected [`ChildRunner`].
     #[must_use]
     pub fn with_components(
-        store: Arc<dyn aura_store::Store>,
+        store: Arc<dyn aura_store_db::Store>,
         registry: SubagentRegistry,
         fleet_registry: Arc<FleetRegistry>,
         quota: Arc<QuotaPool>,
@@ -75,7 +75,7 @@ impl FleetSubagentDispatcher {
     }
 
     /// Override the bundled subagent registry. Used in tests where a
-    /// custom [`aura_core::SubagentKindSpec`] needs to be available in
+    /// custom [`aura_core_types::SubagentKindSpec`] needs to be available in
     /// addition to the bundled defaults.
     #[must_use]
     pub fn with_registry(mut self, registry: SubagentRegistry) -> Self {

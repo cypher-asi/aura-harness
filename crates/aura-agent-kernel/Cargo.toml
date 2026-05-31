@@ -7,13 +7,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aura-core = { path = "../aura-core" }
+aura-core-types = { path = "../aura-core-types" }
 aura-core-modes = { path = "../aura-core-modes" }
 aura-exec-traits = { path = "../aura-exec-traits" }
-aura-store = { path = "../aura-store" }
+aura-store-db = { path = "../aura-store-db" }
 aura-store-record = { path = "../aura-store-record" }
 aura-store-snapshot = { path = "../aura-store-snapshot" }
-aura-reasoner = { path = "../aura-reasoner" }
+aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-plugin-hooks = { path = "../aura-plugin-hooks" }
 thiserror = { workspace = true }
 serde = { workspace = true }

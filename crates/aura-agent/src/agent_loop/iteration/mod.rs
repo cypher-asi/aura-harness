@@ -1,6 +1,6 @@
 //! Per-iteration logic: LLM calls, response accumulation, and stop-reason handling.
 
-use aura_reasoner::{
+use aura_model_reasoner::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ToolResultContent,
 };
 use tokio::sync::mpsc::Sender;
@@ -12,7 +12,7 @@ use crate::dup_audit;
 use crate::events::AgentLoopEvent;
 use crate::sanitize;
 use crate::types::AgentLoopResult;
-use aura_compaction as compaction;
+use aura_context_compaction as compaction;
 use aura_config::CHARS_PER_TOKEN;
 
 use super::streaming;
@@ -88,17 +88,17 @@ impl LlmCallError {
 }
 
 impl LlmCallError {
-    /// Convert a structured [`aura_reasoner::ReasonerError`] into an
+    /// Convert a structured [`aura_model_reasoner::ReasonerError`] into an
     /// [`LlmCallError`] with the same credit/context/fatal classification
     /// the loop already applies to non-streaming errors. Kept as a
     /// dedicated constructor so `streaming.rs` can surface errors without
     /// going through `anyhow`.
-    pub(super) fn from_reasoner_error(e: &aura_reasoner::ReasonerError) -> Self {
+    pub(super) fn from_reasoner_error(e: &aura_model_reasoner::ReasonerError) -> Self {
         match e {
-            aura_reasoner::ReasonerError::InsufficientCredits(msg) => {
+            aura_model_reasoner::ReasonerError::InsufficientCredits(msg) => {
                 Self::InsufficientCredits(msg.clone())
             }
-            aura_reasoner::ReasonerError::RateLimited { message, .. } => {
+            aura_model_reasoner::ReasonerError::RateLimited { message, .. } => {
                 Self::RateLimited(message.clone())
             }
             // Defensive fallback: foreign providers (mock, test
@@ -129,7 +129,7 @@ fn looks_like_rate_limited(message: &str) -> bool {
         || lower.contains("too many requests")
 }
 
-fn classify_reasoner_error(e: &aura_reasoner::ReasonerError) -> LlmCallError {
+fn classify_reasoner_error(e: &aura_model_reasoner::ReasonerError) -> LlmCallError {
     LlmCallError::from_reasoner_error(e)
 }
 
@@ -298,7 +298,7 @@ pub(super) fn handle_max_tokens(
 
 /// Build the synthetic `tool_result` body injected when a tool call is
 /// recovered from a `max_tokens`-truncated stream. Wording lives in
-/// [`aura_prompts::model_messages::max_tokens`]; this helper is just
+/// [`aura_context_prompts::model_messages::max_tokens`]; this helper is just
 /// the per-tool dispatcher.
 ///
 /// `path` is best-effort — extracted from the (possibly partial)
@@ -307,7 +307,7 @@ pub(super) fn handle_max_tokens(
 /// (names the file in the synthetic error); otherwise we fall back
 /// to the path-less template.
 fn synthetic_truncation_message(tc: &crate::types::ToolCallInfo) -> String {
-    use aura_prompts::model_messages::max_tokens;
+    use aura_context_prompts::model_messages::max_tokens;
     let path = tc.input.get("path").and_then(|v| v.as_str());
     match tc.name.as_str() {
         "write_file" => match path {

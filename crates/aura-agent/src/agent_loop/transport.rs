@@ -59,7 +59,7 @@
 //! intact through `process_tool_results`. Returning `Cancelled`
 //! here is reserved for the "no tool_use blocks emitted yet" arms.
 
-use aura_reasoner::{ModelProvider, ModelRequest, ModelResponse, ToolDefinition};
+use aura_model_reasoner::{ModelProvider, ModelRequest, ModelResponse, ToolDefinition};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 

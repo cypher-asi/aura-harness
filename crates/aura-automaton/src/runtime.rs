@@ -278,7 +278,7 @@ impl Default for AutomatonRuntime {
 /// hide the async/cancellation contract. The trait impl instead exposes
 /// the read-only name -> metadata view (`get` / `iter` / `len`) shared by
 /// `SkillRegistry` and `ToolCatalog`.
-impl aura_core::Registry for AutomatonRuntime {
+impl aura_core_types::Registry for AutomatonRuntime {
     type Id = String;
     type Item = AutomatonInfo;
 
@@ -286,8 +286,8 @@ impl aura_core::Registry for AutomatonRuntime {
         &mut self,
         _id: Self::Id,
         _item: Self::Item,
-    ) -> Result<(), aura_core::RegistryError> {
-        Err(aura_core::RegistryError::Unsupported(
+    ) -> Result<(), aura_core_types::RegistryError> {
+        Err(aura_core_types::RegistryError::Unsupported(
             "AutomatonRuntime uses async install() to spawn running automatons",
         ))
     }
@@ -357,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn registry_trait_read_only_view() {
-        use aura_core::{Registry, RegistryError};
+        use aura_core_types::{Registry, RegistryError};
 
         let mut runtime = AutomatonRuntime::new();
         assert!(Registry::is_empty(&runtime));

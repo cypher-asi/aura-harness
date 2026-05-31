@@ -7,7 +7,7 @@ use crate::tool::{
 };
 use crate::ToolConfig;
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     Action, ActionKind, AgentId, AgentPermissions, AgentToolPermissions, Effect, EffectKind,
     EffectStatus, ToolCall, ToolResult, UserToolDefaults,
 };
@@ -151,8 +151,8 @@ impl ToolExecutor {
     /// Set the caller's **external** agent id — the upstream OS UUID
     /// (`aura-os-server`'s `agents.agent_id`) that identifies this agent
     /// on the OS REST surface. The harness's internal
-    /// [`aura_core::AgentId`] is a 32-byte blake3 hash of that UUID
-    /// (see `aura_core::AgentId::from_uuid` and the harness runtime-request
+    /// [`aura_core_types::AgentId`] is a 32-byte blake3 hash of that UUID
+    /// (see `aura_core_types::AgentId::from_uuid` and the harness runtime-request
     /// fallback in `crates/aura-runtime/src/gateway/session/state.rs`), and its
     /// `Display` impl truncates to 16 hex chars — so passing
     /// `caller_agent_id.to_string()` to `aura-os-server` as
@@ -328,7 +328,7 @@ impl Executor for ToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{ActionId, AgentId};
+    use aura_core_types::{ActionId, AgentId};
     use aura_exec_traits::ExecuteContext;
     use tempfile::TempDir;
 
@@ -434,8 +434,8 @@ mod tests {
             fn name(&self) -> &str {
                 "custom_tool"
             }
-            fn definition(&self) -> aura_core::ToolDefinition {
-                aura_core::ToolDefinition::new(
+            fn definition(&self) -> aura_core_types::ToolDefinition {
+                aura_core_types::ToolDefinition::new(
                     "custom_tool",
                     "A test tool",
                     serde_json::json!({"type": "object"}),

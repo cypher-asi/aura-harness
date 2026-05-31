@@ -6,9 +6,9 @@
 //! by construction (Invariant §3).
 
 use crate::context::hash_tx_with_window;
-use aura_core::{AgentId, RecordEntry, Transaction, TransactionType};
-use aura_reasoner::{StopReason, Usage};
-use aura_store::Store;
+use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
+use aura_model_reasoner::{StopReason, Usage};
+use aura_store_db::Store;
 use std::sync::{Arc, Mutex};
 
 /// Handle returned alongside a streaming response so the caller can finalize

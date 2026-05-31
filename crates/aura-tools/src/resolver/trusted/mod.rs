@@ -31,7 +31,7 @@ use super::json_paths::{
 };
 use super::{ToolResolver, TRUSTED_INTEGRATION_RUNTIME_METADATA_KEY};
 use crate::error::ToolError;
-use aura_core::{
+use aura_core_types::{
     InstalledToolDefinition, InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution,
 };
 use reqwest::{Method, Url};

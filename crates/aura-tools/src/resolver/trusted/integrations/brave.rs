@@ -12,7 +12,7 @@ use super::super::super::json_paths::{optional_positive_number, optional_string,
 use super::super::transforms::brave_search_results;
 use super::super::ToolResolver;
 use crate::error::ToolError;
-use aura_core::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
+use aura_core_types::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
 use reqwest::{Method, Url};
 use serde_json::Value;
 

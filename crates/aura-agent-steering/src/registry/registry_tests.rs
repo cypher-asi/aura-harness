@@ -7,7 +7,7 @@
 //! plumbing) so they pin the trait contract directly without
 //! coupling to the surrounding loop machinery.
 
-use aura_prompts::SteeringKind;
+use aura_context_prompts::SteeringKind;
 use serde_json::json;
 
 use crate::early_oracle::EarlyTestOracle;
@@ -37,7 +37,7 @@ fn ok_read_result(id: &str, content: &str) -> ToolCallResult {
         tool_use_id: id.to_string(),
         content: content.to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     }
@@ -48,7 +48,7 @@ fn ok_write_result(id: &str, path: &str) -> ToolCallResult {
         tool_use_id: id.to_string(),
         content: "ok".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: vec![FileChange {
             path: path.to_string(),

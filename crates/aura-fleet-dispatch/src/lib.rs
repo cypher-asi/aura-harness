@@ -38,7 +38,7 @@
 
 use std::sync::Arc;
 
-use aura_core::SubagentResult;
+use aura_core_types::SubagentResult;
 use aura_core_modes::SpawnMode;
 use aura_fleet_spawn::{FleetSpawner, SpawnError, SpawnHandle, SpawnRequest};
 use futures_util::{Stream, StreamExt};

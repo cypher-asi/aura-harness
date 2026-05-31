@@ -1,7 +1,7 @@
 //! Loading and displaying historical records from the store.
 
-use aura_core::{AgentId, EffectStatus, Identity, Transaction, TransactionType};
-use aura_store::{ReadStore, RocksStore};
+use aura_core_types::{AgentId, EffectStatus, Identity, Transaction, TransactionType};
+use aura_store_db::{ReadStore, RocksStore};
 use aura_terminal::{
     events::{AgentSummary, RecordStatus, RecordSummary},
     UiCommand,
@@ -167,7 +167,7 @@ pub fn tx_type_label(tx_type: TransactionType) -> (&'static str, &'static str) {
 pub fn extract_tool_info(tx: &Transaction) -> String {
     match tx.tx_type {
         TransactionType::ToolProposal => {
-            if let Ok(proposal) = serde_json::from_slice::<aura_core::ToolProposal>(&tx.payload) {
+            if let Ok(proposal) = serde_json::from_slice::<aura_core_types::ToolProposal>(&tx.payload) {
                 if proposal.tool == "run_command" {
                     return extract_cmd_run_command(&proposal.args);
                 }
@@ -175,7 +175,7 @@ pub fn extract_tool_info(tx: &Transaction) -> String {
             }
         }
         TransactionType::ToolExecution => {
-            if let Ok(execution) = serde_json::from_slice::<aura_core::ToolExecution>(&tx.payload) {
+            if let Ok(execution) = serde_json::from_slice::<aura_core_types::ToolExecution>(&tx.payload) {
                 if execution.tool == "run_command" {
                     return extract_cmd_run_command(&execution.args);
                 }

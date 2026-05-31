@@ -181,7 +181,7 @@ run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
 # code that needs persistence goes through the per-agent kernel. Test files
 # in the same tree are exempt since they assemble scaffolding.
 #
-# The pattern catches both `use aura_store::` (the Phase 2 re-export shell)
+# The pattern catches both `use aura_store_db::` (the Phase 2 re-export shell)
 # and `use aura_store_db::` (the active impl crate).
 store_hits=$(rg -n --hidden --glob '!target/**' --glob '!.git/**' --type rust \
     --glob 'crates/aura-agent/src/agent_loop/**' \

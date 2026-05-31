@@ -13,7 +13,7 @@
 //! cost on a clean conversation is just a `HashMap` build per audit
 //! call.
 
-use aura_reasoner::{ContentBlock, Message};
+use aura_model_reasoner::{ContentBlock, Message};
 use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use tracing::error;
@@ -50,7 +50,7 @@ pub(crate) fn audit_tool_result_duplicates(messages: &[Message], source: &'stati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_reasoner::{Role, ToolResultContent};
+    use aura_model_reasoner::{Role, ToolResultContent};
     use std::io;
     use std::sync::{Arc, Mutex};
     use tracing::subscriber::with_default;

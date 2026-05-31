@@ -14,9 +14,9 @@ use crate::{
 
 /// Maximum tool-use iterations before the loop terminates.
 ///
-/// Derived from [`aura_core::MAX_TURNS`] — the single source of truth
+/// Derived from [`aura_core_types::MAX_TURNS`] — the single source of truth
 /// for every "max turns / max iterations" knob in the system.
-pub const MAX_ITERATIONS: usize = aura_core::MAX_TURNS as usize;
+pub const MAX_ITERATIONS: usize = aura_core_types::MAX_TURNS as usize;
 
 /// Maximum characters retained in the full task-context blob assembled
 /// by `aura_agent::task_context::build_full_task_context`.

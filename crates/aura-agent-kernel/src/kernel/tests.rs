@@ -8,13 +8,13 @@
 use super::*;
 use aura_exec_traits::ExecuteContext;
 use crate::ExecutorRouter;
-use aura_core::{
+use aura_core_types::{
     ActionKind, AgentId, InstalledIntegrationDefinition, InstalledToolCapability,
     InstalledToolIntegrationRequirement, RuntimeCapabilityInstall, SystemKind, ToolProposal,
     Transaction, TransactionType,
 };
-use aura_reasoner::{MockProvider, ModelProvider, ModelRequest};
-use aura_store::{RocksStore, Store};
+use aura_model_reasoner::{MockProvider, ModelProvider, ModelRequest};
+use aura_store_db::{RocksStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -196,7 +196,7 @@ async fn reason_reconciles_stale_kernel_sequence_with_store_head() {
         .unwrap();
 
     let request = ModelRequest::builder("test-model", "system")
-        .message(aura_reasoner::Message::user("test"))
+        .message(aura_model_reasoner::Message::user("test"))
         .try_build()
         .unwrap();
     let result = kernel_b.reason(request).await.unwrap();
@@ -237,7 +237,7 @@ fn test_agent_workspace_can_use_workspace_base_directly() {
 async fn test_reason_records_and_returns_response() {
     let (kernel, _db, _ws) = create_new_kernel();
     let request = ModelRequest::builder("test-model", "system prompt")
-        .message(aura_reasoner::Message::user("hello"))
+        .message(aura_model_reasoner::Message::user("hello"))
         .try_build()
         .unwrap();
     let result = kernel.reason(request).await.unwrap();
@@ -265,7 +265,7 @@ async fn reason_sync_error_records_failed() {
     let kernel = Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap();
 
     let request = ModelRequest::builder("test-model", "system")
-        .message(aura_reasoner::Message::user("hello"))
+        .message(aura_model_reasoner::Message::user("hello"))
         .try_build()
         .unwrap();
     let err = kernel
@@ -313,7 +313,7 @@ async fn reason_streaming_handshake_error_records_failed() {
     let kernel = Kernel::new(store.clone(), provider, executor, config, agent_id).unwrap();
 
     let request = ModelRequest::builder("test-model", "system")
-        .message(aura_reasoner::Message::user("hello"))
+        .message(aura_model_reasoner::Message::user("hello"))
         .try_build()
         .unwrap();
     let err = kernel
@@ -350,7 +350,7 @@ async fn test_sequence_across_process_and_reason() {
     assert_eq!(r1.entry.seq, 1);
 
     let request = ModelRequest::builder("test-model", "system")
-        .message(aura_reasoner::Message::user("test"))
+        .message(aura_model_reasoner::Message::user("test"))
         .try_build()
         .unwrap();
     let r2 = kernel.reason(request).await.unwrap();
@@ -383,7 +383,7 @@ async fn test_session_start_clears_policy_session_tool_states() {
     let kernel = Kernel::new(store, provider, executor, config, agent_id).unwrap();
     kernel
         .policy
-        .remember_tool_state_for_session("guarded_tool", aura_core::ToolState::Deny);
+        .remember_tool_state_for_session("guarded_tool", aura_core_types::ToolState::Deny);
     assert!(
         !kernel
             .policy

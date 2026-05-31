@@ -10,7 +10,7 @@
 //! `crates/aura-reasoner/src/anthropic/provider.rs` were demoted to
 //! `debug!` as part of the same change — operators get a clean
 //! transcript by default and can opt back into the full field dump
-//! with `RUST_LOG=aura_reasoner=debug`.
+//! with `RUST_LOG=aura_model_reasoner=debug`.
 //!
 //! ## Layout & colors
 //!

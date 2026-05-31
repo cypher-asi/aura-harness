@@ -110,7 +110,7 @@ impl SteeringKind {
 /// envelope.
 ///
 /// This used to be `SteeringInjector` (with both a `render` AND an
-/// `inject` method that mutated `Vec<aura_reasoner::Message>`); the
+/// `inject` method that mutated `Vec<aura_model_reasoner::Message>`); the
 /// `inject` half is now an agent-owned helper at
 /// `aura-agent/src/agent_loop/steering/inject.rs` so this crate
 /// stays free of the reasoner dep. Phase 5 will wire the steering

@@ -12,13 +12,13 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use aura_reasoner::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
+use aura_model_reasoner::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
 use crate::planning::{TaskPhase, TaskPlan};
-use aura_prompts::bootstrap::build_agentic_task_context;
-use aura_prompts::{
+use aura_context_prompts::bootstrap::build_agentic_task_context;
+use aura_context_prompts::{
     agentic_execution_system_prompt, build_chat_system_prompt, AgentInfo, ProjectInfo, SessionInfo,
     SpecInfo, TaskInfo,
 };
@@ -101,7 +101,7 @@ pub struct TaskExecutionResult {
     /// Final message history from the agent loop. Downstream validators use
     /// this to build recovery hints (e.g. which file paths the agent tried
     /// to write before truncation).
-    pub messages: Vec<aura_reasoner::Message>,
+    pub messages: Vec<aura_model_reasoner::Message>,
 }
 
 /// Suggested follow-up task from agent execution.
@@ -172,7 +172,7 @@ pub struct AgentRunnerConfig {
     /// so cross-task agent invocations land on the same OpenAI cache
     /// bucket. Anthropic caching does not need a key — the provider's
     /// ephemeral `cache_control` breakpoints in
-    /// `aura_reasoner::anthropic::convert` handle prefix reuse.
+    /// `aura_model_reasoner::anthropic::convert` handle prefix reuse.
     pub prompt_cache_key: Option<String>,
     /// Phase 5: per-task switch for the early test-gate oracle.
     ///
@@ -208,7 +208,7 @@ impl AgentRunnerConfig {
     pub fn for_agent(model: impl Into<String>) -> Self {
         let model = model.into();
         Self {
-            max_agentic_iterations: aura_core::MAX_TURNS as usize,
+            max_agentic_iterations: aura_core_types::MAX_TURNS as usize,
             max_shell_task_retries: 4,
             task_execution_max_tokens: 16_384,
             // Stripped (2026-05): cut from 10_000 to 2_000.

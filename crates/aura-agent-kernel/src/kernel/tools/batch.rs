@@ -11,7 +11,7 @@ use crate::context::hash_tx_with_window;
 use aura_exec_traits::ExecuteContext;
 use crate::kernel::{Kernel, ProcessResult};
 use crate::policy::PolicyVerdict;
-use aura_core::{
+use aura_core_types::{
     Action, ActionId, ActionKind, Effect, EffectKind, Proposal, ToolProposal, Transaction,
 };
 use bytes::Bytes;
@@ -55,7 +55,7 @@ pub(super) async fn process_many(
     // executor dispatch. Any handler returning
     // `HookOutcome::Block` causes us to skip the executor for
     // that slot and substitute a synthetic failed
-    // [`aura_core::Effect`] carrying the block reason; a parallel
+    // [`aura_core_types::Effect`] carrying the block reason; a parallel
     // `tool_call_blocked_by_hook` System audit row is written by
     // [`fire_pre_tool_use_for_batch`] so the audit log can
     // distinguish the block from a normal executor failure.

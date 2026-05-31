@@ -31,7 +31,7 @@
 
 use crate::store::WriteStore;
 use crate::{RocksStore, StoreError};
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_store_record::{RecordEntry, RecordLog, RecordLogError};
 
 fn map_append_error(agent_id: &AgentId, entry_seq: u64, err: &StoreError) -> RecordLogError {

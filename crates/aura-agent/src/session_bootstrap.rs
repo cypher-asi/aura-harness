@@ -8,10 +8,10 @@
 //! (`src/session_helpers.rs`) is now a thin `pub use` re-export layer.
 
 use crate::AgentLoopConfig;
-use aura_kernel::ExecutorRouter;
-use aura_prompts::default_system_prompt;
-use aura_reasoner::ToolDefinition;
-use aura_store::RocksStore;
+use aura_agent_kernel::ExecutorRouter;
+use aura_context_prompts::default_system_prompt;
+use aura_model_reasoner::ToolDefinition;
+use aura_store_db::RocksStore;
 use aura_tools::{ToolCatalog, ToolConfig, ToolExecutor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -116,10 +116,10 @@ pub fn load_auth_token() -> Option<String> {
 }
 
 // `ProviderSelection` / `select_provider` were removed in Wave 4. The
-// canonical factory now lives in [`aura_reasoner::provider_factory`].
-// Callers use `aura_reasoner::default_provider_from_env`,
-// `aura_reasoner::with_session_overrides`, and
-// `aura_reasoner::mock_provider`.
+// canonical factory now lives in [`aura_model_reasoner::provider_factory`].
+// Callers use `aura_model_reasoner::default_provider_from_env`,
+// `aura_model_reasoner::with_session_overrides`, and
+// `aura_model_reasoner::mock_provider`.
 
 // ---------------------------------------------------------------------
 // Phase 3 consolidation: moved from `src/session_helpers.rs`.
@@ -136,7 +136,7 @@ pub fn load_auth_token() -> Option<String> {
 /// defaults.
 ///
 /// Callers must thread their model selection through here. The TUI uses
-/// [`aura_reasoner::ENV_FALLBACK_MODEL`] (the seed of the reasoner's
+/// [`aura_model_reasoner::ENV_FALLBACK_MODEL`] (the seed of the reasoner's
 /// `AURA_DEFAULT_MODEL` env-var fallback). Higher-level surfaces — the
 /// chat WS path, the dev-loop / task-run automatons — pin the
 /// user-selected model and never fall through to the env seed.

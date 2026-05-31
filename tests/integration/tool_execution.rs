@@ -2,9 +2,9 @@
 //!
 //! Tests the full tool execution pipeline from action to effect.
 
-use aura_core::{Action, ActionId, AgentId, ToolCall};
-use aura_kernel::ExecuteContext;
-use aura_kernel::ExecutorRouter;
+use aura_core_types::{Action, ActionId, AgentId, ToolCall};
+use aura_agent_kernel::ExecuteContext;
+use aura_agent_kernel::ExecutorRouter;
 use aura_tools::{Sandbox, ToolConfig, ToolExecutor};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -87,7 +87,7 @@ async fn test_fs_ls_integration() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
     
     let output = String::from_utf8_lossy(&effect.payload);
     assert!(output.contains("hello.txt") || output.contains("stdout")); // Might be in JSON
@@ -104,7 +104,7 @@ async fn test_fs_read_integration() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
     
     let output = String::from_utf8_lossy(&effect.payload);
     assert!(output.contains("Hello, World!") || output.contains("stdout"));
@@ -127,7 +127,7 @@ async fn test_fs_write_integration() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
     
     // Verify file was created
     let content = std::fs::read_to_string(workspace.path().join("new_file.txt")).unwrap();
@@ -152,7 +152,7 @@ async fn test_fs_edit_integration() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
     
     // Verify file was edited
     let content = std::fs::read_to_string(workspace.path().join("hello.txt")).unwrap();
@@ -176,7 +176,7 @@ async fn test_search_code_integration() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
     
     let output = String::from_utf8_lossy(&effect.payload);
     assert!(output.contains("fn main") || output.contains("code.rs"));
@@ -198,7 +198,7 @@ async fn test_path_traversal_blocked() {
     let effect = executor.execute(&ctx, &action).await;
 
     // Should fail due to sandbox violation
-    assert_eq!(effect.status, aura_core::EffectStatus::Failed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Failed);
 }
 
 #[tokio::test]
@@ -213,7 +213,7 @@ async fn test_absolute_path_outside_workspace() {
     let effect = executor.execute(&ctx, &action).await;
 
     // Should fail due to sandbox violation
-    assert_eq!(effect.status, aura_core::EffectStatus::Failed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Failed);
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn test_nested_path_traversal() {
     let effect = executor.execute(&ctx, &action).await;
 
     // Should fail (file doesn't exist in workspace, and traversal is blocked)
-    assert_eq!(effect.status, aura_core::EffectStatus::Failed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Failed);
 }
 
 // ============================================================================
@@ -247,7 +247,7 @@ async fn test_file_not_found() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Failed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Failed);
 }
 
 #[tokio::test]
@@ -261,7 +261,7 @@ async fn test_unknown_tool() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Failed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Failed);
 }
 
 #[tokio::test]
@@ -276,7 +276,7 @@ async fn test_missing_required_argument() {
 
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Failed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Failed);
 }
 
 // ============================================================================
@@ -307,10 +307,10 @@ async fn test_cmd_run_simple() {
     if cfg!(windows) {
         assert!(matches!(
             effect.status,
-            aura_core::EffectStatus::Committed | aura_core::EffectStatus::Failed
+            aura_core_types::EffectStatus::Committed | aura_core_types::EffectStatus::Failed
         ));
     } else {
-        assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+        assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
     }
 }
 
@@ -343,5 +343,5 @@ async fn test_cmd_run_in_workspace_dir() {
     let action = Action::delegate_tool(&tool_call).unwrap();
     let effect = executor.execute(&ctx, &action).await;
 
-    assert_eq!(effect.status, aura_core::EffectStatus::Committed);
+    assert_eq!(effect.status, aura_core_types::EffectStatus::Committed);
 }

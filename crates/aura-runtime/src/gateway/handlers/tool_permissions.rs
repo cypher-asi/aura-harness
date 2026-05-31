@@ -6,7 +6,7 @@ use crate::tool_permissions::{
     load_agent_tool_context, validate_agent_tool_permissions, validate_user_defaults,
     EffectiveToolInfo,
 };
-use aura_core::{AgentToolPermissions, UserToolDefaults};
+use aura_core_types::{AgentToolPermissions, UserToolDefaults};
 
 #[derive(Debug, Deserialize)]
 pub(in crate::gateway) struct AgentToolsQuery {

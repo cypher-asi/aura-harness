@@ -6,7 +6,7 @@
 //! skills for a single agent.
 
 use crate::error::SkillError;
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use chrono::{DateTime, Utc};
 use rocksdb::{DBWithThreadMode, IteratorMode, MultiThreaded};
 use serde::{Deserialize, Serialize};
@@ -59,7 +59,7 @@ impl SkillInstallStore {
 
     fn cf_handle(&self) -> Result<Arc<rocksdb::BoundColumnFamily<'_>>, SkillError> {
         self.db
-            .cf_handle(aura_store::cf::AGENT_SKILLS)
+            .cf_handle(aura_store_db::cf::AGENT_SKILLS)
             .ok_or_else(|| {
                 SkillError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,

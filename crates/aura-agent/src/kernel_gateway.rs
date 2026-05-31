@@ -9,8 +9,8 @@ use crate::helpers;
 use crate::recording_stream::RecordingStream;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
-use aura_kernel::{Kernel, KernelError};
-use aura_reasoner::{ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream};
+use aura_agent_kernel::{Kernel, KernelError};
+use aura_model_reasoner::{ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream};
 use std::sync::Arc;
 use tracing::warn;
 
@@ -60,9 +60,9 @@ impl KernelToolGateway {
 #[async_trait]
 impl AgentToolExecutor for KernelToolGateway {
     async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
-        let proposals: Vec<aura_core::ToolProposal> = tool_calls
+        let proposals: Vec<aura_core_types::ToolProposal> = tool_calls
             .iter()
-            .map(|tc| aura_core::ToolProposal::new(&tc.id, &tc.name, tc.input.clone()))
+            .map(|tc| aura_core_types::ToolProposal::new(&tc.id, &tc.name, tc.input.clone()))
             .collect();
 
         match self.kernel.process_tools(proposals).await {
@@ -193,10 +193,10 @@ impl ModelProvider for KernelModelGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::AgentId;
-    use aura_kernel::{ExecutorRouter, KernelConfig};
-    use aura_reasoner::{Message, MockProvider};
-    use aura_store::RocksStore;
+    use aura_core_types::AgentId;
+    use aura_agent_kernel::{ExecutorRouter, KernelConfig};
+    use aura_model_reasoner::{Message, MockProvider};
+    use aura_store_db::RocksStore;
     use aura_tools::ToolExecutor;
     use serde_json::json;
     use tempfile::TempDir;
@@ -205,7 +205,7 @@ mod tests {
         let db_dir = TempDir::new().unwrap();
         let ws_dir = TempDir::new().unwrap();
         let agent_id = AgentId::generate();
-        let store: Arc<dyn aura_store::Store> =
+        let store: Arc<dyn aura_store_db::Store> =
             Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
         let provider: Arc<dyn ModelProvider + Send + Sync> =
             Arc::new(MockProvider::simple_response("gateway test response"));
@@ -224,7 +224,7 @@ mod tests {
     ) -> (Arc<Kernel>, TempDir) {
         let db_dir = TempDir::new().unwrap();
         let agent_id = AgentId::generate();
-        let store: Arc<dyn aura_store::Store> =
+        let store: Arc<dyn aura_store_db::Store> =
             Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
         let provider: Arc<dyn ModelProvider + Send + Sync> =
             Arc::new(MockProvider::simple_response("gateway test response"));

@@ -1,6 +1,6 @@
 //! Contract tests for AgentLoop behavior that must hold across all refactor phases.
 
-use aura_reasoner::{
+use aura_model_reasoner::{
     ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition, Usage,
 };
 use tokio::sync::mpsc;
@@ -296,7 +296,7 @@ async fn contract_tool_cache_hit_matches_original() {
         .filter_map(|block| {
             if let ContentBlock::ToolResult { content, .. } = block {
                 match content {
-                    aura_reasoner::ToolResultContent::Text(t) => Some(t.as_str()),
+                    aura_model_reasoner::ToolResultContent::Text(t) => Some(t.as_str()),
                     _ => None,
                 }
             } else {

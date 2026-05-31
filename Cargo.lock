@@ -127,11 +127,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-kernel",
  "aura-agent-subagent",
  "aura-auth",
  "aura-automaton",
  "aura-config",
- "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
  "aura-core-protocol",
@@ -139,11 +139,10 @@ dependencies = [
  "aura-fleet-daemon",
  "aura-fleet-registry",
  "aura-fleet-spawn",
- "aura-kernel",
+ "aura-model-reasoner",
  "aura-protocol",
- "aura-reasoner",
  "aura-runtime",
- "aura-store",
+ "aura-store-db",
  "aura-store-record",
  "aura-surface-cli",
  "aura-surface-sdk",
@@ -174,15 +173,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aura-agent-kernel",
  "aura-agent-steering",
- "aura-compaction",
  "aura-config",
- "aura-core",
- "aura-kernel",
+ "aura-context-compaction",
+ "aura-context-prompts",
+ "aura-core-types",
+ "aura-model-reasoner",
  "aura-plugin-hooks",
- "aura-prompts",
- "aura-reasoner",
- "aura-store",
+ "aura-store-db",
  "aura-tools",
  "chrono",
  "colored",
@@ -208,12 +207,12 @@ name = "aura-agent-kernel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "aura-core",
  "aura-core-modes",
+ "aura-core-types",
  "aura-exec-traits",
+ "aura-model-reasoner",
  "aura-plugin-hooks",
- "aura-reasoner",
- "aura-store",
+ "aura-store-db",
  "aura-store-record",
  "aura-store-snapshot",
  "blake3",
@@ -241,9 +240,9 @@ name = "aura-agent-steering"
 version = "0.1.0"
 dependencies = [
  "aura-config",
- "aura-core",
- "aura-prompts",
- "aura-reasoner",
+ "aura-context-prompts",
+ "aura-core-types",
+ "aura-model-reasoner",
  "serde",
  "serde_json",
 ]
@@ -252,7 +251,6 @@ dependencies = [
 name = "aura-agent-subagent"
 version = "0.1.0"
 dependencies = [
- "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
  "aura-core-types",
@@ -287,9 +285,9 @@ dependencies = [
  "async-trait",
  "aura-agent",
  "aura-config",
- "aura-core",
- "aura-prompts",
- "aura-reasoner",
+ "aura-context-prompts",
+ "aura-core-types",
+ "aura-model-reasoner",
  "aura-tools",
  "chrono",
  "dashmap 5.5.3",
@@ -304,18 +302,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-compaction"
-version = "0.1.0"
-dependencies = [
- "aura-context-compaction",
-]
-
-[[package]]
 name = "aura-config"
 version = "0.1.0"
 dependencies = [
- "aura-core",
  "aura-core-modes",
+ "aura-core-types",
  "dirs",
  "serde",
  "serde_json",
@@ -328,7 +319,7 @@ name = "aura-context-compaction"
 version = "0.1.0"
 dependencies = [
  "aura-config",
- "aura-reasoner",
+ "aura-model-reasoner",
  "serde_json",
  "tracing",
 ]
@@ -337,9 +328,9 @@ dependencies = [
 name = "aura-context-memory"
 version = "0.1.0"
 dependencies = [
- "aura-core",
- "aura-reasoner",
- "aura-store",
+ "aura-core-types",
+ "aura-model-reasoner",
+ "aura-store-db",
  "chrono",
  "rocksdb",
  "serde",
@@ -364,8 +355,8 @@ dependencies = [
 name = "aura-context-skills"
 version = "0.1.0"
 dependencies = [
- "aura-core",
- "aura-store",
+ "aura-core-types",
+ "aura-store-db",
  "chrono",
  "dirs",
  "rocksdb",
@@ -376,13 +367,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "aura-core"
-version = "0.1.0"
-dependencies = [
- "aura-core-types",
 ]
 
 [[package]]
@@ -464,20 +448,20 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-kernel",
  "aura-agent-loop",
  "aura-agent-subagent",
  "aura-automaton",
- "aura-compaction",
- "aura-core",
+ "aura-context-compaction",
+ "aura-context-memory",
+ "aura-context-prompts",
+ "aura-core-types",
  "aura-domain-http",
  "aura-exec-runner",
  "aura-fleet-spawn",
- "aura-kernel",
- "aura-memory",
- "aura-prompts",
+ "aura-model-reasoner",
  "aura-protocol",
- "aura-reasoner",
- "aura-store",
+ "aura-store-db",
  "aura-tools",
  "bytes",
  "dashmap 5.5.3",
@@ -551,7 +535,7 @@ name = "aura-exec-traits"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "aura-core",
+ "aura-core-types",
  "bytes",
  "serde",
  "serde_json",
@@ -567,8 +551,8 @@ dependencies = [
  "aura-agent-kernel",
  "aura-config",
  "aura-context-skills",
- "aura-core",
  "aura-core-modes",
+ "aura-core-types",
  "aura-fleet-dispatch",
  "aura-fleet-mailbox",
  "aura-fleet-quota",
@@ -576,7 +560,7 @@ dependencies = [
  "aura-fleet-spawn",
  "aura-plugin-core",
  "aura-plugin-hooks",
- "aura-store",
+ "aura-store-db",
  "bytes",
  "insta",
  "serde",
@@ -592,8 +576,8 @@ name = "aura-fleet-dispatch"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "aura-core",
  "aura-core-modes",
+ "aura-core-types",
  "aura-fleet-spawn",
  "futures-util",
  "thiserror 1.0.69",
@@ -606,9 +590,9 @@ name = "aura-fleet-mailbox"
 version = "0.1.0"
 dependencies = [
  "aura-agent-subagent",
- "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-core-types",
  "aura-fleet-dispatch",
  "aura-fleet-spawn",
  "thiserror 1.0.69",
@@ -620,7 +604,7 @@ dependencies = [
 name = "aura-fleet-quota"
 version = "0.1.0"
 dependencies = [
- "aura-core",
+ "aura-core-types",
  "parking_lot",
  "thiserror 1.0.69",
  "tracing",
@@ -631,9 +615,9 @@ dependencies = [
 name = "aura-fleet-registry"
 version = "0.1.0"
 dependencies = [
- "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-core-types",
  "chrono",
  "parking_lot",
  "thiserror 1.0.69",
@@ -647,13 +631,12 @@ dependencies = [
  "async-trait",
  "aura-agent-kernel",
  "aura-agent-subagent",
- "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-core-types",
  "aura-fleet-quota",
  "aura-fleet-registry",
  "aura-plugin-hooks",
- "aura-store",
  "aura-store-db",
  "aura-store-record",
  "bytes",
@@ -676,34 +659,20 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aura-agent-subagent",
- "aura-core",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-core-types",
  "aura-engine",
  "aura-fleet-quota",
  "aura-fleet-registry",
  "aura-fleet-spawn",
- "aura-reasoner",
- "aura-store",
+ "aura-model-reasoner",
+ "aura-store-db",
  "aura-tools",
  "insta",
  "serde_json",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "aura-kernel"
-version = "0.1.0"
-dependencies = [
- "aura-agent-kernel",
-]
-
-[[package]]
-name = "aura-memory"
-version = "0.1.0"
-dependencies = [
- "aura-context-memory",
 ]
 
 [[package]]
@@ -713,7 +682,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-config",
- "aura-core",
+ "aura-core-types",
  "aura-protocol",
  "bytes",
  "colored",
@@ -767,7 +736,7 @@ dependencies = [
 name = "aura-plugin-hooks"
 version = "0.1.0"
 dependencies = [
- "aura-core",
+ "aura-core-types",
  "serde",
  "serde_json",
  "tempfile",
@@ -787,28 +756,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-prompts"
-version = "0.1.0"
-dependencies = [
- "aura-context-prompts",
-]
-
-[[package]]
 name = "aura-protocol"
 version = "0.1.0"
 dependencies = [
- "aura-core",
+ "aura-core-types",
  "blake3",
  "serde",
  "serde_json",
  "ts-rs",
-]
-
-[[package]]
-name = "aura-reasoner"
-version = "0.1.0"
-dependencies = [
- "aura-model-reasoner",
 ]
 
 [[package]]
@@ -818,12 +773,15 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-kernel",
  "aura-agent-subagent",
  "aura-automaton",
- "aura-compaction",
  "aura-config",
+ "aura-context-compaction",
+ "aura-context-memory",
+ "aura-context-prompts",
  "aura-context-skills",
- "aura-core",
+ "aura-core-types",
  "aura-domain-http",
  "aura-engine",
  "aura-fleet-daemon",
@@ -831,15 +789,11 @@ dependencies = [
  "aura-fleet-registry",
  "aura-fleet-spawn",
  "aura-fleet-subagent",
- "aura-kernel",
- "aura-memory",
+ "aura-model-reasoner",
  "aura-plugin-core",
  "aura-plugin-hooks",
- "aura-prompts",
  "aura-protocol",
- "aura-reasoner",
- "aura-skills",
- "aura-store",
+ "aura-store-db",
  "aura-surface-automaton",
  "aura-terminal",
  "aura-tools",
@@ -872,24 +826,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-skills"
-version = "0.1.0"
-dependencies = [
- "aura-context-skills",
-]
-
-[[package]]
-name = "aura-store"
-version = "0.1.0"
-dependencies = [
- "aura-store-db",
-]
-
-[[package]]
 name = "aura-store-db"
 version = "0.1.0"
 dependencies = [
- "aura-core",
+ "aura-core-types",
  "aura-store-record",
  "bytes",
  "futures-util",
@@ -907,7 +847,6 @@ dependencies = [
 name = "aura-store-record"
 version = "0.1.0"
 dependencies = [
- "aura-core",
  "aura-core-types",
  "blake3",
  "bytes",
@@ -947,20 +886,20 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-kernel",
  "aura-auth",
  "aura-config",
- "aura-core",
+ "aura-context-memory",
  "aura-core-modes",
+ "aura-core-types",
  "aura-engine",
  "aura-fleet-daemon",
  "aura-fleet-registry",
  "aura-fleet-spawn",
- "aura-kernel",
- "aura-memory",
+ "aura-model-reasoner",
  "aura-plugin-core",
- "aura-reasoner",
  "aura-runtime",
- "aura-store",
+ "aura-store-db",
  "aura-surface-auth",
  "aura-surface-sdk",
  "aura-surface-terminal",
@@ -1034,9 +973,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aura-core",
+ "aura-core-types",
  "aura-exec-traits",
- "aura-store",
+ "aura-store-db",
  "bytes",
  "futures-util",
  "glob",

@@ -7,7 +7,7 @@
 use crate::error::MemoryError;
 use crate::store::MemoryStoreApi;
 use crate::types::Procedure;
-use aura_core::{AgentId, ProcedureId};
+use aura_core_types::{AgentId, ProcedureId};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

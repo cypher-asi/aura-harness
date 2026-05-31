@@ -3,15 +3,15 @@
 //! Verifies the full flow: process → reason → process_tools → reason → process,
 //! checking all invariants hold.
 
-use aura_core::{AgentId, TransactionType};
-use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_reasoner::{Message, MockProvider, ModelRequest};
-use aura_store::{RocksStore, Store};
+use aura_core_types::{AgentId, TransactionType};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_model_reasoner::{Message, MockProvider, ModelRequest};
+use aura_store_db::{RocksStore, Store};
 use std::sync::Arc;
 use tempfile::TempDir;
 
 fn create_test_kernel(
-    provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync>,
+    provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync>,
 ) -> (Arc<Kernel>, Arc<dyn Store>, TempDir) {
     let dir = TempDir::new().unwrap();
     let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
@@ -31,12 +31,12 @@ fn create_test_kernel(
 
 #[tokio::test]
 async fn test_full_kernel_mediated_flow() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("I'll help with that."));
     let (kernel, store, _dir) = create_test_kernel(provider);
 
     // 1. Process a UserPrompt
-    let tx1 = aura_core::Transaction::user_prompt(kernel.agent_id, "Hello agent");
+    let tx1 = aura_core_types::Transaction::user_prompt(kernel.agent_id, "Hello agent");
     let r1 = kernel.process_direct(tx1).await.unwrap();
     assert_eq!(r1.entry.seq, 1, "First entry should be seq 1");
     assert!(r1.tool_output.is_none());
@@ -52,7 +52,7 @@ async fn test_full_kernel_mediated_flow() {
     assert_eq!(r2.entry.tx.tx_type, TransactionType::Reasoning);
 
     // 3. Process an AgentMsg (response)
-    let response_tx = aura_core::Transaction::new_chained(
+    let response_tx = aura_core_types::Transaction::new_chained(
         kernel.agent_id,
         TransactionType::AgentMsg,
         "I'll help with that.",
@@ -73,11 +73,11 @@ async fn test_full_kernel_mediated_flow() {
     }
 
     // Verify context hashes are non-zero and unique
-    let hashes: Vec<aura_core::ContextHash> = entries.iter().map(|e| e.context_hash).collect();
+    let hashes: Vec<aura_core_types::ContextHash> = entries.iter().map(|e| e.context_hash).collect();
     for hash in &hashes {
         assert_ne!(
             *hash,
-            aura_core::ContextHash::zero(),
+            aura_core_types::ContextHash::zero(),
             "Context hash should be non-zero"
         );
     }
@@ -87,12 +87,12 @@ async fn test_full_kernel_mediated_flow() {
 
 #[tokio::test]
 async fn test_dequeued_processing() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("processed"));
     let (kernel, store, _dir) = create_test_kernel(provider);
 
     // Enqueue and dequeue
-    let tx = aura_core::Transaction::user_prompt(kernel.agent_id, "test");
+    let tx = aura_core_types::Transaction::user_prompt(kernel.agent_id, "test");
     store.enqueue_tx(&tx).unwrap();
     let (token, dequeued_tx) = store.dequeue_tx(kernel.agent_id).unwrap().unwrap();
 
@@ -106,14 +106,14 @@ async fn test_dequeued_processing() {
 
 #[tokio::test]
 async fn test_sequence_continuity() {
-    let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("response"));
     let (kernel, store, _dir) = create_test_kernel(provider);
 
     // Mix process_direct and reason calls
     for i in 0..5 {
         if i % 2 == 0 {
-            let tx = aura_core::Transaction::user_prompt(kernel.agent_id, format!("msg {i}"));
+            let tx = aura_core_types::Transaction::user_prompt(kernel.agent_id, format!("msg {i}"));
             kernel.process_direct(tx).await.unwrap();
         } else {
             let request = ModelRequest::builder("test-model", "system")

@@ -55,7 +55,7 @@ pub enum KernelError {
     #[error("store error: {0}")]
     Store(String),
     /// Provider-side reasoning failure. The inner
-    /// [`aura_reasoner::ReasonerError`] is preserved (instead of being
+    /// [`aura_model_reasoner::ReasonerError`] is preserved (instead of being
     /// flattened to a string) so callers — notably
     /// `aura_agent::KernelModelGateway` — can branch on the variant
     /// (`RateLimited`, `InsufficientCredits`, `Api { status }`, …)
@@ -65,7 +65,7 @@ pub enum KernelError {
     /// recording, so the `Reasoning` record payload format is
     /// unchanged.
     #[error("reasoner error: {0}")]
-    Reasoner(#[from] aura_reasoner::ReasonerError),
+    Reasoner(#[from] aura_model_reasoner::ReasonerError),
     #[error("timeout: {0}")]
     Timeout(String),
     #[error("serialization error: {0}")]
@@ -84,4 +84,4 @@ pub enum KernelError {
 }
 
 // Re-export ToolResultContent for convenience
-pub use aura_core::ToolResultContent;
+pub use aura_core_types::ToolResultContent;

@@ -8,7 +8,7 @@
 //!
 //! - [`AgentIdentityEnvelope`] — owned mirror of the agent identity
 //!   bundle the operator sends through the wire. Renders as the
-//!   transient `aura_prompts::AgentInfo<'_>` view the prompt builders
+//!   transient `aura_context_prompts::AgentInfo<'_>` view the prompt builders
 //!   consume.
 //! - [`DevLoopConfig`] — the dev-loop's typed start-request config.
 //!   Parsed **once** in `on_install` and stashed on the
@@ -27,7 +27,7 @@ use crate::error::AutomatonError;
 /// [`aura_agent::agent_runner::AgenticTaskParams::agent`].
 ///
 /// Owns its strings so the `&str`-borrowing
-/// [`aura_prompts::AgentInfo`] view handed to the runner can
+/// [`aura_context_prompts::AgentInfo`] view handed to the runner can
 /// be built on demand from a stable in-memory location. When aura-os
 /// leaves the wire fields absent / blank the envelope reports
 /// [`Self::is_empty`] and [`Self::as_agent_info`] returns `None`,
@@ -97,16 +97,16 @@ impl AgentIdentityEnvelope {
                 .map_or(true, |s| s.trim().is_empty())
     }
 
-    /// Borrow this envelope as an [`aura_prompts::AgentInfo`].
+    /// Borrow this envelope as an [`aura_context_prompts::AgentInfo`].
     /// Returns `None` when [`Self::is_empty`].
-    pub(crate) fn as_agent_info(&self) -> Option<aura_prompts::AgentInfo<'_>> {
+    pub(crate) fn as_agent_info(&self) -> Option<aura_context_prompts::AgentInfo<'_>> {
         if self.is_empty() {
             return None;
         }
         let identity_present = !(self.name.trim().is_empty()
             && self.role.trim().is_empty()
             && self.personality.trim().is_empty());
-        let identity = identity_present.then_some(aura_prompts::AgentIdentity {
+        let identity = identity_present.then_some(aura_context_prompts::AgentIdentity {
             name: self.name.as_str(),
             role: self.role.as_str(),
             personality: self.personality.as_str(),
@@ -115,7 +115,7 @@ impl AgentIdentityEnvelope {
             .system_prompt
             .as_deref()
             .filter(|s| !s.trim().is_empty());
-        Some(aura_prompts::AgentInfo {
+        Some(aura_context_prompts::AgentInfo {
             identity,
             skills: self.skills.as_slice(),
             system_prompt,

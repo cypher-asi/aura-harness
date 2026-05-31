@@ -9,7 +9,7 @@
 //! reassembly and is the home of the
 //! `Completed.end_turn` → [`StopReason`] mapping.
 
-use aura_reasoner::{ContentBlock, Message, ModelResponse, ProviderTrace, Role, StopReason, Usage};
+use aura_model_reasoner::{ContentBlock, Message, ModelResponse, ProviderTrace, Role, StopReason, Usage};
 
 use crate::types::ToolCallInfo;
 
@@ -18,7 +18,7 @@ use crate::types::ToolCallInfo;
 ///
 /// # `Completed.end_turn` → [`StopReason`] mapping (Phase 3 fix)
 ///
-/// The pump observes [`aura_reasoner::ResponseEvent::Completed`]'s
+/// The pump observes [`aura_model_reasoner::ResponseEvent::Completed`]'s
 /// `end_turn: Option<bool>`, which is the lossy reduction applied at
 /// `response_stream_from_response`:
 ///

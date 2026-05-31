@@ -26,7 +26,7 @@ pub use stat::FsStatTool;
 pub use write::FsWriteTool;
 
 use crate::error::ToolError;
-use aura_core::ToolResult;
+use aura_core_types::ToolResult;
 
 /// Run a blocking tool closure on the tokio blocking threadpool.
 pub async fn spawn_blocking_tool<F>(f: F) -> Result<ToolResult, ToolError>

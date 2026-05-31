@@ -5,17 +5,17 @@ use crate::gateway::{create_router, RouterState};
 use anyhow::Context;
 use aura_agent::KernelModelGateway;
 use aura_surface_automaton::AutomatonRuntime;
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_domain_http::HttpDomainApi;
 use aura_engine::automaton::AutomatonBridge;
 use aura_engine::scheduler::Scheduler;
-use aura_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
-use aura_memory::{
+use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
+use aura_context_memory::{
     ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
     WriteConfig,
 };
-use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
-use aura_store::RocksStore;
+use aura_context_skills::{SkillInstallStore, SkillLoader, SkillManager};
+use aura_store_db::RocksStore;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
@@ -140,7 +140,7 @@ impl Node {
         let executors = vec![resolver];
         info!("Executors configured");
 
-        let provider = aura_reasoner::default_provider_from_env()
+        let provider = aura_model_reasoner::default_provider_from_env()
             .context("building default model provider")?
             .provider;
 
@@ -148,7 +148,7 @@ impl Node {
         // recorded via a dedicated "memory service" kernel whose agent log
         // is kept distinct from per-user / per-session agent logs.
         let memory_agent_id = AgentId::generate();
-        let memory_store: Arc<dyn aura_store::Store> = store.clone();
+        let memory_store: Arc<dyn aura_store_db::Store> = store.clone();
         let memory_kernel = Arc::new(
             Kernel::new(
                 memory_store,
@@ -188,7 +188,7 @@ impl Node {
         let automaton_bridge: Option<Arc<AutomatonBridge>> = Some(Arc::new(
             AutomatonBridge::new(
                 automaton_runtime.clone(),
-                store.clone() as Arc<dyn aura_store::Store>,
+                store.clone() as Arc<dyn aura_store_db::Store>,
                 domain_api.clone(),
                 provider.clone(),
                 catalog.clone(),
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_create_model_provider_returns_something() {
         let _provider =
-            aura_reasoner::default_provider_from_env().expect("default provider should build");
+            aura_model_reasoner::default_provider_from_env().expect("default provider should build");
     }
 
     /// `AddrInUse` errors must be reformatted into an actionable

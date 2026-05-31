@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use std::time::Duration;
 
-use aura_reasoner::anthropic::exp_backoff_with_jitter;
-use aura_reasoner::{
+use aura_model_reasoner::anthropic::exp_backoff_with_jitter;
+use aura_model_reasoner::{
     ModelProvider, ModelRequest, ModelResponse, PartialToolUse, ReasonerError, StreamAccumulator,
     StreamContentType, StreamEvent, StreamEventStream,
 };
@@ -76,7 +76,7 @@ pub(super) fn emit_iteration_complete(
         .message
         .content
         .iter()
-        .filter(|b| matches!(b, aura_reasoner::ContentBlock::ToolUse { .. }))
+        .filter(|b| matches!(b, aura_model_reasoner::ContentBlock::ToolUse { .. }))
         .count();
 
     let duration_ms = u64::try_from(iteration_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -270,10 +270,10 @@ async fn complete_and_emit_as_deltas(
         .map_err(|e| LlmCallError::from_reasoner_error(&e))?;
     for block in &response.message.content {
         match block {
-            aura_reasoner::ContentBlock::Text { text } => {
+            aura_model_reasoner::ContentBlock::Text { text } => {
                 emit(event_tx, AgentLoopEvent::TextDelta(text.clone()));
             }
-            aura_reasoner::ContentBlock::Thinking { thinking, .. } => {
+            aura_model_reasoner::ContentBlock::Thinking { thinking, .. } => {
                 emit(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
             }
             _ => {}
@@ -319,8 +319,8 @@ impl AgentLoop {
                 );
                 let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let err_str = e.to_string();
-                aura_reasoner::console::anthropic_failure_block(
-                    &aura_reasoner::console::AnthropicFailureView {
+                aura_model_reasoner::console::anthropic_failure_block(
+                    &aura_model_reasoner::console::AnthropicFailureView {
                         status_code: Some(200),
                         status_text: "OK",
                         class: "sse_transport",
@@ -391,7 +391,7 @@ impl AgentLoop {
         let latency_ms = start.elapsed().as_millis() as u64;
         match accumulator.into_response(0, latency_ms) {
             Ok(response) => {
-                aura_reasoner::console::emit_response_block(&response, latency_ms, 200, "OK");
+                aura_model_reasoner::console::emit_response_block(&response, latency_ms, 200, "OK");
                 emit_debug_llm_call(event_tx, provider_name, model_name, &response, latency_ms);
                 Ok(response)
             }
@@ -668,8 +668,8 @@ impl super::AgentLoop {
             DrainOutcome::Transport(e) => {
                 let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let err_str = e.to_string();
-                aura_reasoner::console::anthropic_failure_block(
-                    &aura_reasoner::console::AnthropicFailureView {
+                aura_model_reasoner::console::anthropic_failure_block(
+                    &aura_model_reasoner::console::AnthropicFailureView {
                         status_code: Some(200),
                         status_text: "OK",
                         class: "sse_transport",
@@ -689,7 +689,7 @@ impl super::AgentLoop {
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         match accumulator.into_response(0, latency_ms) {
             Ok(response) => {
-                aura_reasoner::console::emit_response_block(&response, latency_ms, 200, "OK");
+                aura_model_reasoner::console::emit_response_block(&response, latency_ms, 200, "OK");
                 emit_debug_llm_call(event_tx, provider_name, &model_name, &response, latency_ms);
                 Ok(response)
             }

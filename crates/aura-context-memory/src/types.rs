@@ -1,6 +1,6 @@
 //! Core memory types.
 
-use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -186,7 +186,7 @@ pub struct RefinedCandidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+    use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
     use chrono::Utc;
 
     fn make_fact(key: &str, val: &str) -> Fact {

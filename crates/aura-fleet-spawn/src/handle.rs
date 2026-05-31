@@ -12,7 +12,7 @@
 //!   spec's [`JoinPolicy`]; the parent gets a [`BatchSpawn`] handle
 //!   it `await`s on.
 
-use aura_core::{AgentId, SubagentResult};
+use aura_core_types::{AgentId, SubagentResult};
 use aura_core_modes::{JoinPolicy, SpawnMode};
 use tokio::sync::oneshot;
 

@@ -9,8 +9,8 @@
 
 use super::{Kernel, ProcessResult};
 use crate::context::hash_tx_with_window;
-use aura_core::{RecordEntry, RuntimeCapabilityInstall, Transaction, TransactionType};
-use aura_store::DequeueToken;
+use aura_core_types::{RecordEntry, RuntimeCapabilityInstall, Transaction, TransactionType};
+use aura_store_db::DequeueToken;
 
 impl Kernel {
     /// Process a transaction from a direct (non-inbox) source.

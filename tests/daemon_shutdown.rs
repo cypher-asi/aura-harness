@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_agent_subagent::{ParentContext, SubagentLineage, SubagentOverrides};
-use aura_core::{AgentId, SubagentExit, SubagentResult, TransactionType};
+use aura_core_types::{AgentId, SubagentExit, SubagentResult, TransactionType};
 use aura_core_modes::{AgentMode, KernelMode, ModeProfile, ReplayMode, SandboxMode, SpawnMode};
 use aura_core_permissions::{Capability, Permissions};
 use aura_fleet_daemon::{
@@ -44,7 +44,7 @@ use aura_fleet_daemon::{
 use aura_fleet_spawn::{
     ChildRunContext, ChildRunError, ChildRunner, OrphanStore, SpawnHandle, SpawnRequest,
 };
-use aura_store::RocksStore;
+use aura_store_db::RocksStore;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -130,7 +130,7 @@ fn parent_at(mode: AgentMode) -> ParentContext {
     }
 }
 
-fn open_test_store(dir: &std::path::Path) -> Arc<dyn aura_store::Store> {
+fn open_test_store(dir: &std::path::Path) -> Arc<dyn aura_store_db::Store> {
     let store = RocksStore::open(dir.join("db"), false).expect("open rocks store");
     Arc::new(store)
 }
@@ -145,7 +145,7 @@ fn make_daemon(
     runner: Arc<dyn ChildRunner>,
 ) -> (
     Arc<FleetDaemon>,
-    Arc<dyn aura_store::Store>,
+    Arc<dyn aura_store_db::Store>,
     std::path::PathBuf,
 ) {
     let orphan_root = tempdir.join("orphans");
@@ -168,7 +168,7 @@ fn make_daemon(
 /// row and return the parsed payload. Returns `None` if no row was
 /// written.
 fn find_session_stop(
-    store: &Arc<dyn aura_store::Store>,
+    store: &Arc<dyn aura_store_db::Store>,
     agent_id: AgentId,
 ) -> Option<SessionStopRecordPayload> {
     let entries = store.scan_record(agent_id, 1, 200).ok()?;

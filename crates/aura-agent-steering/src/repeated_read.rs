@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use aura_prompts::SteeringKind;
+use aura_context_prompts::SteeringKind;
 
 use crate::helpers::content_hash_hex;
 use crate::registry::TurnSteering;
@@ -28,7 +28,7 @@ use crate::types::{ToolCallInfo, ToolCallResult};
 /// contract.
 ///
 /// The tracker only stores hashes; rendering the nudge body is
-/// delegated to [`aura_prompts::SteeringRenderer`] via
+/// delegated to [`aura_context_prompts::SteeringRenderer`] via
 /// [`SteeringKind::RepeatedRead`] so wording stays in lockstep with
 /// every other steering kind.
 #[derive(Debug, Default)]

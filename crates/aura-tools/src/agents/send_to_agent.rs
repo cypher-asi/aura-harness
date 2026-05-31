@@ -29,7 +29,7 @@
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
-use aura_core::{Capability, ToolDefinition, ToolResult};
+use aura_core_types::{Capability, ToolDefinition, ToolResult};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -281,7 +281,7 @@ mod tests {
     use crate::sandbox::Sandbox;
     use crate::ToolConfig;
     use async_trait::async_trait;
-    use aura_core::{AgentId, AgentPermissions, AgentScope};
+    use aura_core_types::{AgentId, AgentPermissions, AgentScope};
     use std::sync::Arc;
 
     fn ctx(caller: AgentPermissions) -> ToolContext {

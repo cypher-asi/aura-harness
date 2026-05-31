@@ -2,6 +2,6 @@
 import type { ToolStateWire } from "./ToolStateWire";
 
 /**
- * Wire-compatible mirror of `aura_core::AgentToolPermissions`.
+ * Wire-compatible mirror of `aura_core_types::AgentToolPermissions`.
  */
 export type AgentToolPermissionsWire = { per_tool: { [key in string]?: ToolStateWire }, };

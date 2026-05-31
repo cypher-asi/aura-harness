@@ -4,7 +4,7 @@
 //! retry envelope inside [`aura_config::reasoner()`] so the streaming
 //! pump, the legacy buffered streaming retry loop
 //! ([`crate::agent_loop::streaming::AgentLoop::stream_retry_params`]),
-//! and `aura_reasoner::AnthropicConfig` all read the same
+//! and `aura_model_reasoner::AnthropicConfig` all read the same
 //! `AURA_LLM_MAX_RETRIES` / `AURA_LLM_BACKOFF_INITIAL_MS` /
 //! `AURA_LLM_BACKOFF_CAP_MS` triple at startup.
 //!
@@ -13,10 +13,10 @@
 //! operators tune both paths together and a single definition keeps
 //! the budget invariant from drifting.
 
-use aura_reasoner::PartialToolUse;
+use aura_model_reasoner::PartialToolUse;
 
 /// Retry budget / backoff envelope shared with the legacy buffered
-/// streaming retry path and `aura_reasoner::AnthropicConfig`. Both
+/// streaming retry path and `aura_model_reasoner::AnthropicConfig`. Both
 /// paths now read the same [`aura_config::reasoner().llm_retry`]
 /// value (sourced once from `AURA_LLM_MAX_RETRIES` /
 /// `AURA_LLM_BACKOFF_INITIAL_MS` / `AURA_LLM_BACKOFF_CAP_MS` at

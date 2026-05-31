@@ -8,8 +8,8 @@
 use crate::error::MemoryError;
 use crate::store::MemoryStoreApi;
 use crate::types::{AgentEvent, Fact, FactSource};
-use aura_core::{AgentEventId, AgentId, FactId};
-use aura_reasoner::{Message, ModelProvider, ModelRequest};
+use aura_core_types::{AgentEventId, AgentId, FactId};
+use aura_model_reasoner::{Message, ModelProvider, ModelRequest};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;

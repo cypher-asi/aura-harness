@@ -37,7 +37,7 @@ mod common;
 
 use std::time::Duration;
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use common::{
     assert_stop_reason, chat_request_payload, chat_request_payload_extended, collect_text,
     connect_llm_session, find_agent_dir, find_file, http_client, open_chat_run,

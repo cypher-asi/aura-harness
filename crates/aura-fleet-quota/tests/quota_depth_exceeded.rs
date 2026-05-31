@@ -2,7 +2,7 @@
 //! / global counters are touched, so a too-deep spawn never consumes
 //! a concurrent slot.
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_fleet_quota::{QuotaConfig, QuotaError, QuotaPool, QuotaRequest};
 
 #[test]

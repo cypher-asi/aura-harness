@@ -1,14 +1,14 @@
 use super::*;
 use aura_agent::KernelModelGateway;
-use aura_core::AgentId;
-use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_memory::{
+use aura_core_types::AgentId;
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_context_memory::{
     ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
     WriteConfig,
 };
-use aura_reasoner::MockProvider;
-use aura_skills::{SkillInstallStore, SkillLoader, SkillManager};
-use aura_store::RocksStore;
+use aura_model_reasoner::MockProvider;
+use aura_context_skills::{SkillInstallStore, SkillLoader, SkillManager};
+use aura_store_db::RocksStore;
 use axum::body::Body;
 use axum::http::{request::Builder as RequestBuilder, Request};
 use tower::util::ServiceExt;

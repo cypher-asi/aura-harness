@@ -33,9 +33,9 @@ pub use state::Session;
 pub(crate) use tool_approval::ToolApprovalBroker;
 
 use aura_engine::scheduler::Scheduler;
-use aura_reasoner::ModelProvider;
-use aura_skills::SkillManager;
-use aura_store::Store;
+use aura_model_reasoner::ModelProvider;
+use aura_context_skills::SkillManager;
+use aura_store_db::Store;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::domain_tools::DomainApi;
 use aura_tools::{ToolCatalog, ToolConfig};
@@ -78,7 +78,7 @@ pub(crate) struct WsContext {
     /// Optional project base for remapping project paths (from `AURA_PROJECT_BASE`).
     pub(crate) project_base: Option<PathBuf>,
     /// Optional memory manager for prompt injection and result ingestion.
-    pub(crate) memory_manager: Option<Arc<aura_memory::MemoryManager>>,
+    pub(crate) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     /// Optional skill manager for per-agent skill injection into prompts.
     pub(crate) skill_manager: Option<Arc<RwLock<SkillManager>>>,
     /// Router URL for generation proxying (from `AURA_ROUTER_URL`).

@@ -32,11 +32,11 @@ use crate::tool::{AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool};
 use crate::ToolConfig;
 use crate::ToolExecutor;
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     Action, ActionKind, Effect, EffectKind, EffectStatus, InstalledToolDefinition, ToolCall,
     ToolResult,
 };
-use aura_core::{AgentPermissions, AgentToolPermissions, ToolDefinition, UserToolDefaults};
+use aura_core_types::{AgentPermissions, AgentToolPermissions, ToolDefinition, UserToolDefaults};
 use aura_exec_traits::{ExecuteContext, Executor, ExecutorError, SpawnHook};
 use bytes::Bytes;
 use reqwest::Client;

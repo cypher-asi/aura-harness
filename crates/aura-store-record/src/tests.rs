@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use aura_core::{AgentId, Decision, ProposalSet, Transaction};
+use aura_core_types::{AgentId, Decision, ProposalSet, Transaction};
 use bytes::Bytes;
 
 use crate::{

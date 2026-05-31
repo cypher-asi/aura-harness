@@ -7,10 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-aura-core = { path = "../aura-core" }
+aura-core-types = { path = "../aura-core-types" }
 aura-config = { path = "../aura-config" }
-aura-prompts = { path = "../aura-prompts" }
-aura-reasoner = { path = "../aura-reasoner" }
+aura-context-prompts = { path = "../aura-context-prompts" }
+aura-model-reasoner = { path = "../aura-model-reasoner" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

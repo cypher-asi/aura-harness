@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use aura_core::ToolResultContent;
+pub use aura_core_types::ToolResultContent;
 
 // ============================================================================
 // Role and Content Types

@@ -12,7 +12,7 @@ use super::super::runtime_headers::{
 use super::super::TRUSTED_PROVIDER_REQUEST_TIMEOUT;
 use super::ToolResolver;
 use crate::error::ToolError;
-use aura_core::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
+use aura_core_types::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
 use reqwest::Method;
 use serde_json::Value;
 

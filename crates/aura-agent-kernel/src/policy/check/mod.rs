@@ -9,7 +9,7 @@
 //! - [`agent_permissions`] — `Policy::resolve_tool_state` and the
 //!   capability + scope check on a `ToolCall`.
 //! - [`integration_gate`] — the integration-requirement check that
-//!   delegates to `aura_core::installed_integrations_satisfy`.
+//!   delegates to `aura_core_types::installed_integrations_satisfy`.
 //! - [`scope`] — `target_*` scope-key validation.
 //! - [`delegate_gate`] — `ActionKind::Delegate` payload parsing and
 //!   evaluation against the per-agent and tool gates.
@@ -26,7 +26,7 @@ pub use verdict::{PolicyResult, PolicyVerdict};
 
 use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
-use aura_core::{ActionKind, Proposal, RuntimeCapabilityInstall, ToolState};
+use aura_core_types::{ActionKind, Proposal, RuntimeCapabilityInstall, ToolState};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::{debug, warn};
@@ -90,7 +90,7 @@ impl Policy {
         &self,
         tool: &str,
         args: &serde_json::Value,
-        agent_id: aura_core::AgentId,
+        agent_id: aura_core_types::AgentId,
         request_id: String,
         has_live_session: bool,
         remember_options: Vec<ToolApprovalRemember>,

@@ -47,7 +47,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core::{ToolDefinition, ToolResult};
+use aura_core_types::{ToolDefinition, ToolResult};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{info, warn};

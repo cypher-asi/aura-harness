@@ -1,4 +1,4 @@
-//! Pure-data adapters between [`aura_core`] dispatch primitives and
+//! Pure-data adapters between [`aura_core_types`] dispatch primitives and
 //! the [`crate`] (agent-layer) derivation surface.
 //!
 //! Phase B / Commit 3 / Step 3a moved these helpers out of the
@@ -6,9 +6,9 @@
 //! fleet-layer dispatcher can be sliced cleanly out. None of them
 //! touch fleet types — they translate parent context, narrowing
 //! policy, and override fields between the wire/core types in
-//! `aura_core` and the agent-layer types this crate already owns.
+//! `aura_core_types` and the agent-layer types this crate already owns.
 
-use aura_core::{AgentPermissions, SubagentDispatchRequest, SubagentKindSpec};
+use aura_core_types::{AgentPermissions, SubagentDispatchRequest, SubagentKindSpec};
 use aura_core_modes::{AgentMode, KernelMode, ModeProfile, ReplayMode, SandboxMode};
 use aura_core_permissions::Permissions;
 
@@ -60,26 +60,26 @@ pub fn parent_context_from_request(request: &SubagentDispatchRequest) -> ParentC
     }
 }
 
-/// Translate the legacy [`aura_core::AgentMode`] enum into the
+/// Translate the legacy [`aura_core_types::AgentMode`] enum into the
 /// canonical [`aura_core_modes::AgentMode`]. The two enums are
 /// structurally identical today (one re-exports the other); the
 /// alias keeps call sites at a single readable level of indirection.
 #[must_use]
-pub fn core_to_modes_mode(mode: aura_core::AgentMode) -> AgentMode {
+pub fn core_to_modes_mode(mode: aura_core_types::AgentMode) -> AgentMode {
     match mode {
-        aura_core::AgentMode::Agent => AgentMode::Agent,
-        aura_core::AgentMode::Plan => AgentMode::Plan,
-        aura_core::AgentMode::Ask => AgentMode::Ask,
-        aura_core::AgentMode::Debug => AgentMode::Debug,
+        aura_core_types::AgentMode::Agent => AgentMode::Agent,
+        aura_core_types::AgentMode::Plan => AgentMode::Plan,
+        aura_core_types::AgentMode::Ask => AgentMode::Ask,
+        aura_core_types::AgentMode::Debug => AgentMode::Debug,
     }
 }
 
-/// Translate [`aura_core::KernelMode`] into [`aura_core_modes::KernelMode`].
+/// Translate [`aura_core_types::KernelMode`] into [`aura_core_modes::KernelMode`].
 #[must_use]
-pub fn core_to_modes_kernel(kernel: aura_core::KernelMode) -> KernelMode {
+pub fn core_to_modes_kernel(kernel: aura_core_types::KernelMode) -> KernelMode {
     match kernel {
-        aura_core::KernelMode::Audited => KernelMode::Audited,
-        aura_core::KernelMode::AuditedLite => KernelMode::AuditedLite,
+        aura_core_types::KernelMode::Audited => KernelMode::Audited,
+        aura_core_types::KernelMode::AuditedLite => KernelMode::AuditedLite,
     }
 }
 
@@ -158,7 +158,7 @@ pub fn narrow_permissions(parent: &AgentPermissions, kind: &SubagentKindSpec) ->
     }
 }
 
-/// Map the legacy [`aura_core::AgentPermissions`] surface onto the
+/// Map the legacy [`aura_core_types::AgentPermissions`] surface onto the
 /// [`aura_core_permissions::Permissions`] type the derivation engine
 /// consumes. The two shapes carry the same data; the alias clarifies
 /// the layer hop.

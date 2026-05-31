@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_reasoner::{
+use aura_model_reasoner::{
     ContentBlock, Message, ModelResponse, OutputItem, ProviderTrace, ResponseEvent,
     ResponseEventStream, Role, StopReason, StreamPhase, Usage,
 };
@@ -73,7 +73,7 @@ fn mk_call(id: &str, name: &str) -> ResponseEvent {
 
 fn mk_stream(events: Vec<ResponseEvent>) -> ResponseEventStream {
     Box::pin(futures_util::stream::iter(
-        events.into_iter().map(Ok::<_, aura_reasoner::StreamError>),
+        events.into_iter().map(Ok::<_, aura_model_reasoner::StreamError>),
     ))
 }
 
@@ -181,7 +181,7 @@ async fn pump_per_outputitemdone_input_drain() {
             .iter()
             .any(|m| m.content.iter().any(|b| matches!(
                 b,
-                aura_reasoner::ContentBlock::Text { text } if text.contains("queued-message")
+                aura_model_reasoner::ContentBlock::Text { text } if text.contains("queued-message")
             ))),
         "drained user input must be appended to messages mid-pump"
     );
@@ -231,7 +231,7 @@ async fn pump_keepalive_resets_liveness_timeout() {
             if i < 4 {
                 tokio::time::sleep(gap).await;
                 Some((
-                    Ok::<_, aura_reasoner::StreamError>(ResponseEvent::Keepalive(
+                    Ok::<_, aura_model_reasoner::StreamError>(ResponseEvent::Keepalive(
                         StreamPhase::Thinking,
                     )),
                     i + 1,
@@ -618,7 +618,7 @@ async fn pump_triggers_auto_build_on_write() {
                     tool_use_id: tc.id.clone(),
                     content: "wrote".to_string(),
                     is_error: false,
-                    kind: aura_core::ToolResultKind::Ok,
+                    kind: aura_core_types::ToolResultKind::Ok,
                     stop_loop: false,
                     file_changes: vec![crate::types::FileChange {
                         path: "src/foo.rs".into(),
@@ -666,7 +666,7 @@ async fn pump_triggers_auto_build_on_write() {
         tool_use_id: "toolu_w".to_string(),
         content: "wrote".to_string(),
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: vec![crate::types::FileChange {
             path: "src/foo.rs".into(),
@@ -704,7 +704,7 @@ async fn pump_triggers_auto_build_on_write() {
         m.content.iter().any(|b| match b {
             ContentBlock::Text { text } => text.contains("Build check failed"),
             ContentBlock::ToolResult {
-                content: aura_reasoner::ToolResultContent::Text(t),
+                content: aura_model_reasoner::ToolResultContent::Text(t),
                 ..
             } => t.contains("Build check failed"),
             _ => false,

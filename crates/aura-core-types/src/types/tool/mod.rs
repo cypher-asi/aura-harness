@@ -2,7 +2,7 @@
 //!
 //! The module is split across siblings for readability. Public items are
 //! re-exported here so external callers (and the parent `types::mod`)
-//! continue to import them via `aura_core::types::tool::Item` exactly
+//! continue to import them via `aura_core_types::types::tool::Item` exactly
 //! as before the Phase 2a split.
 //!
 //! - [`proposal`] — `ToolProposal`, `ToolGateVerdict` (audit-log enum;

@@ -18,7 +18,7 @@ use aura_config::{
     EarlyTestOracleConfig, AUTO_BUILD_COOLDOWN, MAX_ITERATIONS, THINKING_MIN_BUDGET,
     THINKING_TAPER_AFTER, THINKING_TAPER_FACTOR,
 };
-use aura_reasoner::{ModelRequestKind, ToolDefinition};
+use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
 use aura_tools::IntentClassifier;
 
 use crate::types::TurnObserver;
@@ -29,7 +29,7 @@ pub struct AgentLoopConfig {
     /// Maximum iterations (model calls) per turn.
     ///
     /// Defaults to [`aura_config::MAX_ITERATIONS`], which is
-    /// itself derived from [`aura_core::MAX_TURNS`] — the single
+    /// itself derived from [`aura_core_types::MAX_TURNS`] — the single
     /// source of truth for every "max turns / max iterations" knob.
     /// Termination is also driven by `EndTurn` from the model,
     /// exhaustion of [`Self::credit_budget`], stall detection, or
@@ -98,7 +98,7 @@ pub struct AgentLoopConfig {
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
     /// Stable `prompt_cache_key` forwarded to OpenAI-family routing. See
-    /// `aura_reasoner::ModelRequest::prompt_cache_key`.
+    /// `aura_model_reasoner::ModelRequest::prompt_cache_key`.
     pub prompt_cache_key: Option<String>,
     /// Retention hint paired with `prompt_cache_key`. Wire values
     /// `"in_memory"` / `"24h"`.
@@ -155,7 +155,7 @@ pub struct AgentLoopConfig {
     /// a fresh budget. `None` for non-task callers (e.g. chat).
     pub phase_reset_signal: Option<Arc<AtomicBool>>,
     /// Dev-loop signal: pin reasoning effort to
-    /// [`aura_reasoner::ThinkingEffort::Medium`] across every
+    /// [`aura_model_reasoner::ThinkingEffort::Medium`] across every
     /// iteration of the run (see
     /// `LoopState::compute_thinking_effort`).
     ///
@@ -179,7 +179,7 @@ pub struct AgentLoopConfig {
     /// iteration, overriding the internal `compute_thinking_effort`
     /// taper so the user's explicit choice always wins. `None` (chat
     /// with no selection, dev-loop, subagents) keeps the heuristic.
-    pub user_thinking_effort: Option<aura_reasoner::ThinkingEffort>,
+    pub user_thinking_effort: Option<aura_model_reasoner::ThinkingEffort>,
     /// Layer E.1: hard cap on the number of *turns* one task may run.
     /// A turn is the unit of work between "model starts talking" and
     /// "model goes quiet without follow-up signal"; codex's
@@ -187,7 +187,7 @@ pub struct AgentLoopConfig {
     /// empty. E.1 has no `input_queue` yet (lands in E.2), so the
     /// task shell runs exactly one turn per task and this cap is
     /// effectively dormant. Default derives from
-    /// [`aura_core::MAX_TURNS`] — the single source of truth for every
+    /// [`aura_core_types::MAX_TURNS`] — the single source of truth for every
     /// "max turns / max iterations" knob. The cap exists to surface a
     /// typed [`AgentError::TurnBudgetExceeded`](crate::AgentError::TurnBudgetExceeded)
     /// instead of letting a runaway `input_queue` push the agent
@@ -197,7 +197,7 @@ pub struct AgentLoopConfig {
     /// requests (model round-trips) across every turn of one task.
     /// Companion to [`Self::max_iterations`] (per-turn) and
     /// [`Self::max_turns_per_task`] (turn count); all three default to
-    /// [`aura_core::MAX_TURNS`]. Trips surface as
+    /// [`aura_core_types::MAX_TURNS`]. Trips surface as
     /// [`AgentError::IterationBudgetExceeded`](crate::AgentError::IterationBudgetExceeded).
     pub max_iterations_per_task: u32,
     /// Layer E.3: per-event boundary timeout for the streaming
@@ -207,7 +207,7 @@ pub struct AgentLoopConfig {
     /// [`AgentError::StreamTimeout`](crate::AgentError::StreamTimeout)
     /// instead of hanging the turn forever. This measures the gap
     /// between *liveness frames*, not completed blocks: pings and
-    /// intra-block deltas surface as [`aura_reasoner::ResponseEvent::Keepalive`]
+    /// intra-block deltas surface as [`aura_model_reasoner::ResponseEvent::Keepalive`]
     /// and reset the window, so a long extended-thinking block (which
     /// streams thinking deltas but completes no top-level item for a
     /// while) does NOT trip the timeout. Default `90s` — comfortably
@@ -314,8 +314,8 @@ impl AgentLoopConfig {
             phase_reset_signal: None,
             disable_thinking_iteration_0: false,
             user_thinking_effort: None,
-            max_turns_per_task: aura_core::MAX_TURNS,
-            max_iterations_per_task: aura_core::MAX_TURNS,
+            max_turns_per_task: aura_core_types::MAX_TURNS,
+            max_iterations_per_task: aura_core_types::MAX_TURNS,
             stream_event_timeout: Duration::from_secs(90),
             per_tool_timeout: Duration::from_secs(300),
             // Off by default — chat / generic callers do not declare
@@ -333,7 +333,7 @@ impl AgentLoopConfig {
 }
 
 /// Parse the wire-level `prompt_cache_retention` string forwarded by
-/// `aura-os` into a typed [`aura_reasoner::PromptCacheRetention`].
+/// `aura-os` into a typed [`aura_model_reasoner::PromptCacheRetention`].
 /// Unknown or blank values fall through as `None` so the reasoner
 /// falls back to the upstream provider default.
 ///
@@ -343,13 +343,13 @@ impl AgentLoopConfig {
 /// keeps the wire-string contract one file away from the consumers.
 pub(super) fn parse_cache_retention(
     value: Option<&str>,
-) -> Option<aura_reasoner::PromptCacheRetention> {
+) -> Option<aura_model_reasoner::PromptCacheRetention> {
     let v = value?.trim();
     match v {
         "24h" | "h24" | "hours_24" | "Hours24" => {
-            Some(aura_reasoner::PromptCacheRetention::Hours24)
+            Some(aura_model_reasoner::PromptCacheRetention::Hours24)
         }
-        "in_memory" | "InMemory" | "memory" => Some(aura_reasoner::PromptCacheRetention::InMemory),
+        "in_memory" | "InMemory" | "memory" => Some(aura_model_reasoner::PromptCacheRetention::InMemory),
         _ => None,
     }
 }

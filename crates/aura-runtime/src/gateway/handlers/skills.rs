@@ -2,7 +2,7 @@
 
 use super::super::RouterState;
 use super::util::parse_agent_id;
-use aura_skills::{
+use aura_context_skills::{
     SkillActivation, SkillFrontmatter, SkillInstallation, SkillManager, SkillMeta, SkillSource,
 };
 use axum::{
@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
-fn skill_err(e: aura_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
+fn skill_err(e: aura_context_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
     let status = if e.is_not_found() {
         StatusCode::NOT_FOUND
     } else {

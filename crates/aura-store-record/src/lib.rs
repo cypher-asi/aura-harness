@@ -65,7 +65,7 @@ pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 ///   emitted by the fleet daemon's shutdown path.
 /// - [`RecordKind::ToolCallBlockedByHook`] — audit row replacing
 ///   `ToolCallResult` when a `PreToolUse` hook blocks dispatch.
-/// - [`aura_core::TransactionType::SubagentSpawn`] — typed wire
+/// - [`aura_core_types::TransactionType::SubagentSpawn`] — typed wire
 ///   variant replacing the Phase 7a `TransactionType::System +
 ///   "kind": "subagent_spawn"` JSON-discriminator workaround.
 ///

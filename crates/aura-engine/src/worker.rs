@@ -2,9 +2,9 @@
 
 use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_agent_loop::{AgentLoop, AgentLoopResult};
-use aura_core::AgentId;
-use aura_kernel::Kernel;
-use aura_reasoner::{Message, ToolDefinition};
+use aura_core_types::AgentId;
+use aura_agent_kernel::Kernel;
+use aura_model_reasoner::{Message, ToolDefinition};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
@@ -69,9 +69,9 @@ pub async fn process_agent_detailed(
         .await
         .map_err(|_| anyhow::anyhow!("Agent loop timed out after {AGENT_LOOP_TIMEOUT:?}"))??;
 
-        let response_tx = aura_core::Transaction::new_chained(
+        let response_tx = aura_core_types::Transaction::new_chained(
             agent_id,
-            aura_core::TransactionType::AgentMsg,
+            aura_core_types::TransactionType::AgentMsg,
             result.total_text.as_bytes().to_vec(),
             None,
         );
@@ -102,15 +102,15 @@ pub async fn process_agent_detailed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{Transaction, TransactionType};
-    use aura_kernel::{ExecutorRouter, KernelConfig};
-    use aura_reasoner::MockProvider;
-    use aura_store::{RocksStore, Store};
+    use aura_core_types::{Transaction, TransactionType};
+    use aura_agent_kernel::{ExecutorRouter, KernelConfig};
+    use aura_model_reasoner::MockProvider;
+    use aura_store_db::{RocksStore, Store};
     use bytes::Bytes;
 
     fn create_test_kernel(dir: &std::path::Path, agent_id: AgentId) -> Arc<Kernel> {
         let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.join("db"), false).unwrap());
-        let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+        let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
             Arc::new(MockProvider::simple_response("response"));
         let ws_dir = dir.join("workspaces");
         std::fs::create_dir_all(&ws_dir).unwrap();
@@ -143,7 +143,7 @@ mod tests {
         let agent_id = AgentId::generate();
         let store: Arc<dyn Store> =
             Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
-        let provider: Arc<dyn aura_reasoner::ModelProvider + Send + Sync> =
+        let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
             Arc::new(MockProvider::simple_response("I processed your request."));
         let ws_dir = dir.path().join("workspaces");
         std::fs::create_dir_all(&ws_dir).unwrap();

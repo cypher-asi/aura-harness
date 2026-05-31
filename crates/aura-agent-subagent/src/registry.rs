@@ -8,7 +8,7 @@
 //! pure-data subagent surface. No fleet deps are added — the
 //! `aura-core` types are sufficient.
 
-use aura_core::{Capability, SubagentBudget, SubagentKindSpec};
+use aura_core_types::{Capability, SubagentBudget, SubagentKindSpec};
 
 const READ_TOOLS: &[&str] = &[
     "list_files",
@@ -96,7 +96,7 @@ fn general_purpose() -> SubagentKindSpec {
         readonly: false,
         default_model: None,
         budget: SubagentBudget {
-            max_iterations: aura_core::MAX_TURNS,
+            max_iterations: aura_core_types::MAX_TURNS,
             max_tokens: None,
             timeout_ms: 300_000,
         },
@@ -135,7 +135,7 @@ fn shell() -> SubagentKindSpec {
         readonly: false,
         default_model: None,
         budget: SubagentBudget {
-            max_iterations: aura_core::MAX_TURNS,
+            max_iterations: aura_core_types::MAX_TURNS,
             max_tokens: None,
             timeout_ms: 180_000,
         },
@@ -152,7 +152,7 @@ fn readonly_kind(name: &str, description: &str, system_prompt: &str) -> Subagent
         readonly: true,
         default_model: None,
         budget: SubagentBudget {
-            max_iterations: aura_core::MAX_TURNS,
+            max_iterations: aura_core_types::MAX_TURNS,
             max_tokens: None,
             timeout_ms: 180_000,
         },

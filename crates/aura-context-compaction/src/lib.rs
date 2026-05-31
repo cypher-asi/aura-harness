@@ -44,14 +44,14 @@ impl Compactor {
     }
 
     /// Apply storage compaction to persisted messages.
-    pub fn compact_for_storage(&self, messages: &mut [aura_reasoner::Message]) {
+    pub fn compact_for_storage(&self, messages: &mut [aura_model_reasoner::Message]) {
         compact_for_storage(messages);
     }
 
     /// Apply overflow recovery with a specific tier.
     pub fn recover_overflow(
         &self,
-        messages: &mut [aura_reasoner::Message],
+        messages: &mut [aura_model_reasoner::Message],
         tier: CompactionConfig,
     ) -> CompactionReport {
         recover_overflow(messages, tier)
@@ -60,7 +60,7 @@ impl Compactor {
     /// Compact the tool surface supplied by the caller.
     pub fn compact_tool_surface(
         &self,
-        tools: &mut [aura_reasoner::ToolDefinition],
+        tools: &mut [aura_model_reasoner::ToolDefinition],
     ) -> ToolSurfaceReport {
         compact_tool_surface(tools)
     }
@@ -68,7 +68,7 @@ impl Compactor {
     /// Rewrite compactable middle history with a model-generated summary.
     pub fn apply_summary(
         &self,
-        messages: &mut Vec<aura_reasoner::Message>,
+        messages: &mut Vec<aura_model_reasoner::Message>,
         summary: SummaryOutput,
     ) -> CompactionReport {
         apply_message_summary(messages, summary)

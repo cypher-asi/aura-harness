@@ -104,7 +104,7 @@ fn normalized_access(count: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+    use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
     use chrono::{Duration, Utc};
 
     fn make_fact(importance: f32, access_count: u32, hours_ago: i64) -> Fact {

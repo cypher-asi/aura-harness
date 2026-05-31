@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_plugin_hooks::{HookEngine, HookEvent, HookFiringContext, RegisteredHook};
 use tempfile::TempDir;
 

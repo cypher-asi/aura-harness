@@ -32,7 +32,7 @@
 //! the turn-scoped identity (task_id, turn_index, iteration_offset,
 //! input_queue, tools) that the loop body needs.
 
-use aura_reasoner::Message;
+use aura_model_reasoner::Message;
 use tokio::sync::mpsc::Sender;
 use tracing::instrument;
 

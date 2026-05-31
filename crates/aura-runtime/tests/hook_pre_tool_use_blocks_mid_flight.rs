@@ -7,8 +7,8 @@
 //! [`aura_plugin_hooks::HookOutcome::Block`]:
 //!
 //! 1. The executor is NEVER invoked — verified here with a
-//!    tracking [`aura_kernel::Executor`] that panics if called.
-//! 2. The synthetic [`aura_core::Effect::failed`] carries a JSON
+//!    tracking [`aura_agent_kernel::Executor`] that panics if called.
+//! 2. The synthetic [`aura_core_types::Effect::failed`] carries a JSON
 //!    discriminator (`{"kind":"tool_call_blocked_by_hook", ...}`)
 //!    on its payload so the audit consumer can distinguish the
 //!    block from a normal executor failure. This surfaces the
@@ -17,8 +17,8 @@
 //!    deterministic sequence number per blocked slot (no parallel
 //!    `write_system_record` race).
 //! 3. The kernel surfaces the synthetic
-//!    [`aura_core::Effect::failed`] (status =
-//!    [`aura_core::EffectStatus::Failed`]) so the agent loop sees
+//!    [`aura_core_types::Effect::failed`] (status =
+//!    [`aura_core_types::EffectStatus::Failed`]) so the agent loop sees
 //!    a clean rejection in its next iteration.
 //!
 //! Two acceptance tests cover the single-proposal path (most
@@ -29,18 +29,18 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_plugin_hooks::{HookEngine, HookEvent, PluginHookHost, RegisteredHook};
-use aura_reasoner::{MockProvider, ModelProvider};
-use aura_store::{RocksStore, Store};
+use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_store_db::{RocksStore, Store};
 use tempfile::TempDir;
 
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     Action, AgentId, Effect, EffectKind, EffectStatus, ToolProposal, Transaction, TransactionType,
 };
 
-/// Tracking [`aura_kernel::Executor`] that panics if `execute` is
+/// Tracking [`aura_agent_kernel::Executor`] that panics if `execute` is
 /// reached. Used to enforce the "executor was NEVER invoked" arm
 /// of the acceptance contract.
 #[derive(Debug)]
@@ -66,7 +66,7 @@ impl ForbiddenExecutor {
 }
 
 #[async_trait]
-impl aura_kernel::Executor for ForbiddenExecutor {
+impl aura_agent_kernel::Executor for ForbiddenExecutor {
     fn name(&self) -> &'static str {
         self.name
     }
@@ -77,9 +77,9 @@ impl aura_kernel::Executor for ForbiddenExecutor {
 
     async fn execute(
         &self,
-        _ctx: &aura_kernel::ExecuteContext,
+        _ctx: &aura_agent_kernel::ExecuteContext,
         action: &Action,
-    ) -> Result<Effect, aura_kernel::ExecutorError> {
+    ) -> Result<Effect, aura_agent_kernel::ExecutorError> {
         let mut guard = self
             .calls
             .lock()
@@ -161,7 +161,7 @@ fn build_kernel(
         Arc::new(MockProvider::simple_response("noop"));
     let executor = Arc::new(ForbiddenExecutor::new());
     let mut router = ExecutorRouter::new();
-    router.add_executor(executor.clone() as Arc<dyn aura_kernel::Executor>);
+    router.add_executor(executor.clone() as Arc<dyn aura_agent_kernel::Executor>);
 
     let config = KernelConfig {
         workspace_base: ws_dir.path().to_path_buf(),
@@ -251,8 +251,8 @@ async fn pre_tool_use_block_aborts_single_proposal_dispatch() {
 #[tokio::test]
 async fn pre_tool_use_block_persists_discriminator_to_record_log() {
     // Second test: after a block, scan the agent's record log via
-    // the [`aura_store::Store`] and verify that the persisted
-    // [`aura_core::RecordEntry`] reproduces the synthetic
+    // the [`aura_store_db::Store`] and verify that the persisted
+    // [`aura_core_types::RecordEntry`] reproduces the synthetic
     // `tool_call_blocked_by_hook` effect payload. This pins the
     // round-trip so a future change to the wire format must
     // either preserve the discriminator or bump the schema

@@ -3,7 +3,7 @@
 //! These tests pin the requirement that any automaton that issues a
 //! `ModelProvider::complete`-style call MUST go through
 //! [`aura_agent::KernelModelGateway`] so the call produces a
-//! [`aura_core::TransactionType::Reasoning`] record entry. A failure
+//! [`aura_core_types::TransactionType::Reasoning`] record entry. A failure
 //! here indicates that a new code path bypasses the kernel's recording
 //! seam — a §1 / §3 regression.
 
@@ -12,10 +12,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aura_agent::KernelModelGateway;
 use aura_automaton::{Automaton, AutomatonId, AutomatonState, TickContext};
-use aura_core::{AgentId, TransactionType};
-use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_reasoner::{MockProvider, ModelProvider};
-use aura_store::{RocksStore, Store};
+use aura_core_types::{AgentId, TransactionType};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_store_db::{RocksStore, Store};
 use aura_tools::domain_tools::{
     CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
     SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,

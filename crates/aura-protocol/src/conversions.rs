@@ -10,7 +10,7 @@
 //! router) actually speaks. Both crates sit in the `core` layer so
 //! this is a same-layer dependency edge.
 
-use aura_core::{
+use aura_core_types::{
     AgentToolPermissions, InstalledIntegrationDefinition, InstalledToolDefinition, ToolState,
 };
 
@@ -66,15 +66,15 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
         input_schema: t.input_schema,
         endpoint: t.endpoint,
         auth: match t.auth {
-            ToolAuth::None => aura_core::ToolAuth::None,
-            ToolAuth::Bearer { token } => aura_core::ToolAuth::Bearer { token },
-            ToolAuth::ApiKey { header, key } => aura_core::ToolAuth::ApiKey { header, key },
-            ToolAuth::Headers { headers } => aura_core::ToolAuth::Headers { headers },
+            ToolAuth::None => aura_core_types::ToolAuth::None,
+            ToolAuth::Bearer { token } => aura_core_types::ToolAuth::Bearer { token },
+            ToolAuth::ApiKey { header, key } => aura_core_types::ToolAuth::ApiKey { header, key },
+            ToolAuth::Headers { headers } => aura_core_types::ToolAuth::Headers { headers },
         },
         timeout_ms: t.timeout_ms,
         namespace: t.namespace,
         required_integration: t.required_integration.map(|requirement| {
-            aura_core::InstalledToolIntegrationRequirement {
+            aura_core_types::InstalledToolIntegrationRequirement {
                 integration_id: requirement.integration_id,
                 provider: requirement.provider,
                 kind: requirement.kind,
@@ -82,42 +82,42 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
         }),
         runtime_execution: t.runtime_execution.map(|execution| match execution {
             InstalledToolRuntimeExecution::AppProvider(provider) => {
-                aura_core::InstalledToolRuntimeExecution::AppProvider(
-                    aura_core::InstalledToolRuntimeProviderExecution {
+                aura_core_types::InstalledToolRuntimeExecution::AppProvider(
+                    aura_core_types::InstalledToolRuntimeProviderExecution {
                         provider: provider.provider,
                         base_url: provider.base_url,
                         static_headers: provider.static_headers,
                         integrations: provider
                             .integrations
                             .into_iter()
-                            .map(|integration| aura_core::InstalledToolRuntimeIntegration {
+                            .map(|integration| aura_core_types::InstalledToolRuntimeIntegration {
                                 integration_id: integration.integration_id,
                                 base_url: integration.base_url,
                                 auth: match integration.auth {
                                     InstalledToolRuntimeAuth::None => {
-                                        aura_core::InstalledToolRuntimeAuth::None
+                                        aura_core_types::InstalledToolRuntimeAuth::None
                                     }
                                     InstalledToolRuntimeAuth::AuthorizationBearer { token } => {
-                                        aura_core::InstalledToolRuntimeAuth::AuthorizationBearer {
+                                        aura_core_types::InstalledToolRuntimeAuth::AuthorizationBearer {
                                             token,
                                         }
                                     }
                                     InstalledToolRuntimeAuth::AuthorizationRaw { value } => {
-                                        aura_core::InstalledToolRuntimeAuth::AuthorizationRaw {
+                                        aura_core_types::InstalledToolRuntimeAuth::AuthorizationRaw {
                                             value,
                                         }
                                     }
                                     InstalledToolRuntimeAuth::Header { name, value } => {
-                                        aura_core::InstalledToolRuntimeAuth::Header { name, value }
+                                        aura_core_types::InstalledToolRuntimeAuth::Header { name, value }
                                     }
                                     InstalledToolRuntimeAuth::QueryParam { name, value } => {
-                                        aura_core::InstalledToolRuntimeAuth::QueryParam {
+                                        aura_core_types::InstalledToolRuntimeAuth::QueryParam {
                                             name,
                                             value,
                                         }
                                     }
                                     InstalledToolRuntimeAuth::Basic { username, password } => {
-                                        aura_core::InstalledToolRuntimeAuth::Basic {
+                                        aura_core_types::InstalledToolRuntimeAuth::Basic {
                                             username,
                                             password,
                                         }

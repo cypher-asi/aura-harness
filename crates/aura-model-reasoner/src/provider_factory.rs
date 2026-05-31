@@ -38,7 +38,7 @@ pub struct SessionOverrides {
     pub fallback_model: Option<String>,
     pub prompt_caching_enabled: Option<bool>,
     /// Stable cache key forwarded to OpenAI-family upstreams as
-    /// `prompt_cache_key`. See `aura_reasoner::ModelRequest::prompt_cache_key`.
+    /// `prompt_cache_key`. See `aura_model_reasoner::ModelRequest::prompt_cache_key`.
     pub prompt_cache_key: Option<String>,
     /// Retention hint paired with `prompt_cache_key`. Wire values are
     /// `"in_memory"` or `"24h"`.

@@ -24,7 +24,7 @@ mod record_log_bridge;
 mod rocks_store;
 mod store;
 
-pub use aura_core::AgentStatus;
+pub use aura_core_types::AgentStatus;
 pub use error::StoreError;
 pub use keys::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};
 #[cfg(any(test, feature = "test-support"))]
@@ -54,6 +54,6 @@ pub mod cf {
     pub const RUNTIME_CAPABILITIES: &str = "runtime_capabilities";
     /// Per-user tool-permission default policy (full_access /
     /// auto_review / default_permissions). Keyed by `user_id` bytes;
-    /// value is a JSON-serialised [`aura_core::UserToolDefaults`].
+    /// value is a JSON-serialised [`aura_core_types::UserToolDefaults`].
     pub const USER_TOOL_DEFAULTS: &str = "user_tool_defaults";
 }

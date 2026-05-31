@@ -36,7 +36,7 @@
 //! the wrong length, an unrecognised prefix byte, or an unknown metadata field
 //! discriminant.
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 
 use crate::error::StoreError;
 

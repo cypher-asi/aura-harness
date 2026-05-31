@@ -1,7 +1,7 @@
 use crate::error::MemoryError;
 use crate::store::{MemoryStats, MemoryStore, MemoryStoreApi};
 use crate::types::{AgentEvent, Fact, FactSource, Procedure};
-use aura_core::{AgentEventId, AgentId, FactId, ProcedureId};
+use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
 use chrono::{Duration, Utc};
 use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options};
 use std::sync::Arc;

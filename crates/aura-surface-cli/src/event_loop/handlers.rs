@@ -3,7 +3,7 @@
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
-use aura_core::{SystemKind, Transaction, TransactionType};
+use aura_core_types::{SystemKind, Transaction, TransactionType};
 use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};

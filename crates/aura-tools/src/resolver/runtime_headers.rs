@@ -7,7 +7,7 @@
 //! sync with the tests in `resolver_tests.rs`.
 
 use crate::error::ToolError;
-use aura_core::{InstalledToolRuntimeAuth, InstalledToolRuntimeIntegration};
+use aura_core_types::{InstalledToolRuntimeAuth, InstalledToolRuntimeIntegration};
 use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 use reqwest::{RequestBuilder, Url};
 use std::collections::HashMap;

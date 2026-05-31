@@ -5,7 +5,7 @@
 //! summarise the compactable middle of the transcript. This module
 //! owns the **model-facing strings** the call uses (system prompt
 //! constant + the user-prompt header template). The actual message
-//! rendering (walking `aura_reasoner::Message` blocks and producing
+//! rendering (walking `aura_model_reasoner::Message` blocks and producing
 //! the per-message text bodies) stays in `aura-agent` because it
 //! requires the reasoner crate, which is a forbidden dep here (see
 //! crate-level docs).
@@ -14,7 +14,7 @@
 //!
 //! The plan instructed "auxiliary/compaction.rs — moved verbatim".
 //! Doing so would force a `aura-reasoner` dependency on this crate
-//! (the verbatim function takes `&[aura_reasoner::Message]` and walks
+//! (the verbatim function takes `&[aura_model_reasoner::Message]` and walks
 //! `ContentBlock` variants), which the boundary contract explicitly
 //! forbids. The pragmatic split is:
 //!
@@ -52,20 +52,20 @@ pub const RECENT_TAIL_HEADER: &str = "\n## Recent Tail Kept Verbatim\n";
 /// Rendered numeric / target inputs the user prompt header carries.
 ///
 /// `aura-agent` populates this from the
-/// `aura_compaction::SummaryInput` and threads it (plus the two
+/// `aura_context_compaction::SummaryInput` and threads it (plus the two
 /// already-rendered message blocks) into [`build_compact_summary_user_prompt`].
 #[derive(Debug, Clone, Copy)]
 pub struct CompactSummaryHeader {
-    /// `aura_compaction::SummaryInput::max_summary_chars` — the
+    /// `aura_context_compaction::SummaryInput::max_summary_chars` — the
     /// soft target the model is asked to hit.
     pub max_summary_chars: usize,
-    /// `aura_compaction::SummaryInput::original_chars` — pre-local-
+    /// `aura_context_compaction::SummaryInput::original_chars` — pre-local-
     /// compaction transcript size.
     pub original_chars: usize,
-    /// `aura_compaction::SummaryInput::local_chars` — post-local-
+    /// `aura_context_compaction::SummaryInput::local_chars` — post-local-
     /// compaction transcript size.
     pub local_chars: usize,
-    /// `aura_compaction::SummaryInput::target_total_chars` — desired
+    /// `aura_context_compaction::SummaryInput::target_total_chars` — desired
     /// total transcript size after the summary lands.
     pub target_total_chars: usize,
 }
@@ -73,7 +73,7 @@ pub struct CompactSummaryHeader {
 /// Render the compaction-summary user prompt.
 ///
 /// `compactable_middle_block` and `recent_tail_block` are pre-rendered
-/// by `aura-agent` (it walks the `Vec<aura_reasoner::Message>` slices
+/// by `aura-agent` (it walks the `Vec<aura_model_reasoner::Message>` slices
 /// and produces the per-message text). Both arguments may be empty
 /// strings when the corresponding section is empty.
 #[must_use]

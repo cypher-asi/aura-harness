@@ -173,7 +173,7 @@ Phase 1 wire-protocol primitives — currently just `ProtocolVersion` and `PROTO
 
 #### [`aura-core`](../crates/aura-core) (shell)
 
-Phase 1 compatibility shell. Re-exports the split core crates and still hosts the larger domain types (`Transaction`, `TransactionType`, `Action`, `ActionKind`, `Effect`, `RecordEntry`, `ToolCall`, `ToolResult`, `Identity`, `AuraError`) that have not yet been moved to a more specific home. Most workspace crates can simply `use aura_core::*`.
+Phase 1 compatibility shell. Re-exports the split core crates and still hosts the larger domain types (`Transaction`, `TransactionType`, `Action`, `ActionKind`, `Effect`, `RecordEntry`, `ToolCall`, `ToolResult`, `Identity`, `AuraError`) that have not yet been moved to a more specific home. Most workspace crates can simply `use aura_core_types::*`.
 
 #### [`aura-protocol`](../crates/aura-protocol)
 
@@ -212,7 +212,7 @@ Content-addressed snapshot store trait (`SnapshotStore`, `SnapshotError`, `NoopS
 
 #### [`aura-store`](../crates/aura-store) (shell)
 
-Re-export shell over `aura-store-db` so legacy `aura_store::*` imports keep compiling unchanged.
+Re-export shell over `aura-store-db` so legacy `aura_store_db::*` imports keep compiling unchanged.
 
 ---
 
@@ -402,7 +402,7 @@ Key types and modules:
 
 #### [`aura-kernel`](../crates/aura-kernel) (shell)
 
-Re-export shell over `aura-agent-kernel` preserving historical `aura_kernel::*` paths.
+Re-export shell over `aura-agent-kernel` preserving historical `aura_agent_kernel::*` paths.
 
 ---
 
@@ -507,7 +507,7 @@ Layout:
 - `scheduler.rs` — per-agent single-writer claim (Invariant §12.a), `IdentityRegistry`, per-turn `AgentLoopConfig` resolution. The claim semantics are unchanged from the pre-refactor `aura-runtime/src/scheduler.rs` — only the crate moved.
 - `worker.rs` — `process_agent`: dequeue + `AgentLoop` execution + atomic record append. Owns the `AGENT_LOOP_TIMEOUT` boundary timeout (rules.md §6.2).
 - `automaton/{mod,build,dispatch,event_channel}.rs` — `AutomatonBridge`: builds per-agent automaton kernels, turns automaton events into outbound `OutboundMessage` frames, records lifecycle changes. Formerly `aura-runtime/src/automaton_bridge/`.
-- `memory_observer.rs` — `MemoryTurnObserver`: `TurnObserver` adapter feeding completed turns into `aura_memory::MemoryManager`.
+- `memory_observer.rs` — `MemoryTurnObserver`: `TurnObserver` adapter feeding completed turns into `aura_context_memory::MemoryManager`.
 - `capabilities.rs` — `record_runtime_capabilities` helper called by the automaton bridge during dev-loop / task-run bootstrap.
 - `executor.rs` — shared `ToolResolver` / `ExecutorRouter` construction helpers (formerly `executor_factory.rs`).
 - `child_runner.rs` — `RuntimeChildRunner`: the surface-layer impl of `aura_fleet_spawn::ChildRunner`. Exposed as `Engine::child_runner() -> Arc<dyn ChildRunner>`; consumed by the fleet-layer `FleetSubagentDispatcher`.

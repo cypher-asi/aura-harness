@@ -5,7 +5,7 @@
 //! `RocksStore` can append a sequence of entries for one agent and
 //! report a head_seq matching the number of entries appended.
 
-use aura_core::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};
+use aura_core_types::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};
 use aura_store_db::RocksStore;
 use aura_store_record::{RecordLog, RecordLogError};
 use tempfile::TempDir;

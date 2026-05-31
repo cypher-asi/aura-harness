@@ -14,19 +14,19 @@
 
 use crate::gateway::session::ToolApprovalBroker;
 use aura_agent::AgentLoopConfig;
-use aura_core::{
+use aura_core_types::{
     AgentId, AgentPermissions, AgentScope, AgentToolPermissions, Capability,
     InstalledIntegrationDefinition, InstalledToolDefinition,
 };
 use aura_engine::scheduler::AgentIdentity as RuntimeAgentIdentity;
-use aura_prompts::{
+use aura_context_prompts::{
     default_system_prompt, AgentIdentity as PromptAgentIdentity, ProjectInfo, SystemPromptBuilder,
 };
 use aura_protocol::{
     AgentPermissionsWire, AgentPersona, CapabilityWire, ChatProjectInfoWire, IntentClassifierSpec,
     ReasoningEffort, RuntimeRequest, RuntimeRequestType, SessionModelOverrides,
 };
-use aura_reasoner::{
+use aura_model_reasoner::{
     Message, ModelProvider, ModelRequestKind, PromptCacheRetention, ThinkingEffort, ToolDefinition,
 };
 use aura_tools::IntentClassifier;
@@ -74,7 +74,7 @@ pub struct Session {
     /// model picker via `ModelSelection::reasoning_effort`. When set it
     /// hard-pins the agent loop's thinking effort (see
     /// `AgentLoopConfig::user_thinking_effort`).
-    pub(crate) user_thinking_effort: Option<aura_reasoner::ThinkingEffort>,
+    pub(crate) user_thinking_effort: Option<aura_model_reasoner::ThinkingEffort>,
     /// Maximum agentic steps per turn.
     pub(crate) max_turns: u32,
     /// Installed tools registered for this session.
@@ -159,7 +159,7 @@ impl Session {
             max_tokens: 16384,
             temperature: None,
             user_thinking_effort: None,
-            max_turns: aura_core::MAX_TURNS,
+            max_turns: aura_core_types::MAX_TURNS,
             installed_tools: Vec::new(),
             installed_integrations: Vec::new(),
             messages: Vec::new(),

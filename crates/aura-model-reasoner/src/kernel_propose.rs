@@ -5,7 +5,7 @@
 //! aura-core or a shared protocol crate in a future refactor to keep aura-reasoner
 //! focused on LLM client concerns.
 
-use aura_core::{ActionKind, AgentId, Transaction};
+use aura_core_types::{ActionKind, AgentId, Transaction};
 use serde::{Deserialize, Serialize};
 
 /// A summary of a record entry for context.
@@ -78,7 +78,7 @@ impl ProposeRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::{Hash, TransactionType};
+    use aura_core_types::{Hash, TransactionType};
     use bytes::Bytes;
 
     fn create_test_tx(agent_id: AgentId) -> Transaction {

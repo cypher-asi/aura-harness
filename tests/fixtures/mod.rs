@@ -3,7 +3,7 @@
 //! Provides common test data and helpers used across all crates.
 #![allow(deprecated)]
 
-use aura_core::{
+use aura_core_types::{
     Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectKind, EffectStatus,
     ProposalSet, RecordEntry, ToolCall, ToolResult, Transaction, TransactionType, TxId,
 };

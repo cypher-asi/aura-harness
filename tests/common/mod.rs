@@ -18,11 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_auth::CredentialStore;
-use aura_kernel::Executor;
-use aura_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
+use aura_agent_kernel::Executor;
+use aura_model_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
 use aura_runtime::test_support::{create_router, RouterState, RouterStateConfig, Scheduler};
 use aura_runtime::NodeConfig;
-use aura_store::RocksStore;
+use aura_store_db::RocksStore;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::{ToolCatalog, ToolConfig, ToolResolver};
 use futures_util::{SinkExt, StreamExt};
@@ -173,7 +173,7 @@ impl TestServer {
             config.auth_token.clear();
         }
 
-        let store: Arc<dyn aura_store::Store> =
+        let store: Arc<dyn aura_store_db::Store> =
             Arc::new(RocksStore::open(&db_path, false).expect("open rocks"));
 
         let tool_config = ToolConfig {
@@ -349,7 +349,7 @@ pub fn chat_request_payload_extended(workspace: &Path, opts: ChatRequestOpts<'_>
     if let Some(mt) = opts.max_tokens {
         request["model"]["max_tokens"] = json!(mt);
     }
-    let max_turns = opts.max_turns.unwrap_or(aura_core::MAX_TURNS);
+    let max_turns = opts.max_turns.unwrap_or(aura_core_types::MAX_TURNS);
     request["model"]["max_turns"] = json!(max_turns);
     if let Some(temp) = opts.temperature {
         request["model"]["temperature"] = json!(temp);

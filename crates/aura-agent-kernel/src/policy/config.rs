@@ -3,7 +3,7 @@
 //! All behavior-free, data-shape pieces of the policy engine live here so
 //! [`super::check`] can focus on the authorization pipeline itself.
 
-use aura_core::{
+use aura_core_types::{
     ActionKind, AgentPermissions, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
     InstalledToolIntegrationRequirement, UserToolDefaults,
 };
@@ -37,13 +37,13 @@ pub struct PolicyConfig {
     /// "default permissions" / "auto-review" / "full access" mode. Every
     /// `(agent, tool)` resolves through this plus the optional
     /// [`Self::agent_override`] via
-    /// [`aura_core::resolve_effective_permission`]. Defaults to
+    /// [`aura_core_types::resolve_effective_permission`]. Defaults to
     /// [`UserToolDefaults::full_access`] to preserve "default ON" for
     /// callers that do not load a persisted user profile.
     ///
     pub user_default: UserToolDefaults,
     /// Optional per-agent override map stamped on this agent's
-    /// [`aura_core::Identity`]. `None` (or an empty map) means
+    /// [`aura_core_types::Identity`]. `None` (or an empty map) means
     /// "inherit the user default verbatim". Populated entries override
     /// only that specific tool; anything unlisted still flows through
     /// [`Self::user_default`].
@@ -118,7 +118,7 @@ impl PolicyConfig {
 
     /// Attach the originating user's tool-permission defaults. This is
     /// the first half of the tri-state (`on`/`off`/`ask`) resolution
-    /// consulted by [`aura_core::resolve_effective_permission`].
+    /// consulted by [`aura_core_types::resolve_effective_permission`].
     #[must_use]
     pub fn with_user_default(mut self, user_default: UserToolDefaults) -> Self {
         self.user_default = user_default;

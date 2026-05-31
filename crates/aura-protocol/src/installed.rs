@@ -1,7 +1,7 @@
 //! Installed-tool and installed-integration wire definitions.
 //!
 //! These are the self-contained, wire-compatible mirrors of
-//! `aura_core::InstalledToolDefinition` (and friends), shipped on
+//! `aura_core_types::InstalledToolDefinition` (and friends), shipped on
 //! the [`crate::AgentCapabilities`] bundle of a
 //! [`crate::RuntimeRequest`].
 
@@ -90,7 +90,7 @@ pub enum InstalledToolRuntimeExecution {
 /// Definition for an installed tool, sent over the wire on
 /// [`crate::AgentCapabilities`].
 ///
-/// Wire-compatible with `aura_core::InstalledToolDefinition`.
+/// Wire-compatible with `aura_core_types::InstalledToolDefinition`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct InstalledToolIntegrationRequirement {

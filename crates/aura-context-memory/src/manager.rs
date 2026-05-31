@@ -10,9 +10,9 @@ use crate::store::{MemoryStore, MemoryStoreApi};
 use crate::turn_summary::TurnSummary;
 use crate::types::{MemoryPacket, Procedure};
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
-use aura_core::AgentId;
-use aura_core::ProcedureId;
-use aura_reasoner::ModelProvider;
+use aura_core_types::AgentId;
+use aura_core_types::ProcedureId;
+use aura_model_reasoner::ModelProvider;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 

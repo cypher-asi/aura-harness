@@ -14,7 +14,7 @@ use ts_rs::TS;
 
 use crate::common::ToolStateWire;
 
-/// Wire-compatible mirror of `aura_core::AgentToolPermissions`.
+/// Wire-compatible mirror of `aura_core_types::AgentToolPermissions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct AgentToolPermissionsWire {
@@ -22,11 +22,11 @@ pub struct AgentToolPermissionsWire {
     pub per_tool: BTreeMap<String, ToolStateWire>,
 }
 
-/// Wire-compatible mirror of `aura_core::AgentPermissions`.
+/// Wire-compatible mirror of `aura_core_types::AgentPermissions`.
 ///
 /// Mirrored here so `aura-protocol` stays decoupled from the harness-core
 /// crates; the harness translates [`AgentPermissionsWire`] into its own
-/// `aura_core::AgentPermissions` when a [`crate::RuntimeRequest`] lands.
+/// `aura_core_types::AgentPermissions` when a [`crate::RuntimeRequest`] lands.
 /// Additive / forward-compatible: unknown capability variants
 /// deserialize into [`CapabilityWire::Unknown`] rather than rejecting
 /// the run.
@@ -39,7 +39,7 @@ pub struct AgentPermissionsWire {
     pub capabilities: Vec<CapabilityWire>,
 }
 
-/// Wire-compatible mirror of `aura_core::AgentScope`.
+/// Wire-compatible mirror of `aura_core_types::AgentScope`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct AgentScopeWire {
@@ -51,7 +51,7 @@ pub struct AgentScopeWire {
     pub agent_ids: Vec<String>,
 }
 
-/// Wire-compatible mirror of `aura_core::Capability` (externally-tagged
+/// Wire-compatible mirror of `aura_core_types::Capability` (externally-tagged
 /// camel-case enum matching the core serialization format).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]

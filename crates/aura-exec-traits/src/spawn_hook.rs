@@ -11,7 +11,7 @@
 //! `aura-agent-kernel` and implements this trait.
 
 use async_trait::async_trait;
-use aura_core::{AgentId, AgentPermissions, AgentToolPermissions, Hash};
+use aura_core_types::{AgentId, AgentPermissions, AgentToolPermissions, Hash};
 use serde::{Deserialize, Serialize};
 
 /// Specification for a child agent a `spawn_agent` call wants to create.
@@ -107,7 +107,7 @@ impl SpawnHook for NoopSpawnHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core::AgentPermissions;
+    use aura_core_types::AgentPermissions;
 
     #[tokio::test]
     async fn noop_hook_generates_child_id_when_absent() {

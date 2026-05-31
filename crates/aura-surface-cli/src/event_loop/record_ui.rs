@@ -1,5 +1,5 @@
 use crate::record_loader::extract_tool_info;
-use aura_core::{AgentId, EffectStatus, RecordEntry, Transaction, TransactionType};
+use aura_core_types::{AgentId, EffectStatus, RecordEntry, Transaction, TransactionType};
 use aura_terminal::{
     events::{RecordStatus, RecordSummary},
     UiCommand,

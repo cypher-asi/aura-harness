@@ -6,7 +6,7 @@
 use super::super::super::json_paths::{ensure_slack_ok, required_string};
 use super::super::ToolResolver;
 use crate::error::ToolError;
-use aura_core::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
+use aura_core_types::{InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution};
 use reqwest::Method;
 use serde_json::{json, Value};
 

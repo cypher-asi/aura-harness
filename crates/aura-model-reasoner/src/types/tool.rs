@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use aura_core::{CacheControl, ToolDefinition};
+pub use aura_core_types::{CacheControl, ToolDefinition};
 
 // ============================================================================
 // Tool Choice

@@ -1,7 +1,7 @@
 //! Phase 7b: per-parent concurrency cap rejects the 4th spawn when
 //! `max_concurrent_per_parent = 3`.
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_fleet_quota::{QuotaConfig, QuotaError, QuotaPool, QuotaRequest};
 
 fn request(parent: AgentId) -> QuotaRequest {

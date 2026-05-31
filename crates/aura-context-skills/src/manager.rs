@@ -8,7 +8,7 @@ use crate::parser::validate_name;
 use crate::prompt;
 use crate::registry::SkillRegistry;
 use crate::types::{Skill, SkillActivation, SkillMeta};
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use chrono::Utc;
 use std::sync::Arc;
 use tracing::info;

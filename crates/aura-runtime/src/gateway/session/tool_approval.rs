@@ -6,8 +6,8 @@ use crate::protocol::{
     ToolApprovalResponse as ProtocolResponse,
 };
 use async_trait::async_trait;
-use aura_core::ToolState;
-use aura_kernel::{
+use aura_core_types::ToolState;
+use aura_agent_kernel::{
     PendingToolPrompt, ToolApprovalError, ToolApprovalPrompter, ToolApprovalRemember,
     ToolApprovalResponse,
 };
@@ -143,8 +143,8 @@ mod tests {
         OutboundMessage, TextDelta, ToolApprovalDecision, ToolApprovalRemember,
         ToolApprovalResponse as ProtocolResponse,
     };
-    use aura_core::{AgentId, ToolState};
-    use aura_kernel::{
+    use aura_core_types::{AgentId, ToolState};
+    use aura_agent_kernel::{
         PendingToolPrompt, ToolApprovalError, ToolApprovalPrompter,
         ToolApprovalRemember as Remember,
     };

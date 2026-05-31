@@ -1,7 +1,7 @@
 use crate::procedures::{ProcedureConfig, ProcedureExtractor, StepSequence};
 use crate::store::{MemoryStore, MemoryStoreApi};
 use crate::types::{AgentEvent, Procedure};
-use aura_core::{AgentEventId, AgentId, ProcedureId};
+use aura_core_types::{AgentEventId, AgentId, ProcedureId};
 use chrono::{Duration, Utc};
 use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options};
 use std::sync::Arc;

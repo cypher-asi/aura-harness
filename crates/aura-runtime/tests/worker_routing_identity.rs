@@ -36,13 +36,13 @@
 use async_trait::async_trait;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::AgentLoopConfig;
-use aura_core::{AgentId, AgentStatus, Transaction, TransactionType};
-use aura_reasoner::{
+use aura_core_types::{AgentId, AgentStatus, Transaction, TransactionType};
+use aura_model_reasoner::{
     Message, ModelProvider, ModelRequest, ModelRequestKind, ModelResponse, ProviderTrace,
     ReasonerError, Role, StopReason, Usage,
 };
 use aura_runtime::scheduler::{AgentIdentity, AgentIdentityRegistry, Scheduler, SchedulerError};
-use aura_store::{RocksStore, Store};
+use aura_store_db::{RocksStore, Store};
 use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
@@ -54,7 +54,7 @@ use tempfile::TempDir;
 /// Capture every [`ModelRequest`] that reaches a [`ModelProvider`].
 ///
 /// Documented as a test-only shim because the production
-/// [`aura_reasoner::MockProvider`] returns canned responses but does
+/// [`aura_model_reasoner::MockProvider`] returns canned responses but does
 /// not expose the inbound request. The recording wrapper feeds back a
 /// trivial `EndTurn` response so the agent loop terminates after one
 /// iteration; the captured request is what we assert on.
@@ -93,7 +93,7 @@ impl ModelProvider for RecordingProvider {
             stop_reason: StopReason::EndTurn,
             message: Message {
                 role: Role::Assistant,
-                content: vec![aura_reasoner::ContentBlock::text("ok")],
+                content: vec![aura_model_reasoner::ContentBlock::text("ok")],
             },
             usage: Usage::new(10, 5),
             trace: ProviderTrace::new(model_str.clone(), 0),

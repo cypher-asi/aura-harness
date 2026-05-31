@@ -1,7 +1,7 @@
 //! [`ParentContext`] — atomic snapshot of a parent agent's session
 //! state at spawn time.
 
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_core_modes::{AgentMode, KernelMode, ModeProfile};
 use aura_core_permissions::Permissions;
 

@@ -2,7 +2,7 @@
 //!
 //! Re-exports canonical types from `aura-protocol` and provides
 //! harness-specific helpers that depend on aura-runtime-internal
-//! types (e.g. [`aura_reasoner::ToolDefinition`]).
+//! types (e.g. [`aura_model_reasoner::ToolDefinition`]).
 //!
 //! Phase A note: the wire→core conversion helpers
 //! (`installed_tool_to_core`, `installed_integration_to_core`,
@@ -15,8 +15,8 @@
 
 pub use aura_protocol::*;
 
-use aura_core::ToolState;
-use aura_reasoner::ToolDefinition;
+use aura_core_types::ToolState;
+use aura_model_reasoner::ToolDefinition;
 
 /// Convert a reasoner [`ToolDefinition`] into a protocol [`ToolInfo`]
 /// with an explicit tri-state permission annotation.

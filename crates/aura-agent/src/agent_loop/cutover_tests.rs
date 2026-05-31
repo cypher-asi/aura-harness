@@ -3,7 +3,7 @@
 //! These tests verify that AgentLoop covers the same behavioral surface as
 //! the removed TurnProcessor, ensuring no coverage was lost during migration.
 
-use aura_reasoner::{ContentBlock, Message, MockProvider, MockResponse, ToolDefinition};
+use aura_model_reasoner::{ContentBlock, Message, MockProvider, MockResponse, ToolDefinition};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 

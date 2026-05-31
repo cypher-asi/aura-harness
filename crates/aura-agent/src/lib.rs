@@ -89,7 +89,7 @@ pub use types::{
 /// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).
 ///
 /// Phase 5 (error-handling polish) reshaped this enum so that
-/// [`aura_reasoner::ReasonerError`] and [`aura_kernel::KernelError`]
+/// [`aura_model_reasoner::ReasonerError`] and [`aura_agent_kernel::KernelError`]
 /// are preserved end-to-end instead of being flattened to a `String`
 /// inside [`AgentError::Internal`]. Callers (and tests) can now match
 /// on the underlying variant — for example
@@ -103,18 +103,18 @@ pub use types::{
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     /// Provider-side failure surfaced through the kernel gateway. The
-    /// inner [`aura_reasoner::ReasonerError`] keeps its variant
+    /// inner [`aura_model_reasoner::ReasonerError`] keeps its variant
     /// (`RateLimited`, `InsufficientCredits`, `Api { status }`,
     /// `StreamAbortedWithPartial`, …) so the agent loop and CLI can
     /// branch on it.
     #[error(transparent)]
-    Reason(#[from] aura_reasoner::ReasonerError),
+    Reason(#[from] aura_model_reasoner::ReasonerError),
     /// Non-reasoner kernel failure (store, serialization, internal
     /// invariants, kernel-level timeout). Reasoner failures wrapped
-    /// in [`aura_kernel::KernelError::Reasoner`] are unwrapped into
+    /// in [`aura_agent_kernel::KernelError::Reasoner`] are unwrapped into
     /// [`AgentError::Reason`] via [`From<KernelError>`] below.
     #[error(transparent)]
-    Kernel(aura_kernel::KernelError),
+    Kernel(aura_agent_kernel::KernelError),
     /// `tokio::spawn_blocking` join failure — the worker panicked or
     /// was cancelled by the runtime.
     #[error("background task failed: {0}")]
@@ -173,9 +173,9 @@ pub enum AgentError {
     },
     /// Layer E.3: raised by the streaming sampling pump when
     /// `tokio::time::timeout(config.stream_event_timeout, …)` elapses
-    /// waiting for the next [`aura_reasoner::ResponseEvent`]
+    /// waiting for the next [`aura_model_reasoner::ResponseEvent`]
     /// (Rule 6.2 boundary timeout). Because pings and intra-block
-    /// deltas surface as [`aura_reasoner::ResponseEvent::Keepalive`]
+    /// deltas surface as [`aura_model_reasoner::ResponseEvent::Keepalive`]
     /// and reset the window, this fires only on a genuinely silent
     /// stream (no frame at all for the full boundary) — not on a
     /// slow-but-alive one. `elapsed_ms` carries the configured
@@ -188,26 +188,26 @@ pub enum AgentError {
     },
     /// Layer E.3: in-band or transport-level streaming error
     /// surfaced by the sampling pump. Wraps the typed
-    /// [`aura_reasoner::StreamError`] so the variant survives the
+    /// [`aura_model_reasoner::StreamError`] so the variant survives the
     /// trip through the agent loop and matches downstream branches
     /// (TransportClosed vs InvalidEvent vs Timeout) without parsing
     /// the formatted message.
     #[error(transparent)]
-    Stream(aura_reasoner::StreamError),
+    Stream(aura_model_reasoner::StreamError),
     #[error("{0}")]
     Internal(String),
 }
 
-impl From<aura_kernel::KernelError> for AgentError {
+impl From<aura_agent_kernel::KernelError> for AgentError {
     /// Flatten `KernelError::Reasoner(inner)` into
     /// [`AgentError::Reason`] so the typed `ReasonerError` survives a
     /// trip through the kernel gateway and a `?` in the agent runner
     /// without being wrapped twice (which would render as
     /// `"reasoner error: <ReasonerError display>"`). All other kernel
     /// failure modes flow through [`AgentError::Kernel`] unchanged.
-    fn from(e: aura_kernel::KernelError) -> Self {
+    fn from(e: aura_agent_kernel::KernelError) -> Self {
         match e {
-            aura_kernel::KernelError::Reasoner(inner) => Self::Reason(inner),
+            aura_agent_kernel::KernelError::Reasoner(inner) => Self::Reason(inner),
             other => Self::Kernel(other),
         }
     }

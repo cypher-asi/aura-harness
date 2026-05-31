@@ -10,10 +10,10 @@
 //! stays confined to `aura-kernel` per Invariant §10.
 
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolGateway};
-use aura_core::{AgentId, Transaction, TransactionType};
-use aura_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_reasoner::{MockProvider, MockResponse, ModelProvider, ToolDefinition};
-use aura_store::{RocksStore, Store};
+use aura_core_types::{AgentId, Transaction, TransactionType};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_model_reasoner::{MockProvider, MockResponse, ModelProvider, ToolDefinition};
+use aura_store_db::{RocksStore, Store};
 use bytes::Bytes;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -73,7 +73,7 @@ async fn test_full_pipeline_enqueue_process_record() {
     let agent_loop = AgentLoop::new(config);
 
     let prompt = String::from_utf8(dequeued_tx.payload.to_vec()).unwrap();
-    let messages = vec![aura_reasoner::Message::user(prompt)];
+    let messages = vec![aura_model_reasoner::Message::user(prompt)];
     let result = agent_loop
         .run(provider.as_ref(), &executor, messages, vec![])
         .await
@@ -124,7 +124,7 @@ async fn test_pipeline_multiple_transactions() {
     let mut processed = 0u64;
     while let Some((token, tx)) = store.dequeue_tx(agent_id).unwrap() {
         let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
-        let messages = vec![aura_reasoner::Message::user(prompt)];
+        let messages = vec![aura_model_reasoner::Message::user(prompt)];
         let _result = agent_loop
             .run(provider.as_ref(), &executor, messages, vec![])
             .await
@@ -175,7 +175,7 @@ async fn test_deterministic_processing_same_input() {
         let config = AgentLoopConfig::for_agent("claude-test-model");
         let agent_loop = AgentLoop::new(config);
 
-        let messages = vec![aura_reasoner::Message::user("determinism test")];
+        let messages = vec![aura_model_reasoner::Message::user("determinism test")];
         let result = agent_loop
             .run(provider.as_ref(), &executor, messages, vec![])
             .await
@@ -264,7 +264,7 @@ async fn test_multi_agent_concurrent_processing() {
 
             let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
             let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
-            let messages = vec![aura_reasoner::Message::user(prompt)];
+            let messages = vec![aura_model_reasoner::Message::user(prompt)];
             let _result = agent_loop
                 .run(provider.as_ref(), &executor, messages, vec![])
                 .await
@@ -389,7 +389,7 @@ async fn test_pipeline_with_tool_use() {
     )];
 
     let prompt = String::from_utf8(dequeued.payload.to_vec()).unwrap();
-    let messages = vec![aura_reasoner::Message::user(prompt)];
+    let messages = vec![aura_model_reasoner::Message::user(prompt)];
     let result = agent_loop
         .run(provider.as_ref(), &executor, messages, tools)
         .await

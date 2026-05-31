@@ -26,7 +26,7 @@
 //!   the diverging entry; the entire boot is rejected.
 //! - **Shim substitution.** No live model provider or executor is
 //!   invoked during replay. The consumer's only inputs are the
-//!   recorded [`aura_core::RecordEntry`] rows (proposals, decisions,
+//!   recorded [`aura_core_types::RecordEntry`] rows (proposals, decisions,
 //!   actions, effects) and the snapshot store; the recorded values
 //!   are treated as the source of truth for what the original turn
 //!   produced.
@@ -66,8 +66,8 @@
 
 use std::sync::Arc;
 
-use aura_core::{AgentId, ContextHash, Decision, Effect, RecordEntry};
-use aura_store::Store;
+use aura_core_types::{AgentId, ContextHash, Decision, Effect, RecordEntry};
+use aura_store_db::Store;
 use aura_store_record::RecordPayload;
 use aura_store_snapshot::{SnapshotError, SnapshotStore};
 use thiserror::Error;

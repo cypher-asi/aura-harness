@@ -1,7 +1,7 @@
 //! Storage error types.
 
 #[allow(deprecated)]
-use aura_core::{AgentId, TxId};
+use aura_core_types::{AgentId, TxId};
 use thiserror::Error;
 
 /// Storage-specific error type.

@@ -9,7 +9,7 @@
 //! `TurnSummary` and the runtime owns the copy.
 
 use aura_agent::AgentLoopResult;
-use aura_reasoner::Message;
+use aura_model_reasoner::Message;
 use aura_runtime::memory_observer::turn_summary_from_result;
 
 #[test]

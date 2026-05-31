@@ -18,7 +18,7 @@
 //! `system_prompt`, `user_body`, `max_tokens`, and the model
 //! identifier.
 
-use aura_reasoner::{Message, ModelProvider, ModelRequest, ModelResponse, ToolChoice};
+use aura_model_reasoner::{Message, ModelProvider, ModelRequest, ModelResponse, ToolChoice};
 
 use crate::error::AutomatonError;
 

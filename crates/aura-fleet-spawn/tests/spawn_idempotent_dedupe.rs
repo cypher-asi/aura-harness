@@ -8,7 +8,7 @@ mod common;
 use std::sync::Arc;
 
 use aura_agent_subagent::SubagentOverrides;
-use aura_core::TransactionType;
+use aura_core_types::TransactionType;
 use aura_core_modes::{AgentMode, SpawnMode};
 use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;

@@ -1,5 +1,5 @@
 use super::*;
-use aura_core::{
+use aura_core_types::{
     ActionId, AgentId, InstalledToolDefinition, InstalledToolRuntimeAuth,
     InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
     InstalledToolRuntimeProviderExecution, ToolAuth,

@@ -3,7 +3,7 @@
 use super::*;
 use crate::policy::PolicyConfig;
 use crate::ToolApprovalRemember;
-use aura_core::{
+use aura_core_types::{
     ActionKind, AgentPermissions, AgentScope, Capability, Proposal, ToolCall, ToolState,
 };
 use bytes::Bytes;
@@ -89,7 +89,7 @@ fn resolve_tool_state_default_is_on() {
 
 #[test]
 fn resolve_tool_state_auto_review_is_ask_for_everything() {
-    let cfg = PolicyConfig::default().with_user_default(aura_core::UserToolDefaults::auto_review());
+    let cfg = PolicyConfig::default().with_user_default(aura_core_types::UserToolDefaults::auto_review());
     let policy = Policy::new(cfg);
     assert_eq!(policy.resolve_tool_state("read_file"), ToolState::Ask);
     assert_eq!(policy.resolve_tool_state("run_command"), ToolState::Ask);
@@ -101,7 +101,7 @@ fn resolve_tool_state_default_permissions_mode_is_tri_state_per_tool() {
     per_tool.insert("read_file".into(), ToolState::Allow);
     per_tool.insert("run_command".into(), ToolState::Ask);
     per_tool.insert("delete_file".into(), ToolState::Deny);
-    let user_default = aura_core::UserToolDefaults::default_permissions(per_tool, ToolState::Deny);
+    let user_default = aura_core_types::UserToolDefaults::default_permissions(per_tool, ToolState::Deny);
     let cfg = PolicyConfig::default().with_user_default(user_default);
     let policy = Policy::new(cfg);
     assert_eq!(policy.resolve_tool_state("read_file"), ToolState::Allow);
@@ -117,9 +117,9 @@ fn resolve_tool_state_default_permissions_mode_is_tri_state_per_tool() {
 #[test]
 fn resolve_tool_state_agent_override_wins_over_user_default() {
     let cfg = PolicyConfig::default()
-        .with_user_default(aura_core::UserToolDefaults::full_access())
+        .with_user_default(aura_core_types::UserToolDefaults::full_access())
         .with_agent_override(Some(
-            aura_core::AgentToolPermissions::new()
+            aura_core_types::AgentToolPermissions::new()
                 .with("run_command", ToolState::Deny)
                 .with("delete_file", ToolState::Ask),
         ));
@@ -143,13 +143,13 @@ fn resolve_tool_state_agent_override_wins_over_user_default() {
 
 #[test]
 fn live_prompt_verdict_denies_ask_without_session() {
-    let cfg = PolicyConfig::default().with_user_default(aura_core::UserToolDefaults::auto_review());
+    let cfg = PolicyConfig::default().with_user_default(aura_core_types::UserToolDefaults::auto_review());
     let policy = Policy::new(cfg);
     let verdict = policy
         .live_tool_prompt_verdict(
             "read_file",
             &serde_json::json!({"path": "a.txt"}),
-            aura_core::AgentId::generate(),
+            aura_core_types::AgentId::generate(),
             "request-1".to_string(),
             false,
             vec![ToolApprovalRemember::Once],
@@ -163,9 +163,9 @@ fn live_prompt_verdict_denies_ask_without_session() {
 
 #[test]
 fn live_prompt_verdict_carries_structured_prompt() {
-    let cfg = PolicyConfig::default().with_user_default(aura_core::UserToolDefaults::auto_review());
+    let cfg = PolicyConfig::default().with_user_default(aura_core_types::UserToolDefaults::auto_review());
     let policy = Policy::new(cfg);
-    let agent_id = aura_core::AgentId::generate();
+    let agent_id = aura_core_types::AgentId::generate();
     let verdict = policy
         .live_tool_prompt_verdict(
             "read_file",

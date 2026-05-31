@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use aura_agent::RecordingModelProvider;
-use aura_reasoner::ModelProvider;
+use aura_model_reasoner::ModelProvider;
 use aura_tools::domain_tools::DomainApi;
 
 use crate::context::TickContext;

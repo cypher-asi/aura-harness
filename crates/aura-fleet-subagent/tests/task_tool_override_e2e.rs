@@ -18,7 +18,7 @@
 mod common;
 
 use aura_agent_subagent::OverriddenField;
-use aura_core::{
+use aura_core_types::{
     AgentId, AgentPermissions, AgentScope, Capability, SubagentBudget, SubagentDispatchRequest,
     SubagentExit, UserToolDefaults,
 };
@@ -56,12 +56,12 @@ fn base_request(parent_agent_id: AgentId) -> SubagentDispatchRequest {
 }
 
 fn applied_fields(
-    store: &Arc<dyn aura_store::Store>,
+    store: &Arc<dyn aura_store_db::Store>,
     parent_agent_id: AgentId,
 ) -> Vec<OverriddenField> {
     let records = store.scan_record(parent_agent_id, 1, 100).expect("scan");
     for entry in records {
-        if entry.tx.tx_type != aura_core::TransactionType::SubagentSpawn {
+        if entry.tx.tx_type != aura_core_types::TransactionType::SubagentSpawn {
             continue;
         }
         let Ok(payload) = serde_json::from_slice::<Value>(&entry.tx.payload) else {

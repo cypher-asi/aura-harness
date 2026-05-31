@@ -20,14 +20,14 @@
 
 #![cfg(feature = "test-support")]
 
-use aura_core::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};
+use aura_core_types::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};
 use aura_store_db::{FaultAt, ReadStore, RocksStore, Store, StoreError, WriteStore};
 use std::sync::Arc;
 use tempfile::TempDir;
 
 // Compile-time check: `RocksStore` is the canonical `WriteStore` impl.
 // Invariant §10 seals the trait via a crate-private marker
-// (`aura_store::store::sealed::Sealed`) so only types declared inside
+// (`aura_store_db::store::sealed::Sealed`) so only types declared inside
 // `aura-store` can satisfy the bound. A negative compile-fail test is
 // redundant because an external `impl WriteStore for MyType {}` would
 // be rejected by rustc at build time with a private-trait error —

@@ -117,7 +117,7 @@ fn cached_tool_result(call: &ToolCallInfo, content: String) -> ToolCallResult {
         tool_use_id: call.id.clone(),
         content,
         is_error: false,
-        kind: aura_core::ToolResultKind::Ok,
+        kind: aura_core_types::ToolResultKind::Ok,
         stop_loop: false,
         file_changes: Vec::new(),
     }

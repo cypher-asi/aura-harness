@@ -266,7 +266,7 @@ fn automaton_bridge(
     })
 }
 
-fn wire_permissions_to_core(wire: AgentPermissionsWire) -> aura_core::AgentPermissions {
+fn wire_permissions_to_core(wire: AgentPermissionsWire) -> aura_core_types::AgentPermissions {
     crate::gateway::session::agent_permissions_from_wire(wire)
 }
 

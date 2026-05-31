@@ -27,7 +27,7 @@
 //! once the workspace has `trybuild` wired into CI.
 
 use crate::error::StoreError;
-use aura_core::{
+use aura_core_types::{
     AgentId, AgentStatus, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults,
 };
 

@@ -209,7 +209,7 @@ pub struct AgentLoopResult {
     /// Number of iterations completed.
     pub iterations: usize,
     /// Final message history.
-    pub messages: Vec<aura_reasoner::Message>,
+    pub messages: Vec<aura_model_reasoner::Message>,
 }
 
 impl AgentLoopResult {

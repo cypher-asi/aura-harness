@@ -1,7 +1,7 @@
 //! Executor router for dispatching actions.
 
 use crate::executor::{ExecuteContext, Executor};
-use aura_core::{Action, Effect, EffectKind, EffectStatus};
+use aura_core_types::{Action, Effect, EffectKind, EffectStatus};
 use std::sync::Arc;
 use tracing::{debug, error, instrument};
 
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
     use crate::executor::{ExecuteContext, Executor, ExecutorError};
     use async_trait::async_trait;
-    use aura_core::{ActionId, ActionKind, AgentId};
+    use aura_core_types::{ActionId, ActionKind, AgentId};
 
     /// Test executor that always claims to handle the action.
     struct AlwaysMatch {

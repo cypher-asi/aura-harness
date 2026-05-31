@@ -17,7 +17,7 @@
 //! consumers` comment on the relevant groups.
 
 use crate::tool::builtin_tools;
-use aura_core::ToolDefinition;
+use aura_core_types::ToolDefinition;
 
 // ============================================================================
 // Helpers

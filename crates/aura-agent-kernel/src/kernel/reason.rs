@@ -12,8 +12,8 @@
 
 use super::{Kernel, ReasonResult, ReasonStreamHandle};
 use crate::context::hash_tx_with_window;
-use aura_core::{RecordEntry, Transaction, TransactionType};
-use aura_reasoner::{ModelRequest, StreamEventStream};
+use aura_core_types::{RecordEntry, Transaction, TransactionType};
+use aura_model_reasoner::{ModelRequest, StreamEventStream};
 use tracing::error;
 
 impl Kernel {

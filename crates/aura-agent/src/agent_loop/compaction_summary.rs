@@ -2,7 +2,7 @@
 //!
 //! The render-only template (system prompt, header literals,
 //! numeric-input formatter) lives in
-//! `aura_prompts::auxiliary::compaction`. The `Vec<aura_reasoner::Message>`
+//! `aura_context_prompts::auxiliary::compaction`. The `Vec<aura_model_reasoner::Message>`
 //! walker that produces the per-message text for the two body
 //! sections has to stay in `aura-agent` because it depends on
 //! `aura-reasoner`, which the prompts crate is forbidden from
@@ -13,15 +13,15 @@
 //! inline implementation that used to live in
 //! `prompts/auxiliary/compaction.rs`.
 
-use aura_prompts::auxiliary::compaction::{
+use aura_context_prompts::auxiliary::compaction::{
     build_compact_summary_user_prompt, CompactSummaryHeader,
 };
-use aura_reasoner::{ContentBlock, Message, ToolResultContent};
+use aura_model_reasoner::{ContentBlock, Message, ToolResultContent};
 
 /// Render the user-channel prompt for the compaction-summary LLM
 /// call.
 #[must_use]
-pub(super) fn render_user_prompt(input: &aura_compaction::SummaryInput) -> String {
+pub(super) fn render_user_prompt(input: &aura_context_compaction::SummaryInput) -> String {
     let header = CompactSummaryHeader {
         max_summary_chars: input.max_summary_chars,
         original_chars: input.original_chars,
@@ -95,7 +95,7 @@ fn truncate_for_summary_prompt(text: &str) -> String {
     if text.len() <= max_block_chars {
         text.to_string()
     } else {
-        aura_compaction::truncate_content(text, max_block_chars, Some(2_000), Some(1_000))
+        aura_context_compaction::truncate_content(text, max_block_chars, Some(2_000), Some(1_000))
     }
 }
 
@@ -103,8 +103,8 @@ fn truncate_for_summary_prompt(text: &str) -> String {
 mod tests {
     use super::*;
 
-    fn small_input() -> aura_compaction::SummaryInput {
-        aura_compaction::SummaryInput {
+    fn small_input() -> aura_context_compaction::SummaryInput {
+        aura_context_compaction::SummaryInput {
             compactable_messages: vec![Message::user("first")],
             recent_tail: vec![Message::assistant("latest")],
             max_summary_chars: 1_000,

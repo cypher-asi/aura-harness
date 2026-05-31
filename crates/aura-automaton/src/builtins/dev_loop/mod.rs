@@ -1,4 +1,4 @@
-﻿//! Dev-loop automaton — runs project tasks in order.
+//! Dev-loop automaton — runs project tasks in order.
 //!
 //! Intentionally minimal: fetch all tasks on first tick, drop the ones
 //! already marked `done`, sort the rest by `order`, then execute one
@@ -20,7 +20,7 @@
 use std::sync::{Arc, OnceLock};
 
 use aura_agent::agent_runner::{AgentRunner, AgentRunnerConfig};
-use aura_reasoner::ModelProvider;
+use aura_model_reasoner::ModelProvider;
 use aura_tools::catalog::ToolCatalog;
 use aura_tools::domain_tools::DomainApi;
 

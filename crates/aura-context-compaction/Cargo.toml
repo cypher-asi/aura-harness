@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-config = { path = "../aura-config" }
-aura-reasoner = { path = "../aura-reasoner" }
+aura-model-reasoner = { path = "../aura-model-reasoner" }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 

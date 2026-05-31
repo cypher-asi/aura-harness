@@ -3,18 +3,18 @@
 //!
 //! Phase 6c inverted the historical upward edge `aura-context-memory ->
 //! aura-agent`. The memory crate now consumes a layer-neutral
-//! [`aura_memory::TurnSummary`] and exposes no observer trait of its own.
+//! [`aura_context_memory::TurnSummary`] and exposes no observer trait of its own.
 //! This module lives in the engine layer — the natural meeting point of
 //! `aura-agent` (for the [`aura_agent::TurnObserver`] trait + the
 //! [`aura_agent::AgentLoopResult`] payload) and `aura-context-memory`
-//! (for the [`aura_memory::MemoryManager`] facade) — and supplies the
+//! (for the [`aura_context_memory::MemoryManager`] facade) — and supplies the
 //! glue that:
 //!
 //! 1. Translates an [`aura_agent::AgentLoopResult`] into a
-//!    [`aura_memory::TurnSummary`] via [`turn_summary_from_result`].
+//!    [`aura_context_memory::TurnSummary`] via [`turn_summary_from_result`].
 //! 2. Implements [`aura_agent::TurnObserver`] for [`MemoryTurnObserver`]
 //!    and delegates to
-//!    [`aura_memory::MemoryManager::process_result_with_context`].
+//!    [`aura_context_memory::MemoryManager::process_result_with_context`].
 //!
 //! Memory ingestion is intentionally best-effort: a failed write logs a
 //! `warn!` and returns, never aborting the in-flight turn (Invariant:
@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aura_agent::{AgentLoopResult, TurnObserver};
-use aura_core::AgentId;
-use aura_memory::{MemoryManager, TurnSummary};
+use aura_core_types::AgentId;
+use aura_context_memory::{MemoryManager, TurnSummary};
 use tracing::warn;
 
 /// Build a layer-neutral [`TurnSummary`] from an

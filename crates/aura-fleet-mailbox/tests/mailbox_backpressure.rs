@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use aura_agent_subagent::{ParentContext, SubagentLineage, SubagentOverrides};
-use aura_core::AgentId;
+use aura_core_types::AgentId;
 use aura_core_modes::{AgentMode, KernelMode, ModeProfile, ReplayMode, SandboxMode, SpawnMode};
 use aura_core_permissions::{AgentScope, Capability, Permissions};
 use aura_fleet_dispatch::AgentJob;

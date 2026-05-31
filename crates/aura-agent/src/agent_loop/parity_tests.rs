@@ -11,17 +11,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core::{
+use aura_core_types::{
     Action, ActionKind, AgentId, AgentToolPermissions, Effect, ToolCall, ToolResult, ToolState,
 };
-use aura_kernel::{
+use aura_agent_kernel::{
     ExecuteContext, Executor, ExecutorError, ExecutorRouter, Kernel, KernelConfig, PolicyConfig,
 };
-use aura_reasoner::{
+use aura_model_reasoner::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, StopReason, ToolDefinition,
     Usage,
 };
-use aura_store::{RocksStore, Store};
+use aura_store_db::{RocksStore, Store};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::kernel_gateway::KernelToolGateway;

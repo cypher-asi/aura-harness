@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use aura_core::ToolDefinition;
-use aura_core::ToolResult;
+use aura_core_types::ToolDefinition;
+use aura_core_types::ToolResult;
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};

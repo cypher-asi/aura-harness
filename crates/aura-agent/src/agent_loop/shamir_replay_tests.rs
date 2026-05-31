@@ -10,7 +10,7 @@
 //!    [`super::tool_execution`] — every subset/superset hit avoids a
 //!    re-execution.
 //! 2. Phase 2's
-//!    [`aura_compaction::dedup_read_results_by_content_hash`] pass —
+//!    [`aura_context_compaction::dedup_read_results_by_content_hash`] pass —
 //!    identical read-only tool results fold to a structured marker
 //!    in older history.
 //! 3. Phase 3's [`super::steering::RepeatedReadTracker`] —
@@ -41,12 +41,12 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
 use aura_agent_steering::TurnSteering;
-use aura_compaction::dedup_read_results_by_content_hash;
-use aura_reasoner::{ContentBlock, Message, Role, ToolResultContent};
+use aura_context_compaction::dedup_read_results_by_content_hash;
+use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
 use serde::Deserialize;
 use serde_json::Value;
 
-use aura_prompts::SteeringKind;
+use aura_context_prompts::SteeringKind;
 
 use super::steering::RepeatedReadTracker;
 use crate::types::{ToolCallInfo, ToolCallResult};
@@ -186,7 +186,7 @@ fn synthesize_result_bytes(
 }
 
 /// Mirror of `aura_tools::fs_tools::read::content_hash_hex` /
-/// `aura_compaction::messages::dedup_content_hash_hex`. Reproduced
+/// `aura_context_compaction::messages::dedup_content_hash_hex`. Reproduced
 /// here so the replay harness has zero new dependencies and the hash
 /// stamp matches what the read tool would have produced for the same
 /// bytes (both implementations use `std::hash::DefaultHasher`).
@@ -236,7 +236,7 @@ fn shamir_replay_meets_eight_distinct_read_target() {
             tool_use_id: call.id.clone(),
             content: body,
             is_error: false,
-            kind: aura_core::ToolResultKind::Ok,
+            kind: aura_core_types::ToolResultKind::Ok,
             stop_loop: false,
             file_changes: Vec::new(),
         };

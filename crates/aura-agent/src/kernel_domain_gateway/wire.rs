@@ -2,7 +2,7 @@
 //!
 //! The `KernelDomainGateway` records a `request` entry before each
 //! mutating `DomainApi` call and a `response` entry after. Both entries
-//! serialize through [`Kernel::process_direct`](aura_kernel::Kernel::process_direct)
+//! serialize through [`Kernel::process_direct`](aura_agent_kernel::Kernel::process_direct)
 //! as `System` / `DomainMutation` payloads. This module owns the JSON
 //! shape of those payloads (via the `with_recording!` /
 //! `with_recording_unit!` macros consumed by the trait `impl` in

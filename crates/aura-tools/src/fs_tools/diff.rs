@@ -2,7 +2,7 @@
 //!
 //! Centralises the `similar`-based line counting that `fs_write`,
 //! `fs_edit`, and `fs_delete` use to populate
-//! [`aura_core::ToolResult::line_diff`]. Keeping the call in one place
+//! [`aura_core_types::ToolResult::line_diff`]. Keeping the call in one place
 //! means there's a single source of truth for "how do we count lines"
 //! — the agent loop just reads what the tool layer reports rather than
 //! re-implementing the diff math against tool inputs.

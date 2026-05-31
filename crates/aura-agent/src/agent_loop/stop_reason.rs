@@ -7,12 +7,12 @@
 //! stop-reason routing for both transports. What remains:
 //!
 //! - [`AgentLoop::apply_summary_compaction`] — the auxiliary
-//!   model-call that turns a [`aura_compaction::SummaryInput`] into a
+//!   model-call that turns a [`aura_context_compaction::SummaryInput`] into a
 //!   replacement transcript prefix.
 //! - [`AgentLoop::build_summary_request`] — the
 //!   [`ModelRequest`] builder for the summary call (kept private to
 //!   the loop). Renders the user prompt via
-//!   [`aura_prompts::auxiliary::compaction`] per the Phase 2 prompts
+//!   [`aura_context_prompts::auxiliary::compaction`] per the Phase 2 prompts
 //!   boundary contract.
 //!
 //! Phase 7 deleted the pre-pump `retry_after_context_overflow`
@@ -22,9 +22,9 @@
 //! ladder against the active transport rather than resurrect the
 //! buffered helper.
 
-use aura_compaction as compaction;
+use aura_context_compaction as compaction;
 use aura_config::CHARS_PER_TOKEN;
-use aura_reasoner::{
+use aura_model_reasoner::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ThinkingEffort,
     ToolChoice, ToolDefinition,
 };
@@ -122,7 +122,7 @@ impl AgentLoop {
 
         ModelRequest::builder(
             &self.config.model,
-            aura_prompts::auxiliary::compaction::COMPACTION_SUMMARY_SYSTEM_PROMPT,
+            aura_context_prompts::auxiliary::compaction::COMPACTION_SUMMARY_SYSTEM_PROMPT,
         )
         .messages(vec![Message::user(prompt)])
         .tools(Vec::new())
