@@ -13,7 +13,7 @@
 //! without touching this crate.
 
 use async_trait::async_trait;
-use aura_agent::AgentLoopConfig;
+use aura_agent_loop::AgentLoopConfig;
 use aura_agent_subagent::{narrow_permissions, registry::SubagentRegistry};
 use aura_core::{
     resolve_effective_permission, AgentPermissions, AgentToolPermissions, SubagentExit,

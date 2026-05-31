@@ -1,6 +1,7 @@
 //! Worker for processing agent transactions via kernel-mediated `AgentLoop`.
 
-use aura_agent::{AgentLoop, AgentLoopResult, KernelModelGateway, KernelToolGateway};
+use aura_agent::{KernelModelGateway, KernelToolGateway};
+use aura_agent_loop::{AgentLoop, AgentLoopResult};
 use aura_core::AgentId;
 use aura_kernel::Kernel;
 use aura_reasoner::{Message, ToolDefinition};

@@ -25,6 +25,7 @@ aura-agent = { path = "../aura-agent" }
 aura-agent-subagent = { path = "../aura-agent-subagent" }
 aura-memory = { path = "../aura-memory" }
 aura-automaton = { path = "../aura-automaton" }
+aura-surface-automaton = { path = "../aura-surface-automaton" }
 aura-skills = { path = "../aura-skills" }
 # Phase B / Commit 3: the chat-session bootstrap renders a typed
 # `<agent_identity>` block via `aura_prompts::SystemPromptBuilder`

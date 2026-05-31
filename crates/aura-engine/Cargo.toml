@@ -14,6 +14,8 @@ aura-tools = { path = "../aura-tools" }
 aura-reasoner = { path = "../aura-reasoner" }
 aura-kernel = { path = "../aura-kernel" }
 aura-agent = { path = "../aura-agent" }
+aura-agent-loop = { path = "../aura-agent-loop" }
+aura-exec-runner = { path = "../aura-exec-runner" }
 aura-agent-subagent = { path = "../aura-agent-subagent" }
 aura-memory = { path = "../aura-memory" }
 aura-automaton = { path = "../aura-automaton" }

@@ -4,7 +4,7 @@ use crate::config::NodeConfig;
 use crate::gateway::{create_router, RouterState};
 use anyhow::Context;
 use aura_agent::KernelModelGateway;
-use aura_automaton::AutomatonRuntime;
+use aura_surface_automaton::AutomatonRuntime;
 use aura_core::AgentId;
 use aura_domain_http::HttpDomainApi;
 use aura_engine::automaton::AutomatonBridge;

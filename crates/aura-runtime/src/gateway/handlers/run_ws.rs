@@ -150,7 +150,7 @@ async fn handle_automaton_ws(
 
     let mut saw_done_in_history = false;
     for event in history {
-        let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
+        let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
         match serde_json::to_string(&event) {
             Ok(json) => {
                 if ws_tx.send(WsMessage::Text(json)).await.is_err() {
@@ -173,7 +173,7 @@ async fn handle_automaton_ws(
         loop {
             match live.recv().await {
                 Ok(event) => {
-                    let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
+                    let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
                     match serde_json::to_string(&event) {
                         Ok(json) => {
                             if ws_tx.send(WsMessage::Text(json)).await.is_err() {

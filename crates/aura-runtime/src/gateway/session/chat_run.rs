@@ -4,7 +4,7 @@
 //! [`aura_engine::automaton::EventChannel`] model so a chat run's
 //! turn execution can be decoupled from any single WebSocket
 //! connection. Where the automaton channel replays
-//! [`aura_automaton::AutomatonEvent`]s, this one replays
+//! [`aura_surface_automaton::AutomatonEvent`]s, this one replays
 //! [`OutboundMessage`]s (the chat wire protocol).
 //!
 //! Motivation: today a chat run is one-shot — the first
