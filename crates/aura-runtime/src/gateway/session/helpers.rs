@@ -410,12 +410,29 @@ pub(super) async fn build_kernel_with_config(
     // wiring into the composition root once the gateway layout
     // stabilises.
     let subagent_registry = SubagentRegistry::bundled();
-    let orphan_dir = std::env::temp_dir().join("aura-test-orphans");
-    let child_runner: Arc<dyn aura_fleet_spawn::ChildRunner> = Arc::new(RuntimeChildRunner::new(
-        ctx.store.clone(),
-        ctx.scheduler.clone(),
-        subagent_registry.clone(),
-    ));
+    // Durable per-node orphan store under the node data dir
+    // (`workspace_base` is `<data_dir>/workspaces`, so its parent is the
+    // data dir). Detached/abandoned subagents must survive in a real
+    // location so `aura agents inspect` can find them — not the OS temp
+    // dir, which is volatile and shared across unrelated installs.
+    let orphan_dir = ctx
+        .workspace_base
+        .parent()
+        .map_or_else(
+            || ctx.workspace_base.join("subagent-orphans"),
+            |data_dir| data_dir.join("subagent-orphans"),
+        );
+    // Root child subagents at the parent session's resolved workspace so
+    // they can read the same project files the parent sees, rather than
+    // the scheduler's empty `workspace_base/<child_id>` scratch dir.
+    let child_runner: Arc<dyn aura_fleet_spawn::ChildRunner> = Arc::new(
+        RuntimeChildRunner::new(
+            ctx.store.clone(),
+            ctx.scheduler.clone(),
+            subagent_registry.clone(),
+        )
+        .with_child_workspace(workspace.clone(), use_workspace_base_as_root),
+    );
     let fleet_dispatcher = Arc::new(FleetSubagentDispatcher::with_components(
         ctx.store.clone(),
         subagent_registry,

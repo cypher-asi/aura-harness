@@ -25,6 +25,7 @@ use aura_fleet_spawn::{ChildRunContext, ChildRunError, ChildRunner};
 use aura_store_db::Store;
 use bytes::Bytes;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
@@ -38,6 +39,13 @@ pub struct RuntimeChildRunner {
     scheduler: Arc<Scheduler>,
     registry: SubagentRegistry,
     spawn_hook: aura_agent_kernel::KernelSpawnHook,
+    /// Optional workspace root override applied to every child run as
+    /// `(workspace_base, use_workspace_base_as_root)`. Set to the parent
+    /// session's resolved project workspace so subagents share the
+    /// parent's sandbox root and can read project files, instead of the
+    /// scheduler's empty per-agent scratch directory. `None` preserves
+    /// the legacy per-agent `workspace_base/<agent_id>` layout.
+    child_workspace: Option<(PathBuf, bool)>,
 }
 
 impl std::fmt::Debug for RuntimeChildRunner {
@@ -50,7 +58,8 @@ impl std::fmt::Debug for RuntimeChildRunner {
 
 impl RuntimeChildRunner {
     /// Construct a [`RuntimeChildRunner`] over the supplied store /
-    /// scheduler / registry.
+    /// scheduler / registry, with no workspace override (children use the
+    /// scheduler's default per-agent layout).
     #[must_use]
     pub fn new(
         store: Arc<dyn Store>,
@@ -62,7 +71,18 @@ impl RuntimeChildRunner {
             store,
             scheduler,
             registry,
+            child_workspace: None,
         }
+    }
+
+    /// Root every child run's sandbox at the given workspace, expressed
+    /// as `(workspace_base, use_workspace_base_as_root)` — the same pair
+    /// the parent session resolved. This lets subagents read the parent
+    /// project's files instead of an empty per-agent scratch directory.
+    #[must_use]
+    pub fn with_child_workspace(mut self, workspace: PathBuf, use_as_root: bool) -> Self {
+        self.child_workspace = Some((workspace, use_as_root));
+        self
     }
 }
 
@@ -202,6 +222,7 @@ impl ChildRunner for RuntimeChildRunner {
                         loop_config: Some(loop_config),
                         policy: Some(policy),
                         event_tx: child_event_tx,
+                        workspace_override: self.child_workspace.clone(),
                     },
                 ),
             ) => match outcome {

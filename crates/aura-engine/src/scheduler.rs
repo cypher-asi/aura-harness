@@ -61,6 +61,13 @@ pub struct ScheduleOverrides {
     /// loop runs via `run_with_events`. `None` keeps the non-streaming
     /// path. Used by subagent child runs to make the child observable.
     pub event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
+    /// Optional per-agent workspace root override as
+    /// `(workspace_base, use_workspace_base_as_root)`. `None` keeps the
+    /// scheduler's default `workspace_base/<agent_id>` layout. Subagent
+    /// child runs set this to the parent session's project workspace so
+    /// the child's sandbox is rooted at the real project tree (and can
+    /// read project files) instead of an empty per-id scratch dir.
+    pub workspace_override: Option<(std::path::PathBuf, bool)>,
 }
 
 /// Per-agent identity recorded by the chat WS / automaton bridge / `/tx`
@@ -388,6 +395,7 @@ impl Scheduler {
                 loop_config: agent_loop_config,
                 policy,
                 event_tx: None,
+                workspace_override: None,
             },
         )
         .await
@@ -409,6 +417,7 @@ impl Scheduler {
             loop_config: agent_loop_config,
             policy,
             event_tx,
+            workspace_override,
         } = overrides;
         let status = self.store.get_agent_status(agent_id)?;
         if status != AgentStatus::Active {
@@ -454,6 +463,10 @@ impl Scheduler {
         let mut kernel_config = self.kernel_config.clone();
         if let Some(policy) = policy {
             kernel_config.policy = policy;
+        }
+        if let Some((workspace_base, use_as_root)) = workspace_override {
+            kernel_config.workspace_base = workspace_base;
+            kernel_config.use_workspace_base_as_root = use_as_root;
         }
         // The store-backed claim is the scheduler-side mitigation for
         // `Kernel::next_seq`'s read-before-append window: only one scheduler
