@@ -21,6 +21,17 @@ use aura_core_types::{
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// Tools that manage their own end-to-end budget + cancellation and must NOT
+/// be bounded by the kernel's per-tool `tool_timeout_ms`.
+///
+/// `task` dispatches a subagent and blocks (`SpawnMode::Wait`) while the child
+/// agent loop runs under the fleet child runner's own (longer) timeout +
+/// parent cancellation token. The kernel's 120s default would otherwise abort
+/// a legitimately long child run prematurely. The name is hardcoded rather than
+/// imported from `aura-tools` to keep the kernel free of an upward dependency
+/// on the tool crate.
+const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["task"];
+
 impl Kernel {
     /// Build the kernel-internal [`Proposal`] (a `Delegate` proposal whose
     /// payload is the serialized [`ToolCall`]) from a reasoner-emitted
@@ -40,11 +51,23 @@ impl Kernel {
     /// timeout into a failed `Effect`. Shared by `process_tool_proposal` and
     /// `process_tools` so both the single-proposal and batch paths apply the
     /// same per-tool budget (Invariant §1 / rules.md §6.2).
+    ///
+    /// `tool_name` is consulted against [`TIMEOUT_EXEMPT_TOOLS`]: a tool that
+    /// owns its own end-to-end budget + cancellation runs WITHOUT the kernel's
+    /// per-tool wrapper. The `task` subagent-dispatch tool blocks
+    /// (`SpawnMode::Wait`) for the full duration of a child agent run whose
+    /// budget (180–300s) intentionally exceeds the 120s kernel default; wrapping
+    /// it would kill long child runs with a spurious "Tool timed out" before the
+    /// child's own budget (enforced by the fleet child runner) ever elapses.
     pub(super) async fn execute_with_timeout(
         &self,
         ctx: &ExecuteContext,
         action: &Action,
+        tool_name: &str,
     ) -> Effect {
+        if TIMEOUT_EXEMPT_TOOLS.contains(&tool_name) {
+            return self.executor.execute(ctx, action).await;
+        }
         let tool_timeout = Duration::from_millis(self.config.tool_timeout_ms);
         match tokio::time::timeout(tool_timeout, self.executor.execute(ctx, action)).await {
             Ok(effect) => effect,

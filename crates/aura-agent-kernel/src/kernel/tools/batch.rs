@@ -69,6 +69,7 @@ pub(super) async fn process_many(
     let mut dispatch_indices: Vec<usize> = Vec::new();
     let mut dispatch_contexts: Vec<ExecuteContext> = Vec::new();
     let mut dispatch_actions: Vec<Action> = Vec::new();
+    let mut dispatch_tool_names: Vec<String> = Vec::new();
 
     for (i, proposal) in tool_proposals.iter().enumerate() {
         let verdict = &verdicts[i];
@@ -96,12 +97,14 @@ pub(super) async fn process_many(
         dispatch_indices.push(i);
         dispatch_contexts.push(ctx);
         dispatch_actions.push(action);
+        dispatch_tool_names.push(proposal.tool.clone());
     }
 
     let exec_futures = dispatch_contexts
         .iter()
         .zip(dispatch_actions.iter())
-        .map(|(ctx, action)| kernel.execute_with_timeout(ctx, action));
+        .zip(dispatch_tool_names.iter())
+        .map(|((ctx, action), tool_name)| kernel.execute_with_timeout(ctx, action, tool_name));
     let dispatched_effects: Vec<Effect> = futures_util::future::join_all(exec_futures).await;
 
     for (slot, effect) in dispatch_indices.iter().zip(dispatched_effects.into_iter()) {

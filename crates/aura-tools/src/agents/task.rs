@@ -14,7 +14,16 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 pub const TASK_TOOL_NAME: &str = "task";
-const MAX_SUBAGENT_DEPTH: usize = 3;
+/// Maximum subagent nesting depth enforced at the tool boundary.
+///
+/// Kept in lockstep with the authoritative derivation cap
+/// (`SubagentDerivationConfig::max_depth`, currently 8). This early check is a
+/// fast-fail guard so an over-deep `task` call is rejected before any fleet
+/// resource is acquired; the derivation re-validates depth as the real source
+/// of truth. The two values previously diverged (3 here vs 8 in derivation),
+/// which would have spuriously rejected legitimately-allowed depth-3..=7 spawns
+/// once `parent_chain` is threaded through.
+const MAX_SUBAGENT_DEPTH: usize = 8;
 
 /// Argument shape for the `task` tool.
 ///
@@ -328,11 +337,7 @@ mod tests {
             scope: AgentScope::default(),
             capabilities: vec![Capability::SpawnAgent],
         });
-        ctx.parent_chain = vec![
-            AgentId::generate(),
-            AgentId::generate(),
-            AgentId::generate(),
-        ];
+        ctx.parent_chain = (0..MAX_SUBAGENT_DEPTH).map(|_| AgentId::generate()).collect();
         let input = minimal_input();
         let err = TaskTool::build_request(&ctx, &input).unwrap_err();
         assert!(
