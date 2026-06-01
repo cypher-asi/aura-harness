@@ -68,6 +68,15 @@ pub struct ScheduleOverrides {
     /// the child's sandbox is rooted at the real project tree (and can
     /// read project files) instead of an empty per-id scratch dir.
     pub workspace_override: Option<(std::path::PathBuf, bool)>,
+    /// Optional pre-built executor router. `None` keeps the legacy
+    /// behavior of building a router from the scheduler's shared
+    /// (bare node-level) executor list. Subagent child runs inject a
+    /// session-equivalent router here — built via
+    /// [`crate::child_kernel::ChildKernelFactory`] — so the child gets
+    /// the same subagent dispatch, spawn hooks, caller permissions, and
+    /// parent-chain as a real top-level turn instead of the bare
+    /// resolver that lacks all of the above.
+    pub router_override: Option<ExecutorRouter>,
 }
 
 /// Per-agent identity recorded by the chat WS / automaton bridge / `/tx`
@@ -396,6 +405,7 @@ impl Scheduler {
                 policy,
                 event_tx: None,
                 workspace_override: None,
+                router_override: None,
             },
         )
         .await
@@ -418,6 +428,7 @@ impl Scheduler {
             policy,
             event_tx,
             workspace_override,
+            router_override,
         } = overrides;
         let status = self.store.get_agent_status(agent_id)?;
         if status != AgentStatus::Active {
@@ -459,7 +470,10 @@ impl Scheduler {
 
         debug!("Processing claim acquired, constructing kernel for agent");
 
-        let router = self.build_executor_router();
+        // Child subagent runs inject a session-equivalent router (built
+        // via `ChildKernelFactory`); everything else falls back to the
+        // scheduler's shared bare executor list.
+        let router = router_override.unwrap_or_else(|| self.build_executor_router());
         let mut kernel_config = self.kernel_config.clone();
         if let Some(policy) = policy {
             kernel_config.policy = policy;

@@ -64,6 +64,7 @@
 
 pub mod automaton;
 pub mod capabilities;
+pub mod child_kernel;
 pub mod child_runner;
 pub mod executor;
 pub mod memory_observer;
@@ -72,6 +73,7 @@ pub mod scheduler;
 pub mod worker;
 
 pub use automaton::{AutomatonBridge, EventSubscription};
+pub use child_kernel::{ChildKernelFactory, ChildKernelRequest};
 pub use child_runner::RuntimeChildRunner;
 pub use memory_observer::{turn_summary_from_result, MemoryTurnObserver};
 pub use model_context::context_window_for_model;

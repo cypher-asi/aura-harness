@@ -659,6 +659,7 @@ name = "aura-fleet-subagent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aura-agent-kernel",
  "aura-agent-loop",
  "aura-agent-subagent",
  "aura-core-modes",

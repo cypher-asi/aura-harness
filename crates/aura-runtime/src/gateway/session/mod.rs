@@ -17,6 +17,7 @@
 
 mod chat;
 pub(crate) mod chat_run;
+mod child_kernel;
 pub(crate) mod cross_agent_hook;
 mod generation;
 mod helpers;

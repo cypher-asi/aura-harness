@@ -46,6 +46,13 @@ pub struct RuntimeChildRunner {
     /// scheduler's empty per-agent scratch directory. `None` preserves
     /// the legacy per-agent `workspace_base/<agent_id>` layout.
     child_workspace: Option<(PathBuf, bool)>,
+    /// Optional factory that builds a session-equivalent executor router
+    /// for the child run. When set (the gateway path injects it), the
+    /// child reuses the real-agent resolver — subagent dispatch, spawn
+    /// hooks, caller permissions, and parent-chain — instead of the
+    /// scheduler's bare node-level resolver. `None` preserves the legacy
+    /// bare-resolver behavior for non-gateway / test callers.
+    child_kernel_factory: Option<Arc<dyn crate::child_kernel::ChildKernelFactory>>,
 }
 
 impl std::fmt::Debug for RuntimeChildRunner {
@@ -72,6 +79,7 @@ impl RuntimeChildRunner {
             scheduler,
             registry,
             child_workspace: None,
+            child_kernel_factory: None,
         }
     }
 
@@ -82,6 +90,19 @@ impl RuntimeChildRunner {
     #[must_use]
     pub fn with_child_workspace(mut self, workspace: PathBuf, use_as_root: bool) -> Self {
         self.child_workspace = Some((workspace, use_as_root));
+        self
+    }
+
+    /// Inject a [`ChildKernelFactory`](crate::child_kernel::ChildKernelFactory)
+    /// so every child run reuses a session-equivalent executor router
+    /// (subagent dispatch, spawn hooks, permissions, parent-chain)
+    /// instead of the scheduler's bare node resolver.
+    #[must_use]
+    pub fn with_child_kernel_factory(
+        mut self,
+        factory: Arc<dyn crate::child_kernel::ChildKernelFactory>,
+    ) -> Self {
+        self.child_kernel_factory = Some(factory);
         self
     }
 }
@@ -186,7 +207,28 @@ impl ChildRunner for RuntimeChildRunner {
                 .register(child_agent_id, child_identity);
         }
         let loop_config = loop_config_for(&kind, &child_model);
+        // Build the child's session-equivalent executor router via the
+        // injected factory (when present). This is the production seam
+        // that gives the child the same subagent dispatch + spawn hooks
+        // + caller permissions + parent_chain a real top-level turn
+        // gets — replacing the scheduler's bare node resolver for this
+        // run. `ctx.parent_chain` is the child's ancestor lineage, so
+        // threading it here makes the depth/cycle guards fire on the
+        // child's own nested spawns. Built before `policy_for` consumes
+        // the narrowed permissions below.
+        let router_override = self.child_kernel_factory.as_ref().map(|factory| {
+            factory.build_child_router(crate::child_kernel::ChildKernelRequest {
+                child_agent_id,
+                permissions: child_permissions.clone(),
+                tool_permissions: child_tool_permissions.clone(),
+                user_tool_defaults: user_defaults.clone(),
+                parent_chain: ctx.parent_chain.clone(),
+                originating_user_id: originating_user_id.clone(),
+                model_id: child_model.clone(),
+            })
+        });
         let policy = policy_for(child_permissions, child_tool_permissions, &user_defaults);
+
         // Hand the optional streaming sink to the scheduler so the
         // child loop runs via `run_with_events` and its
         // `AgentLoopEvent`s reach the observer attached to the minted
@@ -223,6 +265,7 @@ impl ChildRunner for RuntimeChildRunner {
                         policy: Some(policy),
                         event_tx: child_event_tx,
                         workspace_override: self.child_workspace.clone(),
+                        router_override,
                     },
                 ),
             ) => match outcome {

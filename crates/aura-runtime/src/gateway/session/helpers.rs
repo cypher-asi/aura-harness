@@ -422,6 +422,33 @@ pub(super) async fn build_kernel_with_config(
             || ctx.workspace_base.join("subagent-orphans"),
             |data_dir| data_dir.join("subagent-orphans"),
         );
+    // Cross-crate seam: build the session-equivalent child-kernel
+    // factory (declared in aura-engine, implemented here) and inject it
+    // into the child runner so a `task` child run reuses the real-agent
+    // resolver — subagent dispatch, spawn hooks, caller permissions, and
+    // parent_chain — instead of the scheduler's bare node resolver. The
+    // factory is self-referential (re-injects itself into the children
+    // it spawns) so nesting works to arbitrary depth.
+    let child_kernel_factory = super::child_kernel::SessionChildKernelFactory::new(
+        super::child_kernel::SessionChildKernelFactoryParams {
+            catalog: ctx.catalog.clone(),
+            session_tool_config: session_tool_config.clone(),
+            domain_exec: domain_exec.clone(),
+            installed_tools: session.installed_tools.clone(),
+            automaton_controller: ctx.automaton_controller.clone(),
+            automaton_project_id: session.project_id.clone().unwrap_or_default(),
+            automaton_workspace_root: session.project_path.clone(),
+            store: ctx.store.clone(),
+            scheduler: ctx.scheduler.clone(),
+            subagent_registry: subagent_registry.clone(),
+            orphan_dir: orphan_dir.clone(),
+            workspace: workspace.clone(),
+            use_workspace_base_as_root,
+            aura_os_server_url: ctx.aura_os_server_url.clone(),
+            auth_token: session.auth_token.clone(),
+            aura_org_id: session.aura_org_id.clone(),
+        },
+    );
     // Root child subagents at the parent session's resolved workspace so
     // they can read the same project files the parent sees, rather than
     // the scheduler's empty `workspace_base/<child_id>` scratch dir.
@@ -431,7 +458,8 @@ pub(super) async fn build_kernel_with_config(
             ctx.scheduler.clone(),
             subagent_registry.clone(),
         )
-        .with_child_workspace(workspace.clone(), use_workspace_base_as_root),
+        .with_child_workspace(workspace.clone(), use_workspace_base_as_root)
+        .with_child_kernel_factory(child_kernel_factory),
     );
     let fleet_dispatcher = Arc::new(FleetSubagentDispatcher::with_components(
         ctx.store.clone(),

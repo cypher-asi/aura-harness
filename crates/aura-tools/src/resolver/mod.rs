@@ -184,6 +184,17 @@ impl ToolResolver {
         self
     }
 
+    /// Attach the caller's ancestor chain so the `task`/`spawn_agent`
+    /// tools can enforce subagent depth + ancestor-cycle guards. The
+    /// session (top-level) build leaves this empty; child subagent
+    /// runs populate it from their lineage so nested spawns fire the
+    /// guards in production.
+    #[must_use]
+    pub fn with_parent_chain(mut self, chain: Vec<aura_core_types::AgentId>) -> Self {
+        self.inner = self.inner.with_parent_chain(chain);
+        self
+    }
+
     /// Attach the caller's upstream OS UUID so cross-agent tools can ship
     /// it as `originating_agent_id` to aura-os-server (instead of the
     /// truncated harness blake3 hash from `caller_agent_id.to_string()`).

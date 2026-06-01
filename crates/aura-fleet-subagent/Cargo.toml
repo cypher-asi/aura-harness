@@ -23,6 +23,7 @@ tokio-util = { workspace = true }
 
 [dev-dependencies]
 aura-engine = { path = "../aura-engine" }
+aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-store-db = { path = "../aura-store-db" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-core-modes = { path = "../aura-core-modes" }
