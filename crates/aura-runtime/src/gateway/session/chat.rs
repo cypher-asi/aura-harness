@@ -857,6 +857,7 @@ mod tests {
             router_url: None,
             aura_os_server_url: None,
             chat_runs: Arc::new(dashmap::DashMap::new()),
+            run_id: None,
         }
     }
 

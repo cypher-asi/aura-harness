@@ -148,6 +148,31 @@ pub(crate) fn spawn_event_forwarder(
     tx
 }
 
+/// Parent-linkage metadata for a registered run.
+///
+/// `None` on a top-level run (registered by `POST /v1/run`); `Some` on
+/// a child subagent run so the shared registry exposes the same
+/// parent/child lineage a real top-level run would have — letting a
+/// child be looked up, attached, and cancelled through the same
+/// mechanisms while still carrying its ancestry.
+#[derive(Debug, Clone)]
+pub(crate) struct RunLinkage {
+    /// Run id of the parent (top-level) chat run that spawned this
+    /// child. `None` when the parent run id was not threaded (e.g. the
+    /// bootstrap/test paths that build a hook without a live run).
+    pub(crate) parent_run_id: Option<String>,
+    /// Parent tool-call id (`toolu_…`) of the `task` invocation that
+    /// produced this child, tying the run back to its spawning tool use.
+    pub(crate) parent_tool_use_id: Option<String>,
+    /// This run's own id (the registry key), retained on the handle so
+    /// linkage is self-describing without a registry round-trip.
+    pub(crate) child_run_id: String,
+    /// Nesting depth = number of ancestors in [`Self::parent_chain`].
+    pub(crate) depth: usize,
+    /// Ancestor agent-id chain `[parent, grandparent, …]` (stringified).
+    pub(crate) parent_chain: Vec<String>,
+}
+
 /// Registry entry for a live chat run. Shared between the registry
 /// (`RouterState::chat_runs`), the driver task, and every attached WS
 /// adapter.
@@ -161,12 +186,51 @@ pub(crate) struct ChatRunHandle {
     /// this to decide whether an idle run may be reaped.
     pub(crate) attach_count: Arc<AtomicUsize>,
     /// Explicit-stop signal. Cancelled by `POST /v1/run/:id/stop`; the
-    /// driver watches it to tear down (cancelling any active turn).
+    /// driver watches it to tear down (cancelling any active turn). For
+    /// a child run this token is forked from the parent turn token, so
+    /// stopping the child cancels only that child while a parent-turn
+    /// cancellation still propagates down.
     pub(crate) shutdown: CancellationToken,
+    /// Parent-linkage metadata. `None` for a top-level run, `Some` for a
+    /// child subagent run.
+    pub(crate) linkage: Option<RunLinkage>,
 }
 
 /// `run_id` → live chat run.
 pub(crate) type ChatRunRegistry = Arc<DashMap<String, Arc<ChatRunHandle>>>;
+
+/// Pieces needed to build + register a [`ChatRunHandle`]. Shared by the
+/// top-level `POST /v1/run` path ([`spawn_chat_run`]) and the child
+/// subagent path
+/// ([`super::subagent_stream::RuntimeSubagentObservabilityHook`]) so
+/// both register through the exact same run-handle path instead of
+/// constructing the handle independently.
+pub(crate) struct RunRegistration {
+    pub(crate) commands: mpsc::Sender<crate::protocol::InboundMessage>,
+    pub(crate) events: Arc<ChatEventChannel>,
+    pub(crate) attach_count: Arc<AtomicUsize>,
+    pub(crate) shutdown: CancellationToken,
+    pub(crate) linkage: Option<RunLinkage>,
+}
+
+/// Build a [`ChatRunHandle`] from `reg` and insert it into `registry`
+/// under `run_id`, returning the shared handle. Single insertion point
+/// for both top-level and child runs.
+pub(crate) fn register_run(
+    registry: &ChatRunRegistry,
+    run_id: String,
+    reg: RunRegistration,
+) -> Arc<ChatRunHandle> {
+    let handle = Arc::new(ChatRunHandle {
+        commands: reg.commands,
+        events: reg.events,
+        attach_count: reg.attach_count,
+        shutdown: reg.shutdown,
+        linkage: reg.linkage,
+    });
+    registry.insert(run_id, handle.clone());
+    handle
+}
 
 /// RAII guard that tracks one WS attach against a run's `attach_count`.
 /// Incremented on construction, decremented on drop, so the driver's
@@ -195,23 +259,33 @@ impl Drop for AttachGuard {
 /// WebSocket; it removes itself from the registry when it stops.
 pub(crate) fn spawn_chat_run(
     session: Session,
-    ctx: WsContext,
+    mut ctx: WsContext,
     run_id: String,
     registry: ChatRunRegistry,
 ) -> Arc<ChatRunHandle> {
+    // Make the run id visible to the per-turn kernel build so the
+    // subagent observability hook can stamp `parent_run_id` onto each
+    // child run's linkage metadata.
+    ctx.run_id = Some(run_id.clone());
+
     let events = ChatEventChannel::new();
     let outbound_tx = spawn_event_forwarder(events.clone());
     let (commands_tx, commands_rx) = mpsc::channel::<InboundMessage>(256);
     let attach_count = Arc::new(AtomicUsize::new(0));
     let shutdown = CancellationToken::new();
 
-    let handle = Arc::new(ChatRunHandle {
-        commands: commands_tx,
-        events: events.clone(),
-        attach_count: attach_count.clone(),
-        shutdown: shutdown.clone(),
-    });
-    registry.insert(run_id.clone(), handle.clone());
+    let handle = register_run(
+        &registry,
+        run_id.clone(),
+        RunRegistration {
+            commands: commands_tx,
+            events: events.clone(),
+            attach_count: attach_count.clone(),
+            shutdown: shutdown.clone(),
+            // Top-level run: no parent linkage.
+            linkage: None,
+        },
+    );
 
     let registry_for_task = registry.clone();
     tokio::spawn(async move {
@@ -578,6 +652,7 @@ mod driver_tests {
             router_url: None,
             aura_os_server_url: None,
             chat_runs: Arc::new(DashMap::new()),
+            run_id: None,
         }
     }
 

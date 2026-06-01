@@ -26,6 +26,7 @@
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_agent::AgentLoopEvent;
@@ -37,8 +38,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::chat_run::{
-    spawn_event_forwarder, ChatEventChannel, ChatRunHandle, ChatRunRegistry,
-    CHAT_RUN_IDLE_RETENTION,
+    register_run, spawn_event_forwarder, ChatEventChannel, ChatRunRegistry, RunLinkage,
+    RunRegistration, CHAT_RUN_IDLE_RETENTION,
 };
 use crate::protocol::{InboundMessage, OutboundMessage, SubagentSpawned, SubagentStatus};
 
@@ -85,33 +86,67 @@ pub(crate) struct RuntimeSubagentObservabilityHook {
     parent_outbound: mpsc::Sender<OutboundMessage>,
     chat_runs: ChatRunRegistry,
     parent_cancellation: Option<CancellationToken>,
+    /// Run id of the parent (top-level) chat run, stamped onto each
+    /// child's linkage as `parent_run_id`.
+    parent_run_id: Option<String>,
+    /// How long a completed child run lingers in the shared registry
+    /// before being reaped (see [`schedule_child_run_cleanup`]).
+    /// Defaults to [`CHAT_RUN_IDLE_RETENTION`]; overridable in tests.
+    cleanup_retention: Duration,
 }
 
 impl RuntimeSubagentObservabilityHook {
     /// Construct a hook that emits onto `parent_outbound`, registers
-    /// child runs in `chat_runs`, and forks `parent_cancellation` into
-    /// each `Wait` child.
+    /// child runs in `chat_runs`, forks `parent_cancellation` into each
+    /// `Wait` child, and stamps `parent_run_id` onto child linkage.
     pub(crate) fn new(
         inner: Arc<dyn EventAwareSubagentDispatch>,
         parent_outbound: mpsc::Sender<OutboundMessage>,
         chat_runs: ChatRunRegistry,
         parent_cancellation: Option<CancellationToken>,
+        parent_run_id: Option<String>,
     ) -> Self {
         Self {
             inner,
             parent_outbound,
             chat_runs,
             parent_cancellation,
+            parent_run_id,
+            cleanup_retention: CHAT_RUN_IDLE_RETENTION,
         }
     }
 
-    /// Register an event-only child run under `child_run_id` and return
-    /// the [`AgentLoopEvent`] sink the child loop streams into, plus the
-    /// run's event channel (so the caller can push a terminal status and
-    /// mark it done).
+    /// Override the post-completion registry retention. Test-only: the
+    /// production default ([`CHAT_RUN_IDLE_RETENTION`]) is far too long
+    /// to exercise reaping in a unit test.
+    #[cfg(test)]
+    fn with_cleanup_retention(mut self, retention: Duration) -> Self {
+        self.cleanup_retention = retention;
+        self
+    }
+
+    /// Per-child cancellation token forked off the parent turn token (a
+    /// standalone token when no parent token is present). Stored as the
+    /// child run's `shutdown` so `POST /v1/run/:id/stop` cancels only
+    /// this child, while a parent-turn cancellation still propagates
+    /// down through the forked token.
+    fn child_cancellation(&self) -> CancellationToken {
+        match &self.parent_cancellation {
+            Some(parent) => parent.child_token(),
+            None => CancellationToken::new(),
+        }
+    }
+
+    /// Register a child run under `child_run_id` through the shared
+    /// run-handle path ([`register_run`]) with parent `linkage`, and
+    /// return the [`AgentLoopEvent`] sink the child loop streams into
+    /// plus the run's event channel (so the caller can push a terminal
+    /// status and mark it done).
     fn register_child_run(
         &self,
         child_run_id: &str,
+        shutdown: CancellationToken,
+        linkage: RunLinkage,
     ) -> (
         mpsc::Sender<AgentLoopEvent>,
         Arc<ChatEventChannel>,
@@ -123,16 +158,23 @@ impl RuntimeSubagentObservabilityHook {
         // Event-only run: no driver consumes inbound commands, so the
         // receiver is dropped immediately. A WS attach can still replay
         // history + stream live; inbound frames simply close that
-        // attach's reader.
+        // attach's reader. The handle is registered through the same
+        // `register_run` path a top-level `POST /v1/run` uses, so the
+        // child appears in the shared registry like a real run (with
+        // parent linkage) and is lookup/attach/stop-able the same way.
         let (commands, _commands_rx) =
             mpsc::channel::<InboundMessage>(CHILD_COMMAND_CHANNEL_CAPACITY);
-        let handle = Arc::new(ChatRunHandle {
-            commands,
-            events: channel.clone(),
-            attach_count: Arc::new(AtomicUsize::new(0)),
-            shutdown: CancellationToken::new(),
-        });
-        self.chat_runs.insert(child_run_id.to_string(), handle);
+        register_run(
+            &self.chat_runs,
+            child_run_id.to_string(),
+            RunRegistration {
+                commands,
+                events: channel.clone(),
+                attach_count: Arc::new(AtomicUsize::new(0)),
+                shutdown,
+                linkage: Some(linkage),
+            },
+        );
 
         let (event_tx, event_rx) = mpsc::channel::<AgentLoopEvent>(CHILD_EVENT_CHANNEL_CAPACITY);
         // The forwarder ends when the child loop drops its event sender,
@@ -160,7 +202,30 @@ impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
             Some(aura_core_types::SpawnMode::Detached)
         );
 
-        let (event_tx, child_channel, forwarder) = self.register_child_run(&child_run_id);
+        // Parent linkage stamped onto the shared registry entry. `depth`
+        // is the count of ancestors carried on the request's
+        // `parent_chain` (which already includes the spawning parent).
+        let linkage = RunLinkage {
+            parent_run_id: self.parent_run_id.clone(),
+            parent_tool_use_id: parent_tool_use_id.clone(),
+            child_run_id: child_run_id.clone(),
+            depth: request.parent_chain.len(),
+            parent_chain: request
+                .parent_chain
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        };
+
+        // One token serves as both the child's `shutdown` (so a `stop`
+        // cancels just this child) and the dispatch cancellation (so a
+        // parent-turn cancel still propagates). The spawner forks its
+        // own per-child token from whatever we pass, so handing it a
+        // standalone uncancelled token when there is no parent token is
+        // equivalent to the previous `None`.
+        let child_cancel = self.child_cancellation();
+        let (event_tx, child_channel, forwarder) =
+            self.register_child_run(&child_run_id, child_cancel.clone(), linkage);
 
         // Emit `SubagentSpawned` on the parent stream BEFORE the (Wait)
         // dispatch blocks so the client can render a clickable thread
@@ -176,7 +241,7 @@ impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
 
         let result = self
             .inner
-            .dispatch_with_events(request, Some(event_tx), self.parent_cancellation.clone())
+            .dispatch_with_events(request, Some(event_tx), Some(child_cancel))
             .await;
 
         // Detached dispatch returns an immediate ack while the child is
@@ -199,6 +264,7 @@ impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
                 child_channel,
                 self.chat_runs.clone(),
                 child_run_id,
+                self.cleanup_retention,
             );
             return result;
         }
@@ -217,7 +283,7 @@ impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
         // the child loop dropped its sender; detaching the handle is
         // equivalent to the prior fire-and-forget spawn.
         drop(forwarder);
-        schedule_child_run_cleanup(self.chat_runs.clone(), child_run_id);
+        schedule_child_run_cleanup(self.chat_runs.clone(), child_run_id, self.cleanup_retention);
 
         result
     }
@@ -234,6 +300,7 @@ fn spawn_detached_completion_watch(
     child_channel: Arc<ChatEventChannel>,
     chat_runs: ChatRunRegistry,
     child_run_id: String,
+    cleanup_retention: Duration,
 ) {
     tokio::spawn(async move {
         let _ = forwarder.await;
@@ -245,7 +312,7 @@ fn spawn_detached_completion_watch(
         let _ = parent_outbound.try_send(OutboundMessage::SubagentStatus(status.clone()));
         child_channel.push(OutboundMessage::SubagentStatus(status));
         child_channel.mark_done();
-        schedule_child_run_cleanup(chat_runs, child_run_id);
+        schedule_child_run_cleanup(chat_runs, child_run_id, cleanup_retention);
     });
 }
 
@@ -271,12 +338,20 @@ fn status_payload(child_run_id: &str, result: &Result<SubagentResult, String>) -
     }
 }
 
-/// Reap the event-only child run from the registry after the idle
-/// retention window so a client that attached mid-run can still replay
-/// the completed thread, but the entry does not leak forever.
-fn schedule_child_run_cleanup(chat_runs: ChatRunRegistry, child_run_id: String) {
+/// Reap the child run from the registry after the retention window so a
+/// client that attached mid-run can still replay the completed thread,
+/// but the entry does not leak forever. A child run lingers for the
+/// grace window rather than being removed synchronously on completion
+/// (unlike a top-level run, whose own driver self-removes), because the
+/// terminal thread must stay replayable for a late `WS /stream/:id`
+/// attach; an explicit `POST /v1/run/:id/stop` still removes it eagerly.
+fn schedule_child_run_cleanup(
+    chat_runs: ChatRunRegistry,
+    child_run_id: String,
+    retention: Duration,
+) {
     tokio::spawn(async move {
-        tokio::time::sleep(CHAT_RUN_IDLE_RETENTION).await;
+        tokio::time::sleep(retention).await;
         chat_runs.remove(&child_run_id);
     });
 }
@@ -355,6 +430,7 @@ mod tests {
             parent_tx,
             registry.clone(),
             Some(CancellationToken::new()),
+            None,
         );
         (hook, parent_rx, registry)
     }
@@ -454,6 +530,72 @@ mod tests {
             }
             other => panic!("expected SubagentStatus, got {other:?}"),
         }
+    }
+
+    /// The child run is registered in the SHARED chat-run registry
+    /// (same `register_run` path as a top-level `POST /v1/run`) carrying
+    /// parent linkage metadata, and is reaped from the registry after
+    /// the (here-shortened) retention window once the run completes.
+    #[tokio::test]
+    async fn child_run_registered_with_linkage_and_reaped_on_completion() {
+        let (parent_tx, _parent_rx) = mpsc::channel::<OutboundMessage>(16);
+        let registry: ChatRunRegistry = Arc::new(DashMap::new());
+        let parent_cancel = CancellationToken::new();
+        let hook = RuntimeSubagentObservabilityHook::new(
+            Arc::new(StubDispatch {
+                exit: SubagentExit::Completed,
+                streamed_text: None,
+            }),
+            parent_tx,
+            registry.clone(),
+            Some(parent_cancel.clone()),
+            Some("run-parent".to_string()),
+        )
+        .with_cleanup_retention(Duration::from_millis(150));
+
+        // Request with a populated ancestor chain + spawning tool-use id
+        // so every linkage field is exercised.
+        let ancestor_a = aura_core_types::AgentId::generate();
+        let ancestor_b = aura_core_types::AgentId::generate();
+        let mut req = request();
+        req.parent_chain = vec![ancestor_a, ancestor_b];
+        req.tool_call_id = Some("toolu_linkage".to_string());
+
+        let _ = hook.dispatch(req).await.expect("dispatch ok");
+
+        // Exactly one child run is registered; capture its key + handle.
+        let (child_run_id, linkage) = {
+            assert_eq!(registry.len(), 1, "one child run registered");
+            let entry = registry.iter().next().expect("child run present");
+            let linkage = entry
+                .value()
+                .linkage
+                .clone()
+                .expect("child run carries parent linkage");
+            (entry.key().clone(), linkage)
+        };
+
+        assert_eq!(linkage.parent_run_id.as_deref(), Some("run-parent"));
+        assert_eq!(linkage.parent_tool_use_id.as_deref(), Some("toolu_linkage"));
+        assert_eq!(linkage.child_run_id, child_run_id);
+        assert_eq!(linkage.depth, 2);
+        assert_eq!(
+            linkage.parent_chain,
+            vec![ancestor_a.to_string(), ancestor_b.to_string()]
+        );
+
+        // Reaped after the retention window: the completed child does
+        // not leak in the shared registry.
+        for _ in 0..100 {
+            if !registry.contains_key(&child_run_id) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            !registry.contains_key(&child_run_id),
+            "completed child run reaped from the shared registry"
+        );
     }
 
     /// A detached dispatch must reflect `running` immediately (not a

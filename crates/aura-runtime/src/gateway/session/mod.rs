@@ -90,10 +90,16 @@ pub(crate) struct WsContext {
     /// Live chat-run registry, shared with [`crate::gateway::RouterState`].
     ///
     /// Threaded into the session so the subagent observability hook can
-    /// register an event-only child run keyed by a minted `child_run_id`
-    /// that `WS /stream/:child_run_id` can attach to (see
+    /// register a child run keyed by a minted `child_run_id` that
+    /// `WS /stream/:child_run_id` can attach to (see
     /// [`chat_run::ChatRunRegistry`]).
     pub(crate) chat_runs: chat_run::ChatRunRegistry,
+    /// Run id of the top-level chat run this context drives, set by
+    /// [`chat_run::spawn_chat_run`] once the run is registered. Read by
+    /// the per-turn kernel build to stamp `parent_run_id` onto each
+    /// child subagent run's linkage. `None` outside a live run (the
+    /// session bootstrap + test fixtures).
+    pub(crate) run_id: Option<String>,
 }
 
 impl WsContext {
@@ -120,6 +126,7 @@ impl WsContext {
             router_url: state.router_url.clone(),
             aura_os_server_url: state.config.aura_os_server_url.clone(),
             chat_runs: state.chat_runs.clone(),
+            run_id: None,
         }
     }
 }

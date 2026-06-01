@@ -292,16 +292,26 @@ fn run_start_error_response(e: String) -> (StatusCode, Json<serde_json::Value>) 
 /// `GET /v1/run/:run_id/status` — fetch the status of a running run.
 ///
 /// Live chat runs (a registered driver task) return
-/// `{"status": "chat_active"}`. Automaton runs delegate to the
-/// existing bridge status.
+/// `{"status": "chat_active"}`. A child subagent run is registered in
+/// the same registry, so it is looked up here identically and reports
+/// `kind: "subagent"` plus its parent-linkage metadata. Automaton runs
+/// delegate to the existing bridge status.
 pub(in crate::gateway) async fn run_status_handler(
     State(state): State<RouterState>,
     Path(run_id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    if state.chat_runs.contains_key(&run_id) {
-        return Ok(Json(
-            serde_json::json!({"run_id": run_id, "status": "chat_active", "kind": "chat"}),
-        ));
+    if let Some(handle) = state.chat_runs.get(&run_id).map(|e| e.value().clone()) {
+        let mut body =
+            serde_json::json!({"run_id": run_id, "status": "chat_active", "kind": "chat"});
+        if let Some(linkage) = &handle.linkage {
+            body["kind"] = serde_json::json!("subagent");
+            body["parent_run_id"] = serde_json::json!(linkage.parent_run_id);
+            body["parent_tool_use_id"] = serde_json::json!(linkage.parent_tool_use_id);
+            body["child_run_id"] = serde_json::json!(linkage.child_run_id);
+            body["depth"] = serde_json::json!(linkage.depth);
+            body["parent_chain"] = serde_json::json!(linkage.parent_chain);
+        }
+        return Ok(Json(body));
     }
     let bridge = automaton_bridge(&state)?;
     match bridge.get_status(&run_id) {

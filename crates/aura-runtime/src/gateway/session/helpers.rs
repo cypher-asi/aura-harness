@@ -480,6 +480,7 @@ pub(super) async fn build_kernel_with_config(
                 outbound.clone(),
                 ctx.chat_runs.clone(),
                 parent_cancellation.cloned(),
+                ctx.run_id.clone(),
             ),
         ),
         None => fleet_dispatcher,
@@ -1036,6 +1037,7 @@ mod tests {
             router_url: None,
             aura_os_server_url: None,
             chat_runs: Arc::new(dashmap::DashMap::new()),
+            run_id: None,
         }
     }
 
