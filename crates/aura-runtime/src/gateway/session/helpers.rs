@@ -548,15 +548,16 @@ pub(super) async fn build_kernel_with_config(
 /// [`RuntimeChildRunner`] + the session-equivalent child-kernel
 /// factory).
 ///
-/// Extracted from [`build_kernel_with_config`] so the council
-/// orchestrator ([`super::council::start_council_run`]) fans members
-/// out through the exact same dispatch surface a `task` tool call would
-/// use — children inherit the parent identity / permissions /
-/// parent-chain and run the full real-agent loop, with only their model
-/// overridden per member. The inputs (`domain_exec`, the session-scoped
-/// tool config, the resolved workspace) are recomputed here so the
-/// helper is self-contained; the duplicated computation is cheap and
-/// pure.
+/// Extracted from [`build_kernel_with_config`] as the single per-turn
+/// subagent dispatch surface. An AURA Council
+/// ([`super::council::start_council_run`]) reuses it implicitly: the
+/// synthesizer model issues real parallel `task` calls, which dispatch
+/// through this exact surface (children inherit the parent identity /
+/// permissions / parent-chain and run the full real-agent loop, with
+/// only their model overridden per member). The inputs (`domain_exec`,
+/// the session-scoped tool config, the resolved workspace) are
+/// recomputed here so the helper is self-contained; the duplicated
+/// computation is cheap and pure.
 pub(super) fn build_fleet_subagent_dispatcher(
     session: &Session,
     ctx: &WsContext,
