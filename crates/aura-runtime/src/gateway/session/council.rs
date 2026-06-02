@@ -1,53 +1,59 @@
 //! AURA Council orchestrator.
 //!
 //! A council run convenes `members` model seats to answer the user's
-//! question, then synthesizes one combined response. It is deliberately
-//! built on the SAME canonical subagent path the `task` tool uses for
-//! an ordinary "spawn N subagents in parallel, then summarize" turn,
-//! rather than a bespoke hand-rolled fan-out. That makes the feature
-//! reuse existing, already-working machinery end to end:
+//! question, then synthesizes one combined response.
+//!
+//! The fan-out is **deterministic and harness-orchestrated** rather than
+//! model-driven: instead of prompting the synthesizer model to "please
+//! call the `task` tool N times" (which is non-deterministic, slow, and
+//! emits ordinary task spawns the UI can't group), the coordinator
+//! dispatches the N member child runs DIRECTLY through the same
+//! [`super::subagent_stream::RuntimeSubagentObservabilityHook`] +
+//! [`aura_fleet_subagent::FleetSubagentDispatcher`] the `task` tool uses.
+//! That reuses all the existing, already-working subagent machinery
+//! (child-run registration, live WS-attachable threads, status frames)
+//! while giving the council exactly the shape the UI expects:
 //!
 //! - The PARENT run is created + registered through the SAME
 //!   [`super::chat_run::spawn_chat_run`] path a `POST /v1/run` chat run
 //!   uses (so `WS /stream/:run_id` attaches non-destructively), prepared
 //!   with `members[0]`'s model — the synthesizer.
-//! - Once the parent session is ready, the orchestrator injects ONE
-//!   coordinator `user_message` instructing the synthesizer model to
-//!   call the `task` tool once per member IN PARALLEL — each with that
-//!   member's model id as the `model` override and the user's question
-//!   verbatim as the `prompt` — and then to synthesize the members'
-//!   answers into one combined response.
-//! - Every `task` call therefore flows through the normal agent loop +
-//!   [`super::subagent_stream::RuntimeSubagentObservabilityHook`] (wired
-//!   for every per-turn chat build in [`super::helpers`]). So each
-//!   member is announced as a `SubagentSpawned` carrying a REAL
-//!   `parent_tool_use_id` (the model's tool-use id), streams live on its
-//!   own child run, and renders as the standard subagent thread card.
-//!   The synthesized answer is the parent model's normal text turn after
-//!   the members return — no synthetic frames, no separate synthesis
-//!   injection path.
+//! - Once the parent session is ready, the coordinator dispatches every
+//!   member as a council-tagged subagent (`council_index = Some(i)`,
+//!   `model_override = member.model`, prompt = the user's question)
+//!   IN PARALLEL. Each emits a `SubagentSpawned { council_index, model,
+//!   parent_tool_use_id }` on the parent stream IMMEDIATELY — so all N
+//!   member columns appear at once — and streams live on its own child
+//!   run. All members share one synthetic `council_parent_tool_use_id`
+//!   so the UI folds them into a single council panel (N columns), while
+//!   each still dispatches with its own `tool_call_id` so the
+//!   per-`(parent, tool_call_id)` dedupe never collapses two members.
+//! - When every member returns, the coordinator injects ONE synthesis
+//!   `user_message` carrying the members' answers; the synthesizer's
+//!   normal text turn is the combined answer rendered below the panel.
 //!
-//! Because the members are real model-issued `task` calls, the council
-//! reuses the exact "parallel task + synthesize" behavior that already
-//! works for an arbitrary chat prompt; the only council-specific piece
-//! is the coordinator instruction that names the per-member models.
-//!
-//! Cancellation: the parent run's driver cancels in-flight `task`
-//! children on `shutdown` (each child token is forked from the parent
-//! turn token by the observability hook), so a single
-//! `POST /v1/run/:id/stop` (or a parent `Cancel`) aborts every in-flight
-//! member AND the synthesizer.
+//! Cancellation: each member's child token is forked from the parent
+//! run's `shutdown` token, so a single `POST /v1/run/:id/stop` (or a
+//! parent `Cancel`) aborts every in-flight member; the coordinator also
+//! bails before injecting synthesis if `shutdown` fired.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use aura_core_types::{
+    AgentId, AgentPermissions, AgentToolPermissions, SubagentDispatchRequest, SubagentExit,
+    SubagentResult, UserToolDefaults,
+};
+use aura_fleet_subagent::FleetSubagentDispatcher;
 use aura_protocol::{ConversationMessage, CouncilMember, RuntimeRequest, RuntimeRequestType};
+use aura_tools::SubagentDispatchHook;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::chat_run::{ChatEventChannel, ChatRunHandle};
-use super::helpers::{prepare_chat_session, ChatRequestError};
+use super::chat_run::{spawn_event_forwarder, ChatEventChannel, ChatRunHandle, ChatRunRegistry};
+use super::helpers::{build_fleet_subagent_dispatcher, prepare_chat_session, ChatRequestError};
+use super::subagent_stream::RuntimeSubagentObservabilityHook;
 use super::WsContext;
 use crate::protocol::{InboundMessage, OutboundMessage, UserMessage};
 
@@ -61,7 +67,22 @@ const DEFAULT_COUNCIL_MAX_MEMBERS: usize = 4;
 /// answers the query like a real agent rather than a read-only explorer.
 const COUNCIL_MEMBER_KIND: &str = "general_purpose";
 
-/// Everything the detached coordinator task needs to kick a council off
+/// Parent-derived inputs the coordinator needs to build each member's
+/// [`SubagentDispatchRequest`]. Snapshotted from the prepared
+/// [`super::Session`] BEFORE it is moved into the parent run driver
+/// (mirrors the fields the `task` tool pulls off its `ToolContext`).
+struct CouncilDispatchParams {
+    parent_agent_id: AgentId,
+    parent_permissions: AgentPermissions,
+    parent_tool_permissions: Option<AgentToolPermissions>,
+    user_tool_defaults: UserToolDefaults,
+    originating_user_id: String,
+    parent_model_id: String,
+    chat_runs: ChatRunRegistry,
+    dispatcher: Arc<FleetSubagentDispatcher>,
+}
+
+/// Everything the detached coordinator task needs to fan a council out
 /// once the parent run is registered + ready.
 struct CouncilCoordinator {
     handle: Arc<ChatRunHandle>,
@@ -69,6 +90,7 @@ struct CouncilCoordinator {
     query: String,
     run_id: String,
     shutdown: CancellationToken,
+    params: CouncilDispatchParams,
 }
 
 /// Start an AURA Council run.
@@ -76,10 +98,9 @@ struct CouncilCoordinator {
 /// Mirrors [`super::chat_run::spawn_chat_run`]'s setup to create +
 /// register the PARENT run (hosting the synthesizer, `members[0]`), then
 /// detaches a coordinator task that — once the session is ready —
-/// injects a single instruction turn telling the synthesizer model to
-/// fan the members out as parallel `task` calls and synthesize their
-/// answers. Returns the registered `run_id` (the caller turns it into
-/// `{ run_id, event_stream_url }`).
+/// directly dispatches the members as council-tagged subagents and, when
+/// they return, injects the synthesis turn. Returns the registered
+/// `run_id` (the caller turns it into `{ run_id, event_stream_url }`).
 ///
 /// Errors mirror [`prepare_chat_session`] plus council-specific
 /// validation (`council_no_members`, `invalid_council_request`).
@@ -111,8 +132,7 @@ pub(crate) async fn start_council_run(
     let query = latest_user_query(&conversation_messages);
 
     // The PARENT run hosts the synthesizer: prepare it with members[0]'s
-    // model so the synthesis turn (and the coordinator turn that issues
-    // the `task` calls) runs on the first model.
+    // model so the synthesis turn runs on the first model.
     let synth_model = members[0].model.clone();
     let registry = ctx.chat_runs.clone();
 
@@ -126,12 +146,35 @@ pub(crate) async fn start_council_run(
 
     let session = prepare_chat_session(chat_req, &ctx).await?;
 
+    // Build the member-dispatch surface and snapshot the parent identity
+    // / permissions BEFORE `session` + `ctx` are moved into the driver.
+    // The dispatcher is the SAME per-session fleet dispatcher the
+    // `task`-tool path constructs, so members inherit the parent's
+    // identity / permissions / workspace and run the full real-agent
+    // loop with only their model overridden.
+    let dispatcher = build_fleet_subagent_dispatcher(&session, &ctx).map_err(|e| {
+        ChatRequestError {
+            code: "council_dispatcher_build_failed",
+            message: format!("failed to build council member dispatcher: {e}"),
+        }
+    })?;
+    let user_tool_defaults =
+        super::helpers::session_user_defaults(&session, &ctx).map_err(|e| ChatRequestError {
+            code: "council_user_defaults_failed",
+            message: format!("failed to resolve council user tool defaults: {e}"),
+        })?;
+    let params = CouncilDispatchParams {
+        parent_agent_id: session.agent_id,
+        parent_permissions: session.agent_permissions.clone(),
+        parent_tool_permissions: session.tool_permissions.clone(),
+        user_tool_defaults,
+        originating_user_id: session.user_id.clone(),
+        parent_model_id: session.model.clone(),
+        chat_runs: registry.clone(),
+        dispatcher,
+    };
+
     let run_id = Uuid::new_v4().to_string();
-    // Register + drive the parent run through the shared chat-run path.
-    // The chat driver wires the subagent observability hook for every
-    // per-turn build, so the `task` calls the coordinator turn triggers
-    // are announced + streamed exactly like any other parallel-`task`
-    // chat turn.
     let handle = super::spawn_chat_run(session, ctx, run_id.clone(), registry);
     let shutdown = handle.shutdown.clone();
 
@@ -147,16 +190,15 @@ pub(crate) async fn start_council_run(
         query,
         run_id: run_id.clone(),
         shutdown,
+        params,
     }));
 
     Ok(run_id)
 }
 
-/// Drive a council: wait for the parent session to be ready, then inject
-/// the single coordinator instruction turn. The synthesizer model owns
-/// the rest — it issues the parallel `task` calls and synthesizes their
-/// results — so there is no hand-rolled fan-out or synthesis injection
-/// here.
+/// Drive a council: wait for the parent session to be ready, dispatch
+/// every member in parallel as a council-tagged subagent, then inject a
+/// synthesis turn built from their answers.
 async fn run_council_coordinator(coordinator: CouncilCoordinator) {
     let CouncilCoordinator {
         handle,
@@ -164,30 +206,32 @@ async fn run_council_coordinator(coordinator: CouncilCoordinator) {
         query,
         run_id,
         shutdown,
+        params,
     } = coordinator;
 
-    // Wait for the parent driver's `SessionReady` before injecting the
-    // coordinator turn so the parent identity is registered in the
-    // scheduler before the synthesizer spawns members off it (otherwise
-    // members fall back to a bare config and the router buckets them as
-    // anonymous traffic). Bounded so a stuck bootstrap never wedges the
-    // coordinator.
+    // Wait for the parent driver's `SessionReady` before dispatching so
+    // the parent identity is registered in the scheduler before members
+    // spawn off it (otherwise they fall back to a bare config and the
+    // router buckets them as anonymous traffic). Bounded so a stuck
+    // bootstrap never wedges the coordinator.
     wait_for_session_ready(&handle.events, &shutdown).await;
     if shutdown.is_cancelled() {
         return;
     }
 
-    let prompt = build_coordinator_prompt(&query, &members);
+    let answers = dispatch_members(&handle, &members, &query, &run_id, &shutdown, &params).await;
+    if shutdown.is_cancelled() {
+        return;
+    }
+
+    // Inject the synthesis turn. The synthesizer's normal text turn is
+    // the combined answer the UI renders below the council panel.
+    let prompt = build_synthesis_prompt(&query, &answers);
     if handle
         .commands
         .send(InboundMessage::UserMessage(UserMessage {
             content: prompt,
-            // Steer the kickoff turn toward the `task` tool so the
-            // synthesizer reaches for it first. `tool_hints` only scopes
-            // which tools are visible (tool_choice stays auto) and
-            // synthesis itself is plain text, so this never blocks the
-            // follow-up synthesis turn.
-            tool_hints: Some(vec!["task".to_string()]),
+            tool_hints: None,
             attachments: None,
         }))
         .await
@@ -195,49 +239,156 @@ async fn run_council_coordinator(coordinator: CouncilCoordinator) {
     {
         warn!(
             run_id = %run_id,
-            "AURA Council: parent run gone before the coordinator turn could start"
+            "AURA Council: parent run gone before the synthesis turn could start"
         );
     }
 }
 
-/// Build the coordinator instruction turn: embed the user's question,
-/// name every member's model id for the per-call `model` override, and
-/// direct the synthesizer to (1) spawn one parallel `task` per member,
-/// then (2) synthesize their answers. This is the only council-specific
-/// logic — everything downstream is the canonical parallel-`task` path.
-fn build_coordinator_prompt(query: &str, members: &[CouncilMember]) -> String {
-    let n = members.len();
+/// One council member's resolved outcome, carried into the synthesis
+/// prompt in `council_index` order.
+struct MemberAnswer {
+    index: usize,
+    model_label: String,
+    outcome: Result<SubagentResult, String>,
+}
+
+/// Dispatch every council member in parallel through the shared
+/// observability hook. Each member emits a `SubagentSpawned` (with
+/// `council_index`, `model`, and the shared `council_parent_tool_use_id`)
+/// on the parent stream immediately, streams live on its own child run,
+/// and resolves to a [`SubagentResult`]. Returns the answers in
+/// `council_index` order for synthesis.
+async fn dispatch_members(
+    handle: &Arc<ChatRunHandle>,
+    members: &[CouncilMember],
+    query: &str,
+    run_id: &str,
+    shutdown: &CancellationToken,
+    params: &CouncilDispatchParams,
+) -> Vec<MemberAnswer> {
+    // Emit member spawn/status frames into the SAME replay channel the
+    // parent run streams over, via a forwarder onto its event channel.
+    let parent_outbound = spawn_event_forwarder(handle.events.clone());
+    let hook = Arc::new(RuntimeSubagentObservabilityHook::new(
+        params.dispatcher.clone(),
+        parent_outbound,
+        params.chat_runs.clone(),
+        Some(shutdown.clone()),
+        Some(run_id.to_string()),
+    ));
+
+    // One synthetic grouping id every member shares so the UI folds them
+    // into a single council panel (N columns). Distinct from each
+    // member's `tool_call_id` (left `None`) so the `(parent,
+    // tool_call_id)` dedupe never collapses two members into one child.
+    let group_id = format!("council-{run_id}");
+
+    info!(
+        run_id = %run_id,
+        member_count = members.len(),
+        "AURA Council: dispatching members"
+    );
+
+    let dispatches = members.iter().enumerate().map(|(index, member)| {
+        let hook = hook.clone();
+        let model_label = member.model.id.clone().unwrap_or_default();
+        let request = SubagentDispatchRequest {
+            parent_agent_id: params.parent_agent_id,
+            subagent_type: COUNCIL_MEMBER_KIND.to_string(),
+            prompt: query.to_string(),
+            originating_user_id: Some(params.originating_user_id.clone()),
+            // Members hang directly off the parent (depth 1).
+            parent_chain: vec![params.parent_agent_id],
+            model_override: member.model.id.clone(),
+            system_prompt_addendum: None,
+            parent_permissions: params.parent_permissions.clone(),
+            parent_tool_permissions: params.parent_tool_permissions.clone(),
+            user_tool_defaults: params.user_tool_defaults.clone(),
+            // No dedupe key: each member is a distinct dispatch.
+            tool_call_id: None,
+            parent_mode: None,
+            parent_kernel_mode: None,
+            parent_model_id: Some(params.parent_model_id.clone()),
+            override_mode: None,
+            override_permissions: None,
+            override_tool_subset: None,
+            override_isolation_id: None,
+            override_budget: None,
+            // Wait: block until the member finishes; the hook still emits
+            // the spawn frame up-front so all columns appear immediately.
+            spawn_mode: None,
+            council_index: Some(u32::try_from(index).unwrap_or(u32::MAX)),
+            council_parent_tool_use_id: Some(group_id.clone()),
+        };
+        async move {
+            let outcome = hook.dispatch(request).await;
+            MemberAnswer {
+                index,
+                model_label,
+                outcome,
+            }
+        }
+    });
+
+    let mut answers = futures_util::future::join_all(dispatches).await;
+    answers.sort_by_key(|a| a.index);
+    answers
+}
+
+/// Build the synthesis turn: embed the user's question and each member's
+/// answer (or failure), and direct the synthesizer to integrate them
+/// into one combined response.
+fn build_synthesis_prompt(query: &str, answers: &[MemberAnswer]) -> String {
+    let n = answers.len();
     let mut prompt = String::new();
     prompt.push_str(&format!(
-        "You are the AURA Council coordinator. Convene a council of {n} member models to answer \
-         the user's question, then synthesize their answers into one combined response.\n\n"
+        "You are the AURA Council synthesizer. {n} council member model(s) independently answered \
+         the user's question. Integrate their answers into ONE combined response.\n\n"
     ));
 
     prompt.push_str("## User question\n\n");
     prompt.push_str(query.trim());
 
-    prompt.push_str("\n\n## Step 1 — fan out the members (do this FIRST)\n\n");
-    prompt.push_str(&format!(
-        "In a SINGLE assistant message, call the `task` tool {n} times IN PARALLEL — one call per \
-         council member listed below. Issue all {n} calls together so the members run \
-         concurrently; do NOT call `task` sequentially and do NOT answer the question yourself \
-         first. For EVERY call set:\n\
-         - `subagent_type`: \"{COUNCIL_MEMBER_KIND}\"\n\
-         - `prompt`: the user's question above, verbatim\n\
-         - `model`: the member's model id below (copy it EXACTLY)\n\n"
-    ));
-    prompt.push_str("Council members:\n");
-    for (idx, member) in members.iter().enumerate() {
-        let model = member.model.id.as_deref().unwrap_or("(default model)");
-        prompt.push_str(&format!("- Member {idx}: model `{model}`\n"));
+    prompt.push_str("\n\n## Council member answers\n");
+    for answer in answers {
+        let label = if answer.model_label.is_empty() {
+            "(default model)".to_string()
+        } else {
+            answer.model_label.clone()
+        };
+        prompt.push_str(&format!("\n### Member {} — `{label}`\n\n", answer.index));
+        match &answer.outcome {
+            Ok(result) => match &result.exit {
+                SubagentExit::Completed => {
+                    let body = result.final_message.trim();
+                    if body.is_empty() {
+                        prompt.push_str("(member returned an empty answer)\n");
+                    } else {
+                        prompt.push_str(body);
+                        prompt.push('\n');
+                    }
+                }
+                SubagentExit::Failed { reason } => {
+                    prompt.push_str(&format!("(member failed: {reason})\n"));
+                }
+                SubagentExit::Cancelled => prompt.push_str("(member was cancelled)\n"),
+                SubagentExit::Timeout => prompt.push_str("(member timed out)\n"),
+                SubagentExit::Rejected { reason } => {
+                    prompt.push_str(&format!("(member rejected: {reason})\n"));
+                }
+            },
+            Err(err) => {
+                prompt.push_str(&format!("(member dispatch error: {err})\n"));
+            }
+        }
     }
 
-    prompt.push_str("\n## Step 2 — synthesize\n\n");
     prompt.push_str(
-        "After ALL members return, write ONE combined answer. Explicitly call out where the \
-         members AGREE and where they DISAGREE; when they disagree, weigh the trade-offs and \
-         state your single best recommendation. Integrate their answers — do not merely list \
-         them.",
+        "\n## Synthesize\n\n\
+         Write ONE combined answer. Explicitly call out where the members AGREE and where they \
+         DISAGREE; when they disagree, weigh the trade-offs and state your single best \
+         recommendation. Integrate their answers — do not merely list them. Do NOT call any \
+         tools; respond with the synthesized answer directly.",
     );
     prompt
 }
@@ -352,39 +503,64 @@ mod tests {
         assert_eq!(latest_user_query(&[]), "");
     }
 
-    /// The coordinator prompt must embed the question, name every
-    /// member's model id (so the synthesizer can override per call), and
-    /// steer the canonical "parallel `task`, then synthesize" behavior.
+    fn completed_answer(index: usize, model: &str, body: &str) -> MemberAnswer {
+        MemberAnswer {
+            index,
+            model_label: model.to_string(),
+            outcome: Ok(SubagentResult {
+                child_agent_id: None,
+                final_message: body.to_string(),
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                files_changed: Vec::new(),
+                exit: SubagentExit::Completed,
+            }),
+        }
+    }
+
+    /// The synthesis prompt must embed the question, each member's model
+    /// label + answer, and steer the synthesizer to integrate (not list)
+    /// them.
     #[test]
-    fn coordinator_prompt_lists_each_member_model_and_demands_parallel_tasks() {
-        let members = test_members(&["model-a", "model-b", "model-c"]);
-        let prompt = build_coordinator_prompt("what is rust?", &members);
+    fn synthesis_prompt_embeds_question_and_member_answers() {
+        let answers = vec![
+            completed_answer(0, "model-a", "rust is a systems language"),
+            completed_answer(1, "model-b", "rust has a borrow checker"),
+        ];
+        let prompt = build_synthesis_prompt("what is rust?", &answers);
 
         assert!(prompt.contains("what is rust?"), "embeds the question");
-        for model in ["model-a", "model-b", "model-c"] {
-            assert!(prompt.contains(model), "lists member model {model}");
-        }
-        assert!(prompt.contains("`task`"), "names the task tool");
+        assert!(prompt.contains("model-a") && prompt.contains("model-b"), "labels members");
         assert!(
-            prompt.to_lowercase().contains("parallel"),
-            "demands parallel fan-out"
+            prompt.contains("rust is a systems language")
+                && prompt.contains("rust has a borrow checker"),
+            "embeds each member's answer"
         );
+        assert!(prompt.contains("Member 0") && prompt.contains("Member 1"));
         assert!(
-            prompt.to_lowercase().contains("synthesize"),
+            prompt.to_lowercase().contains("synthesize")
+                || prompt.to_lowercase().contains("combined"),
             "asks for synthesis"
-        );
-        assert!(
-            prompt.contains(COUNCIL_MEMBER_KIND),
-            "names the member subagent kind"
         );
     }
 
+    /// A failed / rejected member is surfaced (with its reason) rather
+    /// than silently dropped, so the synthesizer can account for it.
     #[test]
-    fn coordinator_prompt_counts_members() {
-        let two = build_coordinator_prompt("q", &test_members(&["x", "y"]));
-        assert!(two.contains("council of 2 member"));
-        assert!(two.contains("Member 0"));
-        assert!(two.contains("Member 1"));
-        assert!(!two.contains("Member 2"));
+    fn synthesis_prompt_surfaces_member_failures() {
+        let answers = vec![
+            completed_answer(0, "model-a", "ok answer"),
+            MemberAnswer {
+                index: 1,
+                model_label: "model-b".to_string(),
+                outcome: Ok(SubagentResult::rejected("depth exceeded")),
+            },
+        ];
+        let prompt = build_synthesis_prompt("q", &answers);
+        assert!(prompt.contains("ok answer"));
+        assert!(
+            prompt.contains("depth exceeded"),
+            "rejected member reason is surfaced: {prompt}"
+        );
     }
 }

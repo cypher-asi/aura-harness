@@ -226,6 +226,7 @@ impl TaskTool {
             spawn_mode: input.spawn_mode,
             // Ordinary `task` spawns are never council members.
             council_index: None,
+            council_parent_tool_use_id: None,
         })
     }
 }

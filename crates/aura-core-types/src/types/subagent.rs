@@ -149,6 +149,18 @@ pub struct SubagentDispatchRequest {
     /// `council_index: None` exactly as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub council_index: Option<u32>,
+    /// AURA Council shared grouping id. When `Some`, the runtime
+    /// observability hook advertises THIS as the emitted
+    /// `SubagentSpawned.parent_tool_use_id` (and on the child run's
+    /// linkage) instead of deriving it from [`Self::tool_call_id`]. All
+    /// members of one council run pass the same value so the UI folds
+    /// them into a single council panel (N columns), while each member
+    /// still dispatches with its own unique/none `tool_call_id` so the
+    /// per-`(parent, tool_call_id)` dedupe never collapses two members
+    /// into one child. `None` for every ordinary `task` spawn (which
+    /// keeps deriving `parent_tool_use_id` from `tool_call_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub council_parent_tool_use_id: Option<String>,
 }
 
 /// Terminal state of a foreground subagent task.

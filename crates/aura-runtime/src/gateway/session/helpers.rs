@@ -104,7 +104,7 @@ fn resolve_session_workspace(session: &Session) -> (std::path::PathBuf, bool) {
     (session.workspace.clone(), false)
 }
 
-fn session_user_defaults(
+pub(super) fn session_user_defaults(
     session: &Session,
     ctx: &WsContext,
 ) -> Result<UserToolDefaults, aura_agent_kernel::KernelError> {

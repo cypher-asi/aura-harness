@@ -194,7 +194,17 @@ impl RuntimeSubagentObservabilityHook {
 impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
     async fn dispatch(&self, request: SubagentDispatchRequest) -> Result<SubagentResult, String> {
         let child_run_id = Uuid::new_v4().to_string();
-        let parent_tool_use_id = request.tool_call_id.clone();
+        // AURA Council members share ONE `council_parent_tool_use_id` so the
+        // UI folds them into a single council panel; that shared id is what
+        // we advertise as `parent_tool_use_id` (and stamp on child linkage),
+        // NOT each member's own `tool_call_id` (which stays unique/none so the
+        // `(parent, tool_call_id)` dedupe never collapses two members). An
+        // ordinary `task` spawn leaves `council_parent_tool_use_id` unset and
+        // keeps deriving the id from `tool_call_id` exactly as before.
+        let parent_tool_use_id = request
+            .council_parent_tool_use_id
+            .clone()
+            .or_else(|| request.tool_call_id.clone());
         let subagent_type = request.subagent_type.clone();
         let prompt = request.prompt.clone();
         // Council labelling: a council-member dispatch carries
@@ -427,6 +437,7 @@ mod tests {
             override_budget: None,
             spawn_mode: None,
             council_index: None,
+            council_parent_tool_use_id: None,
         }
     }
 
