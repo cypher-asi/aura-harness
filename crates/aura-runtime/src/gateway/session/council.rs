@@ -45,7 +45,9 @@ use aura_core_types::{
     SubagentResult, UserToolDefaults,
 };
 use aura_fleet_subagent::FleetSubagentDispatcher;
-use aura_protocol::{ConversationMessage, CouncilMember, RuntimeRequest, RuntimeRequestType};
+use aura_protocol::{
+    ConversationMessage, CouncilMechanism, CouncilMember, RuntimeRequest, RuntimeRequestType,
+};
 use aura_tools::SubagentDispatchHook;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -87,6 +89,7 @@ struct CouncilDispatchParams {
 struct CouncilCoordinator {
     handle: Arc<ChatRunHandle>,
     members: Vec<CouncilMember>,
+    mechanism: CouncilMechanism,
     query: String,
     run_id: String,
     shutdown: CancellationToken,
@@ -108,11 +111,12 @@ pub(crate) async fn start_council_run(
     req: RuntimeRequest,
     ctx: WsContext,
 ) -> Result<String, ChatRequestError> {
-    let (members, conversation_messages) = match req.r#type {
+    let (members, mechanism, conversation_messages) = match req.r#type {
         RuntimeRequestType::Council {
             ref members,
+            mechanism,
             ref conversation_messages,
-        } => (members.clone(), conversation_messages.clone()),
+        } => (members.clone(), mechanism, conversation_messages.clone()),
         _ => {
             return Err(ChatRequestError {
                 code: "invalid_council_request",
@@ -180,12 +184,14 @@ pub(crate) async fn start_council_run(
     info!(
         run_id = %run_id,
         member_count = members.len(),
+        mechanism = mechanism.as_wire(),
         "AURA Council run started"
     );
 
     tokio::spawn(run_council_coordinator(CouncilCoordinator {
         handle,
         members,
+        mechanism,
         query,
         run_id: run_id.clone(),
         shutdown,
@@ -202,6 +208,7 @@ async fn run_council_coordinator(coordinator: CouncilCoordinator) {
     let CouncilCoordinator {
         handle,
         members,
+        mechanism,
         query,
         run_id,
         shutdown,
@@ -224,8 +231,10 @@ async fn run_council_coordinator(coordinator: CouncilCoordinator) {
     }
 
     // Inject the synthesis turn. The synthesizer's normal text turn is
-    // the combined answer the UI renders below the council panel.
-    let prompt = build_synthesis_prompt(&query, &answers);
+    // the combined answer the UI renders below the council panel. The
+    // mechanism selects HOW the members' answers are combined
+    // (integrate / contrast / present side by side).
+    let prompt = build_synthesis_prompt(&query, &answers, mechanism);
     if handle
         .commands
         .send(InboundMessage::UserMessage(UserMessage {
@@ -334,15 +343,20 @@ async fn dispatch_members(
     answers
 }
 
-/// Build the synthesis turn: embed the user's question and each member's
-/// answer (or failure), and direct the synthesizer to integrate them
-/// into one combined response.
-fn build_synthesis_prompt(query: &str, answers: &[MemberAnswer]) -> String {
+/// Build the final combine turn: embed the user's question and each
+/// member's answer (or failure), then direct `members[0]` to combine
+/// them according to the chosen [`CouncilMechanism`].
+fn build_synthesis_prompt(
+    query: &str,
+    answers: &[MemberAnswer],
+    mechanism: CouncilMechanism,
+) -> String {
     let n = answers.len();
     let mut prompt = String::new();
     prompt.push_str(&format!(
         "You are the AURA Council synthesizer. {n} council member model(s) independently answered \
-         the user's question. Integrate their answers into ONE combined response.\n\n"
+         the user's question. {}\n\n",
+        mechanism_intro(mechanism)
     ));
 
     prompt.push_str("## User question\n\n");
@@ -382,14 +396,55 @@ fn build_synthesis_prompt(query: &str, answers: &[MemberAnswer]) -> String {
         }
     }
 
-    prompt.push_str(
-        "\n## Synthesize\n\n\
-         Write ONE combined answer. Explicitly call out where the members AGREE and where they \
-         DISAGREE; when they disagree, weigh the trade-offs and state your single best \
-         recommendation. Integrate their answers — do not merely list them. Do NOT call any \
-         tools; respond with the synthesized answer directly.",
-    );
+    prompt.push_str(mechanism_instruction(mechanism));
     prompt
+}
+
+/// One-line framing for the chosen mechanism, dropped into the prompt
+/// preamble so the synthesizer knows its job before reading the answers.
+fn mechanism_intro(mechanism: CouncilMechanism) -> &'static str {
+    match mechanism {
+        CouncilMechanism::Synthesize => "Integrate their answers into ONE combined response.",
+        CouncilMechanism::Contrast => {
+            "Compare and contrast their answers, surfacing agreements and disagreements."
+        }
+        CouncilMechanism::SideBySide => {
+            "Present each member's answer side by side, faithfully and without merging them."
+        }
+    }
+}
+
+/// The closing instruction block that tells `members[0]` how to combine
+/// the members' answers for the chosen mechanism. Every variant forbids
+/// tool calls so the combine turn is a single direct text response the
+/// UI renders below the council panel.
+fn mechanism_instruction(mechanism: CouncilMechanism) -> &'static str {
+    match mechanism {
+        CouncilMechanism::Synthesize => {
+            "\n## Synthesize\n\n\
+             Write ONE combined answer. Explicitly call out where the members AGREE and where they \
+             DISAGREE; when they disagree, weigh the trade-offs and state your single best \
+             recommendation. Integrate their answers — do not merely list them. Do NOT call any \
+             tools; respond with the synthesized answer directly."
+        }
+        CouncilMechanism::Contrast => {
+            "\n## Contrast\n\n\
+             Write a structured comparison of the members' answers. Use a section (or table) for \
+             the points where they AGREE and a section for where they DISAGREE, attributing each \
+             position to the member(s) that hold it. Highlight the key trade-offs that distinguish \
+             the answers. Do NOT collapse everything into a single recommendation — the goal is to \
+             make the differences clear so the reader can decide. Do NOT call any tools; respond \
+             with the contrast directly."
+        }
+        CouncilMechanism::SideBySide => {
+            "\n## Side by side\n\n\
+             Present each member's answer side by side under its own clearly labeled heading \
+             (`## Member <index> — <model>`), reproducing each answer faithfully with only light \
+             cleanup for readability. Do NOT merge, rank, editorialize, or add a recommendation — \
+             keep every member's response distinct and self-contained. Do NOT call any tools; \
+             respond with the side-by-side presentation directly."
+        }
+    }
 }
 
 /// Resolve the council member cap from `AURA_COUNCIL_MAX_MEMBERS`,
@@ -526,7 +581,8 @@ mod tests {
             completed_answer(0, "model-a", "rust is a systems language"),
             completed_answer(1, "model-b", "rust has a borrow checker"),
         ];
-        let prompt = build_synthesis_prompt("what is rust?", &answers);
+        let prompt =
+            build_synthesis_prompt("what is rust?", &answers, CouncilMechanism::Synthesize);
 
         assert!(prompt.contains("what is rust?"), "embeds the question");
         assert!(
@@ -558,11 +614,44 @@ mod tests {
                 outcome: Ok(SubagentResult::rejected("depth exceeded")),
             },
         ];
-        let prompt = build_synthesis_prompt("q", &answers);
+        let prompt = build_synthesis_prompt("q", &answers, CouncilMechanism::Synthesize);
         assert!(prompt.contains("ok answer"));
         assert!(
             prompt.contains("depth exceeded"),
             "rejected member reason is surfaced: {prompt}"
         );
+    }
+
+    /// Each mechanism steers the combine turn with its own instruction
+    /// block while still embedding every member's answer.
+    #[test]
+    fn synthesis_prompt_varies_by_mechanism() {
+        let answers = vec![
+            completed_answer(0, "model-a", "answer one"),
+            completed_answer(1, "model-b", "answer two"),
+        ];
+
+        let synthesize = build_synthesis_prompt("q", &answers, CouncilMechanism::Synthesize);
+        assert!(synthesize.contains("## Synthesize"));
+        assert!(synthesize.contains("ONE combined answer"));
+
+        let contrast = build_synthesis_prompt("q", &answers, CouncilMechanism::Contrast);
+        assert!(contrast.contains("## Contrast"));
+        assert!(
+            contrast.contains("Do NOT collapse everything into a single recommendation"),
+            "contrast must not force a single recommendation: {contrast}"
+        );
+
+        let side_by_side = build_synthesis_prompt("q", &answers, CouncilMechanism::SideBySide);
+        assert!(side_by_side.contains("## Side by side"));
+        assert!(
+            side_by_side.contains("Do NOT merge"),
+            "side-by-side must not merge answers: {side_by_side}"
+        );
+
+        // Every mechanism still embeds each member's answer.
+        for prompt in [&synthesize, &contrast, &side_by_side] {
+            assert!(prompt.contains("answer one") && prompt.contains("answer two"));
+        }
     }
 }

@@ -134,12 +134,19 @@ pub enum RuntimeRequestType {
         work_log: Vec<String>,
     },
     /// AURA Council: fan the same query across `members` in parallel
-    /// (one subagent child run each), then synthesize one combined
-    /// answer with `members[0]` (the first model). `members[0]` is the
-    /// synthesizer.
+    /// (one subagent child run each), then combine their answers with
+    /// `members[0]` (the first model) using the chosen [`mechanism`].
+    /// `members[0]` is the synthesizer.
+    ///
+    /// [`mechanism`]: CouncilMechanism
     Council {
         /// Council member models in order; `members[0]` synthesizes.
         members: Vec<CouncilMember>,
+        /// How `members[0]` combines the members' answers once every
+        /// member has completed. Defaults to [`CouncilMechanism::Synthesize`]
+        /// for older clients that omit the field.
+        #[serde(default)]
+        mechanism: CouncilMechanism,
         /// Prior conversation messages to hydrate into session history.
         #[serde(default)]
         conversation_messages: Vec<ConversationMessage>,
@@ -156,6 +163,57 @@ pub struct CouncilMember {
     pub id: String,
     /// Model driving this member.
     pub model: ModelSelection,
+}
+
+/// How an AURA Council combines its members' answers once every member
+/// has completed. Selected by the user before the run; applied by the
+/// synthesizer (`members[0]`) in the final turn the UI renders below the
+/// council panel.
+///
+/// Wire format is snake_case (`synthesize` / `contrast` / `side_by_side`).
+/// `#[serde(default)]` on the [`RuntimeRequestType::Council`] field folds
+/// older clients that omit it into [`Self::Synthesize`], the prior
+/// behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum CouncilMechanism {
+    /// Integrate the members' answers into ONE combined best answer
+    /// (the default, original council behavior).
+    #[default]
+    Synthesize,
+    /// Compare the members' answers, explicitly calling out where they
+    /// agree and disagree, without forcing a single merged answer.
+    Contrast,
+    /// Present each member's answer verbatim, side by side, with light
+    /// per-member framing and no integration or editorializing.
+    SideBySide,
+}
+
+impl CouncilMechanism {
+    /// Parse a wire string (snake_case, case-insensitive) into a
+    /// mechanism. Returns `None` for unknown / empty input so HTTP-edge
+    /// callers can fall back to the default rather than failing the
+    /// request.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "synthesize" => Some(Self::Synthesize),
+            "contrast" => Some(Self::Contrast),
+            "side_by_side" | "side-by-side" | "sidebyside" => Some(Self::SideBySide),
+            _ => None,
+        }
+    }
+
+    /// The canonical snake_case wire string for this mechanism.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Synthesize => "synthesize",
+            Self::Contrast => "contrast",
+            Self::SideBySide => "side_by_side",
+        }
+    }
 }
 
 /// "Who is this agent" bundle.
@@ -408,5 +466,55 @@ mod reasoning_effort_tests {
             ReasoningEffort::from_wire("minimal"),
             Some(ReasoningEffort::Minimal)
         );
+    }
+
+    #[test]
+    fn council_mechanism_round_trips_snake_case() {
+        for (mechanism, wire) in [
+            (CouncilMechanism::Synthesize, "\"synthesize\""),
+            (CouncilMechanism::Contrast, "\"contrast\""),
+            (CouncilMechanism::SideBySide, "\"side_by_side\""),
+        ] {
+            let json = serde_json::to_string(&mechanism).expect("serialize mechanism");
+            assert_eq!(json, wire);
+            let back: CouncilMechanism =
+                serde_json::from_str(&json).expect("deserialize mechanism");
+            assert_eq!(back, mechanism);
+            assert_eq!(mechanism.as_wire(), &wire[1..wire.len() - 1]);
+        }
+    }
+
+    #[test]
+    fn council_mechanism_defaults_to_synthesize() {
+        assert_eq!(CouncilMechanism::default(), CouncilMechanism::Synthesize);
+        // A council request that omits `mechanism` (older client) folds
+        // into the default rather than failing to deserialize.
+        let json = r#"{"kind":"council","params":{"members":[],"conversation_messages":[]}}"#;
+        let parsed: RuntimeRequestType =
+            serde_json::from_str(json).expect("deserialize legacy council request");
+        match parsed {
+            RuntimeRequestType::Council { mechanism, .. } => {
+                assert_eq!(mechanism, CouncilMechanism::Synthesize);
+            }
+            other => panic!("expected council, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn council_mechanism_from_wire_is_lenient() {
+        assert_eq!(
+            CouncilMechanism::from_wire("SIDE_BY_SIDE"),
+            Some(CouncilMechanism::SideBySide)
+        );
+        assert_eq!(
+            CouncilMechanism::from_wire("side-by-side"),
+            Some(CouncilMechanism::SideBySide)
+        );
+        assert_eq!(
+            CouncilMechanism::from_wire(" contrast "),
+            Some(CouncilMechanism::Contrast)
+        );
+        assert_eq!(CouncilMechanism::from_wire("bogus"), None);
+        assert_eq!(CouncilMechanism::from_wire(""), None);
     }
 }
