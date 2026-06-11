@@ -20,13 +20,23 @@ RUN cargo build --release --bin aura \
 # ── Runtime ─────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# Runtime libs + a baseline development toolchain. Agents run as a
+# root-capable dev environment inside a Firecracker microVM and are
+# expected to install software and modify the OS, so ship sudo and the
+# common package/build toolchains; `apt` remains available for anything
+# else. (Privilege escalation is gated by the K8s securityContext, not
+# the image: runc-isolated agents run non-root with escalation denied,
+# so the bundled sudo is inert there.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl3 ca-certificates curl libdbus-1-3 \
+        sudo git build-essential python3 python3-pip nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g 1000 aura \
     && useradd -u 1000 -g aura -m aura \
-    && mkdir -p /data && chown aura:aura /data
+    && mkdir -p /data && chown aura:aura /data \
+    && echo 'aura ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/aura \
+    && chmod 0440 /etc/sudoers.d/aura
 
 COPY --from=builder /build/target/release/aura /usr/local/bin/aura
 

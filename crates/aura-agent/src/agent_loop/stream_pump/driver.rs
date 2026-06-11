@@ -85,6 +85,14 @@ pub(super) async fn drive_stream(
     // so only an actual phase change emits a line (not every delta).
     let stream_started = Instant::now();
     let mut logged_phase: Option<StreamPhase> = None;
+    // C2: a long, content-free time-to-first-token (or a long thinking /
+    // tool-input phase) produces only `Keepalive` events, which the
+    // legacy code consumed silently. We turn them into throttled
+    // `model_thinking` progress so the aura-os sliding-idle watchdog
+    // (`AURA_TURN_MAX_TIMEOUT_SECS`) keeps resetting during slow model
+    // turns, without flooding the broadcast with one event per ping.
+    let thinking_heartbeat = super::super::tool_pipeline::tool_heartbeat_interval();
+    let mut last_thinking_progress = Instant::now();
 
     loop {
         let next_step =
@@ -224,6 +232,23 @@ pub(super) async fn drive_stream(
                         console::stream_phase_line(phase, stream_started.elapsed());
                         logged_phase = Some(phase);
                     }
+                    // Throttled forward-progress signal for the server
+                    // watchdog: at most one `model_thinking` event per
+                    // `thinking_heartbeat`, regardless of ping cadence.
+                    if last_thinking_progress.elapsed() >= thinking_heartbeat {
+                        let elapsed_ms =
+                            u64::try_from(stream_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        emit_event(
+                            event_tx,
+                            AgentLoopEvent::Progress {
+                                stage: "model_thinking".to_string(),
+                                tool_name: None,
+                                elapsed_ms: Some(elapsed_ms),
+                                message: None,
+                            },
+                        );
+                        last_thinking_progress = Instant::now();
+                    }
                 }
             },
         }
@@ -238,6 +263,21 @@ pub(super) async fn drive_stream(
     // index captured above so the final `tool_results` vec mirrors
     // the order the model emitted the corresponding
     // `OutputItemDone(tool_use)` events.
+    // While draining potentially long-running tool calls, emit a
+    // periodic `tool_running` progress heartbeat. The spawned tool
+    // futures only make progress as `FuturesOrdered` is polled in the
+    // drain loop below, so this window is the main silent stretch of a
+    // turn. The heartbeat keeps the aura-os server's sliding-idle
+    // watchdog (`AURA_TURN_MAX_TIMEOUT_SECS`) resetting so only a
+    // genuinely hung tool trips `turn_timeout`. No-op when there are no
+    // tools (`tool_calls_seen` empty) or no event channel. The guard
+    // aborts the ticker as soon as the drain loop ends.
+    let _tool_heartbeat = super::super::tool_pipeline::spawn_tool_heartbeat(
+        event_tx,
+        &tool_calls_seen,
+        super::super::tool_pipeline::tool_heartbeat_interval(),
+    );
+
     let mut spawned_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))> = Vec::new();
     let mut spawn_cursor = 0usize;
     loop {

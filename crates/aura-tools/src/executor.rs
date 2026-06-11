@@ -236,8 +236,26 @@ impl ToolExecutor {
 
         let workspace_root = ctx.workspace_root.clone();
         let extra_paths = self.config.extra_allowed_paths.clone();
+        // Privileged dev environment: an effectively-full-access session
+        // (operator opt-in via `AURA_ALLOW_UNRESTRICTED_FULL_ACCESS` plus
+        // a FullAccess agent, surfaced here as `bypass_allowlists`) is
+        // granted an OS-wide filesystem root so the agent can modify the
+        // guest OS — install packages, edit `/etc`, write `/usr`, etc.
+        // This widens the same containment that otherwise pins every tool
+        // to the workspace root. It is gated to the existing full-access
+        // opt-in and is only safe behind microVM isolation (the K8s
+        // securityContext decides whether this process is root); ordinary
+        // agents keep strict per-tenant workspace containment.
+        let os_wide = self.config.command.bypass_allowlists;
         let sandbox = tokio::task::spawn_blocking(move || {
-            if extra_paths.is_empty() {
+            if os_wide {
+                // `/` targets the Linux microVM guest rootfs. Extra
+                // skill-granted paths are still merged for parity.
+                let mut roots = Vec::with_capacity(extra_paths.len() + 1);
+                roots.push(std::path::PathBuf::from("/"));
+                roots.extend(extra_paths);
+                Sandbox::with_extra_roots(&workspace_root, &roots)
+            } else if extra_paths.is_empty() {
                 Sandbox::new(&workspace_root)
             } else {
                 Sandbox::with_extra_roots(&workspace_root, &extra_paths)

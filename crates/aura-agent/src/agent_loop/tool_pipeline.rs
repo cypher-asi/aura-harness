@@ -59,7 +59,6 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 /// is kept for the buffered-style helpers' unit-test coverage and
 /// for any future transport (e.g. cassette replay) that needs
 /// inline executor calls.
-#[allow(dead_code)]
 pub(crate) fn tool_heartbeat_interval() -> Duration {
     aura_config::agent().tools.heartbeat_interval
 }
@@ -80,7 +79,6 @@ pub(crate) fn tool_heartbeat_interval() -> Duration {
 /// `event_tx` is `None` for the headless code path (no event channel,
 /// e.g. unit tests in non-streaming mode); the spawn is skipped and
 /// the returned guard is a no-op so the call site stays branch-free.
-#[allow(dead_code)]
 pub(super) fn spawn_tool_heartbeat(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     to_execute: &[ToolCallInfo],
@@ -134,7 +132,6 @@ pub(super) fn spawn_tool_heartbeat(
 /// on drop so a panicking executor or an early `?`-return at the
 /// caller doesn't leak the periodic emission past the tool's
 /// lifetime.
-#[allow(dead_code)]
 pub(super) struct HeartbeatGuard {
     handle: Option<JoinHandle<()>>,
 }
