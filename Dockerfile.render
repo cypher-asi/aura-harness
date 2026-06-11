@@ -20,6 +20,11 @@ RUN cargo build --release --bin aura \
 # ── Runtime ─────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# Git commit the image was built from, surfaced by the harness /health
+# endpoint so operators can trace a running deployment back to its source.
+ARG GIT_SHA=""
+ENV AURA_HARNESS_GIT_SHA=${GIT_SHA}
+
 # Runtime libs + a baseline development toolchain. Agents run as a
 # root-capable dev environment inside a Firecracker microVM and are
 # expected to install software and modify the OS, so ship sudo and the

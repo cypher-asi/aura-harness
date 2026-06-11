@@ -100,6 +100,13 @@ async fn test_health_endpoint() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "ok");
     assert!(json["version"].is_string());
+    // git_sha is baked in via AURA_HARNESS_GIT_SHA in container images and
+    // null for local builds; either way the key must be present.
+    assert!(
+        json.get("git_sha").is_some(),
+        "/health must always include the git_sha key"
+    );
+    assert!(json["git_sha"].is_string() || json["git_sha"].is_null());
 }
 
 /// Verify that `/health` exposes the effective tool policy so the

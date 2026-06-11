@@ -475,6 +475,9 @@ async fn health_handler(State(state): State<RouterState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
+        // Build-time git commit baked into the container image (see
+        // Dockerfile ARG GIT_SHA). Absent for local/non-container builds.
+        "git_sha": std::env::var("AURA_HARNESS_GIT_SHA").ok().filter(|s| !s.is_empty()),
         "run_command_enabled": state.tool_config.command.enabled,
         "shell_enabled": state.tool_config.command.allow_shell,
         "allowed_commands": state.tool_config.command.command_allowlist,
