@@ -213,6 +213,7 @@ impl TestServer {
             automaton_bridge: None,
             memory_manager: None,
             skill_manager: None,
+            secrets_vault: None,
             router_url: None,
         });
         let app = create_router(state);

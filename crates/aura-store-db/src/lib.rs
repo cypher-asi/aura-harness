@@ -24,6 +24,7 @@ mod record_log_bridge;
 mod rocks_store;
 pub mod seal;
 mod store;
+pub mod vault;
 
 pub use aura_core_types::AgentStatus;
 pub use error::StoreError;
@@ -33,6 +34,7 @@ pub use rocks_store::FaultAt;
 pub use rocks_store::RocksStore;
 pub use seal::{SealCipher, SealError, SEAL_MAGIC, SEAL_VERSION};
 pub use store::{DequeueToken, ReadStore, Store, WriteStore};
+pub use vault::{SecretMetadata, SecretRecord, SecretsVault, VaultError};
 
 /// Column family names.
 pub mod cf {
@@ -58,4 +60,8 @@ pub mod cf {
     /// auto_review / default_permissions). Keyed by `user_id` bytes;
     /// value is a JSON-serialised [`aura_core_types::UserToolDefaults`].
     pub const USER_TOOL_DEFAULTS: &str = "user_tool_defaults";
+    /// In-TEE secrets vault (Swarm TEE phase 6). Keyed by secret name;
+    /// value is a JSON-serialised [`crate::vault::SecretRecord`],
+    /// sealed at rest in sealed mode.
+    pub const SECRETS: &str = "secrets";
 }

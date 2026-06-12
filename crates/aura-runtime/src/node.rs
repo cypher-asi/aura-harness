@@ -228,6 +228,14 @@ impl Node {
 
         let router_url = std::env::var("AURA_ROUTER_URL").ok();
 
+        // In-TEE secrets vault (Swarm TEE phase 6): same shared DB +
+        // optional state cipher as the memory/skill stores, so secrets
+        // are sealed at rest whenever the node booted in sealed mode.
+        let secrets_vault = Arc::new(aura_store_db::SecretsVault::with_cipher(
+            store.db_handle().clone(),
+            seal_cipher.clone(),
+        ));
+
         let state = RouterState::new(crate::gateway::RouterStateConfig {
             store,
             scheduler,
@@ -240,6 +248,7 @@ impl Node {
             automaton_bridge,
             memory_manager: Some(memory_manager),
             skill_manager: Some(skill_manager),
+            secrets_vault: Some(secrets_vault),
             router_url,
         });
         let app = create_router(state);

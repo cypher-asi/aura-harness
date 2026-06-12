@@ -68,6 +68,7 @@ fn test_router_state(store: Arc<dyn Store>) -> RouterState {
         automaton_bridge: None,
         memory_manager: None,
         skill_manager: None,
+        secrets_vault: None,
         router_url: None,
     })
 }
@@ -563,12 +564,14 @@ fn test_router_state_with_managers() -> RouterState {
         ProcedureConfig::default(),
     ));
 
-    let skill_store = Arc::new(SkillInstallStore::new(db));
+    let skill_store = Arc::new(SkillInstallStore::new(db.clone()));
     let loader = SkillLoader::with_defaults(None, None);
     let skill_manager = Arc::new(std::sync::RwLock::new(SkillManager::with_install_store(
         loader,
         skill_store,
     )));
+
+    let secrets_vault = Arc::new(aura_store_db::SecretsVault::new(db));
 
     // See note on `test_router_state` - opt in to bearer enforcement
     // because the ambient default is now off but the rest of this
@@ -589,6 +592,7 @@ fn test_router_state_with_managers() -> RouterState {
         automaton_bridge: None,
         memory_manager: Some(memory_manager),
         skill_manager: Some(skill_manager),
+        secrets_vault: Some(secrets_vault),
         router_url: None,
     })
 }
@@ -1258,6 +1262,175 @@ async fn test_requires_bearer_on_protected_routes() {
     }
 }
 
+// ============================================================================
+// Secrets vault (Swarm TEE phase 6)
+// ============================================================================
+
+/// Full CRUD roundtrip over the HTTP surface: PUT → GET (reveal) →
+/// GET (default, redacted) → DELETE → 404.
+#[tokio::test]
+async fn test_secrets_crud_roundtrip() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    // Create.
+    let body = serde_json::json!({ "value": "sk-live-12345", "description": "stripe key" });
+    let req = authed_request()
+        .method("PUT")
+        .uri("/secrets/stripe-key")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["secret"]["name"], "stripe-key");
+    assert_eq!(json["secret"]["description"], "stripe key");
+    assert!(
+        json["secret"].get("value").is_none(),
+        "PUT response must not echo the value"
+    );
+
+    // GET with ?reveal=true returns the value (the in-VM read path).
+    let req = authed_request()
+        .uri("/secrets/stripe-key?reveal=true")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["secret"]["value"], "sk-live-12345");
+
+    // GET without reveal returns metadata only.
+    let req = authed_request()
+        .uri("/secrets/stripe-key")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let raw = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        !raw.contains("sk-live-12345"),
+        "non-reveal GET must not include the value: {raw}"
+    );
+
+    // DELETE, then the secret is gone.
+    let req = authed_request()
+        .method("DELETE")
+        .uri("/secrets/stripe-key")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = authed_request()
+        .uri("/secrets/stripe-key")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let req = authed_request()
+        .method("DELETE")
+        .uri("/secrets/stripe-key")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// The list endpoint must never return values, only names + metadata.
+#[tokio::test]
+async fn test_secrets_list_never_returns_values() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    for (name, value) in [("alpha", "value-alpha-xyz"), ("beta", "value-beta-xyz")] {
+        let body = serde_json::json!({ "value": value });
+        let req = authed_request()
+            .method("PUT")
+            .uri(format!("/secrets/{name}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    let req = authed_request()
+        .uri("/secrets")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let raw = String::from_utf8(bytes.to_vec()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+
+    let secrets = json["secrets"].as_array().unwrap();
+    assert_eq!(secrets.len(), 2);
+    assert_eq!(secrets[0]["name"], "alpha");
+    assert_eq!(secrets[1]["name"], "beta");
+    assert!(
+        !raw.contains("value-alpha-xyz") && !raw.contains("value-beta-xyz"),
+        "list response must never contain secret values: {raw}"
+    );
+}
+
+/// Secrets routes sit on the protected sub-router: no bearer → 401.
+#[tokio::test]
+async fn test_secrets_require_bearer() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    for (method, uri) in [
+        ("GET", "/secrets"),
+        ("GET", "/secrets/some-name"),
+        ("DELETE", "/secrets/some-name"),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {uri} must require a bearer token"
+        );
+    }
+}
+
+/// Invalid names are rejected before touching the store.
+#[tokio::test]
+async fn test_secrets_invalid_name_rejected() {
+    let state = test_router_state_with_managers();
+    let app = create_router(state);
+
+    let body = serde_json::json!({ "value": "v" });
+    let req = authed_request()
+        .method("PUT")
+        .uri("/secrets/bad%20name")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
 /// Overwrite the default `ConnectInfo<SocketAddr>` that
 /// `router::ensure_connect_info` would otherwise inject, so callers
 /// can appear to the governor as different peer IPs.
@@ -1359,6 +1532,7 @@ async fn test_rejects_when_server_auth_token_empty() {
         automaton_bridge: None,
         memory_manager: None,
         skill_manager: None,
+        secrets_vault: None,
         router_url: None,
     });
     let app = create_router(state);
@@ -1451,6 +1625,7 @@ fn test_router_state_with_workspace() -> (RouterState, tempfile::TempDir) {
         automaton_bridge: None,
         memory_manager: None,
         skill_manager: None,
+        secrets_vault: None,
         router_url: None,
     });
     (state, tmp)

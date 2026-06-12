@@ -127,6 +127,7 @@ impl RocksStore {
             cf::AGENT_SKILLS,
             cf::RUNTIME_CAPABILITIES,
             cf::USER_TOOL_DEFAULTS,
+            cf::SECRETS,
         ];
         let block_cache = Cache::new_lru_cache(Self::BLOCK_CACHE_BYTES);
         let cf_descriptors: Vec<_> = cf_names
@@ -223,6 +224,7 @@ impl RocksStore {
                 | cf::AGENT_SKILLS
                 | cf::RUNTIME_CAPABILITIES
                 | cf::USER_TOOL_DEFAULTS
+                | cf::SECRETS
         )
     }
 

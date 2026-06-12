@@ -21,6 +21,8 @@
 //! - [`memory`] — memory CRUD (canonical paths + aura-os `/api/*`
 //!   compatibility aliases).
 //! - [`skills`] — skill CRUD + per-agent install/uninstall.
+//! - [`secrets`] — in-TEE secrets vault CRUD (`/secrets`,
+//!   `/secrets/:name`; Swarm TEE phase 6).
 //! - [`tool_permissions`] — user defaults + per-agent overrides.
 //! - [`util`] — shared parsing helpers (`parse_agent_id` for the
 //!   bare/partitioned UUID + hex grammars).
@@ -36,6 +38,7 @@ pub(crate) mod files;
 pub(crate) mod memory;
 pub(crate) mod run;
 pub(crate) mod run_ws;
+pub(crate) mod secrets;
 pub(crate) mod skills;
 pub(crate) mod tool_permissions;
 pub(crate) mod tx;

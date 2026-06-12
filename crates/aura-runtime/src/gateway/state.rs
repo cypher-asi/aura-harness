@@ -63,6 +63,10 @@ pub struct RouterState {
     pub(crate) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     /// Optional skill manager for skill CRUD API and prompt injection.
     pub(crate) skill_manager: Option<Arc<RwLock<aura_context_skills::SkillManager>>>,
+    /// In-TEE secrets vault (Swarm TEE phase 6). Sealed at rest when the
+    /// node booted with a state cipher; `None` only in test fixtures
+    /// that don't exercise the secrets routes.
+    pub(crate) secrets_vault: Option<Arc<aura_store_db::SecretsVault>>,
     /// Router URL for generation proxying (from `AURA_ROUTER_URL`).
     pub(crate) router_url: Option<String>,
     /// Bounded pool of WebSocket connection slots.
@@ -105,6 +109,7 @@ pub struct RouterStateConfig {
     pub automaton_bridge: Option<Arc<AutomatonBridge>>,
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     pub skill_manager: Option<Arc<RwLock<aura_context_skills::SkillManager>>>,
+    pub secrets_vault: Option<Arc<aura_store_db::SecretsVault>>,
     pub router_url: Option<String>,
 }
 
@@ -128,6 +133,7 @@ impl RouterState {
             failed_txs: Arc::new(DashMap::new()),
             memory_manager: cfg.memory_manager,
             skill_manager: cfg.skill_manager,
+            secrets_vault: cfg.secrets_vault,
             router_url: cfg.router_url,
             ws_slots: Arc::new(Semaphore::new(ws::MAX_WS_CONNS_PER_NODE)),
             chat_runs: Arc::new(DashMap::new()),
@@ -150,6 +156,7 @@ impl Clone for RouterState {
             failed_txs: self.failed_txs.clone(),
             memory_manager: self.memory_manager.clone(),
             skill_manager: self.skill_manager.clone(),
+            secrets_vault: self.secrets_vault.clone(),
             router_url: self.router_url.clone(),
             ws_slots: self.ws_slots.clone(),
             chat_runs: self.chat_runs.clone(),

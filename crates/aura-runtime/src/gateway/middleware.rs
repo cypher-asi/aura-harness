@@ -56,6 +56,9 @@ use super::handlers::run::{
     run_list_handler, run_pause_handler, run_start_handler, run_status_handler, run_stop_handler,
 };
 use super::handlers::run_ws::{self, run_ws_handler};
+use super::handlers::secrets::{
+    delete_secret_handler, get_secret_handler, list_secrets_handler, put_secret_handler,
+};
 use super::handlers::skills;
 use super::handlers::tool_permissions::{
     get_agent_tool_permissions_handler, get_agent_tools_handler, get_user_tool_defaults_handler,
@@ -274,6 +277,18 @@ pub fn create_router(state: RouterState) -> Router {
         .route(
             "/api/harness/agents/:agent_id/skills/:name",
             axum::routing::delete(skills::uninstall_agent_skill),
+        )
+        // In-TEE secrets vault (Swarm TEE phase 6). Proxied by the swarm
+        // gateway as /v1/agents/:id/secrets[/:name]; values are sealed at
+        // rest under the state DEK and only leave the vault on explicit
+        // ?reveal=true reads.
+        .route("/secrets", get(list_secrets_handler))
+        .route(
+            "/secrets/:name",
+            get(get_secret_handler)
+                .put(put_secret_handler)
+                .delete(delete_secret_handler)
+                .route_layer(body_limit_16k),
         )
         .merge(strict);
 

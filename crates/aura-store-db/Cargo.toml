@@ -19,6 +19,9 @@ static_assertions = "1.1"
 # under the per-agent DEK released by the KBS after attestation.
 aes-gcm = { workspace = true }
 zeroize = { workspace = true }
+# Secret metadata timestamps (Swarm TEE phase 6 vault).
+chrono = { workspace = true }
+serde = { workspace = true }
 
 [features]
 # Expose fault-injection helpers for the Wave 7 invariant-atomicity
