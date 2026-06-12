@@ -3,7 +3,8 @@
 //! Runs 6 passes:
 //! 1. Remove empty messages
 //! 2. Merge consecutive same-role messages
-//! 3. Fix orphan tool results (`tool_result` without matching `tool_use`)
+//! 3. Fix orphan tool results (`tool_result` without a matching `tool_use`
+//!    in the immediately previous message — Anthropic positional rule)
 //! 4. Fix unpaired tool uses (`tool_use` without matching `tool_result`)
 //! 5. Ensure conversation starts with a user message
 //! 6. Assert positional `tool_use/tool_result` constraint (debug guard)
@@ -20,6 +21,9 @@ pub fn validate_and_repair(messages: &mut Vec<Message>) {
     merge_consecutive_same_role(messages);
     dup_audit::audit_tool_result_duplicates(messages, "sanitize.after_merge");
     fix_orphan_tool_results(messages);
+    // Dropping orphan-only messages can leave two same-role neighbors
+    // adjacent again, so re-merge before the pairing passes below.
+    merge_consecutive_same_role(messages);
     dup_audit::audit_tool_result_duplicates(messages, "sanitize.after_orphan");
     fix_unpaired_tool_uses(messages);
     dup_audit::audit_tool_result_duplicates(messages, "sanitize.after_unpaired");
@@ -56,24 +60,46 @@ fn merge_consecutive_same_role(messages: &mut Vec<Message>) {
     }
 }
 
-/// Pass 3: Remove orphan tool results that don't have a matching `tool_use`.
+/// Pass 3: Remove orphan tool results that don't have a matching `tool_use`
+/// in the **immediately previous** message.
+///
+/// The Anthropic Messages API enforces this positionally: "Each `tool_result`
+/// block must have a corresponding `tool_use` block in the previous message."
+/// A global membership check is not enough — a `tool_result` whose `tool_use`
+/// survives *elsewhere* in the transcript (e.g. after compaction splicing or
+/// same-role merges rearranged history) still 400s the whole request, worst
+/// case as `messages.0.content.0` when the result ends up at the very front.
+/// Any `tool_use` left without a result by this pass gets a synthetic result
+/// injected by pass 4, so the transcript converges to a valid state.
 fn fix_orphan_tool_results(messages: &mut Vec<Message>) {
-    let tool_use_ids: HashSet<String> = messages
-        .iter()
-        .flat_map(|msg| &msg.content)
-        .filter_map(|block| {
-            if let ContentBlock::ToolUse { id, .. } = block {
-                Some(id.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
+    for i in 0..messages.len() {
+        let previous_tool_use_ids: HashSet<String> = if i == 0 {
+            HashSet::new()
+        } else {
+            messages[i - 1]
+                .content
+                .iter()
+                .filter_map(|block| {
+                    if let ContentBlock::ToolUse { id, .. } = block {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
 
-    for msg in messages.iter_mut() {
-        msg.content.retain(|block| {
+        messages[i].content.retain(|block| {
             if let ContentBlock::ToolResult { tool_use_id, .. } = block {
-                tool_use_ids.contains(tool_use_id)
+                let keep = previous_tool_use_ids.contains(tool_use_id);
+                if !keep {
+                    warn!(
+                        message_index = i,
+                        tool_use_id = tool_use_id.as_str(),
+                        "Sanitization: dropped tool_result without matching tool_use in the previous message"
+                    );
+                }
+                keep
             } else {
                 true
             }
@@ -166,11 +192,32 @@ fn ensure_starts_with_user(messages: &mut Vec<Message>) {
     }
 }
 
-/// Pass 6 (guard): Verify that every assistant message containing `tool_use`
-/// is immediately followed by a user message containing matching `tool_result`
-/// blocks.  Logs a warning on any violation so it surfaces in traces rather
-/// than silently hitting the Anthropic 400 error.
+/// Pass 6 (guard): Verify both directions of the positional pairing rule —
+/// every assistant `tool_use` is immediately followed by a user message
+/// containing the matching `tool_result`, and every `tool_result` references
+/// a `tool_use` in the immediately previous message. Logs a warning on any
+/// violation so it surfaces in traces rather than silently hitting the
+/// Anthropic 400 error.
 fn debug_assert_tool_pairing(messages: &[Message]) {
+    for (i, msg) in messages.iter().enumerate() {
+        for block in &msg.content {
+            let ContentBlock::ToolResult { tool_use_id, .. } = block else {
+                continue;
+            };
+            let paired_with_previous = i > 0
+                && messages[i - 1].content.iter().any(
+                    |b| matches!(b, ContentBlock::ToolUse { id, .. } if id == tool_use_id),
+                );
+            if !paired_with_previous {
+                warn!(
+                    message_index = i,
+                    tool_use_id = tool_use_id.as_str(),
+                    "Sanitization guard: tool_result without matching tool_use in the previous message"
+                );
+            }
+        }
+    }
+
     for (i, msg) in messages.iter().enumerate() {
         if msg.role != Role::Assistant {
             continue;
@@ -416,6 +463,83 @@ mod tests {
             assert_eq!(messages[i].role, Role::Assistant);
             assert_eq!(messages[i + 1].role, Role::User);
         }
+    }
+
+    /// Returns true when every `tool_result` in `messages` references a
+    /// `tool_use` in the immediately previous message — the exact rule the
+    /// Anthropic API enforces with a 400 otherwise.
+    fn positional_pairing_holds(messages: &[Message]) -> bool {
+        messages.iter().enumerate().all(|(i, msg)| {
+            msg.content.iter().all(|block| {
+                let ContentBlock::ToolResult { tool_use_id, .. } = block else {
+                    return true;
+                };
+                i > 0
+                    && messages[i - 1].content.iter().any(
+                        |b| matches!(b, ContentBlock::ToolUse { id, .. } if id == tool_use_id),
+                    )
+            })
+        })
+    }
+
+    /// Regression for the production 400: "messages.0.content.0: unexpected
+    /// `tool_use_id` found in `tool_result` blocks". A transcript whose FIRST
+    /// message starts with a `tool_result` used to survive sanitization as
+    /// long as the matching `tool_use` id existed anywhere else (e.g. later,
+    /// after compaction rearranged history).
+    #[test]
+    fn test_leading_tool_result_with_use_later_is_repaired() {
+        let mut messages = vec![
+            make_tool_result_msg(&["t1"]),
+            make_assistant_with_tool_use(&["t1"]),
+            make_tool_result_msg(&["t1"]),
+        ];
+        validate_and_repair(&mut messages);
+
+        assert!(
+            positional_pairing_holds(&messages),
+            "repaired transcript must satisfy the positional rule: {messages:?}"
+        );
+        assert_eq!(messages[0].role, Role::User);
+        assert!(
+            !matches!(messages[0].content[0], ContentBlock::ToolResult { .. }),
+            "first message must not start with a tool_result"
+        );
+    }
+
+    /// A `tool_result` whose `tool_use` sits two messages back (non-adjacent)
+    /// must be dropped, and the now-unpaired `tool_use` gets a synthetic
+    /// result from pass 4.
+    #[test]
+    fn test_non_adjacent_tool_result_is_repaired() {
+        let mut messages = vec![
+            Message::user("task"),
+            make_assistant_with_tool_use(&["t1"]),
+            make_tool_result_msg(&["other"]),
+            make_assistant_with_tool_use(&["t2"]),
+            make_tool_result_msg(&["t1"]),
+        ];
+        validate_and_repair(&mut messages);
+
+        assert!(
+            positional_pairing_holds(&messages),
+            "repaired transcript must satisfy the positional rule: {messages:?}"
+        );
+    }
+
+    /// A fully valid transcript (including parallel tool calls) must pass
+    /// through sanitization untouched.
+    #[test]
+    fn test_valid_transcript_untouched() {
+        let mut messages = vec![
+            Message::user("task"),
+            make_assistant_with_tool_use(&["t1", "t2"]),
+            make_tool_result_msg(&["t1", "t2"]),
+            Message::assistant("done"),
+        ];
+        let before = serde_json::to_value(&messages).unwrap();
+        validate_and_repair(&mut messages);
+        assert_eq!(serde_json::to_value(&messages).unwrap(), before);
     }
 
     #[test]

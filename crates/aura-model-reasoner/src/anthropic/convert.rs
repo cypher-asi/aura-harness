@@ -302,8 +302,146 @@ pub(super) fn convert_messages_to_api(
     }
 
     dedupe_tool_results(&mut api_messages);
+    drop_misplaced_tool_results(&mut api_messages);
+    inject_missing_tool_results(&mut api_messages);
 
     api_messages
+}
+
+/// Final wire-level guard for the Anthropic positional pairing rule: every
+/// `tool_result` block in message `i` must reference a `tool_use` block in
+/// message `i - 1`. Violating blocks are dropped (and logged) instead of
+/// shipped, because the API rejects the entire request with 400
+/// "unexpected `tool_use_id` found in `tool_result` blocks" otherwise.
+///
+/// Upstream sanitization (`aura-agent`'s `validate_and_repair`) repairs the
+/// transcript properly — including injecting synthetic results for any
+/// `tool_use` left unpaired — so this guard firing means an upstream path
+/// produced an invalid layout; the error log is the signal to fix it there.
+pub(super) fn drop_misplaced_tool_results(api_messages: &mut Vec<ApiMessage>) {
+    use std::collections::HashSet;
+
+    let mut i = 0;
+    while i < api_messages.len() {
+        let previous_tool_use_ids: HashSet<String> = if i == 0 {
+            HashSet::new()
+        } else {
+            api_messages[i - 1]
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ApiContent::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        api_messages[i].content.retain(|block| match block {
+            ApiContent::ToolResult { tool_use_id, .. } => {
+                let keep = previous_tool_use_ids.contains(tool_use_id);
+                if !keep {
+                    tracing::error!(
+                        message_index = i,
+                        tool_use_id = %tool_use_id,
+                        "convert_messages_to_api: dropped tool_result without matching tool_use \
+                         in the previous message; upstream history construction is invalid"
+                    );
+                }
+                keep
+            }
+            _ => true,
+        });
+
+        if api_messages[i].content.is_empty() {
+            // Removing the emptied message changes who the next message's
+            // predecessor is, so do not advance: re-evaluate index `i`
+            // against its new neighbor on the next pass.
+            api_messages.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Companion to [`drop_misplaced_tool_results`]: ensure every assistant
+/// `tool_use` has a matching `tool_result` at the front of the immediately
+/// following user message, injecting synthetic error results when missing.
+/// Without this, dropping a misplaced result would just trade one 400
+/// ("unexpected tool_use_id in tool_result") for another ("tool_use ids were
+/// found without tool_result blocks immediately after").
+pub(super) fn inject_missing_tool_results(api_messages: &mut Vec<ApiMessage>) {
+    use std::collections::HashSet;
+
+    let mut i = 0;
+    while i < api_messages.len() {
+        let tool_use_ids: Vec<String> = if api_messages[i].role == "assistant" {
+            api_messages[i]
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ApiContent::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if tool_use_ids.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        let existing_result_ids: HashSet<String> = api_messages
+            .get(i + 1)
+            .filter(|m| m.role == "user")
+            .map(|m| {
+                m.content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ApiContent::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let synthetic: Vec<ApiContent> = tool_use_ids
+            .into_iter()
+            .filter(|id| !existing_result_ids.contains(id))
+            .map(|id| {
+                tracing::error!(
+                    message_index = i,
+                    tool_use_id = %id,
+                    "convert_messages_to_api: injected synthetic tool_result for unpaired tool_use"
+                );
+                ApiContent::ToolResult {
+                    tool_use_id: id,
+                    content: "[Tool result was lost during context compaction]".to_string(),
+                    is_error: Some(true),
+                    cache_control: None,
+                }
+            })
+            .collect();
+
+        if !synthetic.is_empty() {
+            if i + 1 < api_messages.len() && api_messages[i + 1].role == "user" {
+                for (offset, block) in synthetic.into_iter().enumerate() {
+                    api_messages[i + 1].content.insert(offset, block);
+                }
+            } else {
+                api_messages.insert(
+                    i + 1,
+                    ApiMessage {
+                        role: "user".to_string(),
+                        content: synthetic,
+                    },
+                );
+            }
+        }
+
+        i += 1;
+    }
 }
 
 pub(super) fn convert_tools_to_api(
