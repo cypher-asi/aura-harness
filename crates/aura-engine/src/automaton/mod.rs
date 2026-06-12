@@ -227,6 +227,38 @@ impl AutomatonBridge {
         automaton_id: &str,
         event: &str,
     ) {
+        Self::commit_lifecycle_event(
+            self.store.clone(),
+            self.scheduler.clone(),
+            agent_id,
+            automaton_id.to_string(),
+            event.to_string(),
+        )
+        .await;
+    }
+
+    /// Commit an automaton lifecycle `System` transaction and drain it
+    /// through one scheduler tick. Takes owned handles instead of
+    /// `&self` so the dev-loop / task-run start paths can run it in a
+    /// background task (`tokio::spawn`).
+    ///
+    /// §2 requires the System transaction eventually appears in the
+    /// record log; the scheduler drains the inbox through the kernel's
+    /// single-writer path. Crucially, that drain runs the automaton's
+    /// **first full agent iteration**, which for a freshly-installed
+    /// dev loop is the bootstrap turn and routinely outlives the
+    /// gateway's 30s request timeout. The start paths therefore spawn
+    /// this rather than awaiting it inline, so `POST /v1/run` returns
+    /// the run id immediately and the scheduler owns the loop from
+    /// there. Errors are logged, never propagated — a lifecycle
+    /// side-effect must not mask the underlying start/stop operation.
+    pub(crate) async fn commit_lifecycle_event(
+        store: Arc<dyn Store>,
+        scheduler: Option<Arc<Scheduler>>,
+        agent_id: AgentId,
+        automaton_id: String,
+        event: String,
+    ) {
         let payload = serde_json::json!({
             "system_kind": SystemKind::AutomatonLifecycle,
             "automaton_id": automaton_id,
@@ -237,18 +269,11 @@ impl AutomatonBridge {
             return;
         };
         let tx = Transaction::new_chained(agent_id, TransactionType::System, payload_bytes, None);
-        if let Err(e) = self.store.enqueue_tx(&tx) {
+        if let Err(e) = store.enqueue_tx(&tx) {
             warn!(error = %e, "Failed to record automaton lifecycle event");
             return;
         }
-        // §2 requires that the System transaction eventually appears in
-        // the record log. The scheduler drains the inbox through the
-        // kernel's single-writer path; awaiting here means the record
-        // entry is committed before the caller observes the lifecycle
-        // write. Scheduler errors are logged but never propagated — a
-        // lifecycle side-effect must not mask the underlying
-        // start/stop operation.
-        if let Some(scheduler) = self.scheduler.as_ref() {
+        if let Some(scheduler) = scheduler.as_ref() {
             if let Err(e) = scheduler.schedule_agent(agent_id).await {
                 warn!(
                     agent_id = %agent_id,

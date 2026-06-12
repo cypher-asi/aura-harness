@@ -309,11 +309,13 @@ impl AutomatonBridge {
             Some(project_id),
             aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
         );
-        self.record_lifecycle_event(ctx.kernel.agent_id, &automaton_id, "start_dev_loop")
-            .await;
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
         info!(project_id, automaton_id = %automaton_id, "Dev loop started");
+        // Record the handle BEFORE the (now background) bootstrap tick so
+        // a concurrent or retried start observes the running loop, and the
+        // handle is never lost if the first iteration outlives the
+        // request.
         self.project_handles.insert(
             project_id.to_string(),
             ProjectHandle {
@@ -322,6 +324,19 @@ impl AutomatonBridge {
                 handle,
             },
         );
+        // Drive the lifecycle commit + first bootstrap iteration in the
+        // background. The scheduler tick runs the dev loop's first full
+        // agent turn, which routinely exceeds the gateway's 30s request
+        // timeout; awaiting it here turned every successful start into a
+        // 408. Returning the run id now hands the loop to the scheduler,
+        // matching the non-blocking contract POST /v1/run advertises.
+        tokio::spawn(Self::commit_lifecycle_event(
+            self.store.clone(),
+            self.scheduler.clone(),
+            ctx.kernel.agent_id,
+            automaton_id.clone(),
+            "start_dev_loop".to_string(),
+        ));
         Ok(automaton_id)
     }
 
@@ -424,11 +439,19 @@ impl AutomatonBridge {
             Some(project_id),
             aura_model_reasoner::ModelRequestKind::Chat,
         );
-        self.record_lifecycle_event(ctx.kernel.agent_id, &automaton_id, "start_task_run")
-            .await;
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
 
         info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
+        // Background the lifecycle commit + first tick so POST /v1/run
+        // returns immediately instead of blocking on the task's first
+        // full agent iteration past the gateway's 30s request timeout.
+        tokio::spawn(Self::commit_lifecycle_event(
+            self.store.clone(),
+            self.scheduler.clone(),
+            ctx.kernel.agent_id,
+            automaton_id.clone(),
+            "start_task_run".to_string(),
+        ));
         Ok(automaton_id)
     }
 }
