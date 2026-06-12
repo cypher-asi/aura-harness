@@ -196,8 +196,8 @@ pub struct ToolApprovalResponse {
 /// Payload for `generation_request`.
 ///
 /// Fields are mode-dependent:
-/// - `mode == "image"`: uses `prompt` (required), `model`, `size`, `images`, `is_iteration`
-/// - `mode == "3d"`:    uses `image_url` (required), `prompt` (optional hint)
+/// - `mode == "image"`: uses `prompt` (required), `model`, `size`, `quality`, `images`, `is_iteration`
+/// - `mode == "3d"`:    uses `image_url` (required), `prompt` (optional hint), `model`
 ///
 /// Both modes accept `project_id` for artifact storage. 3D
 /// generation also accepts `parent_id` to link a generated model to
@@ -212,6 +212,11 @@ pub struct GenerationRequest {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
+    /// Image generation: quality tier (`auto` / `low` / `medium` / `high`
+    /// for GPT Image models). The router validates per model and ignores
+    /// unsupported values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

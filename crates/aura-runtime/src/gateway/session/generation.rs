@@ -158,6 +158,9 @@ fn build_router_request(
             if let Some(ref size) = req.size {
                 body["size"] = serde_json::json!(size);
             }
+            if let Some(ref quality) = req.quality {
+                body["quality"] = serde_json::json!(quality);
+            }
             if let Some(ref images) = req.images {
                 body["images"] = serde_json::json!(images);
             }
@@ -178,8 +181,14 @@ fn build_router_request(
             if let Some(ref prompt) = req.prompt {
                 body["prompt"] = serde_json::json!(prompt);
             }
+            if let Some(ref model) = req.model {
+                body["model"] = serde_json::json!(model);
+            }
             if let Some(ref pid) = req.project_id {
                 body["projectId"] = serde_json::json!(pid);
+            }
+            if let Some(ref parent_id) = req.parent_id {
+                body["parentId"] = serde_json::json!(parent_id);
             }
             Ok((url, body))
         }
@@ -203,6 +212,9 @@ fn build_router_request(
             }
             if let Some(audio) = req.generate_audio {
                 body["generateAudio"] = serde_json::json!(audio);
+            }
+            if let Some(ref images) = req.images {
+                body["images"] = serde_json::json!(images);
             }
             if let Some(ref pid) = req.project_id {
                 body["projectId"] = serde_json::json!(pid);
@@ -687,6 +699,65 @@ fn translate_router_event(event_type: &str, data: &str, mode: &str) -> Option<Ou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn base_request(mode: &str) -> GenerationRequest {
+        GenerationRequest {
+            mode: mode.to_string(),
+            prompt: None,
+            model: None,
+            size: None,
+            quality: None,
+            image_url: None,
+            images: None,
+            project_id: None,
+            parent_id: None,
+            is_iteration: None,
+            aspect_ratio: None,
+            duration_seconds: None,
+            resolution: None,
+            generate_audio: None,
+        }
+    }
+
+    #[test]
+    fn image_request_forwards_quality() {
+        let mut req = base_request("image");
+        req.prompt = Some("a cat".into());
+        req.model = Some("gpt-image-2".into());
+        req.quality = Some("high".into());
+
+        let (url, body) = build_router_request("http://router", &req).expect("image request");
+
+        assert_eq!(url, "http://router/v1/generate-image/stream");
+        assert_eq!(body["quality"], "high");
+        assert_eq!(body["model"], "gpt-image-2");
+    }
+
+    #[test]
+    fn video_request_forwards_source_images() {
+        let mut req = base_request("video");
+        req.prompt = Some("a cat surfing".into());
+        req.images = Some(vec!["data:image/png;base64,abc".into()]);
+
+        let (url, body) = build_router_request("http://router", &req).expect("video request");
+
+        assert_eq!(url, "http://router/v1/generate-video/stream");
+        assert_eq!(body["images"][0], "data:image/png;base64,abc");
+    }
+
+    #[test]
+    fn three_d_request_forwards_model_and_parent_id() {
+        let mut req = base_request("3d");
+        req.image_url = Some("https://cdn.example.test/cat.png".into());
+        req.model = Some("tripo-v2".into());
+        req.parent_id = Some("art-123".into());
+
+        let (url, body) = build_router_request("http://router", &req).expect("3d request");
+
+        assert_eq!(url, "http://router/v1/generate-3d/stream");
+        assert_eq!(body["model"], "tripo-v2");
+        assert_eq!(body["parentId"], "art-123");
+    }
 
     #[test]
     fn pop_sse_frame_handles_lf_and_crlf_boundaries() {
