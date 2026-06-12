@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_model_reasoner::{
-    ContentBlock, Message, ModelResponse, OutputItem, ProviderTrace, ResponseEvent,
-    ResponseEventStream, Role, StopReason, StreamPhase, Usage,
+    response_stream_from_event_stream, ContentBlock, Message, ModelResponse, OutputItem,
+    ProviderTrace, ResponseEvent, ResponseEventStream, Role, StopReason, StreamContentType,
+    StreamEvent, StreamEventStream, StreamPhase, Usage,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -531,6 +532,120 @@ async fn pump_emits_per_delta_events() {
                 if id == "toolu_a" && name == "read_file"
         )),
         "pump must emit ToolInputSnapshot for OutputItemDone(ToolUse): {events:?}"
+    );
+}
+
+/// Regression: thinking (and text) must stream to the client
+/// *incrementally* — one `ThinkingDelta` per wire delta as it
+/// arrives — not a single coarse delta at block close. Feeds a
+/// multi-delta thinking block through the real
+/// `response_stream_from_event_stream` adapter (the production lift
+/// path) and asserts each chunk surfaces on its own, the per-chunk
+/// order is preserved, the block is NOT re-emitted whole at close,
+/// and a single `ThinkingComplete` marks the end.
+#[tokio::test(start_paused = true)]
+async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
+    let executor = CountingExecutor::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
+
+    let wire: Vec<Result<StreamEvent, aura_model_reasoner::ReasonerError>> = vec![
+        Ok(StreamEvent::MessageStart {
+            message_id: "msg".into(),
+            model: "test".into(),
+            input_tokens: Some(1),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        }),
+        Ok(StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::Thinking,
+        }),
+        Ok(StreamEvent::ThinkingDelta {
+            thinking: "Let me ".into(),
+        }),
+        Ok(StreamEvent::ThinkingDelta {
+            thinking: "check the ".into(),
+        }),
+        Ok(StreamEvent::ThinkingDelta {
+            thinking: "files.".into(),
+        }),
+        Ok(StreamEvent::ContentBlockStop { index: 0 }),
+        Ok(StreamEvent::ContentBlockStart {
+            index: 1,
+            content_type: StreamContentType::Text,
+        }),
+        Ok(StreamEvent::TextDelta {
+            text: "Done.".into(),
+        }),
+        Ok(StreamEvent::ContentBlockStop { index: 1 }),
+        Ok(StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::EndTurn),
+            output_tokens: 5,
+        }),
+        Ok(StreamEvent::MessageStop),
+    ];
+    let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(wire));
+    let stream = response_stream_from_event_stream(underlying);
+
+    let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+    let outcome = drive_stream(
+        StreamPumpCtx {
+            event_tx: Some(&tx),
+            ..test_ctx(&config, &executor)
+        },
+        stream,
+        &mut state,
+        "test-model",
+    )
+    .await;
+    assert!(matches!(outcome, StreamPumpOutcome::Completed { .. }));
+    drop(tx);
+
+    let mut events: Vec<AgentLoopEvent> = Vec::new();
+    while let Some(ev) = rx.recv().await {
+        events.push(ev);
+    }
+
+    // Each thinking chunk must surface on its own, in order — proof
+    // that the client sees the reasoning stream live instead of one
+    // block-close dump.
+    let thinking: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentLoopEvent::ThinkingDelta(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        thinking,
+        vec!["Let me ", "check the ", "files."],
+        "thinking must stream one delta per wire frame, in order: {events:?}"
+    );
+
+    // Exactly one ThinkingComplete after the block.
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AgentLoopEvent::ThinkingComplete))
+            .count(),
+        1,
+        "exactly one ThinkingComplete should mark end-of-thinking: {events:?}"
+    );
+
+    // Text streams the same way; the incremental delta is NOT
+    // re-emitted whole at block close (dedup), so "Done." appears once.
+    let text: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentLoopEvent::TextDelta(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text, vec!["Done."],
+        "assistant text must stream once, not be duplicated at block close: {events:?}"
     );
 }
 
