@@ -263,6 +263,16 @@ pub struct AgentLoopConfig {
     /// registered for a given event — the empty-install backward-
     /// compat invariant.
     pub plugin_hooks: Option<aura_plugin_hooks::PluginHookHost>,
+    /// When `true`, a turn that ends cleanly having produced **no**
+    /// user-visible output (no assistant text and no tool calls — an
+    /// empty or thinking-only turn) injects a single steering nudge
+    /// and runs one more sampling request instead of terminating
+    /// silently. Capped at one nudge per turn (see
+    /// [`super::turn::MAX_NO_OP_TURN_NUDGES`]) so it can never loop.
+    /// A clear `turn_ended_no_action` / `turn_no_action_retry`
+    /// progress event is emitted either way so the client is never
+    /// left guessing. Defaults to `true`.
+    pub auto_continue_no_op_turns: bool,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -345,6 +355,9 @@ impl AgentLoopConfig {
             // materialised at session start; chat / unit-test
             // callers leave it `None`.
             plugin_hooks: None,
+            // Never-silent default: re-prompt once when a turn ends
+            // having done nothing visible (see `turn::run_turn`).
+            auto_continue_no_op_turns: true,
         }
     }
 }

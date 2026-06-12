@@ -63,6 +63,17 @@ pub(super) async fn drive_stream(
     let mut in_flight: FuturesOrdered<ToolFuture<'_>> = FuturesOrdered::new();
     let mut text_chunks: Vec<String> = Vec::new();
     let mut thinking_chunks: Vec<(String, Option<String>)> = Vec::new();
+    // Per-block dedup flags: set when an incremental `OutputTextDelta`
+    // / `OutputThinkingDelta` has already been streamed for the block
+    // currently accumulating, so the block-close `OutputItemDone` arm
+    // does not re-emit the full text/thinking a second time. Reset at
+    // each block close so a subsequent block starts fresh. The flags
+    // also cover the buffered/synthesised fallback stream
+    // (`response_stream_from_response`), which emits only
+    // `OutputItemDone` and no deltas — there the flag stays `false` so
+    // the close arm still emits the whole block.
+    let mut streamed_text_in_block = false;
+    let mut streamed_thinking_in_block = false;
     let mut tool_calls_seen: Vec<ToolCallInfo> = Vec::new();
     // E.4 tool-result cache: tracks tools that we DID NOT spawn
     // because the per-run cache had a hit. The result is materialised
@@ -175,27 +186,48 @@ pub(super) async fn drive_stream(
                         return err;
                     }
                 }
+                ResponseEvent::OutputTextDelta(chunk) => {
+                    // Incremental assistant text: stream it to the
+                    // client the moment it arrives so a long writing
+                    // phase is never a silent gap. The full block is
+                    // still accumulated at `OutputItemDone(Message)`
+                    // below for final-response synthesis.
+                    streamed_text_in_block = true;
+                    emit_event(event_tx, AgentLoopEvent::TextDelta(chunk));
+                }
+                ResponseEvent::OutputThinkingDelta(chunk) => {
+                    // Incremental extended-thinking: stream it live so
+                    // the client can render the current thinking block
+                    // instead of waiting out a multi-second think.
+                    streamed_thinking_in_block = true;
+                    emit_event(event_tx, AgentLoopEvent::ThinkingDelta(chunk));
+                }
                 ResponseEvent::OutputItemDone(OutputItem::Message { text }) => {
-                    // Layer E.4: emit a coarse TextDelta carrying the
-                    // whole finished block. Sub-block per-wire-frame
-                    // deltas remain on the legacy buffered path; this
-                    // is the minimum needed for chat UX continuity
-                    // (the assistant text actually surfaces) when
-                    // the pump default flips to `true`.
-                    emit_event(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+                    // Block close. Only emit the whole block as a delta
+                    // when nothing was streamed incrementally for it
+                    // (the buffered/synthesised fallback stream, which
+                    // emits no `OutputTextDelta`); otherwise the client
+                    // already has the text and a re-emit would double
+                    // it. Always accumulate for `synthesize_response`.
+                    if !streamed_text_in_block {
+                        emit_event(event_tx, AgentLoopEvent::TextDelta(text.clone()));
+                    }
+                    streamed_text_in_block = false;
                     text_chunks.push(text);
                 }
                 ResponseEvent::OutputItemDone(OutputItem::Thinking {
                     thinking,
                     signature,
                 }) => {
-                    // Layer E.4: same coarse-granularity rationale as
-                    // TextDelta above. Emit ThinkingDelta + the
-                    // ThinkingComplete marker so consumers that
-                    // pattern-match on the end-of-thinking event
+                    // Same dedup rationale as the Message arm. Always
+                    // emit the `ThinkingComplete` marker so consumers
+                    // that pattern-match on the end-of-thinking event
                     // (e.g. the chat client's "Thought for Xs" pill)
                     // still see the close signal.
-                    emit_event(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+                    if !streamed_thinking_in_block {
+                        emit_event(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
+                    }
+                    streamed_thinking_in_block = false;
                     emit_event(event_tx, AgentLoopEvent::ThinkingComplete);
                     thinking_chunks.push((thinking, signature));
                 }

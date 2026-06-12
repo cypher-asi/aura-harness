@@ -44,7 +44,23 @@ use crate::{helpers, AgentError};
 
 use super::cx::TurnCtx;
 use super::sampling::{run_sampling_request, SamplingRequestResult};
-use super::{context, LoopState};
+use super::{context, streaming, LoopState};
+
+/// Hard cap on how many "you produced nothing visible" nudges one
+/// turn may inject before it terminates anyway. One is enough to
+/// recover the common premature-`EndTurn` (model reads files, thinks,
+/// then stops without acting) without any risk of a re-prompt loop:
+/// if the nudged retry is *also* a no-op the budget is spent and the
+/// turn ends.
+pub(super) const MAX_NO_OP_TURN_NUDGES: u32 = 1;
+
+/// Steering text injected when a turn ends having produced no
+/// user-visible output. Kept terse and non-prescriptive: it nudges
+/// the model to either act or respond without assuming which the
+/// user wanted.
+const NO_OP_TURN_NUDGE: &str = "Your previous turn ended without sending a response to the user or \
+making any changes. If the request needs action, continue and complete it now; otherwise reply to \
+the user directly.";
 
 /// Result of a single turn.
 ///
@@ -110,6 +126,11 @@ pub(crate) async fn run_turn(
     let mut sampling_count: u32 = 0;
     let mut terminated_cleanly = false;
     let mut broke_for_error = false;
+    // Never-silent / no-op handling: track whether this turn produced
+    // anything the user can see, and how many recovery nudges we have
+    // already spent.
+    let mut turn_had_visible_output = false;
+    let mut no_op_nudges_used: u32 = 0;
 
     loop {
         let iteration = usize::try_from(ctx.iteration_offset.saturating_add(sampling_count))
@@ -154,6 +175,7 @@ pub(crate) async fn run_turn(
             run_sampling_request(ctx, state, iteration).await;
 
         sampling_count = sampling_count.saturating_add(1);
+        turn_had_visible_output |= sampling_result.produced_visible_output;
 
         if sampling_result.broke_for_error {
             broke_for_error = true;
@@ -181,6 +203,30 @@ pub(crate) async fn run_turn(
         // fresh sampling request.
         if ctx.input_queue.is_some_and(InputQueue::has_pending) {
             continue;
+        }
+
+        // Never-silent + premature-`EndTurn` recovery: the model
+        // signalled stop with no pending input. If the whole turn
+        // produced nothing the user can see (empty or thinking-only
+        // response), surface a clear progress signal so the client
+        // never reads the stop as a silent hang — and, when enabled
+        // and within budget, inject one nudge and re-sample instead
+        // of ending on a no-op.
+        if !turn_had_visible_output {
+            if ctx.run.agent.config.auto_continue_no_op_turns
+                && no_op_nudges_used < MAX_NO_OP_TURN_NUDGES
+            {
+                no_op_nudges_used = no_op_nudges_used.saturating_add(1);
+                emit_no_op_progress(ctx.run.event_tx, "turn_no_action_retry");
+                apply_user_inputs_to_messages(
+                    &mut state.messages,
+                    vec![UserInput::Steer {
+                        instruction: NO_OP_TURN_NUDGE.to_string(),
+                    }],
+                );
+                continue;
+            }
+            emit_no_op_progress(ctx.run.event_tx, "turn_ended_no_action");
         }
 
         terminated_cleanly = true;
@@ -263,6 +309,30 @@ pub(super) fn apply_user_inputs_to_messages(messages: &mut Vec<Message>, inputs:
             UserInput::Cancel => {}
         }
     }
+}
+
+/// Emit a `Progress` event describing a turn that produced no
+/// user-visible output, so the client always shows *why* the stream
+/// went quiet instead of appearing to hang. `stage` is
+/// `"turn_no_action_retry"` when we are about to re-prompt and
+/// `"turn_ended_no_action"` when the turn is terminating. The WS sink
+/// forwards `Progress` verbatim and the chat client renders unknown
+/// stages as their label, so no coordinated client release is needed.
+fn emit_no_op_progress(event_tx: Option<&Sender<AgentLoopEvent>>, stage: &str) {
+    let message = if stage == "turn_no_action_retry" {
+        "Model ended its turn without responding or acting — re-prompting once."
+    } else {
+        "Model ended its turn without responding or taking any action."
+    };
+    streaming::emit(
+        event_tx,
+        AgentLoopEvent::Progress {
+            stage: stage.to_string(),
+            tool_name: None,
+            elapsed_ms: None,
+            message: Some(message.to_string()),
+        },
+    );
 }
 
 /// Run the post-sampling stop hooks for a single turn iteration.

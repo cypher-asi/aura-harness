@@ -157,6 +157,23 @@ pub enum ResponseEvent {
     /// streaming phase to operators. The agent-side pump treats this
     /// as a no-op for accumulation/ordering purposes.
     Keepalive(StreamPhase),
+    /// An intra-block assistant-text delta. Carries the incremental
+    /// text chunk so the agent-side pump can stream it to the client
+    /// in real time instead of waiting for the whole block to close
+    /// (the previous behaviour, which surfaced these as content-free
+    /// `Keepalive(StreamPhase::Text)` and dropped the text). Also
+    /// doubles as a liveness signal: receiving it resets the pump's
+    /// per-event timeout. The accumulator still builds the full block
+    /// for final-response synthesis; this variant is purely for
+    /// incremental surfacing.
+    OutputTextDelta(String),
+    /// An intra-block extended-thinking delta. Same incremental-
+    /// surfacing + liveness rationale as [`Self::OutputTextDelta`],
+    /// for the thinking channel. The terminal
+    /// [`OutputItem::Thinking`] still arrives at `content_block_stop`
+    /// so consumers that key off block close (e.g. the "Thought for
+    /// Xs" pill) keep working.
+    OutputThinkingDelta(String),
     /// Terminal event for this sampling request. `end_turn` is `Some(true)`
     /// when the model signalled it intends to stop, `Some(false)` when
     /// it explicitly signalled more work, and `None` when the provider
@@ -349,13 +366,24 @@ impl AdapterState {
                 };
                 self.pending.push_back(Ok(ResponseEvent::Keepalive(phase)));
             }
-            StreamEvent::ThinkingDelta { .. } | StreamEvent::SignatureDelta { .. } => {
+            // Carry the actual thinking text through so the pump can
+            // stream it incrementally. The chunk also serves as a
+            // liveness signal (any yielded item resets the per-event
+            // timeout). Signature deltas carry no user-visible text, so
+            // they stay a content-free thinking keepalive.
+            StreamEvent::ThinkingDelta { thinking } => {
+                self.pending
+                    .push_back(Ok(ResponseEvent::OutputThinkingDelta(thinking.clone())));
+            }
+            StreamEvent::SignatureDelta { .. } => {
                 self.pending
                     .push_back(Ok(ResponseEvent::Keepalive(StreamPhase::Thinking)));
             }
-            StreamEvent::TextDelta { .. } => {
+            // Carry the actual assistant text through for incremental
+            // streaming (same liveness rationale as thinking deltas).
+            StreamEvent::TextDelta { text } => {
                 self.pending
-                    .push_back(Ok(ResponseEvent::Keepalive(StreamPhase::Text)));
+                    .push_back(Ok(ResponseEvent::OutputTextDelta(text.clone())));
             }
             StreamEvent::InputJsonDelta { .. } => {
                 self.pending
@@ -575,12 +603,20 @@ mod tests {
         while let Some(event) = stream.next().await {
             collected.push(event.expect("test stream never yields Err"));
         }
-        // Keepalives now interleave with completed items (one per
-        // swallowed delta / start / message_delta frame); filter them
-        // out to assert the completed-item backbone is unchanged.
+        // Keepalives and incremental text/thinking deltas now
+        // interleave with completed items (one per delta / start /
+        // message_delta frame); filter them out to assert the
+        // completed-item backbone is unchanged.
         let items: Vec<&ResponseEvent> = collected
             .iter()
-            .filter(|e| !matches!(e, ResponseEvent::Keepalive(_)))
+            .filter(|e| {
+                !matches!(
+                    e,
+                    ResponseEvent::Keepalive(_)
+                        | ResponseEvent::OutputTextDelta(_)
+                        | ResponseEvent::OutputThinkingDelta(_)
+                )
+            })
             .collect();
         assert_eq!(items.len(), 3);
         assert!(matches!(
@@ -598,13 +634,15 @@ mod tests {
                 ..
             }
         ));
-        // The deltas/starts must surface as liveness signals so a
-        // consumer's per-event timeout sees a slow-but-alive stream.
+        // The text deltas must surface as incremental, content-bearing
+        // events (which also reset the consumer's per-event timeout so
+        // a slow-but-alive stream is not mistaken for a dead one).
         assert!(
-            collected
-                .iter()
-                .any(|e| matches!(e, ResponseEvent::Keepalive(StreamPhase::Text))),
-            "text deltas must surface a Text keepalive"
+            collected.iter().any(|e| matches!(
+                e,
+                ResponseEvent::OutputTextDelta(text) if text == "hello " || text == "world"
+            )),
+            "text deltas must surface as OutputTextDelta"
         );
     }
 
@@ -633,16 +671,21 @@ mod tests {
         let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(events));
         let mut stream = response_stream_from_event_stream(underlying);
         let mut phases = Vec::new();
+        let mut thinking_text = String::new();
         while let Some(event) = stream.next().await {
-            if let Ok(ResponseEvent::Keepalive(phase)) = &event {
-                phases.push(*phase);
+            match &event {
+                Ok(ResponseEvent::Keepalive(phase)) => phases.push(*phase),
+                Ok(ResponseEvent::OutputThinkingDelta(chunk)) => thinking_text.push_str(chunk),
+                _ => {}
             }
         }
         // message_start -> Connecting, ping -> Ping,
-        // content_block_start(thinking) + thinking delta -> Thinking.
+        // content_block_start(thinking) -> Thinking keepalive.
         assert!(phases.contains(&StreamPhase::Connecting));
         assert!(phases.contains(&StreamPhase::Ping));
         assert!(phases.contains(&StreamPhase::Thinking));
+        // The thinking delta itself now carries its content through.
+        assert_eq!(thinking_text, "let me think");
     }
 
     #[tokio::test]

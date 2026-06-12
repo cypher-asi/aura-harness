@@ -64,6 +64,26 @@ pub(crate) struct SamplingRequestResult {
     /// the loop must break and not run stop hooks — the result has
     /// already been mutated with `llm_error` / `cancelled`.
     pub(crate) broke_for_error: bool,
+    /// `true` when the model response carried something the user can
+    /// see — non-empty assistant text or at least one `tool_use`
+    /// block. `false` for an empty or thinking-only response. The
+    /// turn loop accumulates this so it can surface a clear
+    /// "turn ended without action" signal (and optionally re-prompt)
+    /// instead of letting a no-op turn look like a silent hang.
+    pub(crate) produced_visible_output: bool,
+}
+
+/// Whether a model response carries user-visible output: a non-empty
+/// assistant text block or any `tool_use` block. A response that is
+/// only an (extended) thinking block — or entirely empty — returns
+/// `false`. Used by the turn loop's never-silent / no-op handling.
+fn response_has_visible_output(response: &aura_model_reasoner::ModelResponse) -> bool {
+    use aura_model_reasoner::ContentBlock;
+    response.message.content.iter().any(|block| match block {
+        ContentBlock::Text { text } => !text.trim().is_empty(),
+        ContentBlock::ToolUse { .. } => true,
+        _ => false,
+    })
 }
 
 /// Drive one sampling request to completion (Phase 4 unified body).
@@ -97,6 +117,7 @@ pub(crate) async fn run_sampling_request(
         return SamplingRequestResult {
             needs_follow_up: false,
             broke_for_error: true,
+            produced_visible_output: false,
         };
     }
 
@@ -129,6 +150,7 @@ pub(crate) async fn run_sampling_request(
             return SamplingRequestResult {
                 needs_follow_up: false,
                 broke_for_error: true,
+                produced_visible_output: false,
             };
         }
     };
@@ -158,6 +180,7 @@ pub(crate) async fn run_sampling_request(
             return SamplingRequestResult {
                 needs_follow_up: false,
                 broke_for_error: true,
+                produced_visible_output: false,
             };
         }
     };
@@ -175,9 +198,12 @@ pub(crate) async fn run_sampling_request(
             return SamplingRequestResult {
                 needs_follow_up: false,
                 broke_for_error: true,
+                produced_visible_output: false,
             };
         }
     };
+
+    let produced_visible_output = response_has_visible_output(&response);
 
     iteration::accumulate_response(&run.agent.config, state, &response, iteration);
     state.result.iterations = iteration + 1;
@@ -196,6 +222,7 @@ pub(crate) async fn run_sampling_request(
         return SamplingRequestResult {
             needs_follow_up: false,
             broke_for_error: true,
+            produced_visible_output,
         };
     }
 
@@ -210,5 +237,6 @@ pub(crate) async fn run_sampling_request(
     SamplingRequestResult {
         needs_follow_up: !dispatch_says_break,
         broke_for_error: false,
+        produced_visible_output,
     }
 }
