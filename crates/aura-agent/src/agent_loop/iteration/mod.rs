@@ -212,7 +212,20 @@ pub(super) fn accumulate_response(
     state.result.context_breakdown.cache_creation_tokens =
         response.usage.cache_creation_input_tokens.unwrap_or(0);
 
-    for block in &response.message.content {
+    // Defensively strip any tool-call markup the model leaked into a
+    // text block (Anthropic `<invoke>` / `<function_calls>` XML or the
+    // hybrid `[tool_use ... name="...">` shape — see
+    // `super::text_sanitize`). Done before the message enters history so
+    // the markup is neither re-fed to the model on the next iteration
+    // (reinforcing the behaviour) nor carried into the accumulated
+    // result text.
+    let (sanitized_message, scrubbed_markup) =
+        super::text_sanitize::sanitize_message(&response.message);
+    if scrubbed_markup {
+        warn!("Scrubbed leaked tool-call markup from assistant text before adding to history");
+    }
+
+    for block in &sanitized_message.content {
         match block {
             ContentBlock::Text { text } => state.result.total_text.push_str(text),
             ContentBlock::Thinking { thinking, .. } => {
@@ -222,7 +235,7 @@ pub(super) fn accumulate_response(
         }
     }
 
-    state.messages.push(response.message.clone());
+    state.messages.push(sanitized_message);
 
     let raw_message_bytes = compaction::estimate_message_chars(&state.messages);
     #[allow(clippy::cast_possible_truncation)]

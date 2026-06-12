@@ -55,6 +55,7 @@ mod stop_reason;
 mod stream_pump;
 mod streaming;
 mod task;
+mod text_sanitize;
 mod tool_execution;
 #[cfg(test)]
 mod tool_execution_tests;
