@@ -14,8 +14,9 @@
 //! On startup, **before opening or serving any state**, `Node::run` calls
 //! [`prepare_state_sealing`]:
 //!
-//! 1. If sealed mode is not requested, return `None` — the plaintext path
-//!    is byte-for-byte identical to the historical behavior.
+//! 1. If sealed mode is not requested **and no swarm control-plane env is
+//!    present**, return `None` — the plaintext path survives for pure
+//!    local/dev usage only.
 //! 2. Otherwise fetch the DEK via a [`DekProvider`] — the CoCo CDH
 //!    resource endpoint in production ([`CdhDekProvider`]) or a local key
 //!    file in dev mode ([`LocalKeyFileDekProvider`]) — retrying with
@@ -23,6 +24,21 @@
 //!    boot.
 //! 3. If no DEK is obtained within the bounded window, startup **fails
 //!    hard**. Sealed mode never silently falls back to plaintext.
+//!
+//! # Swarm agents never run plaintext (TEE upgrade R3)
+//!
+//! When the process runs as a swarm agent — detected by the control-plane
+//! environment the scheduler always injects (`CONTROL_PLANE_URL` /
+//! `AGENT_ID`) — plaintext state is **refused**:
+//!
+//! * `AURA_STATE_ENCRYPTION` unset defaults to `sealed` (every swarm pod
+//!   has been started with `sealed` since R1; this default only matters
+//!   for hand-rolled pods).
+//! * An explicit `AURA_STATE_ENCRYPTION=plaintext`/`none` fails startup.
+//!
+//! Local dev without those env vars keeps working exactly as before:
+//! plaintext by default, or the local-keyfile sealed mode when
+//! `AURA_STATE_ENCRYPTION=sealed` + `AURA_STATE_KEY_FILE` are set.
 //!
 //! Key material is held in [`Zeroizing`] buffers and never logged.
 //!
@@ -54,6 +70,12 @@ pub const ENV_CDH_URL: &str = "AURA_CDH_URL";
 pub const ENV_STATE_KEY_FILE: &str = "AURA_STATE_KEY_FILE";
 /// Bound (seconds) on the total DEK fetch retry window.
 pub const ENV_DEK_FETCH_TIMEOUT_SECS: &str = "AURA_DEK_FETCH_TIMEOUT_SECS";
+/// Swarm control-plane URL the scheduler injects into every agent pod.
+/// Its presence marks the process as a swarm agent (plaintext refused).
+pub const ENV_CONTROL_PLANE_URL: &str = "CONTROL_PLANE_URL";
+/// Swarm agent id the scheduler injects into every agent pod.
+/// Its presence marks the process as a swarm agent (plaintext refused).
+pub const ENV_AGENT_ID: &str = "AGENT_ID";
 
 /// CoCo guests ship the CDH on this local endpoint.
 pub const DEFAULT_CDH_URL: &str = "http://127.0.0.1:8006";
@@ -87,19 +109,29 @@ impl SealingConfig {
     /// # Errors
     /// Returns an error when [`ENV_STATE_ENCRYPTION`] is set to an
     /// unrecognized value — a typo must refuse to start rather than
-    /// silently run plaintext.
+    /// silently run plaintext — or when plaintext is requested while the
+    /// swarm control-plane env ([`ENV_CONTROL_PLANE_URL`] /
+    /// [`ENV_AGENT_ID`]) is present (swarm agents never run plaintext).
     pub fn from_env() -> anyhow::Result<Self> {
+        let env_present =
+            |name: &str| std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
         Self::resolve(
             std::env::var(ENV_STATE_ENCRYPTION).ok(),
             std::env::var(ENV_STATE_KEY_ID).ok(),
             std::env::var(ENV_STATE_KEY_FILE).ok(),
             std::env::var(ENV_CDH_URL).ok(),
             std::env::var(ENV_DEK_FETCH_TIMEOUT_SECS).ok(),
+            env_present(ENV_CONTROL_PLANE_URL) || env_present(ENV_AGENT_ID),
         )
     }
 
     /// Pure resolution from raw env values (unit-testable without
     /// touching the process environment).
+    ///
+    /// `swarm_env` says whether the swarm control-plane environment is
+    /// present (TEE upgrade R3): then sealed is the default and an
+    /// explicit plaintext request is refused. Without it, plaintext
+    /// remains the local/dev default.
     ///
     /// # Errors
     /// See [`Self::from_env`].
@@ -109,11 +141,28 @@ impl SealingConfig {
         key_file: Option<String>,
         cdh_url: Option<String>,
         timeout_secs: Option<String>,
+        swarm_env: bool,
     ) -> anyhow::Result<Self> {
         let enabled = match encryption.as_deref().map(str::trim) {
-            None | Some("") => false,
+            None | Some("") => {
+                if swarm_env {
+                    info!(
+                        "swarm control-plane env present and {ENV_STATE_ENCRYPTION} unset; \
+                         defaulting to sealed (swarm agents never run plaintext)"
+                    );
+                }
+                swarm_env
+            }
             Some(v) if v.eq_ignore_ascii_case("sealed") => true,
             Some(v) if v.eq_ignore_ascii_case("plaintext") || v.eq_ignore_ascii_case("none") => {
+                if swarm_env {
+                    bail!(
+                        "{ENV_STATE_ENCRYPTION}=`{v}` requested but the swarm \
+                         control-plane env ({ENV_CONTROL_PLANE_URL}/{ENV_AGENT_ID}) is \
+                         present; swarm agents never run with plaintext state (TEE \
+                         upgrade R3). Unset {ENV_STATE_ENCRYPTION} or set it to `sealed`."
+                    );
+                }
                 false
             }
             Some(other) => bail!(
@@ -588,8 +637,8 @@ mod tests {
     // ----------------------------------------------------------------
 
     #[test]
-    fn resolve_unset_is_plaintext() {
-        let cfg = SealingConfig::resolve(None, None, None, None, None).unwrap();
+    fn resolve_unset_is_plaintext_without_swarm_env() {
+        let cfg = SealingConfig::resolve(None, None, None, None, None, false).unwrap();
         assert!(!cfg.enabled);
         assert_eq!(cfg.cdh_url, DEFAULT_CDH_URL);
         assert_eq!(
@@ -602,16 +651,18 @@ mod tests {
     fn resolve_sealed_enables_and_is_case_insensitive() {
         for v in ["sealed", "SEALED", " Sealed "] {
             let cfg =
-                SealingConfig::resolve(Some(v.to_string()), None, None, None, None).unwrap();
+                SealingConfig::resolve(Some(v.to_string()), None, None, None, None, false)
+                    .unwrap();
             assert!(cfg.enabled, "`{v}` must enable sealed mode");
         }
     }
 
     #[test]
-    fn resolve_plaintext_spellings_disable() {
+    fn resolve_plaintext_spellings_disable_without_swarm_env() {
         for v in ["plaintext", "none", ""] {
             let cfg =
-                SealingConfig::resolve(Some(v.to_string()), None, None, None, None).unwrap();
+                SealingConfig::resolve(Some(v.to_string()), None, None, None, None, false)
+                    .unwrap();
             assert!(!cfg.enabled);
         }
     }
@@ -620,8 +671,9 @@ mod tests {
     /// plaintext when the operator asked for encryption.
     #[test]
     fn resolve_rejects_unknown_mode() {
-        let err = SealingConfig::resolve(Some("seald".to_string()), None, None, None, None)
-            .unwrap_err();
+        let err =
+            SealingConfig::resolve(Some("seald".to_string()), None, None, None, None, false)
+                .unwrap_err();
         assert!(err.to_string().contains("seald"));
     }
 
@@ -633,10 +685,70 @@ mod tests {
             None,
             Some("http://cdh.local:8006/".to_string()),
             Some("7".to_string()),
+            false,
         )
         .unwrap();
         assert_eq!(cfg.cdh_url, "http://cdh.local:8006");
         assert_eq!(cfg.fetch_timeout, Duration::from_secs(7));
+    }
+
+    // ----------------------------------------------------------------
+    // Swarm env: plaintext refused (TEE upgrade R3)
+    // ----------------------------------------------------------------
+
+    /// With the swarm control-plane env present, an unset
+    /// `AURA_STATE_ENCRYPTION` defaults to sealed instead of plaintext.
+    #[test]
+    fn resolve_swarm_env_defaults_to_sealed() {
+        for unset in [None, Some(String::new()), Some("  ".to_string())] {
+            let cfg = SealingConfig::resolve(
+                unset,
+                Some("swarm/agents/x/state-key".to_string()),
+                None,
+                None,
+                None,
+                true,
+            )
+            .unwrap();
+            assert!(cfg.enabled, "swarm env must default to sealed");
+        }
+    }
+
+    /// With the swarm control-plane env present, an explicit plaintext
+    /// request must refuse to start.
+    #[test]
+    fn resolve_swarm_env_refuses_explicit_plaintext() {
+        for v in ["plaintext", "none", "PLAINTEXT"] {
+            let err = SealingConfig::resolve(
+                Some(v.to_string()),
+                None,
+                None,
+                None,
+                None,
+                true,
+            )
+            .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("never run with plaintext"),
+                "`{v}` must be refused under swarm env: {msg}"
+            );
+        }
+    }
+
+    /// Explicit sealed under swarm env stays sealed (the normal R1+ pod).
+    #[test]
+    fn resolve_swarm_env_sealed_is_sealed() {
+        let cfg = SealingConfig::resolve(
+            Some("sealed".to_string()),
+            Some("swarm/agents/x/state-key".to_string()),
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(cfg.enabled);
     }
 
     // ----------------------------------------------------------------
@@ -813,7 +925,7 @@ mod tests {
     #[tokio::test]
     async fn plaintext_mode_returns_no_cipher_and_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = SealingConfig::resolve(None, None, None, None, None).unwrap();
+        let cfg = SealingConfig::resolve(None, None, None, None, None, false).unwrap();
         let cipher = prepare_with_config(&cfg, dir.path(), &dir.path().join("db"))
             .await
             .unwrap();
