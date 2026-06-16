@@ -228,8 +228,7 @@ fn is_text_file(path: &std::path::Path) -> bool {
         // executables / objects / libraries
         "exe", "dll", "so", "dylib", "a", "o", "obj", "bin", "class", "wasm", "node", "pyc", "pdb",
         // fonts
-        "ttf", "otf", "woff", "woff2", "eot",
-        // databases / binary data
+        "ttf", "otf", "woff", "woff2", "eot", // databases / binary data
         "db", "sqlite", "sqlite3", "lockb",
     ];
     let extension = path
