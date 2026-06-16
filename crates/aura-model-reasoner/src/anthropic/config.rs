@@ -50,7 +50,7 @@ pub struct AnthropicConfig {
     /// budget that sits well below Cloudflare's effective wire limit
     /// for the managed router edge. Pre-emptive trimming here keeps
     /// the harness from triggering body-size WAF rules in the first
-    /// place; the `403`-retry path then tightens the cap by 25% on
+    /// place; the `403`-retry path then tightens the cap by 50% on
     /// each successive attempt, so a Cloudflare block deterministically
     /// converges on a body the edge will accept rather than burning
     /// the retry budget on the same oversized payload.
@@ -61,7 +61,7 @@ pub struct AnthropicConfig {
 
     /// Maximum number of times a Cloudflare 403 may be retried with
     /// a progressively tighter body cap before the error is surfaced
-    /// to the caller. Each retry shrinks the effective cap by 25%
+    /// to the caller. Each retry shrinks the effective cap by 50%
     /// (multiplicatively) so a fixed-pattern WAF rule eventually
     /// drops below whatever threshold the edge is enforcing.
     ///

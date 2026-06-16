@@ -20,13 +20,14 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 /// On every successive Cloudflare 403, multiply the emergency body cap
-/// by this factor before retrying. 3/4 (= 25% shrink) converges fast
-/// while still leaving meaningful conversation context after several
-/// hits: starting at 512 KiB the sequence is 384 / 288 / 216 / 162 /
-/// 121 KiB — three retries land at ~216 KiB which is comfortably below
-/// every body-size WAF rule we have observed on the managed router edge.
-const CLOUDFLARE_RETRY_SHRINK_NUMER: usize = 3;
-const CLOUDFLARE_RETRY_SHRINK_DENOM: usize = 4;
+/// by this factor before retrying. Once the managed edge has already
+/// rejected the request, recovering the turn is more important than
+/// preserving the maximum possible context. A 1/2 shrink gives the
+/// default three Cloudflare retries enough room to cross the observed
+/// ~64 KiB chat WAF cliff; the normal proactive cap remains much more
+/// generous for requests that have not been blocked.
+const CLOUDFLARE_RETRY_SHRINK_NUMER: usize = 1;
+const CLOUDFLARE_RETRY_SHRINK_DENOM: usize = 2;
 static OUTBOUND_REQUEST_THROTTLE: OnceLock<tokio::sync::Mutex<Option<Instant>>> = OnceLock::new();
 
 /// Saturating cast from a `Duration::as_millis()` result (`u128`) into
@@ -2287,7 +2288,7 @@ fn parse_complete_response(
 /// `Retry { sleep, body_cap_override }` → sleep the given duration
 /// then attempt again with the same model. `body_cap_override` is
 /// `Some(cap)` only on Cloudflare 403 retries, where the cap shrinks
-/// 25% per attempt so a body-size WAF rule is guaranteed to clear
+/// 50% per attempt so a body-size WAF rule is guaranteed to clear
 /// within `cloudflare_max_retries` attempts. All other retry paths
 /// (5xx, 429/529 overload) leave the cap alone.
 ///
@@ -2336,7 +2337,7 @@ fn classify_retry_action(
             // can't carry attributes directly, so bind first.
             #[allow(clippy::cast_possible_truncation)]
             let backoff_ms = millis_as_u64(sleep.as_millis());
-            // Shrink the body cap by 25% per attempt. When the cap is
+            // Shrink the body cap by 50% per attempt. When the cap is
             // disabled (0) we still produce an override so the next
             // attempt has *some* ceiling — pick a generous starting
             // point (256 KiB) so the first shrink isn't a sudden
@@ -3379,8 +3380,8 @@ mod retry_tests {
             first_cap < 524_288,
             "shrunk cap ({first_cap}) must be strictly smaller than the previous one (524288)"
         );
-        // 3/4 of 524288 = 393216.
-        assert_eq!(first_cap, 393_216, "first shrink should be 25% off");
+        // 1/2 of 524288 = 262144.
+        assert_eq!(first_cap, 262_144, "first shrink should halve the cap");
 
         // Second Cloudflare hit: cap shrinks again from the previous override.
         let second = classify_retry_action(
@@ -3439,8 +3440,47 @@ mod retry_tests {
             "retry cap ({cap}) must be lower than the blocked wire body ({observed_body_bytes})"
         );
         assert_eq!(
-            cap, 118_725,
-            "cap should shrink by 25% from the observed blocked wire body"
+            cap, 79_150,
+            "cap should halve from the observed blocked wire body"
+        );
+    }
+
+    #[test]
+    fn classify_retry_action_crosses_low_waf_band_with_default_retries() {
+        // Production desktop traces showed chat WAF blocks with
+        // messages_text_bytes around 64-82 KiB. The old 25% shrink
+        // could still leave a ~158 KiB blocked wire body above that
+        // band after the default three Cloudflare retries. The retry
+        // ladder should now get under 64 KiB before it gives up.
+        let err = cloudflare_block(Some(158_300));
+        let mut last_err = None;
+        let mut current_cap = 524_288;
+
+        for attempt in 0..3 {
+            let action = classify_retry_action(
+                &err,
+                attempt,
+                8,
+                3,
+                1000,
+                30_000,
+                0,
+                1,
+                "primary",
+                &mut last_err,
+                current_cap,
+            );
+            current_cap = match action {
+                RetryAction::Retry {
+                    body_cap_override, ..
+                } => body_cap_override.expect("Cloudflare retry must set a tighter body cap"),
+                other => panic!("expected Retry, got {other:?}"),
+            };
+        }
+
+        assert!(
+            current_cap < 64 * 1024,
+            "three Cloudflare retries should drive the cap below the observed low-WAF band; got {current_cap}"
         );
     }
 
