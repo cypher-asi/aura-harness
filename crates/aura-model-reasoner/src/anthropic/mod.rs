@@ -36,8 +36,12 @@ enum ApiError {
     },
     /// 402 — stop immediately, no retry or fallback.
     InsufficientCredits(String),
-    /// 403 / 503 with managed edge WAF HTML — retryable once so blocks do not storm.
-    CloudflareBlock(String),
+    /// 403 / 503 with managed edge WAF HTML — retryable with a tighter
+    /// body cap so body-size WAF rules can clear on the next attempt.
+    CloudflareBlock {
+        message: String,
+        wire_body_bytes: Option<usize>,
+    },
     /// Generic transient upstream 5xx — 500 / 502 / 503 (non-Cloudflare) /
     /// 504. Mapped to a retryable class so a single provider blip doesn't
     /// immediately surface a terminal `LLM error: ...` to the dev loop.
@@ -65,9 +69,9 @@ impl From<ApiError> for ReasonerError {
             // Managed edge WAF blocks are transient — encode that
             // classification in the variant rather than expecting
             // downstream code to special-case status 403 messages.
-            ApiError::CloudflareBlock(msg) => Self::Transient {
+            ApiError::CloudflareBlock { message, .. } => Self::Transient {
                 status: 403,
-                message: msg,
+                message,
                 retry_after: None,
             },
             ApiError::TransientServer { status, message } => Self::Transient {

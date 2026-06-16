@@ -398,6 +398,7 @@ impl AnthropicProvider {
         // through this same step). Pre-cap defanging would risk silently
         // shifting byte offsets that the cap relies on.
         let final_bytes = defang_waf_command_patterns(capped_bytes);
+        let wire_body_bytes = final_bytes.len();
         let request_summary = summarize_anthropic_request(&final_bytes);
         let debug_request_dump_path =
             dump_request_body_if_enabled(model, &request_summary.body_hash, &final_bytes);
@@ -426,7 +427,7 @@ impl AnthropicProvider {
         crate::console::anthropic_request_block(&crate::console::AnthropicRequestView {
             model,
             kind: &request_kind_label,
-            body_bytes: final_bytes.len(),
+            body_bytes: wire_body_bytes,
             messages_count,
             tools_count: request_summary.tools_count,
             tool_choice: &tool_choice_label,
@@ -443,7 +444,7 @@ impl AnthropicProvider {
 
         debug!(
             model = %model,
-            body_bytes = final_bytes.len(),
+            body_bytes = wire_body_bytes,
             messages_count,
             emergency_body_cap_bytes = self.config.emergency_body_cap_bytes,
             effective_body_cap_bytes = effective_cap,
@@ -588,6 +589,7 @@ impl AnthropicProvider {
                 response,
                 RequestRoutingContext::from_request(request_ctx),
                 Some(&content_profile),
+                wire_body_bytes,
             )
             .await;
             crate::console::anthropic_failure_block(&crate::console::AnthropicFailureView {
@@ -1969,6 +1971,7 @@ async fn classify_api_error(
     response: reqwest::Response,
     routing: RequestRoutingContext,
     content_profile: Option<&ModelContentProfile>,
+    wire_body_bytes: usize,
 ) -> (ApiError, FailureMeta) {
     let status = response.status();
     let status_code = status.as_u16();
@@ -2021,12 +2024,15 @@ async fn classify_api_error(
             || "profile=unavailable".to_string(),
             ModelContentProfile::summary,
         );
-        let err = ApiError::CloudflareBlock(format!(
-            "LLM proxy returned Cloudflare block ({status}; request_id={request_id_label}; \
-             aura_org_id={}; aura_session_id={}; {profile_label})",
-            routing.org_label(),
-            routing.session_label()
-        ));
+        let err = ApiError::CloudflareBlock {
+            message: format!(
+                "LLM proxy returned Cloudflare block ({status}; request_id={request_id_label}; \
+                 aura_org_id={}; aura_session_id={}; {profile_label})",
+                routing.org_label(),
+                routing.session_label()
+            ),
+            wire_body_bytes: Some(wire_body_bytes),
+        };
         return (
             err,
             FailureMeta {
@@ -2320,7 +2326,10 @@ fn classify_retry_action(
     current_body_cap: usize,
 ) -> RetryAction {
     match err {
-        ApiError::CloudflareBlock(msg) if attempt < max_retries.min(cloudflare_max_retries) => {
+        ApiError::CloudflareBlock {
+            message,
+            wire_body_bytes,
+        } if attempt < max_retries.min(cloudflare_max_retries) => {
             let sleep = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
             // `Duration::as_millis` returns u128 but 30s backoff caps well below
             // u64::MAX; truncation cannot happen. `warn!` field value expressions
@@ -2337,7 +2346,10 @@ fn classify_retry_action(
             } else {
                 current_body_cap
             };
-            let next_cap = (starting_cap.saturating_mul(CLOUDFLARE_RETRY_SHRINK_NUMER))
+            let shrink_basis = wire_body_bytes
+                .filter(|bytes| *bytes > 0)
+                .map_or(starting_cap, |bytes| bytes.min(starting_cap));
+            let next_cap = (shrink_basis.saturating_mul(CLOUDFLARE_RETRY_SHRINK_NUMER))
                 / CLOUDFLARE_RETRY_SHRINK_DENOM;
             // Floor: never shrink below 16 KiB; below that point a
             // tighter cap won't appease the WAF, and we just damage
@@ -2349,12 +2361,14 @@ fn classify_retry_action(
                 backoff_ms,
                 max_cloudflare_retries = cloudflare_max_retries,
                 current_body_cap,
+                wire_body_bytes = ?wire_body_bytes,
+                shrink_basis,
                 next_body_cap = next_cap,
                 "Cloudflare block, will retry with tighter body cap"
             );
             *last_err = Some(ReasonerError::Transient {
                 status: 403,
-                message: msg.clone(),
+                message: message.clone(),
                 retry_after: None,
             });
             RetryAction::Retry {
@@ -2450,7 +2464,7 @@ fn classify_retry_action(
 fn retry_reason_for(err: &ApiError) -> &'static str {
     match err {
         ApiError::Overloaded { .. } => "rate_limited_429",
-        ApiError::CloudflareBlock(_) => "cloudflare_block",
+        ApiError::CloudflareBlock { .. } => "cloudflare_block",
         // Axis 2: distinct label so the dev loop can tell a real
         // upstream 5xx apart from Cloudflare/WAF blocks in
         // `retries.jsonl` (the heuristic reports bucket by reason).
@@ -3276,14 +3290,21 @@ mod retry_tests {
         };
         assert_eq!(retry_reason_for(&err), "upstream_5xx");
         assert_eq!(
-            retry_reason_for(&ApiError::CloudflareBlock("cf".into())),
+            retry_reason_for(&cloudflare_block(None)),
             "cloudflare_block"
         );
     }
 
+    fn cloudflare_block(wire_body_bytes: Option<usize>) -> ApiError {
+        ApiError::CloudflareBlock {
+            message: "cf".into(),
+            wire_body_bytes,
+        }
+    }
+
     #[test]
     fn classify_retry_action_caps_cloudflare_retries() {
-        let err = ApiError::CloudflareBlock("cf".into());
+        let err = cloudflare_block(None);
         let mut last_err = None;
 
         // With cloudflare_max_retries=3, attempts 0/1/2 should all
@@ -3331,8 +3352,8 @@ mod retry_tests {
     }
 
     #[test]
-    fn classify_retry_action_shrinks_body_cap_on_cloudflare() {
-        let err = ApiError::CloudflareBlock("cf".into());
+    fn classify_retry_action_shrinks_configured_body_cap_on_cloudflare() {
+        let err = cloudflare_block(None);
         let mut last_err = None;
 
         let first = classify_retry_action(
@@ -3388,11 +3409,47 @@ mod retry_tests {
     }
 
     #[test]
+    fn classify_retry_action_shrinks_observed_body_on_cloudflare() {
+        let observed_body_bytes = 158_300;
+        let err = cloudflare_block(Some(observed_body_bytes));
+        let mut last_err = None;
+
+        let action = classify_retry_action(
+            &err,
+            0,
+            8,
+            3,
+            1000,
+            30_000,
+            0,
+            1,
+            "primary",
+            &mut last_err,
+            524_288,
+        );
+        let cap = match action {
+            RetryAction::Retry {
+                body_cap_override, ..
+            } => body_cap_override.expect("Cloudflare retry must set a tighter body cap"),
+            other => panic!("expected Retry, got {other:?}"),
+        };
+
+        assert!(
+            cap < observed_body_bytes,
+            "retry cap ({cap}) must be lower than the blocked wire body ({observed_body_bytes})"
+        );
+        assert_eq!(
+            cap, 118_725,
+            "cap should shrink by 25% from the observed blocked wire body"
+        );
+    }
+
+    #[test]
     fn classify_retry_action_cloudflare_shrink_has_a_floor() {
         // Repeatedly shrinking from a tiny starting cap must never go
         // below 16 KiB — that's the floor where further shrinks just
         // damage the conversation without appeasing any WAF rule.
-        let err = ApiError::CloudflareBlock("cf".into());
+        let err = cloudflare_block(None);
         let mut last_err = None;
         let action = classify_retry_action(
             &err,

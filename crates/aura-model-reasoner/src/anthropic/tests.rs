@@ -309,7 +309,11 @@ fn test_api_error_classification() {
     let credits: ReasonerError = ApiError::InsufficientCredits("402 insufficient".into()).into();
     assert!(credits.to_string().contains("402"));
 
-    let cloudflare: ReasonerError = ApiError::CloudflareBlock("Cloudflare block".into()).into();
+    let cloudflare: ReasonerError = ApiError::CloudflareBlock {
+        message: "Cloudflare block".into(),
+        wire_body_bytes: Some(42_000),
+    }
+    .into();
     assert!(cloudflare.to_string().contains("Cloudflare"));
 
     let other: ReasonerError =
