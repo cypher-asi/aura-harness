@@ -24,13 +24,22 @@ use std::time::Duration;
 /// Tools that manage their own end-to-end budget + cancellation and must NOT
 /// be bounded by the kernel's per-tool `tool_timeout_ms`.
 ///
+/// `run_command` launches operating-system processes and owns its own hard
+/// timeout so it can terminate the spawned process group on expiry. The
+/// kernel's generic timeout would otherwise abort the tool future before the
+/// command runner can clean up children.
+///
 /// `task` dispatches a subagent and blocks (`SpawnMode::Wait`) while the child
 /// agent loop runs under the fleet child runner's own (longer) timeout +
 /// parent cancellation token. The kernel's 120s default would otherwise abort
 /// a legitimately long child run prematurely. The name is hardcoded rather than
 /// imported from `aura-tools` to keep the kernel free of an upward dependency
 /// on the tool crate.
-const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["task"];
+const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["run_command", "task"];
+
+fn tool_manages_own_timeout(tool_name: &str) -> bool {
+    TIMEOUT_EXEMPT_TOOLS.contains(&tool_name)
+}
 
 impl Kernel {
     /// Build the kernel-internal [`Proposal`] (a `Delegate` proposal whose
@@ -65,7 +74,7 @@ impl Kernel {
         action: &Action,
         tool_name: &str,
     ) -> Effect {
-        if TIMEOUT_EXEMPT_TOOLS.contains(&tool_name) {
+        if tool_manages_own_timeout(tool_name) {
             return self.executor.execute(ctx, action).await;
         }
         let tool_timeout = Duration::from_millis(self.config.tool_timeout_ms);
@@ -418,6 +427,13 @@ mod summarisation_tests {
     use super::*;
     use aura_core_types::{Effect, EffectStatus};
     use aura_store_record::RecordPayload;
+
+    #[test]
+    fn run_command_owns_its_timeout_budget() {
+        assert!(tool_manages_own_timeout("run_command"));
+        assert!(tool_manages_own_timeout("task"));
+        assert!(!tool_manages_own_timeout("read_file"));
+    }
 
     fn effect_with(payload: Vec<u8>) -> Effect {
         Effect::new(

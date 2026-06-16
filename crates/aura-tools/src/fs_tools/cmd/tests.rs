@@ -142,6 +142,48 @@ fn test_cmd_run_rejects_injection_in_program() {
     }
 }
 
+#[cfg(unix)]
+fn command_fragment_running(fragment: &str) -> bool {
+    let output = std::process::Command::new("ps")
+        .args(["-eo", "command"])
+        .output()
+        .expect("ps must run on Unix test hosts");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().any(|line| line.contains(fragment))
+}
+
+#[cfg(unix)]
+#[test]
+fn test_cmd_run_shell_script_timeout_kills_child_process_group() {
+    let (sandbox, _dir) = create_test_sandbox();
+    let marker = format!("aura-run-command-timeout-marker-{}", std::process::id());
+    let script = format!("sh -c 'while :; do sleep 1; done' {marker} & wait");
+
+    let result = cmd_run_shell_script(&sandbox, &script, None, 200);
+
+    match result {
+        Err(ToolError::CommandFailed(msg)) => {
+            assert!(
+                msg.contains("Command timed out"),
+                "unexpected timeout error: {msg}"
+            );
+        }
+        other => panic!("expected timeout failure, got {other:?}"),
+    }
+
+    for _ in 0..20 {
+        if !command_fragment_running(&marker) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", &marker])
+        .status();
+    panic!("timed-out shell child process leaked: {marker}");
+}
+
 #[test]
 fn test_cmd_run_nonexistent_command_fails() {
     let (sandbox, _dir) = create_test_sandbox();

@@ -147,6 +147,7 @@ pub fn cmd_spawn(
 
     let mut cmd = Command::new(&spawn_target);
     cmd.args(args);
+    configure_process_group(&mut cmd);
 
     #[cfg(windows)]
     {
@@ -189,6 +190,35 @@ fn apply_plain_output_env(cmd: &mut std::process::Command) {
     cmd.env("TERM", "dumb");
 }
 
+/// Isolate each command tool invocation from the harness process group.
+///
+/// Hard timeouts need to terminate shells and their grandchildren
+/// together. On Unix, setting the child process group to the child's pid
+/// lets `terminate_child_process_group` kill the whole tree without
+/// touching the harness. Windows currently falls back to `Child::kill`.
+#[cfg(unix)]
+fn configure_process_group(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_cmd: &mut std::process::Command) {}
+
+#[cfg(unix)]
+fn terminate_child_process_group(child: &mut std::process::Child) {
+    let target = format!("-{}", child.id());
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", &target])
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn terminate_child_process_group(child: &mut std::process::Child) {
+    let _ = child.kill();
+}
+
 /// Spawn a raw shell script under `sh -c` / `cmd.exe /C`.
 ///
 /// This is the ONLY code path that exposes a shell interpreter to
@@ -225,6 +255,7 @@ fn cmd_spawn_shell_script(
         c.args(["-c", shell_script]);
         c
     };
+    configure_process_group(&mut cmd);
 
     #[cfg(windows)]
     {
@@ -569,7 +600,7 @@ fn wait_with_hard_timeout(
         }
 
         if start.elapsed() > timeout {
-            let _ = child.kill();
+            terminate_child_process_group(&mut child);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "Process timed out",
