@@ -64,12 +64,10 @@ pub(crate) struct SamplingRequestResult {
     /// the loop must break and not run stop hooks — the result has
     /// already been mutated with `llm_error` / `cancelled`.
     pub(crate) broke_for_error: bool,
-    /// `true` when the model response carried something the user can
-    /// see — non-empty assistant text or at least one `tool_use`
-    /// block. `false` for an empty or thinking-only response. The
-    /// turn loop accumulates this so it can surface a clear
-    /// "turn ended without action" signal (and optionally re-prompt)
-    /// instead of letting a no-op turn look like a silent hang.
+    /// `true` when the model response carried assistant text the user
+    /// can actually read. Tool calls alone are not enough: a turn that
+    /// only reads files and then stops still needs a final answer or a
+    /// real mutation, otherwise the user sees an apparent no-op.
     pub(crate) produced_visible_output: bool,
     /// `true` when leaked tool-call markup was scrubbed from the
     /// assistant text this sampling request (the model wrote
@@ -81,15 +79,14 @@ pub(crate) struct SamplingRequestResult {
     pub(crate) scrubbed_tool_markup: bool,
 }
 
-/// Whether a model response carries user-visible output: a non-empty
-/// assistant text block or any `tool_use` block. A response that is
-/// only an (extended) thinking block — or entirely empty — returns
-/// `false`. Used by the turn loop's never-silent / no-op handling.
+/// Whether a model response carries assistant text the user can read.
+/// A response that is only thinking or native `tool_use` blocks
+/// returns `false`; read-only tools are useful internally but are not
+/// a completed user-visible answer by themselves.
 fn response_has_visible_output(response: &aura_model_reasoner::ModelResponse) -> bool {
     use aura_model_reasoner::ContentBlock;
     response.message.content.iter().any(|block| match block {
         ContentBlock::Text { text } => !text.trim().is_empty(),
-        ContentBlock::ToolUse { .. } => true,
         _ => false,
     })
 }

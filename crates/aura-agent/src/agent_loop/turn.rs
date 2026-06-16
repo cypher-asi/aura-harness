@@ -262,7 +262,7 @@ pub(crate) async fn run_turn(
         // never reads the stop as a silent hang — and, when enabled
         // and within budget, inject one nudge and re-sample instead
         // of ending on a no-op.
-        if !turn_had_visible_output {
+        if !turn_had_visible_output && !state.had_any_write && !state.task_done_completed {
             if ctx.run.agent.config.auto_continue_no_op_turns
                 && no_op_nudges_used < MAX_NO_OP_TURN_NUDGES
             {

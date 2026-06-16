@@ -998,6 +998,72 @@ async fn turn_continues_while_needs_follow_up_true() {
     );
 }
 
+/// Regression from a production AURA repair-agent run: the model
+/// spent the whole turn reading files, then stopped with no assistant
+/// text and no file changes. Tool calls alone are not a completed
+/// user-visible response, so the no-op recovery must re-prompt once.
+#[tokio::test]
+async fn read_only_tool_loop_with_empty_endturn_gets_no_op_retry() {
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("placeholder", "file contents")],
+    };
+
+    let provider = MockProvider::new()
+        .with_response(MockResponse::tool_use(
+            "tc_read",
+            "read_file",
+            serde_json::json!({"path": "src/main.rs"}),
+        ))
+        .with_response(MockResponse {
+            stop_reason: StopReason::EndTurn,
+            content: vec![],
+            usage: Usage::new(120, 0),
+        })
+        .with_response(MockResponse::text(
+            "I found the issue and will patch it next.",
+        ));
+
+    let config = AgentLoopConfig {
+        system_prompt: "test agent".to_string(),
+        ..AgentLoopConfig::for_agent("claude-test-model")
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![Message::user("audit and fix this project")];
+    let tools = vec![ToolDefinition::new(
+        "read_file",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let result = agent
+        .run_with_events(&provider, &executor, messages, tools, Some(tx), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.iterations, 3,
+        "read-only tool use plus empty EndTurn must consume one retry and then finish"
+    );
+    assert!(
+        result
+            .total_text
+            .contains("I found the issue and will patch it next."),
+        "the retry response should become the visible result"
+    );
+
+    let mut saw_retry_progress = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AgentLoopEvent::Progress { stage, .. } = event {
+            saw_retry_progress |= stage == "turn_no_action_retry";
+        }
+    }
+    assert!(
+        saw_retry_progress,
+        "the stream should explain that a no-action turn was retried"
+    );
+}
+
 /// Counterpart to `turn_continues_while_needs_follow_up_true`: a
 /// single `EndTurn` (no tool calls) must break the turn loop on the
 /// first sampling. Pinned so the polarity flip cannot accidentally
