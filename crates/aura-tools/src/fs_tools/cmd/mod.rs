@@ -209,9 +209,19 @@ fn configure_process_group(_cmd: &mut std::process::Command) {}
 fn terminate_child_process_group(child: &mut std::process::Child) {
     let target = format!("-{}", child.id());
     let _ = std::process::Command::new("kill")
-        .args(["-KILL", &target])
+        .args(["-KILL", "--", &target])
         .status();
     let _ = child.kill();
+
+    for _ in 0..50 {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(_) => return,
+        }
+    }
+
+    let _ = child.wait();
 }
 
 #[cfg(not(unix))]
