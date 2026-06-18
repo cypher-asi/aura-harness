@@ -7,6 +7,12 @@ use super::{
 use aura_context_prompts::model_messages::{auto_build, task_done as task_done_msgs, test_warning};
 use aura_context_prompts::steering::{SteeringKind, SteeringRenderer, StubReportView};
 
+#[cfg(not(test))]
+const POST_TASK_DONE_TEST_WARNING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+#[cfg(test)]
+const POST_TASK_DONE_TEST_WARNING_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(25);
+
 pub(super) fn enrich_compiler_output_sync(project_folder: &str, raw_output: &str) -> String {
     if !looks_like_compiler_errors(raw_output) {
         return raw_output.to_string();
@@ -274,32 +280,62 @@ impl TaskToolExecutor {
 
         self.emit_text(test_warning::post_task_done_starting_line(&cmd, source));
 
-        let outcome = match self.test_runner.run_tests(project_root, &cmd).await {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                tracing::warn!(error = %e, cmd, "post-task_done test run failed to execute");
-                self.emit_event(AgentLoopEvent::TestSuiteWarning {
-                    passed: false,
-                    summary: format!("failed to execute `{cmd}`: {e}"),
-                    failed_tests: Vec::new(),
-                });
-                return;
+        let runner = self.test_runner.clone();
+        let project_root = project_root.to_path_buf();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let run = runner.run_tests(&project_root, &cmd);
+            let event = match tokio::time::timeout(POST_TASK_DONE_TEST_WARNING_TIMEOUT, run).await {
+                Ok(Ok(outcome)) => {
+                    if let Some(tx) = &event_tx {
+                        let line = if outcome.passed {
+                            test_warning::post_task_done_passed_line(
+                                outcome.duration_ms,
+                                &outcome.summary,
+                            )
+                        } else {
+                            test_warning::post_task_done_failed_line(&outcome.summary)
+                        };
+                        let _ = tx.try_send(AgentLoopEvent::TextDelta(line));
+                    }
+                    AgentLoopEvent::TestSuiteWarning {
+                        passed: outcome.passed,
+                        summary: outcome.summary,
+                        failed_tests: outcome.failed_tests,
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, cmd, "post-task_done test run failed to execute");
+                    AgentLoopEvent::TestSuiteWarning {
+                        passed: false,
+                        summary: format!("failed to execute `{cmd}`: {e}"),
+                        failed_tests: Vec::new(),
+                    }
+                }
+                Err(_) => {
+                    let timeout_secs = POST_TASK_DONE_TEST_WARNING_TIMEOUT.as_secs().max(1);
+                    tracing::warn!(
+                        cmd,
+                        timeout_secs,
+                        "post-task_done test run timed out; allowing task_done to complete"
+                    );
+                    if let Some(tx) = &event_tx {
+                        let _ = tx.try_send(AgentLoopEvent::TextDelta(
+                            test_warning::post_task_done_failed_line(&format!(
+                                "timed out after {timeout_secs}s"
+                            )),
+                        ));
+                    }
+                    AgentLoopEvent::TestSuiteWarning {
+                        passed: false,
+                        summary: format!("timed out after {timeout_secs}s"),
+                        failed_tests: Vec::new(),
+                    }
+                }
+            };
+            if let Some(tx) = event_tx {
+                let _ = tx.try_send(event);
             }
-        };
-
-        if outcome.passed {
-            self.emit_text(test_warning::post_task_done_passed_line(
-                outcome.duration_ms,
-                &outcome.summary,
-            ));
-        } else {
-            self.emit_text(test_warning::post_task_done_failed_line(&outcome.summary));
-        }
-
-        self.emit_event(AgentLoopEvent::TestSuiteWarning {
-            passed: outcome.passed,
-            summary: outcome.summary,
-            failed_tests: outcome.failed_tests,
         });
     }
 
