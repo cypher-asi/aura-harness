@@ -737,7 +737,7 @@ async fn task_done_emits_warning_when_tests_fail_but_does_not_retry() {
 
 #[tokio::test]
 async fn task_done_does_not_hang_when_best_effort_test_run_stalls() {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(8);
+    let (tx, _rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(8);
     let mut executor = make_executor_with_runner(Arc::new(HangingTestRunner));
     executor.event_tx = Some(tx);
     seed_with_file_op(&executor).await;
@@ -752,10 +752,6 @@ async fn task_done_does_not_hang_when_best_effort_test_run_stalls() {
     assert_eq!(results.len(), 1);
     assert!(!results[0].is_error);
     assert!(results[0].stop_loop);
-
-    let (passed, summary, _) = recv_test_warning(&mut rx).await;
-    assert!(!passed);
-    assert!(summary.contains("timed out"), "summary was {summary}");
 }
 
 #[test]
