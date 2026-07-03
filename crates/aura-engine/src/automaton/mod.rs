@@ -34,6 +34,7 @@ mod event_channel;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -182,6 +183,7 @@ impl AutomatonBridge {
         aura_session_id: Option<&str>,
         aura_agent_id: Option<&str>,
         aura_project_id: Option<&str>,
+        provider_api_keys: HashMap<String, String>,
         request_kind: aura_model_reasoner::ModelRequestKind,
     ) {
         let Some(scheduler) = self.scheduler.as_ref() else {
@@ -202,6 +204,7 @@ impl AutomatonBridge {
             system_prompt: String::new(),
             prompt_cache_key: aura_project_id.map(|pid| format!("devloop:{pid}")),
             prompt_cache_retention: None,
+            provider_api_keys,
             request_kind,
             max_tokens: 16384,
             // Anthropic context windows top out around 1M tokens; the
@@ -432,6 +435,7 @@ impl AutomatonController for AutomatonBridge {
             None,
             None,
             None,
+            HashMap::new(),
             None,
             Vec::new(),
             None,
@@ -509,6 +513,7 @@ impl AutomatonController for AutomatonBridge {
             None,
             None,
             None,
+            HashMap::new(),
             None,
             Vec::new(),
             None,

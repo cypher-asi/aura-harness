@@ -1506,6 +1506,7 @@ mod tests {
             prompt_caching_enabled: Some(true),
             prompt_cache_key: None,
             prompt_cache_retention: None,
+            provider_api_keys: Default::default(),
         });
 
         let config = session.agent_loop_config();
@@ -1560,6 +1561,7 @@ mod tests {
                 prompt_caching_enabled: Some(true),
                 prompt_cache_key: None,
                 prompt_cache_retention: None,
+                provider_api_keys: Default::default(),
             }),
         );
 

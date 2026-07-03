@@ -438,6 +438,7 @@ mod tests {
             system_prompt: "parent prompt".to_string(),
             prompt_cache_key: None,
             prompt_cache_retention: None,
+            provider_api_keys: Default::default(),
             request_kind: aura_model_reasoner::ModelRequestKind::Chat,
             max_tokens: 1024,
             max_context_tokens: 200_000,

@@ -1677,6 +1677,66 @@ async fn test_proxy_openai_models_carry_prompt_cache_key_when_set() {
 }
 
 #[tokio::test]
+async fn test_proxy_xai_models_carry_provider_api_key_when_set() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let body = r#"{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"aura-grok-4-3","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+
+        request_text
+    });
+
+    let config = AnthropicConfig {
+        default_model: "aura-grok-4-3".to_string(),
+        timeout_ms: 5000,
+        max_retries: 0,
+        backoff_initial_ms: 250,
+        backoff_cap_ms: 30_000,
+        min_request_interval_ms: 0,
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        fallback_model: None,
+        prompt_caching_enabled: true,
+        emergency_body_cap_bytes: 0,
+        cloudflare_max_retries: 3,
+    };
+
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("aura-grok-4-3", "system")
+        .message(Message::user("test"))
+        .auth_token(Some("test-jwt-token".to_string()))
+        .provider_api_keys(std::collections::HashMap::from([(
+            "xai".to_string(),
+            "xai-test-key".to_string(),
+        )]))
+        .try_build()
+        .unwrap();
+
+    let _ = provider.complete(request).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert!(
+        captured
+            .to_ascii_lowercase()
+            .contains("x-aura-provider-api-key: xai-test-key"),
+        "Proxy xAI requests should carry X-Aura-Provider-Api-Key header.\nCaptured request:\n{captured}"
+    );
+}
+
+#[tokio::test]
 async fn test_proxy_openai_models_clamp_oversized_prompt_cache_key() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

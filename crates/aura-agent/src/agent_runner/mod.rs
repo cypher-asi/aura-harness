@@ -4,6 +4,7 @@
 //! result processing into a convenient orchestration layer built on top of
 //! [`AgentLoop`].
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -123,7 +124,7 @@ pub struct FollowUpSuggestion {
 // ---------------------------------------------------------------------------
 
 /// Configuration for the `AgentRunner`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentRunnerConfig {
     pub max_agentic_iterations: usize,
     pub max_shell_task_retries: u32,
@@ -174,6 +175,8 @@ pub struct AgentRunnerConfig {
     /// ephemeral `cache_control` breakpoints in
     /// `aura_model_reasoner::anthropic::convert` handle prefix reuse.
     pub prompt_cache_key: Option<String>,
+    /// Per-provider user-supplied API keys resolved by the caller.
+    pub provider_api_keys: HashMap<String, String>,
     /// Phase 5: per-task switch for the early test-gate oracle.
     ///
     /// `TaskRunAutomaton` (and any future task-shaped automaton) sets
@@ -189,6 +192,29 @@ pub struct AgentRunnerConfig {
     /// `AgentLoopConfig.early_test_oracle: Option<EarlyTestOracleConfig>`
     /// → `LoopState::steering`.
     pub early_test_oracle: bool,
+}
+
+impl std::fmt::Debug for AgentRunnerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let provider_api_key_providers = self
+            .provider_api_keys
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        f.debug_struct("AgentRunnerConfig")
+            .field("max_agentic_iterations", &self.max_agentic_iterations)
+            .field("task_execution_max_tokens", &self.task_execution_max_tokens)
+            .field("default_model", &self.default_model)
+            .field("simple_model", &self.simple_model)
+            .field("has_auth_token", &self.auth_token.is_some())
+            .field("aura_org_id", &self.aura_org_id)
+            .field("aura_session_id", &self.aura_session_id)
+            .field("aura_agent_id", &self.aura_agent_id)
+            .field("aura_project_id", &self.aura_project_id)
+            .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("provider_api_key_providers", &provider_api_key_providers)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentRunnerConfig {
@@ -239,6 +265,7 @@ impl AgentRunnerConfig {
             aura_agent_id: None,
             aura_project_id: None,
             prompt_cache_key: None,
+            provider_api_keys: HashMap::new(),
             // Phase 5: default off so chat / generic runners do not
             // pay for the oracle's hint generation. Task-shaped
             // automatons flip this on per-construction.
@@ -605,6 +632,7 @@ impl AgentRunner {
             aura_agent_id: self.config.aura_agent_id.clone(),
             aura_project_id: self.config.aura_project_id.clone(),
             prompt_cache_key: self.config.prompt_cache_key.clone(),
+            provider_api_keys: self.config.provider_api_keys.clone(),
             ..AgentLoopConfig::for_agent(self.config.default_model.clone())
         };
         let agent_loop = AgentLoop::new(config);
@@ -761,6 +789,7 @@ pub fn configure_loop_config(
         aura_agent_id: config.aura_agent_id.clone(),
         aura_project_id: config.aura_project_id.clone(),
         prompt_cache_key: config.prompt_cache_key.clone(),
+        provider_api_keys: config.provider_api_keys.clone(),
         request_kind: ModelRequestKind::DevLoopBootstrap,
         // Temporary (2026-05): the dev-loop policy pins reasoning
         // effort to `Medium` across every iteration. This flag is

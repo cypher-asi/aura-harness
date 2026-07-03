@@ -81,10 +81,11 @@ pub struct IntentClassifierRule {
 ///
 /// All LLM traffic flows through aura-router (the AURA proxy) using
 /// a per-request JWT; there is no direct-provider path, so this
-/// struct only carries knobs that still mean something for proxy
-/// routing: model name, fallback model, prompt-caching toggle.
+/// struct carries fields that still mean something for proxy
+/// routing: model name, fallback model, prompt-caching toggle, and
+/// per-provider user credentials resolved by aura-os.
 /// `None` on a field means "leave the harness default unchanged".
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct SessionModelOverrides {
     /// Optional default model for this session.
@@ -107,6 +108,29 @@ pub struct SessionModelOverrides {
     /// `"24h"` (extended retention on newer OpenAI models).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_retention: Option<String>,
+    /// Per-provider user-supplied API keys resolved by aura-os for the
+    /// current session. The runtime forwards only the key matching the
+    /// selected upstream provider to aura-router.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub provider_api_keys: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for SessionModelOverrides {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let providers = self
+            .provider_api_keys
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        f.debug_struct("SessionModelOverrides")
+            .field("default_model", &self.default_model)
+            .field("fallback_model", &self.fallback_model)
+            .field("prompt_caching_enabled", &self.prompt_caching_enabled)
+            .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("prompt_cache_retention", &self.prompt_cache_retention)
+            .field("provider_api_key_providers", &providers)
+            .finish()
+    }
 }
 
 /// OpenAI rejects `prompt_cache_key` strings longer than 64 chars

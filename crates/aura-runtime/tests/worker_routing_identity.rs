@@ -123,6 +123,7 @@ fn opus_4_7_identity() -> AgentIdentity {
         system_prompt: "Test system prompt for worker routing identity check.".into(),
         prompt_cache_key: None,
         prompt_cache_retention: None,
+        provider_api_keys: Default::default(),
         request_kind: ModelRequestKind::Chat,
         max_tokens: 1024,
         max_context_tokens: 200_000,

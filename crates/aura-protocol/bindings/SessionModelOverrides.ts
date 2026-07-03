@@ -6,8 +6,9 @@
  *
  * All LLM traffic flows through aura-router (the AURA proxy) using
  * a per-request JWT; there is no direct-provider path, so this
- * struct only carries knobs that still mean something for proxy
- * routing: model name, fallback model, prompt-caching toggle.
+ * struct carries fields that still mean something for proxy
+ * routing: model name, fallback model, prompt-caching toggle, and
+ * per-provider user credentials resolved by aura-os.
  * `None` on a field means "leave the harness default unchanged".
  */
 export type SessionModelOverrides = { 
@@ -35,4 +36,10 @@ prompt_cache_key: string | null,
  * Wire values are `"in_memory"` (default, ~5–10 min) or
  * `"24h"` (extended retention on newer OpenAI models).
  */
-prompt_cache_retention: string | null, };
+prompt_cache_retention: string | null,
+/**
+ * Per-provider user-supplied API keys resolved by aura-os for the
+ * current session. The runtime forwards only the key matching the
+ * selected upstream provider to aura-router.
+ */
+provider_api_keys: Record<string, string>, };

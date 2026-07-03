@@ -3,6 +3,7 @@ use super::message::Message;
 use super::tool::{ToolChoice, ToolDefinition};
 use crate::error::ReasonerError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -286,7 +287,7 @@ impl PromptCacheRetention {
 // ============================================================================
 
 /// Request to the model.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModelRequest {
     /// Model identifier (e.g., "claude-opus-4-6")
     pub model: ModelName,
@@ -347,6 +348,10 @@ pub struct ModelRequest {
     /// Optional retention hint paired with `prompt_cache_key`. See
     /// [`PromptCacheRetention`] for the wire values.
     pub prompt_cache_retention: Option<PromptCacheRetention>,
+    /// Per-provider user-supplied API keys resolved by aura-os for the
+    /// current session. The provider sends only the key matching this
+    /// request's model family to aura-router.
+    pub provider_api_keys: HashMap<String, String>,
     /// Optional request-contract metadata used by provider-bound validation.
     pub metadata: ModelRequestMetadata,
 }
@@ -356,6 +361,51 @@ impl ModelRequest {
     #[must_use]
     pub fn builder(model: impl Into<String>, system: impl Into<String>) -> ModelRequestBuilder {
         ModelRequestBuilder::new(model, system)
+    }
+
+    /// Return the BYOK provider API key that matches this request's model,
+    /// if one was supplied on the session.
+    #[must_use]
+    pub fn provider_api_key_for_model(&self) -> Option<&str> {
+        provider_api_key_family_for_model(self.model.as_str())
+            .and_then(|provider| self.provider_api_keys.get(provider))
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+    }
+}
+
+impl fmt::Debug for ModelRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let provider_api_key_providers = self
+            .provider_api_keys
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        f.debug_struct("ModelRequest")
+            .field("model", &self.model)
+            .field("system", &self.system)
+            .field("messages", &self.messages)
+            .field("tools", &self.tools)
+            .field("tool_choice", &self.tool_choice)
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .field("thinking", &self.thinking)
+            .field("thinking_effort", &self.thinking_effort)
+            .field("parallel_tool_use", &self.parallel_tool_use)
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("upstream_provider_family", &self.upstream_provider_family)
+            .field("aura_project_id", &self.aura_project_id)
+            .field("aura_agent_id", &self.aura_agent_id)
+            .field("aura_session_id", &self.aura_session_id)
+            .field("aura_org_id", &self.aura_org_id)
+            .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("prompt_cache_retention", &self.prompt_cache_retention)
+            .field("provider_api_key_providers", &provider_api_key_providers)
+            .field("metadata", &self.metadata)
+            .finish()
     }
 }
 
@@ -379,6 +429,7 @@ pub struct ModelRequestBuilder {
     aura_org_id: Option<String>,
     prompt_cache_key: Option<String>,
     prompt_cache_retention: Option<PromptCacheRetention>,
+    provider_api_keys: HashMap<String, String>,
     metadata: ModelRequestMetadata,
 }
 
@@ -406,6 +457,7 @@ impl ModelRequestBuilder {
             aura_org_id: None,
             prompt_cache_key: None,
             prompt_cache_retention: None,
+            provider_api_keys: HashMap::new(),
             metadata: ModelRequestMetadata::default(),
         }
     }
@@ -528,6 +580,12 @@ impl ModelRequestBuilder {
     }
 
     #[must_use]
+    pub fn provider_api_keys(mut self, keys: HashMap<String, String>) -> Self {
+        self.provider_api_keys = keys;
+        self
+    }
+
+    #[must_use]
     pub const fn request_kind(mut self, kind: ModelRequestKind) -> Self {
         self.metadata.kind = Some(kind);
         self
@@ -576,9 +634,32 @@ impl ModelRequestBuilder {
                 .prompt_cache_key
                 .map(aura_protocol::clamp_prompt_cache_key),
             prompt_cache_retention: self.prompt_cache_retention,
+            provider_api_keys: normalize_provider_api_keys(self.provider_api_keys),
             metadata: self.metadata,
         })
     }
+}
+
+fn provider_api_key_family_for_model(model: &str) -> Option<&'static str> {
+    let model = model.trim().to_ascii_lowercase();
+    if model.starts_with("aura-grok-")
+        || model.starts_with("xai/grok-")
+        || model.starts_with("grok-")
+    {
+        Some("xai")
+    } else {
+        None
+    }
+}
+
+fn normalize_provider_api_keys(keys: HashMap<String, String>) -> HashMap<String, String> {
+    keys.into_iter()
+        .filter_map(|(provider, key)| {
+            let provider = provider.trim().to_ascii_lowercase();
+            let key = key.trim().to_string();
+            (!provider.is_empty() && !key.is_empty()).then_some((provider, key))
+        })
+        .collect()
 }
 
 #[cfg(test)]

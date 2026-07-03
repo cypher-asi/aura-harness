@@ -38,6 +38,7 @@ use aura_core_types::{AgentId, AgentStatus};
 use aura_model_reasoner::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
 use aura_store_db::Store;
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
@@ -87,7 +88,7 @@ pub struct ScheduleOverrides {
 /// went out with `claude-opus-4-6` (the pre-rename default) and a stripped
 /// `X-Aura-*` envelope, causing `aura-router` to bucket the request as anonymous
 /// public traffic and return `429 RATE_LIMITED`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AgentIdentity {
     /// Caller-selected model (e.g. `claude-opus-4-7`). Required.
     pub model: String,
@@ -105,6 +106,9 @@ pub struct AgentIdentity {
     pub prompt_cache_key: Option<String>,
     /// Retention hint paired with `prompt_cache_key`.
     pub prompt_cache_retention: Option<PromptCacheRetention>,
+    /// Per-provider user-supplied API keys inherited from the parent
+    /// runtime session.
+    pub provider_api_keys: HashMap<String, String>,
     /// Request contract kind. Chat sessions ship `Chat`; dev-loop / task-run
     /// land `DevLoopBootstrap` (and the loop self-promotes to
     /// `DevLoopContinuation` after the first iteration).
@@ -115,6 +119,30 @@ pub struct AgentIdentity {
     pub max_context_tokens: usize,
     /// JWT auth token forwarded onto outbound model requests.
     pub auth_token: Option<String>,
+}
+
+impl std::fmt::Debug for AgentIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let provider_api_key_providers = self
+            .provider_api_keys
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        f.debug_struct("AgentIdentity")
+            .field("model", &self.model)
+            .field("aura_org_id", &self.aura_org_id)
+            .field("aura_session_id", &self.aura_session_id)
+            .field("aura_agent_id", &self.aura_agent_id)
+            .field("aura_project_id", &self.aura_project_id)
+            .field("prompt_cache_key", &self.prompt_cache_key)
+            .field("prompt_cache_retention", &self.prompt_cache_retention)
+            .field("provider_api_key_providers", &provider_api_key_providers)
+            .field("request_kind", &self.request_kind)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_context_tokens", &self.max_context_tokens)
+            .field("has_auth_token", &self.auth_token.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentIdentity {
@@ -139,6 +167,7 @@ impl AgentIdentity {
                 PromptCacheRetention::Hours24 => "24h".to_string(),
                 PromptCacheRetention::InMemory => "in_memory".to_string(),
             }),
+            provider_api_keys: self.provider_api_keys,
             request_kind: self.request_kind,
             ..AgentLoopConfig::for_agent(self.model)
         }
@@ -574,6 +603,7 @@ mod tests {
             system_prompt: String::new(),
             prompt_cache_key: None,
             prompt_cache_retention: None,
+            provider_api_keys: HashMap::new(),
             request_kind: ModelRequestKind::Chat,
             max_tokens: 1024,
             max_context_tokens: 200_000,
