@@ -153,7 +153,6 @@ impl AgentLoop {
         .prompt_cache_retention(parse_cache_retention(
             self.config.prompt_cache_retention.as_deref(),
         ))
-        .provider_api_keys(self.config.provider_api_keys.clone())
         .request_kind(ModelRequestKind::Auxiliary)
         .try_build()
         .map_err(crate::AgentError::from)

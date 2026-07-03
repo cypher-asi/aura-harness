@@ -163,11 +163,6 @@ async fn start_dev_loop_run(
     let agent_system_prompt = agent_identity
         .system_prompt
         .filter(|s| !s.trim().is_empty());
-    let provider_api_keys = model
-        .provider_overrides
-        .as_ref()
-        .map(|overrides| overrides.provider_api_keys.clone())
-        .unwrap_or_default();
 
     let installed_tools = if agent_capabilities.installed_tools.is_empty() {
         None
@@ -194,7 +189,6 @@ async fn start_dev_loop_run(
             project_ctx.aura_org_id,
             project_ctx.aura_session_id,
             project_ctx.aura_agent_id,
-            provider_api_keys,
             agent_persona,
             agent_skills,
             agent_system_prompt,
@@ -254,11 +248,6 @@ async fn start_task_run(
     let agent_system_prompt = agent_identity
         .system_prompt
         .filter(|s| !s.trim().is_empty());
-    let provider_api_keys = model
-        .provider_overrides
-        .as_ref()
-        .map(|overrides| overrides.provider_api_keys.clone())
-        .unwrap_or_default();
 
     let installed_tools = if agent_capabilities.installed_tools.is_empty() {
         None
@@ -288,7 +277,6 @@ async fn start_task_run(
             project_ctx.aura_org_id,
             project_ctx.aura_session_id,
             project_ctx.aura_agent_id,
-            provider_api_keys,
             agent_persona,
             agent_skills,
             agent_system_prompt,

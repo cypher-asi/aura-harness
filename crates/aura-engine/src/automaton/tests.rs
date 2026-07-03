@@ -292,7 +292,6 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
         None,
         None,
         None,
-        Default::default(),
         aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
     );
 
@@ -364,7 +363,6 @@ async fn pause_then_stop_records_distinct_lifecycle_entries_in_order() {
         None,
         None,
         None,
-        Default::default(),
         aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
     );
 

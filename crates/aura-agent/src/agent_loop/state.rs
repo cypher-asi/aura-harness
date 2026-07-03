@@ -408,7 +408,6 @@ impl LoopState {
             .prompt_cache_retention(parse_cache_retention(
                 config.prompt_cache_retention.as_deref(),
             ))
-            .provider_api_keys(config.provider_api_keys.clone())
             .request_kind(request_kind)
             .try_build()
             .map_err(crate::AgentError::from)

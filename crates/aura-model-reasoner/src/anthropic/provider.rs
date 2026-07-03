@@ -743,9 +743,6 @@ impl AnthropicProvider {
                 req_builder = req_builder.header("X-Aura-Upstream-Provider-Family", family);
             }
         }
-        if let Some(api_key) = request_ctx.provider_api_key_for_model() {
-            req_builder = req_builder.header("X-Aura-Provider-Api-Key", api_key);
-        }
 
         if Self::supports_openai_proxy_features(request_ctx, model) {
             if let Some(ref key) = request_ctx.prompt_cache_key {
@@ -1310,9 +1307,6 @@ fn request_headers_present(request_ctx: &ModelRequest, prompt_caching_enabled: b
         .is_some_and(non_empty)
     {
         headers.push("X-Aura-Upstream-Provider-Family");
-    }
-    if request_ctx.provider_api_key_for_model().is_some() {
-        headers.push("X-Aura-Provider-Api-Key");
     }
     headers.join(",")
 }

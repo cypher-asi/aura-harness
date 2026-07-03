@@ -30,7 +30,6 @@ use aura_protocol::{
     ReasoningEffort, RuntimeRequest, RuntimeRequestType, SessionModelOverrides,
 };
 use aura_tools::IntentClassifier;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -64,9 +63,6 @@ pub struct Session {
     /// Optional OpenAI-family `prompt_cache_retention` paired with
     /// `prompt_cache_key`.
     pub(crate) prompt_cache_retention: Option<String>,
-    /// Per-provider user-supplied API keys resolved from
-    /// `provider_overrides`.
-    pub(crate) provider_api_keys: HashMap<String, String>,
     /// Optional concrete provider override built from
     /// `provider_overrides`.
     pub(crate) provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
@@ -167,7 +163,6 @@ impl Session {
             provider_overrides: None,
             prompt_cache_key: None,
             prompt_cache_retention: None,
-            provider_api_keys: HashMap::new(),
             provider_override: None,
             max_tokens: 16384,
             temperature: None,
@@ -375,7 +370,6 @@ impl Session {
         if let Some(provider_overrides) = model.provider_overrides {
             self.prompt_cache_key = provider_overrides.prompt_cache_key.clone();
             self.prompt_cache_retention = provider_overrides.prompt_cache_retention.clone();
-            self.provider_api_keys = provider_overrides.provider_api_keys.clone();
             self.provider_overrides = Some(provider_overrides);
         }
         if let Some(spec) = agent_capabilities.intent_classifier {
@@ -454,7 +448,6 @@ impl Session {
             system_prompt: self.resolved_system_prompt(),
             prompt_cache_key: self.prompt_cache_key.clone(),
             prompt_cache_retention,
-            provider_api_keys: self.provider_api_keys.clone(),
             request_kind: ModelRequestKind::Chat,
             max_tokens: self.max_tokens,
             max_context_tokens: usize::try_from(self.context_window_tokens).unwrap_or(usize::MAX),
@@ -524,7 +517,6 @@ impl Session {
             intent_classifier_manifest: self.intent_classifier_manifest.clone(),
             prompt_cache_key: self.prompt_cache_key.clone(),
             prompt_cache_retention: self.prompt_cache_retention.clone(),
-            provider_api_keys: self.provider_api_keys.clone(),
             ..AgentLoopConfig::for_agent(self.model.clone())
         }
     }

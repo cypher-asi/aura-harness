@@ -57,33 +57,6 @@ fn test_model_request_builder() {
     assert_eq!(request.max_tokens.get(), 1000);
     assert_eq!(request.temperature.map(f32::from), Some(0.7));
     assert_eq!(request.metadata.kind, Some(ModelRequestKind::Chat));
-    assert!(request.provider_api_keys.is_empty());
-}
-
-#[test]
-fn model_request_selects_xai_key_for_grok_models() {
-    let request = ModelRequest::builder("aura-grok-4-3", "You are helpful")
-        .provider_api_keys(std::collections::HashMap::from([(
-            " XAI ".to_string(),
-            " xai-test-key ".to_string(),
-        )]))
-        .try_build()
-        .unwrap();
-
-    assert_eq!(request.provider_api_key_for_model(), Some("xai-test-key"));
-}
-
-#[test]
-fn model_request_does_not_select_xai_key_for_non_grok_models() {
-    let request = ModelRequest::builder("aura-gpt-5-5", "You are helpful")
-        .provider_api_keys(std::collections::HashMap::from([(
-            "xai".to_string(),
-            "xai-test-key".to_string(),
-        )]))
-        .try_build()
-        .unwrap();
-
-    assert_eq!(request.provider_api_key_for_model(), None);
 }
 
 #[test]

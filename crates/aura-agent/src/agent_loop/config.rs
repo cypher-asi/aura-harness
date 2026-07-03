@@ -10,7 +10,6 @@
 //! file-size split. The flat struct is preserved as-is so Phase 3 is
 //! a pure restructure.
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -104,9 +103,6 @@ pub struct AgentLoopConfig {
     /// Retention hint paired with `prompt_cache_key`. Wire values
     /// `"in_memory"` / `"24h"`.
     pub prompt_cache_retention: Option<String>,
-    /// Per-provider user-supplied API keys resolved for this session.
-    /// Values are intentionally omitted from `Debug`.
-    pub provider_api_keys: HashMap<String, String>,
     /// Request contract kind used when building provider-bound requests.
     ///
     /// Chat/session callers default to [`ModelRequestKind::Chat`]. Task
@@ -334,7 +330,6 @@ impl AgentLoopConfig {
             aura_org_id: None,
             prompt_cache_key: None,
             prompt_cache_retention: None,
-            provider_api_keys: HashMap::new(),
             request_kind: ModelRequestKind::Chat,
             observers: Vec::new(),
             intent_classifier: None,

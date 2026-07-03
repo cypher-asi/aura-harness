@@ -14,7 +14,6 @@
 //! 6. Installing the automaton, recording the lifecycle event, and
 //!    spawning the replay-aware event forwarder.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -100,7 +99,6 @@ impl AutomatonBridge {
         aura_org_id: Option<&str>,
         aura_session_id: Option<&str>,
         aura_agent_id: Option<&str>,
-        provider_api_keys: HashMap<String, String>,
         labels: AutomatonKindLabels,
     ) -> Result<AutomatonRunContext, String> {
         let domain = self.domain_with_jwt(auth_token);
@@ -159,7 +157,7 @@ impl AutomatonBridge {
         // -> `aura_project_id: self.project_id.clone()`), so feed
         // the same value here to keep the dev-loop / task-run wire
         // shape symmetric with chat.
-        let mut runner_config = self.build_runner_config(
+        let runner_config = self.build_runner_config(
             model,
             auth_token,
             aura_org_id,
@@ -167,7 +165,6 @@ impl AutomatonBridge {
             aura_agent_id,
             Some(project_id),
         );
-        runner_config.provider_api_keys = provider_api_keys;
         let catalog = Arc::new(
             self.catalog
                 .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
@@ -199,7 +196,6 @@ impl AutomatonBridge {
         aura_org_id: Option<String>,
         aura_session_id: Option<String>,
         aura_agent_id: Option<String>,
-        provider_api_keys: HashMap<String, String>,
         agent_persona: Option<AgentPersona>,
         agent_skills: Vec<String>,
         agent_system_prompt: Option<String>,
@@ -254,7 +250,6 @@ impl AutomatonBridge {
                 aura_org_id.as_deref(),
                 aura_session_id.as_deref(),
                 aura_agent_id.as_deref(),
-                provider_api_keys.clone(),
                 AutomatonKindLabels {
                     kernel: "dev loop",
                     capabilities: "dev loop",
@@ -312,7 +307,6 @@ impl AutomatonBridge {
             aura_session_id.as_deref(),
             aura_agent_id.as_deref(),
             Some(project_id),
-            provider_api_keys,
             aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
         );
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
@@ -364,7 +358,6 @@ impl AutomatonBridge {
         aura_org_id: Option<String>,
         aura_session_id: Option<String>,
         aura_agent_id: Option<String>,
-        provider_api_keys: HashMap<String, String>,
         agent_persona: Option<AgentPersona>,
         agent_skills: Vec<String>,
         agent_system_prompt: Option<String>,
@@ -392,7 +385,6 @@ impl AutomatonBridge {
                 aura_org_id.as_deref(),
                 aura_session_id.as_deref(),
                 aura_agent_id.as_deref(),
-                provider_api_keys.clone(),
                 AutomatonKindLabels {
                     kernel: "task runtime",
                     capabilities: "task",
@@ -445,7 +437,6 @@ impl AutomatonBridge {
             aura_session_id.as_deref(),
             aura_agent_id.as_deref(),
             Some(project_id),
-            provider_api_keys,
             aura_model_reasoner::ModelRequestKind::Chat,
         );
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
