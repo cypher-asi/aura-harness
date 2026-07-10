@@ -783,7 +783,10 @@ async fn test_memory_continuity_config_roundtrip_and_empty_trace() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(), serde_json::Value::Null);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+        serde_json::Value::Null
+    );
 }
 
 // ============================================================================
