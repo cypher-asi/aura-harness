@@ -49,9 +49,9 @@ pub struct RefinementRequestContext {
 impl Default for RefinerConfig {
     fn default() -> Self {
         Self {
-            // Aura Router model IDs are namespaced. Using the raw provider ID
-            // reaches the router but cannot be resolved to a configured route.
-            model: "aura-claude-sonnet-4-6".to_string(),
+            // Keep the always-on extraction call on a low-cost Aura Router
+            // route that is available to the same sessions as the chat model.
+            model: "aura-gpt-5-4-nano".to_string(),
             auth_token: None,
         }
     }
@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(request.aura_agent_id.as_deref(), Some("agent-123"));
         assert_eq!(request.aura_session_id.as_deref(), Some("session-123"));
         assert_eq!(request.aura_org_id.as_deref(), Some("org-123"));
-        assert_eq!(request.model.as_str(), "aura-claude-sonnet-4-6");
+        assert_eq!(request.model.as_str(), "aura-gpt-5-4-nano");
     }
 
     #[test]
