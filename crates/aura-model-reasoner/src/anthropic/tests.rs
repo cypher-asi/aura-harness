@@ -327,7 +327,7 @@ fn test_api_error_classification() {
     // surfaces in `task_failed` reasons is preserved.
     let transient_5xx: ReasonerError = ApiError::TransientServer {
         status: 500,
-        message: "Anthropic API error: 500 Internal Server Error - body".into(),
+        message: "Model provider API error: 500 Internal Server Error - body".into(),
     }
     .into();
     match transient_5xx {
@@ -353,7 +353,7 @@ fn test_api_error_classification() {
 #[test]
 fn test_overloaded_message_appends_retry_after_hint_when_absent() {
     let err: ReasonerError = ApiError::Overloaded {
-        message: "Anthropic API error: 429 Too Many Requests - server busy".into(),
+        message: "Model provider API error: 429 Too Many Requests - server busy".into(),
         retry_after: Some(Duration::from_secs(7)),
     }
     .into();
@@ -367,7 +367,7 @@ fn test_overloaded_message_appends_retry_after_hint_when_absent() {
 #[test]
 fn test_overloaded_message_leaves_existing_retry_after_phrase_alone() {
     let err: ReasonerError = ApiError::Overloaded {
-        message: "Anthropic API error: 429 - \
+        message: "Model provider API error: 429 - \
                   {\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests. Retry after 7 seconds.\"}}"
             .into(),
         retry_after: Some(Duration::from_secs(7)),

@@ -506,7 +506,7 @@ impl AnthropicProvider {
                     Some(send_error_text.as_str()),
                 );
                 // #endregion
-                error!(error = %e, "Anthropic API request failed");
+                error!(error = %e, "Model provider API request failed");
                 let is_timeout = e.is_timeout();
                 let err_str = e.to_string();
                 let class = if is_timeout { "timeout" } else { "transport" };
@@ -529,7 +529,7 @@ impl AnthropicProvider {
                     ApiError::Other(ReasonerError::Timeout)
                 } else {
                     ApiError::Other(ReasonerError::Request(format!(
-                        "Anthropic API request failed: {e}"
+                        "Model provider API request failed: {e}"
                     )))
                 });
             }
@@ -1998,7 +1998,7 @@ async fn classify_api_error(
         request_id = ?request_id,
         aura_org_id = routing.org_label(),
         aura_session_id = routing.session_label(),
-        "Anthropic API error"
+        "Model provider API error"
     );
 
     if super::is_cloudflare_html(&body) {
@@ -2049,7 +2049,7 @@ async fn classify_api_error(
 
     let (err, class) = match status_code {
         402 => (
-            ApiError::InsufficientCredits(format!("Anthropic API error: {status} - {body}")),
+            ApiError::InsufficientCredits(provider_api_error_message(status, &body)),
             "insufficient_credits",
         ),
         429 | 529 => {
@@ -2057,7 +2057,7 @@ async fn classify_api_error(
             let retry_after = header_retry_after.or(body_retry_after);
             (
                 ApiError::Overloaded {
-                    message: format!("Anthropic API error: {status} - {body}"),
+                    message: provider_api_error_message(status, &body),
                     retry_after,
                 },
                 "rate_limited_429",
@@ -2074,7 +2074,7 @@ async fn classify_api_error(
         500 | 502 | 503 | 504 => (
             ApiError::TransientServer {
                 status: status_code,
-                message: format!("Anthropic API error: {status} - {body}"),
+                message: provider_api_error_message(status, &body),
             },
             "upstream_5xx",
         ),
@@ -2103,6 +2103,10 @@ async fn classify_api_error(
             body_preview,
         },
     )
+}
+
+fn provider_api_error_message(status: reqwest::StatusCode, body: &str) -> String {
+    format!("Model provider API error: {status} - {body}")
 }
 
 fn extract_waf_request_id_from_body(body: &str) -> Option<String> {
@@ -3011,6 +3015,18 @@ mod retry_tests {
     }
 
     #[test]
+    fn provider_api_error_message_does_not_misidentify_routed_provider() {
+        let body = r#"{"error":{"message":"You exceeded your current quota."}}"#;
+        let message = provider_api_error_message(reqwest::StatusCode::TOO_MANY_REQUESTS, body);
+
+        assert_eq!(
+            message,
+            format!("Model provider API error: 429 Too Many Requests - {body}")
+        );
+        assert!(!message.contains("Anthropic"));
+    }
+
+    #[test]
     fn retry_after_prose_is_case_insensitive_and_handles_plural() {
         assert_eq!(
             parse_retry_after_prose("please Retry After 5 seconds"),
@@ -3188,7 +3204,7 @@ mod retry_tests {
     fn classify_retry_action_retries_transient_5xx_with_exp_backoff() {
         let err = ApiError::TransientServer {
             status: 500,
-            message: "Anthropic API error: 500 Internal Server Error - body".into(),
+            message: "Model provider API error: 500 Internal Server Error - body".into(),
         };
         let mut last_err = None;
         let action = classify_retry_action(
@@ -3235,7 +3251,7 @@ mod retry_tests {
     fn classify_retry_action_falls_back_when_5xx_retries_exhausted() {
         let err = ApiError::TransientServer {
             status: 502,
-            message: "Anthropic API error: 502 Bad Gateway - body".into(),
+            message: "Model provider API error: 502 Bad Gateway - body".into(),
         };
         let mut last_err = None;
         let action = classify_retry_action(
@@ -3265,7 +3281,7 @@ mod retry_tests {
     fn classify_retry_action_propagates_5xx_when_no_fallback_available() {
         let err = ApiError::TransientServer {
             status: 504,
-            message: "Anthropic API error: 504 Gateway Timeout - body".into(),
+            message: "Model provider API error: 504 Gateway Timeout - body".into(),
         };
         let mut last_err = None;
         let action = classify_retry_action(
@@ -3295,7 +3311,7 @@ mod retry_tests {
         // blocks in retry histograms.
         let err = ApiError::TransientServer {
             status: 503,
-            message: "Anthropic API error: 503 - body".into(),
+            message: "Model provider API error: 503 - body".into(),
         };
         assert_eq!(retry_reason_for(&err), "upstream_5xx");
         assert_eq!(
