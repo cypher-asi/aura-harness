@@ -6,6 +6,7 @@
 use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, MemoryScope, RefinedCandidate};
+use crate::DEFAULT_MEMORY_MODEL;
 use aura_model_reasoner::{Message, ModelProvider, ModelRequest};
 use std::fmt::Write;
 use std::sync::Arc;
@@ -52,9 +53,7 @@ pub struct RefinementRequestContext {
 impl Default for RefinerConfig {
     fn default() -> Self {
         Self {
-            // Keep the always-on extraction call on a low-cost Aura Router
-            // route that is available to the same sessions as the chat model.
-            model: "aura-gpt-5-4-nano".to_string(),
+            model: DEFAULT_MEMORY_MODEL.to_string(),
             auth_token: None,
         }
     }
@@ -631,7 +630,7 @@ mod tests {
         assert_eq!(request.aura_agent_id.as_deref(), Some("agent-123"));
         assert_eq!(request.aura_session_id.as_deref(), Some("session-123"));
         assert_eq!(request.aura_org_id.as_deref(), Some("org-123"));
-        assert_eq!(request.model.as_str(), "aura-gpt-5-4-nano");
+        assert_eq!(request.model.as_str(), DEFAULT_MEMORY_MODEL);
     }
 
     #[test]

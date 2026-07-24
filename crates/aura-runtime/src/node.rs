@@ -7,7 +7,7 @@ use aura_agent::KernelModelGateway;
 use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
 use aura_context_memory::{
     ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
-    WriteConfig,
+    WriteConfig, DEFAULT_MEMORY_MODEL,
 };
 use aura_context_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_core_types::AgentId;
@@ -25,6 +25,24 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
+
+fn configured_memory_model(configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(DEFAULT_MEMORY_MODEL)
+        .to_string()
+}
+
+fn memory_provider_overrides(model: &str) -> aura_model_reasoner::SessionOverrides {
+    aura_model_reasoner::SessionOverrides {
+        default_model: Some(model.to_string()),
+        // Memory traffic must not inherit a global cross-provider fallback.
+        // Keeping the fallback identical also lets the provider deduplicate it.
+        fallback_model: Some(model.to_string()),
+        ..Default::default()
+    }
+}
 
 /// The Aura Node runtime.
 pub struct Node {
@@ -157,6 +175,13 @@ impl Node {
             .context("building default model provider")?
             .provider;
 
+        let memory_model =
+            configured_memory_model(std::env::var("AURA_MEMORY_MODEL").ok().as_deref());
+        let memory_provider =
+            aura_model_reasoner::with_session_overrides(memory_provider_overrides(&memory_model))
+                .context("building dedicated memory model provider")?
+                .provider;
+
         // Invariant §3: LLM calls performed by the memory subsystem are
         // recorded via a dedicated "memory service" kernel whose agent log
         // is kept distinct from per-user / per-session agent logs.
@@ -165,7 +190,7 @@ impl Node {
         let memory_kernel = Arc::new(
             Kernel::new(
                 memory_store,
-                provider.clone(),
+                memory_provider,
                 ExecutorRouter::new(),
                 KernelConfig::default(),
                 memory_agent_id,
@@ -173,18 +198,27 @@ impl Node {
             .context("building memory-service kernel")?,
         );
         let memory_gateway = Arc::new(KernelModelGateway::new(memory_kernel));
+        let refiner_config = RefinerConfig {
+            model: memory_model.clone(),
+            ..Default::default()
+        };
+        let consolidation_config = ConsolidationConfig {
+            model: memory_model.clone(),
+            ..Default::default()
+        };
         let memory_manager = Arc::new(MemoryManager::with_cipher(
             store.db_handle().clone(),
             seal_cipher.clone(),
             memory_gateway,
-            RefinerConfig::default(),
+            refiner_config,
             WriteConfig::default(),
             RetrievalConfig::default(),
-            ConsolidationConfig::default(),
+            consolidation_config,
             ProcedureConfig::default(),
         ));
         info!(
             memory_agent_id = %memory_agent_id,
+            memory_model = %memory_model,
             "Memory manager ready"
         );
 
@@ -670,6 +704,22 @@ mod tests {
     fn test_create_model_provider_returns_something() {
         let _provider = aura_model_reasoner::default_provider_from_env()
             .expect("default provider should build");
+    }
+
+    #[test]
+    fn memory_model_defaults_to_low_cost_anthropic_route() {
+        assert_eq!(configured_memory_model(None), DEFAULT_MEMORY_MODEL);
+        assert_eq!(configured_memory_model(Some("  ")), DEFAULT_MEMORY_MODEL);
+    }
+
+    #[test]
+    fn memory_model_override_is_trimmed_and_isolates_fallbacks() {
+        let model = configured_memory_model(Some("  aura-claude-sonnet-4-6  "));
+        assert_eq!(model, "aura-claude-sonnet-4-6");
+
+        let overrides = memory_provider_overrides(&model);
+        assert_eq!(overrides.default_model.as_deref(), Some(model.as_str()));
+        assert_eq!(overrides.fallback_model.as_deref(), Some(model.as_str()));
     }
 
     /// `AddrInUse` errors must be reformatted into an actionable
