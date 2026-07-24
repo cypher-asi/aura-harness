@@ -11,6 +11,7 @@ use crate::types::{
     AgentEvent, Fact, FactSource, MemoryContinuity, MemoryProvenance, MemorySensitivity,
     MemoryStatus,
 };
+use crate::DEFAULT_MEMORY_MODEL;
 use aura_core_types::{AgentEventId, AgentId, FactId};
 use aura_model_reasoner::{Message, ModelProvider, ModelRequest};
 use chrono::Utc;
@@ -47,7 +48,7 @@ pub struct ConsolidationConfig {
 impl Default for ConsolidationConfig {
     fn default() -> Self {
         Self {
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: DEFAULT_MEMORY_MODEL.to_string(),
             auth_token: None,
             max_events_before_compression: 100,
             max_event_age_days: 30,
@@ -621,6 +622,11 @@ changes with clear benefit.";
 mod tests {
     use super::*;
     use crate::types::MemoryScope;
+
+    #[test]
+    fn consolidation_uses_the_shared_low_cost_memory_model() {
+        assert_eq!(ConsolidationConfig::default().model, DEFAULT_MEMORY_MODEL);
+    }
 
     #[test]
     fn parse_compress_response_with_summaries() {
