@@ -52,13 +52,14 @@ pub enum ThinkingEffort {
     High,
     /// Maximum-leaning tier exposed to users via the chat model
     /// picker. In `enabled` mode it requests an even larger budget than
-    /// [`Self::High`] (clamped to `16000..=24000`); in `adaptive` mode
-    /// it folds to the highest `output_config.effort` the API exposes
-    /// today (`"high"`).
+    /// [`Self::High`] (clamped to `16000..=24000`). Opus 5 maps this to
+    /// native `output_config.effort = "xhigh"`; older adaptive models fold
+    /// it into their highest supported value (`"high"`).
     XHigh,
     /// Top user-selectable tier. In `enabled` mode it requests the
-    /// largest budget (clamped to `24000..=32000`); in `adaptive` mode
-    /// it folds to `output_config.effort = "high"`.
+    /// largest budget (clamped to `24000..=32000`). Opus 5 maps this to
+    /// native `output_config.effort = "max"`; older adaptive models fold
+    /// it into `output_config.effort = "high"`.
     Max,
 }
 
