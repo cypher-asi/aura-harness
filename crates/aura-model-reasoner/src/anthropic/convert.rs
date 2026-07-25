@@ -27,7 +27,10 @@ fn normalize_anthropic_model(model: &str) -> String {
 
 fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
     let model = normalize_anthropic_model(model);
-    if model.starts_with("claude-opus-4") || model.starts_with("claude-sonnet-4") {
+    if model.starts_with("claude-opus-5")
+        || model.starts_with("claude-opus-4")
+        || model.starts_with("claude-sonnet-4")
+    {
         Some(ThinkingMode::Adaptive)
     } else if model.starts_with("claude-3-7-sonnet") {
         Some(ThinkingMode::Enabled)
@@ -159,15 +162,28 @@ pub(super) fn resolve_output_config(
     if thinking.thinking_type != "adaptive" {
         return None;
     }
+    if normalize_anthropic_model(model).starts_with("claude-opus-5") {
+        let effort = match request.thinking_effort.unwrap_or(ThinkingEffort::High) {
+            ThinkingEffort::Off => return None,
+            // Opus 5 does not expose a separate minimal tier.
+            ThinkingEffort::Minimal | ThinkingEffort::Low => "low",
+            ThinkingEffort::Medium => "medium",
+            ThinkingEffort::High => "high",
+            ThinkingEffort::XHigh => "xhigh",
+            ThinkingEffort::Max => "max",
+        };
+        return Some(ApiOutputConfig {
+            effort: effort.to_string(),
+        });
+    }
     // Phase 2: only force `output_config.effort = "high"` when the
     // caller explicitly opted into [`ThinkingEffort::High`] (or the
     // higher user tiers XHigh / Max), or when the legacy auto-enable
     // path fired (`thinking_effort: None`). Low / Medium / Off opt-in
     // callers must NOT inherit the forced-high effort — that's exactly
     // the override that amplifies the doom loop's read iterations.
-    // Adaptive mode currently exposes only `"high"` as a discrete
-    // effort, so XHigh / Max fold into it until the API offers finer
-    // tiers.
+    // Older adaptive Claude 4 models expose only `"high"` here, so XHigh /
+    // Max fold into it. Opus 5's full native ladder is handled above.
     match request.thinking_effort {
         Some(
             ThinkingEffort::Off

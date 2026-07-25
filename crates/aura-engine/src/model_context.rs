@@ -10,6 +10,7 @@
 #[must_use]
 pub fn context_window_for_model(model: &str) -> u64 {
     match model {
+        m if m.contains("opus-5") => 1_000_000,
         m if m.contains("opus-4") => 1_000_000,
         m if m.contains("sonnet-4") => 1_000_000,
         m if m.contains("sonnet-5") => 1_000_000,
@@ -45,6 +46,7 @@ mod tests {
 
     #[test]
     fn anthropic_aura_aliases() {
+        assert_eq!(context_window_for_model("aura-claude-opus-5"), 1_000_000);
         assert_eq!(context_window_for_model("aura-claude-opus-4-7"), 1_000_000);
         assert_eq!(context_window_for_model("aura-claude-opus-4-6"), 1_000_000);
         assert_eq!(
@@ -57,6 +59,7 @@ mod tests {
 
     #[test]
     fn anthropic_bare_names() {
+        assert_eq!(context_window_for_model("claude-opus-5"), 1_000_000);
         assert_eq!(context_window_for_model("claude-opus-4-6"), 1_000_000);
         assert_eq!(context_window_for_model("claude-sonnet-4-6"), 1_000_000);
         assert_eq!(context_window_for_model("claude-sonnet-5"), 1_000_000);

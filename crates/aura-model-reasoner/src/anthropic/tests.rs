@@ -684,6 +684,17 @@ fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
 }
 
 #[test]
+fn test_resolve_thinking_auto_for_opus_5() {
+    let request = ModelRequest::builder("aura-claude-opus-5", "system")
+        .max_tokens(8192)
+        .try_build()
+        .unwrap();
+    let thinking = resolve_thinking(&request, "aura-claude-opus-5").unwrap();
+    assert_eq!(thinking.thinking_type, "adaptive");
+    assert_eq!(thinking.budget_tokens, None);
+}
+
+#[test]
 fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
     let request = ModelRequest::builder("claude-3-7-sonnet", "system")
         .max_tokens(8192)
@@ -799,6 +810,26 @@ fn thinking_effort_high_adaptive_omits_budget_tokens_but_keeps_output_effort() {
     // High retains the existing forced effort=high override for adaptive.
     let out = resolve_output_config(&request, TEST_DEFAULT_MODEL).expect("High keeps effort=high");
     assert_eq!(out.effort, "high");
+}
+
+#[test]
+fn opus_5_preserves_native_output_effort_ladder() {
+    for (thinking_effort, expected) in [
+        (ThinkingEffort::Low, "low"),
+        (ThinkingEffort::Medium, "medium"),
+        (ThinkingEffort::High, "high"),
+        (ThinkingEffort::XHigh, "xhigh"),
+        (ThinkingEffort::Max, "max"),
+    ] {
+        let request = ModelRequest::builder("aura-claude-opus-5", "system")
+            .max_tokens(64_000)
+            .thinking_effort(Some(thinking_effort))
+            .try_build()
+            .unwrap();
+        let output = resolve_output_config(&request, "aura-claude-opus-5")
+            .expect("Opus 5 effort should reach output_config");
+        assert_eq!(output.effort, expected);
+    }
 }
 
 /// Companion to the adaptive tests: the `enabled` thinking mode
