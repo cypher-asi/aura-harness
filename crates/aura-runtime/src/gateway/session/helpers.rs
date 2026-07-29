@@ -2,6 +2,7 @@
 //! construction, event forwarding, and turn finalization.
 
 use super::chat::populate_tool_definitions;
+use super::state::is_managed_safe_workspace_path;
 use super::{Session, WsContext};
 use crate::gateway::session::cross_agent_hook::{AuraServerAgentHook, AuraServerSpawnHook};
 use crate::protocol::{
@@ -219,8 +220,10 @@ pub(crate) async fn prepare_chat_session(
     }
 
     if let (Some(ref base), Some(ref pp)) = (&ctx.project_base, &session.project_path) {
-        let slug = pp.file_name().and_then(|n| n.to_str()).unwrap_or("default");
-        session.project_path = Some(base.join(slug));
+        if !is_managed_safe_workspace_path(&ctx.workspace_base, pp) {
+            let slug = pp.file_name().and_then(|n| n.to_str()).unwrap_or("default");
+            session.project_path = Some(base.join(slug));
+        }
     }
 
     populate_tool_definitions(&mut session, ctx);
@@ -1221,6 +1224,25 @@ mod tests {
 
         assert_eq!(workspace, PathBuf::from("/tmp/project"));
         assert!(use_workspace_base_as_root);
+    }
+
+    #[tokio::test]
+    async fn prepare_chat_session_preserves_managed_safe_path_with_project_base() {
+        let mut ctx = test_context();
+        ctx.project_base = Some(PathBuf::from("/home/aura"));
+        let safe_path = ctx
+            .workspace_base
+            .parent()
+            .expect("workspace base has a data-dir parent")
+            .join("safe-workspaces/project-id/session-id/repo");
+        let mut request = chat_request(None, None);
+        request.workspace.project_path = Some(safe_path.to_string_lossy().to_string());
+
+        let session = prepare_chat_session(request, &ctx)
+            .await
+            .expect("managed safe path should pass hosted validation");
+
+        assert_eq!(session.project_path, Some(safe_path));
     }
 
     #[test]

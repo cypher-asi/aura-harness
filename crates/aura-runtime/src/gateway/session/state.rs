@@ -30,7 +30,7 @@ use aura_protocol::{
     ReasoningEffort, RuntimeRequest, RuntimeRequestType, SessionModelOverrides,
 };
 use aura_tools::IntentClassifier;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -323,7 +323,9 @@ impl Session {
             if let Some(ref base) = self.project_base {
                 let normalized = lexical_normalize(&candidate);
                 let normalized_base = lexical_normalize(base);
-                if !normalized.starts_with(&normalized_base) {
+                if !normalized.starts_with(&normalized_base)
+                    && !is_managed_safe_workspace_path(&self.workspace_base, &normalized)
+                {
                     return Err(format!("project_path must be under {}", base.display()));
                 }
             }
@@ -675,7 +677,34 @@ pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPe
     }
 }
 
-fn lexical_normalize(path: &std::path::Path) -> PathBuf {
+/// Return whether a project path points into the harness-owned Safe Workspace
+/// tree beside `workspaces/` under the node data directory.
+///
+/// Hosted deployments may also configure `project_base` (for example
+/// `/home/aura`). Safe worktrees deliberately live under the persistent node
+/// data directory, so they need this narrow second accepted root. Arbitrary
+/// paths outside both roots remain rejected.
+pub(super) fn is_managed_safe_workspace_path(workspace_base: &Path, path: &Path) -> bool {
+    let Some(data_dir) = workspace_base.parent() else {
+        return false;
+    };
+    let safe_root = lexical_normalize(&data_dir.join("safe-workspaces"));
+    let normalized = lexical_normalize(path);
+    let Ok(relative) = normalized.strip_prefix(safe_root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    matches!(
+        (components.next(), components.next(), components.next()),
+        (
+            Some(std::path::Component::Normal(_)),
+            Some(std::path::Component::Normal(_)),
+            Some(std::path::Component::Normal(repo)),
+        ) if repo == std::ffi::OsStr::new("repo")
+    )
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
     for comp in path.components() {

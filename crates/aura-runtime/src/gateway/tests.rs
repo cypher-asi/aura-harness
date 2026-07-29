@@ -111,6 +111,7 @@ async fn test_health_endpoint() {
         "/health must always include the git_sha key"
     );
     assert!(json["git_sha"].is_string() || json["git_sha"].is_null());
+    assert_eq!(json["safe_workspace"], true);
 }
 
 /// Verify that `/health` exposes the effective tool policy so the
@@ -1474,6 +1475,17 @@ const PROTECTED_ROUTES: &[(&str, &str)] = &[
     ("GET", "/workspace/resolve"),
     ("POST", "/workspace/import"),
     ("DELETE", "/workspace/deadbeef"),
+    ("GET", "/workspace/deadbeef/safe/session-1"),
+    ("POST", "/workspace/deadbeef/safe/session-1"),
+    (
+        "GET",
+        "/workspace/deadbeef/safe/session-1/checkpoints/abcdef/diff",
+    ),
+    (
+        "POST",
+        "/workspace/deadbeef/safe/session-1/checkpoints/abcdef/restore",
+    ),
+    ("POST", "/workspace/deadbeef/safe/session-1/apply"),
     ("POST", "/tx"),
     ("GET", "/tx/status/deadbeef/abcd"),
     ("GET", "/agents/deadbeef/head"),
@@ -2548,6 +2560,99 @@ async fn test_workspace_import_and_delete_use_stable_workspace_key() {
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert!(!workspace.exists());
+}
+
+#[tokio::test]
+async fn test_hosted_safe_workspace_prepare_diff_and_apply_round_trip() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let app = create_router(state);
+    let workspace_key = "36d4494f-75df-4c02-84d5-07aef06d2569";
+    let session_id = "c4e91e27-cde4-4d66-a077-51d88c987c43";
+    let source = tmp.path().join("workspaces").join(workspace_key);
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("app.txt"), "source\n").unwrap();
+
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/workspace/{workspace_key}/safe/{session_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let prepared: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let isolated = std::path::PathBuf::from(prepared["workspacePath"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(isolated.join("app.txt")).unwrap(),
+        "source\n"
+    );
+    std::fs::write(isolated.join("app.txt"), "isolated\n").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(source.join("app.txt")).unwrap(),
+        "source\n"
+    );
+
+    let request = authed_request()
+        .uri(format!("/workspace/{workspace_key}/safe/{session_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let response_status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        response_status,
+        StatusCode::OK,
+        "status response: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status["enabled"], true);
+    let checkpoint = status["checkpoints"][0]["id"].as_str().unwrap();
+
+    let request = authed_request()
+        .uri(format!(
+            "/workspace/{workspace_key}/safe/{session_id}/checkpoints/{checkpoint}/diff"
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let diff: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(diff["diff"].as_str().unwrap().contains("isolated"));
+
+    let request = authed_request()
+        .method("POST")
+        .uri(format!(
+            "/workspace/{workspace_key}/safe/{session_id}/apply"
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        std::fs::read_to_string(source.join("app.txt")).unwrap(),
+        "isolated\n"
+    );
+
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/workspace/{workspace_key}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(!tmp
+        .path()
+        .join("safe-workspaces")
+        .join(workspace_key)
+        .exists());
 }
 
 #[tokio::test]

@@ -63,6 +63,10 @@ use super::handlers::run::{
     run_list_handler, run_pause_handler, run_start_handler, run_status_handler, run_stop_handler,
 };
 use super::handlers::run_ws::{self, run_ws_handler};
+use super::handlers::safe_workspace::{
+    apply_safe_workspace_handler, prepare_safe_workspace_handler, restore_safe_workspace_handler,
+    safe_workspace_diff_handler, safe_workspace_status_handler,
+};
 use super::handlers::secrets::{
     delete_secret_handler, get_secret_handler, list_secrets_handler, put_secret_handler,
 };
@@ -120,6 +124,18 @@ pub fn create_router(state: RouterState) -> Router {
     let strict_small_body = Router::new()
         .route("/v1/run/:run_id/pause", post(run_pause_handler))
         .route("/v1/run/:run_id/stop", post(run_stop_handler))
+        .route(
+            "/workspace/:workspace_key/safe/:session_id",
+            post(prepare_safe_workspace_handler),
+        )
+        .route(
+            "/workspace/:workspace_key/safe/:session_id/checkpoints/:checkpoint_id/restore",
+            post(restore_safe_workspace_handler),
+        )
+        .route(
+            "/workspace/:workspace_key/safe/:session_id/apply",
+            post(apply_safe_workspace_handler),
+        )
         .route_layer(body_limit_4k);
 
     let strict_default_body = Router::new()
@@ -150,6 +166,14 @@ pub fn create_router(state: RouterState) -> Router {
         .route(
             "/workspace/:workspace_key",
             axum::routing::delete(delete_workspace_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/workspace/:workspace_key/safe/:session_id",
+            get(safe_workspace_status_handler).route_layer(body_limit_1k),
+        )
+        .route(
+            "/workspace/:workspace_key/safe/:session_id/checkpoints/:checkpoint_id/diff",
+            get(safe_workspace_diff_handler).route_layer(body_limit_1k),
         )
         .route(
             "/tx/status/:agent_id/:tx_id",
@@ -550,6 +574,9 @@ async fn health_handler(State(state): State<RouterState>) -> impl IntoResponse {
         "shell_enabled": state.tool_config.command.allow_shell,
         "allowed_commands": state.tool_config.command.command_allowlist,
         "binary_allowlist": state.tool_config.command.binary_allowlist,
+        // Additive capability negotiation for separately deployed Aura OS
+        // servers. Older harnesses omit this field and therefore fail closed.
+        "safe_workspace": true,
     }))
 }
 
