@@ -5,6 +5,12 @@
 //! keep all Git and filesystem operations beside the runtime that executes the
 //! agent. The parent runtime request receives the resulting path; child agents
 //! continue to inherit that same parent workspace without any protocol change.
+//!
+//! This module is a declared invariant §1 infrastructure exception, analogous
+//! to `aura-exec-isolation`: it may run local-only Git lifecycle commands for
+//! worktree isolation and checkpoints. [`local_git_command`] enforces a closed
+//! subcommand allowlist and disables terminal prompting; network-capable Git
+//! operations such as clone, fetch, pull, push, and remote are not permitted.
 
 use super::super::*;
 use axum::extract::Path as AxumPath;
@@ -32,6 +38,23 @@ const MAX_UNTRACKED_COPY_BYTES: u64 = 10 * 1024 * 1024;
 const LOCK_ATTEMPTS: usize = 200;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(120);
+const LOCAL_GIT_SUBCOMMANDS: &[&str] = &[
+    "add",
+    "apply",
+    "commit",
+    "commit-tree",
+    "diff",
+    "init",
+    "log",
+    "ls-files",
+    "merge-base",
+    "read-tree",
+    "rev-list",
+    "rev-parse",
+    "update-ref",
+    "worktree",
+    "write-tree",
+];
 
 #[derive(Debug, Error)]
 enum SafeWorkspaceError {
@@ -230,8 +253,46 @@ fn command_error(output: &Output) -> String {
     }
 }
 
+fn local_git_subcommand<'a>(args: &'a [&str]) -> Option<&'a str> {
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if *argument == "-c" {
+            index += 2;
+        } else if argument.starts_with('-') {
+            index += 1;
+        } else {
+            return Some(argument);
+        }
+    }
+    None
+}
+
+fn local_git_command(cwd: &Path, args: &[&str]) -> Result<Command, SafeWorkspaceError> {
+    let subcommand = local_git_subcommand(args).ok_or_else(|| {
+        SafeWorkspaceError::Unsupported(
+            "Safe Workspace Git command is missing a subcommand".to_string(),
+        )
+    })?;
+    if !LOCAL_GIT_SUBCOMMANDS.contains(&subcommand) {
+        return Err(SafeWorkspaceError::Unsupported(format!(
+            "Git subcommand '{subcommand}' is not allowed for Safe Workspace lifecycle operations"
+        )));
+    }
+
+    let mut command = Command::new("git");
+    command
+        .current_dir(cwd)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    Ok(command)
+}
+
+fn run_git_allow_failure(cwd: &Path, args: &[&str]) -> Result<Output, SafeWorkspaceError> {
+    Ok(local_git_command(cwd, args)?.output()?)
+}
+
 fn run_git(cwd: &Path, args: &[&str]) -> Result<Output, SafeWorkspaceError> {
-    let output = Command::new("git").current_dir(cwd).args(args).output()?;
+    let output = run_git_allow_failure(cwd, args)?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -244,9 +305,8 @@ fn run_git_with_input(
     args: &[&str],
     input: &[u8],
 ) -> Result<Output, SafeWorkspaceError> {
-    let mut child = Command::new("git")
-        .current_dir(cwd)
-        .args(args)
+    let mut command = local_git_command(cwd, args)?;
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -264,14 +324,16 @@ fn run_git_with_input(
     }
 }
 
-fn shadow_command(metadata: &WorkspaceMetadata) -> Command {
+fn shadow_command(
+    metadata: &WorkspaceMetadata,
+    args: &[&str],
+) -> Result<Command, SafeWorkspaceError> {
     let root = metadata
         .workspace_root
         .parent()
         .expect("managed worktree always has a session root");
-    let mut command = Command::new("git");
+    let mut command = local_git_command(&metadata.workspace_root, args)?;
     command
-        .current_dir(&metadata.workspace_root)
         .env("GIT_DIR", root.join(CHECKPOINT_STORE_DIR))
         .env("GIT_WORK_TREE", &metadata.workspace_root)
         .env("GIT_INDEX_FILE", root.join(CHECKPOINT_INDEX_FILE))
@@ -279,7 +341,7 @@ fn shadow_command(metadata: &WorkspaceMetadata) -> Command {
         .env("GIT_AUTHOR_EMAIL", "safe-workspace@aura.local")
         .env("GIT_COMMITTER_NAME", "Aura Safe Workspace")
         .env("GIT_COMMITTER_EMAIL", "safe-workspace@aura.local");
-    command
+    Ok(command)
 }
 
 fn run_shadow(
@@ -287,7 +349,7 @@ fn run_shadow(
     args: &[&str],
     allowed_failure: bool,
 ) -> Result<Output, SafeWorkspaceError> {
-    let output = shadow_command(metadata).args(args).output()?;
+    let output = shadow_command(metadata, args)?.output()?;
     if output.status.success() || allowed_failure {
         Ok(output)
     } else {
@@ -348,12 +410,7 @@ fn initialize_shadow_store(metadata: &WorkspaceMetadata) -> Result<(), SafeWorks
     let store = root.join(CHECKPOINT_STORE_DIR);
     if !store.join("HEAD").exists() {
         fs::create_dir_all(&store)?;
-        let output = Command::new("git")
-            .args(["init", "--bare", store.to_string_lossy().as_ref()])
-            .output()?;
-        if !output.status.success() {
-            return Err(SafeWorkspaceError::Git(command_error(&output)));
-        }
+        run_git(root, &["init", "--bare", store.to_string_lossy().as_ref()])?;
         let info = store.join("info");
         fs::create_dir_all(&info)?;
         fs::write(
@@ -490,10 +547,10 @@ fn clean_incomplete_workspace(
 ) -> Result<(), SafeWorkspaceError> {
     if workspace_root.exists() {
         let workspace_arg = workspace_root.to_string_lossy().to_string();
-        let _ = Command::new("git")
-            .current_dir(source_repo)
-            .args(["worktree", "remove", "--force", &workspace_arg])
-            .output()?;
+        let _ = run_git_allow_failure(
+            source_repo,
+            &["worktree", "remove", "--force", &workspace_arg],
+        )?;
         remove_managed_entry(workspace_root)?;
     }
     run_git(source_repo, &["worktree", "prune"])?;
@@ -847,10 +904,7 @@ fn ensure_source_git_repository(source_path: &Path) -> Result<(), SafeWorkspaceE
     }
 
     let canonical_source = source_path.canonicalize()?;
-    let probe = Command::new("git")
-        .current_dir(&canonical_source)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
+    let probe = run_git_allow_failure(&canonical_source, &["rev-parse", "--show-toplevel"])?;
     let owns_repository = probe.status.success()
         && PathBuf::from(String::from_utf8_lossy(&probe.stdout).trim())
             .canonicalize()
@@ -868,10 +922,7 @@ fn ensure_source_git_repository(source_path: &Path) -> Result<(), SafeWorkspaceE
         )?;
     }
 
-    let head = Command::new("git")
-        .current_dir(&canonical_source)
-        .args(["rev-parse", "--verify", "HEAD"])
-        .output()?;
+    let head = run_git_allow_failure(&canonical_source, &["rev-parse", "--verify", "HEAD"])?;
     if !head.status.success() {
         run_git(&canonical_source, &["add", "-A", "--", "."])?;
         run_git(
@@ -1099,14 +1150,20 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, tempfile::TempDir, WorkspaceMetadata) {
         let source = tempfile::tempdir().expect("source tempdir");
         git(source.path(), &["init"]);
-        git(source.path(), &["config", "user.name", "Aura Test"]);
-        git(
-            source.path(),
-            &["config", "user.email", "aura@test.invalid"],
-        );
         fs::write(source.path().join("tracked.txt"), "baseline\n").unwrap();
         git(source.path(), &["add", "tracked.txt"]);
-        git(source.path(), &["commit", "-m", "baseline"]);
+        git(
+            source.path(),
+            &[
+                "-c",
+                "user.name=Aura Test",
+                "-c",
+                "user.email=aura@test.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ],
+        );
         fs::write(source.path().join("tracked.txt"), "dirty source\n").unwrap();
         fs::write(source.path().join("untracked.txt"), "copied\n").unwrap();
 
@@ -1115,6 +1172,25 @@ mod tests {
             prepare_workspace_blocking(data.path(), "project-id", "session-id", source.path())
                 .expect("prepare safe workspace");
         (source, data, metadata)
+    }
+
+    #[test]
+    fn local_git_command_allowlist_rejects_network_operations() {
+        for subcommand in ["clone", "fetch", "pull", "push", "remote", "submodule"] {
+            assert!(local_git_command(Path::new("."), &[subcommand]).is_err());
+        }
+        assert!(local_git_command(
+            Path::new("."),
+            &[
+                "-c",
+                "user.name=Aura Test",
+                "-c",
+                "user.email=aura@test.invalid",
+                "commit",
+                "--allow-empty",
+            ],
+        )
+        .is_ok());
     }
 
     #[test]
