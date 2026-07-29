@@ -94,6 +94,23 @@ fn project_path_blocked_outside_base() {
 }
 
 #[test]
+fn safe_workspace_root_is_not_an_accepted_project_path() {
+    let project_base = absolute_path(&["home", "aura"]);
+    let mut session = test_session(Some(project_base));
+    let safe_root = session
+        .workspace_base
+        .parent()
+        .expect("workspace base has a data-dir parent")
+        .join("safe-workspaces");
+    let req = chat_request_with_project_path(&safe_root);
+
+    let result = session.apply_chat_runtime_request(req);
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("must be under"));
+}
+
+#[test]
 fn project_path_blocked_with_traversal() {
     let project_base = absolute_path(&["home", "aura"]);
     let project_path = project_base.join("..").join("etc").join("passwd");

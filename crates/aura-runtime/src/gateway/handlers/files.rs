@@ -514,18 +514,37 @@ pub(in crate::gateway) async fn delete_workspace_handler(
     let workspace = state.config.resolve_workspace_for_project(workspace_key);
     match tokio::fs::symlink_metadata(&workspace).await {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            StatusCode::BAD_REQUEST
+            return StatusCode::BAD_REQUEST;
         }
-        Ok(_) => match tokio::fs::remove_dir_all(&workspace).await {
-            Ok(()) => StatusCode::NO_CONTENT,
-            Err(error) => {
-                warn!(path = %workspace.display(), %error, "failed to delete hosted workspace");
-                StatusCode::INTERNAL_SERVER_ERROR
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Err(error) = super::safe_workspace::delete_project_safe_workspaces(
+                &state.config.data_dir,
+                workspace_key,
+            )
+            .await
+            {
+                warn!(%error, "failed to delete hosted project Safe Workspaces");
+                return StatusCode::INTERNAL_SERVER_ERROR;
             }
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => StatusCode::NO_CONTENT,
+            return StatusCode::NO_CONTENT;
+        }
         Err(error) => {
             warn!(path = %workspace.display(), %error, "failed to inspect hosted workspace");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+    if let Err(error) =
+        super::safe_workspace::delete_project_safe_workspaces(&state.config.data_dir, workspace_key)
+            .await
+    {
+        warn!(%error, "failed to delete hosted project Safe Workspaces");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    match tokio::fs::remove_dir_all(&workspace).await {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(error) => {
+            warn!(path = %workspace.display(), %error, "failed to delete hosted workspace");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }

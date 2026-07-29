@@ -42,6 +42,7 @@ pub(crate) mod memory;
 pub(crate) mod processes;
 pub(crate) mod run;
 pub(crate) mod run_ws;
+pub(crate) mod safe_workspace;
 pub(crate) mod secrets;
 pub(crate) mod skills;
 pub(crate) mod tool_permissions;
