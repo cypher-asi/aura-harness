@@ -50,7 +50,7 @@ use rocksdb::{
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 /// `RocksDB`-based store implementation.
 pub struct RocksStore {
@@ -115,8 +115,12 @@ impl RocksStore {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
-        // Define column families
-        let cf_names = [
+        // Define column families. If a newer harness version has already
+        // created additional families, include them as opaque pass-through
+        // handles. RocksDB refuses to open a database when any existing
+        // family is omitted, which previously made a desktop rollback or a
+        // briefly out-of-order app/sidecar update fatal at startup.
+        let expected_cf_names = [
             cf::RECORD,
             cf::AGENT_META,
             cf::INBOX,
@@ -132,12 +136,41 @@ impl RocksStore {
             cf::PROCESSES,
             cf::PROCESS_RUNS,
         ];
+        let mut cf_names = expected_cf_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        if path.join("CURRENT").is_file() {
+            match DBWithThreadMode::<MultiThreaded>::list_cf(&Options::default(), path) {
+                Ok(existing) => {
+                    for name in existing {
+                        // The default family is opened implicitly by
+                        // `open_cf_descriptors`.
+                        if name != "default" && !cf_names.contains(&name) {
+                            warn!(
+                                column_family = %name,
+                                ?path,
+                                "opening unknown RocksDB column family for forward compatibility"
+                            );
+                            cf_names.push(name);
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        %error,
+                        ?path,
+                        "could not enumerate existing RocksDB column families before open"
+                    );
+                }
+            }
+        }
         let block_cache = Cache::new_lru_cache(Self::BLOCK_CACHE_BYTES);
         let cf_descriptors: Vec<_> = cf_names
             .iter()
             .map(|name| {
                 let cf_opts = Self::column_family_options(name, &block_cache);
-                ColumnFamilyDescriptor::new(*name, cf_opts)
+                ColumnFamilyDescriptor::new(name.clone(), cf_opts)
             })
             .collect();
 
