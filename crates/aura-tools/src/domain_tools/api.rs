@@ -83,7 +83,53 @@ pub struct TaskDescriptor {
 
 #[cfg(test)]
 mod tests {
-    use super::TaskDescriptor;
+    use super::{ListMarketplaceAgentsResponse, TaskDescriptor};
+
+    #[test]
+    fn marketplace_response_lifts_nested_agent_shape() {
+        // Mirrors aura-os-server's `ListMarketplaceAgentsResponse`:
+        // each entry nests identity under `agent`, with marketplace stats
+        // as top-level siblings. Regression guard for the flat-vs-nested
+        // mismatch that made every live `list_agents_marketplace` call fail
+        // with `missing field agent_id`.
+        let resp: ListMarketplaceAgentsResponse = serde_json::from_value(serde_json::json!({
+            "agents": [{
+                "agent": {
+                    "agent_id": "a1b2c3",
+                    "name": "Ada",
+                    "role": "backend",
+                    "expertise": ["backend", "rust"],
+                    "tags": ["fast"],
+                    "system_prompt": "ignored heavy field",
+                    "personality": "ignored heavy field"
+                },
+                "description": "Ships reliable services",
+                "completed_tasks": 12,
+                "jobs": 20,
+                "revenue_usd": 1234.5,
+                "reputation": 4.8,
+                "creator_display_name": "Acme Labs",
+                "creator_user_id": "u-99",
+                "listed_at": "2026-05-01T00:00:00Z"
+            }],
+            "total": 1
+        }))
+        .expect("aura-os MarketplaceAgent should deserialize as the flat descriptor");
+
+        assert_eq!(resp.total, 1);
+        let a = &resp.agents[0];
+        assert_eq!(a.agent_id, "a1b2c3");
+        assert_eq!(a.name, "Ada");
+        assert_eq!(a.role, "backend");
+        assert_eq!(a.expertise, vec!["backend".to_string(), "rust".to_string()]);
+        assert_eq!(a.tags, vec!["fast".to_string()]);
+        assert_eq!(a.description, "Ships reliable services");
+        assert_eq!(a.completed_tasks, 12);
+        assert_eq!(a.revenue_usd, 1234.5);
+        assert_eq!(a.reputation, 4.8);
+        assert_eq!(a.creator_display_name, "Acme Labs");
+        assert_eq!(a.listed_at, "2026-05-01T00:00:00Z");
+    }
 
     #[test]
     fn task_descriptor_accepts_aura_os_task_shape() {
@@ -125,6 +171,107 @@ pub struct ProjectDescriptor {
     pub tech_stack: Option<String>,
     pub build_command: Option<String>,
     pub test_command: Option<String>,
+}
+
+/// Slim view of a marketplace listing returned by
+/// `list_marketplace_agents`. Re-projects aura-os's `MarketplaceAgent`
+/// DTO (`apps/aura-os-server/src/dto.rs` ←
+/// `interface/src/apps/marketplace/marketplace-types.ts`) into a single
+/// flat record the model can reason over, keeping only the fields a
+/// hiring agent actually needs. Heavy fields (base64 icon, full
+/// `system_prompt`, `personality`) are dropped to stay inside the
+/// model's per-tool-result cap.
+///
+/// **Wire shape note:** the server nests the agent identity under an
+/// `agent` object (`MarketplaceAgent { agent: Agent, description, … }`)
+/// while the marketplace stats sit as top-level siblings. This struct is
+/// **flat** for the LLM, so it derives `Serialize` directly but
+/// hand-rolls `Deserialize` (below) to lift `agent_id` / `name` / `role`
+/// / `expertise` / `tags` out of the nested `agent` object. Deriving
+/// `Deserialize` here would look for those fields at the top level and
+/// fail every live call with `missing field agent_id`.
+#[derive(Debug, Clone, Serialize)]
+pub struct MarketplaceAgentDescriptor {
+    /// Template `agent_id` — the value to pass to `assign_agent_to_project`.
+    pub agent_id: String,
+    pub name: String,
+    pub role: String,
+    /// Marketplace listing description (the agent's elevator pitch).
+    /// Distinct from the underlying agent's `personality` / `system_prompt`
+    /// and surfaced as the LLM-readable summary on the talent card.
+    pub description: String,
+    /// Marketplace expertise slugs declared by the agent's creator. Useful
+    /// for follow-up filtering when the caller wants to narrow by topic.
+    pub expertise: Vec<String>,
+    /// Free-form tag list from the underlying agent record.
+    pub tags: Vec<String>,
+    /// Number of completed marketplace tasks attributed to this agent.
+    pub completed_tasks: u64,
+    /// Aggregate revenue in USD this agent has earned in the marketplace.
+    pub revenue_usd: f64,
+    /// Reputation score from the marketplace ranking layer.
+    pub reputation: f64,
+    /// Display name of the agent's creator (organisation or user).
+    pub creator_display_name: String,
+    /// ISO-8601 timestamp of when the agent was first listed.
+    pub listed_at: String,
+}
+
+impl<'de> Deserialize<'de> for MarketplaceAgentDescriptor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        /// Agent identity as the server nests it under `MarketplaceAgent.agent`.
+        #[derive(Default, Deserialize)]
+        struct AgentIdentityWire {
+            #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+            agent_id: String,
+            #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+            name: String,
+            #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+            role: String,
+            #[serde(default)]
+            expertise: Vec<String>,
+            #[serde(default)]
+            tags: Vec<String>,
+        }
+
+        /// The full `MarketplaceAgent` wire shape: identity nested under
+        /// `agent`, marketplace stats as top-level siblings.
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(default)]
+            agent: AgentIdentityWire,
+            #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+            description: String,
+            #[serde(default)]
+            completed_tasks: u64,
+            #[serde(default)]
+            revenue_usd: f64,
+            #[serde(default)]
+            reputation: f64,
+            #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+            creator_display_name: String,
+            #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+            listed_at: String,
+        }
+
+        let w = Wire::deserialize(deserializer)?;
+        Ok(MarketplaceAgentDescriptor {
+            agent_id: w.agent.agent_id,
+            name: w.agent.name,
+            role: w.agent.role,
+            description: w.description,
+            expertise: w.agent.expertise,
+            tags: w.agent.tags,
+            completed_tasks: w.completed_tasks,
+            revenue_usd: w.revenue_usd,
+            reputation: w.reputation,
+            creator_display_name: w.creator_display_name,
+            listed_at: w.listed_at,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,4 +504,53 @@ pub trait DomainApi: Send + Sync {
         body: Option<&serde_json::Value>,
         jwt: Option<&str>,
     ) -> anyhow::Result<String>;
+
+    /// List agents publicly listed in the marketplace. Returns a slim
+    /// projection (no icons / system_prompt / personality) so the tool
+    /// result stays under the per-tool-result byte cap, plus the total
+    /// pre-pagination so the LLM can iterate with `offset`.
+    ///
+    /// Default impl returns `unimplemented` so existing `impl DomainApi`
+    /// sites (mocks, kernel-domain-gateway, automaton fakes) keep compiling
+    /// — only `HttpDomainApi` actually overrides this.
+    async fn list_marketplace_agents(
+        &self,
+        _params: ListMarketplaceAgentsParams<'_>,
+        _jwt: Option<&str>,
+    ) -> anyhow::Result<ListMarketplaceAgentsResponse> {
+        Err(anyhow::anyhow!(
+            "list_marketplace_agents not implemented for this DomainApi"
+        ))
+    }
+}
+
+/// Query parameters accepted by `GET /api/marketplace/agents`. Mirrors
+/// `apps/aura-os-server/src/dto.rs::ListMarketplaceAgentsParams` and the
+/// shape consumed by the TypeScript `interface/src/api/marketplace.ts`.
+///
+/// All fields are optional; the server applies sensible defaults
+/// (sort=trending, limit=50, server-side cap at 100).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ListMarketplaceAgentsParams<'a> {
+    /// One of "trending" | "latest" | "revenue" | "reputation". Passed
+    /// through verbatim — the server validates.
+    pub sort: Option<&'a str>,
+    /// Expertise slug filter (e.g. `"backend"`). Server matches on
+    /// exact slug. There is no free-text/keyword search today.
+    pub expertise: Option<&'a str>,
+    /// Page size. Server caps at 100; this layer doesn't re-cap so the
+    /// server's response stays authoritative.
+    pub limit: Option<u32>,
+    /// Pagination offset.
+    pub offset: Option<u32>,
+}
+
+/// Response shape from `GET /api/marketplace/agents`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListMarketplaceAgentsResponse {
+    pub agents: Vec<MarketplaceAgentDescriptor>,
+    /// Total matching agents pre-pagination, so the caller knows when
+    /// to stop incrementing `offset`.
+    #[serde(default)]
+    pub total: u64,
 }

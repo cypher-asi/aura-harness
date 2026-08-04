@@ -9,8 +9,9 @@
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use aura_tools::domain_tools::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, ListMarketplaceAgentsParams, ListMarketplaceAgentsResponse,
+    MessageDescriptor, ProjectDescriptor, ProjectUpdate, SaveMessageParams, SessionDescriptor,
+    SpecDescriptor, TaskDescriptor, TaskUpdate,
 };
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -625,6 +626,45 @@ impl DomainApi for HttpDomainApi {
             return Err(anyhow!("HTTP {status}: {truncated}"));
         }
         Ok(text)
+    }
+
+    // -- Marketplace (aura-os-server) -----------------------------------------
+    //
+    // `GET /api/marketplace/agents` returns the cross-org talent pool. The
+    // endpoint is owned by aura-os-server (not aura-network / aura-storage),
+    // so we route through `project_base_url()` for the same reason as the
+    // project routes above. Wire shape lives in
+    // `apps/aura-os-server/src/dto.rs::ListMarketplaceAgentsResponse`.
+
+    async fn list_marketplace_agents(
+        &self,
+        params: ListMarketplaceAgentsParams<'_>,
+        jwt: Option<&str>,
+    ) -> anyhow::Result<ListMarketplaceAgentsResponse> {
+        let jwt = Self::require_jwt(jwt)?;
+        // Build via `Url` so query values (notably the caller-supplied
+        // `expertise` slug, which is not charset-validated upstream) are
+        // percent-encoded rather than concatenated raw.
+        let mut url = reqwest::Url::parse(&format!(
+            "{}/api/marketplace/agents",
+            self.project_base_url()
+        ))?;
+        {
+            let mut q = url.query_pairs_mut();
+            if let Some(sort) = params.sort {
+                q.append_pair("sort", sort);
+            }
+            if let Some(expertise) = params.expertise {
+                q.append_pair("expertise", expertise);
+            }
+            if let Some(limit) = params.limit {
+                q.append_pair("limit", &limit.to_string());
+            }
+            if let Some(offset) = params.offset {
+                q.append_pair("offset", &offset.to_string());
+            }
+        }
+        self.api_get(url.as_str(), jwt).await
     }
 }
 
