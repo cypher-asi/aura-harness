@@ -39,6 +39,7 @@
 
 pub(crate) mod files;
 pub(crate) mod memory;
+pub(crate) mod preview_tcp;
 pub(crate) mod processes;
 pub(crate) mod run;
 pub(crate) mod run_ws;

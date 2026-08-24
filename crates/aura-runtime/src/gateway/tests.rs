@@ -1491,6 +1491,7 @@ const PROTECTED_ROUTES: &[(&str, &str)] = &[
     ("GET", "/agents/deadbeef/head"),
     ("GET", "/agents/deadbeef/record"),
     ("GET", "/ws/terminal"),
+    ("GET", "/ws/preview/tcp/5173"),
     ("GET", "/stream/test-run"),
     ("POST", "/v1/run"),
     ("GET", "/v1/run/list"),
