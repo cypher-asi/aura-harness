@@ -197,6 +197,10 @@ pub fn create_router(state: RouterState) -> Router {
         )
         .route("/agents/:agent_id/tools", get(get_agent_tools_handler))
         .route("/ws/terminal", get(terminal_ws_handler))
+        .route(
+            "/ws/preview/tcp/:port",
+            get(crate::gateway::handlers::preview_tcp::preview_tcp_ws),
+        )
         .route("/stream/:run_id", get(run_ws_handler))
         .route(
             "/v1/run/list",
