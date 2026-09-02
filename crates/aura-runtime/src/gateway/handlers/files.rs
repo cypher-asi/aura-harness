@@ -6,6 +6,12 @@ use std::path::{Component, PathBuf};
 
 const MAX_IMPORTED_FILES: usize = 4_096;
 const MAX_IMPORTED_BYTES: usize = 8 * 1024 * 1024;
+/// Keeps the base64 JSON request below Swarm's 1 MiB gateway limit.
+pub(in crate::gateway) const MAX_WRITE_BYTES: usize = 700 * 1024;
+
+fn file_revision(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
 
 #[derive(Debug, Deserialize)]
 pub(in crate::gateway) struct ListFilesQuery {
@@ -189,6 +195,7 @@ pub(in crate::gateway) async fn read_file_handler(
 
     match files_api::read_file_capped(&resolved, MAX_READ_BYTES).await {
         Ok(ReadOutcome::Ok { bytes }) => {
+            let revision = file_revision(&bytes);
             // Decode as UTF-8 for the JSON payload. Lossy conversion
             // matches the previous `read_to_string` behaviour for
             // clean text files and degrades gracefully on binary
@@ -201,6 +208,7 @@ pub(in crate::gateway) async fn read_file_handler(
                     "content": content,
                     "path": resolved.to_string_lossy(),
                     "bytes": bytes.len(),
+                    "revision": revision,
                 })),
             )
                 .into_response()
@@ -219,6 +227,169 @@ pub(in crate::gateway) async fn read_file_handler(
             Json(serde_json::json!({
                 "ok": false,
                 "error": format!("{e}: {}", resolved.display()),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(in crate::gateway) struct WriteFileRequest {
+    path: String,
+    content_base64: String,
+    expected_revision: String,
+}
+
+/// Replace an existing UTF-8 workspace file without clobbering a newer edit.
+///
+/// The caller must send the revision digest it originally read. This turns an
+/// agent or second browser changing the file between open and save into an HTTP
+/// 409 instead of silently losing that newer work.
+pub(in crate::gateway) async fn write_file_handler(
+    State(state): State<RouterState>,
+    Json(request): Json<WriteFileRequest>,
+) -> impl IntoResponse {
+    if request.expected_revision.len() != 64
+        || !request
+            .expected_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "expected_revision must be a 64-character hex digest",
+            })),
+        )
+            .into_response();
+    }
+
+    let content = match base64::engine::general_purpose::STANDARD.decode(request.content_base64) {
+        Ok(content) => content,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": "content_base64 must contain valid base64",
+                })),
+            )
+                .into_response();
+        }
+    };
+    if content.len() > MAX_WRITE_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("file exceeds {MAX_WRITE_BYTES}-byte write cap"),
+                "max_bytes": MAX_WRITE_BYTES,
+            })),
+        )
+            .into_response();
+    }
+    if std::str::from_utf8(&content).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "only UTF-8 text files can be edited",
+            })),
+        )
+            .into_response();
+    }
+
+    let resolved = match state
+        .config
+        .resolve_allowed_path(std::path::Path::new(&request.path))
+    {
+        Ok(path) => path,
+        Err(error) => {
+            let (status, body) = path_error_response(&error);
+            return (status, body).into_response();
+        }
+    };
+
+    match tokio::fs::metadata(&resolved).await {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": "path is not a file" })),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "ok": false, "error": "path not found" })),
+            )
+                .into_response();
+        }
+    }
+
+    let current = match files_api::read_file_capped(&resolved, MAX_READ_BYTES).await {
+        Ok(ReadOutcome::Ok { bytes }) => bytes,
+        Ok(ReadOutcome::TooLarge { .. }) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": "file changed since it was opened; reopen it before saving",
+                })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": format!("failed to read file before saving: {error}"),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if std::str::from_utf8(&current).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "only UTF-8 text files can be edited",
+            })),
+        )
+            .into_response();
+    }
+
+    if !file_revision(&current).eq_ignore_ascii_case(&request.expected_revision) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "file changed since it was opened; reopen it before saving",
+            })),
+        )
+            .into_response();
+    }
+
+    match tokio::fs::write(&resolved, &content).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "path": resolved.to_string_lossy(),
+                "revision": file_revision(&content),
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("failed to write file: {error}"),
             })),
         )
             .into_response(),

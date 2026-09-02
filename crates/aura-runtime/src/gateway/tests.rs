@@ -1472,6 +1472,7 @@ async fn test_skills_returns_503_when_not_configured() {
 const PROTECTED_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/files"),
     ("GET", "/api/read-file"),
+    ("PUT", "/api/write-file"),
     ("GET", "/workspace/resolve"),
     ("POST", "/workspace/import"),
     ("DELETE", "/workspace/deadbeef"),
@@ -2468,6 +2469,82 @@ async fn test_read_file_returns_workspace_file() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["ok"], true);
     assert_eq!(json["content"], "hello, world");
+    assert_eq!(
+        json["revision"],
+        blake3::hash(b"hello, world").to_hex().to_string()
+    );
+}
+
+#[tokio::test]
+async fn test_write_file_replaces_matching_workspace_file() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let file_path = tmp.path().join("workspaces").join("hello.txt");
+    std::fs::write(&file_path, "before").unwrap();
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "path": file_path,
+        "content_base64": base64::engine::general_purpose::STANDARD.encode("after"),
+        "expected_revision": blake3::hash(b"before").to_hex().to_string(),
+    });
+
+    let request = authed_request()
+        .method("PUT")
+        .uri("/api/write-file")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(file_path).unwrap(), "after");
+}
+
+#[tokio::test]
+async fn test_write_file_rejects_stale_content_without_overwriting() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let file_path = tmp.path().join("workspaces").join("hello.txt");
+    std::fs::write(&file_path, "agent edit").unwrap();
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "path": file_path,
+        "content_base64": base64::engine::general_purpose::STANDARD.encode("browser edit"),
+        "expected_revision": blake3::hash(b"old content").to_hex().to_string(),
+    });
+
+    let request = authed_request()
+        .method("PUT")
+        .uri("/api/write-file")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(std::fs::read_to_string(file_path).unwrap(), "agent edit");
+}
+
+#[tokio::test]
+async fn test_write_file_rejects_path_traversal() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let secret = tmp.path().join("secret.txt");
+    std::fs::write(&secret, "secret").unwrap();
+    let app = create_router(state);
+    let body = serde_json::json!({
+        "path": secret,
+        "content_base64": base64::engine::general_purpose::STANDARD.encode("overwritten"),
+        "expected_revision": blake3::hash(b"secret").to_hex().to_string(),
+    });
+
+    let request = authed_request()
+        .method("PUT")
+        .uri("/api/write-file")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(std::fs::read_to_string(secret).unwrap(), "secret");
 }
 
 #[tokio::test]
