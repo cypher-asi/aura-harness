@@ -695,6 +695,19 @@ fn test_resolve_thinking_auto_for_opus_5() {
 }
 
 #[test]
+fn test_resolve_thinking_auto_for_fable_and_mythos_5_1() {
+    for model in ["aura-claude-fable-5-1", "aura-claude-mythos-5-1"] {
+        let request = ModelRequest::builder(model, "system")
+            .max_tokens(128_000)
+            .try_build()
+            .unwrap();
+        let thinking = resolve_thinking(&request, model).expect("5.1 thinking config");
+        assert_eq!(thinking.thinking_type, "adaptive", "{model}");
+        assert_eq!(thinking.budget_tokens, None, "{model}");
+    }
+}
+
+#[test]
 fn test_resolve_thinking_uses_enabled_budget_for_older_models() {
     let request = ModelRequest::builder("claude-3-7-sonnet", "system")
         .max_tokens(8192)
@@ -829,6 +842,28 @@ fn opus_5_preserves_native_output_effort_ladder() {
         let output = resolve_output_config(&request, "aura-claude-opus-5")
             .expect("Opus 5 effort should reach output_config");
         assert_eq!(output.effort, expected);
+    }
+}
+
+#[test]
+fn fable_and_mythos_5_1_preserve_native_output_effort_ladder() {
+    for model in ["aura-claude-fable-5-1", "aura-claude-mythos-5-1"] {
+        for (thinking_effort, expected) in [
+            (ThinkingEffort::Low, "low"),
+            (ThinkingEffort::Medium, "medium"),
+            (ThinkingEffort::High, "high"),
+            (ThinkingEffort::XHigh, "xhigh"),
+            (ThinkingEffort::Max, "max"),
+        ] {
+            let request = ModelRequest::builder(model, "system")
+                .max_tokens(128_000)
+                .thinking_effort(Some(thinking_effort))
+                .try_build()
+                .unwrap();
+            let output = resolve_output_config(&request, model)
+                .expect("Claude 5.1 effort should reach output_config");
+            assert_eq!(output.effort, expected, "{model}");
+        }
     }
 }
 
