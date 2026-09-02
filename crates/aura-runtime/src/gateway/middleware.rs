@@ -52,7 +52,7 @@ use crate::terminal;
 use super::auth_mw;
 use super::handlers::files::{
     delete_workspace_handler, import_workspace_handler, list_files_handler, read_file_handler,
-    resolve_workspace_handler,
+    resolve_workspace_handler, write_file_handler,
 };
 use super::handlers::memory;
 use super::handlers::processes::{
@@ -117,7 +117,7 @@ pub fn create_router(state: RouterState) -> Router {
         config: build_strict_governor(),
     };
 
-    // Strict-rate-limit sub-router: `/tx`, `/v1/run`, and the
+    // Strict-rate-limit sub-router: `/tx`, `/v1/run`, `/api/write-file`, and the
     // `:id/pause` + `:id/stop` path params. Pause/stop use a 4 KiB
     // body limit for tiny JSON payloads; `/tx` and `/v1/run` keep
     // the 1 MiB default because legitimate requests can be large.
@@ -140,7 +140,8 @@ pub fn create_router(state: RouterState) -> Router {
 
     let strict_default_body = Router::new()
         .route("/tx", post(submit_tx_handler))
-        .route("/v1/run", post(run_start_handler));
+        .route("/v1/run", post(run_start_handler))
+        .route("/api/write-file", axum::routing::put(write_file_handler));
 
     let strict = strict_small_body
         .merge(strict_default_body)
