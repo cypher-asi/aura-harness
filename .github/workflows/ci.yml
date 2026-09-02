@@ -159,7 +159,10 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: cargo audit
-        run: cargo audit
+        # h2 0.3.27 is transitive via reqwest 0.11 / hyper 0.14. The fix is
+        # available only in h2 0.4.16+ and is tracked by the Phase 10 HTTP
+        # stack migration documented in deny.toml.
+        run: cargo audit --ignore RUSTSEC-2026-0258
 
   # ---------------------------------------------------------------------------
   # Phase 9: unused-workspace-dependency check (`cargo machete`).

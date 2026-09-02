@@ -28,6 +28,9 @@ fn normalize_anthropic_model(model: &str) -> String {
 fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
     let model = normalize_anthropic_model(model);
     if model.starts_with("claude-opus-5")
+        || model.starts_with("claude-fable-5")
+        || model.starts_with("claude-mythos-5")
+        || model.starts_with("claude-sonnet-5")
         || model.starts_with("claude-opus-4")
         || model.starts_with("claude-sonnet-4")
     {
@@ -154,6 +157,14 @@ fn thinking_mode_label(mode: ThinkingMode) -> &'static str {
     }
 }
 
+fn supports_native_adaptive_effort_ladder(model: &str) -> bool {
+    let model = normalize_anthropic_model(model);
+    model.starts_with("claude-opus-5")
+        || model.starts_with("claude-fable-5")
+        || model.starts_with("claude-mythos-5")
+        || model.starts_with("claude-sonnet-5")
+}
+
 pub(super) fn resolve_output_config(
     request: &ModelRequest,
     model: &str,
@@ -162,10 +173,11 @@ pub(super) fn resolve_output_config(
     if thinking.thinking_type != "adaptive" {
         return None;
     }
-    if normalize_anthropic_model(model).starts_with("claude-opus-5") {
+    if supports_native_adaptive_effort_ladder(model) {
         let effort = match request.thinking_effort.unwrap_or(ThinkingEffort::High) {
             ThinkingEffort::Off => return None,
-            // Opus 5 does not expose a separate minimal tier.
+            // Current adaptive Claude 5 models do not expose a separate
+            // minimal tier.
             ThinkingEffort::Minimal | ThinkingEffort::Low => "low",
             ThinkingEffort::Medium => "medium",
             ThinkingEffort::High => "high",
@@ -183,7 +195,8 @@ pub(super) fn resolve_output_config(
     // callers must NOT inherit the forced-high effort — that's exactly
     // the override that amplifies the doom loop's read iterations.
     // Older adaptive Claude 4 models expose only `"high"` here, so XHigh /
-    // Max fold into it. Opus 5's full native ladder is handled above.
+    // Max fold into it. Current Claude 5 models' full native ladder is
+    // handled above.
     match request.thinking_effort {
         Some(
             ThinkingEffort::Off
