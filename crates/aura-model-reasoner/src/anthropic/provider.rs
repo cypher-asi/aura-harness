@@ -1658,11 +1658,19 @@ fn drop_oldest_non_system_message_pair(value: &mut serde_json::Value) -> Result<
 }
 
 /// Build a synthetic single-user-message body whose only content is
-/// the truncation marker + (a tail of) the original last user text.
+/// the truncation marker plus the most useful recoverable user context.
 /// Used as the final fallback when no amount of history-trimming can
 /// fit under the cap (e.g. one absolutely enormous single user
 /// message). System messages from the original body are preserved
 /// verbatim.
+///
+/// A tool loop's latest user-role message commonly contains only a
+/// `tool_result`. Looking exclusively for a `text` block in that message
+/// produced an `original_len=0,kept=0` marker, causing the model to report
+/// that the user's prompt was empty. Prefer a real text block on the latest
+/// turn; otherwise retain the latest human instruction and the current tool
+/// result as plain text so the collapsed request still has actionable
+/// context without violating Anthropic's tool-use pairing rules.
 fn collapse_messages_to_marker(body_bytes: &[u8], cap_bytes: usize) -> Vec<u8> {
     let parsed: serde_json::Value = match serde_json::from_slice(body_bytes) {
         Ok(v) => v,
@@ -1670,7 +1678,7 @@ fn collapse_messages_to_marker(body_bytes: &[u8], cap_bytes: usize) -> Vec<u8> {
     };
     let mut value = parsed;
 
-    let mut salvaged_user_tail: Option<String> = None;
+    let mut salvaged_user_context: Option<String> = None;
     let mut system_messages: Vec<serde_json::Value> = Vec::new();
     if let Some(messages) = value.get("messages").and_then(serde_json::Value::as_array) {
         for m in messages {
@@ -1687,21 +1695,52 @@ fn collapse_messages_to_marker(body_bytes: &[u8], cap_bytes: usize) -> Vec<u8> {
                 .get("content")
                 .and_then(serde_json::Value::as_array)
             {
-                if let Some(text) = blocks.iter().find_map(|b| {
-                    if b.get("type").and_then(serde_json::Value::as_str) == Some("text") {
-                        b.get("text")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    } else {
-                        None
-                    }
-                }) {
-                    salvaged_user_tail = Some(text);
+                if let Some(text) = latest_non_empty_text_block(blocks) {
+                    salvaged_user_context = Some(text.to_string());
+                } else if let Some(tool_result) = largest_non_empty_tool_result(blocks) {
+                    let latest_instruction = messages
+                        .iter()
+                        .rev()
+                        .filter(|m| {
+                            m.get("role").and_then(serde_json::Value::as_str) == Some("user")
+                        })
+                        .filter_map(|m| {
+                            m.get("content")
+                                .and_then(serde_json::Value::as_array)
+                                .and_then(|blocks| latest_non_empty_text_block(blocks))
+                        })
+                        .next();
+
+                    salvaged_user_context = Some(match latest_instruction {
+                        Some(instruction) => format!(
+                            "[latest user instruction retained after history truncation]\n\
+                             {instruction}\n\n\
+                             [latest tool result retained after history truncation]\n\
+                             {tool_result}"
+                        ),
+                        None => tool_result.to_string(),
+                    });
                 }
             } else if let Some(text) = last_user.get("content").and_then(serde_json::Value::as_str)
             {
-                salvaged_user_tail = Some(text.to_string());
+                if !text.trim().is_empty() {
+                    salvaged_user_context = Some(text.to_string());
+                }
             }
+        }
+
+        if salvaged_user_context.is_none() {
+            salvaged_user_context = messages
+                .iter()
+                .rev()
+                .filter(|m| m.get("role").and_then(serde_json::Value::as_str) == Some("user"))
+                .filter_map(|m| {
+                    m.get("content")
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|blocks| latest_non_empty_text_block(blocks))
+                })
+                .next()
+                .map(str::to_string);
         }
     }
 
@@ -1710,7 +1749,9 @@ fn collapse_messages_to_marker(body_bytes: &[u8], cap_bytes: usize) -> Vec<u8> {
     // overhead is a safe upper bound; `build_truncated_text` clamps
     // again at write time.
     let tail_budget = cap_bytes.saturating_sub(TRUNCATION_MARKER_BUDGET * 2) / 2;
-    let salvaged = salvaged_user_tail.unwrap_or_default();
+    let salvaged = salvaged_user_context.unwrap_or_else(|| {
+        "[The latest user turn contained no recoverable text after request truncation.]".to_string()
+    });
     let new_text = build_truncated_text(&salvaged, tail_budget);
 
     let mut new_messages: Vec<serde_json::Value> = system_messages;
@@ -1729,6 +1770,46 @@ fn collapse_messages_to_marker(body_bytes: &[u8], cap_bytes: usize) -> Vec<u8> {
     }
 
     serialize_request_body(&value).unwrap_or_else(|_| body_bytes.to_vec())
+}
+
+fn latest_non_empty_text_block(blocks: &[serde_json::Value]) -> Option<&str> {
+    blocks.iter().rev().find_map(|block| {
+        if block.get("type").and_then(serde_json::Value::as_str) != Some("text") {
+            return None;
+        }
+        block
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+    })
+}
+
+fn largest_non_empty_tool_result(blocks: &[serde_json::Value]) -> Option<&str> {
+    blocks
+        .iter()
+        .filter(|block| {
+            block.get("type").and_then(serde_json::Value::as_str) == Some("tool_result")
+        })
+        .filter_map(|block| {
+            let content = block.get("content")?;
+            if let Some(text) = content.as_str() {
+                return (!text.trim().is_empty()).then_some(text);
+            }
+            content
+                .as_array()?
+                .iter()
+                .filter_map(|inner| {
+                    if inner.get("type").and_then(serde_json::Value::as_str) != Some("text") {
+                        return None;
+                    }
+                    inner
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                })
+                .max_by_key(|text| text.len())
+        })
+        .max_by_key(|text| text.len())
 }
 
 /// Truncate the largest text block in the last user message of an
@@ -4090,6 +4171,100 @@ mod emergency_body_cap_tests {
             ),
             "expected truncated or collapsed; got {mode:?}"
         );
+    }
+
+    #[test]
+    fn collapse_salvages_instruction_and_tool_result_from_tool_loop() {
+        let body = serde_json::to_vec(&json!({
+            "model": "aura-claude-fable-5-1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Update the dashboard totals"}
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "read_file",
+                            "input": {"path": "dashboard.tsx"}
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "The current total is computed on line 42"
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "A".repeat(20_000)
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 1024,
+            "stream": true,
+        }))
+        .unwrap();
+
+        let (collapsed, _dropped, mode) = fit_body_under_cap(&body, 8 * 1024);
+        assert_eq!(mode, BodyFitMode::Collapsed);
+        let parsed: serde_json::Value = serde_json::from_slice(&collapsed).unwrap();
+        let text = parsed["messages"][0]["content"][0]["text"]
+            .as_str()
+            .expect("collapsed user text");
+
+        assert!(text.starts_with(TRUNCATION_MARKER_PREFIX));
+        assert!(text.contains("Update the dashboard totals"));
+        assert!(text.contains("The current total is computed on line 42"));
+        assert!(!text.contains("original_len=0,kept=0"));
+    }
+
+    #[test]
+    fn collapse_never_emits_an_empty_truncation_marker() {
+        let body = serde_json::to_vec(&json!({
+            "model": "aura-claude-fable-5-1",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "AAAA"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 1024,
+            "stream": true,
+        }))
+        .unwrap();
+
+        let collapsed = collapse_messages_to_marker(&body, 8 * 1024);
+        let parsed: serde_json::Value = serde_json::from_slice(&collapsed).unwrap();
+        let text = parsed["messages"][0]["content"][0]["text"]
+            .as_str()
+            .expect("collapsed user text");
+
+        assert!(text.starts_with(TRUNCATION_MARKER_PREFIX));
+        assert!(text.contains("no recoverable text"));
+        assert!(!text.contains("original_len=0,kept=0"));
     }
 }
 
