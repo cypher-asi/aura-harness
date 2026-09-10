@@ -124,16 +124,10 @@ async fn handle_automaton_ws(
             return;
         }
     };
-    let aura_engine::automaton::EventSubscription {
-        history,
-        mut live,
-        already_done,
-    } = subscription;
-
     info!(
         automaton_id = %automaton_id,
-        history_len = history.len(),
-        already_done,
+        history_len = subscription.history.len(),
+        already_done = subscription.already_done,
         "Run event stream connected"
     );
 
@@ -148,55 +142,156 @@ async fn handle_automaton_ws(
         tracing::debug!(automaton_id = %drain_aid, "Run WS read side closed");
     });
 
-    let mut saw_done_in_history = false;
-    for event in history {
-        let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
-        match serde_json::to_string(&event) {
-            Ok(json) => {
-                if ws_tx.send(WsMessage::Text(json)).await.is_err() {
-                    drain_handle.abort();
-                    info!(automaton_id = %automaton_id, "Run event stream disconnected");
-                    return;
+    forward_automaton_subscription(&mut ws_tx, subscription, drain_handle).await;
+    info!(automaton_id = %automaton_id, "Run event stream disconnected");
+}
+
+/// End the attach as soon as the reader closes, even when the run is
+/// quiet or a slow client has blocked a replay/live write. Otherwise the
+/// outer upgrade task retains its connection permit until another event.
+async fn forward_automaton_subscription<S>(
+    ws_tx: &mut S,
+    subscription: aura_engine::automaton::EventSubscription,
+    mut reader: tokio::task::JoinHandle<()>,
+) where
+    S: futures_util::Sink<axum::extract::ws::Message> + Unpin,
+{
+    use axum::extract::ws::Message as WsMessage;
+    use futures_util::SinkExt;
+
+    let aura_engine::automaton::EventSubscription {
+        history,
+        mut live,
+        already_done,
+    } = subscription;
+
+    let forward = async {
+        let mut saw_done_in_history = false;
+        for event in history {
+            let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
+            match serde_json::to_string(&event) {
+                Ok(json) => {
+                    if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to serialize replayed automaton event");
                 }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to serialize replayed automaton event");
+            if is_done {
+                saw_done_in_history = true;
+                break;
             }
         }
-        if is_done {
-            saw_done_in_history = true;
-            break;
-        }
-    }
 
-    if !saw_done_in_history && !already_done {
-        loop {
-            match live.recv().await {
-                Ok(event) => {
-                    let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
-                    match serde_json::to_string(&event) {
-                        Ok(json) => {
-                            if ws_tx.send(WsMessage::Text(json)).await.is_err() {
-                                break;
+        if !saw_done_in_history && !already_done {
+            loop {
+                match live.recv().await {
+                    Ok(event) => {
+                        let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
+                        match serde_json::to_string(&event) {
+                            Ok(json) => {
+                                if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to serialize automaton event");
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to serialize automaton event");
+                        if is_done {
+                            break;
                         }
                     }
-                    if is_done {
-                        break;
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
+                        let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
-                    let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
+    };
+    tokio::select! {
+        biased;
+        _ = &mut reader => {},
+        () = forward => {},
+    }
+    reader.abort();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_engine::automaton::EventSubscription;
+    use std::time::Duration;
+    use tokio::sync::{broadcast, oneshot};
+
+    #[tokio::test]
+    async fn disconnected_quiet_automaton_releases_connection_slot() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = try_acquire_ws_slot(&slots).unwrap();
+        let (events, live) = broadcast::channel(4);
+        let (disconnect, disconnected) = oneshot::channel::<()>();
+        let reader = tokio::spawn(async move {
+            let _ = disconnected.await;
+        });
+        let attach = tokio::spawn(async move {
+            let _permit = permit;
+            let mut sink = futures_util::sink::drain();
+            forward_automaton_subscription(
+                &mut sink,
+                EventSubscription {
+                    history: Vec::new(),
+                    live,
+                    already_done: false,
+                },
+                reader,
+            )
+            .await;
+        });
+        tokio::task::yield_now().await;
+        assert!(try_acquire_ws_slot(&slots).is_none());
+        disconnect.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), attach)
+            .await
+            .expect("disconnect must release quiet attach without a new run event")
+            .unwrap();
+        assert!(try_acquire_ws_slot(&slots).is_some());
+        // Run is still alive and was never stopped to recover the slot.
+        assert_eq!(events.receiver_count(), 0);
     }
 
-    drain_handle.abort();
-    info!(automaton_id = %automaton_id, "Run event stream disconnected");
+    #[tokio::test]
+    async fn reader_disconnect_interrupts_blocked_history_write() {
+        let (_events, live) = broadcast::channel(4);
+        let (disconnect, disconnected) = oneshot::channel::<()>();
+        let reader = tokio::spawn(async move {
+            let _ = disconnected.await;
+        });
+        let attach = tokio::spawn(async move {
+            let sink = futures_util::sink::unfold((), |(), _: axum::extract::ws::Message| async {
+                std::future::pending::<Result<(), std::convert::Infallible>>().await
+            });
+            let mut sink = Box::pin(sink);
+            forward_automaton_subscription(
+                &mut sink,
+                EventSubscription {
+                    history: vec![aura_surface_automaton::AutomatonEvent::Done],
+                    live,
+                    already_done: true,
+                },
+                reader,
+            )
+            .await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!attach.is_finished());
+        disconnect.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), attach)
+            .await
+            .expect("disconnect must interrupt stalled replay")
+            .unwrap();
+    }
 }
