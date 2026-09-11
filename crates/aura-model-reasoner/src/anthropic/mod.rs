@@ -51,6 +51,10 @@ enum ApiError {
     /// dedicated variant rather than predicating over the status range,
     /// while existing `Display` text is unchanged.
     TransientServer { status: u16, message: String },
+    /// Transport failed before any model output was delivered to the caller.
+    /// Keep this internal: exhausted retries must not trigger another retry
+    /// budget in a caller or the buffered streaming wrapper.
+    Transport(ReasonerError),
     /// Any other failure.
     Other(ReasonerError),
 }
@@ -79,7 +83,7 @@ impl From<ApiError> for ReasonerError {
                 message,
                 retry_after: None,
             },
-            ApiError::Other(e) => e,
+            ApiError::Transport(e) | ApiError::Other(e) => e,
         }
     }
 }
@@ -161,3 +165,6 @@ impl AnthropicProvider {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod transport_tests;
