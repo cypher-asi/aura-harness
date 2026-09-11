@@ -525,13 +525,10 @@ impl AnthropicProvider {
                     body_preview: Some(&err_str),
                     destination: "aura-network",
                 });
-                return Err(if is_timeout {
-                    ApiError::Other(ReasonerError::Timeout)
-                } else {
-                    ApiError::Other(ReasonerError::Request(format!(
-                        "Model provider API request failed: {e}"
-                    )))
-                });
+                return Err(classify_transport_error(
+                    &e,
+                    "Model provider API request failed",
+                ));
             }
         };
 
@@ -2372,6 +2369,27 @@ fn parse_complete_response(
     }
 }
 
+/// Only used before handing a response (or stream) to the caller. reqwest
+/// distinguishes transport failures from builder, redirect, status and JSON
+/// decoding failures; the latter are permanent and must not be retried.
+fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
+}
+
+fn classify_transport_error(error: &reqwest::Error, context: &str) -> ApiError {
+    let retryable = is_retryable_transport_error(error);
+    let reason = if error.is_timeout() {
+        ReasonerError::Timeout
+    } else {
+        ReasonerError::Request(format!("{context}: {error}"))
+    };
+    if retryable {
+        ApiError::Transport(reason)
+    } else {
+        ApiError::Other(reason)
+    }
+}
+
 /// Outcome of `classify_retry_action`.
 ///
 /// `Retry { sleep, body_cap_override }` → sleep the given duration
@@ -2416,6 +2434,17 @@ fn classify_retry_action(
     current_body_cap: usize,
 ) -> RetryAction {
     match err {
+        // Retry only this pending model request. No tools or conversation
+        // state have been delivered by this attempt, so prior tool results
+        // remain in the immutable request and are never executed again.
+        ApiError::Transport(error) if attempt < max_retries => {
+            let sleep = exp_backoff_with_jitter(attempt, backoff_initial_ms, backoff_cap_ms);
+            warn!(model = %model, attempt, error = %error, "Model transport failed, will retry");
+            RetryAction::Retry {
+                sleep,
+                body_cap_override: None,
+            }
+        }
         ApiError::CloudflareBlock {
             message,
             wire_body_bytes,
@@ -2560,6 +2589,8 @@ fn retry_reason_for(err: &ApiError) -> &'static str {
         // `retries.jsonl` (the heuristic reports bucket by reason).
         ApiError::TransientServer { .. } => "upstream_5xx",
         ApiError::InsufficientCredits(_) => "insufficient_credits",
+        ApiError::Transport(ReasonerError::Timeout) => "transport_timeout",
+        ApiError::Transport(_) => "transport",
         ApiError::Other(_) => "transient",
     }
 }
@@ -2856,13 +2887,17 @@ impl ModelProvider for AnthropicProvider {
                 let api_response: ApiResponse = match response.json().await {
                     Ok(value) => value,
                     Err(e) => {
-                        error!(error = %e, "Failed to parse Anthropic response");
+                        // A buffered body can terminate early after HTTP 200.
+                        // No output has escaped yet, so retry its transport
+                        // failure; a complete but invalid JSON body stays Parse.
+                        let is_transport = is_retryable_transport_error(&e);
+                        error!(error = %e, "Failed to read Anthropic response");
                         let err_str = e.to_string();
                         crate::console::anthropic_failure_block(
                             &crate::console::AnthropicFailureView {
                                 status_code: Some(200),
                                 status_text: "OK",
-                                class: "parse",
+                                class: if is_transport { "transport" } else { "parse" },
                                 elapsed_ms: latency_ms,
                                 request_id: provider_request_id.as_deref(),
                                 retry_after_s: None,
@@ -2870,9 +2905,13 @@ impl ModelProvider for AnthropicProvider {
                                 destination: "aura-network",
                             },
                         );
-                        return Err(ApiError::Other(ReasonerError::Parse(format!(
-                            "Failed to parse Anthropic response: {e}"
-                        ))));
+                        return Err(if is_transport {
+                            classify_transport_error(&e, "Failed to read Anthropic response")
+                        } else {
+                            ApiError::Other(ReasonerError::Parse(format!(
+                                "Failed to parse Anthropic response: {e}"
+                            )))
+                        });
                     }
                 };
                 let parsed = parse_complete_response(
@@ -3045,6 +3084,19 @@ impl ModelProvider for AnthropicProvider {
 mod retry_tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn transport_builder_errors_are_not_retryable() {
+        let error = reqwest::Client::new()
+            .post("://invalid-url")
+            .build()
+            .unwrap_err();
+        assert!(error.is_builder());
+        assert!(matches!(
+            classify_transport_error(&error, "invalid request"),
+            ApiError::Other(ReasonerError::Request(_))
+        ));
+    }
 
     #[test]
     fn retry_after_header_parses_integer_seconds() {
