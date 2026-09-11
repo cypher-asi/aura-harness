@@ -275,6 +275,7 @@ impl ChildRunner for RuntimeChildRunner {
                 self.scheduler.schedule_agent_with_options(
                     child_agent_id,
                     ScheduleOverrides {
+                        caller_owns_deadline: true,
                         loop_config: Some(loop_config),
                         policy: Some(policy),
                         event_tx: child_event_tx,
