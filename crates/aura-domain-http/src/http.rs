@@ -19,6 +19,19 @@ use tracing::{debug, warn};
 const MAX_CLOUDFLARE_RETRIES: u32 = 2;
 const CLOUDFLARE_RETRY_BASE_MS: u64 = 1500;
 
+// Tool envelopes display only the outer anyhow error. Include a safe transport
+// category there; keeping it solely in the source chain renders just GET <URL>.
+fn transport_error(method: &str, url: &str, error: reqwest::Error) -> anyhow::Error {
+    let reason = if error.is_timeout() {
+        "request timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else {
+        "request failed"
+    };
+    anyhow::Error::new(error).context(format!("{method} {url}: {reason}"))
+}
+
 fn is_cloudflare_block(status: reqwest::StatusCode, body: &str) -> bool {
     (status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::SERVICE_UNAVAILABLE)
         && body.contains("<!DOCTYPE html")
@@ -134,7 +147,7 @@ impl HttpDomainApi {
             let resp = req
                 .send()
                 .await
-                .with_context(|| format!("{method} {url}"))?;
+                .map_err(|error| transport_error(method, url, error))?;
             let status = resp.status();
             let text = resp.text().await?;
 
@@ -578,7 +591,7 @@ impl DomainApi for HttpDomainApi {
         let resp = req
             .send()
             .await
-            .with_context(|| format!("{method} {url}"))?;
+            .map_err(|error| transport_error(method, &url, error))?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -617,7 +630,7 @@ impl DomainApi for HttpDomainApi {
         let resp = req
             .send()
             .await
-            .with_context(|| format!("{method} {url}"))?;
+            .map_err(|error| transport_error(method, &url, error))?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -631,6 +644,53 @@ impl DomainApi for HttpDomainApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn project_connection_failure_preserves_reason_in_display() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let base = format!("http://{addr}");
+        let api = HttpDomainApi::new(&base, &base, &base, Some(base.clone())).unwrap();
+        let error = api
+            .get_project("project-test", Some("test-token"))
+            .await
+            .unwrap_err();
+        let displayed = error.to_string();
+        assert!(displayed.contains("connection failed"), "{displayed}");
+        assert!(
+            displayed.contains("/api/projects/project-test"),
+            "{displayed}"
+        );
+        assert!(!displayed.contains("test-token"));
+    }
+
+    #[tokio::test]
+    async fn specs_timeout_preserves_reason_in_display() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let mut api = HttpDomainApi::new(&base, &base, &base, Some(base.clone())).unwrap();
+        api.http = Client::builder()
+            .timeout(std::time::Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let error = api
+            .list_specs("project-test", Some("test-token"))
+            .await
+            .unwrap_err();
+        server.abort();
+        let displayed = error.to_string();
+        assert!(displayed.contains("request timed out"), "{displayed}");
+        assert!(
+            displayed.contains("/api/projects/project-test/specs"),
+            "{displayed}"
+        );
+        assert!(!displayed.contains("test-token"));
+    }
 
     /// `specs_tasks_base_url()` must prefer the aura-os-server override
     /// when set. This is the routing hook that lets an operator flip

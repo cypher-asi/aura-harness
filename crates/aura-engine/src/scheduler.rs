@@ -31,7 +31,7 @@
 //! * **Process crash while claimed** – the persisted claim can remain set after
 //!   a hard crash. A future lease timestamp/owner can recover abandoned claims.
 
-use crate::worker::{process_agent_detailed, ProcessedAgent};
+use crate::worker::{process_agent_detailed, process_agent_with_timeout, ProcessedAgent};
 use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
 use aura_agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
 use aura_core_types::{AgentId, AgentStatus};
@@ -52,6 +52,9 @@ use tracing::{debug, error, info, instrument};
 /// positional overrides onto this struct with `event_tx: None`.
 #[derive(Default)]
 pub struct ScheduleOverrides {
+    /// The caller owns a cancellable deadline around the entire schedule.
+    /// Only bounded child dispatch sets this; normal workers retain their timeout.
+    pub caller_owns_deadline: bool,
     /// Explicit per-turn loop config. `None` resolves the config from
     /// the [`AgentIdentityRegistry`].
     pub loop_config: Option<AgentLoopConfig>,
@@ -406,6 +409,7 @@ impl Scheduler {
                 event_tx: None,
                 workspace_override: None,
                 router_override: None,
+                caller_owns_deadline: false,
             },
         )
         .await
@@ -424,6 +428,7 @@ impl Scheduler {
         overrides: ScheduleOverrides,
     ) -> anyhow::Result<ProcessedAgent> {
         let ScheduleOverrides {
+            caller_owns_deadline,
             loop_config: agent_loop_config,
             policy,
             event_tx,
@@ -512,8 +517,12 @@ impl Scheduler {
         }
         let agent_loop = AgentLoop::new(config);
 
-        let result =
-            process_agent_detailed(agent_id, kernel, &agent_loop, &self.tools, event_tx).await;
+        let result = if caller_owns_deadline {
+            process_agent_with_timeout(agent_id, kernel, &agent_loop, &self.tools, event_tx, None)
+                .await
+        } else {
+            process_agent_detailed(agent_id, kernel, &agent_loop, &self.tools, event_tx).await
+        };
         let release_result = claim.release();
 
         match (result, release_result) {

@@ -41,6 +41,27 @@ pub async fn process_agent_detailed(
     tools: &[ToolDefinition],
     event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
 ) -> anyhow::Result<ProcessedAgent> {
+    process_agent_with_timeout(
+        agent_id,
+        kernel,
+        agent_loop,
+        tools,
+        event_tx,
+        Some(AGENT_LOOP_TIMEOUT),
+    )
+    .await
+}
+
+/// Child runners supply their own cancellable deadline; avoid a competing
+/// worker timer that turns a normal timeout into an internal dispatch error.
+pub(crate) async fn process_agent_with_timeout(
+    agent_id: AgentId,
+    kernel: Arc<Kernel>,
+    agent_loop: &AgentLoop,
+    tools: &[ToolDefinition],
+    event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
+    timeout: Option<Duration>,
+) -> anyhow::Result<ProcessedAgent> {
     let mut processed = 0u64;
     let mut last_result = None;
     let store = kernel.store().clone();
@@ -69,19 +90,20 @@ pub async fn process_agent_detailed(
             .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))?;
         let messages = vec![Message::user(prompt)];
 
-        let result = tokio::time::timeout(
-            AGENT_LOOP_TIMEOUT,
-            agent_loop.run_with_events(
-                &model_gateway,
-                &tool_gateway,
-                messages,
-                tools.to_vec(),
-                event_tx.clone(),
-                None,
-            ),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Agent loop timed out after {AGENT_LOOP_TIMEOUT:?}"))??;
+        let run = agent_loop.run_with_events(
+            &model_gateway,
+            &tool_gateway,
+            messages,
+            tools.to_vec(),
+            event_tx.clone(),
+            None,
+        );
+        let result = match timeout {
+            Some(deadline) => tokio::time::timeout(deadline, run)
+                .await
+                .map_err(|_| anyhow::anyhow!("Agent loop timed out after {deadline:?}"))??,
+            None => run.await?,
+        };
 
         let response_tx = aura_core_types::Transaction::new_chained(
             agent_id,
@@ -188,6 +210,68 @@ mod tests {
         assert!(
             store.get_head_seq(agent_id).unwrap() >= 2,
             "Kernel records prompt + response, so head_seq >= 2"
+        );
+    }
+
+    async fn slow_worker(timeout: Option<Duration>) -> anyhow::Result<ProcessedAgent> {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_id = AgentId::generate();
+        let store: Arc<dyn Store> =
+            Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+        let provider = Arc::new(MockProvider::simple_response("finished").with_latency(301_000));
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            Bytes::from("work"),
+            None,
+        );
+        store.enqueue_tx(&tx).unwrap();
+        let workspace_base = dir.path().join("workspaces");
+        std::fs::create_dir_all(&workspace_base).unwrap();
+        let kernel = Arc::new(
+            Kernel::new(
+                store,
+                provider,
+                ExecutorRouter::new(),
+                KernelConfig {
+                    workspace_base,
+                    proposal_timeout_ms: 400_000,
+                    ..KernelConfig::default()
+                },
+                agent_id,
+            )
+            .unwrap(),
+        );
+        let mut config = aura_agent::AgentLoopConfig::for_agent("claude-opus-4-7");
+        config.stream_timeout = Duration::from_secs(400);
+        let agent_loop = AgentLoop::new(config);
+        process_agent_with_timeout(agent_id, kernel, &agent_loop, &[], None, timeout).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn caller_deadline_allows_work_beyond_legacy_worker_limit() {
+        let result = tokio::time::timeout(Duration::from_secs(400), slow_worker(None))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.processed, 1);
+        let last = result.last_result.unwrap();
+        assert!(last.llm_error.is_none(), "{:?}", last.llm_error);
+        assert_eq!(last.total_text, "finished");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ordinary_worker_retains_its_default_deadline() {
+        let error = slow_worker(Some(AGENT_LOOP_TIMEOUT)).await.unwrap_err();
+        assert!(error.to_string().contains("timed out after 300s"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn caller_deadline_still_cancels_slow_work() {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), slow_worker(None))
+                .await
+                .is_err()
         );
     }
 
