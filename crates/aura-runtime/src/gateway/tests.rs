@@ -2084,6 +2084,214 @@ fn test_router_state_with_workspace() -> (RouterState, tempfile::TempDir) {
 }
 
 #[tokio::test]
+async fn test_remote_git_status_and_diff_are_read_only_and_workspace_scoped() {
+    let (state, tmp) = test_router_state_with_workspace();
+    let repo = tmp.path().join("workspaces").join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git command failed: {args:?}");
+    };
+    git(&["init", "-q"]);
+    std::fs::write(repo.join("main.rs"), "fn main() {}\n").unwrap();
+    git(&["add", "main.rs"]);
+    git(&[
+        "-c",
+        "user.name=Aura Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qm",
+        "Initial",
+    ]);
+    std::fs::write(
+        repo.join("main.rs"),
+        "fn main() { println!(\"mobile\"); }\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("new file.rs"), "fn mobile() {}\n").unwrap();
+
+    let app = create_router(state);
+    let status_uri = format!(
+        "/api/git/status?path={}",
+        urlencode(&repo.to_string_lossy())
+    );
+    let status = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(status_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_body = axum::body::to_bytes(status.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let status_json: serde_json::Value = serde_json::from_slice(&status_body).unwrap();
+    assert_eq!(status_json["available"], true);
+    assert_eq!(status_json["files"][0]["path"], "main.rs");
+    assert_eq!(status_json["files"][0]["worktree_status"], "M");
+
+    let diff_uri = format!(
+        "/api/git/diff?path={}&file=main.rs&area=worktree",
+        urlencode(&repo.to_string_lossy())
+    );
+    let diff = app
+        .clone()
+        .oneshot(authed_request().uri(diff_uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(diff.status(), StatusCode::OK);
+    let diff_body = axum::body::to_bytes(diff.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let diff_json: serde_json::Value = serde_json::from_slice(&diff_body).unwrap();
+    assert!(diff_json["diff"].as_str().unwrap().contains("+fn main()"));
+    assert_eq!(diff_json["truncated"], false);
+
+    let untracked_uri = format!(
+        "/api/git/diff?path={}&file=new%20file.rs&area=worktree",
+        urlencode(&repo.to_string_lossy())
+    );
+    let untracked = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(untracked_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(untracked.status(), StatusCode::OK);
+    let untracked_body = axum::body::to_bytes(untracked.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let untracked_json: serde_json::Value = serde_json::from_slice(&untracked_body).unwrap();
+    assert!(untracked_json["diff"]
+        .as_str()
+        .unwrap()
+        .contains("+fn mobile()"));
+    assert!(untracked_json["diff"]
+        .as_str()
+        .unwrap()
+        .contains("@@ -0,0 +1,1 @@"));
+
+    git(&["add", "main.rs"]);
+    let staged_uri = format!(
+        "/api/git/diff?path={}&file=main.rs&area=staged",
+        urlencode(&repo.to_string_lossy())
+    );
+    let staged = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(staged_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(staged.status(), StatusCode::OK);
+    let staged_body = axum::body::to_bytes(staged.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let staged_json: serde_json::Value = serde_json::from_slice(&staged_body).unwrap();
+    assert!(staged_json["diff"].as_str().unwrap().contains("+fn main()"));
+
+    // A changed filename can look like a Git pathspec. It must remain literal
+    // so a mobile diff request cannot expand to other workspace files.
+    std::fs::write(repo.join(":(glob)*"), "literal pathspec\n").unwrap();
+    let add_literal = std::process::Command::new("git")
+        .current_dir(&repo)
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .args(["add", "--", ":(glob)*"])
+        .output()
+        .unwrap();
+    assert!(add_literal.status.success());
+    let literal_uri = format!(
+        "/api/git/diff?path={}&file={}&area=staged",
+        urlencode(&repo.to_string_lossy()),
+        urlencode(":(glob)*")
+    );
+    let literal = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(literal_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(literal.status(), StatusCode::OK);
+    let literal_body = axum::body::to_bytes(literal.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let literal_json: serde_json::Value = serde_json::from_slice(&literal_body).unwrap();
+    let literal_diff = literal_json["diff"].as_str().unwrap();
+    assert!(literal_diff.contains("+literal pathspec"));
+    assert!(!literal_diff.contains("+fn main()"));
+
+    let nested = repo.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let nested_uri = format!(
+        "/api/git/status?path={}",
+        urlencode(&nested.to_string_lossy())
+    );
+    let nested_result = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(nested_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let nested_body = axum::body::to_bytes(nested_result.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let nested_json: serde_json::Value = serde_json::from_slice(&nested_body).unwrap();
+    assert_eq!(nested_json["available"], false);
+
+    let traversal = format!("{}/../../", repo.display());
+    let traversal_uri = format!("/api/git/status?path={}", urlencode(&traversal));
+    let traversal_result = app
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(traversal_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(traversal_result.status(), StatusCode::FORBIDDEN);
+    let unsafe_diff_uri = format!(
+        "/api/git/diff?path={}&file=../secret&area=worktree",
+        urlencode(&repo.to_string_lossy())
+    );
+    let unsafe_diff = app
+        .oneshot(
+            authed_request()
+                .uri(unsafe_diff_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsafe_diff.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_read_file_rejects_path_traversal() {
     let (state, tmp) = test_router_state_with_workspace();
     let workspaces = tmp.path().join("workspaces");

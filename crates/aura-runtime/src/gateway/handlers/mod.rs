@@ -43,6 +43,7 @@ pub(crate) mod run;
 pub(crate) mod run_ws;
 pub(crate) mod secrets;
 pub(crate) mod skills;
+pub(crate) mod source_control;
 pub(crate) mod tool_permissions;
 pub(crate) mod tx;
 pub(crate) mod util;

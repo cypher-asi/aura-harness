@@ -64,6 +64,7 @@ use super::handlers::secrets::{
     delete_secret_handler, get_secret_handler, list_secrets_handler, put_secret_handler,
 };
 use super::handlers::skills;
+use super::handlers::source_control::{git_diff_handler, git_status_handler};
 use super::handlers::tool_permissions::{
     get_agent_tool_permissions_handler, get_agent_tools_handler, get_user_tool_defaults_handler,
     put_agent_tool_permissions_handler, put_user_tool_defaults_handler,
@@ -134,6 +135,14 @@ pub fn create_router(state: RouterState) -> Router {
         .route(
             "/api/read-file",
             get(read_file_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/api/git/status",
+            get(git_status_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/api/git/diff",
+            get(git_diff_handler).route_layer(body_limit_16k),
         )
         .route(
             "/workspace/resolve",

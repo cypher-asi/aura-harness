@@ -66,7 +66,9 @@ fn to_file_entries(base: &std::path::Path, entries: Vec<WalkedEntry>) -> Vec<Fil
 /// `/api/read-file` report traversal attempts, missing files, and
 /// permission failures with the same status codes, and changes to that
 /// policy only need to land here.
-fn path_error_response(err: &PathError) -> (StatusCode, Json<serde_json::Value>) {
+pub(in crate::gateway) fn path_error_response(
+    err: &PathError,
+) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         PathError::NotFound(p) => (
             StatusCode::NOT_FOUND,
