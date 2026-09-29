@@ -10,6 +10,7 @@
 #[must_use]
 pub fn context_window_for_model(model: &str) -> u64 {
     match model {
+        // Anthropic
         m if m.contains("fable-5") => 1_000_000,
         m if m.contains("mythos-5") => 1_000_000,
         m if m.contains("opus-5") => 1_000_000,
@@ -18,6 +19,9 @@ pub fn context_window_for_model(model: &str) -> u64 {
         m if m.contains("sonnet-5") => 1_000_000,
         m if m.contains("haiku-4") => 200_000,
         m if m.starts_with("claude") => 200_000,
+
+        // OpenAI
+        m if m.contains("gpt-6") => 1_050_000,
         m if m.contains("gpt-5.6") || m.contains("gpt-5-6") => 1_050_000,
         m if m.contains("gpt-5.5") || m.contains("gpt-5-5") => 1_050_000,
         m if m.contains("gpt-5.4-mini")
@@ -33,11 +37,52 @@ pub fn context_window_for_model(model: &str) -> u64 {
         m if m.ends_with("-o1") || m.starts_with("o1") => 200_000,
         m if m.contains("-o3") || m.starts_with("o3") => 200_000,
         m if m.contains("-o4") || m.starts_with("o4") => 200_000,
+
+        // xAI. Aura aliases use hyphenated version separators while the
+        // upstream API names use dotted versions, so cover both spellings.
+        m if m.contains("grok-4.7") || m.contains("grok-4-7") => 500_000,
+        m if m.contains("grok-4.6") || m.contains("grok-4-6") => 500_000,
+        m if m.contains("grok-4.5") || m.contains("grok-4-5") => 500_000,
+        m if m.contains("grok-4.3") || m.contains("grok-4-3") => 1_000_000,
+        m if m.contains("grok-build-0.1")
+            || m.contains("grok-build-0-1")
+            || m.contains("grok-code-fast") =>
+        {
+            256_000
+        }
+
+        // Managed open-weight aliases route through Fireworks. Keep their
+        // binary-sized windows aligned with the router instead of rounding
+        // them to the first-party API limits.
+        m if m.contains("gpt-oss-120b") || m.contains("oss-120b") => 131_072,
+        m if m.contains("qwen2p5-coder-7b") || m.contains("qwen2-5-coder-7b") => 32_768,
+        m if m.contains("aura-deepseek-v4")
+            || m.contains("accounts/fireworks/models/deepseek-v4") =>
+        {
+            1_048_576
+        }
         m if m.contains("deepseek") => 1_000_000,
+        m if m.contains("kimi-k3") => 1_048_576,
         m if m.contains("kimi") => 262_144,
-        // GLM 5.2 ships a 1M window (earlier GLM tiers were ~200K, which the
-        // default below already covers).
-        m if m.contains("glm-5.2") || m.contains("glm-5p2") || m.contains("glm-5-2") => 1_000_000,
+        m if m.contains("minimax-m3") => 512_000,
+        m if m.contains("minimax-m2.7")
+            || m.contains("minimax-m2-7")
+            || m.contains("minimax-m2p7") =>
+        {
+            196_608
+        }
+        m if m.contains("glm-5.2") || m.contains("glm-5p2") || m.contains("glm-5-2") => 1_048_576,
+        m if m.contains("glm-5.1") || m.contains("glm-5p1") || m.contains("glm-5-1") => 202_752,
+        m if m.contains("qwen3p6-plus")
+            || m.contains("qwen3-6-plus")
+            || m.contains("qwen3p7-plus")
+            || m.contains("qwen3-7-plus") =>
+        {
+            262_144
+        }
+
+        // Google
+        m if m.contains("gemini") => 1_048_576,
         _ => 200_000,
     }
 }
@@ -78,6 +123,9 @@ mod tests {
 
     #[test]
     fn openai_gpt5_aura_aliases() {
+        assert_eq!(context_window_for_model("aura-gpt-6-astra"), 1_050_000);
+        assert_eq!(context_window_for_model("aura-gpt-6-sol"), 1_050_000);
+        assert_eq!(context_window_for_model("aura-gpt-6-luna"), 1_050_000);
         assert_eq!(context_window_for_model("aura-gpt-5-6-sol"), 1_050_000);
         assert_eq!(context_window_for_model("aura-gpt-5-6-terra"), 1_050_000);
         assert_eq!(context_window_for_model("aura-gpt-5-6-luna"), 1_050_000);
@@ -114,22 +162,100 @@ mod tests {
 
     #[test]
     fn deepseek_and_fireworks() {
-        assert_eq!(context_window_for_model("aura-deepseek-v4-pro"), 1_000_000);
+        assert_eq!(context_window_for_model("aura-deepseek-v4-pro"), 1_048_576);
         assert_eq!(
             context_window_for_model("aura-deepseek-v4-flash"),
-            1_000_000
+            1_048_576
         );
         assert_eq!(context_window_for_model("deepseek-v4-pro"), 1_000_000);
+        assert_eq!(context_window_for_model("aura-kimi-k3"), 1_048_576);
         assert_eq!(context_window_for_model("aura-kimi-k2-5"), 262_144);
         assert_eq!(context_window_for_model("aura-kimi-k2-6"), 262_144);
         assert_eq!(context_window_for_model("aura-kimi-k2-7-code"), 262_144);
-        // GLM 5.2 has a 1M window; earlier GLM tiers fall to the safe default.
-        assert_eq!(context_window_for_model("aura-glm-5-2"), 1_000_000);
-        assert_eq!(
-            context_window_for_model("accounts/fireworks/models/glm-5p2"),
-            1_000_000
-        );
-        assert_eq!(context_window_for_model("aura-glm-5-1"), 200_000);
+        assert_eq!(context_window_for_model("aura-oss-120b"), 131_072);
+        assert_eq!(context_window_for_model("aura-minimax-m3"), 512_000);
+        assert_eq!(context_window_for_model("aura-minimax-m2-7"), 196_608);
+        assert_eq!(context_window_for_model("aura-glm-5-2"), 1_048_576);
+        assert_eq!(context_window_for_model("aura-glm-5-1"), 202_752);
+        assert_eq!(context_window_for_model("aura-qwen3-6-plus"), 262_144);
+        assert_eq!(context_window_for_model("aura-qwen3-7-plus"), 262_144);
+    }
+
+    #[test]
+    fn xai_aura_aliases_and_direct_names() {
+        for (alias, direct, expected) in [
+            ("aura-grok-4-7", "grok-4.7", 500_000),
+            ("aura-grok-4-6", "grok-4.6", 500_000),
+            ("aura-grok-4-5", "grok-4.5", 500_000),
+            ("aura-grok-4-3", "grok-4.3", 1_000_000),
+            ("aura-grok-build-0-1", "grok-build-0.1", 256_000),
+        ] {
+            assert_eq!(context_window_for_model(alias), expected, "{alias}");
+            assert_eq!(context_window_for_model(direct), expected, "{direct}");
+        }
+    }
+
+    #[test]
+    fn google_aura_aliases() {
+        for model in [
+            "aura-gemini-3-1-pro",
+            "aura-gemini-3-5-flash",
+            "aura-gemini-3-flash",
+            "aura-gemini-3-1-flash-lite",
+            "aura-gemini-2-5-pro",
+            "aura-gemini-2-5-flash",
+            "aura-gemini-2-5-flash-lite",
+        ] {
+            assert_eq!(context_window_for_model(model), 1_048_576, "{model}");
+        }
+    }
+
+    #[test]
+    fn current_aura_catalog_matches_router_windows() {
+        for (model, expected) in [
+            ("aura-claude-fable-5-1", 1_000_000),
+            ("aura-claude-opus-5-5", 1_000_000),
+            ("aura-claude-fable-5", 1_000_000),
+            ("aura-claude-opus-5", 1_000_000),
+            ("aura-claude-opus-4-8", 1_000_000),
+            ("aura-claude-opus-4-7", 1_000_000),
+            ("aura-claude-opus-4-6", 1_000_000),
+            ("aura-claude-sonnet-5", 1_000_000),
+            ("aura-claude-sonnet-4-6", 1_000_000),
+            ("aura-claude-haiku-4-5", 200_000),
+            ("aura-gpt-6-astra", 1_050_000),
+            ("aura-gpt-6-sol", 1_050_000),
+            ("aura-gpt-6-luna", 1_050_000),
+            ("aura-gpt-5-6-sol", 1_050_000),
+            ("aura-gpt-5-6-terra", 1_050_000),
+            ("aura-gpt-5-6-luna", 1_050_000),
+            ("aura-gpt-5-5", 1_050_000),
+            ("aura-gpt-5-4", 1_050_000),
+            ("aura-gpt-5-4-mini", 400_000),
+            ("aura-gpt-5-4-nano", 400_000),
+            ("aura-oss-120b", 131_072),
+            ("aura-grok-4-7", 500_000),
+            ("aura-grok-4-6", 500_000),
+            ("aura-grok-4-5", 500_000),
+            ("aura-grok-4-3", 1_000_000),
+            ("aura-grok-build-0-1", 256_000),
+            ("aura-deepseek-v4-pro", 1_048_576),
+            ("aura-deepseek-v4-flash", 1_048_576),
+            ("aura-kimi-k3", 1_048_576),
+            ("aura-kimi-k2-7-code", 262_144),
+            ("aura-kimi-k2-6", 262_144),
+            ("aura-minimax-m3", 512_000),
+            ("aura-glm-5-2", 1_048_576),
+            ("aura-gemini-3-1-pro", 1_048_576),
+            ("aura-gemini-3-5-flash", 1_048_576),
+            ("aura-gemini-3-flash", 1_048_576),
+            ("aura-gemini-3-1-flash-lite", 1_048_576),
+            ("aura-gemini-2-5-pro", 1_048_576),
+            ("aura-gemini-2-5-flash", 1_048_576),
+            ("aura-gemini-2-5-flash-lite", 1_048_576),
+        ] {
+            assert_eq!(context_window_for_model(model), expected, "{model}");
+        }
     }
 
     #[test]
