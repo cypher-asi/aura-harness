@@ -8,7 +8,7 @@
 //! deterministically before any provider event arrives.
 //!
 //! The state machine is deliberately simple — three terminal
-//! conditions:
+//! conditions (plus the configurable idle deadline):
 //!
 //! 1. The upstream stream closes (`Poll::Ready(None)`).
 //! 2. A [`StreamEvent::MessageStop`] / [`StreamEvent::Error`] is
@@ -22,8 +22,10 @@ use super::parse::{parse_sse_event, pop_event_block, MAX_SSE_BUFFER_SIZE};
 use crate::error::ReasonerError;
 use crate::StreamEvent;
 use futures_util::Stream;
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 /// A stream that parses SSE events from an HTTP byte stream.
 ///
@@ -48,6 +50,7 @@ pub(in crate::anthropic) struct SseStream<S> {
     /// emitted. Ensures we only surface it once, before any provider
     /// event.
     emitted_http_meta: bool,
+    idle_timer: Option<(Duration, Pin<Box<tokio::time::Sleep>>)>,
 }
 
 impl<S> SseStream<S> {
@@ -63,6 +66,7 @@ impl<S> SseStream<S> {
             finished: false,
             request_id: None,
             emitted_http_meta: false,
+            idle_timer: None,
         }
     }
 
@@ -79,7 +83,15 @@ impl<S> SseStream<S> {
             finished: false,
             request_id,
             emitted_http_meta: false,
+            idle_timer: None,
         }
+    }
+
+    /// Reset the deadline on every received chunk, including provider pings.
+    /// A long response may keep streaming indefinitely; a silent one may not.
+    pub(in crate::anthropic) fn with_idle_timeout(mut self, duration: Duration) -> Self {
+        self.idle_timer = Some((duration, Box::pin(tokio::time::sleep(duration))));
+        self
     }
 }
 
@@ -116,6 +128,11 @@ where
 
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
+                    if let Some((duration, timer)) = self.idle_timer.as_mut() {
+                        timer
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + *duration);
+                    }
                     match std::str::from_utf8(&bytes) {
                         Ok(s) => self.buffer.push_str(s),
                         Err(e) => {
@@ -142,7 +159,15 @@ where
                     self.finished = true;
                     return Poll::Ready(None);
                 }
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    if let Some((_, timer)) = self.idle_timer.as_mut() {
+                        if timer.as_mut().poll(cx).is_ready() {
+                            self.finished = true;
+                            return Poll::Ready(Some(Err(ReasonerError::Timeout)));
+                        }
+                    }
+                    return Poll::Pending;
+                }
             }
         }
     }

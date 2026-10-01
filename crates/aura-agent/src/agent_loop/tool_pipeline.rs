@@ -354,6 +354,8 @@ pub(crate) async fn process_tool_results(
     // on `LoopState` because the circling-read gate consults them
     // directly.
     let any_write_success = track_tool_effects(&tool_calls, &all_results, state);
+    let repeated_edit_failure =
+        guard_failed_edits(&tool_calls, &all_results, state, &mut side_messages);
 
     if any_write_success && state.build_cooldown == 0 {
         if let Some(build_text) = run_auto_build(
@@ -403,7 +405,7 @@ pub(crate) async fn process_tool_results(
         );
     }
 
-    let should_stop = all_results.iter().any(|r| r.stop_loop);
+    let should_stop = repeated_edit_failure.is_some() || all_results.iter().any(|r| r.stop_loop);
 
     // Drain `all_results` into the trailing user message; carry side
     // messages (chunk-guard warnings + auto-build output) as
@@ -412,7 +414,55 @@ pub(crate) async fn process_tool_results(
     let pushed_results = std::mem::take(&mut all_results);
     push_tool_result_message(&mut state.messages, pushed_results, side_messages);
 
+    if let Some(message) = repeated_edit_failure {
+        state.result.stalled = true;
+        state.result.llm_error = Some(message.clone());
+        emit_event(
+            ctx.event_tx,
+            AgentLoopEvent::Error {
+                code: "tool_no_progress".to_string(),
+                message,
+                recoverable: true,
+            },
+        );
+    }
+
     ProcessedToolResults { should_stop }
+}
+
+/// Reads between retries do not make a failed edit new. A successful mutation
+/// does: reset the tracker so a genuinely changed file gets a fresh budget.
+fn guard_failed_edits(
+    calls: &[ToolCallInfo],
+    results: &[ToolCallResult],
+    state: &mut LoopState,
+    side_messages: &mut Vec<String>,
+) -> Option<String> {
+    for result in results {
+        let Some(call) = calls.iter().find(|call| call.id == result.tool_use_id) else {
+            continue;
+        };
+        if !result.is_error && !result.file_changes.is_empty() {
+            state.failed_edit_attempts.clear();
+            continue;
+        }
+        if call.name != "edit_file"
+            || !result.is_error
+            || result.kind == aura_core_types::ToolResultKind::CompactionStructural
+        {
+            continue;
+        }
+        let key = format!("{}\n{}", call.input, result.content);
+        let count = state.failed_edit_attempts.entry(key).or_default();
+        *count = count.saturating_add(1);
+        if *count == 3 {
+            side_messages.push("The identical edit has failed three times. Do not repeat it unchanged. Read the current file, inspect the error, and use a different matching edit; if blocked, explain the blocker.".to_string());
+        }
+        if *count >= 4 {
+            return Some("Aura stopped a repeated failed edit loop after four identical failures. No successful edit was made by those attempts. Review the tool error and current file before restarting.".to_string());
+        }
+    }
+    None
 }
 
 /// Intermediate view assembled per batch before the common
@@ -1086,6 +1136,49 @@ mod track_tool_effects_tests {
             }],
             image: None,
         }
+    }
+
+    #[test]
+    fn failed_edit_guard_survives_reads_but_resets_after_mutation() {
+        let config = AgentLoopConfig::for_agent("claude-test-model");
+        let mut state = LoopState::new_for_tests(&config, vec![]);
+        let call = mk_write_tool("edit", "edit_file", "test.txt");
+        let mut failure = mk_read_result("edit");
+        failure.is_error = true;
+        failure.content = "No matching text".into();
+        let mut warnings = vec![];
+        for _ in 0..3 {
+            assert!(guard_failed_edits(
+                std::slice::from_ref(&call),
+                std::slice::from_ref(&failure),
+                &mut state,
+                &mut warnings
+            )
+            .is_none());
+            assert!(guard_failed_edits(
+                &[mk_read_tool("read", "test.txt")],
+                &[mk_read_result("read")],
+                &mut state,
+                &mut warnings
+            )
+            .is_none());
+        }
+        assert_eq!(warnings.len(), 1);
+        assert!(guard_failed_edits(
+            std::slice::from_ref(&call),
+            std::slice::from_ref(&failure),
+            &mut state,
+            &mut warnings
+        )
+        .is_some());
+        assert!(guard_failed_edits(
+            std::slice::from_ref(&call),
+            &[mk_write_result("edit", "test.txt")],
+            &mut state,
+            &mut warnings
+        )
+        .is_none());
+        assert!(guard_failed_edits(&[call], &[failure], &mut state, &mut warnings).is_none());
     }
 
     #[test]

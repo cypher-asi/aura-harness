@@ -123,6 +123,8 @@ fn is_cloudflare_html(body: &str) -> bool {
 /// errors and automatic fallback to a secondary model.
 pub struct AnthropicProvider {
     client: reqwest::Client,
+    // Streaming requests use an idle deadline, not a total body deadline.
+    streaming_client: reqwest::Client,
     config: AnthropicConfig,
 }
 
@@ -139,7 +141,16 @@ impl AnthropicProvider {
             .tcp_keepalive(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ReasonerError::Internal(format!("HTTP client creation failed: {e}")))?;
-        Ok(Self { client, config })
+        let streaming_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .tcp_keepalive(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| ReasonerError::Internal(format!("HTTP client creation failed: {e}")))?;
+        Ok(Self {
+            client,
+            streaming_client,
+            config,
+        })
     }
 
     /// Create from environment variables.

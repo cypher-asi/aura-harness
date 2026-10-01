@@ -481,14 +481,22 @@ impl AnthropicProvider {
             "Anthropic /v1/messages request"
         );
 
-        let req_builder = self.build_request(request_ctx, model, final_bytes)?;
+        let req_builder =
+            self.build_request(request_ctx, model, final_bytes, request_summary.stream)?;
         throttle_outbound_request(self.config.min_request_interval_ms, model).await;
 
         // #region agent log
         let send_started_at = std::time::Instant::now();
         // #endregion
 
-        let response = match req_builder.send().await {
+        // Bound connection/header stalls without expiring a healthy SSE body.
+        let send_result = tokio::time::timeout(
+            Duration::from_millis(self.config.timeout_ms),
+            req_builder.send(),
+        )
+        .await
+        .map_err(|_| ApiError::Transport(ReasonerError::Timeout))?;
+        let response = match send_result {
             Ok(resp) => resp,
             Err(e) => {
                 let elapsed_ms = millis_as_u64(send_started_at.elapsed().as_millis());
@@ -583,13 +591,19 @@ impl AnthropicProvider {
         // #endregion
 
         if !response.status().is_success() {
-            let (err, meta) = classify_api_error(
-                response,
-                RequestRoutingContext::from_request(request_ctx),
-                Some(&content_profile),
-                wire_body_bytes,
+            // Error bodies are buffered, even for streaming requests. They
+            // still need a deadline when the SSE client has no total timeout.
+            let (err, meta) = tokio::time::timeout(
+                Duration::from_millis(self.config.timeout_ms),
+                classify_api_error(
+                    response,
+                    RequestRoutingContext::from_request(request_ctx),
+                    Some(&content_profile),
+                    wire_body_bytes,
+                ),
             )
-            .await;
+            .await
+            .map_err(|_| ApiError::Transport(ReasonerError::Timeout))?;
             crate::console::anthropic_failure_block(&crate::console::AnthropicFailureView {
                 status_code: Some(meta.status_code),
                 status_text: &meta.status_text,
@@ -678,6 +692,7 @@ impl AnthropicProvider {
         request_ctx: &ModelRequest,
         model: &str,
         body_bytes: Vec<u8>,
+        streaming: bool,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
         let token = request_ctx.auth_token.as_deref();
 
@@ -691,8 +706,12 @@ impl AnthropicProvider {
         );
         // #endregion
 
-        let mut req_builder = self
-            .client
+        let client = if streaming {
+            &self.streaming_client
+        } else {
+            &self.client
+        };
+        let mut req_builder = client
             .post(format!("{}/v1/messages", self.config.base_url))
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -3072,7 +3091,8 @@ impl ModelProvider for AnthropicProvider {
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string);
                 let byte_stream = response.bytes_stream();
-                let sse_stream = SseStream::with_request_id(byte_stream, provider_request_id);
+                let sse_stream = SseStream::with_request_id(byte_stream, provider_request_id)
+                    .with_idle_timeout(Duration::from_millis(self.config.timeout_ms));
                 Ok(Box::pin(sse_stream) as StreamEventStream)
             })
         })

@@ -1183,6 +1183,62 @@ async fn test_complete_timeout() {
 }
 
 #[tokio::test]
+async fn streaming_activity_outlives_request_deadline() {
+    use futures_util::StreamExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let ping = "event: ping\ndata: {}\n\n";
+    let stop = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0; 8192];
+        let received = socket.read(&mut buf).await.unwrap();
+        assert!(received > 0);
+        let length = ping.len() * 10 + stop.len();
+        socket
+            .write_all(
+                format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {length}\r\n\r\n"
+        )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            socket.write_all(ping.as_bytes()).await.unwrap();
+        }
+        socket.write_all(stop.as_bytes()).await.unwrap();
+    });
+    let mut config = AnthropicConfig::new("claude-test-model");
+    config.base_url = format!("http://{addr}");
+    config.timeout_ms = 200;
+    config.max_retries = 0;
+    let provider = AnthropicProvider::new(config).unwrap();
+    let request = ModelRequest::builder("claude-test-model", "system")
+        .message(Message::user("test"))
+        .try_build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let mut stream = provider.complete_streaming(request).await.unwrap();
+    let mut pings = 0;
+    let mut stopped = false;
+    while let Some(event) = stream.next().await {
+        match event.unwrap() {
+            StreamEvent::Ping => pings += 1,
+            StreamEvent::MessageStop => stopped = true,
+            _ => {}
+        }
+    }
+    server.await.unwrap();
+    assert_eq!(pings, 10);
+    assert!(stopped);
+    assert!(started.elapsed() > Duration::from_millis(200));
+}
+
+#[tokio::test]
 async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
