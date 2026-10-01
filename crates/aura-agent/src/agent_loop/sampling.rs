@@ -247,7 +247,9 @@ pub(crate) async fn run_sampling_request(
 
     SamplingRequestResult {
         needs_follow_up: !dispatch_says_break,
-        broke_for_error: false,
+        // A no-progress tool failure must not be retried by the empty-turn
+        // recovery guard after the dispatcher has explicitly stopped it.
+        broke_for_error: state.result.stalled,
         produced_visible_output,
         scrubbed_tool_markup,
     }

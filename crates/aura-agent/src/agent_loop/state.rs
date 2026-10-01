@@ -139,6 +139,8 @@ pub(crate) struct LoopState {
     /// `tool_pipeline::track_tool_effects` (which calls
     /// `observe_tool` on every `(tool, result)` pair).
     pub(crate) steering: SteeringRegistry,
+    /// Identical failed edit attempts, retained across intervening reads.
+    pub(crate) failed_edit_attempts: std::collections::HashMap<String, u32>,
 }
 
 impl LoopState {
@@ -176,6 +178,7 @@ impl LoopState {
                 config.phase_reset_signal.is_some(),
                 config.early_test_oracle.clone(),
             ),
+            failed_edit_attempts: std::collections::HashMap::new(),
         }
     }
 

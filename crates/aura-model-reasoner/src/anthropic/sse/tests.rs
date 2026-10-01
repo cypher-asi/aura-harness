@@ -24,6 +24,22 @@ fn bytes_stream(
     )
 }
 
+#[tokio::test]
+async fn idle_stream_times_out_and_then_terminates() {
+    let inner = futures_util::stream::pending::<Result<bytes::Bytes, std::io::Error>>();
+    let mut stream = SseStream::with_request_id(inner, None)
+        .with_idle_timeout(std::time::Duration::from_millis(20));
+    assert!(matches!(
+        stream.next().await,
+        Some(Ok(StreamEvent::HttpMeta { .. }))
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(Err(crate::ReasonerError::Timeout))
+    ));
+    assert!(stream.next().await.is_none());
+}
+
 // --- parse_sse_event unit tests ---
 
 #[test]

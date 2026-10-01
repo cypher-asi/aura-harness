@@ -7,7 +7,8 @@
 pub struct AnthropicConfig {
     /// Default model to use.
     pub default_model: String,
-    /// Request timeout in milliseconds.
+    /// Buffered request / streaming header and idle timeout in milliseconds.
+    /// Streaming activity resets the idle deadline; it is not a total-run cap.
     pub timeout_ms: u64,
     /// Maximum retries per model before falling back.
     ///

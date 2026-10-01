@@ -63,6 +63,11 @@ const NO_OP_TURN_NUDGE: &str =
 making any changes. If the request needs action, continue and complete it now; otherwise reply to \
 the user directly.";
 
+const UNFINISHED_ACTION_NUDGE: &str =
+    "You ended your response by promising an immediate action, but ended the turn before \
+performing it. Use the available tools to carry out the authorized request now. If you are blocked \
+or need a decision, explain that clearly instead of promising work that will not run.";
+
 /// Hard cap on how many "you wrote a tool call as text" nudges one
 /// turn may inject. One is enough: the model leaked tool-call markup
 /// into a text block (so [`super::text_sanitize`] scrubbed it and no
@@ -156,6 +161,8 @@ pub(crate) async fn run_turn(
     // text" nudges this turn has spent. The per-iteration signal is
     // read straight off `sampling_result` in the stop branch below.
     let mut markup_nudges_used: u32 = 0;
+    let mut unfinished_action_nudges_used = 0;
+    let recover_promised_actions = !ctx.tools.is_empty() && !is_planning_request(&state.messages);
 
     loop {
         let iteration = usize::try_from(ctx.iteration_offset.saturating_add(sampling_count))
@@ -230,6 +237,29 @@ pub(crate) async fn run_turn(
             continue;
         }
 
+        // A visible sentence such as "I'll read the file now" used to bypass
+        // the no-op guard even though nothing continues after EndTurn. Recover
+        // this narrow case once; real answers, blockers and plans still stop.
+        if recover_promised_actions
+            && !state.task_done_completed
+            && ends_with_unfinished_action(&state.messages)
+        {
+            if ctx.run.agent.config.auto_continue_no_op_turns
+                && unfinished_action_nudges_used < MAX_NO_OP_TURN_NUDGES
+            {
+                unfinished_action_nudges_used += 1;
+                emit_no_op_progress(ctx.run.event_tx, "turn_unfinished_action_retry");
+                apply_user_inputs_to_messages(
+                    &mut state.messages,
+                    vec![UserInput::Steer {
+                        instruction: UNFINISHED_ACTION_NUDGE.to_string(),
+                    }],
+                );
+                continue;
+            }
+            emit_no_op_progress(ctx.run.event_tx, "turn_ended_unfinished_action");
+        }
+
         // Leaked-tool-markup recovery: the model signalled stop, but
         // the last response had tool-call markup scrubbed from its
         // text (it wrote a tool call as prose, so nothing executed).
@@ -288,6 +318,124 @@ pub(crate) async fn run_turn(
         broke_for_error,
         sampling_count,
     })
+}
+
+fn is_planning_request(messages: &[Message]) -> bool {
+    use aura_model_reasoner::{ContentBlock, Role};
+    let text = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)
+        .map(|m| {
+            m.content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        "plan",
+        "outline",
+        "explain",
+        "how ",
+        "what ",
+        "draft a plan",
+        "can you explain",
+    ]
+    .iter()
+    .any(|prefix| text.trim_start().starts_with(prefix))
+        || [
+            "don't implement",
+            "do not implement",
+            "planning only",
+            "plan only",
+        ]
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
+fn ends_with_unfinished_action(messages: &[Message]) -> bool {
+    use aura_model_reasoner::{ContentBlock, Role};
+    let Some(message) = messages.iter().rev().find(|m| m.role == Role::Assistant) else {
+        return false;
+    };
+    let text = message
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    if text.contains('?')
+        || [
+            "please ",
+            "blocked",
+            "cannot ",
+            "can't ",
+            "need your",
+            "waiting for",
+            "tomorrow",
+            "later",
+            "next build",
+            "if you",
+            "once you",
+            "when you",
+            "after you",
+            "approval",
+            "permission",
+        ]
+        .iter()
+        .any(|marker| text.contains(marker))
+    {
+        return false;
+    }
+    let sentence = text
+        .trim()
+        .trim_end_matches(['.', '!'])
+        .rsplit(['\n'])
+        .next()
+        .unwrap_or("")
+        .rsplit(". ")
+        .next()
+        .unwrap_or("")
+        .trim();
+    if sentence == "doing it now" {
+        return true;
+    }
+    let Some(action) = ["i'll ", "i’ll ", "i will "]
+        .iter()
+        .find_map(|prefix| sentence.strip_prefix(prefix))
+    else {
+        return false;
+    };
+    [
+        "read ",
+        "check ",
+        "find ",
+        "locate ",
+        "run ",
+        "test ",
+        "verify ",
+        "edit ",
+        "write ",
+        "patch ",
+        "fix ",
+        "remove ",
+        "delete ",
+        "update ",
+        "implement ",
+        "search ",
+    ]
+    .iter()
+    .any(|verb| action.starts_with(verb))
 }
 
 /// Outcome of a single biased-select drain at the top of the turn
@@ -378,6 +526,12 @@ pub(super) fn apply_user_inputs_to_messages(messages: &mut Vec<Message>, inputs:
 /// release is needed.
 fn emit_no_op_progress(event_tx: Option<&Sender<AgentLoopEvent>>, stage: &str) {
     let message = match stage {
+        "turn_unfinished_action_retry" => {
+            "Model promised an action and ended early — re-prompting once to perform it."
+        }
+        "turn_ended_unfinished_action" => {
+            "Model ended with unfinished work after the recovery attempt."
+        }
         "turn_no_action_retry" => {
             "Model ended its turn without responding or acting — re-prompting once."
         }
