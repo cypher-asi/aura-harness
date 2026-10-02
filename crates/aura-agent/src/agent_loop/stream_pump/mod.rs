@@ -153,12 +153,21 @@ pub(super) enum StreamPumpOutcome {
     /// closed, etc.). Carries the [`AgentError`] so the caller can
     /// fold it into the loop result without re-wrapping.
     Error(AgentError),
+    /// A connection failure before any completed tool call was admitted.
+    /// Only this outcome is safe to replay as a fresh sampling request.
+    RetryableTransport {
+        error: AgentError,
+        text_bytes: usize,
+        thinking_bytes: usize,
+    },
     /// The response stream aborted while a `tool_use` block was
     /// still being accumulated. `run_stream_pump` consumes this
     /// internal outcome to drive the per-tool-call retry loop.
     AbortedWithPartial {
         reason: String,
         partial_tool_use: Option<PartialToolUse>,
+        text_bytes: usize,
+        thinking_bytes: usize,
     },
 }
 
@@ -183,19 +192,23 @@ pub(super) async fn run_stream_pump(
     let model_name = request.model.as_ref().to_string();
     let (max_retries, backoff_initial_ms, backoff_cap_ms) = stream_retry_params();
     let mut retry_state: Option<PartialRetryState> = None;
+    let mut transport_error: Option<AgentError> = None;
+    let mut reset_bytes = (0, 0);
 
     for attempt in 0..=max_retries {
+        if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
+            return StreamPumpOutcome::Cancelled;
+        }
         if attempt > 0 {
-            let Some(state) = retry_state.as_ref() else {
-                // Invariant: when `attempt > 0` the previous iteration
-                // recorded a partial-retry state before `continue`.
+            if retry_state.is_none() && transport_error.is_none() {
+                // Every retry must carry the preceding failure.
                 // Reaching this arm without one is a partition
                 // contract violation; surface it as a fatal
                 // `LlmCallError` rather than panicking (Rule 4.1).
                 return StreamPumpOutcome::Error(AgentError::Reason(ReasonerError::Internal(
-                    "stream retry requested without partial tool-use state".to_string(),
+                    "stream retry requested without an interrupted request".to_string(),
                 )));
-            };
+            }
             let delay = aura_model_reasoner::anthropic::exp_backoff_with_jitter(
                 attempt - 1,
                 backoff_initial_ms,
@@ -206,47 +219,90 @@ pub(super) async fn run_stream_pump(
             // The `unwrap_or(u64::MAX)` is purely defensive against a
             // future cap raise.
             let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
-            warn!(
-                attempt,
-                max_attempts = max_retries,
-                delay_ms,
-                tool_use_id = %state.tool_use_id,
-                tool_name = %state.tool_name,
-                reason = %state.reason,
-                "Per-tool-call streaming retry scheduled after pump stream abort"
-            );
-            emit_event(
-                event_tx,
-                AgentLoopEvent::ToolCallRetrying {
-                    tool_use_id: state.tool_use_id.clone(),
-                    tool_name: state.tool_name.clone(),
+            if let Some(state) = retry_state.as_ref() {
+                warn!(
                     attempt,
-                    max_attempts: max_retries,
+                    max_attempts = max_retries,
                     delay_ms,
-                    reason: state.reason.clone(),
-                },
-            );
+                    tool_use_id = %state.tool_use_id,
+                    tool_name = %state.tool_name,
+                    reason = %state.reason,
+                    "Per-tool-call streaming retry scheduled after pump stream abort"
+                );
+                emit_event(
+                    event_tx,
+                    AgentLoopEvent::ToolCallRetrying {
+                        tool_use_id: state.tool_use_id.clone(),
+                        tool_name: state.tool_name.clone(),
+                        attempt,
+                        max_attempts: max_retries,
+                        delay_ms,
+                        reason: state.reason.clone(),
+                    },
+                );
+            } else if let Some(err) = transport_error.as_ref() {
+                warn!(attempt, max_retries, delay_ms, error = %err, "Retrying interrupted model stream");
+                emit_event(
+                    event_tx,
+                    AgentLoopEvent::Progress {
+                        stage: "model_retrying".to_string(),
+                        tool_name: None,
+                        elapsed_ms: None,
+                        message: Some(format!(
+                            "Connection interrupted; retrying ({attempt}/{max_retries})"
+                        )),
+                    },
+                );
+            }
             if let Some(token) = cancellation_token {
                 tokio::select! {
+                    biased;
                     () = token.cancelled() => return StreamPumpOutcome::Cancelled,
                     () = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
                 }
             } else {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
+            // Discard deltas from the failed attempt before displaying the
+            // fresh response. Never splice two independent generations.
+            emit_event(
+                event_tx,
+                AgentLoopEvent::StreamReset {
+                    reason: "Model stream interrupted; restarting the response".to_string(),
+                    text_bytes: reset_bytes.0,
+                    thinking_bytes: reset_bytes.1,
+                },
+            );
         }
 
-        let stream = match provider.complete_response_stream(request.clone()).await {
+        let opened = if let Some(token) = cancellation_token {
+            tokio::select! {
+                biased;
+                () = token.cancelled() => return StreamPumpOutcome::Cancelled,
+                opened = provider.complete_response_stream(request.clone()) => opened,
+            }
+        } else {
+            provider.complete_response_stream(request.clone()).await
+        };
+        let stream = match opened {
             Ok(s) => s,
             Err(ReasonerError::StreamAbortedWithPartial {
                 reason,
                 partial_tool_use,
             }) => {
+                reset_bytes = (0, 0);
+                transport_error = None;
                 retry_state = Some(update_partial_retry_state(
                     retry_state,
                     reason,
                     partial_tool_use,
                 ));
+                continue;
+            }
+            Err(err @ (ReasonerError::Request(_) | ReasonerError::Timeout)) => {
+                reset_bytes = (0, 0);
+                retry_state = None;
+                transport_error = Some(AgentError::Reason(err));
                 continue;
             }
             Err(err) => return StreamPumpOutcome::Error(AgentError::Reason(err)),
@@ -256,15 +312,32 @@ pub(super) async fn run_stream_pump(
             StreamPumpOutcome::AbortedWithPartial {
                 reason,
                 partial_tool_use,
+                text_bytes,
+                thinking_bytes,
             } => {
+                reset_bytes = (text_bytes, thinking_bytes);
+                transport_error = None;
                 retry_state = Some(update_partial_retry_state(
                     retry_state,
                     reason,
                     partial_tool_use,
                 ));
             }
+            StreamPumpOutcome::RetryableTransport {
+                error: err,
+                text_bytes,
+                thinking_bytes,
+            } => {
+                reset_bytes = (text_bytes, thinking_bytes);
+                retry_state = None;
+                transport_error = Some(err);
+            }
             other => return other,
         }
+    }
+
+    if let Some(err) = transport_error {
+        return StreamPumpOutcome::Error(err);
     }
 
     let state = retry_state.unwrap_or_else(|| PartialRetryState {
@@ -322,6 +395,7 @@ impl std::fmt::Debug for StreamPumpOutcome {
                 .finish(),
             Self::Cancelled => write!(f, "Cancelled"),
             Self::Error(e) => write!(f, "Error({e:?})"),
+            Self::RetryableTransport { error, .. } => write!(f, "RetryableTransport({error:?})"),
             Self::AbortedWithPartial { reason, .. } => f
                 .debug_struct("AbortedWithPartial")
                 .field("reason", reason)

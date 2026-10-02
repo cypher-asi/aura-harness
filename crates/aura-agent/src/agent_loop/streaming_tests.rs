@@ -1,13 +1,9 @@
 //! Streaming-path test coverage retained after the Phase 7
 //! buffered-transport deletion.
 //!
-//! The four `StreamReset` tests that lived here pre-Phase-7 pinned a
-//! `BufferedTransport`-only contract: when the streaming SSE drain
-//! threw mid-message, the buffered path would re-call `complete()`
-//! (non-streaming) and synthesise a single `StreamReset` event before
-//! re-emitting the authoritative text. The pump path has no such
-//! fallback (`provider.complete_response_stream` is the only call
-//! site), so those tests went away with `BufferedTransport`.
+//! Interrupted connections are retried as fresh streams with a bounded
+//! budget and `StreamReset`, never by splicing partial responses or
+//! replaying a request after a completed tool call was admitted.
 //!
 //! The per-tool-call retry coverage below stays — it pins the
 //! `StreamAbortedWithPartial` recovery the pump driver does in
@@ -254,4 +250,303 @@ async fn stream_aborted_with_partial_exhausts_and_fails() {
         failed, 1,
         "expected exactly one ToolCallFailed after exhaustion, got: {failed}"
     );
+}
+
+#[derive(Clone, Copy)]
+enum DisconnectKind {
+    BodyReset,
+    OpenRequest,
+    InvalidEvent,
+    AfterTool,
+    PartialAfterTool,
+}
+
+struct DisconnectProvider {
+    calls: std::sync::atomic::AtomicUsize,
+    failures: usize,
+    kind: DisconnectKind,
+}
+
+impl DisconnectProvider {
+    fn new(failures: usize, kind: DisconnectKind) -> Self {
+        Self {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            failures,
+            kind,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for DisconnectProvider {
+    fn name(&self) -> &'static str {
+        "disconnect-test"
+    }
+
+    async fn health_check(&self) -> bool {
+        true
+    }
+
+    async fn complete(&self, _: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        panic!("disconnect recovery must not switch to a buffered request")
+    }
+
+    async fn complete_streaming(
+        &self,
+        _: ModelRequest,
+    ) -> Result<StreamEventStream, ReasonerError> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call >= self.failures {
+            return Ok(Box::pin(stream::iter(vec![
+                Ok(StreamEvent::ContentBlockStart {
+                    index: 0,
+                    content_type: StreamContentType::Text,
+                }),
+                Ok(StreamEvent::TextDelta {
+                    text: "recovered answer".into(),
+                }),
+                Ok(StreamEvent::ContentBlockStop { index: 0 }),
+                Ok(StreamEvent::MessageDelta {
+                    stop_reason: Some(StopReason::EndTurn),
+                    output_tokens: 1,
+                }),
+                Ok(StreamEvent::MessageStop),
+            ])));
+        }
+        if matches!(self.kind, DisconnectKind::OpenRequest) {
+            return Err(ReasonerError::Request(
+                "connection reset before headers".into(),
+            ));
+        }
+        let mut events = vec![
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                content_type: StreamContentType::Text,
+            }),
+            Ok(StreamEvent::TextDelta {
+                text: "discard this partial answer".into(),
+            }),
+            Ok(StreamEvent::ContentBlockStop { index: 0 }),
+        ];
+        if matches!(
+            self.kind,
+            DisconnectKind::AfterTool | DisconnectKind::PartialAfterTool
+        ) {
+            events.extend([
+                Ok(StreamEvent::ContentBlockStart {
+                    index: 1,
+                    content_type: StreamContentType::ToolUse {
+                        id: "toolu_write".into(),
+                        name: "write_file".into(),
+                    },
+                }),
+                Ok(StreamEvent::InputJsonDelta {
+                    partial_json: "{}".into(),
+                }),
+                Ok(StreamEvent::ContentBlockStop { index: 1 }),
+            ]);
+        }
+        if matches!(self.kind, DisconnectKind::PartialAfterTool) {
+            events.push(Ok(StreamEvent::ContentBlockStart {
+                index: 2,
+                content_type: StreamContentType::ToolUse {
+                    id: "toolu_partial".into(),
+                    name: "edit_file".into(),
+                },
+            }));
+        }
+        if matches!(self.kind, DisconnectKind::InvalidEvent) {
+            events.push(Ok(StreamEvent::Error {
+                request_id: None,
+                message: "invalid request".into(),
+            }));
+        } else {
+            // The exact Windows body-read failure reported in AURA (test).
+            events.push(Err(ReasonerError::Request("Stream error: request or response body error: error reading a body from connection: The remote host forcibly closed the existing connection. (os error 10054)".into())));
+        }
+        Ok(Box::pin(stream::iter(events)))
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn stream_connection_reset_recovers_and_discards_partial_output() {
+    let _lock = STREAM_RETRY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _cfg = install_retry(2, 1, 2);
+    let provider = DisconnectProvider::new(1, DisconnectKind::BodyReset);
+    let (tx, rx) = mpsc::channel(1024);
+    let result = AgentLoop::new(pump_config())
+        .run_with_events(
+            &provider,
+            &NoOpExecutor,
+            vec![Message::user("hello")],
+            vec![],
+            Some(tx),
+            None,
+        )
+        .await
+        .expect("recovered run");
+    assert!(result.llm_error.is_none(), "{:?}", result.llm_error);
+    assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let events = collect_events(rx).await;
+    let reset = events
+        .iter()
+        .position(|e| matches!(e, AgentLoopEvent::StreamReset { .. }))
+        .expect("reset partial UI content");
+    assert!(
+        matches!(&events[reset], AgentLoopEvent::StreamReset { text_bytes, thinking_bytes, .. }
+        if *text_bytes == "discard this partial answer".len() && *thinking_bytes == 0)
+    );
+    assert!(events[..reset]
+        .iter()
+        .any(|e| matches!(e, AgentLoopEvent::TextDelta(t) if t.contains("discard"))));
+    assert!(events[reset + 1..]
+        .iter()
+        .any(|e| matches!(e, AgentLoopEvent::TextDelta(t) if t == "recovered answer")));
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, AgentLoopEvent::ToolCallFailed { .. })));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn stream_connection_reset_exhausts_bounded_budget() {
+    let _lock = STREAM_RETRY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _cfg = install_retry(2, 1, 2);
+    let provider = DisconnectProvider::new(usize::MAX, DisconnectKind::BodyReset);
+    let (tx, rx) = mpsc::channel(1024);
+    let result = AgentLoop::new(pump_config())
+        .run_with_events(
+            &provider,
+            &NoOpExecutor,
+            vec![Message::user("hello")],
+            vec![],
+            Some(tx),
+            None,
+        )
+        .await
+        .expect("errors carried by loop result");
+    assert!(result
+        .llm_error
+        .as_deref()
+        .is_some_and(|s| s.contains("10054")));
+    assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    let events = collect_events(rx).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AgentLoopEvent::StreamReset { .. }))
+            .count(),
+        2
+    );
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, AgentLoopEvent::ToolCallFailed { .. })));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn stream_open_connection_error_recovers() {
+    let _lock = STREAM_RETRY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _cfg = install_retry(2, 1, 2);
+    let provider = DisconnectProvider::new(1, DisconnectKind::OpenRequest);
+    let result = AgentLoop::new(pump_config())
+        .run(
+            &provider,
+            &NoOpExecutor,
+            vec![Message::user("hello")],
+            vec![],
+        )
+        .await
+        .expect("recovered request");
+    assert!(result.llm_error.is_none());
+    assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn stream_invalid_event_is_not_retried() {
+    let _lock = STREAM_RETRY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _cfg = install_retry(2, 1, 2);
+    let provider = DisconnectProvider::new(1, DisconnectKind::InvalidEvent);
+    let result = AgentLoop::new(pump_config())
+        .run(
+            &provider,
+            &NoOpExecutor,
+            vec![Message::user("hello")],
+            vec![],
+        )
+        .await
+        .expect("errors carried by loop result");
+    assert!(result.llm_error.is_some());
+    assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn stream_disconnect_after_completed_tool_is_not_replayed() {
+    let _lock = STREAM_RETRY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _cfg = install_retry(2, 1, 2);
+    for kind in [DisconnectKind::AfterTool, DisconnectKind::PartialAfterTool] {
+        let provider = DisconnectProvider::new(1, kind);
+        let result = AgentLoop::new(pump_config())
+            .run(
+                &provider,
+                &NoOpExecutor,
+                vec![Message::user("hello")],
+                vec![],
+            )
+            .await
+            .expect("errors carried by loop result");
+        assert!(result.llm_error.is_some());
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn stream_connection_retry_backoff_honors_cancellation() {
+    let _lock = STREAM_RETRY_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _cfg = install_retry(2, 30_000, 30_000);
+    let provider = DisconnectProvider::new(usize::MAX, DisconnectKind::BodyReset);
+    let token = tokio_util::sync::CancellationToken::new();
+    let (tx, mut rx) = mpsc::channel(1024);
+    let watch_token = token.clone();
+    let watcher = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if matches!(event, AgentLoopEvent::Progress { stage, .. } if stage == "model_retrying")
+            {
+                watch_token.cancel();
+                break;
+            }
+        }
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        AgentLoop::new(pump_config()).run_with_events(
+            &provider,
+            &NoOpExecutor,
+            vec![Message::user("hello")],
+            vec![],
+            Some(tx),
+            Some(token),
+        ),
+    )
+    .await
+    .expect("cancel without waiting for backoff")
+    .expect("cancelled run");
+    watcher.await.expect("watcher");
+    assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

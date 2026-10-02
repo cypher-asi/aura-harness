@@ -113,6 +113,10 @@ pub enum TurnEvent {
     StreamReset {
         /// Human-readable reason for the reset.
         reason: String,
+        /// UTF-8 bytes emitted by the failed attempt only. Prior successful
+        /// iterations and their tool results must remain visible.
+        text_bytes: usize,
+        thinking_bytes: usize,
     },
 
     /// An in-flight `tool_use` streaming request was interrupted by a

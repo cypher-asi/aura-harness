@@ -63,6 +63,8 @@ pub(super) async fn drive_stream(
     let mut in_flight: FuturesOrdered<ToolFuture<'_>> = FuturesOrdered::new();
     let mut text_chunks: Vec<String> = Vec::new();
     let mut thinking_chunks: Vec<(String, Option<String>)> = Vec::new();
+    let mut text_bytes = 0;
+    let mut thinking_bytes = 0;
     // Per-block dedup flags: set when an incremental `OutputTextDelta`
     // / `OutputThinkingDelta` has already been streamed for the block
     // currently accumulating, so the block-close `OutputItemDone` arm
@@ -155,16 +157,12 @@ pub(super) async fn drive_stream(
                 return StreamPumpOutcome::Error(AgentError::StreamTimeout { elapsed_ms });
             }
             StreamStep::TransportErr(err) => {
-                return match err {
-                    aura_model_reasoner::StreamError::StreamAbortedWithPartial {
-                        reason,
-                        partial_tool_use,
-                    } => StreamPumpOutcome::AbortedWithPartial {
-                        reason,
-                        partial_tool_use,
-                    },
-                    other => StreamPumpOutcome::Error(AgentError::Stream(other)),
-                };
+                return interrupted_outcome(
+                    err,
+                    tool_calls_seen.is_empty(),
+                    text_bytes,
+                    thinking_bytes,
+                );
             }
             StreamStep::End => break,
             StreamStep::Event(event) => match event {
@@ -187,6 +185,7 @@ pub(super) async fn drive_stream(
                     }
                 }
                 ResponseEvent::OutputTextDelta(chunk) => {
+                    text_bytes += chunk.len();
                     // Incremental assistant text: stream it to the
                     // client the moment it arrives so a long writing
                     // phase is never a silent gap. The full block is
@@ -196,6 +195,7 @@ pub(super) async fn drive_stream(
                     emit_event(event_tx, AgentLoopEvent::TextDelta(chunk));
                 }
                 ResponseEvent::OutputThinkingDelta(chunk) => {
+                    thinking_bytes += chunk.len();
                     // Incremental extended-thinking: stream it live so
                     // the client can render the current thinking block
                     // instead of waiting out a multi-second think.
@@ -210,6 +210,7 @@ pub(super) async fn drive_stream(
                     // already has the text and a re-emit would double
                     // it. Always accumulate for `synthesize_response`.
                     if !streamed_text_in_block {
+                        text_bytes += text.len();
                         emit_event(event_tx, AgentLoopEvent::TextDelta(text.clone()));
                     }
                     streamed_text_in_block = false;
@@ -225,6 +226,7 @@ pub(super) async fn drive_stream(
                     // (e.g. the chat client's "Thought for Xs" pill)
                     // still see the close signal.
                     if !streamed_thinking_in_block {
+                        thinking_bytes += thinking.len();
                         emit_event(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
                     }
                     streamed_thinking_in_block = false;
@@ -240,16 +242,12 @@ pub(super) async fn drive_stream(
                     break;
                 }
                 ResponseEvent::Error(err) => {
-                    return match err {
-                        aura_model_reasoner::StreamError::StreamAbortedWithPartial {
-                            reason,
-                            partial_tool_use,
-                        } => StreamPumpOutcome::AbortedWithPartial {
-                            reason,
-                            partial_tool_use,
-                        },
-                        other => StreamPumpOutcome::Error(AgentError::Stream(other)),
-                    };
+                    return interrupted_outcome(
+                        err,
+                        tool_calls_seen.is_empty(),
+                        text_bytes,
+                        thinking_bytes,
+                    );
                 }
                 ResponseEvent::Keepalive(phase) => {
                     // A ping or intra-block delta. Reaching this arm
@@ -398,6 +396,36 @@ pub(super) async fn drive_stream(
     StreamPumpOutcome::Completed {
         response,
         tool_results,
+    }
+}
+
+/// Do not replay a request once a completed tool call was admitted: tools
+/// may have side effects and user inputs may already have been drained.
+/// Partial tool input alone has not executed and retains its retry path.
+fn interrupted_outcome(
+    err: aura_model_reasoner::StreamError,
+    no_tools_admitted: bool,
+    text_bytes: usize,
+    thinking_bytes: usize,
+) -> StreamPumpOutcome {
+    match err {
+        aura_model_reasoner::StreamError::TransportClosed { .. } if no_tools_admitted => {
+            StreamPumpOutcome::RetryableTransport {
+                error: AgentError::Stream(err),
+                text_bytes,
+                thinking_bytes,
+            }
+        }
+        aura_model_reasoner::StreamError::StreamAbortedWithPartial {
+            reason,
+            partial_tool_use,
+        } if no_tools_admitted => StreamPumpOutcome::AbortedWithPartial {
+            reason,
+            partial_tool_use,
+            text_bytes,
+            thinking_bytes,
+        },
+        other => StreamPumpOutcome::Error(AgentError::Stream(other)),
     }
 }
 

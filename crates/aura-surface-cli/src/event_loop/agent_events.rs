@@ -90,7 +90,12 @@ impl TurnEventSink for UiCommandSink {
             .await;
     }
 
-    async fn on_stream_reset(&mut self, reason: String) {
+    async fn on_stream_reset(
+        &mut self,
+        reason: String,
+        _text_bytes: usize,
+        _thinking_bytes: usize,
+    ) {
         debug!(reason = %reason, "Stream reset received");
         if self.state.streaming_active {
             let _ = self.commands.send(UiCommand::FinishStreaming).await;

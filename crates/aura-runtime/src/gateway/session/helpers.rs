@@ -822,6 +822,18 @@ impl TurnEventSink for OutboundMessageSink<'_> {
         self.push_thinking_delta(thinking).await;
     }
 
+    async fn on_stream_reset(&mut self, reason: String, text_bytes: usize, thinking_bytes: usize) {
+        self.push(OutboundMessage::Progress(crate::protocol::ProgressMsg {
+            stage: "stream_reset".to_string(),
+            tool_name: None,
+            elapsed_ms: None,
+            message: Some(reason),
+            reset_text_bytes: Some(text_bytes as u64),
+            reset_thinking_bytes: Some(thinking_bytes as u64),
+        }))
+        .await;
+    }
+
     async fn on_tool_start(&mut self, id: String, name: String) {
         self.push(OutboundMessage::ToolUseStart(ToolUseStart { id, name }))
             .await;
@@ -906,13 +918,15 @@ impl TurnEventSink for OutboundMessageSink<'_> {
             tool_name,
             elapsed_ms,
             message,
+            reset_text_bytes: None,
+            reset_thinking_bytes: None,
         }))
         .await;
     }
 
     // The following variants are intentional no-ops on the WS wire —
     // `ToolComplete`, `IterationComplete`, `ThinkingComplete`,
-    // `StepComplete`, `StreamReset`, `Warning`, `Debug`. The trait
+    // `StepComplete`, `Warning`, `Debug`. The trait
     // defaults cover them, but the mapper's exhaustive match still
     // forces a decision here whenever the event enum changes.
     async fn on_debug(&mut self, _event: DebugEvent) {}
@@ -1365,6 +1379,40 @@ mod tests {
             Some(OutboundMessage::TextDelta(delta)) if delta.text == "hello"
         ));
         assert!(outbound_rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn forward_events_flushes_failed_deltas_before_stream_reset() {
+        let (event_tx, event_rx) = mpsc::channel(8);
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        let task = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+        event_tx
+            .send(AgentLoopEvent::TextDelta("failed 😀".into()))
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::StreamReset {
+                reason: "connection reset".into(),
+                text_bytes: "failed 😀".len(),
+                thinking_bytes: 0,
+            })
+            .await
+            .unwrap();
+        event_tx
+            .send(AgentLoopEvent::TextDelta("recovered".into()))
+            .await
+            .unwrap();
+        drop(event_tx);
+        task.await.unwrap();
+        assert!(
+            matches!(outbound_rx.recv().await, Some(OutboundMessage::TextDelta(d)) if d.text == "failed 😀")
+        );
+        assert!(
+            matches!(outbound_rx.recv().await, Some(OutboundMessage::Progress(p)) if p.stage == "stream_reset" && p.reset_text_bytes == Some("failed 😀".len() as u64))
+        );
+        assert!(
+            matches!(outbound_rx.recv().await, Some(OutboundMessage::TextDelta(d)) if d.text == "recovered")
+        );
     }
 
     #[tokio::test]
