@@ -77,7 +77,13 @@ pub trait TurnEventSink: Send {
     ) {
     }
     async fn on_step_complete(&mut self) {}
-    async fn on_stream_reset(&mut self, _reason: String) {}
+    async fn on_stream_reset(
+        &mut self,
+        _reason: String,
+        _text_bytes: usize,
+        _thinking_bytes: usize,
+    ) {
+    }
     async fn on_warning(&mut self, _message: String) {}
     async fn on_error(&mut self, _code: String, _message: String, _recoverable: bool) {}
     /// Heartbeat / status hook. Default no-op so sinks that don't
@@ -173,7 +179,14 @@ where
                 .await;
         }
         AgentLoopEvent::StepComplete => sink.on_step_complete().await,
-        AgentLoopEvent::StreamReset { reason } => sink.on_stream_reset(reason).await,
+        AgentLoopEvent::StreamReset {
+            reason,
+            text_bytes,
+            thinking_bytes,
+        } => {
+            sink.on_stream_reset(reason, text_bytes, thinking_bytes)
+                .await;
+        }
         AgentLoopEvent::Warning(message) => sink.on_warning(message).await,
         AgentLoopEvent::Error {
             code,
@@ -286,7 +299,12 @@ mod mapper_tests {
         async fn on_step_complete(&mut self) {
             self.calls.push("step_done".into());
         }
-        async fn on_stream_reset(&mut self, reason: String) {
+        async fn on_stream_reset(
+            &mut self,
+            reason: String,
+            _text_bytes: usize,
+            _thinking_bytes: usize,
+        ) {
             self.calls.push(format!("reset:{reason}"));
         }
         async fn on_warning(&mut self, message: String) {
@@ -356,6 +374,8 @@ mod mapper_tests {
         map_agent_loop_event(
             AgentLoopEvent::StreamReset {
                 reason: "provider_drop".into(),
+                text_bytes: 0,
+                thinking_bytes: 0,
             },
             &mut sink,
         )

@@ -335,6 +335,8 @@ impl AgentLoop {
                     event_tx,
                     AgentLoopEvent::StreamReset {
                         reason: format!("Stream error, retrying without streaming: {e}"),
+                        text_bytes: 0,
+                        thinking_bytes: 0,
                     },
                 );
                 complete_and_emit_as_deltas(provider, request, event_tx, provider_name, &model_name)
@@ -433,6 +435,8 @@ impl AgentLoop {
                     event_tx,
                     AgentLoopEvent::StreamReset {
                         reason: format!("Mid-stream SSE error, retrying without streaming: {e}"),
+                        text_bytes: 0,
+                        thinking_bytes: 0,
                     },
                 );
                 complete_and_emit_as_deltas(provider, request, event_tx, provider_name, model_name)

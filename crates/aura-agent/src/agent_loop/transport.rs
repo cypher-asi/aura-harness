@@ -222,6 +222,9 @@ impl ModelTransport for PumpTransport {
             StreamPumpOutcome::AbortedWithPartial { .. } => Err(LlmCallError::Fatal(
                 "stream pump returned an unretried partial tool-use abort".to_string(),
             )),
+            StreamPumpOutcome::RetryableTransport { error, .. } => {
+                Err(LlmCallError::Fatal(error.to_string()))
+            }
         }
     }
 }

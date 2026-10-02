@@ -428,6 +428,8 @@ pub(crate) async fn handle_chat_ws_attach(
                             tool_name: None,
                             elapsed_ms: None,
                             message: Some(format!("dropped {n} messages (client too slow)")),
+                            reset_text_bytes: None,
+                            reset_thinking_bytes: None,
                         });
                         let _ = send_outbound_frame(&mut ws_tx, &warn).await;
                     }
