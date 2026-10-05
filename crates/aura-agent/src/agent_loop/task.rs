@@ -221,6 +221,7 @@ pub(crate) async fn run_task(
         break;
     }
 
+    state.result.task_done_completed = state.task_done_completed;
     state.result.messages = state.messages;
 
     for observer in &ctx.agent.config.observers {

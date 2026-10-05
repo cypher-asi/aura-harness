@@ -116,6 +116,11 @@ pub fn overrides_from_request(
             timeout_ms: b.timeout_ms,
         });
     SubagentOverrides {
+        reasoning_effort: request.reasoning_effort_override.clone(),
+        response_max_tokens: request
+            .override_budget
+            .as_ref()
+            .and_then(|budget| budget.max_tokens),
         mode: mode_override,
         permissions,
         kernel_mode: None,

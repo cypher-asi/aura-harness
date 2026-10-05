@@ -179,3 +179,6 @@ mod tests;
 
 #[cfg(test)]
 mod transport_tests;
+
+#[cfg(test)]
+mod effort_capability_tests;

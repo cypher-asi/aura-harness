@@ -58,6 +58,8 @@ pub struct SubagentSpec {
     pub kernel_mode: KernelMode,
     /// Child's selected model id.
     pub model_id: String,
+    pub reasoning_effort: Option<String>,
+    pub response_max_tokens: Option<u32>,
     /// Free-form child role tag — `"task"`, `"reviewer"`, ...
     pub kind: String,
     /// Child's [`SpawnMode`].

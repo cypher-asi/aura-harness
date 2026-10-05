@@ -43,6 +43,22 @@ fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
 }
 
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
+    let mut thinking = resolve_thinking_unbounded(request, model)?;
+    if let Some(budget) = thinking.budget_tokens {
+        // Enabled thinking requires at least 1024 tokens and strictly less
+        // than max_tokens. Small response caps must not produce invalid API requests.
+        let ceiling = request.max_tokens.get().checked_sub(1)?;
+        if ceiling < 1024 {
+            return None;
+        }
+        // Leave response space for text/tool arguments on enabled-thinking models.
+        let thinking_ceiling = (request.max_tokens.get() / 2).max(1024).min(ceiling);
+        thinking.budget_tokens = Some(budget.min(thinking_ceiling));
+    }
+    Some(thinking)
+}
+
+fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
     // Historical note: dev-loop requests used to escalate
     // [`ThinkingMode::Adaptive`] to [`ThinkingMode::Enabled`] to coax
     // visible `ThinkingDelta` frames out of opus-4 / sonnet-4, gated by
@@ -160,6 +176,8 @@ fn thinking_mode_label(mode: ThinkingMode) -> &'static str {
 fn supports_native_adaptive_effort_ladder(model: &str) -> bool {
     let model = normalize_anthropic_model(model);
     model.starts_with("claude-opus-5")
+        || model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-opus-4-8")
         || model.starts_with("claude-fable-5")
         || model.starts_with("claude-mythos-5")
         || model.starts_with("claude-sonnet-5")
@@ -188,15 +206,21 @@ pub(super) fn resolve_output_config(
             effort: effort.to_string(),
         });
     }
-    // Phase 2: only force `output_config.effort = "high"` when the
-    // caller explicitly opted into [`ThinkingEffort::High`] (or the
-    // higher user tiers XHigh / Max), or when the legacy auto-enable
-    // path fired (`thinking_effort: None`). Low / Medium / Off opt-in
-    // callers must NOT inherit the forced-high effort — that's exactly
-    // the override that amplifies the doom loop's read iterations.
-    // Older adaptive Claude 4 models expose only `"high"` here, so XHigh /
-    // Max fold into it. Current Claude 5 models' full native ladder is
-    // handled above.
+    let normalized = normalize_anthropic_model(model);
+    if normalized.starts_with("claude-opus-4-6") || normalized.starts_with("claude-sonnet-4-6") {
+        let effort = match request.thinking_effort.unwrap_or(ThinkingEffort::High) {
+            ThinkingEffort::Off => return None,
+            ThinkingEffort::Minimal | ThinkingEffort::Low => "low",
+            ThinkingEffort::Medium => "medium",
+            ThinkingEffort::High | ThinkingEffort::XHigh => "high",
+            ThinkingEffort::Max => "max",
+        };
+        return Some(ApiOutputConfig {
+            effort: effort.into(),
+        });
+    }
+    // Conservative compatibility for older adaptive models whose effort ladder
+    // is not covered by the capability cases above.
     match request.thinking_effort {
         Some(
             ThinkingEffort::Off

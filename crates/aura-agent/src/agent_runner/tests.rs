@@ -12,10 +12,7 @@ fn configure_loop_config_simple_caps_max_tokens() {
 fn configure_loop_config_complex_uses_full_budget() {
     let config = AgentRunnerConfig::for_agent("claude-test-model");
     let loop_cfg = configure_loop_config(TaskComplexity::Complex, &config, 3, "system".into());
-    assert_eq!(
-        loop_cfg.max_tokens,
-        config.task_execution_max_tokens.max(32_768)
-    );
+    assert_eq!(loop_cfg.max_tokens, config.task_execution_max_tokens);
     assert_eq!(loop_cfg.max_iterations, config.max_agentic_iterations);
 }
 

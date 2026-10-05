@@ -2,8 +2,4 @@
 //!
 //! - [`rate_limit_tests`] covers [`super::LlmCallError::from_reasoner_error`]
 //!   and the looser prose-based rate-limit recovery path.
-//! - [`max_tokens_tests`] covers [`super::handle_max_tokens`] and the
-//!   `restore_budget_next_iteration` ↔ `LoopState::begin_iteration` contract.
-
-mod max_tokens_tests;
 mod rate_limit_tests;

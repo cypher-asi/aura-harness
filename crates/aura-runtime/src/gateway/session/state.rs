@@ -442,6 +442,8 @@ impl Session {
             .as_deref()
             .and_then(parse_session_cache_retention);
         RuntimeAgentIdentity {
+            reasoning_effort: self.user_thinking_effort,
+            upstream_provider_family: None,
             model: self.model.clone(),
             aura_org_id: self.aura_org_id.clone(),
             aura_session_id: self.aura_session_id.clone(),

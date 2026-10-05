@@ -46,6 +46,7 @@ use crate::verify::{
 /// `too-many-arguments` ceiling without flattening the optional
 /// fields into the public API.
 struct TaskInnerOptions {
+    require_task_done: bool,
     phase_reset_signal: Option<Arc<AtomicBool>>,
     prebuilt_task_ctx: Option<String>,
     early_test_oracle: bool,
@@ -129,6 +130,8 @@ pub struct AgentRunnerConfig {
     pub max_shell_task_retries: u32,
     pub task_execution_max_tokens: u32,
     pub thinking_budget: u32,
+    /// Explicit selected effort, independent of the response token allowance.
+    pub reasoning_effort: Option<aura_model_reasoner::ThinkingEffort>,
     pub stream_timeout_secs: u64,
     pub max_context_tokens: u64,
     pub max_task_credits: Option<u64>,
@@ -211,18 +214,9 @@ impl AgentRunnerConfig {
             max_agentic_iterations: aura_core_types::MAX_TURNS as usize,
             max_shell_task_retries: 4,
             task_execution_max_tokens: 16_384,
-            // Stripped (2026-05): cut from 10_000 to 2_000.
-            // Phase 2 of harness-v2 (2026-05 round 3): further reduced
-            // from 2000 to 800. Extended-thinking turns produced no
-            // faster convergence — they just stretched per-turn
-            // latency, and the tasks that timed out were the same
-            // ones that loop on read-only tool calls regardless of
-            // how much budget the model has to deliberate. The
-            // explore turn should be fast tool calls, not
-            // multi-minute deliberation; the iteration-0 disable in
-            // `LoopState::begin_iteration` clamps it further for the
-            // very first turn. See `harness_task_completion_fix` plan.
-            thinking_budget: 800,
+            // This is the whole response allowance, not a thinking-only budget.
+            thinking_budget: 16_384,
+            reasoning_effort: None,
             // Matches the reasoner's default reqwest request timeout
             // (300s / `AURA_MODEL_TIMEOUT_MS`) so the outer `timeout()`
             // guard in `AgentLoop::call_model` does not preempt an
@@ -368,6 +362,7 @@ impl AgentRunner {
             TaskInnerOptions {
                 phase_reset_signal: None,
                 prebuilt_task_ctx: None,
+                require_task_done: false,
                 early_test_oracle: self.config.early_test_oracle,
             },
         )
@@ -384,6 +379,7 @@ impl AgentRunner {
         options: TaskInnerOptions,
     ) -> Result<TaskExecutionResult, crate::AgentError> {
         let TaskInnerOptions {
+            require_task_done,
             phase_reset_signal,
             prebuilt_task_ctx,
             early_test_oracle,
@@ -461,6 +457,20 @@ impl AgentRunner {
             ));
         }
 
+        if result.output_truncated
+            || result.timed_out
+            || result.insufficient_credits
+            || result.stalled
+        {
+            return Err(crate::AgentError::Internal(
+                "Task execution stopped before completion".into(),
+            ));
+        }
+        if require_task_done && !result.task_done_completed {
+            return Err(crate::AgentError::Internal(
+                "Task ended without an accepted task_done completion".into(),
+            ));
+        }
         Ok(finalize_loop_result(result))
     }
 
@@ -542,6 +552,7 @@ impl AgentRunner {
                 event_tx,
                 cancel,
                 TaskInnerOptions {
+                    require_task_done: true,
                     phase_reset_signal: Some(reset_signal),
                     prebuilt_task_ctx: Some(full_task_ctx),
                     early_test_oracle,
@@ -699,20 +710,11 @@ pub fn configure_loop_config(
     _member_count: usize,
     system_prompt: String,
 ) -> AgentLoopConfig {
-    // Stripped (2026-05): the per-complexity budget escalation
-    // (Standard scaled by `_member_count`, Complex floored to 12_000)
-    // amplified per-turn deliberation without translating into faster
-    // convergence. Hold every task at the configured base — Simple
-    // still gets the same cap as before so trivial tasks don't burn
-    // tokens, but Standard and Complex inherit the runner's
-    // `thinking_budget` floor.
-    let thinking_budget = match complexity {
-        TaskComplexity::Simple => 2_000.min(config.thinking_budget),
-        TaskComplexity::Standard | TaskComplexity::Complex => config.thinking_budget,
-    };
+    // Complexity may narrow a response ceiling, never enlarge an explicit cap.
+    let thinking_budget = config.thinking_budget;
     let max_tokens = match complexity {
         TaskComplexity::Simple => config.task_execution_max_tokens.min(8_192),
-        TaskComplexity::Complex => config.task_execution_max_tokens.max(32_768),
+        TaskComplexity::Complex => config.task_execution_max_tokens,
         TaskComplexity::Standard => config.task_execution_max_tokens,
     };
     let max_iterations = match complexity {
@@ -724,12 +726,7 @@ pub fn configure_loop_config(
         _ => config.default_model.clone(),
     };
 
-    // Phase 6: the policy-derived `thinking_budget` is the *starting*
-    // per-iteration response budget for `LoopState::thinking.budget`.
-    // The agent loop tapers it across iterations and the on-truncation
-    // recovery path lifts back to `max_tokens`. We forward it via
-    // `AgentLoopConfig::thinking_budget` (capped at `max_tokens` so the
-    // ceiling invariant in `LoopState::build_request` still holds).
+    // Legacy name: this field controls initial total output, including tool arguments.
     let initial_thinking_budget = thinking_budget.min(max_tokens);
 
     // Phase 5: the `early_test_oracle` field on the returned
@@ -738,6 +735,7 @@ pub fn configure_loop_config(
     // scope. The struct field defaults to `None` here.
     AgentLoopConfig {
         max_iterations,
+        user_thinking_effort: config.reasoning_effort,
         max_tokens,
         thinking_budget: Some(initial_thinking_budget),
         stream_timeout: Duration::from_secs(config.stream_timeout_secs),

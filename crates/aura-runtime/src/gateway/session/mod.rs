@@ -27,6 +27,9 @@ mod state;
 mod subagent_stream;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod execution_profile_tests;
 mod tool_approval;
 
 pub(crate) use chat_run::{handle_chat_ws_attach, spawn_chat_run};

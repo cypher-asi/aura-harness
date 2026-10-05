@@ -115,6 +115,8 @@ impl ModelProvider for RecordingProvider {
 /// as an explicit assert mismatch rather than as a silent pass.
 fn opus_4_7_identity() -> AgentIdentity {
     AgentIdentity {
+        reasoning_effort: None,
+        upstream_provider_family: None,
         model: "claude-opus-4-7".to_string(),
         aura_org_id: Some("11111111-1111-1111-1111-111111111111".to_string()),
         aura_session_id: Some("22222222-2222-2222-2222-222222222222".to_string()),

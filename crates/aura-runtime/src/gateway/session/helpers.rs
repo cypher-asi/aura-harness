@@ -1040,6 +1040,8 @@ pub(super) async fn apply_turn_result(
         "insufficient_credits"
     } else if loop_result.llm_error.is_some() {
         "end_turn_with_errors"
+    } else if loop_result.output_truncated {
+        "max_tokens"
     } else {
         "end_turn"
     };

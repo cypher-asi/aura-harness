@@ -387,8 +387,12 @@ pub(crate) async fn process_tool_results(
         &blocked_ids,
     );
 
-    let task_done_success = tool_calls.iter().any(|tc| tc.name == "task_done")
-        && all_results.iter().any(|r| !r.is_error && r.stop_loop);
+    let task_done_success = tool_calls.iter().any(|tc| {
+        tc.name == "task_done"
+            && all_results
+                .iter()
+                .any(|r| r.tool_use_id == tc.id && !r.is_error && r.stop_loop)
+    });
     if task_done_success {
         state.task_done_completed = true;
     }
@@ -648,10 +652,36 @@ pub(crate) async fn dispatch(
     ctx: ToolEffectCtx<'_>,
 ) -> bool {
     use aura_model_reasoner::StopReason;
+    let event_tx = ctx.event_tx;
+    state.result.output_truncated = response.stop_reason == StopReason::MaxTokens;
     match response.stop_reason {
         StopReason::EndTurn | StopReason::StopSequence => true,
         StopReason::MaxTokens => {
-            !super::iteration::handle_max_tokens(&agent.config, response, state)
+            // The pump has already executed complete calls. Commit their real
+            // results before continuing; never replace successful writes with
+            // synthetic failures or replay the entire sample.
+            if !tool_calls(response).is_empty()
+                && process_tool_results(state, agent, batch, ctx)
+                    .await
+                    .should_stop
+            {
+                return true;
+            }
+            const MAX_OUTPUT_LIMIT_RECOVERIES: usize = 2;
+            if state.output_limit_recoveries >= MAX_OUTPUT_LIMIT_RECOVERIES {
+                emit_event(event_tx, AgentLoopEvent::Error {
+                    code: "output_limit".into(),
+                    message: "The response is incomplete: output-token limit reached after bounded continuation. Completed tool actions were preserved.".into(),
+                    recoverable: false,
+                });
+                return true;
+            }
+            state.output_limit_recoveries += 1;
+            state.thinking.restore_next_iteration = true;
+            state.messages.push(Message::user(
+                "Your response reached the output-token limit. Continue from the interruption without repeating prior text or completed tools. Use smaller complete tool calls if needed; finish the requested work and clearly report any remaining limitation."
+            ));
+            false
         }
         StopReason::ToolUse => {
             process_tool_results(state, agent, batch, ctx)

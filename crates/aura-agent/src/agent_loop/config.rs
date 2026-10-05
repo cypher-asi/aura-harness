@@ -68,11 +68,11 @@ pub struct AgentLoopConfig {
     pub credit_budget: Option<u64>,
     /// Auto-build cooldown in iterations.
     pub auto_build_cooldown: usize,
-    /// Thinking budget taper starts after this iteration.
+    /// Legacy compatibility setting; response allowances no longer taper.
     pub thinking_taper_after: usize,
-    /// Factor to reduce thinking budget.
+    /// Legacy compatibility setting; does not reduce response-token space.
     pub thinking_taper_factor: f64,
-    /// Minimum thinking budget after tapering.
+    /// Legacy compatibility setting; never enlarges an explicit response cap.
     pub thinking_min_budget: u32,
     /// Additional tool definitions beyond core tools.
     pub extra_tools: Vec<ToolDefinition>,

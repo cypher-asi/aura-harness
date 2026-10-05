@@ -92,6 +92,9 @@ pub struct ScheduleOverrides {
 /// public traffic and return `429 RATE_LIMITED`.
 #[derive(Debug, Clone)]
 pub struct AgentIdentity {
+    /// Explicit caller effort; inherited by worker and child runs.
+    pub reasoning_effort: Option<aura_model_reasoner::ThinkingEffort>,
+    pub upstream_provider_family: Option<String>,
     /// Caller-selected model (e.g. `claude-opus-4-7`). Required.
     pub model: String,
     /// Org UUID forwarded as `X-Aura-Org-Id` on outbound `/v1/messages` calls.
@@ -129,6 +132,8 @@ impl AgentIdentity {
     #[must_use]
     pub fn into_loop_config(self) -> AgentLoopConfig {
         AgentLoopConfig {
+            user_thinking_effort: self.reasoning_effort,
+            upstream_provider_family: self.upstream_provider_family,
             system_prompt: self.system_prompt,
             max_tokens: self.max_tokens,
             max_context_tokens: Some(self.max_context_tokens as u64),
@@ -576,6 +581,8 @@ mod tests {
     /// immediately when callers wire the registry incorrectly.
     pub(crate) fn test_identity(model: &str) -> AgentIdentity {
         AgentIdentity {
+            reasoning_effort: None,
+            upstream_provider_family: None,
             model: model.to_string(),
             aura_org_id: Some("org-test".to_string()),
             aura_session_id: Some("session-test".to_string()),
