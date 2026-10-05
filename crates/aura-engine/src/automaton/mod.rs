@@ -188,6 +188,8 @@ impl AutomatonBridge {
             return;
         };
         let identity = crate::scheduler::AgentIdentity {
+            reasoning_effort: None,
+            upstream_provider_family: None,
             model: model.to_string(),
             aura_org_id: aura_org_id.map(String::from),
             aura_session_id: aura_session_id.map(String::from),
@@ -281,6 +283,26 @@ impl AutomatonBridge {
                     "Scheduler tick after lifecycle event failed"
                 );
             }
+        }
+    }
+
+    fn register_execution_profile(
+        &self,
+        agent_id: AgentId,
+        profile: Option<&aura_protocol::ModelSelection>,
+    ) {
+        let (Some(scheduler), Some(profile)) = (self.scheduler.as_ref(), profile) else {
+            return;
+        };
+        let registry = scheduler.identity_registry();
+        if let Some(mut identity) = registry.get(agent_id) {
+            identity.reasoning_effort = profile.reasoning_effort.and_then(|effort| {
+                aura_model_reasoner::ThinkingEffort::from_wire(effort.as_wire())
+            });
+            if let Some(tokens) = profile.max_tokens {
+                identity.max_tokens = tokens;
+            }
+            registry.register(agent_id, identity);
         }
     }
 
@@ -435,6 +457,7 @@ impl AutomatonController for AutomatonBridge {
             None,
             Vec::new(),
             None,
+            None,
         )
         .await
     }
@@ -511,6 +534,7 @@ impl AutomatonController for AutomatonBridge {
             None,
             None,
             Vec::new(),
+            None,
             None,
         )
         .await

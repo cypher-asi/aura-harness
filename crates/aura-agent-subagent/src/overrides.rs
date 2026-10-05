@@ -45,6 +45,10 @@ pub struct SubagentOverrides {
     pub kernel_mode: Option<KernelMode>,
     /// Override the child's model id.
     pub model_id: Option<String>,
+    /// Provider-neutral effort override; absent inherits parent runtime identity.
+    pub reasoning_effort: Option<String>,
+    /// Explicit per-response allowance, distinct from the total child quota.
+    pub response_max_tokens: Option<u32>,
     /// Override the child's kind tag (a free-form role label —
     /// `"task"`, `"reviewer"`, `"explorer"`, etc.).
     pub kind: Option<String>,

@@ -28,6 +28,112 @@ use std::sync::Arc;
 
 use common::build_dispatch_with_response;
 
+#[derive(Default)]
+struct ProfileCapture(
+    std::sync::Mutex<Vec<aura_model_reasoner::ModelRequest>>,
+    bool,
+);
+
+#[async_trait::async_trait]
+impl aura_model_reasoner::ModelProvider for ProfileCapture {
+    fn name(&self) -> &'static str {
+        "profile-capture"
+    }
+    async fn complete(
+        &self,
+        request: aura_model_reasoner::ModelRequest,
+    ) -> Result<aura_model_reasoner::ModelResponse, aura_model_reasoner::ReasonerError> {
+        self.0.lock().unwrap().push(request.clone());
+        if self.1 {
+            use aura_model_reasoner::{Message, ModelResponse, ProviderTrace, StopReason, Usage};
+            return Ok(ModelResponse::new(
+                StopReason::MaxTokens,
+                Message::assistant("Partial"),
+                Usage::new(10, 1024),
+                ProviderTrace::new("capture", 0),
+            ));
+        }
+        aura_model_reasoner::ModelProvider::complete(
+            &aura_model_reasoner::MockProvider::simple_response("Inspection finished."),
+            request,
+        )
+        .await
+    }
+    async fn health_check(&self) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn explicit_child_profile_reaches_the_model_request() {
+    let provider = Arc::new(ProfileCapture::default());
+    let (dispatch, _store, _dir, _workspace) =
+        common::build_dispatch_with_provider(provider.clone());
+    let mut request = base_request(AgentId::generate());
+    request.reasoning_effort_override = Some("xhigh".into());
+    request.override_budget = Some(SubagentBudget {
+        max_tokens: Some(1024),
+        max_iterations: 2,
+        ..Default::default()
+    });
+    let result = SubagentDispatchHook::dispatch(&dispatch, request)
+        .await
+        .unwrap();
+    assert!(matches!(result.exit, SubagentExit::Completed));
+    let requests = provider.0.lock().unwrap();
+    assert!(!requests.is_empty());
+    assert!(requests.len() <= 2);
+    for request in requests.iter() {
+        assert_eq!(request.max_tokens.get(), 1024);
+        assert_eq!(
+            request.thinking_effort,
+            Some(aura_model_reasoner::ThinkingEffort::XHigh)
+        );
+    }
+}
+
+#[tokio::test]
+async fn repeatedly_truncated_child_is_failed_not_completed() {
+    let provider = Arc::new(ProfileCapture(Default::default(), true));
+    let (dispatch, _store, _dir, _workspace) =
+        common::build_dispatch_with_provider(provider.clone());
+    let mut request = base_request(AgentId::generate());
+    request.override_budget = Some(SubagentBudget {
+        max_tokens: Some(1024),
+        max_iterations: 4,
+        ..Default::default()
+    });
+    let result = SubagentDispatchHook::dispatch(&dispatch, request)
+        .await
+        .unwrap();
+    assert!(matches!(result.exit, SubagentExit::Failed { .. }));
+    assert_eq!(provider.0.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn invalid_child_profiles_do_not_call_the_model() {
+    for (effort, tokens) in [("unknown", 1024), ("high", 0)] {
+        let provider = Arc::new(ProfileCapture::default());
+        let (dispatch, _store, _dir, _workspace) =
+            common::build_dispatch_with_provider(provider.clone());
+        let mut request = base_request(AgentId::generate());
+        request.reasoning_effort_override = Some(effort.into());
+        request.override_budget = Some(SubagentBudget {
+            max_tokens: Some(tokens),
+            ..Default::default()
+        });
+        let result = SubagentDispatchHook::dispatch(&dispatch, request).await;
+        assert!(!matches!(
+            result,
+            Ok(aura_core_types::SubagentResult {
+                exit: SubagentExit::Completed,
+                ..
+            })
+        ));
+        assert!(provider.0.lock().unwrap().is_empty());
+    }
+}
+
 fn base_request(parent_agent_id: AgentId) -> SubagentDispatchRequest {
     SubagentDispatchRequest {
         parent_agent_id,
@@ -35,6 +141,7 @@ fn base_request(parent_agent_id: AgentId) -> SubagentDispatchRequest {
         prompt: "override".into(),
         originating_user_id: Some("override-user".into()),
         parent_chain: Vec::new(),
+        reasoning_effort_override: None,
         model_override: None,
         system_prompt_addendum: None,
         parent_permissions: AgentPermissions {

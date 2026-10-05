@@ -236,6 +236,11 @@ pub(crate) async fn run_turn(
         if ctx.input_queue.is_some_and(InputQueue::has_pending) {
             continue;
         }
+        if state.result.output_truncated {
+            // Bounded output-limit recovery was exhausted. Do not turn it into
+            // another implicit retry through the normal no-op/action guards.
+            break;
+        }
 
         // A visible sentence such as "I'll read the file now" used to bypass
         // the no-op guard even though nothing continues after EndTurn. Recover

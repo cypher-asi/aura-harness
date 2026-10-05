@@ -346,6 +346,7 @@ async fn dispatch_members(
         .map(|(index, member)| {
             let hook = hook.clone();
             let model_label = member.model.id.clone().unwrap_or_default();
+            let (reasoning_effort, budget) = member_execution_profile(&member.model);
             let request = SubagentDispatchRequest {
                 parent_agent_id: params.parent_agent_id,
                 subagent_type: COUNCIL_MEMBER_KIND.to_string(),
@@ -354,6 +355,7 @@ async fn dispatch_members(
                 // Members hang directly off the parent (depth 1).
                 parent_chain: vec![params.parent_agent_id],
                 model_override: member.model.id.clone(),
+                reasoning_effort_override: reasoning_effort,
                 system_prompt_addendum: member_system_prompt_addendum(run_kind),
                 parent_permissions: params.parent_permissions.clone(),
                 parent_tool_permissions: params.parent_tool_permissions.clone(),
@@ -367,7 +369,7 @@ async fn dispatch_members(
                 override_permissions: None,
                 override_tool_subset: member_tool_subset(run_kind),
                 override_isolation_id: None,
-                override_budget: None,
+                override_budget: budget,
                 // Wait: block until the member finishes; the hook still emits
                 // the spawn frame up-front so all columns appear immediately.
                 spawn_mode: None,
@@ -387,6 +389,22 @@ async fn dispatch_members(
     let mut answers = futures_util::future::join_all(dispatches).await;
     answers.sort_by_key(|a| a.index);
     answers
+}
+
+fn member_execution_profile(
+    model: &aura_protocol::ModelSelection,
+) -> (Option<String>, Option<aura_core_types::SubagentBudget>) {
+    let effort = model
+        .reasoning_effort
+        .map(|effort| effort.as_wire().to_string());
+    let budget = (model.max_tokens.is_some() || model.max_turns.is_some()).then(|| {
+        aura_core_types::SubagentBudget {
+            max_tokens: model.max_tokens,
+            max_iterations: model.max_turns.unwrap_or(aura_core_types::MAX_TURNS),
+            ..Default::default()
+        }
+    });
+    (effort, budget)
 }
 
 fn classify_council_members(members: &[CouncilMember]) -> Result<CouncilRunKind, ChatRequestError> {
@@ -693,6 +711,25 @@ async fn wait_for_session_ready(events: &Arc<ChatEventChannel>, shutdown: &Cance
 mod tests {
     use super::*;
     use aura_protocol::ModelSelection;
+
+    #[test]
+    fn council_member_preserves_explicit_effort_and_limits() {
+        let model = ModelSelection {
+            reasoning_effort: Some(aura_protocol::ReasoningEffort::XHigh),
+            max_tokens: Some(1024),
+            max_turns: Some(7),
+            ..Default::default()
+        };
+        let (effort, budget) = member_execution_profile(&model);
+        assert_eq!(effort.as_deref(), Some("xhigh"));
+        let budget = budget.unwrap();
+        assert_eq!(budget.max_tokens, Some(1024));
+        assert_eq!(budget.max_iterations, 7);
+        assert_eq!(
+            member_execution_profile(&ModelSelection::default()),
+            (None, None)
+        );
+    }
 
     fn test_members(model_ids: &[&str]) -> Vec<CouncilMember> {
         model_ids

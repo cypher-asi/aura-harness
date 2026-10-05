@@ -89,6 +89,7 @@ async fn task_child_run_uses_injected_factory_with_parent_chain() {
             prompt: "investigate".into(),
             originating_user_id: Some("factory-user".into()),
             parent_chain: vec![parent_agent_id],
+            reasoning_effort_override: None,
             model_override: None,
             system_prompt_addendum: None,
             parent_permissions: AgentPermissions {

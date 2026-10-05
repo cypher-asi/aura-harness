@@ -98,3 +98,5 @@ pub(crate) use state::LoopState;
 pub struct AgentLoop {
     pub(super) config: AgentLoopConfig,
 }
+#[cfg(test)]
+mod output_limit_tests;

@@ -60,6 +60,7 @@ async fn task_tool_subagent_result_json_shape_is_byte_identical() {
             prompt: "summarize".into(),
             originating_user_id: Some("snapshot-user".into()),
             parent_chain: Vec::new(),
+            reasoning_effort_override: None,
             model_override: None,
             system_prompt_addendum: None,
             parent_permissions: AgentPermissions {

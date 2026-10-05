@@ -91,6 +91,10 @@ pub struct SubagentDispatchRequest {
     pub parent_chain: Vec<AgentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_override: Option<String>,
+    /// Explicit effort override, using the canonical provider-neutral wire tier.
+    /// Absent means inherit the parent's selected effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_override: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_addendum: Option<String>,
     pub parent_permissions: AgentPermissions,

@@ -1,16 +1,12 @@
 //! Per-iteration logic: LLM calls, response accumulation, and stop-reason handling.
 
-use aura_model_reasoner::{
-    ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ToolResultContent,
-};
+use aura_model_reasoner::{ContentBlock, ModelProvider, ModelRequest, ModelResponse};
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::dup_audit;
 use crate::events::AgentLoopEvent;
-use crate::sanitize;
 use crate::types::AgentLoopResult;
 use aura_config::CHARS_PER_TOKEN;
 use aura_context_compaction as compaction;
@@ -264,83 +260,4 @@ pub(super) fn accumulate_response(
     state.result.estimated_context_tokens = estimated_context_tokens;
 
     scrubbed_markup
-}
-
-// ---------------------------------------------------------------------------
-// MaxTokens stop-reason handling
-// ---------------------------------------------------------------------------
-
-/// Handle `StopReason::MaxTokens` — inject error results for pending tool calls.
-///
-/// Returns `true` if the loop should continue, `false` if it should break.
-pub(super) fn handle_max_tokens(
-    config: &AgentLoopConfig,
-    response: &ModelResponse,
-    state: &mut LoopState,
-) -> bool {
-    let pending_tools = super::tool_pipeline::tool_calls(response);
-    if pending_tools.is_empty() {
-        return false;
-    }
-
-    warn!(
-        pending = pending_tools.len(),
-        "MaxTokens with pending tool_use blocks — injecting error results"
-    );
-
-    // Signal to `LoopState::begin_iteration` that the next iteration
-    // must NOT taper `thinking_budget` — the model is about to retry
-    // the dropped tool call(s) and needs the full budget to fit the
-    // JSON that just got cut off. Without this reset, a task that
-    // hits `max_tokens` mid-edit on iteration N+1 would retry on
-    // iteration N+2 with an already-tapered budget and truncate
-    // again, producing the observed loop of repeated
-    // `MaxTokens with pending tool_use blocks` warnings.
-    state.thinking.restore_next_iteration = true;
-
-    let results: Vec<(String, ToolResultContent, bool)> = pending_tools
-        .iter()
-        .map(|tc| {
-            let text = synthetic_truncation_message(tc);
-            (tc.id.clone(), ToolResultContent::text(text), true)
-        })
-        .collect();
-
-    dup_audit::audit_tool_result_duplicates(&state.messages, "handle_max_tokens.pre");
-    state.messages.push(Message::tool_results(results));
-    dup_audit::audit_tool_result_duplicates(&state.messages, "handle_max_tokens.post");
-
-    if config.max_context_tokens.is_some() && !super::context::compaction_disabled_by_env() {
-        let tier = compaction::CompactionConfig::aggressive();
-        compaction::compact_older_messages(&mut state.messages, &tier);
-        sanitize::validate_and_repair(&mut state.messages);
-    }
-
-    true
-}
-
-/// Build the synthetic `tool_result` body injected when a tool call is
-/// recovered from a `max_tokens`-truncated stream. Wording lives in
-/// [`aura_context_prompts::model_messages::max_tokens`]; this helper is just
-/// the per-tool dispatcher.
-///
-/// `path` is best-effort — extracted from the (possibly partial)
-/// `tool_use` input JSON. When the truncated stream serialised the
-/// `path` field cleanly enough to survive, the wording is sharper
-/// (names the file in the synthetic error); otherwise we fall back
-/// to the path-less template.
-fn synthetic_truncation_message(tc: &crate::types::ToolCallInfo) -> String {
-    use aura_context_prompts::model_messages::max_tokens;
-    let path = tc.input.get("path").and_then(|v| v.as_str());
-    match tc.name.as_str() {
-        "write_file" => match path {
-            Some(p) => max_tokens::write_file_truncation_with_path(p),
-            None => max_tokens::WRITE_FILE_TRUNCATION_NO_PATH.to_string(),
-        },
-        "edit_file" => match path {
-            Some(p) => max_tokens::edit_file_truncation_with_path(p),
-            None => max_tokens::EDIT_FILE_TRUNCATION_NO_PATH.to_string(),
-        },
-        other => max_tokens::generic_tool_truncation(other),
-    }
 }

@@ -13,7 +13,7 @@ use aura_fleet_quota::QuotaPool;
 use aura_fleet_registry::FleetRegistry;
 use aura_fleet_spawn::{ChildRunner, OrphanStore, ParentLeaseRegistry};
 use aura_fleet_subagent::FleetSubagentDispatcher;
-use aura_model_reasoner::MockProvider;
+use aura_model_reasoner::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store};
 use aura_tools::ToolCatalog;
 use std::sync::Arc;
@@ -30,11 +30,21 @@ pub fn build_dispatch_with_response(
     tempfile::TempDir,
     tempfile::TempDir,
 ) {
+    build_dispatch_with_provider(Arc::new(MockProvider::simple_response(response)))
+}
+
+pub fn build_dispatch_with_provider(
+    provider: Arc<dyn ModelProvider>,
+) -> (
+    FleetSubagentDispatcher,
+    Arc<dyn Store>,
+    tempfile::TempDir,
+    tempfile::TempDir,
+) {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace = tempfile::tempdir().expect("workspace dir");
     let store: Arc<dyn Store> =
         Arc::new(RocksStore::open(dir.path().join("db"), false).expect("rocks open"));
-    let provider = Arc::new(MockProvider::simple_response(response));
     let catalog = ToolCatalog::default();
     let scheduler = Arc::new(Scheduler::new(
         store.clone(),

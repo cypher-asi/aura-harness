@@ -110,6 +110,24 @@ impl RuntimeChildRunner {
 #[async_trait]
 impl ChildRunner for RuntimeChildRunner {
     async fn run(&self, ctx: ChildRunContext) -> Result<SubagentResult, ChildRunError> {
+        if ctx.spec.response_max_tokens == Some(0)
+            || ctx.spec.budget.max_tokens == 0
+            || ctx.spec.budget.max_iterations == 0
+        {
+            return Err(ChildRunError::Internal(
+                "child execution limits must be positive".into(),
+            ));
+        }
+        let explicit_effort = ctx
+            .spec
+            .reasoning_effort
+            .as_deref()
+            .map(|effort| {
+                aura_model_reasoner::ThinkingEffort::from_wire(effort).ok_or_else(|| {
+                    ChildRunError::Internal(format!("invalid reasoning effort: {effort}"))
+                })
+            })
+            .transpose()?;
         let originating_user_id = ctx.originating_user_id.clone();
         let subagent_type = ctx
             .spec
@@ -213,6 +231,12 @@ impl ChildRunner for RuntimeChildRunner {
             .map(|parent| {
                 let mut child_identity = parent;
                 child_identity.model = child_model.clone();
+                if let Some(effort) = explicit_effort {
+                    child_identity.reasoning_effort = Some(effort);
+                }
+                if let Some(tokens) = ctx.spec.response_max_tokens {
+                    child_identity.max_tokens = tokens;
+                }
                 child_identity.system_prompt =
                     system_prompt_for(&kind, ctx.spec.system_prompt_addendum.as_deref());
                 self.scheduler
@@ -220,7 +244,17 @@ impl ChildRunner for RuntimeChildRunner {
                     .register(child_agent_id, child_identity.clone());
                 child_identity
             });
-        let loop_config = loop_config_for(&kind, &child_model, child_identity);
+        let mut loop_config = loop_config_for(&kind, &child_model, child_identity);
+        if let Some(effort) = explicit_effort {
+            loop_config.user_thinking_effort = Some(effort);
+        }
+        if let Some(tokens) = ctx.spec.response_max_tokens {
+            loop_config.max_tokens = tokens;
+        }
+        loop_config.max_iterations = loop_config
+            .max_iterations
+            .min(ctx.spec.budget.max_iterations as usize);
+        loop_config.max_tokens = loop_config.max_tokens.min(ctx.spec.budget.max_tokens);
         // Build the child's session-equivalent executor router via the
         // injected factory (when present). This is the production seam
         // that gives the child the same subagent dispatch + spawn hooks
@@ -315,12 +349,20 @@ impl ChildRunner for RuntimeChildRunner {
             });
         };
 
-        let exit = result
-            .llm_error
-            .as_ref()
-            .map_or(SubagentExit::Completed, |reason| SubagentExit::Failed {
-                reason: reason.clone(),
-            });
+        let exit = if result.output_truncated || result.insufficient_credits || result.stalled {
+            SubagentExit::Failed {
+                reason: "child execution stopped before completion".into(),
+            }
+        } else if result.timed_out {
+            SubagentExit::Timeout
+        } else {
+            result
+                .llm_error
+                .as_ref()
+                .map_or(SubagentExit::Completed, |reason| SubagentExit::Failed {
+                    reason: reason.clone(),
+                })
+        };
         Ok(SubagentResult {
             child_agent_id: Some(child_agent_id),
             final_message: result.total_text,
@@ -390,7 +432,7 @@ fn loop_config_for(
     };
     config.max_iterations = kind.budget.max_iterations as usize;
     if let Some(max_tokens) = kind.budget.max_tokens {
-        config.max_tokens = max_tokens;
+        config.max_tokens = config.max_tokens.min(max_tokens);
     }
     config
 }
@@ -460,6 +502,8 @@ mod tests {
 
     fn parent_identity(model: &str) -> AgentIdentity {
         AgentIdentity {
+            reasoning_effort: None,
+            upstream_provider_family: None,
             model: model.to_string(),
             aura_org_id: Some("org-parent".to_string()),
             aura_session_id: Some("session-parent".to_string()),
@@ -480,6 +524,8 @@ mod tests {
         let registry = SubagentRegistry::bundled();
         let kind = registry.get("explore").unwrap();
         let identity = parent_identity("claude-opus-4-7");
+        let mut identity = identity;
+        identity.reasoning_effort = Some(aura_model_reasoner::ThinkingEffort::XHigh);
 
         let config = loop_config_for(kind, "claude-opus-4-7", Some(identity));
 
@@ -491,6 +537,10 @@ mod tests {
         assert_eq!(config.aura_agent_id.as_deref(), Some("agent-parent"));
         assert_eq!(config.aura_project_id.as_deref(), Some("project-parent"));
         assert_eq!(config.auth_token.as_deref(), Some("parent-jwt"));
+        assert_eq!(
+            config.user_thinking_effort,
+            Some(aura_model_reasoner::ThinkingEffort::XHigh)
+        );
         // Subagent budget still wins over the inherited identity.
         assert_eq!(config.max_iterations, kind.budget.max_iterations as usize);
         if let Some(max_tokens) = kind.budget.max_tokens {

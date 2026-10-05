@@ -69,6 +69,12 @@ pub enum OutputItem {
         /// every downstream consumer sees the same parse result.
         input: Value,
     },
+    /// A closed tool block whose arguments could not be decoded. Never execute it.
+    InvalidToolUse {
+        id: String,
+        name: String,
+        reason: String,
+    },
 }
 
 /// Recoverable provider/transport failure surfaced inside a
@@ -183,6 +189,8 @@ pub enum ResponseEvent {
         /// (further sampling needed). `None` is the default for
         /// providers that don't surface this bit.
         end_turn: Option<bool>,
+        /// Exact provider termination signal; unlike `end_turn`, preserves truncation.
+        stop_reason: Option<StopReason>,
         /// Per-response usage counters as reported by the provider.
         usage: Usage,
     },
@@ -242,6 +250,7 @@ pub fn response_stream_from_response(response: ModelResponse) -> ResponseEventSt
     };
     events.push(Ok(ResponseEvent::Completed {
         end_turn,
+        stop_reason: Some(response.stop_reason),
         usage: response.usage,
     }));
     Box::pin(futures_util::stream::iter(events))
@@ -257,11 +266,9 @@ pub fn response_stream_from_response(response: ModelResponse) -> ResponseEventSt
 /// observed stop reason and usage counters.
 ///
 /// Transport errors surface as `Some(Err(StreamError::TransportClosed))`
-/// at the point they arrive. Invalid JSON in `InputJsonDelta` raises
-/// [`StreamError::InvalidEvent`] inside an in-band
-/// [`ResponseEvent::Error`] frame so the pump can decide whether to
-/// retry or abort (codex parity: provider-level errors do not
-/// short-circuit the stream).
+/// at the point they arrive. Invalid completed tool JSON produces an
+/// [`OutputItem::InvalidToolUse`], allowing a paired error result without
+/// executing malformed arguments or discarding the terminal stop reason.
 #[must_use]
 pub fn response_stream_from_event_stream(stream: StreamEventStream) -> ResponseEventStream {
     let state = AdapterState {
@@ -298,8 +305,12 @@ pub fn response_stream_from_event_stream(stream: StreamEventStream) -> ResponseE
                             return Some((Err(err), state));
                         }
                         if !state.completed_emitted {
-                            let event = state.synthesize_completed();
-                            return Some((Ok(event), state));
+                            return Some((
+                                Err(StreamError::TransportClosed {
+                                    context: "missing message_stop".into(),
+                                }),
+                                state,
+                            ));
                         }
                         return None;
                     }
@@ -464,8 +475,13 @@ impl AdapterState {
             let input: Value = if tool.input_json.is_empty() {
                 serde_json::json!({})
             } else {
-                serde_json::from_str(&tool.input_json)
-                    .unwrap_or_else(|_| serde_json::json!({ "raw": tool.input_json }))
+                match serde_json::from_str(&tool.input_json) {
+                    Ok(input) => input,
+                    Err(err) => return Some(OutputItem::InvalidToolUse {
+                        id: tool.id, name: tool.name,
+                        reason: format!("Tool arguments were incomplete or invalid JSON: {err}. No tool was executed; regenerate this call with complete arguments."),
+                    }),
+                }
             };
             return Some(OutputItem::ToolUse {
                 id: tool.id,
@@ -500,7 +516,11 @@ impl AdapterState {
             cache_creation_input_tokens: self.accumulator.cache_creation_input_tokens,
             cache_read_input_tokens: self.accumulator.cache_read_input_tokens,
         };
-        ResponseEvent::Completed { end_turn, usage }
+        ResponseEvent::Completed {
+            end_turn,
+            stop_reason: self.accumulator.stop_reason,
+            usage,
+        }
     }
 }
 

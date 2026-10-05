@@ -9,7 +9,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use aura_config::THINKING_AUTO_ENABLE_THRESHOLD;
 use aura_model_reasoner::{
     Message, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolDefinition,
 };
@@ -22,53 +21,12 @@ use super::config::{parse_cache_retention, AgentLoopConfig};
 use super::steering::SteeringRegistry;
 use super::{steering, turn_diff};
 
-/// Per-iteration response-token budget and the one-shot "skip the
-/// taper next iteration" override.
-///
-/// Held as its own struct so [`super::iteration::handle_max_tokens`]
-/// only has to mutate `state.thinking.restore_next_iteration` (a
-/// single boolean) without taking a `&mut LoopState` that grants
-/// access to message lists, caches, etc.
+/// Total response allowance, retained under the legacy internal type name.
 pub(crate) struct ThinkingBudget {
-    /// Tokens the loop allows for the next streaming response. Taper
-    /// applies in [`LoopState::begin_iteration`] once the iteration
-    /// counter passes [`AgentLoopConfig::thinking_taper_after`].
+    /// Output includes reasoning, visible text and tool arguments.
     pub(crate) budget: u32,
-    /// Set by [`super::iteration::handle_max_tokens`] when the previous
-    /// turn ended with pending tool_use blocks truncated by
-    /// `max_tokens`. The next [`LoopState::begin_iteration`] observes
-    /// this flag and restores `budget` to `config.max_tokens`
-    /// (skipping the taper for that one iteration) so the retry has
-    /// the full budget it needs to re-emit the dropped tool call.
-    /// Cleared immediately after the restore so subsequent iterations
-    /// resume normal tapering.
+    /// Restore the caller's response ceiling on a bounded continuation.
     pub(crate) restore_next_iteration: bool,
-    /// One-shot flag: when `true`, [`LoopState::build_request`] caps
-    /// `max_tokens` at the auto-thinking threshold so the underlying
-    /// reasoner does NOT auto-enable extended thinking for that one
-    /// turn, then resets the flag.
-    ///
-    /// Set by [`LoopState::begin_iteration`] for `iteration == 0`
-    /// (the explore turn should be fast tool calls, not multi-minute
-    /// deliberation) and by the read-only force-tool path (Anthropic
-    /// blocks forced tool use while extended thinking is enabled, so
-    /// the two flips ride together).
-    pub(crate) disable_thinking_this_iteration: bool,
-    /// Latch armed by the dispatch path when the dev-loop intercept
-    /// fires on a `MaxTokens` stop reason with no pending tool calls
-    /// (i.e. extended thinking consumed the entire response budget
-    /// without producing a tool_use block). The next
-    /// [`LoopState::begin_iteration`] consumes-and-clears this latch
-    /// into [`Self::disable_thinking_this_iteration`] so the recovery
-    /// turn opens with thinking disabled — the model emits a tool
-    /// call instead of more deliberation.
-    ///
-    /// We need a latch (not a same-iteration flip) because
-    /// [`LoopState::begin_iteration`] unconditionally clears
-    /// `disable_thinking_this_iteration` at the top of every turn:
-    /// a flag armed at the END of iteration N is wiped at the TOP of
-    /// iteration N+1 before `build_request` ever sees it.
-    pub(crate) pending_disable_thinking_next_iteration: bool,
 }
 
 /// Mutable state carried across iterations of the agent loop.
@@ -92,6 +50,7 @@ pub(crate) struct LoopState {
     /// observing a non-error tool result whose source tool is
     /// `task_done` and whose `stop_loop` flag is set.
     pub(crate) task_done_completed: bool,
+    pub(crate) output_limit_recoveries: usize,
     /// Phase 2: set to `true` the iteration after a successful
     /// `submit_plan` accept has been observed via
     /// [`AgentLoopConfig::phase_reset_signal`]. Cumulative across the
@@ -153,6 +112,7 @@ impl LoopState {
             had_any_write: false,
             had_any_file_write: false,
             task_done_completed: false,
+            output_limit_recoveries: 0,
             submit_plan_called: false,
             checkpoint_emitted: false,
             exploration_compaction_done: false,
@@ -162,10 +122,11 @@ impl LoopState {
                 // can request a smaller starting budget than the
                 // per-request `max_tokens` ceiling. Truncation recovery
                 // in `begin_iteration` still restores to `max_tokens`.
-                budget: config.thinking_budget.unwrap_or(config.max_tokens),
+                budget: config
+                    .thinking_budget
+                    .unwrap_or(config.max_tokens)
+                    .min(config.max_tokens),
                 restore_next_iteration: false,
-                disable_thinking_this_iteration: false,
-                pending_disable_thinking_next_iteration: false,
             },
             last_context_tokens_estimate: None,
             messages,
@@ -220,17 +181,6 @@ impl LoopState {
         // taking a fresh borrow on `state.steering` every batch.
         self.implement_now_injected = self.steering.implement_now_injected();
 
-        // One-shot extended-thinking disable flag is re-evaluated each
-        // iteration: seeded from the cross-iteration latch (armed by
-        // the dispatch path's MaxTokens-empty intercept), then
-        // re-set below for the iteration-0 explore case. `build_request`
-        // reads the flag to decide whether to clamp `max_tokens` below
-        // the auto-thinking threshold. The latch is consume-and-clear
-        // so it fires at most once per arm.
-        self.thinking.disable_thinking_this_iteration =
-            self.thinking.pending_disable_thinking_next_iteration;
-        self.thinking.pending_disable_thinking_next_iteration = false;
-
         // Observe-and-clear the optional handshake from a wrapping
         // `TaskToolExecutor`: when `submit_plan` is accepted the
         // executor flips this shared `Arc<AtomicBool>` to `true`, and
@@ -261,39 +211,16 @@ impl LoopState {
             }
         }
 
-        // Temporary (2026-05): the dev-loop policy now pins
-        // reasoning effort to `Medium` across every iteration (see
-        // `compute_thinking_effort`). The previous iteration-0
-        // `max_tokens` clamp — armed here when
-        // `disable_thinking_iteration_0` was set — has been removed
-        // because it contradicted that pin: a 2048-token cap on the
-        // explore turn either rejects the Anthropic request outright
-        // (Claude 3.7 `enabled` mode wants `budget_tokens=4096` for
-        // Medium) or leaves Adaptive thinking with no real budget to
-        // deliberate inside. The cross-iteration recovery latch
-        // [`ThinkingBudget::pending_disable_thinking_next_iteration`]
-        // is currently never armed; keeping the consume-and-clear
-        // wiring above costs nothing and preserves an obvious revert
-        // path if we decide to bring the clamp back later.
-
-        // If the previous iteration ended with a `MaxTokens` truncation
-        // mid-`tool_use`, restore the budget to the configured maximum
-        // and skip the taper this turn. The model is about to retry
-        // the dropped tool call and needs the full budget to fit the
-        // JSON that previously got cut off. Tapering resumes on the
-        // iteration after (the flag is cleared here so it fires at
-        // most once per truncation).
+        // Restore the full response allowance after truncation, not a thinking-only budget.
         if self.thinking.restore_next_iteration {
             self.thinking.budget = config.max_tokens;
             self.thinking.restore_next_iteration = false;
             return;
         }
 
-        if iteration >= config.thinking_taper_after {
-            self.thinking.budget =
-                (f64::from(self.thinking.budget) * config.thinking_taper_factor) as u32;
-            self.thinking.budget = self.thinking.budget.max(config.thinking_min_budget);
-        }
+        // Effort may taper, but output space includes text and tool arguments too.
+        // Do not silently shrink that space (or raise a caller's explicit cap).
+        self.thinking.budget = self.thinking.budget.min(config.max_tokens);
     }
 
     /// Reasoning-effort policy applied per iteration.
@@ -351,33 +278,8 @@ impl LoopState {
         // its own next move.
         let tool_choice = aura_model_reasoner::ToolChoice::Auto;
 
-        // Disable extended thinking for this one iteration by clamping
-        // `max_tokens` below the reasoner's auto-thinking threshold
-        // (`> 2048`, see
-        // `aura_model_reasoner::anthropic::convert::resolve_thinking`).
-        // The reasoner does not currently expose a per-request
-        // "extended thinking off" toggle for Claude 4.x — it
-        // auto-enables thinking whenever `max_tokens > 2048` — so the
-        // only correctness path is to keep `max_tokens` at or below
-        // that threshold.
-        //
-        // The flag persists for the whole iteration: it is set in
-        // [`Self::begin_iteration`] and cleared at the top of the
-        // NEXT [`Self::begin_iteration`] call. That keeps the
-        // disable in force across an overflow-retry within the same
-        // iteration (`retry_after_context_overflow` calls
-        // `build_request` again without re-entering
-        // `begin_iteration`).
-        //
-        // TODO(harness-v2): once `aura-reasoner` exposes an explicit
-        // "thinking: off" knob, replace this clamp with a direct call
-        // to disable extended thinking and remove the implicit
-        // coupling between `max_tokens` and the thinking switch.
-        let effective_max_tokens = if self.thinking.disable_thinking_this_iteration {
-            self.thinking.budget.min(THINKING_AUTO_ENABLE_THRESHOLD)
-        } else {
-            self.thinking.budget
-        };
+        // Response space and reasoning effort are independent controls.
+        let effective_max_tokens = self.thinking.budget.min(config.max_tokens);
 
         // Codex parity: emit an explicit `reasoning.effort` on every
         // request. The reasoner's `max_tokens > 2048` auto-enable

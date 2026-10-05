@@ -793,7 +793,12 @@ fn thinking_effort_low_adaptive_omits_budget_tokens() {
     assert_eq!(thinking.budget_tokens, None);
     // Low must NOT inherit the forced effort=high override — that's
     // exactly the spiral amplifier we want to cap.
-    assert!(resolve_output_config(&request, TEST_DEFAULT_MODEL).is_none());
+    assert_eq!(
+        resolve_output_config(&request, TEST_DEFAULT_MODEL)
+            .unwrap()
+            .effort,
+        "low"
+    );
 }
 
 #[test]
@@ -806,7 +811,12 @@ fn thinking_effort_medium_adaptive_omits_budget_tokens() {
     let thinking = resolve_thinking(&request, TEST_DEFAULT_MODEL).expect("Medium emits a config");
     assert_eq!(thinking.thinking_type, "adaptive");
     assert_eq!(thinking.budget_tokens, None);
-    assert!(resolve_output_config(&request, TEST_DEFAULT_MODEL).is_none());
+    assert_eq!(
+        resolve_output_config(&request, TEST_DEFAULT_MODEL)
+            .unwrap()
+            .effort,
+        "medium"
+    );
 }
 
 #[test]
@@ -896,7 +906,7 @@ fn thinking_effort_medium_enabled_sets_4096_budget() {
 
 #[test]
 fn thinking_effort_high_enabled_clamps_budget_to_8192_16000() {
-    // Small ceiling: clamp pushes the budget up to 8192.
+    // Thinking must leave room for output and be strictly below max_tokens.
     let request = ModelRequest::builder("claude-3-7-sonnet", "system")
         .max_tokens(8_192)
         .thinking_effort(Some(ThinkingEffort::High))
@@ -904,7 +914,7 @@ fn thinking_effort_high_enabled_clamps_budget_to_8192_16000() {
         .unwrap();
     let thinking = resolve_thinking(&request, "claude-3-7-sonnet").expect("High emits a config");
     assert_eq!(thinking.thinking_type, "enabled");
-    assert_eq!(thinking.budget_tokens, Some(8_192));
+    assert_eq!(thinking.budget_tokens, Some(4_096));
 
     // Large ceiling: clamp pulls the budget down to 16000.
     let request_big = ModelRequest::builder("claude-3-7-sonnet", "system")

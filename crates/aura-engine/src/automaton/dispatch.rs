@@ -199,6 +199,7 @@ impl AutomatonBridge {
         agent_persona: Option<AgentPersona>,
         agent_skills: Vec<String>,
         agent_system_prompt: Option<String>,
+        execution_profile: Option<aura_protocol::ModelSelection>,
     ) -> Result<String, String> {
         // Hard-fail when the operator did not pin a model. The
         // pre-fix dev-loop path silently fell back to a build-time
@@ -238,7 +239,7 @@ impl AutomatonBridge {
             self.project_handles.remove(project_id);
         }
 
-        let ctx = self
+        let mut ctx = self
             .prepare_automaton_run(
                 project_id,
                 workspace_root,
@@ -256,6 +257,8 @@ impl AutomatonBridge {
                 },
             )
             .await?;
+
+        apply_execution_profile(&mut ctx.runner_config, execution_profile.as_ref())?;
 
         let automaton = DevLoopAutomaton::new(
             ctx.gateway_domain,
@@ -310,6 +313,7 @@ impl AutomatonBridge {
             aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
         );
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
+        self.register_execution_profile(ctx.kernel.agent_id, execution_profile.as_ref());
 
         info!(project_id, automaton_id = %automaton_id, "Dev loop started");
         // Record the handle BEFORE the (now background) bootstrap tick so
@@ -361,6 +365,7 @@ impl AutomatonBridge {
         agent_persona: Option<AgentPersona>,
         agent_skills: Vec<String>,
         agent_system_prompt: Option<String>,
+        execution_profile: Option<aura_protocol::ModelSelection>,
     ) -> Result<String, String> {
         // Mirror the dev-loop entry-point: refuse to start without an
         // explicit model. Same regression rationale.
@@ -373,7 +378,7 @@ impl AutomatonBridge {
                     .to_string()
             })?
             .to_string();
-        let ctx = self
+        let mut ctx = self
             .prepare_automaton_run(
                 project_id,
                 workspace_root,
@@ -391,6 +396,8 @@ impl AutomatonBridge {
                 },
             )
             .await?;
+
+        apply_execution_profile(&mut ctx.runner_config, execution_profile.as_ref())?;
 
         let automaton = TaskRunAutomaton::new(
             ctx.gateway_domain,
@@ -440,6 +447,7 @@ impl AutomatonBridge {
             aura_model_reasoner::ModelRequestKind::Chat,
         );
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
+        self.register_execution_profile(ctx.kernel.agent_id, execution_profile.as_ref());
 
         info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
         // Background the lifecycle commit + first tick so POST /v1/run
@@ -453,5 +461,75 @@ impl AutomatonBridge {
             "start_task_run".to_string(),
         ));
         Ok(automaton_id)
+    }
+}
+
+/// Preserve explicit task/dev-loop limits and effort instead of dropping the
+/// model selection at the HTTP-to-automaton boundary.
+fn apply_execution_profile(
+    config: &mut AgentRunnerConfig,
+    profile: Option<&aura_protocol::ModelSelection>,
+) -> Result<(), String> {
+    let Some(profile) = profile else {
+        return Ok(());
+    };
+    if let Some(tokens) = profile.max_tokens {
+        if tokens == 0 {
+            return Err("max_tokens must be positive".into());
+        }
+        config.task_execution_max_tokens = tokens;
+        config.thinking_budget = tokens;
+    }
+    if let Some(turns) = profile.max_turns {
+        if turns == 0 {
+            return Err("max_turns must be positive".into());
+        }
+        config.max_agentic_iterations = turns as usize;
+    }
+    config.reasoning_effort = profile
+        .reasoning_effort
+        .and_then(|effort| aura_model_reasoner::ThinkingEffort::from_wire(effort.as_wire()));
+    Ok(())
+}
+
+#[cfg(test)]
+mod execution_profile_tests {
+    use super::*;
+    #[test]
+    fn task_profile_preserves_effort_and_limits() {
+        let mut config = AgentRunnerConfig::for_agent("test-model");
+        let profile = aura_protocol::ModelSelection {
+            max_tokens: Some(1024),
+            max_turns: Some(7),
+            reasoning_effort: Some(aura_protocol::ReasoningEffort::XHigh),
+            ..Default::default()
+        };
+        apply_execution_profile(&mut config, Some(&profile)).unwrap();
+        assert_eq!(config.task_execution_max_tokens, 1024);
+        assert_eq!(config.thinking_budget, 1024);
+        assert_eq!(config.max_agentic_iterations, 7);
+        assert_eq!(
+            config.reasoning_effort,
+            Some(aura_model_reasoner::ThinkingEffort::XHigh)
+        );
+    }
+    #[test]
+    fn zero_execution_limits_are_rejected() {
+        for profile in [
+            aura_protocol::ModelSelection {
+                max_tokens: Some(0),
+                ..Default::default()
+            },
+            aura_protocol::ModelSelection {
+                max_turns: Some(0),
+                ..Default::default()
+            },
+        ] {
+            assert!(apply_execution_profile(
+                &mut AgentRunnerConfig::for_agent("test"),
+                Some(&profile)
+            )
+            .is_err());
+        }
     }
 }

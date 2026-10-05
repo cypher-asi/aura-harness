@@ -194,7 +194,7 @@ async fn start_dev_loop_run(
             &project_ctx.project_id,
             workspace_root,
             auth_token,
-            model.id,
+            model.id.clone(),
             workspace.git_repo_url,
             workspace.git_branch,
             installed_tools,
@@ -206,6 +206,7 @@ async fn start_dev_loop_run(
             agent_persona,
             agent_skills,
             agent_system_prompt,
+            Some(model),
         )
         .await
         .map_err(run_start_error_response)?;
@@ -280,7 +281,7 @@ async fn start_task_run(
             &task_id,
             workspace_root,
             auth_token,
-            model.id,
+            model.id.clone(),
             workspace.git_repo_url,
             workspace.git_branch,
             installed_tools,
@@ -294,6 +295,7 @@ async fn start_task_run(
             agent_persona,
             agent_skills,
             agent_system_prompt,
+            Some(model),
         )
         .await
         .map_err(run_start_error_response)?;

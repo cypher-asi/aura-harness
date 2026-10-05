@@ -235,11 +235,11 @@ async fn test_max_tokens_without_tools_breaks() {
         .unwrap();
 
     assert_eq!(
-        result.iterations, 1,
-        "Loop should break on MaxTokens with no pending tools"
+        result.iterations, 2,
+        "Loop should continue a truncated text response"
     );
     assert!(result.total_text.contains("Truncated text"));
-    assert!(!result.total_text.contains("Should not reach this"));
+    assert!(result.total_text.contains("Should not reach this"));
 }
 
 #[test]

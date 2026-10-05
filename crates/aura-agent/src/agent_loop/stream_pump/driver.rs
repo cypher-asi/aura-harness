@@ -19,7 +19,9 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use aura_model_reasoner::{OutputItem, ResponseEvent, ResponseEventStream, StreamPhase, Usage};
+use aura_model_reasoner::{
+    OutputItem, ResponseEvent, ResponseEventStream, StreamError, StreamPhase, Usage,
+};
 use futures_util::stream::FuturesOrdered;
 use futures_util::StreamExt;
 use tokio::time::timeout;
@@ -90,6 +92,7 @@ pub(super) async fn drive_stream(
     // index for each new call.
     let mut spawned_indices: Vec<usize> = Vec::new();
     let mut end_turn: Option<bool> = None;
+    let stop_reason;
     let mut usage = Usage::default();
     let stream_event_timeout = config.stream_event_timeout;
     let per_tool_timeout = config.per_tool_timeout;
@@ -164,8 +167,27 @@ pub(super) async fn drive_stream(
                     thinking_bytes,
                 );
             }
-            StreamStep::End => break,
+            StreamStep::End => {
+                return interrupted_outcome(
+                    StreamError::TransportClosed {
+                        context: "missing completed event".into(),
+                    },
+                    tool_calls_seen.is_empty(),
+                    text_bytes,
+                    thinking_bytes,
+                )
+            }
             StreamStep::Event(event) => match event {
+                ResponseEvent::OutputItemDone(OutputItem::InvalidToolUse { id, name, reason }) => {
+                    let call = ToolCallInfo {
+                        id: id.clone(),
+                        name,
+                        input: serde_json::json!({}),
+                    };
+                    let index = tool_calls_seen.len();
+                    tool_calls_seen.push(call.clone());
+                    cached_pairs.push((index, (call, ToolCallResult::error(id, reason))));
+                }
                 ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
                     if let Some(err) = handle_tool_use_event(
                         ctx,
@@ -235,9 +257,11 @@ pub(super) async fn drive_stream(
                 }
                 ResponseEvent::Completed {
                     end_turn: et,
+                    stop_reason: sr,
                     usage: u,
                 } => {
                     end_turn = et;
+                    stop_reason = sr;
                     usage = u;
                     break;
                 }
@@ -390,6 +414,7 @@ pub(super) async fn drive_stream(
         &thinking_chunks,
         &tool_calls_seen,
         end_turn,
+        stop_reason,
         &usage,
         model_name,
     );
@@ -720,6 +745,7 @@ fn cancelled_outcome(
         thinking_chunks,
         tool_calls_seen,
         end_turn,
+        None,
         usage,
         model_name,
     );

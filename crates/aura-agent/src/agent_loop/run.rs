@@ -166,6 +166,8 @@ impl AgentLoop {
                                 "UserPromptSubmit hook blocked prompt; returning empty result"
                             );
                             return Ok(AgentLoopResult {
+                                output_truncated: false,
+                                task_done_completed: false,
                                 timed_out: false,
                                 insufficient_credits: false,
                                 stalled: false,

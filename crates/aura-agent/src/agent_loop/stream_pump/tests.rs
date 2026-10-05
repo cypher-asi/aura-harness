@@ -81,6 +81,68 @@ fn mk_stream(events: Vec<ResponseEvent>) -> ResponseEventStream {
 }
 
 #[tokio::test]
+async fn malformed_tool_json_is_rejected_without_execution() {
+    let executor = CountingExecutor::default();
+    let config = AgentLoopConfig::for_agent("test-model");
+    let frames = vec![
+        Ok(StreamEvent::ContentBlockStart {
+            index: 0,
+            content_type: StreamContentType::ToolUse {
+                id: "partial".into(),
+                name: "write_file".into(),
+            },
+        }),
+        Ok(StreamEvent::InputJsonDelta {
+            partial_json: "{\"path\":\"file\",\"content\":\"unfinished".into(),
+        }),
+        Ok(StreamEvent::ContentBlockStop { index: 0 }),
+        Ok(StreamEvent::MessageDelta {
+            stop_reason: Some(StopReason::MaxTokens),
+            output_tokens: 100,
+        }),
+        Ok(StreamEvent::MessageStop),
+    ];
+    let stream = response_stream_from_event_stream(Box::pin(futures_util::stream::iter(frames)));
+    let mut state = super::super::LoopState::new_for_tests(&config, vec![]);
+    let outcome = drive_stream(
+        test_ctx(&config, &executor),
+        stream,
+        &mut state,
+        "test-model",
+    )
+    .await;
+    match outcome {
+        StreamPumpOutcome::Completed {
+            response,
+            tool_results,
+        } => {
+            assert_eq!(response.stop_reason, StopReason::MaxTokens);
+            assert_eq!(tool_results.len(), 1);
+            assert!(tool_results[0].1.is_error);
+            assert_eq!(tool_results[0].1.tool_use_id, "partial");
+            assert!(tool_results[0].1.content.contains("No tool was executed"));
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+    assert!(executor.invocations.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn missing_terminal_event_is_not_clean_completion() {
+    let executor = CountingExecutor::default();
+    let config = AgentLoopConfig::for_agent("test-model");
+    let mut state = super::super::LoopState::new_for_tests(&config, vec![]);
+    let outcome = drive_stream(
+        test_ctx(&config, &executor),
+        mk_stream(vec![]),
+        &mut state,
+        "test-model",
+    )
+    .await;
+    assert!(!matches!(outcome, StreamPumpOutcome::Completed { .. }));
+}
+
+#[tokio::test]
 async fn pump_drains_in_fifo_submission_order() {
     let executor = CountingExecutor::default();
     let config = AgentLoopConfig::for_agent("claude-test-model");
@@ -89,6 +151,7 @@ async fn pump_drains_in_fifo_submission_order() {
         mk_call("toolu_b", "read_file"),
         mk_call("toolu_c", "read_file"),
         ResponseEvent::Completed {
+            stop_reason: None,
             end_turn: Some(false),
             usage: Usage::new(1, 1),
         },
@@ -158,6 +221,7 @@ async fn pump_per_outputitemdone_input_drain() {
         mk_call("toolu_a", "read_file"),
         mk_call("toolu_b", "read_file"),
         ResponseEvent::Completed {
+            stop_reason: None,
             end_turn: Some(false),
             usage: Usage::new(1, 1),
         },
@@ -243,6 +307,7 @@ async fn pump_keepalive_resets_liveness_timeout() {
                 tokio::time::sleep(gap).await;
                 Some((
                     Ok(ResponseEvent::Completed {
+                        stop_reason: None,
                         end_turn: Some(true),
                         usage: Usage::new(1, 1),
                     }),
@@ -316,6 +381,7 @@ async fn pump_overlaps_concurrent_tools() {
         mk_call("toolu_b", "t"),
         mk_call("toolu_c", "t"),
         ResponseEvent::Completed {
+            stop_reason: None,
             end_turn: Some(false),
             usage: Usage::new(1, 1),
         },
@@ -404,6 +470,7 @@ async fn pump_per_tool_timeout_does_not_poison_fifo() {
         mk_call("toolu_b", "hang"),
         mk_call("toolu_c", "ok"),
         ResponseEvent::Completed {
+            stop_reason: None,
             end_turn: Some(false),
             usage: Usage::new(1, 1),
         },
@@ -474,6 +541,7 @@ async fn pump_emits_per_delta_events() {
         }),
         mk_call("toolu_a", "read_file"),
         ResponseEvent::Completed {
+            stop_reason: None,
             end_turn: Some(true),
             usage: Usage::new(1, 1),
         },
@@ -671,6 +739,7 @@ async fn pump_cache_hit_short_circuits_tool_spawn() {
         mk_call("toolu_cached", "read_file"),
         mk_call("toolu_fresh", "run_command"),
         ResponseEvent::Completed {
+            stop_reason: None,
             end_turn: Some(false),
             usage: Usage::new(1, 1),
         },

@@ -204,6 +204,7 @@ impl TaskTool {
             .or_else(|| input.tool_call_id.clone());
 
         Ok(SubagentDispatchRequest {
+            reasoning_effort_override: None,
             parent_agent_id,
             subagent_type: input.subagent_type.clone(),
             prompt: input.prompt.clone(),

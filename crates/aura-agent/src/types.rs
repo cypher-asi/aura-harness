@@ -226,6 +226,10 @@ impl BuildBaseline {
 /// Result of the full agent loop execution.
 #[derive(Debug, Default)]
 pub struct AgentLoopResult {
+    /// Last sample exhausted its output allowance and recovery did not finish.
+    pub output_truncated: bool,
+    /// An actual task_done tool returned a successful terminal result.
+    pub task_done_completed: bool,
     /// Whether the loop timed out.
     pub timed_out: bool,
     /// Whether the loop stopped due to insufficient credits.
