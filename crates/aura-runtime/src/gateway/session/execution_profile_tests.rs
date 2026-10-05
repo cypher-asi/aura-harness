@@ -70,7 +70,7 @@ async fn exhausted_truncation_is_reported_to_ui_as_max_tokens() {
     let event = receiver.recv().await.unwrap();
     match event {
         aura_protocol::OutboundMessage::AssistantMessageEnd(end) => {
-            assert_eq!(end.stop_reason, "max_tokens")
+            assert_eq!(end.stop_reason, "max_tokens");
         }
         other => panic!("unexpected event: {other:?}"),
     }

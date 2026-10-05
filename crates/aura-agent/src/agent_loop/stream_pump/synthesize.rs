@@ -57,7 +57,7 @@ mod tests {
     use super::*;
     #[test]
     fn truncation_is_preserved_even_with_completed_tools() {
-        let calls = vec![ToolCallInfo {
+        let calls = [ToolCallInfo {
             id: "once".into(),
             name: "write_file".into(),
             input: serde_json::json!({}),
