@@ -129,7 +129,7 @@ impl AgentHub {
         lock(&self.definitions).reload()
     }
 
-    /// Rows for the Permanent agents panel.
+    /// Rows for the roster (the agents panel's Agents tab).
     pub fn definition_summaries(&self) -> Vec<AgentDefinitionSummary> {
         lock(&self.definitions)
             .all()
@@ -164,7 +164,7 @@ impl AgentHub {
             .await;
     }
 
-    /// Send the Permanent agents panel rows to the UI.
+    /// Send the roster rows to the UI.
     pub async fn send_definitions(&self) {
         let summaries = self.definition_summaries();
         let _ = self

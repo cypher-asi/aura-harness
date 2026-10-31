@@ -53,9 +53,7 @@ impl App {
             }
             "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
-                if !self.swarm_panel_visible
-                    && matches!(self.focus, PanelFocus::Swarm | PanelFocus::Definitions)
-                {
+                if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
                     self.focus = PanelFocus::Chat;
                 }
                 if self.swarm_panel_visible {

@@ -1,7 +1,10 @@
 //! Panel rendering: Chat, Swarm, Record, and Thinking section.
 
 use super::text::{display_width, wrap_words};
-use crate::{app::PanelFocus, App, Theme};
+use crate::{
+    app::{AgentsTab, PanelFocus},
+    App, Theme,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -274,11 +277,15 @@ fn render_welcome(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(welcome), area);
 }
 
-/// Hint shown at the bottom of the Agents panel.
-const SWARM_HINT: &str = "Alt+↑↓ switch  ^N new";
+/// Hints shown at the bottom of the agents panel, per tab.
+const PROJECTS_HINT: &str = "Alt+↑↓ switch  ^N new";
+const ROSTER_HINT: &str = "⏎ spawn e edit d del";
+/// Shown at the right of the tab bar when there is room.
+const TABS_HINT: &str = "←→";
 
-/// Render the Swarm panel (agent list followed by a "+ New agent" row).
-pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+/// Render the agents panel: a Projects | Agents tab bar over either the
+/// live agents or the roster of permanent agents.
+pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let border_color = if is_focused {
         theme.colors.primary
@@ -293,29 +300,62 @@ pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &mut App, t
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
 
-    let show_hint = inner.height >= 4;
-    let rows_area = Rect {
-        height: inner.height.saturating_sub(u16::from(show_hint)),
+    let header_height = if inner.height >= 6 { 2 } else { 1 };
+    app.set_agent_tabs_area(Rect { height: 1, ..inner });
+    frame.render_widget(
+        Paragraph::new(build_tab_lines(app, inner.width as usize, theme)),
+        Rect {
+            height: header_height,
+            ..inner
+        },
+    );
+
+    let body = Rect {
+        y: inner.y + header_height,
+        height: inner.height - header_height,
         ..inner
     };
-    app.set_agent_rows_area(rows_area);
-    app.sync_agents_scroll(rows_area.height as usize);
-
-    let lines: Vec<Line> = build_swarm_lines(app, inner, theme)
-        .into_iter()
-        .skip(app.agents_scroll())
-        .take(rows_area.height as usize)
-        .collect();
+    let show_hint = body.height >= 3;
+    let rows_area = Rect {
+        height: body.height.saturating_sub(u16::from(show_hint)),
+        ..body
+    };
+    let visible = rows_area.height as usize;
+    let (lines, hint) = match app.agents_tab() {
+        AgentsTab::Projects => {
+            app.set_agent_rows_area(rows_area);
+            app.sync_agents_scroll(visible);
+            let lines: Vec<Line> = build_swarm_lines(app, inner, theme)
+                .into_iter()
+                .skip(app.agents_scroll())
+                .take(visible)
+                .collect();
+            (lines, PROJECTS_HINT)
+        }
+        AgentsTab::Roster => {
+            app.set_definition_rows_area(rows_area);
+            app.sync_definitions_scroll(visible);
+            let lines: Vec<Line> = build_definition_lines(app, inner, theme)
+                .into_iter()
+                .skip(app.definitions_scroll())
+                .take(visible)
+                .collect();
+            (lines, ROSTER_HINT)
+        }
+    };
     frame.render_widget(Paragraph::new(lines), rows_area);
 
     if show_hint {
         let hint_area = Rect {
-            y: inner.y + inner.height - 1,
+            y: body.y + body.height - 1,
             height: 1,
-            ..inner
+            ..body
         };
-        let hint = truncate_agent_name(SWARM_HINT, (inner.width as usize).saturating_sub(1));
+        let hint = truncate_agent_name(hint, (inner.width as usize).saturating_sub(1));
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 format!(" {hint}"),
@@ -324,6 +364,43 @@ pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &mut App, t
             hint_area,
         );
     }
+}
+
+/// The tab labels, and below them a rule that is heavy under the active tab.
+fn build_tab_lines<'a>(app: &App, width: usize, theme: &Theme) -> Vec<Line<'a>> {
+    let active = app.agents_tab();
+    let muted = Style::default().fg(theme.colors.muted);
+    let active_color = if app.focus() == PanelFocus::Swarm {
+        theme.colors.primary
+    } else {
+        theme.colors.secondary
+    };
+    let mut labels = vec![Span::raw(" ")];
+    let mut rule = vec![Span::styled("─", muted)];
+    let mut used = 1;
+    for (tab, _, tab_width) in AgentsTab::layout() {
+        let tab_width = usize::from(tab_width);
+        if tab == active {
+            let style = Style::default()
+                .fg(active_color)
+                .add_modifier(Modifier::BOLD);
+            labels.push(Span::styled(format!(" {} ", tab.label()), style));
+            rule.push(Span::styled(
+                "━".repeat(tab_width),
+                Style::default().fg(active_color),
+            ));
+        } else {
+            labels.push(Span::styled(format!(" {} ", tab.label()), muted));
+            rule.push(Span::styled("─".repeat(tab_width), muted));
+        }
+        used += tab_width;
+    }
+    let rest = width.saturating_sub(used);
+    if rest > display_width(TABS_HINT) {
+        labels.push(Span::styled(format!("{TABS_HINT:>rest$}"), muted));
+    }
+    rule.push(Span::styled("─".repeat(rest), muted));
+    vec![Line::from(labels), Line::from(rule)]
 }
 
 fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
@@ -385,69 +462,16 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     };
     let prefix = if new_selected { " > " } else { "   " };
     lines.push(Line::from(Span::styled(
-        format!("{prefix}{:>number_width$}  New agent", "+"),
+        format!("{prefix}{:>number_width$}  New project", "+"),
         new_style,
     )));
     lines
 }
 
-const DEFINITIONS_HINT: &str = "⏎ spawn e edit d del";
-
-/// Render the Permanent agents panel (definitions followed by a
-/// "+ New permanent" row).
-pub(super) fn render_definitions_panel(
-    frame: &mut Frame,
-    area: Rect,
-    app: &mut App,
-    theme: &Theme,
-) {
-    let is_focused = app.focus() == PanelFocus::Definitions;
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
-    };
-    let block = Block::default()
-        .title(" PERMANENT AGENTS ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let show_hint = inner.height >= 4;
-    let rows_area = Rect {
-        height: inner.height.saturating_sub(u16::from(show_hint)),
-        ..inner
-    };
-    app.set_definition_rows_area(rows_area);
-    app.sync_definitions_scroll(rows_area.height as usize);
-
-    let lines: Vec<Line> = build_definition_lines(app, inner, theme)
-        .into_iter()
-        .skip(app.definitions_scroll())
-        .take(rows_area.height as usize)
-        .collect();
-    frame.render_widget(Paragraph::new(lines), rows_area);
-
-    if show_hint {
-        let hint_area = Rect {
-            y: inner.y + inner.height - 1,
-            height: 1,
-            ..inner
-        };
-        let hint = truncate_agent_name(DEFINITIONS_HINT, (inner.width as usize).saturating_sub(1));
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(" {hint}"),
-                Style::default().fg(theme.colors.muted),
-            ))),
-            hint_area,
-        );
-    }
-}
-
+/// Roster rows: each permanent agent with its description, then
+/// "+ New agent".
 fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
-    let is_focused = app.focus() == PanelFocus::Definitions;
+    let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_definition();
     let width = inner.width as usize;
     let highlighted = Style::default()
@@ -488,7 +512,7 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
         ("   ", Style::default().fg(theme.colors.muted))
     };
     lines.push(Line::from(Span::styled(
-        truncate_agent_name(&format!("{prefix}+  New permanent"), width.max(1)),
+        truncate_agent_name(&format!("{prefix}+  New agent"), width.max(1)),
         style,
     )));
     lines

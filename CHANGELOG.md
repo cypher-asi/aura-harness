@@ -45,9 +45,10 @@ start agents of their own. One node-wide `AgentHost` in
 
 ### Terminal — permanent agents
 
-The terminal's left column is split. **Agents** (top) lists the running
-agent instances, and **Permanent agents** (bottom) lists reusable agent
-definitions that any agent can spawn by name.
+The terminal's AGENTS panel has two tabs. **Projects** lists the live
+agents, and **Agents** is the roster of permanent agents: reusable
+definitions that any agent can spawn by name. With the panel focused,
+←/→ switches tabs, and clicking a tab shows it.
 
 ##### Added
 
@@ -56,7 +57,8 @@ definitions that any agent can spawn by name.
   `tools` (an allow-list; default is every built-in tool except `task`)
   and `skills`. The body is the rules the agent follows. `explorer` and
   `reviewer` are seeded the first time the directory is created.
-- The panel spawns the selected permanent agent (Enter), edits it in
+- The roster spawns the selected permanent agent (Enter) and then shows
+  Projects with the new instance. It also edits it in
   `$VISUAL`/`$EDITOR` (`e`), creates one (`n` or the `+` row), and
   deletes it after confirmation (`d`). `/spawn <name>` starts an
   instance from the chat.
@@ -64,7 +66,7 @@ definitions that any agent can spawn by name.
   one of the permanent agents. The call registers an instance (for
   example `reviewer #1`) under the calling agent, runs it with the
   definition's rules, skills, tools and model, and returns its final
-  reply. Instances stay in the Agents list, indented under their parent
+  reply. Instances stay under Projects, indented under their parent
   and marked with a spinner while they work. Switching to an instance
   continues its conversation under the same rules.
 - `agents.json` entries gain optional `definition` and `parent` fields.

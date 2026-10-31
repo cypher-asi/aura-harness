@@ -423,9 +423,10 @@ fn test_agent_new_command_emits_create_agent() {
 }
 
 // ========================================================================
-// Permanent agents panel
+// Agents panel: roster tab
 // ========================================================================
 
+/// Agents panel focused on the roster tab.
 fn app_with_definitions() -> (App, mpsc::Receiver<UiEvent>) {
     let (mut app, rx) = app_with_agents();
     app.process_command(UiCommand::SetAgentDefinitions(vec![
@@ -438,7 +439,9 @@ fn app_with_definitions() -> (App, mpsc::Receiver<UiEvent>) {
             description: "Reviews diffs".to_string(),
         },
     ]));
-    app.focus = PanelFocus::Definitions;
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), crate::app::AgentsTab::Roster);
     (app, rx)
 }
 
@@ -553,13 +556,78 @@ fn test_open_editor_request_is_taken_once() {
 }
 
 #[test]
-fn test_tab_cycle_reaches_definitions() {
+fn test_arrows_toggle_agents_tabs_without_switching_agent() {
+    let (mut app, mut rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_arrows_edit_input_instead_of_toggling_tabs() {
     let (mut app, _rx) = app_with_agents();
     app.focus = PanelFocus::Swarm;
 
-    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Char('a')));
+    app.handle_key(key(KeyCode::Left));
 
-    assert_eq!(app.focus(), PanelFocus::Definitions);
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
+    assert_eq!(app.cursor_pos(), 0);
+}
+
+#[test]
+fn test_spawning_from_roster_shows_projects() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InstantiateDefinition(_))
+    ));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
+}
+
+#[test]
+fn test_clicking_tab_bar_switches_tabs() {
+    let (mut app, _rx) = app_with_agents();
+    app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
+    app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
+    let (_, roster_start, _) = AgentsTab::layout()
+        .find(|&(tab, _, _)| tab == AgentsTab::Roster)
+        .unwrap();
+
+    app.handle_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        1 + roster_start,
+        1,
+    ));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    assert_eq!(app.focus(), PanelFocus::Swarm);
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
+}
+
+#[test]
+fn test_hidden_tab_ignores_clicks_on_its_old_rows() {
+    let (mut app, mut rx) = app_with_definitions();
+    app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
+    app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
+    app.set_agent_rows_area(Rect::new(1, 3, 22, 10));
+    app.set_definition_rows_area(Rect::new(1, 3, 22, 10));
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 4));
+
+    assert_eq!(app.selected_definition(), 1);
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -1000,7 +1068,7 @@ fn test_closing_focused_sandbox_returns_focus_to_chat() {
 fn test_tab_cycles_visible_panels() {
     let mut app = App::new();
     let mut order = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..4 {
         app.handle_key(key(KeyCode::Tab));
         order.push(app.focus());
     }
@@ -1010,7 +1078,6 @@ fn test_tab_cycles_visible_panels() {
             PanelFocus::Records,
             PanelFocus::Sandbox,
             PanelFocus::Swarm,
-            PanelFocus::Definitions,
             PanelFocus::Chat
         ]
     );

@@ -96,14 +96,14 @@ impl App {
         &self.definitions
     }
 
-    /// Highlighted row in the Permanent agents panel (the last row is
-    /// "+ New permanent").
+    /// Highlighted row in the roster (the last row is
+    /// "+ New agent").
     #[must_use]
     pub const fn selected_definition(&self) -> usize {
         self.selected_definition
     }
 
-    /// First visible row of the Permanent agents panel.
+    /// First visible row of the roster.
     #[must_use]
     pub const fn definitions_scroll(&self) -> usize {
         self.definitions_scroll
@@ -157,7 +157,7 @@ impl App {
     }
 
     /// Spawn the highlighted permanent agent, or create one on the
-    /// "+ New permanent" row.
+    /// "+ New agent" row.
     pub(super) fn activate_definition_row(&mut self) {
         match self.selected_definition_name() {
             Some(name) => self.instantiate_definition(&name),
@@ -242,7 +242,7 @@ impl App {
         }
     }
 
-    /// Clicking a row highlights it; clicking "+ New permanent"
+    /// Clicking a row highlights it; clicking "+ New agent"
     /// creates one.
     pub(super) fn click_definition_row(&mut self, column: u16, row: u16) {
         let Some(rows) = self.areas.definition_rows else {

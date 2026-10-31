@@ -339,7 +339,7 @@ pub enum RecordStatus {
     None,
 }
 
-/// Summary of a permanent agent for display in the Permanent agents panel.
+/// Summary of a permanent agent for display in the roster.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentDefinitionSummary {
     /// Name agents spawn it by

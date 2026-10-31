@@ -222,23 +222,14 @@ fn test_default_layout_shows_agents_column() {
         },
     ]));
 
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
-    terminal
-        .draw(|frame| super::render(frame, &mut app, &test_theme()))
-        .unwrap();
-
-    let buffer = terminal.backend().buffer();
-    let rows: Vec<String> = (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect()
-        })
-        .collect();
+    let rows = render_rows(&mut app, 120);
     let screen = rows.join("\n");
     assert!(screen.contains("AGENTS"));
     assert!(screen.contains("CHAT"));
     assert!(screen.contains("RECORD"));
+    assert!(rows
+        .iter()
+        .any(|r| r.contains("Projects") && r.contains("Agents") && r.contains("←→")));
     assert!(rows
         .iter()
         .any(|r| r.contains("● 1. Terminal") && r.contains("12│")));
@@ -248,21 +239,42 @@ fn test_default_layout_shows_agents_column() {
             .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
             .unwrap()
     };
-    assert_eq!(column_of("New agent"), column_of("Researcher"));
+    assert_eq!(column_of("New project"), column_of("Researcher"));
     assert_eq!(column_of("+"), column_of("2."));
     assert!(screen.contains("Alt+↑↓ switch  ^N new"));
     // Spawned instances sit indented under their parent.
     assert_eq!(column_of("reviewer #1"), column_of("Researcher") + 2);
+    assert!(!screen.contains("Reviews"));
 
-    assert!(screen.contains("PERMANENT AGENTS"));
+    // Tab to the agents panel, then over to the roster tab.
+    for _ in 0..3 {
+        app.handle_key(crossterm::event::KeyEvent::from(
+            crossterm::event::KeyCode::Tab,
+        ));
+    }
+    app.handle_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Right,
+    ));
+    let rows = render_rows(&mut app, 120);
+    let screen = rows.join("\n");
     assert!(rows.iter().any(|r| r.contains("reviewer  Reviews")));
-    assert!(screen.contains("+  New permanent"));
+    assert!(screen.contains("+  New agent"));
     assert!(screen.contains("⏎ spawn e edit d del"));
-    assert!(row_index(&rows, "PERMANENT AGENTS") > row_index(&rows, "Researcher"));
+    assert!(!screen.contains("Researcher"));
 }
 
-fn row_index(rows: &[String], needle: &str) -> usize {
-    rows.iter().position(|r| r.contains(needle)).unwrap()
+#[test]
+fn test_agents_tab_bar_underlines_active_tab() {
+    let mut app = crate::App::new();
+    let rows = render_rows(&mut app, 120);
+    let tabs = rows.iter().position(|r| r.contains("Projects")).unwrap();
+    let rule = &rows[tabs + 1];
+    let start = rows[tabs].find("Projects").unwrap();
+    let column = rows[tabs][..start].chars().count();
+    assert_eq!(rule.chars().nth(column), Some('━'));
+    let agents = rows[tabs].find("Agents").unwrap();
+    let column = rows[tabs][..agents].chars().count();
+    assert_eq!(rule.chars().nth(column), Some('─'));
 }
 
 #[test]

@@ -26,6 +26,7 @@ use crate::{
     renderer::ChatLineCache,
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+pub use definitions::AgentsTab;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -66,8 +67,6 @@ pub enum PanelFocus {
     Records,
     /// Sandbox panel (file tree)
     Sandbox,
-    /// Permanent agents panel (below the agent list)
-    Definitions,
 }
 
 /// Application state.
@@ -211,11 +210,13 @@ pub struct App {
     pub(super) selecting: bool,
     /// Whether the selection should be copied after the next frame
     pub(super) copy_requested: bool,
+    /// Which list the agents panel shows
+    pub(super) agents_tab: AgentsTab,
     /// Permanent agents
     pub(super) definitions: Vec<AgentDefinitionSummary>,
-    /// Highlighted row in the Permanent agents panel
+    /// Highlighted row in the roster
     pub(super) selected_definition: usize,
-    /// First visible row of the Permanent agents panel
+    /// First visible row of the roster
     pub(super) definitions_scroll: usize,
     /// File to open in the editor before the next frame
     pub(super) editor_request: Option<PathBuf>,
@@ -230,9 +231,9 @@ pub struct PanelAreas {
     pub swarm: Option<Rect>,
     /// Rows of the agents list inside the panel
     pub agent_rows: Option<Rect>,
-    /// Permanent agents panel (including border)
-    pub definitions: Option<Rect>,
-    /// Rows of the permanent agents list inside the panel
+    /// Tab bar row of the agents panel
+    pub agent_tabs: Option<Rect>,
+    /// Rows of the roster inside the agents panel
     pub definition_rows: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
@@ -343,6 +344,7 @@ impl App {
             selection: None,
             selecting: false,
             copy_requested: false,
+            agents_tab: AgentsTab::default(),
             definitions: Vec::new(),
             selected_definition: 0,
             definitions_scroll: 0,
@@ -551,12 +553,14 @@ impl App {
             PanelFocus::Records => {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
-            PanelFocus::Swarm => {
-                self.select_agent_row(self.selected_agent.saturating_sub(lines));
-            }
-            PanelFocus::Definitions => {
-                self.select_definition_row(self.selected_definition.saturating_sub(lines));
-            }
+            PanelFocus::Swarm => match self.agents_tab {
+                AgentsTab::Projects => {
+                    self.select_agent_row(self.selected_agent.saturating_sub(lines));
+                }
+                AgentsTab::Roster => {
+                    self.select_definition_row(self.selected_definition.saturating_sub(lines));
+                }
+            },
             PanelFocus::Sandbox => {
                 self.sandbox
                     .move_by(-isize::try_from(lines).unwrap_or(isize::MAX));
@@ -575,12 +579,14 @@ impl App {
                         (self.selected_record + lines).min(self.records.len().saturating_sub(1));
                 }
             }
-            PanelFocus::Swarm => {
-                self.select_agent_row(self.selected_agent.saturating_add(lines));
-            }
-            PanelFocus::Definitions => {
-                self.select_definition_row(self.selected_definition.saturating_add(lines));
-            }
+            PanelFocus::Swarm => match self.agents_tab {
+                AgentsTab::Projects => {
+                    self.select_agent_row(self.selected_agent.saturating_add(lines));
+                }
+                AgentsTab::Roster => {
+                    self.select_definition_row(self.selected_definition.saturating_add(lines));
+                }
+            },
             PanelFocus::Sandbox => {
                 self.sandbox
                     .move_by(isize::try_from(lines).unwrap_or(isize::MAX));
@@ -588,7 +594,7 @@ impl App {
         }
     }
 
-    /// Highlight agents-list row `row` (the last row is "+ New agent") and
+    /// Highlight agents-list row `row` (the last row is "+ New project") and
     /// switch to the agent on it.
     pub(super) fn select_agent_row(&mut self, row: usize) {
         self.selected_agent = row.min(self.agents.len());
@@ -598,7 +604,7 @@ impl App {
     }
 
     /// Act on the highlighted agents-list row: switch to it, or create an
-    /// agent when it is the "+ New agent" row.
+    /// agent when it is the "+ New project" row.
     pub(super) fn activate_agent_row(&mut self) {
         match self.agents.get(self.selected_agent).map(|a| a.id.clone()) {
             Some(agent_id) => self.request_agent_switch(agent_id),
@@ -691,8 +697,6 @@ impl App {
     fn panel_at(&self, column: u16, row: u16) -> Option<PanelFocus> {
         if contains(self.areas.swarm, column, row) {
             Some(PanelFocus::Swarm)
-        } else if contains(self.areas.definitions, column, row) {
-            Some(PanelFocus::Definitions)
         } else if contains(self.areas.records, column, row) {
             Some(PanelFocus::Records)
         } else if contains(self.areas.sandbox, column, row) {
@@ -736,11 +740,7 @@ impl App {
         let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
             return;
         };
-        let step = if matches!(panel, PanelFocus::Swarm | PanelFocus::Definitions) {
-            1
-        } else {
-            3
-        };
+        let step = if panel == PanelFocus::Swarm { 1 } else { 3 };
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.clear_selection();
@@ -757,10 +757,7 @@ impl App {
                     .map(|bounds| Selection::new(bounds, at));
                 self.selecting = self.selection.is_some();
                 match panel {
-                    PanelFocus::Swarm => self.click_agent_row(mouse.column, mouse.row),
-                    PanelFocus::Definitions => {
-                        self.click_definition_row(mouse.column, mouse.row);
-                    }
+                    PanelFocus::Swarm => self.click_agents_panel(mouse.column, mouse.row),
                     PanelFocus::Sandbox => self.click_sandbox_row(mouse.column, mouse.row),
                     PanelFocus::Chat | PanelFocus::Records => {}
                 }
@@ -775,7 +772,6 @@ impl App {
         let area = match panel {
             PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
             PanelFocus::Swarm => self.areas.swarm,
-            PanelFocus::Definitions => self.areas.definitions,
             PanelFocus::Records => self.areas.records,
             PanelFocus::Sandbox => self.areas.sandbox,
         }?;

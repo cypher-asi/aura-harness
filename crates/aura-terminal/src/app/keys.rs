@@ -1,6 +1,6 @@
 //! Key event handling for the App.
 
-use super::{line_edit::LineEdit, App, AppState, NotificationType, PanelFocus};
+use super::{line_edit::LineEdit, AgentsTab, App, AppState, NotificationType, PanelFocus};
 use crate::{events::UiEvent, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -167,7 +167,8 @@ impl App {
         let word_motion = key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-        if self.focus == PanelFocus::Definitions
+        if self.focus == PanelFocus::Swarm
+            && self.agents_tab == AgentsTab::Roster
             && self.input.is_empty()
             && !word_motion
             && self.handle_definitions_shortcut(key)
@@ -196,23 +197,24 @@ impl App {
         match self.focus {
             PanelFocus::Chat => self.handle_chat_key(key),
             PanelFocus::Records => self.handle_records_key(key),
-            PanelFocus::Swarm => self.handle_swarm_key(key),
+            PanelFocus::Swarm => match self.agents_tab {
+                AgentsTab::Projects => self.handle_swarm_key(key),
+                AgentsTab::Roster => {
+                    self.handle_definitions_key(key);
+                    KeyResult::continue_running()
+                }
+            },
             PanelFocus::Sandbox => self.handle_sandbox_key(key),
-            PanelFocus::Definitions => {
-                self.handle_definitions_key(key);
-                KeyResult::continue_running()
-            }
         }
     }
 
     /// Get the next visible panel when Tab is pressed.
     fn next_panel_focus(&self) -> PanelFocus {
-        const CYCLE: [PanelFocus; 5] = [
+        const CYCLE: [PanelFocus; 4] = [
             PanelFocus::Chat,
             PanelFocus::Records,
             PanelFocus::Sandbox,
             PanelFocus::Swarm,
-            PanelFocus::Definitions,
         ];
         let current = CYCLE.iter().position(|&p| p == self.focus).unwrap_or(0);
         (1..CYCLE.len())
@@ -226,7 +228,7 @@ impl App {
             PanelFocus::Chat => true,
             PanelFocus::Records => self.record_panel_visible,
             PanelFocus::Sandbox => self.sandbox_panel_visible,
-            PanelFocus::Swarm | PanelFocus::Definitions => self.swarm_panel_visible,
+            PanelFocus::Swarm => self.swarm_panel_visible,
         }
     }
 
@@ -352,10 +354,12 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Handle key when swarm panel is focused. Moving the highlight onto an
-    /// agent switches to it; Enter on "+ New agent" creates one.
+    /// Handle key when the agents panel shows Projects. Moving the
+    /// highlight onto an agent switches to it; Enter on "+ New project"
+    /// creates one.
     fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
+            KeyCode::Left | KeyCode::Right => self.toggle_agents_tab(),
             KeyCode::Up => self.select_agent_row(self.selected_agent.saturating_sub(1)),
             KeyCode::Down => self.select_agent_row(self.selected_agent + 1),
             KeyCode::Enter => self.activate_agent_row(),
