@@ -1,6 +1,7 @@
 //! Loading and displaying historical records from the store.
 
 use crate::agent_registry::AgentRegistry;
+use crate::event_loop::run_command::is_user_tool_use;
 use aura_agent_kernel::decode_tool_effect;
 use aura_core_types::{
     ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
@@ -168,7 +169,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             MessageRole::System,
             serde_json::from_slice::<PolicyDecision>(&tx.payload)
                 .ok()
-                .map(|decision| policy_chat_line(&decision))?,
+                .and_then(|decision| policy_chat_line(&decision))?,
         ),
         TransactionType::SessionStart => (MessageRole::System, "── new session ──".to_string()),
         _ => return None,
@@ -262,17 +263,21 @@ pub fn build_record_summary(
 
 /// One-line chat rendering of a policy decision, e.g.
 /// `policy: read_file allowed by user_default.full_access`.
+///
+/// `None` when the user's own command was allowed: its output already
+/// shows that it ran.
 #[must_use]
-pub fn policy_chat_line(decision: &PolicyDecision) -> String {
+pub fn policy_chat_line(decision: &PolicyDecision) -> Option<String> {
     let outcome = match decision.verdict {
+        ToolGateVerdict::Approved if is_user_tool_use(&decision.tool_use_id) => return None,
         ToolGateVerdict::Approved => "allowed",
         ToolGateVerdict::Denied => "denied",
         ToolGateVerdict::PendingApproval => "needs approval",
     };
-    format!(
+    Some(format!(
         "policy: {} {outcome} by {}",
         decision.tool, decision.decided_by
-    )
+    ))
 }
 
 /// Policy provenance for the record detail view; `None` for entries that

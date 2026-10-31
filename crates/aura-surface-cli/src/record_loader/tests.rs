@@ -356,6 +356,25 @@ fn tool_call_history_shows_command_then_policy_line() {
 }
 
 #[test]
+fn policy_line_is_hidden_only_for_allowed_user_commands() {
+    let (t, _) = policy_decision_tx(AgentId::generate());
+    let mut decision: PolicyDecision = serde_json::from_slice(&t.payload).unwrap();
+    assert_eq!(
+        policy_chat_line(&decision).as_deref(),
+        Some("policy: run_command allowed by user.on")
+    );
+
+    decision.tool_use_id = "user_abc".into();
+    assert_eq!(policy_chat_line(&decision), None);
+
+    decision.verdict = ToolGateVerdict::Denied;
+    assert_eq!(
+        policy_chat_line(&decision).as_deref(),
+        Some("policy: run_command denied by user.on")
+    );
+}
+
+#[test]
 fn reasoning_completed_and_failed() {
     let ok = json_tx(
         TransactionType::Reasoning,

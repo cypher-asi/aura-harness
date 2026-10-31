@@ -62,10 +62,13 @@ impl ToolAuditObserver for UiToolAuditObserver {
             entry.seq, &entry.tx, entry, timestamp,
         )));
         if entry.tx.tx_type == TransactionType::PolicyDecision {
-            if let Ok(decision) = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload) {
+            let line = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload)
+                .ok()
+                .and_then(|decision| policy_chat_line(&decision));
+            if let Some(content) = line {
                 self.send(UiCommand::ShowMessage(MessageData {
                     role: MessageRole::System,
-                    content: policy_chat_line(&decision),
+                    content,
                     is_streaming: false,
                     timestamp_ms: Some(entry.tx.ts_ms),
                     command: None,

@@ -23,6 +23,14 @@ pub(crate) const RUN_COMMAND_TOOL: &str = "run_command";
 /// `ToolProposal::source` for proposals that come from the user.
 pub(crate) const USER_SOURCE: &str = "user";
 
+/// `tool_use_id` prefix of proposals that come from the user.
+const USER_TOOL_USE_PREFIX: &str = "user_";
+
+/// Whether `tool_use_id` belongs to a command the user typed.
+pub(crate) fn is_user_tool_use(tool_use_id: &str) -> bool {
+    tool_use_id.starts_with(USER_TOOL_USE_PREFIX)
+}
+
 /// Characters that need a shell to interpret.
 const SHELL_SYNTAX: &[char] = &[
     '|', '&', ';', '<', '>', '(', ')', '$', '`', '\\', '"', '\'', '*', '?', '[', ']', '{', '}',
@@ -51,7 +59,7 @@ pub(crate) fn command_args(command: &str, tty_cols: Option<u16>) -> Value {
 
 /// Build the tool proposal for a typed command.
 pub(crate) fn user_command_proposal(command: &str, tty_cols: Option<u16>) -> ToolProposal {
-    let tool_use_id = format!("user_{}", uuid::Uuid::new_v4().simple());
+    let tool_use_id = format!("{USER_TOOL_USE_PREFIX}{}", uuid::Uuid::new_v4().simple());
     ToolProposal::new(
         tool_use_id,
         RUN_COMMAND_TOOL,
