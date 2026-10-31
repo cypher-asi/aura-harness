@@ -2,7 +2,7 @@
 
 This document is organized in three parts:
 
-1. **Part 0 — Layer overview.** The ten-layer stack the workspace ships with today, the strict downward-only dependency rule, the `AgentMode` resolution chain, and the tool authorization pipeline.
+1. **Part 0 — Layer overview.** The ten-layer stack the workspace ships with today, the strict downward-only dependency rule, the runtime diagram, the `AgentMode` resolution chain, and the tool authorization pipeline.
 2. **Part 1 — Layered crate reference.** One section per layer, with a per-layer overview followed by a sub-section for every crate (purpose, key types, key modules).
 3. **Part 2 — User flows.** Sequence diagrams showing how data moves through the system for interactive, headless, WebSocket, and error-recovery paths.
 
@@ -99,6 +99,28 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
    │  aura-core-{types,modes,permissions,auth,protocol},            │
    │  aura-protocol                                                 │
    └────────────────────────────────────────────────────────────────┘
+```
+
+### Runtime diagram
+
+How a request flows through the running system. The kernel boundary cuts at the `agent` layer.
+
+```text
+                 aura (TUI)  ·  aura run --ui none  ·  aura-node
+                                    │
+                    HTTP / WebSocket gateway (aura-runtime)
+                                    │
+                Scheduler (aura-engine): store-backed per-agent claim (§12.a)
+                     │                  │                  │
+                 Worker             Worker             Worker      one per agent
+                     └──────────────────┼──────────────────┘
+                                        │
+              Kernel: build context · mode gate + policy · call reasoner
+                      · execute actions · commit RecordEntry (sealed WriteStore)
+                     │                  │                  │
+        Reasoner (records every    Executor (tools:    Store (RocksDB: record,
+        LLM call) → aura-router    FS, commands,       agent_meta, inbox,
+        proxy → providers          domain, automaton)  memory_*, agent_skills)
 ```
 
 ### `AgentMode` resolution
@@ -420,7 +442,7 @@ Layout:
 
 Backward-compat re-exports preserved at the crate root: `aura_runtime::scheduler::*` and `aura_runtime::memory_observer::*` now resolve to thin re-export modules over `aura_engine::*`. Internal callers should reach `aura-engine` directly, but the old paths keep `aura-surface-cli` and any future re-export-driven external consumer building without ripple changes.
 
-HTTP routes are listed in [README.md#http--websocket-api](../README.md#http--websocket-api).
+HTTP routes are listed in [api.md](api.md).
 
 #### [`aura-engine`](../crates/aura-engine)
 

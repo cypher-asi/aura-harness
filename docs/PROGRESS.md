@@ -4,7 +4,7 @@
 
 This file is the historical implementation log for the Aura Harness workspace. The current source of truth for crate boundaries and wire flow is:
 
-- [`README.md`](../README.md) — operator-facing build, API, and development reference.
+- [`README.md`](../README.md) — overview, principles, and links to the [running](running.md), [API](api.md), [CLI](cli.md), [configuration](configuration.md), and [development](development.md) references.
 - [`docs/architecture.md`](architecture.md) — layered crate map, external-consumer invariant, and run/WebSocket flows.
 
 The active post-Phase-A/B/C shape is a self-contained Cargo workspace with `aura-runtime` as the sole external Rust surface and HTTP/WS gateway. `aura-engine` owns orchestration, `aura-domain-http` owns the HTTP `DomainApi` implementation, and `aura-fleet-subagent` owns the concrete fleet subagent dispatcher. Clients start work with `POST /v1/run` (`RuntimeRequest` → `RuntimeRunResponse`) and then attach to `WS /stream/:run_id`; there is no client-sent `SessionInit` first frame.
@@ -275,7 +275,7 @@ was never created.** Its intended surface is now delivered by the
 root `aura` binary (`src/`) — interactive TUI, login / logout /
 whoami, and the embedded HTTP server for file / record access. The
 headless server half lives in `aura-runtime`. See
-[`README.md`](../README.md) under "Binaries" for the canonical entry
+[`docs/cli.md`](cli.md) under "Binaries" for the canonical entry
 point.
 
 - [x] ~~Create `aura-cli` crate~~ — dropped; root `aura` binary
