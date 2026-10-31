@@ -1,8 +1,10 @@
 //! Provider factory for Aura.
 //!
-//! There is exactly one real LLM provider: an Anthropic-shaped HTTP client
-//! that talks to `aura-router` (the Aura proxy) with a per-request JWT.
-//! For tests, [`mock_provider`] returns a fixture-friendly `MockProvider`.
+//! There is exactly one real LLM wire client: an Anthropic-shaped HTTP
+//! client. It talks to `aura-router` (the Aura proxy) with a per-request
+//! JWT, and — for the terminal UI only — to a local Anthropic-compatible
+//! server (Ollama) via [`routed_provider`]. For tests, [`mock_provider`]
+//! returns a fixture-friendly `MockProvider`.
 //!
 //! Per-session overrides — model, fallback model, prompt-caching toggle —
 //! arrive on the wire as `aura_protocol::SessionModelOverrides` and are
@@ -16,6 +18,7 @@ use tracing::info;
 use crate::anthropic::{AnthropicConfig, AnthropicProvider};
 use crate::error::ReasonerError;
 use crate::mock::MockProvider;
+use crate::routed::RoutedProvider;
 use crate::ModelProvider;
 
 /// Result of a provider selection.
@@ -99,6 +102,28 @@ pub fn with_session_overrides(
     Ok(ProviderSelection {
         provider: Arc::new(provider),
         name: "anthropic".to_string(),
+    })
+}
+
+/// Build the terminal provider: `local/*` models go to the local
+/// Anthropic-compatible server (Ollama), everything else to aura-router.
+///
+/// # Errors
+///
+/// Returns [`ReasonerError`] if HTTP client construction fails.
+pub fn routed_provider() -> Result<ProviderSelection, ReasonerError> {
+    let local_cfg = AnthropicConfig::local_from_env();
+    let router_cfg = AnthropicConfig::from_env();
+    info!(
+        local_url = %local_cfg.base_url,
+        router_url = %router_cfg.base_url,
+        "LLM provider ready (local + router-backed proxy)"
+    );
+    let local = AnthropicProvider::new(local_cfg)?.with_sse_for_all_models();
+    let router = AnthropicProvider::new(router_cfg)?;
+    Ok(ProviderSelection {
+        provider: Arc::new(RoutedProvider::new(Arc::new(local), Arc::new(router))),
+        name: "aura".to_string(),
     })
 }
 

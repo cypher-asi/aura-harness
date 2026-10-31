@@ -23,6 +23,7 @@ impl App {
                 KeyResult::continue_running()
             }
             AppState::LoginEmail | AppState::LoginPassword => self.handle_login_key(key),
+            AppState::SelectingModel => self.handle_model_selector_key(key),
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
         }
     }
@@ -66,6 +67,7 @@ impl App {
                 self.input.clear();
                 self.cursor_pos = 0;
                 self.login_email.clear();
+                self.pending_model = None;
                 self.notification =
                     Some(("Login cancelled".to_string(), NotificationType::Warning));
             }
@@ -119,6 +121,31 @@ impl App {
             }
             KeyCode::Home => self.cursor_pos = 0,
             KeyCode::End => self.cursor_pos = self.input.len(),
+            _ => {}
+        }
+        KeyResult::continue_running()
+    }
+
+    /// Handle key while the model selector is open.
+    fn handle_model_selector_key(&mut self, key: KeyEvent) -> KeyResult {
+        let last = self.models.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.state = AppState::Idle,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.model_cursor = self.model_cursor.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.model_cursor = (self.model_cursor + 1).min(last);
+            }
+            KeyCode::Home => self.model_cursor = 0,
+            KeyCode::End => self.model_cursor = last,
+            KeyCode::Enter => {
+                if let Some(id) = self.models.get(self.model_cursor).map(|m| m.id.clone()) {
+                    self.choose_model(&id);
+                } else {
+                    self.state = AppState::Idle;
+                }
+            }
             _ => {}
         }
         KeyResult::continue_running()

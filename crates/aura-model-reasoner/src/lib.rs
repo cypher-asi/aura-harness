@@ -28,14 +28,17 @@ pub mod console;
 mod error;
 mod kernel_propose;
 mod mock;
+pub mod model_catalog;
 pub mod provider_factory;
 pub mod response_stream;
+mod routed;
 pub mod types;
 
 pub use provider_factory::{
-    default_provider as default_provider_from_env, mock_provider, with_session_overrides,
-    ProviderSelection, SessionOverrides,
+    default_provider as default_provider_from_env, mock_provider, routed_provider,
+    with_session_overrides, ProviderSelection, SessionOverrides,
 };
+pub use routed::RoutedProvider;
 
 pub(crate) fn truncate_body(body: &str, max_len: usize) -> String {
     if body.len() <= max_len {

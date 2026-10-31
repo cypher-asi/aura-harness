@@ -7,6 +7,8 @@ pub(crate) mod record_ui;
 pub(crate) use agent_events::forward_agent_events;
 pub(crate) use record_ui::send_record_to_ui;
 
+use crate::model_selection::ModelSelection;
+
 use aura_agent::{AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Transaction};
@@ -32,6 +34,8 @@ pub struct EventLoopContext<'a> {
     pub _process_manager: Arc<ProcessManager>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
+    /// Model selection already applied to `agent_loop`.
+    pub models: ModelSelection,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -45,6 +49,7 @@ pub(super) struct LoopState<'a> {
     pub(super) kernel: Arc<Kernel>,
     pub(super) agent_id: AgentId,
     pub(super) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
+    pub(super) models: ModelSelection,
 }
 
 /// Run the event processing loop.
@@ -63,6 +68,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         agent_id,
         _process_manager,
         memory_manager,
+        models,
     } = ctx;
 
     if let Some(ref mm) = memory_manager {
@@ -87,7 +93,10 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         kernel,
         agent_id,
         memory_manager,
+        models,
     };
+
+    handlers::announce_models(&mut state).await;
 
     loop {
         tokio::select! {
@@ -172,6 +181,7 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
         }
         UiEvent::Logout => handlers::handle_logout(state).await,
         UiEvent::Whoami => handlers::handle_whoami(state).await,
+        UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
     }
     false
 }

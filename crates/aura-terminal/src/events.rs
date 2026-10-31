@@ -58,6 +58,9 @@ pub enum UiEvent {
 
     /// User requested auth status
     Whoami,
+
+    /// User selected a model by id
+    SelectModel(String),
 }
 
 /// Commands sent from the application logic to the UI.
@@ -147,6 +150,29 @@ pub enum UiCommand {
         /// Whether the API is active
         active: bool,
     },
+
+    /// Update the model selector contents and the current model
+    SetModels {
+        /// Selectable models, in display order
+        options: Vec<ModelOptionView>,
+        /// Id of the model used for the next turn
+        current: String,
+        /// Display name of the logged-in user, `None` when browsing as guest
+        user: Option<String>,
+    },
+}
+
+/// One entry in the model selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelOptionView {
+    /// Model id sent back in [`UiEvent::SelectModel`]
+    pub id: String,
+    /// Display label
+    pub label: String,
+    /// Whether the model runs on the local server (no login required)
+    pub local: bool,
+    /// For local models: whether it is installed on the local server
+    pub installed: bool,
 }
 
 /// Data for displaying a message.

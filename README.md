@@ -33,7 +33,7 @@ Core ideas:
 1. **The Record.** The fundamental unit of truth. Every agent has its own append-only log of record entries, strictly ordered by per-agent sequence number. All state is derivable from the record; there is no hidden state.
 2. **The Kernel.** A deterministic per-agent processor that builds context from the record, calls the reasoner, enforces policy, executes actions through the executor, and commits new entries. Given the same record, the kernel always produces the same output. The record-append surface is sealed to the kernel: only the kernel's `Arc<dyn WriteStore>` can commit a record entry.
 3. **Modes & Policy.** Before any external effect, the resolved `AgentMode` (`Agent` / `Plan` / `Ask` / `Debug`) gates the action; the policy layer then narrows further per-tool. The mode gate runs *before* the policy check, not as a substitute for it.
-4. **Reasoning.** Probabilistic LLM calls are isolated behind a provider trait and recorded by the kernel. There is exactly one real provider: an Anthropic-shaped client that always routes through the JWT-authenticated `aura-router` proxy. A mock provider is available for tests. There is no direct-to-Anthropic path.
+4. **Reasoning.** Probabilistic LLM calls are isolated behind a provider trait and recorded by the kernel. There is exactly one real wire client: an Anthropic-shaped client that routes through the JWT-authenticated `aura-router` proxy. In the terminal UI only, the same client can also talk to a local Anthropic-compatible server (Ollama) for `local/*` models. A mock provider is available for tests. There is no direct-to-Anthropic path.
 5. **Tools & Executors.** All side effects (filesystem, shell commands, domain APIs, automaton actions) are explicit. The executor router dispatches authorized actions and captures structured effects, keeping the kernel boundary clean.
 6. **Memory & Skills.** Per-agent memory (facts, events, procedures) and `SKILL.md`-based skill packages extend an agent's abilities at runtime without widening the deterministic kernel.
 
@@ -71,7 +71,9 @@ RocksDB builds require LLVM/Clang. On Linux, the `keyring` crate's Secret Servic
 # Build the full workspace (release)
 cargo build --release
 
-# Run the TUI (proxy mode — no API key needed)
+# Run the TUI — defaults to a small local model, no account needed
+ollama pull qwen3:4b                      # one-time, ~2.5 GB
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve  # in another terminal
 cargo run
 
 # Run the same binary headless
@@ -80,6 +82,15 @@ cargo run -- run --ui none
 # Run the standalone node server (binary name stays `aura-node`)
 cargo run -p aura-runtime --bin aura-node
 ```
+
+### Local model by default, login optional
+
+The TUI starts on `local/qwen3:4b`, served by [Ollama](https://ollama.com) (0.14+, which exposes the Anthropic-compatible `/v1/messages`). It runs on CPU and supports tool calling. Nothing is sent to aura-router and no login is needed. If Ollama isn't running or the model isn't pulled, the chat shows setup instructions.
+
+- `/model` opens the model selector (↑/↓, Enter, Esc). `/model <id>` switches directly, for example `/model local/qwen3:8b`. The header shows the active model, backend, and user, such as `qwen3:4b · local · guest`.
+- `/login` inside the chat unlocks the aura-router cloud models. Picking a cloud model as a guest starts the login flow and switches to that model once login succeeds. `/logout` returns to the local default.
+- The last choice is saved to `AURA_HOME/tui.json`. `AURA_DEFAULT_MODEL` overrides it.
+- Other local options: `qwen3:1.7b` for very small machines, or `qwen3:8b` / `qwen2.5-coder:7b` for better quality. Set `AURA_LOCAL_MODEL` to change the default.
 
 ### Docker
 
@@ -135,7 +146,7 @@ Defined in [`crates/aura-surface-cli/src/cli.rs`](crates/aura-surface-cli/src/cl
 | Command | Description |
 |---------|-------------|
 | `aura run` (default) | Run the agent. Flags below. |
-| `aura login` | Authenticate with zOS and store a JWT for proxy mode. |
+| `aura login` | Authenticate with zOS and store a JWT for cloud models (optional; `/login` in the TUI does the same). |
 | `aura logout` | Clear stored credentials. |
 | `aura whoami` | Show current authentication status. |
 | `aura hello` | Print `Hello, World!` and exit (Spec 01 smoke test). |
@@ -156,7 +167,7 @@ Flags for `aura run`:
 | `--ui <terminal\|none>` | `terminal` | Terminal UI (ratatui) or headless node. |
 | `--theme <name>` | `cyber` | One of `cyber`, `matrix`, `synthwave`, `minimal`. |
 | `-d, --dir <path>` | -- | Override working / data directory. |
-| `--provider <anthropic\|mock>` | `anthropic` | Model provider for the current session. |
+| `--provider <anthropic\|mock>` | `anthropic` | Model provider for the current session. `anthropic` serves `local/*` models from Ollama and everything else from aura-router. |
 | `-v, --verbose` | off | Enable verbose tracing output. |
 | `--allow-unrestricted-full-access` | off | Permit FullAccess sessions to bypass command allowlists (operator opt-in). |
 
@@ -471,13 +482,16 @@ The node reads configuration from environment variables via `NodeConfig::from_en
 
 ### LLM routing
 
-All LLM traffic flows through the AURA router (proxy) using a per-request JWT. There is no direct-provider path: `aura-harness` does not call Anthropic (or any other provider) on its own.
+All cloud LLM traffic flows through the AURA router (proxy) using a per-request JWT. There is no direct-provider path: `aura-harness` does not call Anthropic (or any other provider) on its own. The terminal UI can also send `local/*` models to a local Anthropic-compatible server (Ollama); those requests never carry the JWT. Headless `aura-node` is router-only.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `AURA_LOCAL_MODEL` | `qwen3:4b` | Default local model for the TUI (sent to Ollama as-is; selected as `local/<name>`). |
+| `AURA_LOCAL_MODEL_URL` | `http://127.0.0.1:11434` | Local Anthropic-compatible server (Ollama 0.14+). |
+| `AURA_LOCAL_CONTEXT_TOKENS` | `32768` | Context window assumed for local models. Start Ollama with a matching `OLLAMA_CONTEXT_LENGTH`. |
 | `AURA_ROUTER_URL` | `https://aura-router.onrender.com` | Proxy router endpoint. |
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions. WebSocket clients supply their own. |
-| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` (`aura_model_reasoner::ENV_FALLBACK_MODEL`) | Model identifier sent to the router **only** when the request did not pin a model itself; sessions, dev-loop runs, and task runs all carry an explicit model end-to-end. (Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback for one release.) |
+| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` (`aura_model_reasoner::ENV_FALLBACK_MODEL`) | Model identifier sent to the router **only** when the request did not pin a model itself; sessions, dev-loop runs, and task runs all carry an explicit model end-to-end. In the TUI, setting it overrides the local default and the saved `/model` choice. (Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback for one release.) |
 | `AURA_MEMORY_MODEL` | `aura-claude-haiku-4-5` | Dedicated low-cost model for background memory extraction and consolidation. It is isolated from the selected chat model and from global cross-provider fallbacks. |
 | `AURA_DEFAULT_FALLBACK_MODEL` | — | Optional secondary model used on 429/529 retries. |
 | `AURA_MODEL_TIMEOUT_MS` | `300000` | LLM request timeout (resolved by `AnthropicConfig::from_env`). |

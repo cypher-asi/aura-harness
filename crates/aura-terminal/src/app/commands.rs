@@ -13,7 +13,7 @@ impl App {
     pub(super) fn handle_command(&mut self, text: &str) -> KeyResult {
         let parts: Vec<&str> = text[1..].splitn(2, ' ').collect();
         let cmd = parts[0].to_lowercase();
-        let _arg = parts.get(1).unwrap_or(&"");
+        let arg = parts.get(1).map_or("", |a| a.trim());
 
         match cmd.as_str() {
             "quit" | "exit" | "q" => {
@@ -62,10 +62,20 @@ impl App {
                     }
                 }
             }
-            "login" => {
-                self.state = AppState::LoginEmail;
-                self.login_email.clear();
-                self.status = "Login — enter email".to_string();
+            "login" => self.start_login(),
+            "model" | "models" | "m" => {
+                if arg.is_empty() {
+                    self.open_model_selector();
+                } else {
+                    let id = self
+                        .models
+                        .iter()
+                        .find(|m| {
+                            m.id.eq_ignore_ascii_case(arg) || m.label.eq_ignore_ascii_case(arg)
+                        })
+                        .map_or_else(|| arg.to_string(), |m| m.id.clone());
+                    self.choose_model(&id);
+                }
             }
             "logout" => {
                 if let Some(tx) = &self.event_tx {
@@ -98,6 +108,77 @@ impl App {
             }
         }
         KeyResult::continue_running()
+    }
+
+    /// Enter the email/password login flow.
+    pub(super) fn start_login(&mut self) {
+        self.state = AppState::LoginEmail;
+        self.login_email.clear();
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.status = "Login — enter email".to_string();
+    }
+
+    /// Open the model selector with the current model highlighted.
+    pub(super) fn open_model_selector(&mut self) {
+        if self.models.is_empty() {
+            self.notification = Some((
+                "Model list not loaded yet".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        self.model_cursor = self
+            .models
+            .iter()
+            .position(|m| m.id == self.current_model)
+            .unwrap_or(0);
+        self.state = AppState::SelectingModel;
+    }
+
+    /// Select `id` for the next turn. Cloud models start the login flow
+    /// first when browsing as guest.
+    pub(super) fn choose_model(&mut self, id: &str) {
+        let needs_login = self
+            .models
+            .iter()
+            .find(|m| m.id == id)
+            .is_some_and(|m| !m.local)
+            && self.user.is_none();
+        if needs_login {
+            self.pending_model = Some(id.to_string());
+            self.start_login();
+            self.notification = Some((
+                "Cloud models need a login — enter email (Esc to stay local)".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        self.state = AppState::Idle;
+        if id != self.current_model {
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(UiEvent::SelectModel(id.to_string()));
+            }
+        }
+    }
+
+    fn cmd_set_models(
+        &mut self,
+        options: Vec<crate::events::ModelOptionView>,
+        current: String,
+        user: Option<String>,
+    ) {
+        self.models = options;
+        self.current_model = current;
+        self.user = user;
+        if self.model_cursor >= self.models.len() {
+            self.model_cursor = self.models.len().saturating_sub(1);
+        }
+        if self.user.is_some() {
+            if let Some(id) = self.pending_model.take() {
+                self.choose_model(&id);
+            }
+        }
     }
 
     /// Process a UI command from the kernel.
@@ -157,6 +238,11 @@ impl App {
                 self.api_url = url;
                 self.api_active = active;
             }
+            UiCommand::SetModels {
+                options,
+                current,
+                user,
+            } => self.cmd_set_models(options, current, user),
         }
     }
 

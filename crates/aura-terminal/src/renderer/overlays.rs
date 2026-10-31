@@ -28,6 +28,10 @@ pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
         render_help_overlay(frame, theme);
     }
 
+    if app.state() == AppState::SelectingModel {
+        render_model_selector(frame, app, theme);
+    }
+
     if let Some((msg, notification_type)) = app.notification() {
         render_notification(frame, msg, *notification_type, theme);
     }
@@ -68,11 +72,82 @@ fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApprov
     frame.render_widget(paragraph, modal_area);
 }
 
+/// Render the model selector, grouped into local and cloud models.
+fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
+    let models = app.models();
+    let guest = app.user().is_none();
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    let mut last_group: Option<bool> = None;
+
+    for (idx, model) in models.iter().enumerate() {
+        if last_group != Some(model.local) {
+            if last_group.is_some() {
+                lines.push(Line::from(""));
+            }
+            let heading = if model.local {
+                "Local (no login)"
+            } else {
+                "Cloud (aura-router)"
+            };
+            lines.push(Line::from(Span::styled(
+                heading,
+                Style::default().fg(theme.colors.muted),
+            )));
+            last_group = Some(model.local);
+        }
+
+        let selected = idx == app.model_cursor();
+        let current = model.id == app.current_model();
+        let marker = if selected { "› " } else { "  " };
+        let check = if current { "● " } else { "  " };
+        let note = if model.local && !model.installed {
+            "  not pulled"
+        } else if !model.local && guest {
+            "  login required"
+        } else {
+            ""
+        };
+        let label_color = if selected {
+            theme.colors.primary
+        } else {
+            theme.colors.foreground
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::default().fg(theme.colors.primary)),
+            Span::styled(check, Style::default().fg(theme.colors.success)),
+            Span::styled(model.label.clone(), Style::default().fg(label_color)),
+            Span::styled(note, Style::default().fg(theme.colors.warning)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "↑/↓ move  Enter select  Esc close",
+        Style::default().fg(theme.colors.muted),
+    )));
+
+    let area = frame.area();
+    let modal_width = 52.min(area.width.saturating_sub(4));
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "selector line count is small"
+    )]
+    let modal_height = ((lines.len() + 2) as u16).min(area.height.saturating_sub(2));
+    let modal_area = centered_rect(modal_width, modal_height, area);
+    frame.render_widget(Clear, modal_area);
+
+    let block = Block::default()
+        .title(" Select model ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.colors.primary));
+    frame.render_widget(Paragraph::new(lines).block(block), modal_area);
+}
+
 /// Render the help overlay.
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 22;
+    let modal_height = 23;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -98,7 +173,8 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/clear     Clear messages",
         "/swarm     Toggle Swarm panel",
         "/record    Toggle Record panel",
-        "/login     Login to zOS",
+        "/model     Choose model (local or cloud)",
+        "/login     Login for cloud models",
         "/logout    Clear credentials",
         "/whoami     Show auth status",
         "/quit      Exit",

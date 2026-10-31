@@ -126,6 +126,9 @@ pub struct AnthropicProvider {
     // Streaming requests use an idle deadline, not a total body deadline.
     streaming_client: reqwest::Client,
     config: AnthropicConfig,
+    // Non-Claude models are normally buffered because the router only
+    // speaks Anthropic SSE for Claude upstreams.
+    sse_for_all_models: bool,
 }
 
 impl AnthropicProvider {
@@ -150,7 +153,17 @@ impl AnthropicProvider {
             client,
             streaming_client,
             config,
+            sse_for_all_models: false,
         })
+    }
+
+    /// Use Anthropic SSE streaming for every model, not only Claude-family
+    /// ones. For endpoints that natively speak the Messages API for all of
+    /// their models (e.g. a local Ollama server).
+    #[must_use]
+    pub const fn with_sse_for_all_models(mut self) -> Self {
+        self.sse_for_all_models = true;
+        self
     }
 
     /// Create from environment variables.

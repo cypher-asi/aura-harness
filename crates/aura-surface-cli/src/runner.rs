@@ -8,6 +8,7 @@ use crate::cli::{
     AgentsCommand, AgentsSubcommand, Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand,
     RunArgs, UiMode,
 };
+use crate::model_selection::ModelSelection;
 use crate::{api_server, event_loop, record_loader, session_helpers};
 
 use anyhow::Context;
@@ -566,13 +567,17 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
     }
     let (executor_router, tools) = session_helpers::build_executor_router_with_config(&tool_config);
 
-    // The terminal harness is the one surface that legitimately
-    // resolves its model from environment configuration (no WS init,
-    // no automaton config to consult). Pin to
-    // `aura_model_reasoner::ENV_FALLBACK_MODEL` here — higher-level surfaces
-    // (chat WS, dev-loop, task-run) plumb the user-selected model
-    // through their own paths and never reach for the env seed.
-    let config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
+    // The terminal harness is the one surface that resolves its model
+    // locally (env, persisted `/model` choice, then the local default) —
+    // higher-level surfaces (chat WS, dev-loop, task-run) plumb the
+    // user-selected model through their own paths.
+    let mut config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
+    let user = config.auth_token.as_ref().map(|_| {
+        aura_auth::CredentialStore::load()
+            .map_or_else(|| "AURA_ROUTER_JWT".to_string(), |s| s.display_name)
+    });
+    let models = ModelSelection::init(&mut config, user);
+    info!(model = %models.current(), "Terminal model selected");
     let agent_loop = AgentLoop::new(config);
 
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
@@ -581,16 +586,15 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
         ProcessManagerConfig::default(),
     ));
 
-    // After the proxy-only collapse there are exactly two providers:
-    // `mock` for explicit test / offline mode, and the router-backed
-    // Anthropic-shaped client for everything else. The legacy
-    // `--provider` arg only ever takes `"anthropic"` or `"mock"`.
+    // `mock` for explicit test / offline mode; otherwise the routed
+    // provider sends `local/*` models to the local server (Ollama) and
+    // everything else to aura-router.
     let selection = match args.provider.as_str() {
         "mock" => Ok(aura_model_reasoner::mock_provider()),
-        _ => aura_model_reasoner::default_provider_from_env(),
+        _ => aura_model_reasoner::routed_provider(),
     }
     .context("building model provider")?;
-    if selection.name != "anthropic" {
+    if selection.name == "mock" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }
     let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
@@ -629,6 +633,7 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
             agent_id,
             _process_manager: process_manager_clone,
             memory_manager: None,
+            models,
         };
         event_loop::run_event_loop(ctx).await
     });

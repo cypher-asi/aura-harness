@@ -12,7 +12,7 @@ mod tests;
 
 use crate::{
     components::{Message, ToolCard},
-    events::{AgentSummary, RecordSummary, UiCommand, UiEvent},
+    events::{AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent},
     input::InputHistory,
 };
 use std::collections::VecDeque;
@@ -51,6 +51,8 @@ pub enum AppState {
     LoginEmail,
     /// Login flow: waiting for password
     LoginPassword,
+    /// Model selector overlay is open
+    SelectingModel,
 }
 
 /// Pending approval request.
@@ -127,6 +129,16 @@ pub struct App {
     pub(super) api_active: bool,
     /// Stored email during login flow (between email and password steps)
     pub(super) login_email: String,
+    /// Models offered by the selector
+    pub(super) models: Vec<ModelOptionView>,
+    /// Id of the model used for the next turn
+    pub(super) current_model: String,
+    /// Logged-in user's display name (`None` = guest)
+    pub(super) user: Option<String>,
+    /// Highlighted row in the model selector
+    pub(super) model_cursor: usize,
+    /// Cloud model to select once the in-chat login completes
+    pub(super) pending_model: Option<String>,
 }
 
 /// Type of notification.
@@ -175,6 +187,11 @@ impl App {
             api_url: None,
             api_active: false,
             login_email: String::new(),
+            models: Vec::new(),
+            current_model: String::new(),
+            user: None,
+            model_cursor: 0,
+            pending_model: None,
         }
     }
 
@@ -362,6 +379,36 @@ impl App {
     #[must_use]
     pub const fn api_active(&self) -> bool {
         self.api_active
+    }
+
+    /// Models offered by the selector.
+    #[must_use]
+    pub fn models(&self) -> &[ModelOptionView] {
+        &self.models
+    }
+
+    /// Id of the model used for the next turn (empty until the kernel reports it).
+    #[must_use]
+    pub fn current_model(&self) -> &str {
+        &self.current_model
+    }
+
+    /// Selector entry for the current model, if listed.
+    #[must_use]
+    pub fn current_model_option(&self) -> Option<&ModelOptionView> {
+        self.models.iter().find(|m| m.id == self.current_model)
+    }
+
+    /// Logged-in user's display name (`None` = guest).
+    #[must_use]
+    pub fn user(&self) -> Option<&str> {
+        self.user.as_deref()
+    }
+
+    /// Highlighted row in the model selector.
+    #[must_use]
+    pub const fn model_cursor(&self) -> usize {
+        self.model_cursor
     }
 
     /// Get the current spinner character for animations.

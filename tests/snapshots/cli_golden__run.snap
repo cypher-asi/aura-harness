@@ -34,7 +34,7 @@ Options:
           Working directory
 
       --provider <PROVIDER>
-          Model provider (anthropic or mock)
+          Model provider: `anthropic` (local Ollama models + aura-router) or `mock`
           
           [default: anthropic]
 

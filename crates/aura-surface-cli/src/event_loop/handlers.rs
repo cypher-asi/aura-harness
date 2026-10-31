@@ -168,6 +168,54 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
         .await;
 }
 
+async fn show_system_message(state: &LoopState<'_>, content: String) {
+    let _ = state
+        .commands
+        .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
+            role: aura_terminal::events::MessageRole::System,
+            content,
+            is_streaming: false,
+        }))
+        .await;
+}
+
+/// Probe the local model server, publish the model list, and explain how
+/// to get the local default running when it isn't.
+pub(super) async fn announce_models(state: &mut LoopState<'_>) {
+    state.models.refresh_local().await;
+    let _ = state.commands.send(state.models.ui_command()).await;
+    if let Some(hint) = state.models.local_hint() {
+        show_system_message(state, hint).await;
+    }
+}
+
+pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
+    if aura_model_reasoner::model_catalog::backend_for(id)
+        == aura_model_reasoner::model_catalog::ModelBackend::Local
+    {
+        state.models.refresh_local().await;
+    }
+    match state.models.select(state.agent_loop.config_mut(), id) {
+        Ok(()) => {
+            info!(model = %state.models.current(), "Model selected");
+            let _ = state
+                .commands
+                .send(UiCommand::ShowSuccess(format!(
+                    "Model: {}",
+                    crate::model_selection::ModelSelection::label(state.models.current())
+                )))
+                .await;
+            if let Some(hint) = state.models.local_hint() {
+                show_system_message(state, hint).await;
+            }
+        }
+        Err(problem) => {
+            let _ = state.commands.send(UiCommand::ShowWarning(problem)).await;
+        }
+    }
+    let _ = state.commands.send(state.models.ui_command()).await;
+}
+
 pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, password: &str) {
     let _ = state
         .commands
@@ -213,6 +261,13 @@ pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, passwor
                             "Logged in as {display} ({zid})"
                         )))
                         .await;
+                    show_system_message(
+                        state,
+                        "Cloud models unlocked — use /model to switch.".to_string(),
+                    )
+                    .await;
+                    state.models.set_user(Some(display));
+                    let _ = state.commands.send(state.models.ui_command()).await;
                 }
             }
             Err(e) => {
@@ -267,6 +322,18 @@ pub(super) async fn handle_logout(state: &mut LoopState<'_>) {
                 .commands
                 .send(UiCommand::ShowSuccess("Logged out".to_string()))
                 .await;
+            state.models.set_user(None);
+            if state.models.ensure_usable(state.agent_loop.config_mut()) {
+                show_system_message(
+                    state,
+                    format!(
+                        "Switched to local model {}.",
+                        crate::model_selection::ModelSelection::label(state.models.current())
+                    ),
+                )
+                .await;
+            }
+            let _ = state.commands.send(state.models.ui_command()).await;
         }
         Err(e) => {
             let _ = state
@@ -303,7 +370,9 @@ pub(super) async fn handle_whoami(state: &LoopState<'_>) {
                 .commands
                 .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
                     role: aura_terminal::events::MessageRole::System,
-                    content: "Not logged in. Use /login to authenticate.".to_string(),
+                    content: "Not logged in — using local models as a guest. \
+                              Use /login to unlock cloud models."
+                        .to_string(),
                     is_streaming: false,
                 }))
                 .await;

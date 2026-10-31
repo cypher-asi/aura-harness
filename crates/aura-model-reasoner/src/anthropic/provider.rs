@@ -2962,7 +2962,9 @@ impl ModelProvider for AnthropicProvider {
 
         run_model_chain_with_retries(&self.config, &models, |ctx, model| {
             Box::pin(async move {
-                if !Self::supports_anthropic_proxy_features(request_ref, &model) {
+                if !self.sse_for_all_models
+                    && !Self::supports_anthropic_proxy_features(request_ref, &model)
+                {
                     debug!(
                         model = %model,
                         "Router-backed fallback model does not support Anthropic SSE; buffering completion"

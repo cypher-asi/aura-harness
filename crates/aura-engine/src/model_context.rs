@@ -10,6 +10,10 @@
 #[must_use]
 pub fn context_window_for_model(model: &str) -> u64 {
     match model {
+        m if m.starts_with(aura_model_reasoner::model_catalog::LOCAL_PREFIX) => {
+            aura_model_reasoner::model_catalog::local_context_tokens()
+        }
+
         // Anthropic
         m if m.contains("fable-5") => 1_000_000,
         m if m.contains("mythos-5") => 1_000_000,
@@ -90,6 +94,14 @@ pub fn context_window_for_model(model: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::context_window_for_model;
+
+    #[test]
+    fn local_models_use_local_window() {
+        assert_eq!(
+            context_window_for_model("local/qwen3:4b"),
+            aura_model_reasoner::model_catalog::local_context_tokens()
+        );
+    }
 
     #[test]
     fn anthropic_aura_aliases() {

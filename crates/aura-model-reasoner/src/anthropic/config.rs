@@ -173,6 +173,28 @@ impl AnthropicConfig {
         }
     }
 
+    /// Build a config for a local Anthropic-compatible server (Ollama).
+    ///
+    /// Reads `AURA_LOCAL_MODEL_URL` (default `http://127.0.0.1:11434`) and
+    /// `AURA_LOCAL_MODEL`. Router-edge protections (prompt caching, body
+    /// cap, Cloudflare retries, fallback model) are disabled, and the
+    /// timeout is doubled because CPU prompt processing can take minutes
+    /// before the first token.
+    #[must_use]
+    pub fn local_from_env() -> Self {
+        Self {
+            base_url: crate::model_catalog::local_base_url(),
+            timeout_ms: 600_000,
+            max_retries: 2,
+            fallback_model: None,
+            prompt_caching_enabled: false,
+            emergency_body_cap_bytes: 0,
+            cloudflare_max_retries: 0,
+            min_request_interval_ms: 0,
+            ..Self::new(crate::model_catalog::default_local_model_id())
+        }
+    }
+
     /// Build a config with an explicit default model. Other fields take
     /// the same defaults as [`from_env`].
     #[must_use]

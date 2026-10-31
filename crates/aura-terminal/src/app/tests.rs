@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{Message, MessageRole};
-use crate::events::UiEvent;
+use crate::events::{ModelOptionView, UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc;
 
@@ -195,6 +195,110 @@ fn test_panel_focus_equality() {
 // ========================================================================
 // Notification types
 // ========================================================================
+
+// ========================================================================
+// Model selector
+// ========================================================================
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::empty())
+}
+
+fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
+    let (tx, rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetModels {
+        options: vec![
+            ModelOptionView {
+                id: "local/qwen3:4b".to_string(),
+                label: "qwen3:4b".to_string(),
+                local: true,
+                installed: true,
+            },
+            ModelOptionView {
+                id: "aura-claude-sonnet-4-6".to_string(),
+                label: "Claude Sonnet 4.6".to_string(),
+                local: false,
+                installed: true,
+            },
+        ],
+        current: "local/qwen3:4b".to_string(),
+        user: user.map(str::to_string),
+    });
+    (app, rx)
+}
+
+#[test]
+fn test_model_command_opens_selector_on_current() {
+    let (mut app, _rx) = app_with_models(None);
+    app.handle_command("/model");
+    assert_eq!(app.state(), AppState::SelectingModel);
+    assert_eq!(app.model_cursor(), 0);
+
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn test_selector_enter_emits_select_model() {
+    let (mut app, mut rx) = app_with_models(Some("alice"));
+    app.handle_command("/model");
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+
+    assert_eq!(app.state(), AppState::Idle);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SelectModel(id)) if id == "aura-claude-sonnet-4-6"
+    ));
+}
+
+#[test]
+fn test_guest_cloud_pick_starts_login_then_selects() {
+    let (mut app, mut rx) = app_with_models(None);
+    app.handle_command("/model");
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+
+    assert_eq!(app.state(), AppState::LoginEmail);
+    assert!(rx.try_recv().is_err());
+
+    app.process_command(UiCommand::SetModels {
+        options: app.models().to_vec(),
+        current: "local/qwen3:4b".to_string(),
+        user: Some("alice".to_string()),
+    });
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SelectModel(id)) if id == "aura-claude-sonnet-4-6"
+    ));
+}
+
+#[test]
+fn test_cancelled_login_drops_pending_model() {
+    let (mut app, mut rx) = app_with_models(None);
+    app.handle_command("/model Claude Sonnet 4.6");
+    assert_eq!(app.state(), AppState::LoginEmail);
+    app.handle_key(key(KeyCode::Esc));
+
+    app.process_command(UiCommand::SetModels {
+        options: app.models().to_vec(),
+        current: "local/qwen3:4b".to_string(),
+        user: Some("alice".to_string()),
+    });
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_model_command_passes_unlisted_id_through() {
+    let (mut app, mut rx) = app_with_models(None);
+    app.handle_command("/model local/qwen3:8b");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SelectModel(id)) if id == "local/qwen3:8b"
+    ));
+    assert_eq!(app.state(), AppState::Idle);
+}
 
 #[test]
 fn test_notification_types() {

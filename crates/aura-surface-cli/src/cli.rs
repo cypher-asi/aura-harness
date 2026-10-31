@@ -175,7 +175,7 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub dir: Option<PathBuf>,
 
-    /// Model provider (anthropic or mock)
+    /// Model provider: `anthropic` (local Ollama models + aura-router) or `mock`
     #[arg(long, default_value = "anthropic")]
     pub provider: String,
 

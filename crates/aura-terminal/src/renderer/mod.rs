@@ -96,9 +96,16 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
 
 /// Render the header bar.
 fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let model_spans = model_indicator_spans(app, theme);
+    let model_width: usize = model_spans
+        .iter()
+        .map(|s| text::display_width(&s.content))
+        .sum();
+    let right_width = u16::try_from(model_width.max(30) + 1).unwrap_or(u16::MAX);
+
     let header_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(10), Constraint::Length(30)])
+        .constraints([Constraint::Min(10), Constraint::Length(right_width)])
         .split(area);
 
     let title = vec![
@@ -111,22 +118,50 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     ];
     frame.render_widget(Paragraph::new(title), header_layout[0]);
 
-    if let Some(url) = app.api_url() {
-        let (icon, color) = if app.api_active() {
-            (" ● ", theme.colors.primary)
-        } else {
-            (" ○ ", theme.colors.error)
-        };
+    let api_line = app.api_url().map_or_else(
+        || Line::from(""),
+        |url| {
+            let (icon, color) = if app.api_active() {
+                (" ● ", theme.colors.primary)
+            } else {
+                (" ○ ", theme.colors.error)
+            };
+            Line::from(vec![
+                Span::styled(icon, Style::default().fg(color)),
+                Span::styled(url, Style::default().fg(theme.colors.muted)),
+            ])
+        },
+    );
 
-        let api_spans = vec![
-            Span::styled(icon, Style::default().fg(color)),
-            Span::styled(url, Style::default().fg(theme.colors.muted)),
-        ];
+    let right = vec![Line::from(""), Line::from(model_spans), api_line];
+    frame.render_widget(
+        Paragraph::new(right).alignment(Alignment::Right),
+        header_layout[1],
+    );
+}
 
-        let api_status = vec![Line::from(""), Line::from(api_spans), Line::from("")];
-        frame.render_widget(
-            Paragraph::new(api_status).alignment(Alignment::Right),
-            header_layout[1],
-        );
+/// `qwen3:4b · local · guest  /model` — empty until the kernel reports a model.
+fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+    if app.current_model().is_empty() {
+        return Vec::new();
     }
+    let (label, local) = app.current_model_option().map_or_else(
+        || {
+            (
+                app.current_model(),
+                app.current_model().starts_with("local/"),
+            )
+        },
+        |m| (m.label.as_str(), m.local),
+    );
+    let backend = if local { "local" } else { "cloud" };
+    let user = app.user().unwrap_or("guest");
+    vec![
+        Span::styled(label, Style::default().fg(theme.colors.primary)),
+        Span::styled(
+            format!(" · {backend} · {user}"),
+            Style::default().fg(theme.colors.muted),
+        ),
+        Span::styled("  /model", Style::default().fg(theme.colors.secondary)),
+    ]
 }
