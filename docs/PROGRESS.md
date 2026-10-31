@@ -29,7 +29,7 @@ $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 ```
 
 ### All Platforms
-- Rust 1.80+ MSRV (via rustup); the checked-in `rust-toolchain.toml` uses stable for local builds.
+- Rust 1.85+ MSRV (via rustup); the checked-in `rust-toolchain.toml` uses stable for local builds.
 - rustfmt: `rustup component add rustfmt`
 - clippy: `rustup component add clippy`
 
