@@ -376,13 +376,61 @@ fn test_default_layout_shows_agents_column() {
         })
         .collect();
     let screen = rows.join("\n");
-    assert!(screen.contains("Agents"));
-    assert!(screen.contains("Chat"));
-    assert!(screen.contains("Record"));
+    assert!(screen.contains("AGENTS"));
+    assert!(screen.contains("CHAT"));
+    assert!(screen.contains("RECORD"));
     assert!(rows
         .iter()
         .any(|r| r.contains("● 1. Terminal") && r.contains("12│")));
     assert!(screen.contains("2. Researcher"));
+    let column_of = |needle: &str| {
+        rows.iter()
+            .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
+            .unwrap()
+    };
+    assert_eq!(column_of("New agent"), column_of("Researcher"));
+    assert_eq!(column_of("+"), column_of("2."));
+    assert!(screen.contains("Alt+↑↓ switch  ^N new"));
+}
+
+#[test]
+fn test_chat_message_text_column_is_aligned() {
+    use crate::components::{Message, MessageRole};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "hi"));
+    app.add_message(Message::new(
+        MessageRole::Assistant,
+        "The task of extracting tasks from a spec file is not currently defined \
+         or available in the current context.",
+    ));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    let col = |row: &str, needle: &str| {
+        row.find(needle)
+            .map(|i| row[..i].chars().count())
+            .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"))
+    };
+    let user = rows.iter().find(|r| r.contains("<YOU>")).unwrap();
+    let aura = rows.iter().position(|r| r.contains("<AURA>")).unwrap();
+
+    assert_eq!(col(user, "<YOU>"), col(&rows[aura], "<AURA>"));
+
+    let text_col = col(user, "hi");
+    assert_eq!(col(&rows[aura], "The task"), text_col);
+    assert_eq!(rows[aura + 1].chars().nth(text_col - 1), Some(' '));
+    assert_ne!(rows[aura + 1].chars().nth(text_col), Some(' '));
 }
 
 fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
@@ -403,11 +451,14 @@ fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
         url: Some("http://127.0.0.1:8080".to_string()),
         active: true,
     });
+    render_rows(&mut app, width)
+}
 
+fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
     terminal
-        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .draw(|frame| super::render(frame, app, &test_theme()))
         .unwrap();
 
     let buffer = terminal.backend().buffer();
@@ -430,12 +481,29 @@ fn test_header_shows_local_url_and_model_moves_to_input() {
     assert!(!header.contains("qwen3:4b"));
 
     let n = rows.len();
-    assert!(rows[n - 3].trim().is_empty(), "top padding row");
-    assert!(rows[n - 1].trim().is_empty(), "bottom padding row");
+    assert!(rows[n - 3].contains('└'), "panel border above input");
+    assert!(
+        rows[n - 1].chars().all(|c| c == '─'),
+        "rule below input: {:?}",
+        rows[n - 1]
+    );
     let input_row = rows[n - 2].trim_end();
     assert!(input_row.contains("> "), "{input_row:?}");
-    assert!(input_row.ends_with("Ready  qwen3:4b"), "{input_row:?}");
+    assert!(input_row.ends_with("qwen3:4b  ● Ready"), "{input_row:?}");
     assert!(!input_row.contains("/model"));
+}
+
+#[test]
+fn test_outer_text_is_inset_to_panel_borders() {
+    let width = 100;
+    let rows = render_with_user(None, width);
+    let last_col = |row: &str| row.trim_end().chars().count() - 1;
+    let inner_right = usize::from(width) - 2;
+
+    assert!(rows[1].starts_with(" AURA"), "{:?}", rows[1]);
+    assert_eq!(last_col(&rows[1]), inner_right, "{:?}", rows[1]);
+    let input_row = &rows[rows.len() - 2];
+    assert_eq!(last_col(input_row), inner_right, "{input_row:?}");
 }
 
 #[test]
@@ -449,7 +517,7 @@ fn test_header_shows_logged_in_user() {
 
 #[test]
 fn test_input_hides_model_when_narrow() {
-    let rows = render_with_user(None, 50);
+    let rows = render_with_user(None, 46);
     let input_row = &rows[rows.len() - 2];
     assert!(!input_row.contains("qwen3:4b"));
     assert!(input_row.contains("Ready"));
@@ -485,6 +553,65 @@ fn test_truncate_record_info_wide_chars_no_panic() {
     let out = truncate_record_info("修复登录错误 🚀 then more text", 7);
     assert!(display_width(&out) <= 7, "too wide: {out:?}");
     assert!(out.ends_with('…'));
+}
+
+#[test]
+fn test_format_elapsed() {
+    use super::panels::format_elapsed;
+    use std::time::Duration;
+
+    assert_eq!(format_elapsed(Duration::from_secs(7)), "7s");
+    assert_eq!(format_elapsed(Duration::from_secs(125)), "2m 05s");
+}
+
+fn submit_message(app: &mut crate::App, text: &str) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    for c in text.chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+}
+
+#[test]
+fn test_chat_shows_working_indicator_until_reply_streams() {
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "hi");
+    let chat = render_rows(&mut app, 120).join("\n");
+    assert!(chat.contains("<AURA> "), "{chat}");
+    assert!(chat.contains("thinking…"), "{chat}");
+
+    app.process_command(UiCommand::StartStreaming);
+    assert!(render_rows(&mut app, 120).join("\n").contains("thinking…"));
+
+    app.process_command(UiCommand::AppendText("hello".to_string()));
+    assert!(!render_rows(&mut app, 120).join("\n").contains("thinking…"));
+
+    app.process_command(UiCommand::Complete);
+    assert!(app.working_label().is_none());
+}
+
+#[test]
+fn test_working_indicator_names_running_tool() {
+    use crate::events::{ToolData, UiCommand};
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "read it");
+    app.process_command(UiCommand::ShowTool(ToolData {
+        id: "t1".to_string(),
+        name: "read_file".to_string(),
+        args: String::new(),
+    }));
+    assert_eq!(app.working_label().as_deref(), Some("running read_file"));
+
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: "no such file".to_string(),
+        success: false,
+    });
+    assert_eq!(app.working_label().as_deref(), Some("thinking"));
 }
 
 #[test]

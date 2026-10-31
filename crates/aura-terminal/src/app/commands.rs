@@ -464,9 +464,7 @@ impl App {
         {
             self.selected_agent = idx;
         }
-        if self.selected_agent >= self.agents.len() && !self.agents.is_empty() {
-            self.selected_agent = self.agents.len() - 1;
-        }
+        self.selected_agent = self.selected_agent.min(self.agents.len());
     }
 
     fn cmd_set_active_agent(&mut self, agent_id: String) {

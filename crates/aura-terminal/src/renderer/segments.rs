@@ -9,13 +9,21 @@ use ratatui::{
     text::{Line, Span},
 };
 
+/// Width of the widest nick ("AURA"); shorter nicks are left-aligned and
+/// padded to it so every message body starts in the same column.
+pub(super) const NICK_WIDTH: usize = 4;
+
+pub(super) fn nick_label(nick: &str) -> String {
+    format!("{:<width$}", format!("<{nick}>"), width = NICK_WIDTH + 2)
+}
+
 pub(super) const fn message_style<'a>(
     role: MessageRole,
     theme: &Theme,
 ) -> (&'a str, ratatui::style::Color, ratatui::style::Color) {
     match role {
-        MessageRole::User => ("YOU", theme.colors.foreground, theme.colors.primary),
-        MessageRole::Assistant => ("AURA", theme.colors.foreground, theme.colors.muted),
+        MessageRole::User => ("YOU", theme.colors.success, theme.colors.muted),
+        MessageRole::Assistant => ("AURA", theme.colors.muted, theme.colors.foreground),
         MessageRole::System => ("*", theme.colors.muted, theme.colors.muted),
     }
 }
@@ -64,7 +72,7 @@ pub(super) fn render_text_segment(
                         format!("[{timestamp}] "),
                         Style::default().fg(theme.colors.muted),
                     ),
-                    Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+                    Span::styled(nick_label(nick), Style::default().fg(nick_color)),
                     Span::raw(" "),
                 ];
                 spans.extend(content_spans);
@@ -89,7 +97,7 @@ pub(super) fn line_with_prefix<'a>(
     let muted = ratatui::style::Color::Rgb(136, 136, 136);
     let mut spans = vec![
         Span::styled(format!("[{timestamp}] "), Style::default().fg(muted)),
-        Span::styled(format!("<{nick}>"), Style::default().fg(nick_color)),
+        Span::styled(nick_label(nick), Style::default().fg(nick_color)),
     ];
     spans.extend_from_slice(extra);
     Line::from(spans)

@@ -1,7 +1,9 @@
 //! Panel rendering: Chat, Swarm, Record, and Thinking section.
 
 use super::markdown::{parse_content_segments, ContentSegment};
-use super::segments::{message_style, render_code_segment, render_text_segment};
+use super::segments::{
+    message_style, nick_label, render_code_segment, render_text_segment, NICK_WIDTH,
+};
 use super::text::{display_width, wrap_words};
 use crate::{app::PanelFocus, App, Theme};
 use ratatui::{
@@ -83,7 +85,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     };
 
     let block = Block::default()
-        .title(" Chat ")
+        .title(" CHAT ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -102,13 +104,56 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         height: messages_area.height.saturating_sub(1),
     };
 
-    if app.messages().is_empty() {
+    let working_line = working_indicator_line(app, theme);
+    if app.messages().is_empty() && working_line.is_none() {
         render_welcome(frame, padded, theme);
         return;
     }
 
-    let lines = build_chat_lines(app, padded.width as usize, theme);
+    let mut lines = build_chat_lines(app, padded.width as usize, theme);
+    lines.extend(working_line);
     render_scrolled_lines(frame, padded, app, lines);
+}
+
+/// `           <AURA> ⠹ thinking… 12s` — shown below the conversation while a
+/// turn is in flight and no reply text is streaming.
+pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
+    let label = app.working_label()?;
+    let mut spans = vec![
+        // Blank where the timestamp column sits, so the nick lines up.
+        Span::raw(" ".repeat(11)),
+        Span::styled(nick_label("AURA"), Style::default().fg(theme.colors.muted)),
+        Span::raw(" "),
+        Span::styled(
+            format!("{} ", app.spinner_char()),
+            Style::default().fg(theme.colors.secondary),
+        ),
+        Span::styled(
+            format!("{label}…"),
+            Style::default()
+                .fg(theme.colors.muted)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ];
+    if let Some(elapsed) = app.processing_elapsed().filter(|e| e.as_secs() > 0) {
+        spans.push(Span::styled(
+            format!(" {}", format_elapsed(elapsed)),
+            Style::default()
+                .fg(theme.colors.muted)
+                .add_modifier(Modifier::DIM),
+        ));
+    }
+    Some(Line::from(spans))
+}
+
+/// `7s`, `2m 05s`.
+pub(super) fn format_elapsed(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    }
 }
 
 fn split_chat_area(inner: Rect, app: &App) -> (Rect, Option<Rect>) {
@@ -146,7 +191,7 @@ fn build_chat_lines<'a>(app: &App, content_width: usize, theme: &Theme) -> Vec<L
     for message in app.messages() {
         let (nick, nick_color, msg_color) = message_style(message.role(), theme);
         let timestamp = message.timestamp_local();
-        let prefix_width = 11 + nick.len() + 2 + 1;
+        let prefix_width = 11 + NICK_WIDTH + 2 + 1;
         let first_line_width = content_width.saturating_sub(prefix_width);
         let continuation_width = content_width.saturating_sub(prefix_width);
 
@@ -200,8 +245,11 @@ fn render_scrolled_lines(frame: &mut Frame, padded: Rect, app: &mut App, lines: 
     frame.render_widget(Paragraph::new(visible_lines), padded);
 }
 
-/// Render the Swarm panel (agent list).
-pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// Hint shown at the bottom of the Agents panel.
+const SWARM_HINT: &str = "Alt+↑↓ switch  ^N new";
+
+/// Render the Swarm panel (agent list followed by a "+ New agent" row).
+pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let border_color = if is_focused {
         theme.colors.primary
@@ -210,50 +258,43 @@ pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &App, theme
     };
 
     let block = Block::default()
-        .title(" Agents ")
+        .title(" AGENTS ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let agents = app.agents();
-    if agents.is_empty() {
-        render_empty_swarm(frame, inner, theme);
-        return;
-    }
-
-    let lines = build_swarm_lines(app, inner, theme);
-
-    let selected = app.selected_agent();
-    let visible_height = inner.height as usize;
-    let scroll = if selected >= visible_height {
-        selected.saturating_sub(visible_height / 2)
-    } else {
-        0
+    let show_hint = inner.height >= 4;
+    let rows_area = Rect {
+        height: inner.height.saturating_sub(u16::from(show_hint)),
+        ..inner
     };
-    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
-    frame.render_widget(Paragraph::new(visible_lines), inner);
-}
+    app.set_agent_rows_area(rows_area);
+    app.sync_agents_scroll(rows_area.height as usize);
 
-fn render_empty_swarm(frame: &mut Frame, inner: Rect, theme: &Theme) {
-    let empty_msg = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  No agents.",
-            Style::default().fg(theme.colors.muted),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Use /agent new",
-            Style::default().fg(theme.colors.muted),
-        )),
-        Line::from(Span::styled(
-            "  to create one.",
-            Style::default().fg(theme.colors.muted),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(empty_msg), inner);
+    let lines: Vec<Line> = build_swarm_lines(app, inner, theme)
+        .into_iter()
+        .skip(app.agents_scroll())
+        .take(rows_area.height as usize)
+        .collect();
+    frame.render_widget(Paragraph::new(lines), rows_area);
+
+    if show_hint {
+        let hint_area = Rect {
+            y: inner.y + inner.height - 1,
+            height: 1,
+            ..inner
+        };
+        let hint = truncate_agent_name(SWARM_HINT, (inner.width as usize).saturating_sub(1));
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {hint}"),
+                Style::default().fg(theme.colors.muted),
+            ))),
+            hint_area,
+        );
+    }
 }
 
 fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
@@ -261,6 +302,7 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     let selected = app.selected_agent();
     let active_id = app.active_agent_id();
     let mut lines: Vec<Line> = Vec::new();
+    let number_width = app.agents().len().max(1).to_string().len();
 
     for (i, agent) in app.agents().iter().enumerate() {
         let is_selected = i == selected;
@@ -284,7 +326,7 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             Style::default().fg(theme.colors.muted)
         };
 
-        let index = format!("{}. ", i + 1);
+        let index = format!("{:>number_width$}. ", i + 1);
         let count = format!(" {}", agent.record_count);
         let name_width = (inner.width as usize)
             .saturating_sub(display_width(prefix) + index.len() + count.len())
@@ -299,6 +341,20 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             Span::styled(count, Style::default().fg(theme.colors.muted)),
         ]));
     }
+
+    let new_selected = selected == app.agents().len() && is_focused;
+    let new_style = if new_selected {
+        Style::default()
+            .fg(theme.colors.primary)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(theme.colors.muted)
+    };
+    let prefix = if new_selected { " > " } else { "   " };
+    lines.push(Line::from(Span::styled(
+        format!("{prefix}{:>number_width$}  New agent", "+"),
+        new_style,
+    )));
     lines
 }
 
@@ -330,7 +386,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &App, them
     };
 
     let block = Block::default()
-        .title(" Record ")
+        .title(" RECORD ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 

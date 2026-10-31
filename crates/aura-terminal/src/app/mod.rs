@@ -12,11 +12,14 @@ mod shell_input;
 mod tests;
 
 use crate::{
-    components::{Message, ToolCard},
+    components::{Message, ToolCard, ToolStatus},
     events::{AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent},
     input::InputHistory,
 };
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// Maximum number of messages to keep in history.
@@ -140,6 +143,31 @@ pub struct App {
     pub(super) model_cursor: usize,
     /// Cloud model to select once the in-chat login completes
     pub(super) pending_model: Option<String>,
+    /// First visible row of the agents list
+    pub(super) agents_scroll: usize,
+    /// Screen areas from the last frame, for mouse hit-testing
+    pub(super) areas: PanelAreas,
+    /// When the in-flight turn started (`None` unless processing)
+    pub(super) processing_since: Option<Instant>,
+}
+
+/// Screen areas of the content panels from the last rendered frame.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PanelAreas {
+    /// Agents panel (including border)
+    pub swarm: Option<Rect>,
+    /// Rows of the agents list inside the panel
+    pub agent_rows: Option<Rect>,
+    /// Chat panel (including border)
+    pub chat: Option<Rect>,
+    /// Record panel (including border)
+    pub records: Option<Rect>,
+}
+
+fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
+    area.is_some_and(|a| {
+        column >= a.x && column < a.x + a.width && row >= a.y && row < a.y + a.height
+    })
 }
 
 /// Type of notification.
@@ -193,6 +221,9 @@ impl App {
             user: None,
             model_cursor: 0,
             pending_model: None,
+            agents_scroll: 0,
+            areas: PanelAreas::default(),
+            processing_since: None,
         }
     }
 
@@ -237,6 +268,41 @@ impl App {
     #[must_use]
     pub fn status(&self) -> &str {
         &self.status
+    }
+
+    /// What the agent is doing during a turn while no reply text is arriving
+    /// (`"thinking"`, `"running fs.read"`, ...). `None` when idle, awaiting
+    /// approval, or while reply text is streaming into the chat.
+    #[must_use]
+    pub fn working_label(&self) -> Option<String> {
+        if self.state != AppState::Processing {
+            return None;
+        }
+        let reply_streaming = self
+            .messages
+            .back()
+            .is_some_and(|m| m.is_streaming() && !m.content().is_empty());
+        if reply_streaming {
+            return None;
+        }
+        if let Some(tool) = self
+            .tools
+            .iter()
+            .rev()
+            .find(|t| t.status() == ToolStatus::Running)
+        {
+            return Some(format!("running {}", tool.name()));
+        }
+        if self.status.starts_with("Running") {
+            return Some("running".to_string());
+        }
+        Some("thinking".to_string())
+    }
+
+    /// Time since the in-flight turn started.
+    #[must_use]
+    pub fn processing_elapsed(&self) -> Option<Duration> {
+        self.processing_since.map(|since| since.elapsed())
     }
 
     /// Get the messages.
@@ -288,7 +354,16 @@ impl App {
 
     /// Scroll up by the given number of lines (panel-aware).
     pub fn scroll_up(&mut self, lines: usize) {
-        match self.focus {
+        self.scroll_panel_up(self.focus, lines);
+    }
+
+    /// Scroll down by the given number of lines (panel-aware).
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_panel_down(self.focus, lines);
+    }
+
+    fn scroll_panel_up(&mut self, panel: PanelFocus, lines: usize) {
+        match panel {
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
             }
@@ -296,14 +371,13 @@ impl App {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
             PanelFocus::Swarm => {
-                self.selected_agent = self.selected_agent.saturating_sub(lines);
+                self.select_agent_row(self.selected_agent.saturating_sub(lines));
             }
         }
     }
 
-    /// Scroll down by the given number of lines (panel-aware).
-    pub fn scroll_down(&mut self, lines: usize) {
-        match self.focus {
+    fn scroll_panel_down(&mut self, panel: PanelFocus, lines: usize) {
+        match panel {
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);
             }
@@ -314,12 +388,127 @@ impl App {
                 }
             }
             PanelFocus::Swarm => {
-                if !self.agents.is_empty() {
-                    self.selected_agent =
-                        (self.selected_agent + lines).min(self.agents.len().saturating_sub(1));
-                }
+                self.select_agent_row(self.selected_agent.saturating_add(lines));
             }
         }
+    }
+
+    /// Highlight agents-list row `row` (the last row is "+ New agent") and
+    /// switch to the agent on it.
+    pub(super) fn select_agent_row(&mut self, row: usize) {
+        self.selected_agent = row.min(self.agents.len());
+        if let Some(agent_id) = self.agents.get(self.selected_agent).map(|a| a.id.clone()) {
+            self.request_agent_switch(agent_id);
+        }
+    }
+
+    /// Act on the highlighted agents-list row: switch to it, or create an
+    /// agent when it is the "+ New agent" row.
+    pub(super) fn activate_agent_row(&mut self) {
+        match self.agents.get(self.selected_agent).map(|a| a.id.clone()) {
+            Some(agent_id) => self.request_agent_switch(agent_id),
+            None => self.create_agent(),
+        }
+    }
+
+    /// Create a new agent and switch to it.
+    pub(super) fn create_agent(&mut self) {
+        let _ = self.handle_command("/agent new");
+    }
+
+    /// Switch to the agent `delta` rows away from the active one.
+    pub(super) fn switch_agent_by(&mut self, delta: isize) {
+        if self.agents.is_empty() {
+            return;
+        }
+        let current = self
+            .agents
+            .iter()
+            .position(|a| a.id == self.active_agent_id)
+            .unwrap_or(self.selected_agent);
+        let last = self.agents.len() - 1;
+        let target = current.saturating_add_signed(delta).min(last);
+        self.select_agent_row(target);
+    }
+
+    /// First visible row of the agents list.
+    #[must_use]
+    pub const fn agents_scroll(&self) -> usize {
+        self.agents_scroll
+    }
+
+    /// Keep the highlighted agents-list row inside a list `visible_rows` tall.
+    pub fn sync_agents_scroll(&mut self, visible_rows: usize) {
+        let visible_rows = visible_rows.max(1);
+        let total_rows = self.agents.len() + 1;
+        if self.selected_agent < self.agents_scroll {
+            self.agents_scroll = self.selected_agent;
+        } else if self.selected_agent >= self.agents_scroll + visible_rows {
+            self.agents_scroll = self.selected_agent + 1 - visible_rows;
+        }
+        self.agents_scroll = self
+            .agents_scroll
+            .min(total_rows.saturating_sub(visible_rows));
+    }
+
+    /// Record where the panels were drawn this frame.
+    pub fn set_panel_areas(&mut self, areas: PanelAreas) {
+        self.areas = areas;
+    }
+
+    /// Record where the agents list rows were drawn this frame.
+    pub fn set_agent_rows_area(&mut self, area: Rect) {
+        self.areas.agent_rows = Some(area);
+    }
+
+    fn panel_at(&self, column: u16, row: u16) -> Option<PanelFocus> {
+        if contains(self.areas.swarm, column, row) {
+            Some(PanelFocus::Swarm)
+        } else if contains(self.areas.records, column, row) {
+            Some(PanelFocus::Records)
+        } else if contains(self.areas.chat, column, row) {
+            Some(PanelFocus::Chat)
+        } else {
+            None
+        }
+    }
+
+    /// Handle a mouse event: the wheel scrolls the panel under the pointer,
+    /// a left click focuses it, and clicking an agent row switches to it.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.state != AppState::Idle && self.state != AppState::Processing {
+            return;
+        }
+        let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
+            return;
+        };
+        let step = if panel == PanelFocus::Swarm { 1 } else { 3 };
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_panel_up(panel, step),
+            MouseEventKind::ScrollDown => self.scroll_panel_down(panel, step),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.focus = panel;
+                if panel == PanelFocus::Swarm {
+                    self.click_agent_row(mouse.column, mouse.row);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn click_agent_row(&mut self, column: u16, row: u16) {
+        let Some(rows) = self.areas.agent_rows else {
+            return;
+        };
+        if !contains(Some(rows), column, row) {
+            return;
+        }
+        let index = self.agents_scroll + usize::from(row - rows.y);
+        if index > self.agents.len() {
+            return;
+        }
+        self.selected_agent = index;
+        self.activate_agent_row();
     }
 
     /// Get the pending approval.
@@ -511,6 +700,15 @@ impl App {
                 self.process_command(cmd);
             }
             self.command_rx = Some(rx);
+        }
+
+        if matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        ) {
+            self.processing_since.get_or_insert_with(Instant::now);
+        } else {
+            self.processing_since = None;
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Input line rendering.
 
-use super::text::display_width;
+use super::{text::display_width, EDGE_INSET};
 use crate::{app::AppState, App, Theme};
 use ratatui::{
     layout::Rect,
@@ -10,12 +10,12 @@ use ratatui::{
     Frame,
 };
 
-/// Columns between the status and the model indicator.
+/// Columns between the model indicator and the status.
 const MODEL_GAP: u16 = 2;
 /// Below this many typing columns the model indicator is hidden.
 const MIN_INPUT_WIDTH: u16 = 20;
 
-/// Render input line with status and the current model on the right.
+/// Render input line with the current model and status on the right.
 /// `left_offset` shifts the input area to align with the chat panel when swarm is visible.
 pub(super) fn render_input(
     frame: &mut Frame,
@@ -42,11 +42,11 @@ pub(super) fn render_input(
     };
 
     let status_text = if is_ready {
-        format!(" ●  {status}")
+        format!("● {status}")
     } else if is_thinking {
-        format!(" {}  {status}", app.spinner_char())
+        format!("{} {status}", app.spinner_char())
     } else {
-        format!(" ◐  {status}")
+        format!("◐ {status}")
     };
     #[expect(
         clippy::cast_possible_truncation,
@@ -61,16 +61,15 @@ pub(super) fn render_input(
     } else {
         model_len + MODEL_GAP
     };
+    let usable_width = area.width.saturating_sub(EDGE_INSET);
     let show_model = model_len > 0
-        && area
-            .width
-            .saturating_sub(status_len + 2 + left_offset + model_reserved)
+        && usable_width.saturating_sub(status_len + 2 + left_offset + model_reserved)
             >= MIN_INPUT_WIDTH;
-    let right_reserved = if show_model { model_reserved } else { 0 };
+    let left_reserved = if show_model { model_reserved } else { 0 };
 
     if show_model {
         let model_area = Rect {
-            x: area.x + area.width.saturating_sub(model_len),
+            x: area.x + usable_width.saturating_sub(status_len + model_reserved),
             y: area.y,
             width: model_len,
             height: 1,
@@ -78,12 +77,10 @@ pub(super) fn render_input(
         frame.render_widget(Paragraph::new(Line::from(model_spans)), model_area);
     }
 
-    let input_width = area
-        .width
-        .saturating_sub(status_len + 2 + left_offset + right_reserved);
+    let input_width = usable_width.saturating_sub(status_len + 2 + left_offset + left_reserved);
 
     let status_area = Rect {
-        x: area.x + area.width.saturating_sub(status_len + right_reserved),
+        x: area.x + usable_width.saturating_sub(status_len),
         y: area.y,
         width: status_len,
         height: 1,
@@ -91,7 +88,7 @@ pub(super) fn render_input(
     let status_line = Line::from(Span::styled(&status_text, status_style));
     frame.render_widget(Paragraph::new(status_line), status_area);
 
-    let chat_padding: u16 = if left_offset > 0 { 3 } else { 0 };
+    let chat_padding: u16 = if left_offset > 0 { 3 } else { EDGE_INSET };
     let input_area = Rect {
         x: area.x + left_offset + chat_padding,
         y: area.y,

@@ -6,9 +6,9 @@
 //! |-------------|----------|----------------|-------------------------------------|
 //! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Success states, neon accents        |
 //! | Blue        | #01a4f4  | (1, 164, 244)  | Primary accent, info, provisioning  |
-//! | Purple      | #cb01f4  | (203, 1, 244)  | Pending states, secondary accent    |
+//! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                 |
 //! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                      |
-//! | White       | #ffffff  | (255, 255, 255)| Primary text                        |
+//! | White       | #ffffff  | (255, 255, 255)| Text, secondary accent, pending     |
 //! | Gray        | #888888  | (136, 136, 136)| Muted text, secondary info          |
 //! | Black       | #0d0d0d  | (13, 13, 13)   | Background                          |
 
@@ -25,7 +25,7 @@ pub const CYAN: Color = Color::Rgb(1, 244, 203);
 /// Blue - Primary accent, info, provisioning (#01a4f4)
 pub const BLUE: Color = Color::Rgb(1, 164, 244);
 
-/// Purple - Pending states, secondary accent (#cb01f4)
+/// Purple - Code block keywords (#cb01f4)
 pub const PURPLE: Color = Color::Rgb(203, 1, 244);
 
 /// Red - Errors, danger (#f4012a)
@@ -48,10 +48,12 @@ pub const BLACK: Color = Color::Rgb(13, 13, 13);
 ///
 /// Uses only the approved color palette:
 /// - Cyan (#01f4cb): Success, neon accents
-/// - Blue (#01a4f4): Primary accent, info
-/// - Purple (#cb01f4): Pending, secondary accent
+/// - Blue (#01a4f4): Info
 /// - Red (#f4012a): Errors, danger
-/// - White/Gray/Black: Text and backgrounds
+/// - White: Text, secondary accent, pending states
+/// - Gray/Black: Muted text and backgrounds
+///
+/// Purple is reserved for syntax-highlighted keywords in code blocks.
 #[must_use]
 pub fn cyber_theme() -> Theme {
     Theme {
@@ -62,14 +64,14 @@ pub fn cyber_theme() -> Theme {
             foreground: WHITE, // #ffffff - white text
 
             // Accent colors
-            primary: CYAN,     // #01f4cb - cyan (primary accent)
-            secondary: PURPLE, // #cb01f4 - purple (secondary accent)
+            primary: CYAN,    // #01f4cb - cyan (primary accent)
+            secondary: WHITE, // #ffffff - white (secondary accent)
 
             // Semantic colors
-            success: CYAN,   // #01f4cb - cyan/green (success)
-            warning: BLUE,   // #01a4f4 - blue (info/warning)
-            error: RED,      // #f4012a - red (errors/danger)
-            pending: PURPLE, // #cb01f4 - purple (pending states)
+            success: CYAN,  // #01f4cb - cyan/green (success)
+            warning: BLUE,  // #01a4f4 - blue (info/warning)
+            error: RED,     // #f4012a - red (errors/danger)
+            pending: WHITE, // #ffffff - white (pending states)
 
             // Muted text
             muted: GRAY, // #888888 - gray
@@ -92,7 +94,8 @@ mod tests {
         assert_eq!(theme.colors.primary, CYAN);
         assert_eq!(theme.colors.success, CYAN);
         assert_eq!(theme.colors.error, RED);
-        assert_eq!(theme.colors.pending, PURPLE);
+        assert_eq!(theme.colors.secondary, WHITE);
+        assert_eq!(theme.colors.pending, WHITE);
     }
 
     #[test]

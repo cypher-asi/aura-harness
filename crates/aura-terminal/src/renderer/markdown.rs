@@ -30,7 +30,7 @@ pub fn parse_markdown_line(text: &str, base_style: Style, theme: &Theme) -> Vec<
         return vec![Span::styled(
             text.to_string(),
             base_style
-                .fg(theme.colors.secondary)
+                .fg(theme.colors.foreground)
                 .add_modifier(Modifier::ITALIC),
         )];
     }
@@ -40,7 +40,7 @@ pub fn parse_markdown_line(text: &str, base_style: Style, theme: &Theme) -> Vec<
         let indent = text.len() - trimmed.len();
         let bullet_span = Span::styled(
             format!("{}• ", " ".repeat(indent)),
-            base_style.fg(theme.colors.primary),
+            base_style.fg(theme.colors.foreground),
         );
         let rest = &trimmed[2..];
         let mut result = vec![bullet_span];
@@ -55,7 +55,7 @@ pub fn parse_markdown_line(text: &str, base_style: Style, theme: &Theme) -> Vec<
             let number = &trimmed[..=dot_pos];
             let number_span = Span::styled(
                 format!("{}{} ", " ".repeat(indent), number),
-                base_style.fg(theme.colors.primary),
+                base_style.fg(theme.colors.foreground),
             );
             let rest = &trimmed[dot_pos + 2..];
             let mut result = vec![number_span];
@@ -102,7 +102,7 @@ pub(super) fn parse_markdown_inline(
                     MarkerType::Code => Span::styled(
                         content.to_string(),
                         Style::default()
-                            .fg(theme.colors.success)
+                            .fg(theme.colors.foreground)
                             .bg(theme.colors.background),
                     ),
                 };

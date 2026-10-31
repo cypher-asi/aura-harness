@@ -10,14 +10,27 @@ mod text;
 #[cfg(test)]
 mod tests;
 
-use crate::{App, Theme};
+use crate::{app::PanelAreas, App, Theme};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
+
+/// Columns that text outside the panels keeps from the screen edges.
+/// Border glyphs are drawn through the middle of their cell, so text in the
+/// outermost column would overhang the panel borders.
+pub(super) const EDGE_INSET: u16 = 1;
+
+fn inset_edges(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(EDGE_INSET),
+        width: area.width.saturating_sub(EDGE_INSET * 2),
+        ..area
+    }
+}
 
 /// Render the full application UI in IRC style.
 pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
@@ -28,16 +41,21 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(3),
-            Constraint::Length(3),
+            Constraint::Length(2),
         ])
         .split(area);
     let input_row = Rect {
+        height: 1,
+        ..main_chunks[2]
+    };
+    // Mirrors the panel border above so the input sits centered between two rules.
+    let input_rule = Rect {
         y: main_chunks[2].y + 1,
         height: 1,
         ..main_chunks[2]
     };
 
-    render_header(frame, main_chunks[0], app, theme);
+    render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     render_content_panels(frame, main_chunks[1], app, theme);
 
@@ -54,6 +72,12 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     };
 
     input::render_input(frame, input_row, app, theme, swarm_offset);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(theme.colors.muted)),
+        input_rule,
+    );
 
     overlays::render_overlays(frame, app, theme);
 }
@@ -63,7 +87,7 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
     let swarm_visible = app.swarm_panel_visible();
     let record_visible = app.record_panel_visible();
 
-    match (swarm_visible, record_visible) {
+    let areas = match (swarm_visible, record_visible) {
         (true, true) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
@@ -73,29 +97,54 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
                     Constraint::Percentage(30),
                 ])
                 .split(area);
-            panels::render_swarm_panel(frame, chunks[0], app, theme);
-            panels::render_chat_panel(frame, chunks[1], app, theme);
-            panels::render_record_panel(frame, chunks[2], app, theme);
+            PanelAreas {
+                swarm: Some(chunks[0]),
+                agent_rows: None,
+                chat: Some(chunks[1]),
+                records: Some(chunks[2]),
+            }
         }
         (true, false) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
                 .split(area);
-            panels::render_swarm_panel(frame, chunks[0], app, theme);
-            panels::render_chat_panel(frame, chunks[1], app, theme);
+            PanelAreas {
+                swarm: Some(chunks[0]),
+                agent_rows: None,
+                chat: Some(chunks[1]),
+                records: None,
+            }
         }
         (false, true) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
                 .split(area);
-            panels::render_chat_panel(frame, chunks[0], app, theme);
-            panels::render_record_panel(frame, chunks[1], app, theme);
+            PanelAreas {
+                swarm: None,
+                agent_rows: None,
+                chat: Some(chunks[0]),
+                records: Some(chunks[1]),
+            }
         }
-        (false, false) => {
-            panels::render_chat_panel(frame, area, app, theme);
-        }
+        (false, false) => PanelAreas {
+            swarm: None,
+            agent_rows: None,
+            chat: Some(area),
+            records: None,
+        },
+    };
+    app.set_panel_areas(areas);
+
+    if let Some(swarm) = areas.swarm {
+        panels::render_swarm_panel(frame, swarm, app, theme);
+    }
+    if let Some(chat) = areas.chat {
+        panels::render_chat_panel(frame, chat, app, theme);
+    }
+    if let Some(records) = areas.records {
+        panels::render_record_panel(frame, records, app, theme);
     }
 }
 
@@ -161,8 +210,5 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
     let label = app
         .current_model_option()
         .map_or_else(|| app.current_model(), |m| m.label.as_str());
-    vec![Span::styled(
-        label,
-        Style::default().fg(theme.colors.primary),
-    )]
+    vec![Span::styled(label, Style::default().fg(theme.colors.muted))]
 }

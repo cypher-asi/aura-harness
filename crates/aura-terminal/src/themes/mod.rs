@@ -8,9 +8,9 @@
 //! |-------------|----------|----------|------------------------------------|
 //! | Cyan/Green  | #01f4cb  | `CYAN`   | Success states, neon accents       |
 //! | Blue        | #01a4f4  | `BLUE`   | Primary accent, info, provisioning |
-//! | Purple      | #cb01f4  | `PURPLE` | Pending states, secondary accent   |
+//! | Purple      | #cb01f4  | `PURPLE` | Code block keywords                |
 //! | Red         | #f4012a  | `RED`    | Errors, danger                     |
-//! | White       | #ffffff  | `WHITE`  | Primary text                       |
+//! | White       | #ffffff  | `WHITE`  | Text, secondary accent, pending    |
 //! | Gray        | #888888  | `GRAY`   | Muted text, secondary info         |
 //! | Black       | #0d0d0d  | `BLACK`  | Background                         |
 

@@ -2,7 +2,7 @@
 
 use super::{App, AppState, NotificationType, PanelFocus};
 use crate::{events::UiEvent, terminal::KeyResult};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
     /// Handle a key event.
@@ -156,6 +156,23 @@ impl App {
         if key.code == KeyCode::Tab {
             self.focus = self.next_panel_focus();
             return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
+            self.create_agent();
+            return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Up => {
+                    self.switch_agent_by(-1);
+                    return KeyResult::continue_running();
+                }
+                KeyCode::Down => {
+                    self.switch_agent_by(1);
+                    return KeyResult::continue_running();
+                }
+                _ => {}
+            }
         }
 
         match key.code {
@@ -319,42 +336,17 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Handle key when swarm panel is focused.
+    /// Handle key when swarm panel is focused. Moving the highlight onto an
+    /// agent switches to it; Enter on "+ New agent" creates one.
     fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
-            KeyCode::Up => {
-                if self.selected_agent > 0 {
-                    self.selected_agent -= 1;
-                }
-            }
-            KeyCode::Down => {
-                if !self.agents.is_empty() && self.selected_agent < self.agents.len() - 1 {
-                    self.selected_agent += 1;
-                }
-            }
-            KeyCode::Enter => {
-                if let Some(agent) = self.agents.get(self.selected_agent) {
-                    let agent_id = agent.id.clone();
-                    self.request_agent_switch(agent_id);
-                }
-            }
-            KeyCode::PageUp => {
-                self.selected_agent = self.selected_agent.saturating_sub(5);
-            }
-            KeyCode::PageDown => {
-                if !self.agents.is_empty() {
-                    self.selected_agent =
-                        (self.selected_agent + 5).min(self.agents.len().saturating_sub(1));
-                }
-            }
-            KeyCode::Home => {
-                self.selected_agent = 0;
-            }
-            KeyCode::End => {
-                if !self.agents.is_empty() {
-                    self.selected_agent = self.agents.len() - 1;
-                }
-            }
+            KeyCode::Up => self.select_agent_row(self.selected_agent.saturating_sub(1)),
+            KeyCode::Down => self.select_agent_row(self.selected_agent + 1),
+            KeyCode::Enter => self.activate_agent_row(),
+            KeyCode::PageUp => self.select_agent_row(self.selected_agent.saturating_sub(5)),
+            KeyCode::PageDown => self.select_agent_row(self.selected_agent + 5),
+            KeyCode::Home => self.select_agent_row(0),
+            KeyCode::End => self.select_agent_row(self.agents.len().saturating_sub(1)),
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor_pos, c);
                 self.cursor_pos += 1;

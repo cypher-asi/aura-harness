@@ -1,7 +1,8 @@
 use super::*;
 use crate::components::{Message, MessageRole};
 use crate::events::{ModelOptionView, UiCommand, UiEvent};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
 #[test]
@@ -324,6 +325,115 @@ fn test_agent_new_command_emits_create_agent() {
 
     app.handle_command("/agent new");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+}
+
+#[test]
+fn test_arrow_in_agents_column_switches_immediately() {
+    let (mut app, mut rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+
+    app.handle_key(key(KeyCode::Down));
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+}
+
+#[test]
+fn test_enter_on_new_agent_row_creates_agent() {
+    let (mut app, mut rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Down));
+    let _ = rx.try_recv();
+    assert_eq!(app.selected_agent(), 2);
+    assert!(rx.try_recv().is_err());
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+}
+
+#[test]
+fn test_ctrl_n_creates_agent_from_chat() {
+    let (mut app, mut rx) = app_with_agents();
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn test_alt_arrows_switch_agent_from_chat() {
+    let (mut app, mut rx) = app_with_agents();
+
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "aa"));
+}
+
+fn mouse(kind: crossterm::event::MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    }
+}
+
+fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_agents();
+    let swarm = Rect::new(0, 3, 20, 10);
+    app.set_panel_areas(crate::app::PanelAreas {
+        swarm: Some(swarm),
+        agent_rows: None,
+        chat: Some(Rect::new(20, 3, 60, 10)),
+        records: None,
+    });
+    app.set_agent_rows_area(Rect::new(1, 4, 18, 7));
+    (app, rx)
+}
+
+#[test]
+fn test_click_agent_row_switches_and_new_row_creates() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, mut rx) = app_with_agent_areas();
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+    assert_eq!(app.focus(), PanelFocus::Swarm);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 6));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 9));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_wheel_over_agents_switches_without_focus() {
+    use crossterm::event::MouseEventKind;
+    let (mut app, mut rx) = app_with_agent_areas();
+
+    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+
+    assert_eq!(app.focus(), PanelFocus::Chat);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert_eq!(app.scroll_offset(), 0);
+}
+
+#[test]
+fn test_agents_scroll_keeps_selection_visible() {
+    let (mut app, _rx) = app_with_agents();
+    app.selected_agent = 2;
+    app.sync_agents_scroll(2);
+    assert_eq!(app.agents_scroll(), 1);
+
+    app.selected_agent = 0;
+    app.sync_agents_scroll(2);
+    assert_eq!(app.agents_scroll(), 0);
 }
 
 #[test]

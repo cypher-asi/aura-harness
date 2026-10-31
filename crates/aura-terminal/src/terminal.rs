@@ -7,7 +7,6 @@ use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -44,7 +43,8 @@ impl Terminal {
             SetCursorStyle::BlinkingBar
         )?;
         let backend = CrosstermBackend::new(stdout);
-        let inner = RatatuiTerminal::new(backend)?;
+        let mut inner = RatatuiTerminal::new(backend)?;
+        inner.clear()?;
         let size = inner.size()?;
 
         Ok(Self {
@@ -169,15 +169,7 @@ impl Terminal {
                             self.mouse_capture_enabled = true;
                         }
 
-                        match mouse.kind {
-                            MouseEventKind::ScrollUp => {
-                                app.scroll_up(3);
-                            }
-                            MouseEventKind::ScrollDown => {
-                                app.scroll_down(3);
-                            }
-                            _ => {}
-                        }
+                        app.handle_mouse(mouse);
                     }
                     _ => {}
                 }
