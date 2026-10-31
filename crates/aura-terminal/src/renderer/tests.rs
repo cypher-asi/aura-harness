@@ -468,7 +468,7 @@ fn test_sandbox_panel_sits_below_record() {
 #[test]
 fn test_files_command_toggles_sandbox_panel() {
     let mut app = crate::App::new();
-    submit(&mut app, "/records");
+    submit(&mut app, "/record");
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 120).join("\n");
     assert!(!screen.contains(" RECORD "));

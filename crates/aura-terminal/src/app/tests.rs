@@ -685,14 +685,14 @@ fn test_panel_commands_toggle_visibility() {
     assert!(app.sandbox_panel_visible());
     assert!(app.swarm_panel_visible());
 
-    app.handle_command("/records");
+    app.handle_command("/record");
     app.handle_command("/files");
     app.handle_command("/agents");
     assert!(!app.record_panel_visible());
     assert!(!app.sandbox_panel_visible());
     assert!(!app.swarm_panel_visible());
 
-    app.handle_command("/records");
+    app.handle_command("/record");
     app.handle_command("/files");
     app.handle_command("/agents");
     assert!(app.record_panel_visible());
@@ -738,7 +738,7 @@ fn test_tab_cycles_visible_panels() {
         ]
     );
 
-    app.handle_command("/records");
+    app.handle_command("/record");
     app.handle_command("/agents");
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus(), PanelFocus::Sandbox);

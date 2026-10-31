@@ -45,7 +45,7 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
-            "records" | "record" | "r" => {
+            "record" | "r" => {
                 self.record_panel_visible = !self.record_panel_visible;
                 if !self.record_panel_visible && self.focus == PanelFocus::Records {
                     self.focus = PanelFocus::Chat;

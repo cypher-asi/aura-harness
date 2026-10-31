@@ -174,7 +174,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/agent new [name]   Create and switch to agent",
         "/agent <n|name>     Switch to agent",
         "/agents    Toggle Agents panel",
-        "/records   Toggle Record panel",
+        "/record    Toggle Record panel",
         "/files     Toggle Sandbox panel",
         "/model     Choose model (local or cloud)",
         "/login     Login for cloud models",
