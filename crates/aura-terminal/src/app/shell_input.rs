@@ -96,19 +96,27 @@ pub(super) fn parse_with(text: &str, resolves: impl FnOnce(&str) -> bool) -> Opt
     Some(text.to_string())
 }
 
-/// A question, or three or more plain words with no flags, paths, quotes
-/// or operators, is treated as a message to the agent.
+/// A question, or a line of plain words and numbers (no flags, paths,
+/// quotes or operators) with at least three words, is treated as a
+/// message to the agent.
 fn looks_like_prose(text: &str) -> bool {
     if text.ends_with('?') {
         return true;
     }
-    let words: Vec<&str> = text.split_whitespace().collect();
-    words.len() >= 3
-        && words.iter().all(|word| {
-            word.trim_end_matches(['.', ',', '!'])
-                .chars()
-                .all(|c| c.is_alphabetic() || c == '\'')
-        })
+    let words: Vec<&str> = text
+        .split_whitespace()
+        .map(|word| word.trim_end_matches(['.', ',', '!']))
+        .collect();
+    words.iter().all(|word| is_word(word) || is_number(word))
+        && words.iter().filter(|word| is_word(word)).count() >= 3
+}
+
+fn is_word(word: &str) -> bool {
+    !word.is_empty() && word.chars().all(|c| c.is_alphabetic() || c == '\'')
+}
+
+fn is_number(word: &str) -> bool {
+    !word.is_empty() && word.chars().all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -116,7 +124,10 @@ mod tests {
     use super::{parse_with, tokens, TokenKind};
 
     fn on_path(program: &str) -> bool {
-        matches!(program, "ls" | "git" | "make" | "echo" | "cargo")
+        matches!(
+            program,
+            "ls" | "git" | "make" | "echo" | "cargo" | "write" | "seq" | "kill"
+        )
     }
 
     fn parse(text: &str) -> Option<String> {
@@ -156,6 +167,15 @@ mod tests {
         assert_eq!(parse("what is this?"), None);
         assert_eq!(parse("hello"), None);
         assert_eq!(parse(""), None);
+        assert_eq!(parse("write a 5 paragrah story"), None);
+        assert_eq!(parse("make 3 small examples."), None);
+    }
+
+    #[test]
+    fn numeric_arguments_still_run() {
+        assert_eq!(parse("seq 1 10").as_deref(), Some("seq 1 10"));
+        assert_eq!(parse("kill 1234 5678").as_deref(), Some("kill 1234 5678"));
+        assert_eq!(parse("echo 1 2").as_deref(), Some("echo 1 2"));
     }
 
     fn kinds(text: &str) -> Vec<(TokenKind, &str)> {

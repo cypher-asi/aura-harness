@@ -228,7 +228,7 @@ fn test_command_width_follows_the_chat() {
 
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::RunCommand { cols: 100, .. })
+        Ok(UiEvent::RunCommand { cols: 118, .. })
     ));
 }
 
@@ -246,6 +246,16 @@ fn test_executable_on_path_runs_as_command() {
     ));
 }
 
+/// Sync the input kind as if the input had sat unchanged past the
+/// highlight delay.
+fn settle_input_kind(app: &mut App) {
+    app.sync_input_kind();
+    if let Some(earlier) = app.input_edited_at.checked_sub(COMMAND_HIGHLIGHT_DELAY) {
+        app.input_edited_at = earlier;
+    }
+    app.sync_input_kind();
+}
+
 #[cfg(unix)]
 #[test]
 fn test_input_kind_tracks_what_enter_would_do() {
@@ -259,9 +269,35 @@ fn test_input_kind_tracks_what_enter_would_do() {
         ("hello there", false),
     ] {
         app.input = text.to_string();
-        app.sync_input_kind();
+        settle_input_kind(&mut app);
         assert_eq!(app.input_is_command(), is_command, "{text:?}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_command_highlight_waits_for_typing_to_pause() {
+    let mut app = App::new();
+    app.input = "ls".to_string();
+    app.sync_input_kind();
+    assert!(!app.input_is_command(), "not until the input settles");
+    settle_input_kind(&mut app);
+    assert!(app.input_is_command());
+
+    app.input = "ls -la".to_string();
+    app.sync_input_kind();
+    assert!(
+        app.input_is_command(),
+        "stays highlighted while typing args"
+    );
+
+    app.input = "ls what is here?".to_string();
+    app.sync_input_kind();
+    assert!(!app.input_is_command(), "turns off immediately");
+
+    app.input = "!echo".to_string();
+    app.sync_input_kind();
+    assert!(app.input_is_command(), "`!` highlights immediately");
 }
 
 #[test]
@@ -505,6 +541,45 @@ fn test_click_agent_row_switches_and_new_row_creates() {
 }
 
 #[test]
+fn test_drag_selects_chat_text_and_requests_copy() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use ratatui::{buffer::Buffer, style::Style};
+    let (mut app, _rx) = app_with_agent_areas();
+    app.set_chat_text_area(Rect::new(23, 4, 54, 8));
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 80, 14));
+    buffer.set_string(23, 4, "[12:00:00] <AURA> hello", Style::default());
+    buffer.set_string(23, 5, "             second line", Style::default());
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 34, 4));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 200, 5));
+    assert!(app.take_copy_text(&buffer).is_none());
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 200, 5));
+
+    assert_eq!(
+        app.take_copy_text(&buffer).as_deref(),
+        Some("<AURA> hello\n             second line")
+    );
+    assert!(app.take_copy_text(&buffer).is_none());
+    assert!(app.request_copy());
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    assert!(app.selection().is_none());
+    assert!(!app.request_copy());
+}
+
+#[test]
+fn test_click_without_drag_selects_nothing() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, _rx) = app_with_agent_areas();
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 30, 5));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 30, 5));
+
+    assert!(app.selection().is_none());
+    assert!(!app.request_copy());
+}
+
+#[test]
 fn test_wheel_over_agents_switches_without_focus() {
     use crossterm::event::MouseEventKind;
     let (mut app, mut rx) = app_with_agent_areas();
@@ -526,6 +601,66 @@ fn test_agents_scroll_keeps_selection_visible() {
     app.selected_agent = 0;
     app.sync_agents_scroll(2);
     assert_eq!(app.agents_scroll(), 0);
+}
+
+#[test]
+fn test_follow_selection_moves_only_to_keep_selection_visible() {
+    use crate::app::follow_selection;
+    // Moving within the view leaves it alone.
+    assert_eq!(follow_selection(0, 4, 5, 20), 0);
+    // Stepping past the bottom scrolls one row, not half a page.
+    assert_eq!(follow_selection(0, 5, 5, 20), 1);
+    // Stepping back up inside the view keeps it where it is.
+    assert_eq!(follow_selection(6, 7, 5, 20), 6);
+    assert_eq!(follow_selection(6, 5, 5, 20), 5);
+    // Never scrolls past the end of the list.
+    assert_eq!(follow_selection(18, 19, 5, 20), 15);
+    assert_eq!(follow_selection(3, 1, 5, 2), 0);
+}
+
+#[test]
+fn test_chat_scroll_holds_position_as_lines_arrive() {
+    let mut app = App::new();
+    assert_eq!(app.sync_chat_scroll(100, 20, true), 80);
+
+    app.scroll_up(10);
+    assert_eq!(app.sync_chat_scroll(100, 20, false), 70);
+    // 15 lines stream in below: the same lines stay on screen.
+    assert_eq!(app.sync_chat_scroll(115, 20, false), 70);
+    assert_eq!(app.scroll_offset(), 25);
+    // A reflow moves every line, so the offset is only clamped.
+    assert_eq!(app.sync_chat_scroll(60, 20, true), 15);
+
+    app.scroll_chat_to_bottom();
+    assert_eq!(app.sync_chat_scroll(70, 20, false), 50);
+    assert_eq!(app.scroll_offset(), 0);
+}
+
+#[test]
+fn test_chat_page_keys_scroll_a_screenful() {
+    let mut app = App::new();
+    app.set_chat_text_area(Rect::new(0, 0, 60, 22));
+    app.sync_chat_scroll(200, 22, true);
+
+    app.handle_key(key(KeyCode::PageUp));
+    assert_eq!(app.scroll_offset(), 20);
+    app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+    app.sync_chat_scroll(200, 22, false);
+    assert_eq!(app.scroll_offset(), 178);
+    app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+    assert_eq!(app.scroll_offset(), 0);
+}
+
+#[test]
+fn test_incoming_messages_keep_scroll_but_sending_jumps_to_bottom() {
+    let mut app = App::new();
+    app.scroll_offset = 7;
+    app.add_message(Message::new(MessageRole::System, "tool output"));
+    assert_eq!(app.scroll_offset(), 7);
+
+    app.input = "hello".to_string();
+    app.submit_input();
+    assert_eq!(app.scroll_offset(), 0);
 }
 
 #[test]
@@ -776,6 +911,34 @@ fn test_sandbox_keys_navigate_tree() {
 }
 
 #[test]
+fn test_arrows_move_input_cursor_when_panel_focused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+
+    let mut app = App::new();
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+
+    app.handle_key(key(KeyCode::Char('a')));
+    app.handle_key(key(KeyCode::Char('b')));
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.cursor_pos(), 1);
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.cursor_pos(), 2);
+    assert_eq!(app.sandbox().rows().len(), 1);
+
+    for focus in [PanelFocus::Records, PanelFocus::Swarm] {
+        app.focus = focus;
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.cursor_pos(), 1);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.cursor_pos(), 2);
+    }
+}
+
+#[test]
 fn test_sandbox_refreshes_after_tool_completes() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = App::new();
@@ -796,4 +959,132 @@ fn test_notification_types() {
     assert_eq!(NotificationType::Success, NotificationType::Success);
     assert_ne!(NotificationType::Success, NotificationType::Warning);
     assert_ne!(NotificationType::Warning, NotificationType::Error);
+}
+
+// ========================================================================
+// Slash menu
+// ========================================================================
+
+fn type_chars(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+}
+
+fn slash_names(app: &App) -> Vec<&'static str> {
+    app.slash_matches().iter().map(|c| c.name).collect()
+}
+
+#[test]
+fn test_slash_opens_menu_with_all_commands() {
+    let mut app = App::new();
+    assert!(app.slash_matches().is_empty());
+    type_chars(&mut app, "/");
+    assert_eq!(slash_names(&app).len(), slash_menu::SLASH_COMMANDS.len());
+    assert_eq!(app.slash_cursor(), 0);
+}
+
+#[test]
+fn test_slash_menu_filters_as_you_type() {
+    let mut app = App::new();
+    type_chars(&mut app, "/lo");
+    assert_eq!(slash_names(&app), ["login", "logout"]);
+    type_chars(&mut app, "go");
+    assert_eq!(slash_names(&app), ["logout"]);
+    type_chars(&mut app, "x");
+    assert!(app.slash_matches().is_empty());
+}
+
+#[test]
+fn test_slash_menu_lists_prefix_matches_first() {
+    let mut app = App::new();
+    type_chars(&mut app, "/a");
+    let names = slash_names(&app);
+    assert_eq!(names[..2], ["agent", "agents"]);
+    assert!(names[2..].contains(&"clear"), "{names:?}");
+}
+
+#[test]
+fn test_slash_menu_closes_after_space() {
+    let mut app = App::new();
+    type_chars(&mut app, "/model ");
+    assert!(app.slash_matches().is_empty());
+}
+
+#[test]
+fn test_slash_menu_arrows_move_and_wrap() {
+    let mut app = App::new();
+    type_chars(&mut app, "/lo");
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.slash_cursor(), 1);
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.slash_cursor(), 0);
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.slash_cursor(), 1);
+    assert_eq!(app.input(), "/lo");
+}
+
+#[test]
+fn test_slash_menu_tab_completes_without_switching_panel() {
+    let mut app = App::new();
+    type_chars(&mut app, "/rec");
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.input(), "/record");
+    assert_eq!(app.cursor_pos(), "/record".len());
+    assert_eq!(app.focus(), PanelFocus::Chat);
+    assert!(app.record_panel_visible());
+}
+
+#[test]
+fn test_slash_menu_enter_runs_selected_command() {
+    let mut app = App::new();
+    type_chars(&mut app, "/rec");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(!app.record_panel_visible());
+    assert_eq!(app.input(), "");
+    assert!(app.slash_matches().is_empty());
+}
+
+#[test]
+fn test_slash_menu_enter_on_command_with_args_waits_for_them() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    type_chars(&mut app, "/ag");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.input(), "/agent ");
+    assert!(app.slash_matches().is_empty());
+    assert!(rx.try_recv().is_err());
+
+    type_chars(&mut app, "new");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+}
+
+#[test]
+fn test_slash_menu_esc_dismisses_until_next_edit() {
+    let mut app = App::new();
+    type_chars(&mut app, "/m");
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.slash_matches().is_empty());
+    assert_eq!(app.input(), "/m");
+
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus(), PanelFocus::Records);
+    app.handle_key(key(KeyCode::Char('o')));
+    assert_eq!(slash_names(&app), ["model"]);
+}
+
+#[test]
+fn test_recalled_slash_command_keeps_history_navigation() {
+    let mut app = App::new();
+    type_chars(&mut app, "/clear");
+    app.handle_key(key(KeyCode::Enter));
+    type_chars(&mut app, "hello");
+    app.handle_key(key(KeyCode::Enter));
+    app.state = AppState::Idle;
+
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "/clear");
+    assert!(app.slash_matches().is_empty());
 }

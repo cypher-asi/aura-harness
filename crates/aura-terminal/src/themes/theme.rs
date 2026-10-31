@@ -4,7 +4,7 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
 /// Terminal color theme.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     /// Theme name
     pub name: String,
@@ -143,7 +143,7 @@ impl Default for Theme {
 /// | White       | #ffffff  | Primary text                       |
 /// | Gray        | #888888  | Muted text, secondary info         |
 /// | Black       | #0d0d0d  | Background                         |
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeColors {
     /// Background color (#0d0d0d black)
     pub background: Color,

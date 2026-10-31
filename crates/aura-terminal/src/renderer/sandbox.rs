@@ -32,9 +32,8 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let tree = app.sandbox();
-    if tree.rows().is_empty() {
-        let message = if tree.root().is_some() {
+    if app.sandbox().rows().is_empty() {
+        let message = if app.sandbox().root().is_some() {
             [
                 "  Sandbox is empty.",
                 "  Files the agent creates",
@@ -58,8 +57,9 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         ..inner
     };
     let visible = rows_area.height as usize;
+    let scroll = app.sync_sandbox_scroll(visible);
+    let tree = app.sandbox();
     let selected = tree.selected();
-    let scroll = (selected + 1).saturating_sub(visible);
 
     let lines: Vec<Line> = tree
         .rows()

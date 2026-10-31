@@ -89,10 +89,19 @@ pub(super) fn render_input(
     let status_line = Line::from(Span::styled(&status_text, status_style));
     frame.render_widget(Paragraph::new(status_line), status_area);
 
-    let (prompt_str, display_input) = match app.state() {
-        AppState::LoginEmail => ("Email: ", input.to_string()),
-        AppState::LoginPassword => ("Password: ", "•".repeat(input.len())),
-        _ => (app.shell_prompt(), input.to_string()),
+    let before_cursor = input.get(..cursor_pos).unwrap_or(input);
+    let (prompt_str, display_input, cursor_col) = match app.state() {
+        AppState::LoginEmail => ("Email: ", input.to_string(), display_width(before_cursor)),
+        AppState::LoginPassword => (
+            "Password: ",
+            "•".repeat(input.chars().count()),
+            before_cursor.chars().count(),
+        ),
+        _ => (
+            app.shell_prompt(),
+            input.to_string(),
+            display_width(before_cursor),
+        ),
     };
     let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
 
@@ -130,7 +139,7 @@ pub(super) fn render_input(
     frame.render_widget(Paragraph::new(input_line), input_area);
 
     if !is_thinking {
-        let cursor_x = typing_x.saturating_add(u16::try_from(cursor_pos).unwrap_or(u16::MAX));
+        let cursor_x = typing_x.saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX));
         frame.set_cursor_position((cursor_x, area.y));
     }
 }

@@ -11,9 +11,16 @@ use ratatui::{
 };
 
 use crate::events::MessageRole;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_message_id() -> u64 {
+    NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// A chat message.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Message {
     /// Message role
     role: MessageRole,
@@ -25,6 +32,24 @@ pub struct Message {
     is_streaming: bool,
     /// Set when the message is a shell command the user ran
     shell: Option<ShellRun>,
+    /// Unique to this message, clones included
+    id: u64,
+    /// Bumped on every change
+    revision: u64,
+}
+
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        Self {
+            role: self.role,
+            content: self.content.clone(),
+            timestamp: self.timestamp,
+            is_streaming: self.is_streaming,
+            shell: self.shell.clone(),
+            id: next_message_id(),
+            revision: 0,
+        }
+    }
 }
 
 /// A shell command typed by the user and its terminal output.
@@ -48,7 +73,20 @@ impl Message {
             timestamp: Utc::now(),
             is_streaming: false,
             shell: None,
+            id: next_message_id(),
+            revision: 0,
         }
+    }
+
+    /// `(id, revision)`: differs from every other message's, and changes
+    /// whenever this message does.
+    #[must_use]
+    pub const fn version(&self) -> (u64, u64) {
+        (self.id, self.revision)
+    }
+
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// A shell command the user ran; output is filled in by [`Self::finish_shell`].
@@ -80,13 +118,15 @@ impl Message {
         if let Some(run) = &mut self.shell {
             run.output = Some(output.to_string());
             run.exit_code = exit_code;
+            self.touch();
         }
     }
 
     /// Override the timestamp (e.g. when restoring history from the record).
     #[must_use]
-    pub const fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.timestamp = timestamp;
+        self.touch();
         self
     }
 
@@ -112,6 +152,7 @@ impl Message {
     /// Set whether the message is streaming.
     pub fn set_streaming(&mut self, streaming: bool) {
         self.is_streaming = streaming;
+        self.touch();
     }
 
     /// Check if the message is still streaming.
@@ -123,11 +164,13 @@ impl Message {
     /// Append content to the message.
     pub fn append(&mut self, text: &str) {
         self.content.push_str(text);
+        self.touch();
     }
 
     /// Set the message content (replaces existing content).
     pub fn set_content(&mut self, content: &str) {
-        self.content = content.to_string();
+        content.clone_into(&mut self.content);
+        self.touch();
     }
 
     /// Render the message.
@@ -232,6 +275,15 @@ mod tests {
         assert!(!msg.is_streaming);
         msg.set_streaming(true);
         assert!(msg.is_streaming);
+    }
+
+    #[test]
+    fn test_version_changes_with_content_and_differs_per_clone() {
+        let mut msg = Message::new(MessageRole::Assistant, "Hello");
+        let before = msg.version();
+        msg.append("!");
+        assert_ne!(msg.version(), before);
+        assert_ne!(msg.clone().version().0, msg.version().0);
     }
 
     #[test]

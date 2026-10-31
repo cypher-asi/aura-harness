@@ -1,7 +1,4 @@
-use super::markdown::{
-    find_next_marker, parse_content_segments, parse_markdown_inline, parse_markdown_line,
-    ContentSegment, MarkerType,
-};
+use super::markdown::{parse_content_segments, ContentSegment};
 use super::panels::truncate_record_info;
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::Theme;
@@ -81,104 +78,6 @@ fn test_display_width_unicode() {
 fn test_display_width_emoji() {
     let width = display_width("🎉");
     assert!(width >= 1);
-}
-
-// ========================================================================
-// Markdown Parsing Tests
-// ========================================================================
-
-#[test]
-fn test_parse_markdown_line_plain() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_line("hello world", base_style, &theme);
-    assert!(!spans.is_empty());
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(text.contains("hello world"));
-}
-
-#[test]
-fn test_parse_markdown_line_header() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_line("# Header", base_style, &theme);
-    assert!(!spans.is_empty());
-    assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
-}
-
-#[test]
-fn test_parse_markdown_line_blockquote() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_line("> quoted text", base_style, &theme);
-    assert!(!spans.is_empty());
-    assert!(spans[0].style.add_modifier.contains(Modifier::ITALIC));
-}
-
-#[test]
-fn test_parse_markdown_line_list_item() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_line("- list item", base_style, &theme);
-    assert!(!spans.is_empty());
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    assert!(text.contains('•') || text.contains('-'));
-}
-
-#[test]
-fn test_parse_markdown_inline_bold() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_inline("hello **bold** world", base_style, &theme);
-    assert!(spans.len() >= 3);
-    let bold_span = spans.iter().find(|s| s.content.as_ref() == "bold");
-    assert!(bold_span.is_some());
-    assert!(bold_span
-        .unwrap()
-        .style
-        .add_modifier
-        .contains(Modifier::BOLD));
-}
-
-#[test]
-fn test_parse_markdown_inline_italic() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_inline("hello *italic* world", base_style, &theme);
-    assert!(spans.len() >= 3);
-    let italic_span = spans.iter().find(|s| s.content.as_ref() == "italic");
-    assert!(italic_span.is_some());
-    assert!(italic_span
-        .unwrap()
-        .style
-        .add_modifier
-        .contains(Modifier::ITALIC));
-}
-
-#[test]
-fn test_parse_markdown_inline_code() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_inline("run `cargo build`", base_style, &theme);
-    assert!(spans.len() >= 2);
-    let code_span = spans.iter().find(|s| s.content.as_ref() == "cargo build");
-    assert!(code_span.is_some());
-}
-
-#[test]
-fn test_parse_markdown_inline_unclosed() {
-    let theme = test_theme();
-    let base_style = Style::default().fg(Color::White);
-
-    let spans = parse_markdown_inline("hello **unclosed", base_style, &theme);
-    assert!(!spans.is_empty());
 }
 
 // ========================================================================
@@ -279,61 +178,6 @@ fn test_centered_rect_with_offset() {
 }
 
 // ========================================================================
-// Marker Finding Tests
-// ========================================================================
-
-#[test]
-fn test_find_next_marker_bold() {
-    let result = find_next_marker("hello **bold** world");
-    assert!(result.is_some());
-    let (pos, marker_type, len) = result.unwrap();
-    assert_eq!(pos, 6);
-    assert!(matches!(marker_type, MarkerType::Bold));
-    assert_eq!(len, 2);
-}
-
-#[test]
-fn test_find_next_marker_italic() {
-    let result = find_next_marker("hello *italic* world");
-    assert!(result.is_some());
-    let (pos, marker_type, len) = result.unwrap();
-    assert_eq!(pos, 6);
-    assert!(matches!(marker_type, MarkerType::Italic));
-    assert_eq!(len, 1);
-}
-
-#[test]
-fn test_find_next_marker_code() {
-    let result = find_next_marker("run `code` here");
-    assert!(result.is_some());
-    let (pos, marker_type, len) = result.unwrap();
-    assert_eq!(pos, 4);
-    assert!(matches!(marker_type, MarkerType::Code));
-    assert_eq!(len, 1);
-}
-
-#[test]
-fn test_find_next_marker_none() {
-    let result = find_next_marker("no markers here");
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_find_next_marker_prefers_earliest() {
-    let result = find_next_marker("**bold** *italic*");
-    assert!(result.is_some());
-    let (pos, marker_type, _) = result.unwrap();
-    assert_eq!(pos, 0);
-    assert!(matches!(marker_type, MarkerType::Bold));
-}
-
-#[test]
-fn test_find_next_marker_skips_triple_backticks() {
-    let result = find_next_marker("```rust");
-    assert!(result.is_none());
-}
-
-// ========================================================================
 // Layout
 // ========================================================================
 
@@ -394,7 +238,54 @@ fn test_default_layout_shows_agents_column() {
 }
 
 #[test]
-fn test_chat_message_text_column_is_aligned() {
+fn test_chat_renders_assistant_markdown() {
+    use crate::components::{Message, MessageRole};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(
+        MessageRole::Assistant,
+        "## Summary\n\nThe build is **green** and `cargo test` passes.\n\n\
+         - first point that is long enough to wrap onto a second line in the chat panel\n\
+         - [x] done\n\n\
+         | Crate | Tests |\n|---|---:|\n| aura-terminal | 231 |\n\n\
+         > note: see [docs](https://example.com)",
+    ));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    let screen = rows.join("\n");
+    let header = rows.iter().position(|r| r.contains("AURA  ")).unwrap();
+    assert!(rows[header + 1].contains("Summary"), "{screen}");
+    assert!(!screen.contains("##") && !screen.contains("**"), "{screen}");
+    assert!(screen.contains("The build is green and cargo"), "{screen}");
+    assert!(screen.contains("• [✓] done"), "{screen}");
+    assert!(screen.contains("│ aura-terminal │   231 │"), "{screen}");
+    assert!(screen.contains("│ note: see docs"), "{screen}");
+    assert!(screen.contains("│ (https://example.com)"), "{screen}");
+
+    let bullet_row = rows.iter().find(|r| r.contains("• first point")).unwrap();
+    let bullet_col = bullet_row.chars().position(|c| c == '•').unwrap();
+    let next_row = &rows[rows.iter().position(|r| r == bullet_row).unwrap() + 1];
+    let hang_col = next_row.chars().position(|c| c.is_alphanumeric()).unwrap();
+    assert_eq!(
+        hang_col,
+        bullet_col + 2,
+        "wrapped item hangs under its text"
+    );
+}
+
+#[test]
+fn test_chat_names_sit_above_centered_text() {
     use crate::components::{Message, MessageRole};
 
     let mut app = crate::App::new();
@@ -418,19 +309,39 @@ fn test_chat_message_text_column_is_aligned() {
         })
         .collect();
     let col = |row: &str, needle: &str| {
-        row.find(needle)
-            .map(|i| row[..i].chars().count())
-            .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"))
+        let i = row
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
+        row[..i].chars().count()
     };
-    let user = rows.iter().find(|r| r.contains("<YOU>")).unwrap();
-    let aura = rows.iter().position(|r| r.contains("<AURA>")).unwrap();
+    let user = rows.iter().position(|r| r.contains("YOU  ")).unwrap();
+    let aura = rows.iter().position(|r| r.contains("AURA  ")).unwrap();
 
-    assert_eq!(col(user, "<YOU>"), col(&rows[aura], "<AURA>"));
+    let text_col = col(&rows[user], "YOU");
+    assert_eq!(col(&rows[user + 1], "hi"), text_col);
+    assert_eq!(col(&rows[aura], "AURA"), text_col);
+    assert_eq!(col(&rows[aura + 1], "The task"), text_col);
+    assert_eq!(rows[aura + 2].chars().nth(text_col - 1), Some(' '));
+    assert_ne!(rows[aura + 2].chars().nth(text_col), Some(' '));
+}
 
-    let text_col = col(user, "hi");
-    assert_eq!(col(&rows[aura], "The task"), text_col);
-    assert_eq!(rows[aura + 1].chars().nth(text_col - 1), Some(' '));
-    assert_ne!(rows[aura + 1].chars().nth(text_col), Some(' '));
+#[test]
+fn test_chat_text_is_centered_with_margins() {
+    use super::panels::centered_text_area;
+
+    let gaps = |area: Rect| {
+        let text = centered_text_area(area);
+        (
+            text.x - area.x,
+            (area.x + area.width) - (text.x + text.width),
+        )
+    };
+    assert_eq!(gaps(Rect::new(10, 0, 60, 20)), (4, 4));
+    let (left, right) = gaps(Rect::new(10, 0, 61, 20));
+    assert!(left.abs_diff(right) <= 1);
+    let wide = Rect::new(0, 0, 200, 20);
+    assert_eq!(centered_text_area(wide).width, 100);
+    assert_eq!(gaps(wide), (50, 50));
 }
 
 fn submit(app: &mut crate::App, text: &str) {
@@ -521,6 +432,42 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
                 .collect()
         })
         .collect()
+}
+
+#[test]
+fn test_slash_menu_spans_chat_width_above_input() {
+    let mut app = app_with_model(None);
+    type_text(&mut app, "/lo");
+    let rows = render_rows(&mut app, 120);
+    let n = rows.len();
+
+    let title = rows.iter().find(|r| r.contains("┌ CHAT ")).unwrap();
+    let chat_left = title[..title.find("┌ CHAT ").unwrap()].chars().count();
+    let chat_right = chat_left
+        + 1
+        + title
+            .chars()
+            .skip(chat_left + 1)
+            .position(|c| c == '┐')
+            .unwrap();
+
+    let menu_bottom = &rows[n - 3];
+    let chars: Vec<char> = menu_bottom.chars().collect();
+    assert_eq!(chars[chat_left], '└', "{menu_bottom:?}");
+    assert_eq!(chars[chat_right], '┘', "{menu_bottom:?}");
+    assert!(menu_bottom.contains("Esc close"), "{menu_bottom:?}");
+
+    assert!(rows[n - 5].contains("› /login"), "{:?}", rows[n - 5]);
+    assert!(rows[n - 5].contains("Login for cloud models"));
+    assert!(rows[n - 4].contains("  /logout"), "{:?}", rows[n - 4]);
+    assert!(rows[n - 6].contains(" COMMANDS "), "{:?}", rows[n - 6]);
+    let menu_top: Vec<char> = rows[n - 6].chars().collect();
+    assert_eq!(menu_top[chat_left], '┌');
+    assert_eq!(menu_top[chat_right], '┐');
+
+    type_text(&mut app, " ");
+    let rows = render_rows(&mut app, 120);
+    assert!(!rows.join("\n").contains(" COMMANDS "));
 }
 
 #[test]
@@ -724,7 +671,7 @@ fn test_chat_shows_working_indicator_until_reply_streams() {
     let mut app = crate::App::new();
     submit_message(&mut app, "hi");
     let chat = render_rows(&mut app, 120).join("\n");
-    assert!(chat.contains("<AURA> "), "{chat}");
+    assert!(chat.contains("AURA  "), "{chat}");
     assert!(chat.contains("thinking…"), "{chat}");
 
     app.process_command(UiCommand::StartStreaming);
@@ -788,6 +735,59 @@ fn find_cell(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> Option<(
 }
 
 #[test]
+fn test_scrolled_chat_stays_put_while_reply_streams() {
+    use crate::components::{Message, MessageRole};
+    use crate::events::UiCommand;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::App::new();
+    for i in 0..40 {
+        app.add_message(Message::new(MessageRole::User, &format!("note {i:02}")));
+    }
+    render_rows(&mut app, 100);
+    app.scroll_up(12);
+    let notes = |rows: Vec<String>| -> Vec<String> {
+        rows.into_iter()
+            .filter(|row| row.contains("note "))
+            .collect()
+    };
+    let before = render_rows(&mut app, 100);
+    assert!(before.join("\n").contains("↓ 12 lines below"));
+
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("first\nsecond\nthird".to_string()));
+    let after = render_rows(&mut app, 100);
+    let screen = after.join("\n");
+    assert!(!screen.contains("third"), "{screen}");
+    assert!(screen.contains("lines below"), "{screen}");
+    assert_eq!(notes(after), notes(before));
+
+    app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+    let screen = render_rows(&mut app, 100).join("\n");
+    assert!(screen.contains("third"), "{screen}");
+    assert!(!screen.contains("lines below"), "{screen}");
+}
+
+#[test]
+fn test_cached_chat_lines_follow_message_edits() {
+    use crate::components::{Message, MessageRole};
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("draft".to_string()));
+    render_rows(&mut app, 100);
+    app.process_command(UiCommand::AppendText(" reply".to_string()));
+    app.add_message(Message::new(MessageRole::User, "next"));
+    let screen = render_rows(&mut app, 100).join("\n");
+    assert!(screen.contains("draft reply"), "{screen}");
+    assert!(screen.contains("next"), "{screen}");
+
+    let narrow = render_rows(&mut app, 60).join("\n");
+    assert!(narrow.contains("draft reply"), "{narrow}");
+}
+
+#[test]
 fn test_command_input_is_highlighted() {
     let theme = test_theme();
     let mut app = app_with_model(None);
@@ -829,10 +829,8 @@ fn test_command_output_renders_like_a_terminal() {
 
     let buffer = render_buffer(&mut app, 120);
     let rows = render_rows(&mut app, 120);
-    let echo = rows
-        .iter()
-        .position(|r| r.contains("<YOU>  ls -la"))
-        .unwrap();
+    let echo = rows.iter().position(|r| r.contains("ls -la")).unwrap();
+    assert!(rows[echo - 1].contains("YOU  "), "{:?}", rows[echo - 1]);
     assert!(!rows.join("\n").contains("[u@h d]$ ls"));
     let total = &rows[echo + 1];
     let listing = &rows[echo + 2];
@@ -866,9 +864,7 @@ fn test_failed_command_shows_exit_code() {
     });
 
     let rows = render_rows(&mut app, 120);
-    let echo = rows
-        .iter()
-        .position(|r| r.contains("<YOU>  false"))
-        .unwrap();
+    let echo = rows.iter().position(|r| r.contains("YOU  ")).unwrap() + 1;
+    assert!(rows[echo].contains("false"), "{:?}", rows[echo]);
     assert!(rows[echo + 1].contains("exit 1"), "{:?}", rows[echo + 1]);
 }

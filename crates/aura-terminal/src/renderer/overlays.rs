@@ -1,9 +1,10 @@
 //! Overlay rendering: approval modal, help, record detail, notifications.
 
-use super::markdown::parse_markdown_line;
+use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::{
     app::{AppState, NotificationType},
+    components::CodeBlock,
     App, Theme,
 };
 use ratatui::{
@@ -147,7 +148,7 @@ fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 27;
+    let modal_height = 28;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -189,6 +190,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "Alt+↑/↓    Switch agent",
         "Mouse      Wheel/click agents to switch",
         "PgUp/PgDn  Scroll chat history",
+        "Ctrl+Home/End  Chat top/bottom",
         "Shift+Mouse Select text to copy",
         "Ctrl+C     Cancel/Exit",
         "",
@@ -261,7 +263,7 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
         build_error_section(&mut content, record, modal_width, theme);
     }
 
-    build_message_section(&mut content, record, theme);
+    build_message_section(&mut content, record, modal_width, theme);
 
     content.push(Line::from(""));
     content.push(Line::from(Span::styled(
@@ -477,9 +479,10 @@ fn build_error_section<'a>(
     }
 }
 
-fn build_message_section<'a>(
-    content: &mut Vec<Line<'a>>,
-    record: &'a crate::events::RecordSummary,
+fn build_message_section(
+    content: &mut Vec<Line<'_>>,
+    record: &crate::events::RecordSummary,
+    modal_width: u16,
     theme: &Theme,
 ) {
     content.push(Line::from(""));
@@ -489,12 +492,15 @@ fn build_message_section<'a>(
     )));
 
     let base_style = Style::default().fg(theme.colors.foreground);
-    for line in record.message.lines() {
-        if line.is_empty() {
-            content.push(Line::from(""));
-        } else {
-            let spans = parse_markdown_line(line, base_style, theme);
-            content.push(Line::from(spans));
+    let width = usize::from(modal_width.saturating_sub(2));
+    for segment in parse_content_segments(&record.message) {
+        match segment {
+            ContentSegment::Text(text) => {
+                content.extend(render_markdown(&text, width, base_style, theme));
+            }
+            ContentSegment::CodeBlock { language, code } => {
+                content.extend(CodeBlock::new(language, code).render(theme, width));
+            }
         }
     }
 }

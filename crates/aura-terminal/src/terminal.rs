@@ -2,7 +2,7 @@
 //!
 //! Provides a high-level interface for terminal operations using ratatui and crossterm.
 
-use crate::{layout::LayoutMode, renderer, App, Theme};
+use crate::{clipboard, layout::LayoutMode, renderer, App, Theme};
 use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
@@ -15,6 +15,10 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal as RatatuiTerminal};
 use std::io::{self, Stdout};
 use std::time::Duration;
 use tracing::error;
+
+/// Most queued input events handled between two frames, so a flood of
+/// input still lets the screen update.
+const MAX_EVENTS_PER_FRAME: usize = 256;
 
 /// Terminal wrapper providing high-level UI operations.
 pub struct Terminal {
@@ -109,74 +113,97 @@ impl Terminal {
 
             // Render current state
             let theme = self.theme.clone();
-            self.inner.draw(|frame| {
+            let frame = self.inner.draw(|frame| {
                 renderer::render(frame, app, &theme);
             })?;
+            if let Some(text) = app.take_copy_text(frame.buffer) {
+                let result = clipboard::copy(self.inner.backend_mut(), &text);
+                app.notify_copied(text.chars().count(), &result);
+            }
 
-            // Poll for events with timeout for animations
-            if event::poll(Duration::from_millis(50))? {
-                match event::read()? {
-                    Event::Key(key) => {
-                        // Re-enable mouse capture if it was disabled for text selection
-                        if !self.mouse_capture_enabled {
-                            let _ = execute!(self.inner.backend_mut(), EnableMouseCapture);
-                            self.mouse_capture_enabled = true;
-                        }
-
-                        // Only process key press events (not release or repeat)
-                        // This fixes double-character input on Windows
-                        if key.kind != KeyEventKind::Press {
-                            continue;
-                        }
-
-                        if key.code == KeyCode::Char('c')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            // Ctrl+C: cancel or quit
-                            if app.is_processing() {
-                                app.cancel();
-                            } else {
-                                break;
-                            }
-                        } else if key.code == KeyCode::Char('d')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            // Ctrl+D: quit
-                            break;
-                        } else if app.handle_key(key).should_quit() {
-                            break;
-                        }
-                    }
-                    Event::Resize(width, height) => {
-                        self.width = width;
-                        self.height = height;
-                    }
-                    Event::Mouse(mouse) => {
-                        // When Shift is held, disable mouse capture to allow terminal's
-                        // native text selection (Shift+click+drag to select, auto-copies
-                        // to clipboard in most terminal emulators like Windows Terminal)
-                        if mouse.modifiers.contains(KeyModifiers::SHIFT) {
-                            if self.mouse_capture_enabled {
-                                let _ = execute!(self.inner.backend_mut(), DisableMouseCapture);
-                                self.mouse_capture_enabled = false;
-                            }
-                            continue;
-                        }
-
-                        // Re-enable mouse capture if it was disabled for selection
-                        if !self.mouse_capture_enabled {
-                            let _ = execute!(self.inner.backend_mut(), EnableMouseCapture);
-                            self.mouse_capture_enabled = true;
-                        }
-
-                        app.handle_mouse(mouse);
-                    }
-                    _ => {}
+            // Poll for events with timeout for animations, then take every
+            // event already queued before drawing again, so a burst of wheel
+            // ticks or key repeats costs one frame instead of one frame each.
+            if !event::poll(Duration::from_millis(50))? {
+                continue;
+            }
+            for _ in 0..MAX_EVENTS_PER_FRAME {
+                if self.handle_event(app, &event::read()?) {
+                    return Ok(());
+                }
+                // A copy reads the next frame, so draw it before later input
+                // can clear the selection.
+                if app.copy_pending() || !event::poll(Duration::ZERO)? {
+                    break;
                 }
             }
         }
+    }
 
-        Ok(())
+    /// Apply one terminal event to `app`. Returns `true` to quit.
+    fn handle_event(&mut self, app: &mut App, event: &Event) -> bool {
+        match *event {
+            Event::Key(key) => {
+                // Re-enable mouse capture if it was disabled for text selection
+                self.enable_mouse_capture();
+
+                // Only process key press events (not release or repeat)
+                // This fixes double-character input on Windows
+                if key.kind != KeyEventKind::Press {
+                    return false;
+                }
+
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    // Ctrl+C: copy the mouse selection, else cancel or quit
+                    if app.request_copy() {
+                        return false;
+                    }
+                    if !app.is_processing() {
+                        return true;
+                    }
+                    app.cancel();
+                    false
+                } else if key.code == KeyCode::Char('d')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    // Ctrl+D: quit
+                    true
+                } else {
+                    app.handle_key(key).should_quit()
+                }
+            }
+            Event::Resize(width, height) => {
+                self.width = width;
+                self.height = height;
+                app.clear_selection();
+                false
+            }
+            Event::Mouse(mouse) => {
+                // When Shift is held, disable mouse capture to allow terminal's
+                // native text selection (Shift+click+drag to select, auto-copies
+                // to clipboard in most terminal emulators like Windows Terminal)
+                if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                    if self.mouse_capture_enabled {
+                        let _ = execute!(self.inner.backend_mut(), DisableMouseCapture);
+                        self.mouse_capture_enabled = false;
+                    }
+                    return false;
+                }
+
+                // Re-enable mouse capture if it was disabled for selection
+                self.enable_mouse_capture();
+                app.handle_mouse(mouse);
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn enable_mouse_capture(&mut self) {
+        if !self.mouse_capture_enabled {
+            let _ = execute!(self.inner.backend_mut(), EnableMouseCapture);
+            self.mouse_capture_enabled = true;
+        }
     }
 
     /// Render a single frame (for testing or custom loops).

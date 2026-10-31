@@ -1,13 +1,7 @@
 //! Panel rendering: Chat, Swarm, Record, and Thinking section.
 
-use super::command::shell_lines;
-use super::markdown::{parse_content_segments, ContentSegment};
-use super::segments::{message_style, nick_label, render_code_segment, render_text_segment};
 use super::text::{display_width, wrap_words};
-use crate::{
-    app::{PanelFocus, MESSAGE_BODY_INDENT},
-    App, Theme,
-};
+use crate::{app::PanelFocus, App, Theme};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -66,15 +60,18 @@ fn build_thinking_lines(app: &App, area: Rect) -> Vec<String> {
     }
     let max_width = area.width.saturating_sub(2) as usize;
     let mut wrapped_lines: Vec<String> = Vec::new();
-    for line in thinking_content.lines() {
+    for line in thinking_content.lines().rev() {
+        if wrapped_lines.len() >= 3 {
+            break;
+        }
         if line.is_empty() {
-            wrapped_lines.push(String::new());
+            wrapped_lines.insert(0, String::new());
         } else {
-            wrapped_lines.extend(wrap_words(line, max_width));
+            wrapped_lines.splice(0..0, wrap_words(line, max_width));
         }
     }
     let start = wrapped_lines.len().saturating_sub(3);
-    wrapped_lines.into_iter().skip(start).collect()
+    wrapped_lines.split_off(start)
 }
 
 /// Render the Chat panel.
@@ -99,13 +96,9 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         render_thinking_section(frame, think_area, app, theme);
     }
 
-    let padded = Rect {
-        x: messages_area.x.saturating_add(2),
-        y: messages_area.y.saturating_add(1),
-        width: messages_area.width.saturating_sub(4),
-        height: messages_area.height.saturating_sub(1),
-    };
+    let padded = centered_text_area(messages_area);
     app.set_chat_width(padded.width);
+    app.set_chat_text_area(padded);
 
     let working_line = working_indicator_line(app, theme);
     if app.messages().is_empty() && working_line.is_none() {
@@ -113,20 +106,113 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         return;
     }
 
-    let mut lines = build_chat_lines(app, padded.width as usize, theme);
-    lines.extend(working_line);
-    render_scrolled_lines(frame, padded, app, lines);
+    render_chat_lines(frame, padded, app, theme, working_line.as_ref());
+    render_lines_below_hint(frame, area, app.scroll_offset(), theme);
 }
 
-/// `           <AURA> ⠹ thinking… 12s` — shown below the conversation while a
-/// turn is in flight and no reply text is streaming.
+/// Draw the rows of the conversation that fall in `padded` at the current
+/// scroll position, cloning only those rows out of the line cache.
+fn render_chat_lines(
+    frame: &mut Frame,
+    padded: Rect,
+    app: &mut App,
+    theme: &Theme,
+    working_line: Option<&Line<'static>>,
+) {
+    let (messages, cache) = app.chat_line_cache();
+    let reflowed = cache.update(messages, padded.width as usize, theme);
+    let separators = messages.len().saturating_sub(1);
+    let message_rows = messages.iter().map(|m| cache.lines(m).len()).sum::<usize>() + separators;
+    let working_rows = match working_line {
+        Some(_) if message_rows > 0 => 2,
+        Some(_) => 1,
+        None => 0,
+    };
+    let start = app.sync_chat_scroll(
+        message_rows + working_rows,
+        padded.height as usize,
+        reflowed,
+    );
+
+    let (messages, cache) = app.chat_line_cache();
+    let blank = Line::default();
+    let working = working_line
+        .into_iter()
+        .flat_map(|line| [(message_rows > 0).then_some(&blank), Some(line)])
+        .flatten();
+    let visible: Vec<Line> = messages
+        .iter()
+        .enumerate()
+        .flat_map(|(i, message)| {
+            (i > 0)
+                .then_some(&blank)
+                .into_iter()
+                .chain(cache.lines(message))
+        })
+        .chain(working)
+        .skip(start)
+        .take(padded.height as usize)
+        .cloned()
+        .collect();
+    frame.render_widget(Paragraph::new(visible), padded);
+}
+
+/// `↓ 42 lines below` on the chat panel's bottom border while scrolled up.
+fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: &Theme) {
+    if below == 0 || panel.width < 4 || panel.height < 2 {
+        return;
+    }
+    let label = format!(
+        " ↓ {below} line{} below ",
+        if below == 1 { "" } else { "s" }
+    );
+    let border_row = Rect {
+        x: panel.x + 1,
+        y: panel.y + panel.height - 1,
+        width: panel.width - 2,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            label,
+            Style::default().fg(theme.colors.primary),
+        )))
+        .alignment(ratatui::layout::Alignment::Right),
+        border_row,
+    );
+}
+
+/// Narrowest gap kept between the chat text and each side of the panel.
+const CHAT_SIDE_MARGIN: u16 = 4;
+
+/// Widest the chat text runs; wider panels grow the side margins instead.
+const CHAT_MAX_TEXT_WIDTH: u16 = 100;
+
+/// The chat text column, horizontally centered in `area` below a blank row.
+pub(super) fn centered_text_area(area: Rect) -> Rect {
+    let width = area
+        .width
+        .saturating_sub(CHAT_SIDE_MARGIN * 2)
+        .min(CHAT_MAX_TEXT_WIDTH);
+    Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y.saturating_add(1),
+        width,
+        height: area.height.saturating_sub(1),
+    }
+}
+
+/// `AURA  ⠹ thinking… 12s` — shown below the conversation while a turn is
+/// in flight and no reply text is streaming.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     let label = app.working_label()?;
     let mut spans = vec![
-        // Blank where the timestamp column sits, so the nick lines up.
-        Span::raw(" ".repeat(11)),
-        Span::styled(nick_label("AURA"), Style::default().fg(theme.colors.muted)),
-        Span::raw(" "),
+        Span::styled(
+            "AURA  ",
+            Style::default()
+                .fg(theme.colors.muted)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             format!("{} ", app.spinner_char()),
             Style::default().fg(theme.colors.secondary),
@@ -186,70 +272,6 @@ fn render_welcome(frame: &mut Frame, area: Rect, theme: &Theme) {
         )),
     ];
     frame.render_widget(Paragraph::new(welcome), area);
-}
-
-fn build_chat_lines<'a>(app: &App, content_width: usize, theme: &Theme) -> Vec<Line<'a>> {
-    let mut lines: Vec<Line> = Vec::new();
-
-    for message in app.messages() {
-        let timestamp = message.timestamp_local();
-        if let Some(run) = message.shell_run() {
-            lines.extend(shell_lines(run, &timestamp, content_width, theme));
-            continue;
-        }
-        let (nick, nick_color, msg_color) = message_style(message.role(), theme);
-        let prefix_width = MESSAGE_BODY_INDENT;
-        let first_line_width = content_width.saturating_sub(prefix_width);
-        let continuation_width = content_width.saturating_sub(prefix_width);
-
-        let mut is_first_output_line = true;
-        let segments = parse_content_segments(message.content());
-
-        for segment in segments {
-            match segment {
-                ContentSegment::Text(text) => render_text_segment(
-                    &mut lines,
-                    &text,
-                    &mut is_first_output_line,
-                    &timestamp,
-                    nick,
-                    nick_color,
-                    msg_color,
-                    prefix_width,
-                    first_line_width,
-                    continuation_width,
-                    message.role(),
-                    theme,
-                ),
-                ContentSegment::CodeBlock { language, code } => render_code_segment(
-                    &mut lines,
-                    &language,
-                    &code,
-                    &mut is_first_output_line,
-                    &timestamp,
-                    nick,
-                    nick_color,
-                    prefix_width,
-                    continuation_width,
-                    theme,
-                ),
-            }
-        }
-    }
-    lines
-}
-
-fn render_scrolled_lines(frame: &mut Frame, padded: Rect, app: &mut App, lines: Vec<Line<'_>>) {
-    let visible_height = padded.height as usize;
-    let total_lines = lines.len();
-    let bottom_start = total_lines.saturating_sub(visible_height);
-
-    app.clamp_scroll(bottom_start);
-    let scroll_offset = app.scroll_offset();
-    let start = bottom_start.saturating_sub(scroll_offset);
-
-    let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(visible_height).collect();
-    frame.render_widget(Paragraph::new(visible_lines), padded);
 }
 
 /// Hint shown at the bottom of the Agents panel.
@@ -384,7 +406,7 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
 }
 
 /// Render the Record panel.
-pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
     let border_color = if is_focused {
         theme.colors.primary
@@ -406,17 +428,10 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &App, them
         return;
     }
 
-    let lines = build_record_lines(app, inner, theme);
-
-    let selected = app.selected_record();
-    let visible_height = inner.height as usize;
-    let scroll = if selected >= visible_height {
-        selected.saturating_sub(visible_height / 2)
-    } else {
-        0
-    };
-    let visible_lines: Vec<Line> = lines.into_iter().skip(scroll).collect();
-    frame.render_widget(Paragraph::new(visible_lines), inner);
+    let visible = inner.height as usize;
+    let scroll = app.sync_records_scroll(visible);
+    let lines = build_record_lines(app, inner, scroll, visible, theme);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_empty_records(frame: &mut Frame, inner: Rect, theme: &Theme) {
@@ -439,14 +454,21 @@ fn render_empty_records(frame: &mut Frame, inner: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(empty_msg), inner);
 }
 
-fn build_record_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+/// Lines for the `rows` records starting at index `first`.
+fn build_record_lines<'a>(
+    app: &App,
+    inner: Rect,
+    first: usize,
+    rows: usize,
+    theme: &Theme,
+) -> Vec<Line<'a>> {
     use crate::events::RecordStatus;
 
     let is_focused = app.focus() == PanelFocus::Records;
     let selected = app.selected_record();
     let mut lines: Vec<Line> = Vec::new();
 
-    for (i, record) in app.records().iter().enumerate() {
+    for (i, record) in app.records().iter().enumerate().skip(first).take(rows) {
         let is_selected = i == selected;
         let prefix = if is_selected && is_focused { ">" } else { " " };
 

@@ -1,5 +1,6 @@
 //! Simple IRC-style renderer for the terminal UI.
 
+mod chat_lines;
 mod command;
 mod input;
 mod markdown;
@@ -7,10 +8,13 @@ mod overlays;
 mod panels;
 mod sandbox;
 mod segments;
+mod slash_menu;
 mod text;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use chat_lines::ChatLineCache;
 
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{
@@ -61,6 +65,9 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
+    if let Some(selection) = app.selection() {
+        selection.highlight(frame.buffer_mut());
+    }
     let chat_left = chat.x.saturating_sub(input_row.x);
 
     input::render_input(frame, input_row, app, theme, chat_left);
@@ -71,6 +78,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         input_rule,
     );
 
+    slash_menu::render_slash_menu(frame, chat, app, theme);
     overlays::render_overlays(frame, app, theme);
 }
 

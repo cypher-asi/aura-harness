@@ -1,6 +1,6 @@
 //! Key event handling for the App.
 
-use super::{App, AppState, NotificationType, PanelFocus};
+use super::{line_edit::LineEdit, App, AppState, NotificationType, PanelFocus};
 use crate::{events::UiEvent, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -8,6 +8,7 @@ impl App {
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         self.notification = None;
+        self.clear_selection();
 
         if self.showing_record_detail {
             if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
@@ -101,27 +102,9 @@ impl App {
                     _ => {}
                 }
             }
-            KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
+            _ => {
+                self.edit_input(key);
             }
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                    self.input.remove(self.cursor_pos);
-                }
-            }
-            KeyCode::Left => {
-                self.cursor_pos = self.cursor_pos.saturating_sub(1);
-            }
-            KeyCode::Right => {
-                if self.cursor_pos < self.input.len() {
-                    self.cursor_pos += 1;
-                }
-            }
-            KeyCode::Home => self.cursor_pos = 0,
-            KeyCode::End => self.cursor_pos = self.input.len(),
-            _ => {}
         }
         KeyResult::continue_running()
     }
@@ -153,6 +136,9 @@ impl App {
 
     /// Handle key in normal mode.
     fn handle_normal_key(&mut self, key: KeyEvent) -> KeyResult {
+        if let Some(result) = self.handle_slash_menu_key(key) {
+            return result;
+        }
         if key.code == KeyCode::Tab {
             self.focus = self.next_panel_focus();
             return KeyResult::continue_running();
@@ -175,12 +161,18 @@ impl App {
             }
         }
 
+        let word_motion = key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match key.code {
             KeyCode::Char(_)
             | KeyCode::Backspace
             | KeyCode::Delete
             | KeyCode::Home
             | KeyCode::End => {
+                return self.handle_chat_key(key);
+            }
+            KeyCode::Left | KeyCode::Right if word_motion || !self.input.is_empty() => {
                 return self.handle_chat_key(key);
             }
             KeyCode::Enter => {
@@ -224,64 +216,56 @@ impl App {
     }
 
     /// Handle key when chat panel is focused.
-    fn handle_chat_key(&mut self, key: KeyEvent) -> KeyResult {
+    pub(super) fn handle_chat_key(&mut self, key: KeyEvent) -> KeyResult {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Home => {
+                    self.scroll_chat_to_top();
+                    return KeyResult::continue_running();
+                }
+                KeyCode::End => {
+                    self.scroll_chat_to_bottom();
+                    return KeyResult::continue_running();
+                }
+                _ => {}
+            }
+        }
+        if let Some(edit) = self.edit_input(key) {
+            if edit == LineEdit::Changed {
+                self.reset_slash_menu();
+            }
+            return KeyResult::continue_running();
+        }
         match key.code {
             KeyCode::Enter => {
                 if !self.input.is_empty() && self.state != AppState::Processing {
                     return self.submit_input();
                 }
             }
-            KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
-            }
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                    self.input.remove(self.cursor_pos);
-                }
-            }
-            KeyCode::Delete => {
-                if self.cursor_pos < self.input.len() {
-                    self.input.remove(self.cursor_pos);
-                }
-            }
-            KeyCode::Left => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if self.cursor_pos < self.input.len() {
-                    self.cursor_pos += 1;
-                }
-            }
-            KeyCode::Home => {
-                self.cursor_pos = 0;
-            }
-            KeyCode::End => {
-                self.cursor_pos = self.input.len();
-            }
+            // A recalled `/command` keeps the slash menu closed so Up/Down
+            // stay on history.
             KeyCode::Up => {
                 if let Some(prev) = self.input_history.previous() {
                     self.input = prev.to_string();
                     self.cursor_pos = self.input.len();
+                    self.slash_dismissed = true;
                 }
             }
             KeyCode::Down => {
                 if let Some(newer) = self.input_history.next_newer() {
                     self.input = newer.to_string();
                     self.cursor_pos = self.input.len();
+                    self.slash_dismissed = true;
                 } else {
                     self.input.clear();
                     self.cursor_pos = 0;
                 }
             }
             KeyCode::PageUp => {
-                self.scroll_up(5);
+                self.scroll_up(self.chat_page_rows());
             }
             KeyCode::PageDown => {
-                self.scroll_down(5);
+                self.scroll_down(self.chat_page_rows());
             }
             _ => {}
         }
@@ -384,6 +368,7 @@ impl App {
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
         self.input_history.add(&text);
+        self.scroll_chat_to_bottom();
 
         if text.starts_with('/') {
             return self.handle_command(&text);
