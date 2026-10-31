@@ -84,10 +84,14 @@ member crates.
 
 ##### Changed
 
-- `README.md`: four principles (per-agent audit log, mediated
-  effects, one writer per agent, the wire API is the contract),
-  invariants grouped under them, 39-crate tables, `--mode` and
-  `RuntimeRequest.mode` documented.
+- `README.md` is now a short landing page: what AURA is, the four
+  principles (per-agent audit log, mediated effects, one writer per
+  agent, the wire API is the contract), how to run, links to the
+  reference pages, directory structure and license. The reference
+  material moved to new pages: `docs/running.md`, `docs/api.md`
+  (now listing every route, including workspace, secrets and
+  processes), `docs/cli.md`, `docs/configuration.md` and
+  `docs/development.md`.
 - `docs/invariants.md`: reorganized under the four principles with
   every `§N` anchor preserved; adds §4.0 (mode gate), a definition
   of "deterministic", and corrects §5.a (AuditedLite replay ends in
