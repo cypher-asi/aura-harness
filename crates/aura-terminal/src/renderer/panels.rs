@@ -220,7 +220,6 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     };
 
     let block = Block::default()
-        .title(" AGENTS ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 

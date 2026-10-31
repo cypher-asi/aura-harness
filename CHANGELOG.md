@@ -73,7 +73,8 @@ start agents of their own. One node-wide `AgentHost` in
 
 ### Terminal — permanent agents
 
-The terminal's AGENTS panel has two tabs. **Projects** lists the live
+The terminal's agents panel has two tabs (it has no border title; the
+tab bar names it). **Projects** lists the live
 agents, and **Agents** is the roster of permanent agents: reusable
 definitions that any agent can spawn by name. With the panel focused,
 ←/→ switches tabs, and clicking a tab shows it.

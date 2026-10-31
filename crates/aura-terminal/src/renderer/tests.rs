@@ -224,7 +224,7 @@ fn test_default_layout_shows_agents_column() {
 
     let rows = render_rows(&mut app, 120);
     let screen = rows.join("\n");
-    assert!(screen.contains("AGENTS"));
+    assert!(!screen.contains("AGENTS"));
     assert!(screen.contains("CHAT"));
     assert!(screen.contains("RECORD"));
     assert!(rows
