@@ -5,6 +5,7 @@ use crate::gateway::{create_router, RouterState};
 use anyhow::Context;
 use aura_agent::KernelModelGateway;
 use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig};
+use aura_automaton::AutomatonRuntime;
 use aura_context_memory::{
     ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
     WriteConfig, DEFAULT_MEMORY_MODEL,
@@ -15,7 +16,6 @@ use aura_domain_http::HttpDomainApi;
 use aura_engine::automaton::AutomatonBridge;
 use aura_engine::scheduler::Scheduler;
 use aura_store_db::RocksStore;
-use aura_surface_automaton::AutomatonRuntime;
 use aura_tools::automaton_tools::AutomatonController;
 use aura_tools::catalog::ToolProfile;
 use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};

@@ -1,19 +1,22 @@
 //! Event processing loop for the terminal UI mode.
 
 pub(crate) mod agent_events;
+pub(crate) mod agents;
 pub(crate) mod handlers;
 pub(crate) mod record_ui;
 
 pub(crate) use agent_events::forward_agent_events;
+pub use agents::{AgentSession, KernelFactory};
 pub(crate) use record_ui::send_record_to_ui;
 
+use crate::agent_registry::AgentRegistry;
 use crate::model_selection::ModelSelection;
-
-use aura_agent::{AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager};
+use aura_agent::{AgentLoop, ProcessManager};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::{UiCommand, UiEvent};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -26,11 +29,12 @@ pub struct EventLoopContext<'a> {
     pub process_completions: mpsc::Receiver<Transaction>,
     pub commands: mpsc::Sender<UiCommand>,
     pub agent_loop: &'a mut AgentLoop,
-    pub model_gateway: &'a KernelModelGateway,
-    pub tool_gateway: &'a KernelToolGateway,
     pub tools: &'a [ToolDefinition],
-    pub kernel: Arc<Kernel>,
-    pub agent_id: AgentId,
+    /// Session for the agent shown when the loop starts.
+    pub session: AgentSession,
+    /// Builds kernels for agents selected later in the run.
+    pub factory: KernelFactory,
+    pub registry: AgentRegistry,
     pub _process_manager: Arc<ProcessManager>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
@@ -40,16 +44,43 @@ pub struct EventLoopContext<'a> {
 
 /// Mutable state threaded through all event handlers.
 pub(super) struct LoopState<'a> {
-    pub(super) messages: Vec<Message>,
     pub(super) commands: &'a mpsc::Sender<UiCommand>,
     pub(super) agent_loop: &'a mut AgentLoop,
-    pub(super) model_gateway: &'a KernelModelGateway,
-    pub(super) tool_gateway: &'a KernelToolGateway,
     pub(super) tools: &'a [ToolDefinition],
-    pub(super) kernel: Arc<Kernel>,
-    pub(super) agent_id: AgentId,
     pub(super) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     pub(super) models: ModelSelection,
+    /// The agent the UI is showing; user messages go here.
+    pub(super) session: AgentSession,
+    /// Previously opened agents, kept so their conversations survive switching.
+    pub(super) parked: HashMap<AgentId, AgentSession>,
+    pub(super) factory: KernelFactory,
+    pub(super) registry: AgentRegistry,
+}
+
+impl LoopState<'_> {
+    fn kernel_for(&self, agent_id: AgentId) -> Option<&Arc<Kernel>> {
+        if agent_id == self.session.agent_id() {
+            Some(&self.session.kernel)
+        } else {
+            self.parked.get(&agent_id).map(|s| &s.kernel)
+        }
+    }
+}
+
+/// Point the memory observer at the active agent. The TUI installs no
+/// other observers, so the list is rebuilt from scratch.
+fn install_memory_observer(state: &mut LoopState<'_>) {
+    if let Some(ref mm) = state.memory_manager {
+        let observers = &mut state.agent_loop.config_mut().observers;
+        observers.clear();
+        observers.push(aura_engine::memory_observer::MemoryTurnObserver::new(
+            Arc::clone(mm),
+            state.session.agent_id(),
+            None,
+            Vec::new(),
+            None,
+        ));
+    }
 }
 
 /// Run the event processing loop.
@@ -61,40 +92,27 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         mut process_completions,
         commands,
         agent_loop,
-        model_gateway,
-        tool_gateway,
         tools,
-        kernel,
-        agent_id,
+        session,
+        factory,
+        registry,
         _process_manager,
         memory_manager,
         models,
     } = ctx;
 
-    if let Some(ref mm) = memory_manager {
-        agent_loop.config_mut().observers.push(
-            aura_engine::memory_observer::MemoryTurnObserver::new(
-                Arc::clone(mm),
-                agent_id,
-                None,
-                Vec::new(),
-                None,
-            ),
-        );
-    }
-
     let mut state = LoopState {
-        messages: Vec::new(),
         commands: &commands,
         agent_loop,
-        model_gateway,
-        tool_gateway,
         tools,
-        kernel,
-        agent_id,
         memory_manager,
         models,
+        session,
+        parked: HashMap::new(),
+        factory,
+        registry,
     };
+    install_memory_observer(&mut state);
 
     handlers::announce_models(&mut state).await;
 
@@ -122,25 +140,34 @@ async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction
         "Processing async process completion"
     );
 
-    let store = state.kernel.store();
+    let agent_id = completion_tx.agent_id;
+    let Some(kernel) = state.kernel_for(agent_id).cloned() else {
+        warn!(%agent_id, "Process completion for an agent with no open kernel");
+        return;
+    };
+    let store = kernel.store();
 
     if let Err(e) = store.enqueue_tx(&completion_tx) {
         error!(error = %e, "Failed to enqueue completion transaction");
         return;
     }
 
-    if let Ok(Some((token, tx))) = store.dequeue_tx(state.agent_id) {
-        match state.kernel.process_dequeued(tx.clone(), token).await {
+    if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
+        match kernel.process_dequeued(tx.clone(), token).await {
             Ok(result) => {
                 debug!(
                     seq = result.entry.seq,
                     "Completion record persisted via kernel"
                 );
-                send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
-                let _ = state
-                    .commands
-                    .send(UiCommand::SetStatus("Process completed".to_string()))
-                    .await;
+                if agent_id == state.session.agent_id() {
+                    send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
+                    let _ = state
+                        .commands
+                        .send(UiCommand::SetStatus("Process completed".to_string()))
+                        .await;
+                } else {
+                    agents::send_agent_list(state).await;
+                }
             }
             Err(e) => {
                 error!(error = %e, "Failed to persist completion record via kernel");
@@ -154,6 +181,7 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
     match event {
         UiEvent::UserMessage(text) => {
             handle_user_message(state, text).await;
+            agents::send_agent_list(state).await;
         }
         UiEvent::Approve(_id) => debug!("Approval received"),
         UiEvent::Deny(_id) => debug!("Denial received"),
@@ -174,8 +202,9 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
             let _ = state.commands.send(UiCommand::ClearConversation).await;
         }
         UiEvent::NewSession => handlers::handle_new_session(state).await,
-        UiEvent::SelectAgent(_) => debug!("Agent selection not yet implemented"),
-        UiEvent::RefreshAgents => debug!("Agent refresh not yet implemented"),
+        UiEvent::SelectAgent(agent_hex) => agents::handle_select_agent(state, &agent_hex).await,
+        UiEvent::CreateAgent(name) => agents::handle_create_agent(state, name).await,
+        UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,
         UiEvent::LoginCredentials { email, password } => {
             handlers::handle_login(state, &email, &password).await;
         }
@@ -201,7 +230,12 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
         None => return,
     };
 
-    let prompt_result = match state.kernel.process_dequeued(tx.clone(), token).await {
+    let prompt_result = match state
+        .session
+        .kernel
+        .process_dequeued(tx.clone(), token)
+        .await
+    {
         Ok(result) => result,
         Err(e) => {
             error!(error = %e, "Failed to persist prompt record via kernel");
@@ -221,11 +255,11 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     )
     .await;
 
-    state.messages.push(Message::user(text));
+    state.session.messages.push(Message::user(text));
 
     if let Some(ref mm) = state.memory_manager {
         mm.prepare_context(
-            state.agent_id,
+            state.session.agent_id(),
             &mut state.agent_loop.config_mut().system_prompt,
         )
         .await;
@@ -249,15 +283,15 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
 }
 
 async fn drain_stale_inbox(state: &mut LoopState<'_>) {
-    let store = state.kernel.store();
+    let store = state.session.kernel.store();
     let mut stale_count = 0;
-    while let Ok(Some((token, tx))) = store.dequeue_tx(state.agent_id) {
+    while let Ok(Some((token, tx))) = store.dequeue_tx(state.session.agent_id()) {
         warn!(
             stale_inbox_seq = token.inbox_seq(),
             stale_tx_type = ?tx.tx_type,
             "Discarding stale inbox transaction"
         );
-        match state.kernel.process_dequeued(tx, token).await {
+        match state.session.kernel.process_dequeued(tx, token).await {
             Ok(_result) => {
                 stale_count += 1;
             }
@@ -277,8 +311,8 @@ async fn enqueue_and_dequeue(
     state: &mut LoopState<'_>,
     text: &str,
 ) -> Option<(Transaction, aura_store_db::DequeueToken)> {
-    let store = state.kernel.store();
-    let tx = Transaction::user_prompt(state.agent_id, text.to_string());
+    let store = state.session.kernel.store();
+    let tx = Transaction::user_prompt(state.session.agent_id(), text.to_string());
     if let Err(e) = store.enqueue_tx(&tx) {
         error!(error = %e, "Failed to enqueue transaction");
         let _ = state
@@ -289,7 +323,7 @@ async fn enqueue_and_dequeue(
         return None;
     }
 
-    let (token, dequeued_tx) = match store.dequeue_tx(state.agent_id) {
+    let (token, dequeued_tx) = match store.dequeue_tx(state.session.agent_id()) {
         Ok(Some(item)) => item,
         Ok(None) => {
             error!("Transaction was enqueued but not found in inbox");

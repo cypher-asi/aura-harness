@@ -20,5 +20,7 @@
 mod check;
 mod config;
 
-pub use check::{Policy, PolicyResult, PolicyVerdict};
+pub use check::{
+    gated_action, tool_mode_class, Policy, PolicyResult, PolicyVerdict, ToolModeClass,
+};
 pub use config::PolicyConfig;

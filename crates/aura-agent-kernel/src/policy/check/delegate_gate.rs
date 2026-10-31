@@ -1,9 +1,9 @@
 //! [`ActionKind::Delegate`] proposal parsing and evaluation.
 //!
 //! A `Delegate` proposal carries a serialized [`ToolCall`] in its
-//! payload. The delegate gate parses the payload, runs the per-agent
-//! permission check, then defers to the tool / runtime-capability
-//! checks for the final verdict.
+//! payload. The delegate gate parses the payload, runs the session mode
+//! gate, then the per-agent permission check, then defers to the tool /
+//! runtime-capability checks for the final verdict.
 
 use super::verdict::PolicyVerdict;
 use super::Policy;
@@ -24,6 +24,10 @@ impl Policy {
     ) -> PolicyVerdict {
         match serde_json::from_slice::<ToolCall>(payload) {
             Ok(tool_call) => {
+                if let Some(verdict) = self.check_mode(&tool_call) {
+                    return verdict;
+                }
+
                 if let Some(result) = self.check_agent_permissions(&tool_call) {
                     if !result.allowed {
                         return PolicyVerdict::Deny {

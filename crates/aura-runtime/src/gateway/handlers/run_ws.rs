@@ -168,7 +168,7 @@ async fn forward_automaton_subscription<S>(
     let forward = async {
         let mut saw_done_in_history = false;
         for event in history {
-            let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
+            let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
             match serde_json::to_string(&event) {
                 Ok(json) => {
                     if ws_tx.send(WsMessage::Text(json)).await.is_err() {
@@ -189,7 +189,7 @@ async fn forward_automaton_subscription<S>(
             loop {
                 match live.recv().await {
                     Ok(event) => {
-                        let is_done = matches!(event, aura_surface_automaton::AutomatonEvent::Done);
+                        let is_done = matches!(event, aura_automaton::AutomatonEvent::Done);
                         match serde_json::to_string(&event) {
                             Ok(json) => {
                                 if ws_tx.send(WsMessage::Text(json)).await.is_err() {
@@ -278,7 +278,7 @@ mod tests {
             forward_automaton_subscription(
                 &mut sink,
                 EventSubscription {
-                    history: vec![aura_surface_automaton::AutomatonEvent::Done],
+                    history: vec![aura_automaton::AutomatonEvent::Done],
                     live,
                     already_done: true,
                 },

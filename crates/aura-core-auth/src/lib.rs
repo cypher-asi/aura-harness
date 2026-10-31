@@ -4,9 +4,8 @@
 //!
 //! Pure auth primitive types only — no network, no storage, no
 //! provider implementations. The login flow and credential persistence
-//! live in `aura-auth` (which re-exports the types below for source
-//! compatibility) and will move to `aura-surface-auth` in a later
-//! phase.
+//! live in the surface-layer `aura-auth` crate (which re-exports the
+//! types below for source compatibility).
 //!
 //! ## Invariants
 //!

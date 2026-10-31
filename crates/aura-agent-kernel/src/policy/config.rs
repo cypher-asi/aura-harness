@@ -3,6 +3,7 @@
 //! All behavior-free, data-shape pieces of the policy engine live here so
 //! [`super::check`] can focus on the authorization pipeline itself.
 
+use aura_core_modes::AgentMode;
 use aura_core_types::{
     ActionKind, AgentPermissions, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
     InstalledToolIntegrationRequirement, UserToolDefaults,
@@ -48,6 +49,10 @@ pub struct PolicyConfig {
     /// only that specific tool; anything unlisted still flows through
     /// [`Self::user_default`].
     pub agent_override: Option<AgentToolPermissions>,
+    /// Session mode. Checked before every other gate on `Delegate`
+    /// proposals and can only deny. Defaults to [`AgentMode::Agent`],
+    /// which permits every action class.
+    pub mode: AgentMode,
 }
 
 impl Default for PolicyConfig {
@@ -82,6 +87,7 @@ impl Default for PolicyConfig {
             tool_capability_requirements,
             user_default: UserToolDefaults::full_access(),
             agent_override: None,
+            mode: AgentMode::Agent,
         }
     }
 }
@@ -133,6 +139,13 @@ impl PolicyConfig {
     #[must_use]
     pub fn with_agent_override(mut self, agent_override: Option<AgentToolPermissions>) -> Self {
         self.agent_override = agent_override;
+        self
+    }
+
+    /// Set the session [`AgentMode`].
+    #[must_use]
+    pub fn with_mode(mut self, mode: AgentMode) -> Self {
+        self.mode = mode;
         self
     }
 }

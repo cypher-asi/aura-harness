@@ -299,6 +299,7 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
         },
         auth_jwt: Some("jwt".into()),
         user_id: "user-1".into(),
+        mode: None,
     };
 
     let request_json = serde_json::to_value(&request).unwrap();

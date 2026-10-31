@@ -147,7 +147,7 @@ fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 23;
+    let modal_height = 27;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -171,7 +171,10 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/help      Show this help",
         "/new       New session (reset context)",
         "/clear     Clear messages",
-        "/swarm     Toggle Swarm panel",
+        "/agent new [name]   Create and switch to agent",
+        "/agent <n|name>     Switch to agent",
+        "/agents    Refresh agent list",
+        "/swarm     Toggle agents column",
         "/record    Toggle Record panel",
         "/model     Choose model (local or cloud)",
         "/login     Login for cloud models",
@@ -182,6 +185,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "Enter      Send message",
         "Tab        Switch panels",
         "↑/↓        Navigate / History",
+        "Enter      Switch agent (agents column)",
         "PgUp/PgDn  Scroll chat history",
         "Shift+Mouse Select text to copy",
         "Ctrl+C     Cancel/Exit",

@@ -9,9 +9,6 @@ license.workspace = true
 [dependencies]
 aura-core-modes = { path = "../aura-core-modes" }
 aura-config = { path = "../aura-config" }
-aura-surface-sdk = { path = "../aura-surface-sdk" }
-aura-surface-terminal = { path = "../aura-surface-terminal" }
-aura-surface-auth = { path = "../aura-surface-auth" }
 # Phase 10 carve-out 1: the binary body migration moves the full
 # `aura` and `aura-node` entrypoint logic into this crate, so we
 # now pull in every dep the binaries previously named directly.
@@ -32,7 +29,6 @@ aura-engine = { path = "../aura-engine" }
 aura-plugin-core = { path = "../aura-plugin-core" }
 aura-fleet-spawn = { path = "../aura-fleet-spawn" }
 aura-fleet-registry = { path = "../aura-fleet-registry" }
-aura-fleet-daemon = { path = "../aura-fleet-daemon" }
 clap = { version = "4.5", features = ["derive"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
@@ -57,15 +53,10 @@ tabwriter = "1.4"
 tempfile = { workspace = true }
 tower = { workspace = true }
 
-# Phase 9: aura-surface-cli is the surface-layer composition root.
-# The sibling surface crates are listed as direct dependencies so
-# the binary embedder pulls them in transitively via this single
-# crate — even though `lib.rs` does not name every symbol today
-# (the body migration of `src/main.rs` proceeds incrementally).
-# `aura-config` is similarly held here for the incremental
-# migration of the daemon-config wiring.
+# `aura-fleet-registry` is held for the incremental migration of
+# the fleet wiring into the composition root.
 [package.metadata.cargo-machete]
-ignored = ["aura-surface-sdk", "aura-surface-terminal", "aura-surface-auth", "aura-fleet-daemon", "aura-fleet-registry"]
+ignored = ["aura-fleet-registry"]
 
 [lints]
 workspace = true

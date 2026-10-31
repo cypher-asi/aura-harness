@@ -14,8 +14,10 @@
 //!   active-wins by `id`).
 //!
 //! The skill roots are returned alongside the runtime so the caller
-//! (typically `FleetDaemon`) can hand them to
-//! `aura_context_skills::SkillRegistry::add_plugin_roots`.
+//! can hand them to
+//! `aura_context_skills::SkillRegistry::add_plugin_roots`. No
+//! production composition root calls [`load_enabled_plugins`] yet;
+//! only the `aura-runtime` plugin integration tests do.
 //!
 //! ## Invariants ([rules.md §13])
 //!

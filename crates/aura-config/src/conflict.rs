@@ -1,5 +1,6 @@
-//! Domain-scoped conflict-lock knobs for the future `aura-exec-conflict`
-//! crate (Phase 4a).
+//! Domain-scoped conflict-lock knobs (Phase 4a). Nothing consumes
+//! them yet: the scaffold lock crate that was meant to read them was
+//! removed, and no conflict-lock implementation exists today.
 //!
 //! ## Invariants ([rules.md §13])
 //!

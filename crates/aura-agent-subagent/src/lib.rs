@@ -63,8 +63,8 @@ pub mod registry;
 mod spec;
 
 pub use adapters::{
-    core_to_modes_kernel, core_to_modes_mode, legacy_permissions_to_modes, narrow_permissions,
-    overrides_from_request, parent_context_from_request,
+    core_to_modes_kernel, legacy_permissions_to_modes, narrow_permissions, overrides_from_request,
+    parent_context_from_request,
 };
 pub use derivation::{
     DefaultDerivation, FlowDerivation, SubagentDerivation, SubagentDerivationConfig,

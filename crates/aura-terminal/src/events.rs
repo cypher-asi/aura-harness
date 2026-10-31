@@ -45,6 +45,9 @@ pub enum UiEvent {
     /// User requested the agent list
     RefreshAgents,
 
+    /// User requested a new agent (with optional display name)
+    CreateAgent(Option<String>),
+
     /// User submitted login credentials from the TUI
     LoginCredentials {
         /// Email address
@@ -143,6 +146,9 @@ pub enum UiCommand {
     /// Clear records (when switching agents)
     ClearRecords,
 
+    /// Replace the conversation with an agent's history (when switching agents)
+    LoadConversation(Vec<MessageData>),
+
     /// Set the API status (URL and whether it's active)
     SetApiStatus {
         /// API URL
@@ -184,6 +190,9 @@ pub struct MessageData {
     pub content: String,
     /// Whether the message is still streaming
     pub is_streaming: bool,
+    /// When the message was originally sent (ms since epoch); `None` means now
+    #[serde(default)]
+    pub timestamp_ms: Option<u64>,
 }
 
 /// Message role for display purposes.

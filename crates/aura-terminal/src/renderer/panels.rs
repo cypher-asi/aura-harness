@@ -210,7 +210,7 @@ pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &App, theme
     };
 
     let block = Block::default()
-        .title(" Swarm ")
+        .title(" Agents ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -245,11 +245,11 @@ fn render_empty_swarm(frame: &mut Frame, inner: Rect, theme: &Theme) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Use /swarm to",
+            "  Use /agent new",
             Style::default().fg(theme.colors.muted),
         )),
         Line::from(Span::styled(
-            "  manage agents.",
+            "  to create one.",
             Style::default().fg(theme.colors.muted),
         )),
     ];
@@ -284,10 +284,19 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             Style::default().fg(theme.colors.muted)
         };
 
-        let display_name = truncate_agent_name(&agent.name, inner.width.saturating_sub(4) as usize);
+        let index = format!("{}. ", i + 1);
+        let count = format!(" {}", agent.record_count);
+        let name_width = (inner.width as usize)
+            .saturating_sub(display_width(prefix) + index.len() + count.len())
+            .max(1);
+        let display_name = truncate_agent_name(&agent.name, name_width);
+        let padding = name_width.saturating_sub(display_width(&display_name));
         lines.push(Line::from(vec![
-            Span::styled(format!("{prefix} "), line_style),
+            Span::styled(prefix, line_style),
+            Span::styled(index, line_style),
             Span::styled(display_name, line_style),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(count, Style::default().fg(theme.colors.muted)),
         ]));
     }
     lines
@@ -406,30 +415,84 @@ fn build_record_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>
             Style::default().fg(status_color)
         };
 
-        let info_display = truncate_record_info(&record.info, inner.width as usize);
+        let kind_style = if is_selected && is_focused {
+            line_style
+        } else {
+            Style::default().fg(record_kind_color(&record.tx_kind, theme))
+        };
 
-        lines.push(Line::from(vec![
+        let fixed_spans = vec![
             Span::styled(prefix, line_style),
             Span::styled(format!("#{:<3}", record.seq), line_style),
             Span::styled(format!(" {} ", record.timestamp), line_style),
             Span::styled(status_text, status_style),
-            Span::styled(format!("{:<8}", record.tx_kind), line_style),
-            Span::styled(format!(" {info_display}"), hash_style),
-        ]));
+            Span::styled(format!("{:<8}", record.tx_kind), kind_style),
+        ];
+        let used: usize = fixed_spans.iter().map(|s| display_width(&s.content)).sum();
+        // One column for the separator space before the info text.
+        let available = (inner.width as usize).saturating_sub(used + 1);
+        let info_display = truncate_record_info(&record.info, available);
+
+        let mut spans = fixed_spans;
+        if !info_display.is_empty() {
+            spans.push(Span::styled(format!(" {info_display}"), hash_style));
+        }
+        lines.push(Line::from(spans));
     }
     lines
 }
 
-fn truncate_record_info(info: &str, panel_width: usize) -> String {
-    let fixed_width = 29usize;
-    let available = panel_width.saturating_sub(fixed_width);
-    if info.is_empty() {
-        String::new()
-    } else if info.len() > available && available > 3 {
-        format!("{}…", &info[..available.saturating_sub(1)])
-    } else if info.len() > available {
-        String::new()
-    } else {
-        info.to_string()
+/// Color for the kind column, grouped so tool activity stands out from
+/// conversation and bookkeeping rows.
+fn record_kind_color(kind: &str, theme: &Theme) -> ratatui::style::Color {
+    match kind {
+        "ToolCall" | "ToolRes" | "Action" | "Complete" => theme.colors.secondary,
+        "Prompt" | "Reply" | "Trigger" => theme.colors.primary,
+        "LLM" | "Spawn" => theme.colors.pending,
+        _ => theme.colors.muted,
     }
+}
+
+/// Fit `info` into `max_width` display columns on a single line.
+///
+/// Control characters (including newlines) are folded into spaces so a
+/// row can never spill onto a second line, and truncation is measured in
+/// display width so wide (CJK/emoji) characters never split mid-glyph.
+pub(super) fn truncate_record_info(info: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut single_line = String::with_capacity(info.len());
+    let mut last_was_space = true;
+    for c in info.chars() {
+        if c.is_whitespace() || c.is_control() {
+            if !last_was_space {
+                single_line.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            single_line.push(c);
+            last_was_space = false;
+        }
+    }
+    let single_line = single_line.trim_end();
+
+    if max_width == 0 || single_line.is_empty() {
+        return String::new();
+    }
+    if display_width(single_line) <= max_width {
+        return single_line.to_string();
+    }
+
+    let budget = max_width - 1;
+    let mut truncated = String::new();
+    let mut width = 0;
+    for c in single_line.chars() {
+        let char_width = c.width().unwrap_or(0);
+        if width + char_width > budget {
+            break;
+        }
+        truncated.push(c);
+        width += char_width;
+    }
+    format!("{}…", truncated.trim_end())
 }

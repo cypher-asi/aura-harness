@@ -193,6 +193,130 @@ fn test_panel_focus_equality() {
 }
 
 // ========================================================================
+// Agents column
+// ========================================================================
+
+fn agent(id: &str, name: &str) -> crate::events::AgentSummary {
+    crate::events::AgentSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        zns_id: format!("0://terminal/{id}"),
+        is_active: false,
+        record_count: 0,
+        last_active: "-".to_string(),
+    }
+}
+
+fn app_with_agents() -> (App, mpsc::Receiver<UiEvent>) {
+    let (tx, rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Terminal Agent"),
+        agent("bb", "Researcher"),
+    ]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    (app, rx)
+}
+
+#[test]
+fn test_agents_column_visible_by_default() {
+    assert!(App::new().swarm_panel_visible());
+}
+
+#[test]
+fn test_enter_in_agents_column_selects_agent() {
+    let (mut app, mut rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+}
+
+#[test]
+fn test_enter_on_active_agent_sends_nothing() {
+    let (mut app, mut rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_agent_switch_refused_while_processing() {
+    let (mut app, mut rx) = app_with_agents();
+    app.state = AppState::Processing;
+
+    app.handle_command("/agent 2");
+
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((_, NotificationType::Warning))
+    ));
+}
+
+#[test]
+fn test_agent_command_selects_by_number_and_name() {
+    let (mut app, mut rx) = app_with_agents();
+
+    app.handle_command("/agent 2");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+
+    app.handle_command("/agent researcher");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+
+    app.handle_command("/agent nobody");
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_agent_new_command_emits_create_agent() {
+    let (mut app, mut rx) = app_with_agents();
+
+    app.handle_command("/agent new Code Reviewer");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateAgent(Some(name))) if name == "Code Reviewer"
+    ));
+
+    app.handle_command("/agent new");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+}
+
+#[test]
+fn test_load_conversation_replaces_messages() {
+    let mut app = App::new();
+    app.add_message(Message::new(MessageRole::User, "old"));
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::StartStreaming);
+    app.scroll_offset = 7;
+
+    app.process_command(UiCommand::LoadConversation(vec![
+        crate::events::MessageData {
+            role: MessageRole::User,
+            content: "hi".to_string(),
+            is_streaming: false,
+            timestamp_ms: None,
+        },
+        crate::events::MessageData {
+            role: MessageRole::Assistant,
+            content: "hello".to_string(),
+            is_streaming: false,
+            timestamp_ms: None,
+        },
+    ]));
+
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["hi", "hello"]);
+    assert!(!app.is_thinking());
+    assert!(app.messages().iter().all(|m| !m.is_streaming()));
+    assert_eq!(app.scroll_offset(), 0);
+}
+
+// ========================================================================
 // Notification types
 // ========================================================================
 

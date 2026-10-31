@@ -104,7 +104,7 @@ pub fn build_executor_router() -> (ExecutorRouter, Vec<ToolDefinition>) {
 ///
 /// Previously this helper also probed the OS keyring via
 /// `aura_auth::CredentialStore::load_token`. Phase 9 moves the
-/// keyring lookup to the surface layer (`aura-surface-auth` /
+/// keyring lookup to the surface layer (`aura-auth` /
 /// `aura-surface-cli`) because credential storage is a surface
 /// concern (see plan §5 cross-cutting ownership). The surface
 /// composition root is responsible for composing the env-var

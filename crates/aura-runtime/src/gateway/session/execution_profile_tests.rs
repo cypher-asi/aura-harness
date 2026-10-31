@@ -28,6 +28,7 @@ fn chat_effort_survives_worker_and_child_identity() {
             agent_capabilities: AgentCapabilities::default(),
             auth_jwt: None,
             user_id: "audit-probe".into(),
+            mode: None,
         })
         .unwrap();
     let direct = session.agent_loop_config();

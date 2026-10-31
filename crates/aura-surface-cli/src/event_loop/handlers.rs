@@ -25,9 +25,9 @@ pub(super) async fn run_agent_turn(
     let process_result = match tokio::time::timeout(
         TURN_TIMEOUT,
         state.agent_loop.run_with_events(
-            state.model_gateway,
-            state.tool_gateway,
-            state.messages.clone(),
+            &state.session.model_gateway,
+            &state.session.tool_gateway,
+            state.session.messages.clone(),
             state.tools.to_vec(),
             Some(agent_event_tx),
             Some(cancel_token),
@@ -69,7 +69,7 @@ pub(super) async fn handle_agent_success(
     result: aura_agent::AgentLoopResult,
     streamed_text: bool,
 ) {
-    state.messages = result.messages.clone();
+    state.session.messages = result.messages.clone();
 
     persist_response_via_kernel(state, &result.total_text).await;
     emit_response_to_ui(state, &result, streamed_text).await;
@@ -93,9 +93,14 @@ pub(super) async fn handle_agent_success(
 }
 
 async fn persist_response_via_kernel(state: &mut LoopState<'_>, total_text: &str) {
-    let response_tx = create_response_transaction(state.agent_id, total_text);
+    let response_tx = create_response_transaction(state.session.agent_id(), total_text);
 
-    match state.kernel.process_direct(response_tx.clone()).await {
+    match state
+        .session
+        .kernel
+        .process_direct(response_tx.clone())
+        .await
+    {
         Ok(result) => {
             debug!(
                 seq = result.entry.seq,
@@ -131,6 +136,7 @@ async fn emit_response_to_ui(
                     role: aura_terminal::events::MessageRole::Assistant,
                     content: result.total_text.clone(),
                     is_streaming: false,
+                    timestamp_ms: None,
                 }))
                 .await;
         }
@@ -140,13 +146,18 @@ async fn emit_response_to_ui(
 pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
     debug!("New session requested");
 
-    let session_tx = Transaction::session_start(state.agent_id);
-    let store = state.kernel.store();
+    let session_tx = Transaction::session_start(state.session.agent_id());
+    let store = state.session.kernel.store();
 
     if let Err(e) = store.enqueue_tx(&session_tx) {
         error!(error = %e, "Failed to enqueue session start");
-    } else if let Ok(Some((token, tx))) = store.dequeue_tx(state.agent_id) {
-        match state.kernel.process_dequeued(tx.clone(), token).await {
+    } else if let Ok(Some((token, tx))) = store.dequeue_tx(state.session.agent_id()) {
+        match state
+            .session
+            .kernel
+            .process_dequeued(tx.clone(), token)
+            .await
+        {
             Ok(result) => {
                 debug!(
                     seq = result.entry.seq,
@@ -160,7 +171,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
         }
     }
 
-    state.messages.clear();
+    state.session.messages.clear();
 
     let _ = state
         .commands
@@ -175,6 +186,7 @@ async fn show_system_message(state: &LoopState<'_>, content: String) {
             role: aura_terminal::events::MessageRole::System,
             content,
             is_streaming: false,
+            timestamp_ms: None,
         }))
         .await;
 }
@@ -244,12 +256,12 @@ pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, passwor
                     });
                     if let Ok(payload_bytes) = serde_json::to_vec(&auth_payload) {
                         let auth_tx = Transaction::new_chained(
-                            state.agent_id,
+                            state.session.agent_id(),
                             TransactionType::System,
                             payload_bytes,
                             None,
                         );
-                        if let Err(e) = state.kernel.process_direct(auth_tx).await {
+                        if let Err(e) = state.session.kernel.process_direct(auth_tx).await {
                             warn!(error = %e, "Failed to record auth login via kernel");
                         }
                     } else {
@@ -306,12 +318,12 @@ pub(super) async fn handle_logout(state: &mut LoopState<'_>) {
                 });
                 if let Ok(payload_bytes) = serde_json::to_vec(&auth_payload) {
                     let auth_tx = Transaction::new_chained(
-                        state.agent_id,
+                        state.session.agent_id(),
                         TransactionType::System,
                         payload_bytes,
                         None,
                     );
-                    if let Err(e) = state.kernel.process_direct(auth_tx).await {
+                    if let Err(e) = state.session.kernel.process_direct(auth_tx).await {
                         warn!(error = %e, "Failed to record auth logout via kernel");
                     }
                 } else {
@@ -362,6 +374,7 @@ pub(super) async fn handle_whoami(state: &LoopState<'_>) {
                     role: aura_terminal::events::MessageRole::System,
                     content: msg,
                     is_streaming: false,
+                    timestamp_ms: None,
                 }))
                 .await;
         }
@@ -374,6 +387,7 @@ pub(super) async fn handle_whoami(state: &LoopState<'_>) {
                               Use /login to unlock cloud models."
                         .to_string(),
                     is_streaming: false,
+                    timestamp_ms: None,
                 }))
                 .await;
         }

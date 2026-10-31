@@ -74,15 +74,9 @@ pub enum RecordKind {
     /// payload carries the agent id, the reap source (cli /
     /// shutdown), and the wall-clock cancellation result.
     OrphanReaped,
-    /// Phase 10: session lifecycle end marker. Emitted by the
-    /// `FleetDaemon` shutdown path with the cumulative session
-    /// telemetry (iteration count, token totals, wall-clock
-    /// duration) and a `clean_shutdown` flag that distinguishes
-    /// graceful drains from grace-period timeouts.
-    ///
-    /// The on-wire payload shape (`SessionStopRecordPayload`) lives
-    /// in `aura_fleet_daemon` so the store crate stays free of any
-    /// upward dep on the fleet layer.
+    /// Reserved session lifecycle end marker. No production writer
+    /// emits this kind today; the variant is kept so the wire tag
+    /// stays stable for logs written by earlier builds.
     SessionStop,
     /// Phase 10: a tool call was vetoed mid-flight by a registered
     /// [`HookEvent::PreToolUse`] handler returning

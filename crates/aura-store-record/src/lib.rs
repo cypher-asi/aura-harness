@@ -61,8 +61,8 @@ pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 ///
 /// Phase 10 bump (v1 → v2) consolidates three closed-enum additions:
 ///
-/// - [`RecordKind::SessionStop`] — session-lifecycle audit row
-///   emitted by the fleet daemon's shutdown path.
+/// - [`RecordKind::SessionStop`] — reserved session-lifecycle audit
+///   row (no production writer today).
 /// - [`RecordKind::ToolCallBlockedByHook`] — audit row replacing
 ///   `ToolCallResult` when a `PreToolUse` hook blocks dispatch.
 /// - [`aura_core_types::TransactionType::SubagentSpawn`] — typed wire

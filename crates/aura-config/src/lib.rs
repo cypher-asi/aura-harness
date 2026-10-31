@@ -222,8 +222,7 @@ pub struct AuraConfig {
     /// Subagent derivation + budget knobs (Phase 4a; consumed by the
     /// Phase 6a derivation path).
     pub subagent: SubagentConfig,
-    /// Conflict-lock knobs (Phase 4a; consumed by future
-    /// `aura-exec-conflict`).
+    /// Conflict-lock knobs (Phase 4a; no consumer today).
     pub conflict: ConflictConfig,
     /// Plugin enable/disable + per-plugin overrides (Phase 4a;
     /// populated from operator config in Phase 4b).
@@ -302,6 +301,17 @@ fn slot() -> &'static Mutex<AuraConfig> {
 #[must_use]
 pub fn loaded() -> AuraConfig {
     current()
+}
+
+/// Resolve a session's [`aura_core_modes::AgentMode`]: the requested
+/// mode, else the daemon default ([`FleetConfig::default_mode`]), else
+/// `Agent`.
+#[must_use]
+pub fn session_mode(requested: Option<aura_core_modes::AgentMode>) -> aura_core_modes::AgentMode {
+    aura_core_modes::resolve_session_mode(aura_core_modes::AgentModeInputs {
+        requested,
+        daemon_default: Some(current().fleet.default_mode),
+    })
 }
 
 /// Shortcut for `loaded().agent`. Use this from agent / automaton /

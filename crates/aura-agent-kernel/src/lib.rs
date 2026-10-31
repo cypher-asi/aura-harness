@@ -45,7 +45,9 @@ pub use kernel::{
     ProcessResult, ReasonResult, ReasonStreamHandle, ToolApprovalError, ToolApprovalPrompter,
     ToolApprovalRemember, ToolApprovalResponse, ToolDecision, ToolOutput,
 };
-pub use policy::{Policy, PolicyConfig, PolicyResult, PolicyVerdict};
+pub use policy::{
+    gated_action, tool_mode_class, Policy, PolicyConfig, PolicyResult, PolicyVerdict, ToolModeClass,
+};
 pub use replay::{ReplayConsumer, ReplayError, ReplayReport};
 pub use spawn_hook::KernelSpawnHook;
 

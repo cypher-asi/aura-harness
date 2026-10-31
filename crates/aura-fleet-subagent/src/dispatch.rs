@@ -19,7 +19,7 @@
 //! `SubagentResult` so the existing task tool surface remains stable.
 
 use async_trait::async_trait;
-use aura_agent_loop::AgentLoopEvent;
+use aura_agent::AgentLoopEvent;
 use aura_agent_subagent::{overrides_from_request, parent_context_from_request, SubagentRegistry};
 use aura_core_types::{SubagentDispatchRequest, SubagentResult};
 use aura_fleet_quota::QuotaPool;

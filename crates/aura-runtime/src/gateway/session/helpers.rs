@@ -450,7 +450,8 @@ pub(super) async fn build_kernel_with_config(
     policy.agent_permissions = session.agent_permissions.clone();
     policy = policy
         .with_user_default(user_default.clone())
-        .with_agent_override(session.tool_permissions.clone());
+        .with_agent_override(session.tool_permissions.clone())
+        .with_mode(session.mode);
 
     // Per-session fleet subagent dispatcher (fresh registry / quota /
     // leases / orphan store + the engine's `RuntimeChildRunner`). Built
@@ -1622,6 +1623,7 @@ mod tests {
             agent_capabilities: AgentCapabilities::default(),
             auth_jwt: None,
             user_id: "user-test".to_string(),
+            mode: None,
         }
     }
 

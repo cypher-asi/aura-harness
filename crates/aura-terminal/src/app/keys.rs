@@ -335,11 +335,7 @@ impl App {
             KeyCode::Enter => {
                 if let Some(agent) = self.agents.get(self.selected_agent) {
                     let agent_id = agent.id.clone();
-                    if agent_id != self.active_agent_id {
-                        if let Some(tx) = &self.event_tx {
-                            let _ = tx.try_send(UiEvent::SelectAgent(agent_id));
-                        }
-                    }
+                    self.request_agent_switch(agent_id);
                 }
             }
             KeyCode::PageUp => {

@@ -1,0 +1,229 @@
+use super::*;
+use aura_store_db::{RocksStore, WriteStore};
+
+fn append(store: &RocksStore, seq: u64, tx: Transaction) {
+    let agent_id = tx.agent_id;
+    let entry = RecordEntry::builder(seq, tx).build();
+    store.append_entry_direct(agent_id, seq, &entry).unwrap();
+}
+
+fn text_tx(agent_id: AgentId, tx_type: TransactionType, text: &str) -> Transaction {
+    Transaction::new_chained(agent_id, tx_type, text.as_bytes().to_vec(), None)
+}
+
+#[test]
+fn conversation_history_rebuilds_chat_per_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let alice = AgentId::generate();
+    let bob = AgentId::generate();
+
+    append(&store, 1, Transaction::session_start(alice));
+    append(
+        &store,
+        2,
+        text_tx(alice, TransactionType::UserPrompt, "hi alice"),
+    );
+    append(
+        &store,
+        3,
+        text_tx(alice, TransactionType::ToolExecution, "not json"),
+    );
+    append(
+        &store,
+        4,
+        text_tx(alice, TransactionType::AgentMsg, "hello from alice"),
+    );
+    append(&store, 5, text_tx(alice, TransactionType::AgentMsg, ""));
+    append(
+        &store,
+        1,
+        text_tx(bob, TransactionType::UserPrompt, "hi bob"),
+    );
+
+    let history = conversation_history(&store, alice).unwrap();
+    let rendered: Vec<(MessageRole, &str)> = history
+        .iter()
+        .map(|m| (m.role, m.content.as_str()))
+        .collect();
+    assert_eq!(
+        rendered,
+        [
+            (MessageRole::System, "── new session ──"),
+            (MessageRole::User, "hi alice"),
+            (MessageRole::Assistant, "hello from alice"),
+        ]
+    );
+
+    let bob_history = conversation_history(&store, bob).unwrap();
+    assert_eq!(bob_history.len(), 1);
+    assert_eq!(bob_history[0].content, "hi bob");
+
+    assert!(conversation_history(&store, AgentId::generate())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn recent_record_summaries_are_scoped_to_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let alice = AgentId::generate();
+    let bob = AgentId::generate();
+
+    append(&store, 1, text_tx(alice, TransactionType::UserPrompt, "a1"));
+    append(&store, 2, text_tx(alice, TransactionType::AgentMsg, "a2"));
+    append(&store, 1, text_tx(bob, TransactionType::UserPrompt, "b1"));
+
+    let summaries = recent_record_summaries(&store, alice).unwrap();
+    let seqs: Vec<u64> = summaries.iter().map(|s| s.seq).collect();
+    assert_eq!(seqs, [1, 2]);
+    assert!(summaries.iter().all(|s| s.agent_id == alice.to_hex()));
+}
+
+use serde_json::json;
+fn tx(tx_type: TransactionType, payload: impl Into<Vec<u8>>) -> Transaction {
+    Transaction::new_chained(AgentId::generate(), tx_type, payload.into(), None)
+}
+
+fn json_tx(tx_type: TransactionType, payload: &Value) -> Transaction {
+    tx(tx_type, serde_json::to_vec(payload).unwrap())
+}
+
+#[test]
+fn labels_fit_kind_column() {
+    for t in [
+        TransactionType::UserPrompt,
+        TransactionType::AgentMsg,
+        TransactionType::Trigger,
+        TransactionType::ActionResult,
+        TransactionType::System,
+        TransactionType::SessionStart,
+        TransactionType::ToolProposal,
+        TransactionType::ToolExecution,
+        TransactionType::ProcessComplete,
+        TransactionType::Reasoning,
+        TransactionType::SubagentSpawn,
+    ] {
+        assert!(tx_type_label(t).0.len() <= 8, "{t:?} label too long");
+    }
+}
+
+#[test]
+fn prompt_collapses_to_one_line() {
+    let t = tx(
+        TransactionType::UserPrompt,
+        "fix the login\n\n  redirect bug\tplease",
+    );
+    assert_eq!(summarize_record(&t), "fix the login redirect bug please");
+}
+
+#[test]
+fn long_prompt_is_capped_char_safely() {
+    let t = tx(TransactionType::UserPrompt, "修".repeat(500));
+    let out = summarize_record(&t);
+    assert_eq!(out.chars().count(), MAX_INFO_CHARS);
+    assert!(out.ends_with("..."));
+}
+
+#[test]
+fn tool_proposal_shows_primary_arg() {
+    let t = json_tx(
+        TransactionType::ToolProposal,
+        &json!({"tool_use_id": "t1", "tool": "read_file", "args": {"path": "src/main.rs"}}),
+    );
+    assert_eq!(summarize_record(&t), "read_file src/main.rs");
+}
+
+#[test]
+fn tool_proposal_run_command() {
+    let t = json_tx(
+        TransactionType::ToolProposal,
+        &json!({"tool_use_id": "t1", "tool": "run_command",
+                "args": {"program": "cargo", "args": ["test", "-p", "x"]}}),
+    );
+    assert_eq!(summarize_record(&t), "run_command cargo test -p x");
+}
+
+fn execution(decision: ToolGateVerdict, result: Option<&str>, is_error: bool) -> Transaction {
+    let exec = ToolExecution {
+        tool_use_id: "t1".into(),
+        tool: "read_file".into(),
+        args: json!({"path": "a.rs"}),
+        decision,
+        reason: Some("policy says no".into()),
+        result: result.map(str::to_string),
+        is_error,
+        parent_agent_id: AgentId::generate(),
+        originating_user_id: "u".into(),
+    };
+    tx(
+        TransactionType::ToolExecution,
+        serde_json::to_vec(&exec).unwrap(),
+    )
+}
+
+#[test]
+fn tool_execution_outcomes() {
+    assert_eq!(
+        summarize_record(&execution(ToolGateVerdict::Approved, Some("hello"), false)),
+        "read_file a.rs · ok 5B"
+    );
+    assert_eq!(
+        summarize_record(&execution(
+            ToolGateVerdict::Approved,
+            Some("\nNo such file\nmore"),
+            true
+        )),
+        "read_file a.rs · err: No such file"
+    );
+    assert_eq!(
+        summarize_record(&execution(ToolGateVerdict::Denied, None, false)),
+        "read_file a.rs · denied: policy says no"
+    );
+}
+
+#[test]
+fn reasoning_completed_and_failed() {
+    let ok = json_tx(
+        TransactionType::Reasoning,
+        &json!({"model": "claude-opus-4-6", "stop_reason": "ToolUse",
+                "input_tokens": 1234, "output_tokens": 340,
+                "tool_uses": ["read_file", "grep"]}),
+    );
+    assert_eq!(
+        summarize_record(&ok),
+        "claude-opus-4-6 · 1.2k/340 tok · ToolUse · tools: read_file, grep"
+    );
+    let failed = json_tx(
+        TransactionType::Reasoning,
+        &json!({"status": "failed", "error": "rate limited"}),
+    );
+    assert_eq!(summarize_record(&failed), "failed: rate limited");
+}
+
+#[test]
+fn system_kind_and_detail() {
+    let t = json_tx(
+        TransactionType::System,
+        &json!({"system_kind": "domain_mutation", "phase": "request", "method": "create_spec"}),
+    );
+    assert_eq!(
+        summarize_record(&t),
+        "domain_mutation · create_spec request"
+    );
+}
+
+#[test]
+fn session_start() {
+    let t = tx(TransactionType::SessionStart, "session_start");
+    assert_eq!(summarize_record(&t), "new session");
+}
+
+#[test]
+fn unparseable_json_falls_back_to_text() {
+    let t = tx(TransactionType::Reasoning, "not json");
+    assert_eq!(summarize_record(&t), "not json");
+    let binary = tx(TransactionType::ToolProposal, vec![0xff, 0xfe]);
+    assert_eq!(summarize_record(&binary), "");
+}
