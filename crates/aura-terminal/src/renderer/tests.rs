@@ -558,21 +558,28 @@ fn type_text(app: &mut crate::App, text: &str) {
 }
 
 #[test]
-fn test_prompt_sits_in_gutter_left_of_chat_aligned_typing() {
+fn test_prompt_starts_at_chat_left_border() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("[u@h d]$ ");
     type_text(&mut app, "hello");
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - 2];
 
-    // Swarm takes 20% of 120 columns; typing starts past the chat padding
-    // (3) and indent (2), the same column the old `> ` chevron led to.
-    let typing_col = 24 + 3 + 2;
+    let chat_border = rows
+        .iter()
+        .find_map(|r| {
+            r.find("┌ CHAT")
+                .or_else(|| r.find("╭ CHAT"))
+                .map(|i| r[..i].chars().count())
+        })
+        .expect("chat title row");
     let chars: Vec<char> = input_row.chars().collect();
-    let prompt: String = chars[typing_col - 9..typing_col].iter().collect();
-    let typed: String = chars[typing_col..typing_col + 5].iter().collect();
-    assert_eq!(prompt, "[u@h d]$ ", "{input_row:?}");
-    assert_eq!(typed, "hello", "{input_row:?}");
+    assert!(
+        chars[..=chat_border].iter().all(|c| *c == ' '),
+        "{input_row:?}"
+    );
+    let entry: String = chars[chat_border + 1..chat_border + 15].iter().collect();
+    assert_eq!(entry, "[u@h d]$ hello", "{input_row:?}");
 }
 
 #[test]

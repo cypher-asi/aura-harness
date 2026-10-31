@@ -14,17 +14,16 @@ use ratatui::{
 const MODEL_GAP: u16 = 2;
 /// Below this many typing columns the model indicator is hidden.
 const MIN_INPUT_WIDTH: u16 = 20;
-/// Columns between the chat-aligned input edge and the typing column.
-const TYPING_INDENT: u16 = 2;
 
 /// Render input line with the current model and status on the right.
-/// `left_offset` shifts the input area to align with the chat panel when swarm is visible.
+/// `chat_left` is the Chat panel's left border, relative to `area`; the
+/// prompt starts there.
 pub(super) fn render_input(
     frame: &mut Frame,
     area: Rect,
     app: &App,
     theme: &Theme,
-    left_offset: u16,
+    chat_left: u16,
 ) {
     let input = app.input();
     let cursor_pos = app.cursor_pos();
@@ -65,7 +64,7 @@ pub(super) fn render_input(
     };
     let usable_width = area.width.saturating_sub(EDGE_INSET);
     let show_model = model_len > 0
-        && usable_width.saturating_sub(status_len + 2 + left_offset + model_reserved)
+        && usable_width.saturating_sub(status_len + 2 + chat_left + model_reserved)
             >= MIN_INPUT_WIDTH;
     let left_reserved = if show_model { model_reserved } else { 0 };
 
@@ -97,15 +96,14 @@ pub(super) fn render_input(
     };
     let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
 
-    // The prompt sits in the gutter left of the chat-aligned typing column,
-    // and only pushes typing right when the gutter is too narrow for it.
-    let chat_padding: u16 = if left_offset > 0 { 3 } else { EDGE_INSET };
-    let typing_x = (area.x + left_offset + chat_padding + TYPING_INDENT)
-        .max(area.x + EDGE_INSET + prompt_width);
+    // Inset one column like the other outer text, so the prompt lines up
+    // with the chat border rather than poking half a cell past it.
+    let prompt_x = area.x + chat_left + EDGE_INSET;
+    let typing_x = prompt_x + prompt_width;
     let prompt_area = Rect {
-        x: typing_x - prompt_width,
+        x: prompt_x,
         y: area.y,
-        width: prompt_width.min(input_right.saturating_sub(typing_x - prompt_width)),
+        width: prompt_width.min(input_right.saturating_sub(prompt_x)),
         height: 1,
     };
     let input_area = Rect {

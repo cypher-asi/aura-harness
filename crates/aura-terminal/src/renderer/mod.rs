@@ -58,21 +58,10 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
 
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
-    render_content_panels(frame, main_chunks[1], app, theme);
+    let chat = render_content_panels(frame, main_chunks[1], app, theme);
+    let chat_left = chat.x.saturating_sub(input_row.x);
 
-    let swarm_offset = if app.swarm_panel_visible() {
-        let swarm_percent: u32 = if right_column_visible(app) { 20 } else { 25 };
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "UI widths are always < u16::MAX"
-        )]
-        let offset = (u32::from(main_chunks[2].width) * swarm_percent / 100) as u16;
-        offset
-    } else {
-        0
-    };
-
-    input::render_input(frame, input_row, app, theme, swarm_offset);
+    input::render_input(frame, input_row, app, theme, chat_left);
     frame.render_widget(
         Block::default()
             .borders(Borders::TOP)
@@ -88,8 +77,9 @@ const fn right_column_visible(app: &App) -> bool {
     app.record_panel_visible() || app.sandbox_panel_visible()
 }
 
-/// Render the content panels (Swarm, Chat, Record, Sandbox) based on visibility.
-fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+/// Render the content panels (Swarm, Chat, Record, Sandbox) based on visibility,
+/// returning where the Chat panel was drawn.
+fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) -> Rect {
     let swarm_visible = app.swarm_panel_visible();
     let right_visible = right_column_visible(app);
 
@@ -143,6 +133,7 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
     if let Some(sandbox) = areas.sandbox {
         sandbox::render_sandbox_panel(frame, sandbox, app, theme);
     }
+    chat
 }
 
 /// Record on the top half and Sandbox on the bottom half; either one takes
