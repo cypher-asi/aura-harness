@@ -247,7 +247,7 @@ impl FleetSpawner {
     }
 
     /// Spawn a single subagent, optionally threading a streaming
-    /// [`AgentLoopEvent`](aura_agent_loop::AgentLoopEvent) sink into
+    /// [`AgentLoopEvent`](aura_agent::AgentLoopEvent) sink into
     /// the child runner so the child's live thread is observable.
     ///
     /// `event_tx` is forwarded into the [`ChildRunContext`] for the
@@ -266,7 +266,7 @@ impl FleetSpawner {
         &self,
         request: SpawnRequest,
         mode: SpawnMode,
-        event_tx: Option<tokio::sync::mpsc::Sender<aura_agent_loop::AgentLoopEvent>>,
+        event_tx: Option<tokio::sync::mpsc::Sender<aura_agent::AgentLoopEvent>>,
     ) -> Result<SpawnHandle, SpawnError> {
         // (1) Parent-mode gate. Plan/Ask/Debug short-circuit before
         //     any lease / quota / audit work.

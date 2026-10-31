@@ -25,7 +25,6 @@ aura-agent = { path = "../aura-agent" }
 aura-agent-subagent = { path = "../aura-agent-subagent" }
 aura-context-memory = { path = "../aura-context-memory" }
 aura-automaton = { path = "../aura-automaton" }
-aura-surface-automaton = { path = "../aura-surface-automaton" }
 # Phase B / Commit 3: the chat-session bootstrap renders a typed
 # `<agent_identity>` block via `aura_context_prompts::SystemPromptBuilder`
 # and the session state derives the compaction tier via
@@ -54,7 +53,6 @@ aura-fleet-subagent = { path = "../aura-fleet-subagent" }
 aura-fleet-spawn = { path = "../aura-fleet-spawn" }
 aura-fleet-registry = { path = "../aura-fleet-registry" }
 aura-fleet-quota = { path = "../aura-fleet-quota" }
-aura-fleet-daemon = { path = "../aura-fleet-daemon" }
 aura-config = { path = "../aura-config" }
 aura-context-skills = { path = "../aura-context-skills" }
 aura-plugin-core = { path = "../aura-plugin-core" }
@@ -104,14 +102,11 @@ insta = { workspace = true }
 # auto-deny-timeout test, without affecting the production build.
 tokio = { workspace = true, features = ["test-util"] }
 
-# Phase 9: `aura-context-skills`, `aura-automaton`, and
-# `aura-fleet-daemon` are held
-# as direct deps so the runtime can reach into the
-# Phase 8 plugin-skills wiring and the Phase 7a fleet daemon
-# without an extra migration touch. The lib.rs `pub use`s do not
-# always name them today (the surface migration is incremental).
+# Phase 9: `aura-context-skills` is held as a direct dep so the
+# runtime can reach into the Phase 8 plugin-skills wiring without an
+# extra migration touch.
 [package.metadata.cargo-machete]
-ignored = ["aura-automaton", "aura-context-skills", "aura-fleet-daemon"]
+ignored = ["aura-context-skills"]
 
 [lints]
 workspace = true

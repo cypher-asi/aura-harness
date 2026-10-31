@@ -171,7 +171,6 @@ dependencies = [
  "aura-core-permissions",
  "aura-core-protocol",
  "aura-core-types",
- "aura-fleet-daemon",
  "aura-fleet-registry",
  "aura-fleet-spawn",
  "aura-model-reasoner",
@@ -180,7 +179,6 @@ dependencies = [
  "aura-store-db",
  "aura-store-record",
  "aura-surface-cli",
- "aura-surface-sdk",
  "aura-terminal",
  "aura-tools",
  "axum",
@@ -261,13 +259,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "aura-agent-loop"
-version = "0.1.0"
-dependencies = [
- "aura-agent",
 ]
 
 [[package]]
@@ -485,7 +476,6 @@ dependencies = [
  "async-trait",
  "aura-agent",
  "aura-agent-kernel",
- "aura-agent-loop",
  "aura-agent-subagent",
  "aura-automaton",
  "aura-context-compaction",
@@ -493,7 +483,6 @@ dependencies = [
  "aura-context-prompts",
  "aura-core-types",
  "aura-domain-http",
- "aura-exec-runner",
  "aura-fleet-spawn",
  "aura-model-reasoner",
  "aura-protocol",
@@ -511,17 +500,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-exec-conflict"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "aura-exec-isolation"
 version = "0.1.0"
 dependencies = [
@@ -529,23 +507,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "which",
-]
-
-[[package]]
-name = "aura-exec-policy"
-version = "0.1.0"
-dependencies = [
- "aura-core-permissions",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "aura-exec-runner"
-version = "0.1.0"
-dependencies = [
- "aura-exec-conflict",
- "aura-exec-isolation",
- "aura-exec-tools",
 ]
 
 [[package]]
@@ -558,15 +519,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-exec-tools"
-version = "0.1.0"
-dependencies = [
- "aura-exec-policy",
- "aura-exec-sandbox",
- "aura-tools",
-]
-
-[[package]]
 name = "aura-exec-traits"
 version = "0.1.0"
 dependencies = [
@@ -575,62 +527,6 @@ dependencies = [
  "bytes",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "aura-fleet-daemon"
-version = "0.1.0"
-dependencies = [
- "aura-agent-kernel",
- "aura-config",
- "aura-context-skills",
- "aura-core-modes",
- "aura-core-types",
- "aura-fleet-dispatch",
- "aura-fleet-mailbox",
- "aura-fleet-quota",
- "aura-fleet-registry",
- "aura-fleet-spawn",
- "aura-plugin-core",
- "aura-plugin-hooks",
- "aura-store-db",
- "bytes",
- "insta",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "aura-fleet-dispatch"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aura-core-modes",
- "aura-core-types",
- "aura-fleet-spawn",
- "futures-util",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "aura-fleet-mailbox"
-version = "0.1.0"
-dependencies = [
- "aura-agent-subagent",
- "aura-core-modes",
- "aura-core-permissions",
- "aura-core-types",
- "aura-fleet-dispatch",
- "aura-fleet-spawn",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
@@ -665,8 +561,8 @@ name = "aura-fleet-spawn"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aura-agent",
  "aura-agent-kernel",
- "aura-agent-loop",
  "aura-agent-subagent",
  "aura-core-modes",
  "aura-core-permissions",
@@ -695,8 +591,8 @@ name = "aura-fleet-subagent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aura-agent",
  "aura-agent-kernel",
- "aura-agent-loop",
  "aura-agent-subagent",
  "aura-core-modes",
  "aura-core-permissions",
@@ -824,7 +720,6 @@ dependencies = [
  "aura-core-types",
  "aura-domain-http",
  "aura-engine",
- "aura-fleet-daemon",
  "aura-fleet-quota",
  "aura-fleet-registry",
  "aura-fleet-spawn",
@@ -834,7 +729,6 @@ dependencies = [
  "aura-plugin-hooks",
  "aura-protocol",
  "aura-store-db",
- "aura-surface-automaton",
  "aura-terminal",
  "aura-tools",
  "axum",
@@ -912,21 +806,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-surface-auth"
-version = "0.1.0"
-dependencies = [
- "aura-auth",
- "aura-core-auth",
-]
-
-[[package]]
-name = "aura-surface-automaton"
-version = "0.1.0"
-dependencies = [
- "aura-automaton",
-]
-
-[[package]]
 name = "aura-surface-cli"
 version = "0.1.0"
 dependencies = [
@@ -940,16 +819,12 @@ dependencies = [
  "aura-core-modes",
  "aura-core-types",
  "aura-engine",
- "aura-fleet-daemon",
  "aura-fleet-registry",
  "aura-fleet-spawn",
  "aura-model-reasoner",
  "aura-plugin-core",
  "aura-runtime",
  "aura-store-db",
- "aura-surface-auth",
- "aura-surface-sdk",
- "aura-surface-terminal",
  "aura-terminal",
  "aura-tools",
  "axum",
@@ -974,28 +849,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-surface-sdk"
-version = "0.1.0"
-dependencies = [
- "aura-core-modes",
- "aura-core-protocol",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "aura-surface-terminal"
-version = "0.1.0"
-dependencies = [
- "aura-core-modes",
- "aura-terminal",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "aura-terminal"
 version = "0.1.0"
 dependencies = [
+ "aura-core-modes",
  "axum",
  "base64 0.22.1",
  "chrono",

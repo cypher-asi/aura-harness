@@ -32,8 +32,8 @@
 //!   a hard crash. A future lease timestamp/owner can recover abandoned claims.
 
 use crate::worker::{process_agent_detailed, process_agent_with_timeout, ProcessedAgent};
+use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
 use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
-use aura_agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
 use aura_core_types::{AgentId, AgentStatus};
 use aura_model_reasoner::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
 use aura_store_db::Store;

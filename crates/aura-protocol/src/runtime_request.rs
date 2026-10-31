@@ -92,6 +92,16 @@ pub struct RuntimeRequest {
     /// Originating end-user id for resolving + persisting tool
     /// defaults.
     pub user_id: String,
+
+    /// Session mode (`agent` / `plan` / `ask` / `debug`). `None` falls
+    /// back to the daemon default (`AURA_FLEET_DEFAULT_MODE`), then
+    /// `agent`. The kernel denies any tool call the mode does not allow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(type = "\"agent\" | \"plan\" | \"ask\" | \"debug\" | null", optional)
+    )]
+    pub mode: Option<aura_core_types::AgentMode>,
 }
 
 /// Discriminated union carrying the data unique to each run type.

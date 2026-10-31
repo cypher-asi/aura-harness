@@ -10,8 +10,8 @@
 //!
 //! Phase 7a ships the minimum viable surface the new
 //! `aura-fleet-spawn` adapter needs to record a subagent at spawn
-//! time and let other crates (notably `aura-fleet-dispatch` and the
-//! task-tool compat adapter) look the child up by id. The richer
+//! time and let other crates (notably the task-tool dispatcher in
+//! `aura-fleet-subagent`) look the child up by id. The richer
 //! design from Section 4 of the architecture plan (parent/child
 //! tree index, lifecycle event stream, persisted snapshot) lands in
 //! Phase 7b — `FleetRegistry` is the foundation that survives.
@@ -31,8 +31,9 @@
 //!
 //! ## Assumptions
 //!
-//! - The fleet daemon owns the single `Arc<FleetRegistry>`; surface
-//!   crates obtain it through `aura-fleet-daemon::FleetDaemon::handle`.
+//! - Each gateway chat session builds its own `Arc<FleetRegistry>`
+//!   and hands it to the fleet spawner; there is no process-wide
+//!   registry.
 //! - The registry does NOT persist; a daemon restart starts with an
 //!   empty registry. Persistent agent state lives in
 //!   `aura-store-record` and is reconstituted lazily.
@@ -182,8 +183,8 @@ impl FleetRegistry {
         Ok(())
     }
 
-    /// Remove a slot. Used by `aura-fleet-dispatch` (Phase 7b+) when
-    /// a terminal-state agent ages out of the live set.
+    /// Remove a slot when a terminal-state agent ages out of the
+    /// live set.
     ///
     /// # Errors
     ///

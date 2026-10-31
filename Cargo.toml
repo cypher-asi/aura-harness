@@ -38,31 +38,23 @@ members = [
     "crates/aura-store-record",
     "crates/aura-store-snapshot",
     "crates/aura-tools",
-    # Phase 5 exec layer split:
-    #   aura-exec-conflict  — domain-scoped advisory locks
+    # Exec layer primitives (aura-tools above holds the Tool impls,
+    # catalog and executor):
     #   aura-exec-isolation — worktree / copy isolation primitives
-    #   aura-exec-policy    — verdict over EffectivePermissions
     #   aura-exec-sandbox   — FsSandbox + ProcessSandbox primitives
-    #   aura-exec-tools     — Tool trait + builtin catalog (re-export shell)
-    #   aura-exec-runner    — ToolExecutor + orchestration (re-export shell)
-    "crates/aura-exec-conflict",
     "crates/aura-exec-isolation",
-    "crates/aura-exec-policy",
     "crates/aura-exec-sandbox",
-    "crates/aura-exec-tools",
-    "crates/aura-exec-runner",
     # Phase 1 refactor: exec-layer executor/spawn traits relocated out
     # of aura-agent-kernel so aura-tools no longer depends upward.
     "crates/aura-exec-traits",
     # Phase 3 model layer crate
     "crates/aura-model-reasoner",
-    # Phase 6a agent layer split:
+    # Agent layer:
     #   aura-agent-kernel    - deterministic kernel (renamed from aura-kernel)
-    #   aura-agent-loop      - agent turn-loop entrypoint shell
+    #   aura-agent           - agent turn loop
     #   aura-agent-steering  - turn-state steering evaluators
     #   aura-agent-subagent  - subagent derivation + inheritance
     "crates/aura-agent-kernel",
-    "crates/aura-agent-loop",
     "crates/aura-agent-subagent",
     "crates/aura-terminal",
     "crates/aura-agent",
@@ -90,35 +82,22 @@ members = [
     "crates/aura-plugin-hooks",
     "crates/aura-plugin-mcp",
     "crates/aura-plugin-connectors",
-    # Phase 7a fleet layer + Phase 7b additions:
+    # Fleet layer:
     #   aura-fleet-registry — RwLock<HashMap<AgentId, AgentSlot>>
-    #   aura-fleet-quota    — QuotaPool + BudgetTicket (Phase 7b enforces)
+    #   aura-fleet-quota    — QuotaPool + BudgetTicket
     #   aura-fleet-spawn    — FleetSpawner + ParentLeaseRegistry + orphans
-    #   aura-fleet-dispatch — FleetDispatcher (mailbox-fed in 7b)
-    #   aura-fleet-mailbox  — bounded mpsc mailbox over AgentJob (Phase 7b)
-    #   aura-fleet-daemon   — composition root wiring all five
     "crates/aura-fleet-registry",
     "crates/aura-fleet-quota",
     "crates/aura-fleet-spawn",
-    "crates/aura-fleet-dispatch",
-    "crates/aura-fleet-mailbox",
-    "crates/aura-fleet-daemon",
     # Phase B / Commit 3 / Step 3a: fleet-layer concrete
     # SubagentDispatchHook impl. Was `RuntimeSubagentDispatch` in
     # aura-runtime; now sits at the fleet layer so the agent layer
     # (`aura-agent-subagent`) stays free of fleet deps.
     "crates/aura-fleet-subagent",
-    # Phase 9 surface layer:
-    #   aura-surface-cli       — CLI composition root + ModeFlag
-    #   aura-surface-sdk       — external AuraClient/AuraSession SDK
-    #   aura-surface-terminal  — TUI surface-layer shell + SlashModeCommand
-    #   aura-surface-automaton — automaton host surface-layer shell
-    #   aura-surface-auth      — zOS HTTP client + credential storage
+    # Surface layer CLI composition root (+ ModeFlag). The TUI
+    # (aura-terminal), automaton host (aura-automaton) and zOS auth
+    # client (aura-auth) are listed above.
     "crates/aura-surface-cli",
-    "crates/aura-surface-sdk",
-    "crates/aura-surface-terminal",
-    "crates/aura-surface-automaton",
-    "crates/aura-surface-auth",
 ]
 
 [profile.dev]
@@ -263,17 +242,8 @@ aura-agent = { path = "crates/aura-agent" }
 aura-automaton = { path = "crates/aura-automaton" }
 aura-tools = { path = "crates/aura-tools" }
 aura-protocol = { path = "crates/aura-protocol" }
-# Phase 9 SDK smoke test (`tests/sdk_smoke.rs`) consumes the
-# external `aura-surface-sdk` crate from this workspace's root test
-# harness, so the SDK type surface is verified from an out-of-crate
-# perspective.
-aura-surface-sdk = { path = "crates/aura-surface-sdk" }
 aura-core-modes = { path = "crates/aura-core-modes" }
 aura-core-protocol = { path = "crates/aura-core-protocol" }
-# Phase 9 daemon-shutdown integration test
-# (`tests/daemon_shutdown.rs`) wires the fleet daemon, mailbox,
-# spawner, and orphan store from the root harness.
-aura-fleet-daemon = { path = "crates/aura-fleet-daemon" }
 aura-fleet-spawn = { path = "crates/aura-fleet-spawn" }
 aura-fleet-registry = { path = "crates/aura-fleet-registry" }
 aura-store-record = { path = "crates/aura-store-record" }

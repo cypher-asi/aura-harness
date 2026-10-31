@@ -215,3 +215,83 @@ fn in_scope_target_is_allowed() {
             .allowed
     );
 }
+
+fn mode_policy(mode: aura_core_modes::AgentMode) -> Policy {
+    Policy::new(PolicyConfig::default().with_mode(mode))
+}
+
+fn mode_allows(mode: aura_core_modes::AgentMode, tool: &str, args: serde_json::Value) -> bool {
+    mode_policy(mode)
+        .check(&delegate_proposal(tool, args))
+        .allowed
+}
+
+#[test]
+fn mode_matrix_matches_the_gate_table() {
+    use aura_core_modes::AgentMode::{Agent, Ask, Debug, Plan};
+
+    let rs = || serde_json::json!({"path":"src/lib.rs","content":"x"});
+    let md = || serde_json::json!({"path":"docs/PLAN.md","content":"x"});
+    let cmd = || serde_json::json!({"program":"ls"});
+    let none = || serde_json::json!({});
+
+    // (tool, args, [Agent, Plan, Ask, Debug])
+    let cases: Vec<(&str, serde_json::Value, [bool; 4])> = vec![
+        (
+            "read_file",
+            serde_json::json!({"path":"a.rs"}),
+            [true, true, true, true],
+        ),
+        ("write_file", rs(), [true, false, false, false]),
+        ("write_file", md(), [true, true, false, false]),
+        ("edit_file", rs(), [true, false, false, false]),
+        ("delete_file", md(), [true, true, false, false]),
+        ("create_spec", none(), [true, true, false, false]),
+        ("git_commit", none(), [true, false, false, false]),
+        ("run_command", cmd(), [true, true, false, false]),
+        ("git_push", none(), [true, false, false, false]),
+        ("create_task", none(), [true, false, false, false]),
+        ("spawn_agent", none(), [true, false, false, false]),
+        ("task", none(), [true, false, false, false]),
+        ("list_specs", none(), [true, true, true, false]),
+        ("unclassified_mcp_tool", none(), [true, false, false, false]),
+    ];
+
+    for (tool, args, expected) in cases {
+        for (mode, want) in [Agent, Plan, Ask, Debug].into_iter().zip(expected) {
+            assert_eq!(
+                mode_allows(mode, tool, args.clone()),
+                want,
+                "{tool} {args} in {mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn mode_denial_names_the_mode_and_violation() {
+    let result = mode_policy(aura_core_modes::AgentMode::Plan).check(&delegate_proposal(
+        "write_file",
+        serde_json::json!({"path":"src/main.rs","content":"x"}),
+    ));
+    assert!(!result.allowed);
+    let reason = result.reason.unwrap();
+    assert!(reason.contains("Plan mode"), "{reason}");
+    assert!(reason.contains("non-markdown"), "{reason}");
+}
+
+#[test]
+fn mode_gate_runs_before_tool_state() {
+    // An explicit per-tool "on" cannot widen past the mode ceiling.
+    let config = PolicyConfig::default()
+        .with_mode(aura_core_modes::AgentMode::Ask)
+        .with_agent_override(Some(
+            aura_core_types::AgentToolPermissions::default().with("run_command", ToolState::Allow),
+        ));
+    let policy = Policy::new(config);
+    let result = policy.check(&delegate_proposal(
+        "run_command",
+        serde_json::json!({"program":"ls"}),
+    ));
+    assert!(!result.allowed);
+}

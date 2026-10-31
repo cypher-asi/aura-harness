@@ -37,9 +37,7 @@ pub fn parent_context_from_request(request: &SubagentDispatchRequest) -> ParentC
     };
     let permissions = legacy_permissions_to_modes(&request.parent_permissions);
     let depth = u32::try_from(request.parent_chain.len()).unwrap_or(u32::MAX);
-    let mode = request
-        .parent_mode
-        .map_or(AgentMode::Agent, core_to_modes_mode);
+    let mode = request.parent_mode.unwrap_or(AgentMode::Agent);
     let kernel = request
         .parent_kernel_mode
         .map_or(KernelMode::Audited, core_to_modes_kernel);
@@ -57,20 +55,6 @@ pub fn parent_context_from_request(request: &SubagentDispatchRequest) -> ParentC
         permissions,
         model_id,
         lineage,
-    }
-}
-
-/// Translate the legacy [`aura_core_types::AgentMode`] enum into the
-/// canonical [`aura_core_modes::AgentMode`]. The two enums are
-/// structurally identical today (one re-exports the other); the
-/// alias keeps call sites at a single readable level of indirection.
-#[must_use]
-pub fn core_to_modes_mode(mode: aura_core_types::AgentMode) -> AgentMode {
-    match mode {
-        aura_core_types::AgentMode::Agent => AgentMode::Agent,
-        aura_core_types::AgentMode::Plan => AgentMode::Plan,
-        aura_core_types::AgentMode::Ask => AgentMode::Ask,
-        aura_core_types::AgentMode::Debug => AgentMode::Debug,
     }
 }
 
@@ -93,7 +77,7 @@ pub fn overrides_from_request(
     kind: &SubagentKindSpec,
 ) -> SubagentOverrides {
     let narrowed_parent = narrow_permissions(&request.parent_permissions, kind);
-    let mode_override = request.override_mode.map(core_to_modes_mode);
+    let mode_override = request.override_mode;
     let tool_subset = request
         .override_tool_subset
         .clone()

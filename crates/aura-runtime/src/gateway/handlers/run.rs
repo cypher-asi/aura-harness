@@ -162,7 +162,9 @@ async fn start_dev_loop_run(
         agent_capabilities,
         auth_jwt: _,
         user_id: _,
+        mode,
     } = req;
+    require_agent_mode(mode, "dev-loop")?;
 
     let project_ctx = project.ok_or_else(|| {
         bad_request("dev-loop runs require a project context (project_id, billing ids)")
@@ -239,7 +241,9 @@ async fn start_task_run(
         agent_capabilities,
         auth_jwt: _,
         user_id: _,
+        mode,
     } = req;
+    require_agent_mode(mode, "task-run")?;
 
     let (task_id, prior_failure, work_log) = match r#type {
         RuntimeRequestType::TaskRun {
@@ -326,6 +330,23 @@ fn automaton_bridge(
 
 fn wire_permissions_to_core(wire: AgentPermissionsWire) -> aura_core_types::AgentPermissions {
     crate::gateway::session::agent_permissions_from_wire(wire)
+}
+
+/// Dev-loop and task-run automatons exist to write code, so they only
+/// run in [`aura_core_types::AgentMode::Agent`]. Rejecting other modes up
+/// front beats starting an automaton whose every write the kernel denies.
+fn require_agent_mode(
+    requested: Option<aura_core_types::AgentMode>,
+    run_kind: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let mode = aura_config::session_mode(requested);
+    if mode == aura_core_types::AgentMode::Agent {
+        Ok(())
+    } else {
+        Err(bad_request(&format!(
+            "{run_kind} runs require agent mode (resolved mode: {mode:?})"
+        )))
+    }
 }
 
 fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {

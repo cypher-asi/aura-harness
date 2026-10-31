@@ -51,10 +51,12 @@ mod capability_profile;
 mod gate;
 mod modes;
 mod profile;
+mod resolution;
 mod violation;
 
 pub use capability_profile::CapabilityProfile;
 pub use gate::{DefaultModeGate, GatedAction, ModeGate};
 pub use modes::{AgentMode, AgentRole, JoinPolicy, KernelMode, ReplayMode, SandboxMode, SpawnMode};
 pub use profile::ModeProfile;
+pub use resolution::{resolve_session_mode, AgentModeInputs};
 pub use violation::ModeViolation;

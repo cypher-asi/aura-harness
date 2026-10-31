@@ -12,7 +12,7 @@ Arguments:
 
 Options:
       --mode <MODE>
-          Phase 9: top-level `AgentMode` override. Highest rung of the documented resolution priority chain (CLI > TUI slash > SDK field > daemon default > `AgentMode::Agent` fallback). The flag is resolved at session start by the fleet daemon's `resolve_session_mode` helper
+          Session mode for the interactive terminal. Overrides the daemon default (`AURA_FLEET_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
 
           Possible values:
           - agent: Full unrestricted operation subject to user permissions

@@ -11,17 +11,20 @@
 //! - [`integration_gate`] — the integration-requirement check that
 //!   delegates to `aura_core_types::installed_integrations_satisfy`.
 //! - [`scope`] — `target_*` scope-key validation.
+//! - [`mode_gate`] — the session `AgentMode` ceiling, checked first.
 //! - [`delegate_gate`] — `ActionKind::Delegate` payload parsing and
-//!   evaluation against the per-agent and tool gates.
+//!   evaluation against the mode, per-agent, and tool gates.
 
 mod agent_permissions;
 mod delegate_gate;
 mod integration_gate;
+mod mode_gate;
 mod scope;
 #[cfg(test)]
 mod tests;
 mod verdict;
 
+pub use mode_gate::{gated_action, tool_mode_class, ToolModeClass};
 pub use verdict::{PolicyResult, PolicyVerdict};
 
 use super::config::PolicyConfig;

@@ -39,6 +39,7 @@ pub mod components;
 pub mod events;
 pub mod input;
 pub mod layout;
+pub mod mode_command;
 pub mod themes;
 pub mod ws;
 
@@ -49,6 +50,7 @@ mod terminal;
 // Re-exports for convenience
 pub use app::{App, AppState};
 pub use events::{UiCommand, UiEvent};
+pub use mode_command::{ModeCommandError, SlashModeCommand};
 pub use terminal::Terminal;
 pub use themes::Theme;
 
