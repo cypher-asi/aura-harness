@@ -4,6 +4,7 @@
 //! lives in this module. The `aura-node` entrypoint lives in
 //! `aura_runtime::run_node` and is re-exported from this crate root.
 
+use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::cli::{
     AgentsCommand, AgentsSubcommand, Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand,
@@ -14,11 +15,12 @@ use crate::{api_server, event_loop, record_loader, session_helpers};
 
 use anyhow::Context;
 use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
-use aura_agent_kernel::{Kernel, KernelConfig};
-use aura_core_types::Transaction;
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_context_skills::{SkillLoader, SkillManager};
+use aura_core_types::{AgentPermissions, Transaction};
 use aura_model_reasoner::ModelProvider;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
-use aura_tools::ToolConfig;
+use aura_tools::{ToolConfig, ToolExecutor};
 use clap::Parser;
 use colored::Colorize;
 use std::path::PathBuf;
@@ -551,7 +553,10 @@ async fn run_terminal(
     tokio::fs::create_dir_all(&data_dir).await?;
 
     let registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
-    let identity = registry.active().identity();
+    let active_agent = registry.active().clone();
+    let identity = active_agent.identity();
+    let definitions =
+        AgentDefinitions::load_or_seed(&data_dir).context("loading permanent agents")?;
 
     let store_path = session_helpers::resolve_store_path(&data_dir);
     let store = session_helpers::open_store(&store_path)?;
@@ -563,12 +568,6 @@ async fn run_terminal(
         }
         Err(e) => warn!(error = %e, "Failed to rebuild conversation from record"),
     }
-    let _ = cmd_tx.try_send(UiCommand::SetAgents(record_loader::agent_summaries(
-        &registry,
-        store.as_ref(),
-        identity.agent_id,
-    )));
-    let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
     let mut tool_config = ToolConfig::for_autonomous_dev_loop();
@@ -597,6 +596,7 @@ async fn run_terminal(
     });
     let models = ModelSelection::init(&mut config, user);
     info!(model = %models.current(), "Terminal model selected");
+    let base_config = config.clone();
     let agent_loop = AgentLoop::new(config);
 
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
@@ -629,21 +629,46 @@ async fn run_terminal(
         ..KernelConfig::default()
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
-    let factory = event_loop::KernelFactory::new(
-        store,
-        Box::new(move |agent_id| {
-            let (executor_router, _) =
-                session_helpers::build_executor_router_with_config(&tool_config);
-            Ok(Kernel::new(
-                Arc::clone(&kernel_store),
-                Arc::clone(&provider),
-                executor_router,
-                kernel_config.clone(),
-                agent_id,
-            )?)
-        }),
+    let hub = event_loop::AgentHub::new(
+        event_loop::AgentHubParts {
+            registry,
+            definitions,
+            skills: SkillManager::new(SkillLoader::with_defaults(
+                Some(workspace_root.clone()),
+                None,
+            )),
+            base: event_loop::TurnBase {
+                config: base_config,
+                tools,
+                limits: models.limits(),
+            },
+            commands: cmd_tx.clone(),
+        },
+        move |dispatcher| {
+            event_loop::KernelFactory::new(
+                store,
+                Box::new(move |agent_id, parent_chain| {
+                    let executor = ToolExecutor::new(tool_config.clone())
+                        .with_caller_permissions(AgentPermissions::full_access())
+                        .with_parent_chain(parent_chain)
+                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher));
+                    let mut executor_router = ExecutorRouter::new();
+                    executor_router.add_executor(Arc::new(executor));
+                    Ok(Kernel::new(
+                        Arc::clone(&kernel_store),
+                        Arc::clone(&provider),
+                        executor_router,
+                        kernel_config.clone(),
+                        agent_id,
+                    )?)
+                }),
+            )
+        },
     );
-    let session = factory.open(identity)?;
+    let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
+    let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
+    let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
+    let session = hub.factory.open(&active_agent, Vec::new())?;
 
     let cmd_tx_clone = cmd_tx.clone();
     let process_manager_clone = Arc::clone(&process_manager);
@@ -655,10 +680,8 @@ async fn run_terminal(
             process_completions: process_rx,
             commands: cmd_tx_clone,
             agent_loop: &mut agent_loop,
-            tools: &tools,
             session,
-            factory,
-            registry,
+            hub,
             _process_manager: process_manager_clone,
             memory_manager: None,
             models,

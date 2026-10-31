@@ -13,6 +13,7 @@ use aura_terminal::{
     UiCommand,
 };
 use serde_json::Value;
+use std::collections::HashSet;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -91,17 +92,20 @@ pub fn conversation_history(
     Ok(history.into_iter().skip(skip).collect())
 }
 
-/// Build the agents-column rows for every registered agent.
+/// Build the agents-column rows for every registered agent, each followed
+/// by the agents it spawned. `running` holds the agents currently working
+/// on a task for their parent.
 #[must_use]
 pub fn agent_summaries(
     registry: &AgentRegistry,
     store: &dyn ReadStore,
     active: AgentId,
+    running: &HashSet<AgentId>,
 ) -> Vec<AgentSummary> {
     registry
-        .agents()
-        .iter()
-        .map(|agent| {
+        .tree()
+        .into_iter()
+        .map(|(agent, depth)| {
             let agent_id = agent.agent_id();
             let record_count = store.get_head_seq(agent_id).unwrap_or(0);
             let last_active = if record_count == 0 {
@@ -119,6 +123,9 @@ pub fn agent_summaries(
                 is_active: agent_id == active,
                 record_count,
                 last_active,
+                definition: agent.definition.clone(),
+                depth,
+                running: running.contains(&agent_id),
             }
         })
         .collect()

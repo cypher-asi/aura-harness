@@ -339,6 +339,7 @@ fn agent(id: &str, name: &str) -> crate::events::AgentSummary {
         is_active: false,
         record_count: 0,
         last_active: "-".to_string(),
+        ..Default::default()
     }
 }
 
@@ -419,6 +420,146 @@ fn test_agent_new_command_emits_create_agent() {
 
     app.handle_command("/agent new");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+}
+
+// ========================================================================
+// Permanent agents panel
+// ========================================================================
+
+fn app_with_definitions() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_agents();
+    app.process_command(UiCommand::SetAgentDefinitions(vec![
+        crate::events::AgentDefinitionSummary {
+            name: "explorer".to_string(),
+            description: "Reads code".to_string(),
+        },
+        crate::events::AgentDefinitionSummary {
+            name: "reviewer".to_string(),
+            description: "Reviews diffs".to_string(),
+        },
+    ]));
+    app.focus = PanelFocus::Definitions;
+    (app, rx)
+}
+
+#[test]
+fn test_enter_on_definition_instantiates_it() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InstantiateDefinition(name)) if name == "reviewer"
+    ));
+}
+
+#[test]
+fn test_enter_on_new_row_creates_definition() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    for _ in 0..3 {
+        app.handle_key(key(KeyCode::Down));
+    }
+    assert_eq!(app.selected_definition(), 2);
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::EditDefinition(None))));
+}
+
+#[test]
+fn test_definition_shortcuts_edit_and_create() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    app.handle_key(key(KeyCode::Char('e')));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::EditDefinition(Some(name))) if name == "explorer"
+    ));
+
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::EditDefinition(None))));
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn test_definition_shortcuts_type_when_input_not_empty() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    app.handle_key(key(KeyCode::Char('h')));
+    app.handle_key(key(KeyCode::Char('e')));
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.input(), "he");
+}
+
+#[test]
+fn test_delete_definition_needs_confirmation() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    app.handle_key(key(KeyCode::Char('d')));
+    assert!(rx.try_recv().is_err());
+    app.handle_key(key(KeyCode::Char('x')));
+    assert!(rx.try_recv().is_err());
+
+    app.handle_key(key(KeyCode::Char('d')));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::DeleteDefinition(name)) if name == "explorer"
+    ));
+}
+
+#[test]
+fn test_spawn_command_matches_name_case_insensitively() {
+    let (mut app, mut rx) = app_with_definitions();
+
+    app.handle_command("/spawn Reviewer");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InstantiateDefinition(name)) if name == "reviewer"
+    ));
+
+    app.handle_command("/spawn nobody");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((_, NotificationType::Warning))
+    ));
+}
+
+#[test]
+fn test_spawn_refused_while_processing() {
+    let (mut app, mut rx) = app_with_definitions();
+    app.state = AppState::Processing;
+
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_open_editor_request_is_taken_once() {
+    let (mut app, mut rx) = app_with_definitions();
+    let path = std::path::PathBuf::from("/tmp/reviewer.md");
+
+    app.process_command(UiCommand::OpenEditor(path.clone()));
+    assert_eq!(app.take_editor_request(), Some(path.clone()));
+    assert_eq!(app.take_editor_request(), None);
+
+    app.editor_closed(path.clone(), &Ok(()));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::DefinitionEdited(p)) if p == path));
+}
+
+#[test]
+fn test_tab_cycle_reaches_definitions() {
+    let (mut app, _rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+
+    app.handle_key(key(KeyCode::Tab));
+
+    assert_eq!(app.focus(), PanelFocus::Definitions);
 }
 
 #[test]
@@ -859,7 +1000,7 @@ fn test_closing_focused_sandbox_returns_focus_to_chat() {
 fn test_tab_cycles_visible_panels() {
     let mut app = App::new();
     let mut order = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..5 {
         app.handle_key(key(KeyCode::Tab));
         order.push(app.focus());
     }
@@ -869,6 +1010,7 @@ fn test_tab_cycles_visible_panels() {
             PanelFocus::Records,
             PanelFocus::Sandbox,
             PanelFocus::Swarm,
+            PanelFocus::Definitions,
             PanelFocus::Chat
         ]
     );

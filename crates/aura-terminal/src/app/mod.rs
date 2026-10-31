@@ -4,6 +4,7 @@
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
 mod commands;
+mod definitions;
 mod format;
 mod keys;
 mod line_edit;
@@ -18,7 +19,9 @@ mod tests;
 
 use crate::{
     components::{Message, ToolCard, ToolStatus},
-    events::{AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent},
+    events::{
+        AgentDefinitionSummary, AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent,
+    },
     input::InputHistory,
     renderer::ChatLineCache,
 };
@@ -30,6 +33,7 @@ use ratatui::{
 use sandbox::SandboxTree;
 pub use selection::Selection;
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -62,6 +66,8 @@ pub enum PanelFocus {
     Records,
     /// Sandbox panel (file tree)
     Sandbox,
+    /// Permanent agents panel (below the agent list)
+    Definitions,
 }
 
 /// Application state.
@@ -205,6 +211,16 @@ pub struct App {
     pub(super) selecting: bool,
     /// Whether the selection should be copied after the next frame
     pub(super) copy_requested: bool,
+    /// Permanent agents
+    pub(super) definitions: Vec<AgentDefinitionSummary>,
+    /// Highlighted row in the Permanent agents panel
+    pub(super) selected_definition: usize,
+    /// First visible row of the Permanent agents panel
+    pub(super) definitions_scroll: usize,
+    /// File to open in the editor before the next frame
+    pub(super) editor_request: Option<PathBuf>,
+    /// Permanent agent waiting for `y` to confirm its deletion
+    pub(super) pending_delete: Option<String>,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -214,6 +230,10 @@ pub struct PanelAreas {
     pub swarm: Option<Rect>,
     /// Rows of the agents list inside the panel
     pub agent_rows: Option<Rect>,
+    /// Permanent agents panel (including border)
+    pub definitions: Option<Rect>,
+    /// Rows of the permanent agents list inside the panel
+    pub definition_rows: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
     /// Message text area inside the chat panel
@@ -323,6 +343,11 @@ impl App {
             selection: None,
             selecting: false,
             copy_requested: false,
+            definitions: Vec::new(),
+            selected_definition: 0,
+            definitions_scroll: 0,
+            editor_request: None,
+            pending_delete: None,
         }
     }
 
@@ -529,6 +554,9 @@ impl App {
             PanelFocus::Swarm => {
                 self.select_agent_row(self.selected_agent.saturating_sub(lines));
             }
+            PanelFocus::Definitions => {
+                self.select_definition_row(self.selected_definition.saturating_sub(lines));
+            }
             PanelFocus::Sandbox => {
                 self.sandbox
                     .move_by(-isize::try_from(lines).unwrap_or(isize::MAX));
@@ -549,6 +577,9 @@ impl App {
             }
             PanelFocus::Swarm => {
                 self.select_agent_row(self.selected_agent.saturating_add(lines));
+            }
+            PanelFocus::Definitions => {
+                self.select_definition_row(self.selected_definition.saturating_add(lines));
             }
             PanelFocus::Sandbox => {
                 self.sandbox
@@ -660,6 +691,8 @@ impl App {
     fn panel_at(&self, column: u16, row: u16) -> Option<PanelFocus> {
         if contains(self.areas.swarm, column, row) {
             Some(PanelFocus::Swarm)
+        } else if contains(self.areas.definitions, column, row) {
+            Some(PanelFocus::Definitions)
         } else if contains(self.areas.records, column, row) {
             Some(PanelFocus::Records)
         } else if contains(self.areas.sandbox, column, row) {
@@ -703,7 +736,11 @@ impl App {
         let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
             return;
         };
-        let step = if panel == PanelFocus::Swarm { 1 } else { 3 };
+        let step = if matches!(panel, PanelFocus::Swarm | PanelFocus::Definitions) {
+            1
+        } else {
+            3
+        };
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.clear_selection();
@@ -721,6 +758,9 @@ impl App {
                 self.selecting = self.selection.is_some();
                 match panel {
                     PanelFocus::Swarm => self.click_agent_row(mouse.column, mouse.row),
+                    PanelFocus::Definitions => {
+                        self.click_definition_row(mouse.column, mouse.row);
+                    }
                     PanelFocus::Sandbox => self.click_sandbox_row(mouse.column, mouse.row),
                     PanelFocus::Chat | PanelFocus::Records => {}
                 }
@@ -735,6 +775,7 @@ impl App {
         let area = match panel {
             PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
             PanelFocus::Swarm => self.areas.swarm,
+            PanelFocus::Definitions => self.areas.definitions,
             PanelFocus::Records => self.areas.records,
             PanelFocus::Sandbox => self.areas.sandbox,
         }?;

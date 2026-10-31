@@ -338,11 +338,13 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
         let is_active = agent.id == active_id;
 
         let prefix = if is_selected && is_focused {
-            " > "
+            " > ".to_string()
+        } else if agent.running {
+            format!(" {} ", app.spinner_char())
         } else if is_active {
-            " ● "
+            " ● ".to_string()
         } else {
-            "   "
+            "   ".to_string()
         };
 
         let line_style = if is_selected && is_focused {
@@ -357,14 +359,16 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
 
         let index = format!("{:>number_width$}. ", i + 1);
         let count = format!(" {}", agent.record_count);
+        let indent = "  ".repeat(agent.depth);
         let name_width = (inner.width as usize)
-            .saturating_sub(display_width(prefix) + index.len() + count.len())
+            .saturating_sub(display_width(&prefix) + index.len() + indent.len() + count.len())
             .max(1);
         let display_name = truncate_agent_name(&agent.name, name_width);
         let padding = name_width.saturating_sub(display_width(&display_name));
         lines.push(Line::from(vec![
             Span::styled(prefix, line_style),
             Span::styled(index, line_style),
+            Span::raw(indent),
             Span::styled(display_name, line_style),
             Span::raw(" ".repeat(padding)),
             Span::styled(count, Style::default().fg(theme.colors.muted)),
@@ -383,6 +387,109 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     lines.push(Line::from(Span::styled(
         format!("{prefix}{:>number_width$}  New agent", "+"),
         new_style,
+    )));
+    lines
+}
+
+const DEFINITIONS_HINT: &str = "⏎ spawn e edit d del";
+
+/// Render the Permanent agents panel (definitions followed by a
+/// "+ New permanent" row).
+pub(super) fn render_definitions_panel(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    theme: &Theme,
+) {
+    let is_focused = app.focus() == PanelFocus::Definitions;
+    let border_color = if is_focused {
+        theme.colors.primary
+    } else {
+        theme.colors.muted
+    };
+    let block = Block::default()
+        .title(" PERMANENT AGENTS ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let show_hint = inner.height >= 4;
+    let rows_area = Rect {
+        height: inner.height.saturating_sub(u16::from(show_hint)),
+        ..inner
+    };
+    app.set_definition_rows_area(rows_area);
+    app.sync_definitions_scroll(rows_area.height as usize);
+
+    let lines: Vec<Line> = build_definition_lines(app, inner, theme)
+        .into_iter()
+        .skip(app.definitions_scroll())
+        .take(rows_area.height as usize)
+        .collect();
+    frame.render_widget(Paragraph::new(lines), rows_area);
+
+    if show_hint {
+        let hint_area = Rect {
+            y: inner.y + inner.height - 1,
+            height: 1,
+            ..inner
+        };
+        let hint = truncate_agent_name(DEFINITIONS_HINT, (inner.width as usize).saturating_sub(1));
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {hint}"),
+                Style::default().fg(theme.colors.muted),
+            ))),
+            hint_area,
+        );
+    }
+}
+
+fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    let is_focused = app.focus() == PanelFocus::Definitions;
+    let selected = app.selected_definition();
+    let width = inner.width as usize;
+    let highlighted = Style::default()
+        .fg(theme.colors.primary)
+        .add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line> = Vec::with_capacity(app.definitions().len() + 1);
+
+    for (i, definition) in app.definitions().iter().enumerate() {
+        let is_selected = i == selected && is_focused;
+        let (prefix, name_style) = if is_selected {
+            (" > ", highlighted)
+        } else {
+            ("   ", Style::default().fg(theme.colors.secondary))
+        };
+        let name_width = width.saturating_sub(prefix.len()).max(1);
+        let name = truncate_agent_name(&definition.name, name_width);
+        let description_width = width.saturating_sub(prefix.len() + display_width(&name) + 2);
+        let mut spans = vec![
+            Span::styled(prefix, name_style),
+            Span::styled(name, name_style),
+        ];
+        if description_width > 1 && !definition.description.is_empty() {
+            spans.push(Span::styled(
+                format!(
+                    "  {}",
+                    truncate_agent_name(&definition.description, description_width)
+                ),
+                Style::default().fg(theme.colors.muted),
+            ));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let new_selected = selected == app.definitions().len() && is_focused;
+    let (prefix, style) = if new_selected {
+        (" > ", highlighted)
+    } else {
+        ("   ", Style::default().fg(theme.colors.muted))
+    };
+    lines.push(Line::from(Span::styled(
+        truncate_agent_name(&format!("{prefix}+  New permanent"), width.max(1)),
+        style,
     )));
     lines
 }

@@ -57,6 +57,18 @@ pub enum UiEvent {
     /// User requested a new agent (with optional display name)
     CreateAgent(Option<String>),
 
+    /// User started an instance of the named permanent agent
+    InstantiateDefinition(String),
+
+    /// User asked to edit the named permanent agent, or to create one (`None`)
+    EditDefinition(Option<String>),
+
+    /// User confirmed deleting the named permanent agent
+    DeleteDefinition(String),
+
+    /// The editor opened by [`UiCommand::OpenEditor`] exited
+    DefinitionEdited(PathBuf),
+
     /// User submitted login credentials from the TUI
     LoginCredentials {
         /// Email address
@@ -159,6 +171,12 @@ pub enum UiCommand {
 
     /// Set the currently active agent
     SetActiveAgent(String),
+
+    /// Update the list of permanent agents
+    SetAgentDefinitions(Vec<AgentDefinitionSummary>),
+
+    /// Suspend the UI and open a file in the user's editor
+    OpenEditor(PathBuf),
 
     /// Clear records (when switching agents)
     ClearRecords,
@@ -321,8 +339,17 @@ pub enum RecordStatus {
     None,
 }
 
+/// Summary of a permanent agent for display in the Permanent agents panel.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDefinitionSummary {
+    /// Name agents spawn it by
+    pub name: String,
+    /// What it does and when to spawn it
+    pub description: String,
+}
+
 /// Summary of an agent for display in the Swarm panel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentSummary {
     /// Agent ID (hex encoded)
     pub id: String,
@@ -336,6 +363,15 @@ pub struct AgentSummary {
     pub record_count: u64,
     /// Last activity timestamp (HH:MM:SS or date)
     pub last_active: String,
+    /// Permanent agent this is an instance of
+    #[serde(default)]
+    pub definition: Option<String>,
+    /// How many spawning agents it is nested under (0 for top-level agents)
+    #[serde(default)]
+    pub depth: usize,
+    /// Whether it is running a task for the agent that spawned it
+    #[serde(default)]
+    pub running: bool,
 }
 
 #[cfg(test)]

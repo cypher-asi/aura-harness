@@ -13,6 +13,8 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Frame, Terminal as RatatuiTerminal};
 use std::io::{self, Stdout};
+use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 use tracing::error;
 
@@ -108,6 +110,12 @@ impl Terminal {
             // This ensures records loaded at startup are displayed on the first frame
             app.tick();
 
+            if let Some(path) = app.take_editor_request() {
+                let result = self.edit_file(&path);
+                app.editor_closed(path, &result);
+                continue;
+            }
+
             // Update size in case of resize
             self.update_size()?;
 
@@ -199,6 +207,30 @@ impl Terminal {
         }
     }
 
+    /// Hand the screen to the user's editor (`$VISUAL`, then `$EDITOR`,
+    /// then `vi`) on `path` and take it back once the editor exits.
+    fn edit_file(&mut self, path: &Path) -> io::Result<()> {
+        disable_raw_mode()?;
+        execute!(
+            self.inner.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
+        let status = editor_command(path).status();
+        enable_raw_mode()?;
+        execute!(
+            self.inner.backend_mut(),
+            EnterAlternateScreen,
+            EnableMouseCapture
+        )?;
+        self.mouse_capture_enabled = true;
+        self.inner.clear()?;
+        match status? {
+            status if status.success() => Ok(()),
+            status => Err(io::Error::other(format!("editor exited with {status}"))),
+        }
+    }
+
     fn enable_mouse_capture(&mut self) {
         if !self.mouse_capture_enabled {
             let _ = execute!(self.inner.backend_mut(), EnableMouseCapture);
@@ -235,6 +267,20 @@ impl Drop for Terminal {
             error!(error = %e, "Failed to leave alternate screen");
         }
     }
+}
+
+/// Command that opens `path` in the user's editor. The editor variable may
+/// carry arguments, e.g. `code --wait`.
+fn editor_command(path: &Path) -> Command {
+    let editor = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|var| std::env::var(var).ok())
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "vi".to_string());
+    let mut parts = editor.split_whitespace();
+    let mut command = Command::new(parts.next().unwrap_or("vi"));
+    command.args(parts).arg(path);
+    command
 }
 
 /// Result of handling a key event.

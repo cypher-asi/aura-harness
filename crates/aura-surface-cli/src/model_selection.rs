@@ -207,23 +207,12 @@ impl ModelSelection {
 
     fn apply(&mut self, config: &mut AgentLoopConfig, id: &str) {
         id.clone_into(&mut self.current);
-        config.model = id.to_string();
-        config.max_context_tokens = Some(aura_engine::model_context::context_window_for_model(id));
-        match backend_for(id) {
-            ModelBackend::Local => {
-                config.max_tokens = self
-                    .router_limits
-                    .max_tokens
-                    .min(model_catalog::DEFAULT_LOCAL_MAX_OUTPUT_TOKENS);
-                config.stream_timeout = LOCAL_STREAM_TIMEOUT;
-                config.stream_event_timeout = LOCAL_STREAM_TIMEOUT;
-            }
-            ModelBackend::Router => {
-                config.max_tokens = self.router_limits.max_tokens;
-                config.stream_timeout = self.router_limits.stream_timeout;
-                config.stream_event_timeout = self.router_limits.stream_event_timeout;
-            }
-        }
+        self.limits().configure(config, id);
+    }
+
+    /// Limits for configuring other agent loops to run a given model.
+    pub const fn limits(&self) -> ModelLimits {
+        ModelLimits(self.router_limits)
     }
 
     fn persist(&self) {
@@ -243,6 +232,45 @@ impl ModelSelection {
         if let Err(e) = result {
             warn!(error = %e, path = %path.display(), "Failed to persist model selection");
         }
+    }
+}
+
+/// What it takes to point an agent loop at a model without changing the
+/// terminal's selected model (used for permanent agents with their own
+/// `model`).
+#[derive(Debug, Clone, Copy)]
+pub struct ModelLimits(RouterLimits);
+
+impl ModelLimits {
+    /// Configure `config` to run model `id`.
+    pub fn configure(self, config: &mut AgentLoopConfig, id: &str) {
+        let limits = self.0;
+        config.model = id.to_string();
+        config.max_context_tokens = Some(aura_engine::model_context::context_window_for_model(id));
+        match backend_for(id) {
+            ModelBackend::Local => {
+                config.max_tokens = limits
+                    .max_tokens
+                    .min(model_catalog::DEFAULT_LOCAL_MAX_OUTPUT_TOKENS);
+                config.stream_timeout = LOCAL_STREAM_TIMEOUT;
+                config.stream_event_timeout = LOCAL_STREAM_TIMEOUT;
+            }
+            ModelBackend::Router => {
+                config.max_tokens = limits.max_tokens;
+                config.stream_timeout = limits.stream_timeout;
+                config.stream_event_timeout = limits.stream_event_timeout;
+            }
+        }
+    }
+
+    /// Limits taken from `config` as the router settings.
+    #[cfg(test)]
+    pub(crate) const fn of(config: &AgentLoopConfig) -> Self {
+        Self(RouterLimits {
+            max_tokens: config.max_tokens,
+            stream_timeout: config.stream_timeout,
+            stream_event_timeout: config.stream_event_timeout,
+        })
     }
 }
 

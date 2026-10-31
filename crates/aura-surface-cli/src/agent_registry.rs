@@ -21,6 +21,12 @@ pub struct RegisteredAgent {
     pub zns_id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
+    /// Permanent agent this is an instance of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<String>,
+    /// ZNS id of the agent that spawned this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 impl RegisteredAgent {
@@ -75,6 +81,8 @@ impl AgentRegistry {
                 zns_id,
                 name: DEFAULT_AGENT_NAME.to_string(),
                 created_at: Utc::now(),
+                definition: None,
+                parent: None,
             });
             registry.save()?;
         }
@@ -122,14 +130,76 @@ impl AgentRegistry {
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Agent {}", self.file.agents.len() + 1));
+        self.push(name, None, None)
+    }
+
+    /// Register an instance of the permanent agent `definition`, named
+    /// `<definition> #<n>`, optionally spawned by the agent with ZNS id
+    /// `parent`.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn create_instance(
+        &mut self,
+        definition: &str,
+        parent: Option<String>,
+    ) -> anyhow::Result<RegisteredAgent> {
+        let count = self
+            .file
+            .agents
+            .iter()
+            .filter(|a| a.definition.as_deref() == Some(definition))
+            .count();
+        let name = format!("{definition} #{}", count + 1);
+        self.push(name, Some(definition.to_string()), parent)
+    }
+
+    fn push(
+        &mut self,
+        name: String,
+        definition: Option<String>,
+        parent: Option<String>,
+    ) -> anyhow::Result<RegisteredAgent> {
         let agent = RegisteredAgent {
             zns_id: format!("0://terminal/{}", uuid::Uuid::new_v4()),
             name,
             created_at: Utc::now(),
+            definition,
+            parent,
         };
         self.file.agents.push(agent.clone());
         self.save()?;
         Ok(agent)
+    }
+
+    /// Agents in display order: each agent is followed by the agents it
+    /// spawned, paired with how deeply it is nested.
+    #[must_use]
+    pub fn tree(&self) -> Vec<(&RegisteredAgent, usize)> {
+        fn visit<'a>(
+            agents: &'a [RegisteredAgent],
+            agent: &'a RegisteredAgent,
+            depth: usize,
+            out: &mut Vec<(&'a RegisteredAgent, usize)>,
+        ) {
+            out.push((agent, depth));
+            for child in agents
+                .iter()
+                .filter(|a| a.parent.as_deref() == Some(agent.zns_id.as_str()))
+            {
+                visit(agents, child, depth + 1, out);
+            }
+        }
+        let agents = &self.file.agents;
+        let mut out = Vec::with_capacity(agents.len());
+        for root in agents.iter().filter(|a| {
+            a.parent
+                .as_deref()
+                .is_none_or(|parent| !agents.iter().any(|p| p.zns_id == parent))
+        }) {
+            visit(agents, root, 0, &mut out);
+        }
+        out
     }
 
     fn save(&self) -> anyhow::Result<()> {
@@ -196,5 +266,54 @@ mod tests {
         let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
         assert_eq!(reloaded.agents(), &[first, named.clone(), unnamed]);
         assert_eq!(reloaded.active(), &named);
+    }
+
+    #[test]
+    fn loads_registry_written_before_definitions_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(REGISTRY_FILE),
+            r#"{"agents":[{"zns_id":"0://terminal/a","name":"A","created_at":"2026-10-31T01:48:50Z"}]}"#,
+        )
+        .unwrap();
+
+        let registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        assert_eq!(registry.agents()[0].definition, None);
+        assert_eq!(registry.agents()[0].parent, None);
+    }
+
+    #[test]
+    fn instances_are_numbered_per_definition_and_nested_under_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let root = registry.active().clone();
+        let other = registry.create(Some("Other".to_string())).unwrap();
+        let child = registry
+            .create_instance("reviewer", Some(root.zns_id.clone()))
+            .unwrap();
+        let grandchild = registry
+            .create_instance("explorer", Some(child.zns_id.clone()))
+            .unwrap();
+        let second = registry.create_instance("reviewer", None).unwrap();
+        assert_eq!(child.name, "reviewer #1");
+        assert_eq!(second.name, "reviewer #2");
+        assert_eq!(child.definition.as_deref(), Some("reviewer"));
+
+        let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let tree: Vec<(&str, usize)> = reloaded
+            .tree()
+            .into_iter()
+            .map(|(a, depth)| (a.name.as_str(), depth))
+            .collect();
+        assert_eq!(
+            tree,
+            [
+                (root.name.as_str(), 0),
+                (child.name.as_str(), 1),
+                (grandchild.name.as_str(), 2),
+                (other.name.as_str(), 0),
+                (second.name.as_str(), 0),
+            ]
+        );
     }
 }

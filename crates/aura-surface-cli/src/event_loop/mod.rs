@@ -5,18 +5,19 @@ pub(crate) mod agents;
 pub(crate) mod handlers;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
+pub(crate) mod subagents;
 
 pub(crate) use agent_events::forward_agent_events;
-pub use agents::{AgentSession, KernelFactory};
+pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub(crate) use record_ui::send_record_to_ui;
 pub use record_ui::UiToolAuditObserver;
+pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
-use crate::agent_registry::AgentRegistry;
 use crate::model_selection::ModelSelection;
 use aura_agent::{AgentLoop, ProcessManager};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Transaction};
-use aura_model_reasoner::{Message, ToolDefinition};
+use aura_model_reasoner::Message;
 use aura_terminal::{UiCommand, UiEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,12 +32,10 @@ pub struct EventLoopContext<'a> {
     pub process_completions: mpsc::Receiver<Transaction>,
     pub commands: mpsc::Sender<UiCommand>,
     pub agent_loop: &'a mut AgentLoop,
-    pub tools: &'a [ToolDefinition],
     /// Session for the agent shown when the loop starts.
     pub session: AgentSession,
-    /// Builds kernels for agents selected later in the run.
-    pub factory: KernelFactory,
-    pub registry: AgentRegistry,
+    /// Agents, permanent agents, and the kernel factory, shared with spawns.
+    pub hub: Arc<AgentHub>,
     pub _process_manager: Arc<ProcessManager>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
@@ -48,15 +47,13 @@ pub struct EventLoopContext<'a> {
 pub(super) struct LoopState<'a> {
     pub(super) commands: &'a mpsc::Sender<UiCommand>,
     pub(super) agent_loop: &'a mut AgentLoop,
-    pub(super) tools: &'a [ToolDefinition],
     pub(super) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     pub(super) models: ModelSelection,
     /// The agent the UI is showing; user messages go here.
     pub(super) session: AgentSession,
     /// Previously opened agents, kept so their conversations survive switching.
     pub(super) parked: HashMap<AgentId, AgentSession>,
-    pub(super) factory: KernelFactory,
-    pub(super) registry: AgentRegistry,
+    pub(super) hub: Arc<AgentHub>,
 }
 
 impl LoopState<'_> {
@@ -66,6 +63,22 @@ impl LoopState<'_> {
         } else {
             self.parked.get(&agent_id).map(|s| &s.kernel)
         }
+    }
+
+    /// Keep the sessions of finished spawns so switching to them resumes
+    /// their conversation on the kernel that wrote it.
+    fn park_finished_spawns(&mut self) {
+        for session in self.hub.take_finished() {
+            self.parked.insert(session.agent_id(), session);
+        }
+    }
+
+    /// Publish the terminal's current config as the base for spawned agents.
+    fn sync_turn_base(&mut self) {
+        let config = self.agent_loop.config_mut().clone();
+        let mut base = subagents::lock(&self.hub.base);
+        base.config = config;
+        base.limits = self.models.limits();
     }
 }
 
@@ -94,10 +107,8 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         mut process_completions,
         commands,
         agent_loop,
-        tools,
         session,
-        factory,
-        registry,
+        hub,
         _process_manager,
         memory_manager,
         models,
@@ -106,13 +117,11 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     let mut state = LoopState {
         commands: &commands,
         agent_loop,
-        tools,
         memory_manager,
         models,
         session,
         parked: HashMap::new(),
-        factory,
-        registry,
+        hub,
     };
     install_memory_observer(&mut state);
 
@@ -212,6 +221,12 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
         UiEvent::SelectAgent(agent_hex) => agents::handle_select_agent(state, &agent_hex).await,
         UiEvent::CreateAgent(name) => agents::handle_create_agent(state, name).await,
         UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,
+        UiEvent::InstantiateDefinition(name) => {
+            agents::handle_instantiate_definition(state, &name).await;
+        }
+        UiEvent::EditDefinition(name) => agents::handle_edit_definition(state, name).await,
+        UiEvent::DeleteDefinition(name) => agents::handle_delete_definition(state, &name).await,
+        UiEvent::DefinitionEdited(path) => agents::handle_definition_edited(state, &path).await,
         UiEvent::LoginCredentials { email, password } => {
             handlers::handle_login(state, &email, &password).await;
         }
@@ -273,7 +288,15 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
         .await;
     }
 
-    let (process_result, streamed_text) = handlers::run_agent_turn(state).await;
+    for problem in subagents::lock(&state.hub.definitions).reload() {
+        warn!(%problem, "Skipping agent definition");
+    }
+    state.hub.send_definitions().await;
+    state.sync_turn_base();
+    let (config, tools) = state.hub.turn(state.session.definition.as_deref());
+    let turn_loop = AgentLoop::new(config);
+    let (process_result, streamed_text) = handlers::run_agent_turn(state, &turn_loop, tools).await;
+    state.park_finished_spawns();
 
     match process_result {
         Ok(result) => {

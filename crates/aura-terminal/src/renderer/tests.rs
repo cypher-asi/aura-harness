@@ -183,7 +183,7 @@ fn test_centered_rect_with_offset() {
 
 #[test]
 fn test_default_layout_shows_agents_column() {
-    use crate::events::{AgentSummary, UiCommand};
+    use crate::events::{AgentDefinitionSummary, AgentSummary, UiCommand};
 
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetAgents(vec![
@@ -194,6 +194,7 @@ fn test_default_layout_shows_agents_column() {
             is_active: true,
             record_count: 12,
             last_active: "-".to_string(),
+            ..Default::default()
         },
         AgentSummary {
             id: "bb".to_string(),
@@ -202,9 +203,24 @@ fn test_default_layout_shows_agents_column() {
             is_active: false,
             record_count: 0,
             last_active: "-".to_string(),
+            ..Default::default()
+        },
+        AgentSummary {
+            id: "cc".to_string(),
+            name: "reviewer #1".to_string(),
+            zns_id: "0://terminal/cc".to_string(),
+            definition: Some("reviewer".to_string()),
+            depth: 1,
+            ..Default::default()
         },
     ]));
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::SetAgentDefinitions(vec![
+        AgentDefinitionSummary {
+            name: "reviewer".to_string(),
+            description: "Reviews diffs".to_string(),
+        },
+    ]));
 
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
     terminal
@@ -235,6 +251,18 @@ fn test_default_layout_shows_agents_column() {
     assert_eq!(column_of("New agent"), column_of("Researcher"));
     assert_eq!(column_of("+"), column_of("2."));
     assert!(screen.contains("Alt+↑↓ switch  ^N new"));
+    // Spawned instances sit indented under their parent.
+    assert_eq!(column_of("reviewer #1"), column_of("Researcher") + 2);
+
+    assert!(screen.contains("PERMANENT AGENTS"));
+    assert!(rows.iter().any(|r| r.contains("reviewer  Reviews")));
+    assert!(screen.contains("+  New permanent"));
+    assert!(screen.contains("⏎ spawn e edit d del"));
+    assert!(row_index(&rows, "PERMANENT AGENTS") > row_index(&rows, "Researcher"));
+}
+
+fn row_index(rows: &[String], needle: &str) -> usize {
+    rows.iter().position(|r| r.contains(needle)).unwrap()
 }
 
 #[test]

@@ -122,8 +122,10 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
         (false, false) => (None, area, None),
     };
     let (records, sandbox) = split_right_column(right, app);
+    let (swarm, definitions) = split_left_column(swarm);
     let areas = PanelAreas {
         swarm,
+        definitions,
         chat: Some(chat),
         records,
         sandbox,
@@ -133,6 +135,9 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
 
     if let Some(swarm) = areas.swarm {
         panels::render_swarm_panel(frame, swarm, app, theme);
+    }
+    if let Some(definitions) = areas.definitions {
+        panels::render_definitions_panel(frame, definitions, app, theme);
     }
     if let Some(chat) = areas.chat {
         panels::render_chat_panel(frame, chat, app, theme);
@@ -144,6 +149,18 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
         sandbox::render_sandbox_panel(frame, sandbox, app, theme);
     }
     chat
+}
+
+/// Running agents on top and permanent agents below.
+fn split_left_column(left: Option<Rect>) -> (Option<Rect>, Option<Rect>) {
+    let Some(area) = left else {
+        return (None, None);
+    };
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+    (Some(parts[0]), Some(parts[1]))
 }
 
 /// Record on the top half and Sandbox on the bottom half; either one takes

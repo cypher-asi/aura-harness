@@ -53,7 +53,9 @@ impl App {
             }
             "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
-                if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
+                if !self.swarm_panel_visible
+                    && matches!(self.focus, PanelFocus::Swarm | PanelFocus::Definitions)
+                {
                     self.focus = PanelFocus::Chat;
                 }
                 if self.swarm_panel_visible {
@@ -71,6 +73,7 @@ impl App {
                 }
             }
             "agent" | "a" => self.handle_agent_command(arg),
+            "spawn" => self.handle_spawn_command(arg),
             "login" => self.start_login(),
             "model" | "models" | "m" => {
                 if arg.is_empty() {
@@ -252,6 +255,26 @@ impl App {
         }
     }
 
+    /// Handle `/spawn <permanent agent>`.
+    fn handle_spawn_command(&mut self, arg: &str) {
+        let name = self
+            .definitions
+            .iter()
+            .find(|d| d.name.eq_ignore_ascii_case(arg))
+            .map(|d| d.name.clone());
+        match name {
+            Some(name) => self.instantiate_definition(&name),
+            None => {
+                let available: Vec<&str> =
+                    self.definitions.iter().map(|d| d.name.as_str()).collect();
+                self.notification = Some((
+                    format!("Usage: /spawn <permanent agent> ({})", available.join(", ")),
+                    NotificationType::Warning,
+                ));
+            }
+        }
+    }
+
     /// Process a UI command from the kernel.
     pub fn process_command(&mut self, cmd: UiCommand) {
         debug!(?cmd, "Processing UI command");
@@ -316,6 +339,8 @@ impl App {
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
             UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(agent_id),
+            UiCommand::SetAgentDefinitions(definitions) => self.set_definitions(definitions),
+            UiCommand::OpenEditor(path) => self.editor_request = Some(path),
             UiCommand::ClearRecords => {
                 self.records.clear();
                 self.selected_record = 0;

@@ -8,8 +8,11 @@ use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+/// Run one turn of the active agent on `agent_loop` with `tools`.
 pub(super) async fn run_agent_turn(
     state: &mut LoopState<'_>,
+    agent_loop: &aura_agent::AgentLoop,
+    tools: Vec<aura_model_reasoner::ToolDefinition>,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     bool,
@@ -24,11 +27,11 @@ pub(super) async fn run_agent_turn(
 
     let process_result = match tokio::time::timeout(
         TURN_TIMEOUT,
-        state.agent_loop.run_with_events(
+        agent_loop.run_with_events(
             &state.session.model_gateway,
             &state.session.tool_gateway,
             state.session.messages.clone(),
-            state.tools.to_vec(),
+            tools,
             Some(agent_event_tx),
             Some(cancel_token),
         ),

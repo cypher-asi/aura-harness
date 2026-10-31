@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal — permanent agents
+
+The terminal's left column is split. **Agents** (top) lists the running
+agent instances, and **Permanent agents** (bottom) lists reusable agent
+definitions that any agent can spawn by name.
+
+##### Added
+
+- Permanent agents are Markdown files in `<data_dir>/agent_defs/`. YAML
+  frontmatter sets `name`, `description`, and the optional `model`,
+  `tools` (an allow-list; default is every built-in tool except `task`)
+  and `skills`. The body is the rules the agent follows. `explorer` and
+  `reviewer` are seeded the first time the directory is created.
+- The panel spawns the selected permanent agent (Enter), edits it in
+  `$VISUAL`/`$EDITOR` (`e`), creates one (`n` or the `+` row), and
+  deletes it after confirmation (`d`). `/spawn <name>` starts an
+  instance from the chat.
+- The terminal's agents get the `task` tool. Its `subagent_type` is
+  one of the permanent agents. The call registers an instance (for
+  example `reviewer #1`) under the calling agent, runs it with the
+  definition's rules, skills, tools and model, and returns its final
+  reply. Instances stay in the Agents list, indented under their parent
+  and marked with a spinner while they work. Switching to an instance
+  continues its conversation under the same rules.
+- `agents.json` entries gain optional `definition` and `parent` fields.
+  Existing files load unchanged.
+
 ### Auditable tool calls — policy decisions in the record
 
 Every tool call is now three record entries, so the record shows which

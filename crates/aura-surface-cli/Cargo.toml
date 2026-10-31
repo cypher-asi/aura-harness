@@ -20,6 +20,7 @@ aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-tools = { path = "../aura-tools" }
 aura-agent = { path = "../aura-agent" }
 aura-context-memory = { path = "../aura-context-memory" }
+aura-context-skills = { path = "../aura-context-skills" }
 aura-auth = { path = "../aura-auth" }
 aura-runtime = { path = "../aura-runtime" }
 # Phase B / Commit 3: the headless `aura ...` event loop pushes a
@@ -43,6 +44,7 @@ chrono = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tokio-util = { workspace = true }

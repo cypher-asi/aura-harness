@@ -38,6 +38,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Create or switch agent",
         needs_args: true,
     },
+    SlashCommand {
+        name: "spawn",
+        args: "<permanent agent>",
+        description: "Start an instance of a permanent agent",
+        needs_args: true,
+    },
     command("agents", "Toggle Agents panel"),
     command("record", "Toggle Record panel"),
     command("files", "Toggle Sandbox panel"),
