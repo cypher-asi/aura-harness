@@ -16,8 +16,8 @@ const MODEL_GAP: u16 = 2;
 const MIN_INPUT_WIDTH: u16 = 20;
 
 /// Render input line with the current model and status on the right.
-/// `chat_left` is the Chat panel's left border, relative to `area`; the
-/// prompt starts there.
+/// `chat_left` is the Chat panel's left border, relative to `area`; typing
+/// starts there, with the prompt to its left.
 pub(super) fn render_input(
     frame: &mut Frame,
     area: Rect,
@@ -96,10 +96,12 @@ pub(super) fn render_input(
     };
     let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
 
-    // Inset one column like the other outer text, so the prompt lines up
-    // with the chat border rather than poking half a cell past it.
-    let prompt_x = area.x + chat_left + EDGE_INSET;
-    let typing_x = prompt_x + prompt_width;
+    // Typing starts at the Chat panel's left border, inset one column like
+    // the other outer text, with the prompt right-aligned under the Agents
+    // column before it. Typing moves right only when the prompt is wider
+    // than the space left of the chat.
+    let typing_x = (area.x + chat_left + EDGE_INSET).max(area.x + EDGE_INSET + prompt_width);
+    let prompt_x = typing_x - prompt_width;
     let prompt_area = Rect {
         x: prompt_x,
         y: area.y,

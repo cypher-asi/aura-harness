@@ -582,7 +582,7 @@ fn test_prompt_colors_user_green_and_host_gray() {
 }
 
 #[test]
-fn test_prompt_starts_at_chat_left_border() {
+fn test_typing_starts_at_chat_left_border_with_prompt_under_agents() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("[u@h d]$ ");
     type_text(&mut app, "hello");
@@ -598,12 +598,29 @@ fn test_prompt_starts_at_chat_left_border() {
         })
         .expect("chat title row");
     let chars: Vec<char> = input_row.chars().collect();
+    let typing = chat_border + 1;
+    let typed: String = chars[typing..typing + 5].iter().collect();
+    let prompt: String = chars[typing - 9..typing].iter().collect();
+    assert_eq!(typed, "hello", "{input_row:?}");
+    assert_eq!(prompt, "[u@h d]$ ", "{input_row:?}");
     assert!(
-        chars[..=chat_border].iter().all(|c| *c == ' '),
+        chars[..typing - 9].iter().all(|c| *c == ' '),
         "{input_row:?}"
     );
-    let entry: String = chars[chat_border + 1..chat_border + 15].iter().collect();
-    assert_eq!(entry, "[u@h d]$ hello", "{input_row:?}");
+}
+
+#[test]
+fn test_wide_prompt_pushes_typing_past_chat_border() {
+    let mut app = app_with_model(None);
+    app.set_shell_prompt("[someone@a-very-long-hostname some-project-dir]$ ");
+    type_text(&mut app, "hello");
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+
+    assert!(
+        input_row.starts_with(" [someone@a-very-long-hostname some-project-dir]$ hello"),
+        "{input_row:?}"
+    );
 }
 
 #[test]
