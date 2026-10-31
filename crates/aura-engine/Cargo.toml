@@ -1,6 +1,6 @@
 [package]
 name = "aura-engine"
-description = "Aura runtime orchestration engine — scheduler, worker, automaton bridge, memory observer, child runner"
+description = "Aura runtime orchestration engine — scheduler, worker, agent host, automaton bridge, memory observer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,7 +19,6 @@ aura-context-memory = { path = "../aura-context-memory" }
 aura-automaton = { path = "../aura-automaton" }
 aura-context-compaction = { path = "../aura-context-compaction" }
 aura-context-prompts = { path = "../aura-context-prompts" }
-aura-fleet-spawn = { path = "../aura-fleet-spawn" }
 # Phase C / Commit 4: the JWT-injecting `DomainApi` wrapper moved
 # into `aura-domain-http` alongside the HTTP impl. The automaton
 # bridge imports `JwtDomainApi` from there.
@@ -33,6 +32,7 @@ tokio = { workspace = true }
 async-trait = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

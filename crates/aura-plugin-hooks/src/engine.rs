@@ -2,7 +2,7 @@
 //!
 //! Phase 4c shipped the engine shell and the manual `fire` surface
 //! used by the integration test. Phase 8 fires hooks for real at
-//! every lifecycle point in the agent loop / fleet spawner.
+//! every lifecycle point in the agent loop / agent host.
 //!
 //! ## Invariants ([rules.md §13])
 //!

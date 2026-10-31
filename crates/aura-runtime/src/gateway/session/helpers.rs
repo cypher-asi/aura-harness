@@ -15,16 +15,11 @@ use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, AgentLoopResult, DebugEvent, TurnEventSink,
 };
 use aura_agent_kernel::{Kernel, KernelConfig, PolicyConfig};
-use aura_agent_subagent::SubagentRegistry;
 use aura_core_types::{
     is_effectively_full_access, resolve_effective_permission, AgentToolPermissions, ToolState,
     UserToolDefaults,
 };
-use aura_engine::{capabilities, child_runner::RuntimeChildRunner, executor};
-use aura_fleet_quota::QuotaPool;
-use aura_fleet_registry::FleetRegistry;
-use aura_fleet_spawn::{OrphanStore, ParentLeaseRegistry};
-use aura_fleet_subagent::FleetSubagentDispatcher;
+use aura_engine::{capabilities, executor, AgentEnv, AgentHooks, RootAgent};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -453,52 +448,26 @@ pub(super) async fn build_kernel_with_config(
         .with_agent_override(session.tool_permissions.clone())
         .with_mode(session.mode);
 
-    // Per-session fleet subagent dispatcher (fresh registry / quota /
-    // leases / orphan store + the engine's `RuntimeChildRunner`). Built
-    // by a shared helper so the council orchestrator
-    // ([`super::council::start_council_run`]) constructs the identical
-    // dispatcher when fanning members out, instead of duplicating the
-    // wiring.
-    let fleet_dispatcher = build_fleet_subagent_dispatcher(session, ctx)?;
-    // On the per-turn path, wrap the blocking dispatcher so each child
-    // run is observable as its own live WS thread without regressing the
-    // inline `SubagentResult` the parent still receives.
+    // The session's agent is a root in the node's agent host; its hooks
+    // handle task, spawn_agent and agent messaging. On the per-turn path
+    // the task hook is wrapped so each child run is observable as its own
+    // live WS thread.
+    let hooks = register_session_agent(session, ctx)?;
     let dispatch_hook: Arc<dyn aura_tools::SubagentDispatchHook> = match parent_outbound {
         Some(outbound) => Arc::new(
             super::subagent_stream::RuntimeSubagentObservabilityHook::new(
-                fleet_dispatcher,
+                Arc::new(hooks.clone()),
                 outbound.clone(),
                 ctx.chat_runs.clone(),
                 parent_cancellation.cloned(),
                 ctx.run_id.clone(),
             ),
         ),
-        None => fleet_dispatcher,
+        None => Arc::new(hooks.clone()),
     };
-    resolver = resolver.with_subagent_dispatch_hook(dispatch_hook);
-    if let Some(base_url) = ctx
-        .aura_os_server_url
-        .as_deref()
-        .filter(|url| !url.is_empty())
-    {
-        resolver = resolver.with_spawn_hook(Arc::new(AuraServerSpawnHook::new(
-            base_url.to_string(),
-            session.auth_token.clone(),
-            session.aura_org_id.clone(),
-            ctx.store.clone(),
-        )));
-        let hook = Arc::new(AuraServerAgentHook::new(
-            base_url.to_string(),
-            session.auth_token.clone(),
-        ));
-        resolver = resolver
-            .with_agent_control_hook(hook.clone())
-            .with_agent_read_hook(hook);
-    } else {
-        resolver = resolver.with_spawn_hook(Arc::new(aura_agent_kernel::KernelSpawnHook::new(
-            ctx.store.clone(),
-        )));
-    }
+    resolver = hooks
+        .attach(resolver)
+        .with_subagent_dispatch_hook(dispatch_hook);
     resolver = resolver
         .with_caller_permissions(session.agent_permissions.clone())
         .with_tool_permission_context(user_default, session.tool_permissions.clone())
@@ -575,25 +544,17 @@ pub(super) async fn build_kernel_with_config(
     Ok(Arc::new(kernel))
 }
 
-/// Build the per-session [`FleetSubagentDispatcher`] (fresh registry /
-/// quota / leases / orphan store wired to the engine's
-/// [`RuntimeChildRunner`] + the session-equivalent child-kernel
-/// factory).
+/// Register the session's agent as a root in the node's agent host and
+/// return the hooks that act for it.
 ///
-/// Extracted from [`build_kernel_with_config`] as the single per-turn
-/// subagent dispatch surface. An AURA Council
-/// ([`super::council::start_council_run`]) reuses it implicitly: the
-/// synthesizer model issues real parallel `task` calls, which dispatch
-/// through this exact surface (children inherit the parent identity /
-/// permissions / parent-chain and run the full real-agent loop, with
-/// only their model overridden per member). The inputs (`domain_exec`,
-/// the session-scoped tool config, the resolved workspace) are
-/// recomputed here so the helper is self-contained; the duplicated
-/// computation is cheap and pure.
-pub(super) fn build_fleet_subagent_dispatcher(
+/// Called for every kernel build, so the root always carries the
+/// session's latest auth token, permissions and inbox. Agents it already
+/// spawned keep running. The council ([`super::council::start_council_run`])
+/// dispatches its members through the same hooks.
+pub(super) fn register_session_agent(
     session: &Session,
     ctx: &WsContext,
-) -> Result<Arc<FleetSubagentDispatcher>, aura_agent_kernel::KernelError> {
+) -> Result<AgentHooks, aura_agent_kernel::KernelError> {
     let domain_exec = ctx.domain_api.as_ref().map(|api| {
         use aura_tools::domain_tools::DomainToolExecutor;
         Arc::new(DomainToolExecutor::with_session_context(
@@ -606,73 +567,65 @@ pub(super) fn build_fleet_subagent_dispatcher(
                 .map(|p| p.to_string_lossy().into_owned()),
         ))
     });
-
     let user_default = session_user_defaults(session, ctx)?;
     let session_tool_config = session_scoped_tool_config(
         &ctx.tool_config,
         &user_default,
         session.tool_permissions.as_ref(),
     );
-    let (workspace, use_workspace_base_as_root) = resolve_session_workspace(session);
 
-    let subagent_registry = SubagentRegistry::bundled();
-    // Durable per-node orphan store under the node data dir
-    // (`workspace_base` is `<data_dir>/workspaces`, so its parent is the
-    // data dir). Detached/abandoned subagents must survive in a real
-    // location so `aura agents inspect` can find them — not the OS temp
-    // dir, which is volatile and shared across unrelated installs.
-    let orphan_dir = ctx.workspace_base.parent().map_or_else(
-        || ctx.workspace_base.join("subagent-orphans"),
-        |data_dir| data_dir.join("subagent-orphans"),
-    );
-    // Cross-crate seam: build the session-equivalent child-kernel
-    // factory (declared in aura-engine, implemented here) and inject it
-    // into the child runner so a child run reuses the real-agent
-    // resolver — subagent dispatch, spawn hooks, caller permissions, and
-    // parent_chain — instead of the scheduler's bare node resolver. The
-    // factory is self-referential (re-injects itself into the children
-    // it spawns) so nesting works to arbitrary depth.
-    let child_kernel_factory = super::child_kernel::SessionChildKernelFactory::new(
+    let factory = super::child_kernel::SessionChildKernelFactory::new(
         super::child_kernel::SessionChildKernelFactoryParams {
             catalog: ctx.catalog.clone(),
-            session_tool_config: session_tool_config.clone(),
-            domain_exec: domain_exec.clone(),
+            session_tool_config,
+            domain_exec,
             installed_tools: session.installed_tools.clone(),
+            installed_integrations: session.installed_integrations.clone(),
             automaton_controller: ctx.automaton_controller.clone(),
             automaton_project_id: session.project_id.clone().unwrap_or_default(),
             automaton_workspace_root: session.project_path.clone(),
-            store: ctx.store.clone(),
-            scheduler: ctx.scheduler.clone(),
-            subagent_registry: subagent_registry.clone(),
-            orphan_dir: orphan_dir.clone(),
-            workspace: workspace.clone(),
-            use_workspace_base_as_root,
-            aura_os_server_url: ctx.aura_os_server_url.clone(),
             auth_token: session.auth_token.clone(),
-            aura_org_id: session.aura_org_id.clone(),
         },
     );
-    // Root child subagents at the parent session's resolved workspace so
-    // they can read the same project files the parent sees, rather than
-    // the scheduler's empty `workspace_base/<child_id>` scratch dir.
-    let child_runner: Arc<dyn aura_fleet_spawn::ChildRunner> = Arc::new(
-        RuntimeChildRunner::new(
+    let mut env = AgentEnv::new(factory);
+    // Children work in the session's project, not a scratch directory.
+    env.workspace = Some(resolve_session_workspace(session));
+    env.user_tool_defaults = user_default;
+    env.originating_user_id = Some(session.user_id.clone());
+    if let Some(base_url) = ctx
+        .aura_os_server_url
+        .as_deref()
+        .filter(|url| !url.is_empty())
+    {
+        // With aura-os, spawn_agent creates aura-os agents, and messages
+        // to agents outside this node go through aura-os.
+        env.spawn_override = Some(Arc::new(AuraServerSpawnHook::new(
+            base_url.to_string(),
+            session.auth_token.clone(),
+            session.aura_org_id.clone(),
             ctx.store.clone(),
-            ctx.scheduler.clone(),
-            subagent_registry.clone(),
-        )
-        .with_child_workspace(workspace.clone(), use_workspace_base_as_root)
-        .with_child_kernel_factory(child_kernel_factory),
-    );
-    Ok(Arc::new(FleetSubagentDispatcher::with_components(
-        ctx.store.clone(),
-        subagent_registry,
-        Arc::new(FleetRegistry::new()),
-        Arc::new(QuotaPool::new()),
-        Arc::new(ParentLeaseRegistry::new()),
-        Arc::new(OrphanStore::new(orphan_dir)),
-        child_runner,
-    )))
+        )));
+        let remote = Arc::new(AuraServerAgentHook::new(
+            base_url.to_string(),
+            session.auth_token.clone(),
+        ));
+        env.remote_control = Some(remote.clone());
+        env.remote_read = Some(remote);
+    }
+
+    ctx.agent_host.register_root(RootAgent {
+        agent_id: session.agent_id,
+        name: "root".to_string(),
+        permissions: session.agent_permissions.clone(),
+        tool_permissions: session.tool_permissions.clone(),
+        mode: session.mode,
+        model: session.model.clone(),
+        env,
+        inbox: Some(Arc::new(super::agent_inbox::SessionInbox::new(
+            &session.agent_mailbox,
+        ))),
+    });
+    Ok(ctx.agent_host.hooks_for(session.agent_id))
 }
 
 /// [`TurnEventSink`] that maps events onto the WebSocket wire protocol.
@@ -1153,6 +1106,12 @@ mod tests {
         std::mem::forget(workspace);
         std::mem::forget(db_dir);
 
+        let agent_host = aura_engine::AgentHost::new(
+            store.clone(),
+            scheduler.clone(),
+            aura_engine::AgentHostConfig::default(),
+        );
+
         WsContext {
             workspace_base,
             provider,
@@ -1170,6 +1129,7 @@ mod tests {
             aura_os_server_url: None,
             chat_runs: Arc::new(dashmap::DashMap::new()),
             run_id: None,
+            agent_host,
         }
     }
 

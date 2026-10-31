@@ -33,8 +33,8 @@ aura-automaton = { path = "../aura-automaton" }
 aura-context-prompts = { path = "../aura-context-prompts" }
 aura-context-compaction = { path = "../aura-context-compaction" }
 # Phase B / Commit 3 engine extraction. The composition root in
-# `node.rs` instantiates the engine (scheduler + automaton bridge +
-# child runner) and hands it to the gateway router.
+# `node.rs` instantiates the engine (scheduler + automaton bridge) and
+# the gateway router builds the node's agent host from it.
 aura-engine = { path = "../aura-engine" }
 # Phase C / Commit 4: HTTP `DomainApi` impl moved out of the gateway.
 # `node.rs` constructs `HttpDomainApi` from here.
@@ -43,16 +43,6 @@ aura-domain-http = { path = "../aura-domain-http" }
 # The `/ws/terminal` upgrade handler is a thin delegate over
 # `aura_terminal::ws::handle_terminal_ws`.
 aura-terminal = { path = "../aura-terminal" }
-# Phase B / Commit 3 / Step 3a: the fleet-layer task dispatcher impl.
-# Wired into the engine's `RuntimeChildRunner` at composition time.
-aura-fleet-subagent = { path = "../aura-fleet-subagent" }
-# Phase 7a: route the task tool through the fleet layer. Phase B
-# keeps these deps because `node.rs` still hand-assembles the
-# fleet spawner inputs (registry, quota, leases, orphans) and
-# passes them to `FleetSubagentDispatcher::with_components`.
-aura-fleet-spawn = { path = "../aura-fleet-spawn" }
-aura-fleet-registry = { path = "../aura-fleet-registry" }
-aura-fleet-quota = { path = "../aura-fleet-quota" }
 aura-config = { path = "../aura-config" }
 aura-context-skills = { path = "../aura-context-skills" }
 aura-plugin-core = { path = "../aura-plugin-core" }

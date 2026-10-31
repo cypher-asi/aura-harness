@@ -3,8 +3,8 @@
 //! Phase 2 carve-out of the `append_entry_*` / `get_head_seq` family
 //! that previously lived only as inherent methods on
 //! `aura-store::WriteStore`/`ReadStore`. Hoisting the API into a
-//! dedicated trait lets `aura-agent-kernel` (Phase 6a) and
-//! `aura-fleet-spawn` (Phase 7a) bind to a small `Arc<dyn RecordLog>`
+//! dedicated trait lets `aura-agent-kernel` (Phase 6a) bind
+//! to a small `Arc<dyn RecordLog>`
 //! surface instead of pulling the whole [`crate::RecordEntry`]-aware
 //! store.
 //!

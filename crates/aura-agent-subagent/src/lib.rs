@@ -7,15 +7,15 @@
 //! Every subagent is a derivative of a parent agent (or parent flow) —
 //! the rules that decide which session state the child inherits, which
 //! overrides are allowed, and which combinations are rejected outright
-//! live exclusively in this crate. The fleet layer
-//! (`aura-fleet-spawn`, Phase 7a) consumes the [`SubagentSpec`]
-//! produced here; it never constructs derivation state itself.
+//! live exclusively in this crate. The agent host
+//! in `aura-engine` consumes the [`SubagentSpec`] produced here; it
+//! never constructs derivation state itself.
 //!
 //! ## Invariants (per `.cursor/rules.md` §13)
 //!
 //! - **Narrowing-only**: derived permissions / mode / model / tool
 //!   sets are ALWAYS strict subsets of the parent. Any attempt to
-//!   widen produces a typed [`DerivationError`] before fleet-layer
+//!   widen produces a typed [`DerivationError`] before any spawn
 //!   resource acquisition starts.
 //! - **`UserId` non-overridable**: children always run as the same
 //!   user; the security boundary forbids re-targeting.
@@ -42,7 +42,7 @@
 //! - [`ParentContext`] is a stable snapshot of the parent's session
 //!   state at spawn time — captured atomically by the caller before
 //!   any concurrent parent-state mutation can race the derivation.
-//! - Depth is validated BEFORE any fleet-layer work begins, so a
+//! - Depth is validated BEFORE any spawn work begins, so a
 //!   rejected spawn never holds quota or isolation resources.
 //!
 //! ## Failure modes

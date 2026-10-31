@@ -1,6 +1,6 @@
 //! [`SubagentDerivation`] trait + [`DefaultDerivation`] impl.
 
-use aura_core_modes::{AgentMode, JoinPolicy, KernelMode, ModeProfile, ReplayMode, SpawnMode};
+use aura_core_modes::{AgentMode, KernelMode, ModeProfile, ReplayMode, SpawnMode};
 
 use crate::errors::DerivationError;
 use crate::manifest::{OverriddenField, OverrideManifest};
@@ -89,7 +89,7 @@ impl SubagentDerivation for DefaultDerivation {
         overrides: SubagentOverrides,
     ) -> Result<(SubagentSpec, OverrideManifest), DerivationError> {
         // 1. Depth cap — checked first so deep recursion never holds
-        //    fleet-layer resources.
+        //    spawn resources.
         let new_depth = parent.depth.saturating_add(1);
         if new_depth > self.config.max_depth {
             return Err(DerivationError::DepthExceeded {
@@ -202,13 +202,6 @@ impl SubagentDerivation for DefaultDerivation {
             SpawnMode::Wait
         };
 
-        let join_policy = if let Some(jp) = overrides.join_policy {
-            manifest.applied.push(OverriddenField::JoinPolicy(jp));
-            jp
-        } else {
-            JoinPolicy::All
-        };
-
         let replay_mode = if let Some(rm) = overrides.replay_mode {
             manifest.applied.push(OverriddenField::ReplayMode(rm));
             rm
@@ -288,7 +281,6 @@ impl SubagentDerivation for DefaultDerivation {
             response_max_tokens: overrides.response_max_tokens,
             kind,
             spawn_mode,
-            join_policy,
             replay_mode,
             budget,
             tool_subset: overrides.tool_subset,

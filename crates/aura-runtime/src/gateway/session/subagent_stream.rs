@@ -4,10 +4,9 @@
 //! Layer boundary: this module is the ONLY place that turns subagent
 //! activity into `aura_protocol::OutboundMessage` frames and registers
 //! a child run id in the [`super::chat_run::ChatRunRegistry`]. The
-//! fleet (`aura-fleet-spawn` / `aura-fleet-subagent`) and engine
-//! (`aura-engine`) layers only forward an opaque
-//! [`AgentLoopEvent`](aura_agent::AgentLoopEvent) sink; they never
-//! construct wire messages.
+//! engine's agent host only forwards an opaque
+//! [`AgentLoopEvent`](aura_agent::AgentLoopEvent) sink; it never
+//! constructs wire messages.
 //!
 //! Flow per `task` dispatch:
 //! 1. Mint a `child_run_id` (UUID).
@@ -31,7 +30,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use aura_agent::AgentLoopEvent;
 use aura_core_types::{SubagentDispatchRequest, SubagentExit, SubagentResult};
-use aura_fleet_subagent::FleetSubagentDispatcher;
+use aura_engine::AgentHooks;
 use aura_tools::SubagentDispatchHook;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -51,9 +50,8 @@ const CHILD_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const CHILD_COMMAND_CHANNEL_CAPACITY: usize = 8;
 
 /// Observability-aware dispatch surface implemented by
-/// [`FleetSubagentDispatcher`]. Carved out as a trait so the runtime
-/// hook can wrap a test double without standing up a full fleet
-/// spawner.
+/// [`AgentHooks`]. Carved out as a trait so the runtime hook can wrap a
+/// test double without standing up an agent host.
 #[async_trait]
 pub(crate) trait EventAwareSubagentDispatch: Send + Sync {
     /// Dispatch the child run, threading an optional streaming sink and
@@ -67,14 +65,14 @@ pub(crate) trait EventAwareSubagentDispatch: Send + Sync {
 }
 
 #[async_trait]
-impl EventAwareSubagentDispatch for FleetSubagentDispatcher {
+impl EventAwareSubagentDispatch for AgentHooks {
     async fn dispatch_with_events(
         &self,
         request: SubagentDispatchRequest,
         event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
         cancellation: Option<CancellationToken>,
     ) -> Result<SubagentResult, String> {
-        FleetSubagentDispatcher::spawn_with_events(self, request, event_tx, cancellation).await
+        AgentHooks::dispatch_with_events(self, request, event_tx, cancellation).await
     }
 }
 
@@ -193,8 +191,8 @@ impl RuntimeSubagentObservabilityHook {
         let (event_tx, event_rx) = mpsc::channel::<AgentLoopEvent>(CHILD_EVENT_CHANNEL_CAPACITY);
         // The forwarder ends when the child loop drops its event sender,
         // i.e. when the child run finishes — the detached path awaits this
-        // handle to emit a terminal status without holding the child's
-        // `result_rx` (owned by the spawner).
+        // handle to emit a terminal status without waiting on the child's
+        // result (which goes to the parent as a message).
         let forwarder = tokio::spawn(super::helpers::forward_events_to_ws(
             event_rx,
             child_outbound,
@@ -256,10 +254,9 @@ impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
 
         // One token serves as both the child's `shutdown` (so a `stop`
         // cancels just this child) and the dispatch cancellation (so a
-        // parent-turn cancel still propagates). The spawner forks its
-        // own per-child token from whatever we pass, so handing it a
+        // parent-turn cancel still propagates). Handing the host a
         // standalone uncancelled token when there is no parent token is
-        // equivalent to the previous `None`.
+        // equivalent to passing `None`.
         let child_cancel = self.child_cancellation();
         let (event_tx, child_channel, forwarder) =
             self.register_child_run(&child_run_id, child_cancel.clone(), linkage);
@@ -331,8 +328,8 @@ impl SubagentDispatchHook for RuntimeSubagentObservabilityHook {
 
 /// Watch a detached child's event forwarder to completion, then publish
 /// the terminal status on both the parent and child streams and reap the
-/// run. The typed exit is not available here (the spawner owns the
-/// detached `result_rx`), so a generic `completed` terminal is emitted;
+/// run. The typed exit is not available here (the result goes to the
+/// parent as a message), so a generic `completed` terminal is emitted;
 /// any failure detail still streams through the child's live events.
 fn spawn_detached_completion_watch(
     forwarder: tokio::task::JoinHandle<()>,

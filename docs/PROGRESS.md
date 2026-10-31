@@ -7,7 +7,7 @@ This file is the historical implementation log for the Aura Harness workspace. T
 - [`README.md`](../README.md) — overview, principles, and links to the [running](running.md), [API](api.md), [CLI](cli.md), [configuration](configuration.md), and [development](development.md) references.
 - [`docs/architecture.md`](architecture.md) — layered crate map, external-consumer invariant, and run/WebSocket flows.
 
-The active post-Phase-A/B/C shape is a self-contained Cargo workspace with `aura-runtime` as the sole external Rust surface and HTTP/WS gateway. `aura-engine` owns orchestration, `aura-domain-http` owns the HTTP `DomainApi` implementation, and `aura-fleet-subagent` owns the concrete fleet subagent dispatcher. Clients start work with `POST /v1/run` (`RuntimeRequest` → `RuntimeRunResponse`) and then attach to `WS /stream/:run_id`; there is no client-sent `SessionInit` first frame.
+The active post-Phase-A/B/C shape is a self-contained Cargo workspace with `aura-runtime` as the sole external Rust surface and HTTP/WS gateway. `aura-engine` owns orchestration, `aura-domain-http` owns the HTTP `DomainApi` implementation, and `aura-engine::agents::AgentHost` owns recursive agent spawning (`task` / `spawn_agent`). Clients start work with `POST /v1/run` (`RuntimeRequest` → `RuntimeRunResponse`) and then attach to `WS /stream/:run_id`; there is no client-sent `SessionInit` first frame.
 
 Original MVP specifications:
 - `specs/spec-01.md` - MVP Foundation (Complete)
@@ -170,7 +170,7 @@ HTTP/WS gateway, scheduler, and worker management. The original scheduler/worker
 - [x] Per-agent processing claim in `aura-engine::Scheduler`
 - [x] Worker loop implementation in `aura-engine::process_agent`
 - [x] HTTP `DomainApi` implementation in `aura-domain-http`
-- [x] Concrete `FleetSubagentDispatcher` in `aura-fleet-subagent`
+- [x] Recursive agent spawning via `aura-engine::agents::AgentHost` (replaces the fleet crates)
 - [x] `NodeConfig` struct
 
 ---
@@ -330,10 +330,9 @@ aura-harness/
 │   ├── aura-plugin-*    # Plugin API, manifests, hooks, MCP, connectors
 │   ├── aura-exec-*      # Tool execution, sandbox, policy, isolation, conflicts
 │   ├── aura-agent-*     # Deterministic kernel, AgentLoop, steering, subagents
-│   ├── aura-fleet-*     # Registry, quota, spawn, dispatch, mailbox, daemon, subagent dispatcher
 │   └── aura-surface-*   # CLI, SDK, terminal, automaton, auth surface shells
 ├── crates/aura-runtime/ # Sole external Cargo surface; HTTP/WS gateway + aura-node root
-├── crates/aura-engine/  # Orchestration engine: scheduler, workers, automatons, child runner
+├── crates/aura-engine/  # Orchestration engine: scheduler, workers, automatons, agent host
 ├── crates/aura-domain-http/
 │                         # HTTP DomainApi implementation + JWT wrapper
 ├── tests/               # Workspace integration, boundary, e2e, proptest tests

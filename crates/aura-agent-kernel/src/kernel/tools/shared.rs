@@ -24,7 +24,7 @@ use std::time::Duration;
 /// command runner can clean up children.
 ///
 /// `task` dispatches a subagent and blocks (`SpawnMode::Wait`) while the child
-/// agent loop runs under the fleet child runner's own (longer) timeout +
+/// agent loop runs under the agent host's own (longer) timeout +
 /// parent cancellation token. The kernel's 120s default would otherwise abort
 /// a legitimately long child run prematurely. The name is hardcoded rather than
 /// imported from `aura-tools` to keep the kernel free of an upward dependency
@@ -61,7 +61,7 @@ impl Kernel {
     /// (`SpawnMode::Wait`) for the full duration of a child agent run whose
     /// budget (180–300s) intentionally exceeds the 120s kernel default; wrapping
     /// it would kill long child runs with a spurious "Tool timed out" before the
-    /// child's own budget (enforced by the fleet child runner) ever elapses.
+    /// child's own budget (enforced by the agent host) ever elapses.
     pub(super) async fn execute_with_timeout(
         &self,
         ctx: &ExecuteContext,

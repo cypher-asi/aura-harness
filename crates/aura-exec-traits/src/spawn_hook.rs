@@ -37,6 +37,10 @@ pub struct ChildAgentSpec {
     /// Optional pre-assigned agent id. When `None` the hook generates one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preassigned_agent_id: Option<AgentId>,
+    /// Optional first message for the child. Hosts that run children start
+    /// working on it right away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_prompt: Option<String>,
 }
 
 /// Successful outcome of a `SpawnHook::spawn_child` call.
@@ -125,6 +129,7 @@ mod tests {
                     parent_tool_permissions: None,
                     system_prompt_override: None,
                     preassigned_agent_id: None,
+                    initial_prompt: None,
                 },
             )
             .await
@@ -149,6 +154,7 @@ mod tests {
                     parent_tool_permissions: None,
                     system_prompt_override: None,
                     preassigned_agent_id: Some(pre),
+                    initial_prompt: None,
                 },
             )
             .await

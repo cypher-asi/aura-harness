@@ -15,8 +15,8 @@
 #   - memory:   `aura-context-memory/`
 #
 # When a legitimate new call-site needs to land (e.g. a newly-approved
-# gateway that routes `.complete(` through the kernel, or a fleet-layer
-# crate that holds a store handle for a kernel-mediated audit write), add
+# gateway that routes `.complete(` through the kernel, or an engine
+# module that holds a store handle for a kernel-mediated audit write), add
 # its path to the corresponding allowlist regex below AND update the
 # matching section of `docs/invariants.md` in the same PR.
 
@@ -97,9 +97,9 @@ run_band "§1/§3" "direct ModelProvider::complete call outside the recording se
 #   * `crates/aura-runtime/src/tool_permissions.rs` — HTTP-driven tool-
 #     permissions append guarded by the per-agent scheduler claim (see
 #     §12.a). Routed via `aura_agent_kernel::write_system_record`.
-# Fleet-spawn `SubagentSpawn` audit rows and `promote_to_orphan` writes
-# also go through `aura_agent_kernel::write_system_record`, which calls
-# `WriteStore::append_entry_direct` internally — `aura-fleet-spawn/` itself
+# Agent-host fallback records (a root agent whose inbox is gone) also go
+# through `aura_agent_kernel::write_system_record`, which calls
+# `WriteStore::append_entry_direct` internally — `aura-engine/src/agents/`
 # never names an `append_entry_*` symbol, so no allowlist entry is needed.
 run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
     'append_entry_(atomic|dequeued|direct|entries_batch)' \
@@ -153,19 +153,15 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared excepti
 #   - crates/aura-runtime/src/gateway/session/child_kernel.rs — session-scoped child-kernel
 #                                                  factory captures the same store handle as
 #                                                  WsContext so nested child runs route through
-#                                                  RuntimeChildRunner / Scheduler.
+#                                                  AgentHost / Scheduler.
 #   - crates/aura-engine/src/scheduler.rs        — Scheduler builds per-agent kernels (§12.a claim seam)
 #   - crates/aura-engine/src/automaton/          — AutomatonBridge builds per-agent automaton kernels
 #                                                  (mod.rs + build.rs + dispatch.rs + event_channel.rs)
-#   - crates/aura-engine/src/child_runner.rs     — RuntimeChildRunner creates child kernels
-#                                                  through the scheduler
+#   - crates/aura-engine/src/agents/host.rs      — AgentHost runs spawned agents through the
+#                                                  scheduler and writes inbox fallback records
 #   - crates/aura-runtime/src/node.rs            — boots the process-wide store and wires runtime surfaces
 #   - crates/aura-runtime/src/tool_permissions.rs — HTTP-driven tool-permissions
 #                                                  append serialized via the §12.a claim
-#   - crates/aura-fleet-spawn/src/spawner.rs     — FleetSpawner holds the store for
-#                                                  write_system_record SubagentSpawn audit rows
-#                                                  (§12.b ParentLeaseRegistry serialises these)
-#   - crates/aura-fleet-subagent/src/dispatch.rs — FleetSubagentDispatcher hands the store to FleetSpawner
 #   - crates/aura-surface-cli/src/runner.rs      — interactive TUI composition root constructs a Kernel
 #
 # Test-only holders (filenames that don't match `*test*.rs` but whose hits
@@ -176,7 +172,7 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared excepti
 #   - crates/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/aura-agent-kernel/|crates/aura-store-db/|crates/aura-store-record/|crates/aura-runtime/src/gateway/state\.rs|crates/aura-runtime/src/gateway/session/mod\.rs|crates/aura-runtime/src/gateway/session/cross_agent_hook\.rs|crates/aura-runtime/src/gateway/session/child_kernel\.rs|crates/aura-engine/src/scheduler\.rs|crates/aura-engine/src/automaton/|crates/aura-engine/src/child_runner\.rs|crates/aura-engine/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|crates/aura-fleet-spawn/|crates/aura-fleet-subagent/src/dispatch\.rs|crates/aura-surface-cli/src/runner\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-agent-kernel/|crates/aura-store-db/|crates/aura-store-record/|crates/aura-runtime/src/gateway/state\.rs|crates/aura-runtime/src/gateway/session/mod\.rs|crates/aura-runtime/src/gateway/session/cross_agent_hook\.rs|crates/aura-runtime/src/gateway/session/child_kernel\.rs|crates/aura-engine/src/scheduler\.rs|crates/aura-engine/src/automaton/|crates/aura-engine/src/agents/host\.rs|crates/aura-engine/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|crates/aura-surface-cli/src/runner\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files

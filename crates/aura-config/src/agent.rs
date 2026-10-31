@@ -2,7 +2,9 @@
 //! aren't worth a dedicated submodule (task-context budgets,
 //! pervasive-error window, `AURA_SIMPLE_MODEL` override).
 
-use crate::env::{lookup_string, AURA_SIMPLE_MODEL};
+use aura_core_modes::AgentMode;
+
+use crate::env::{lookup_string, AURA_DEFAULT_MODE, AURA_FLEET_DEFAULT_MODE, AURA_SIMPLE_MODEL};
 use crate::{
     AutomatonConfig, CompactionConfig, PromptsConfig, SteeringConfig, ThinkingConfig, ToolsConfig,
     VerifyConfig,
@@ -81,6 +83,12 @@ pub struct AgentConfig {
     /// `aura_agent::turn_config::resolve_simple_model`. Empty /
     /// whitespace-only values are treated as unset.
     pub simple_model_override: Option<String>,
+    /// env: `AURA_DEFAULT_MODE`, or the older `AURA_FLEET_DEFAULT_MODE`
+    /// (default: `agent`)
+    ///
+    /// Mode for sessions that don't request one; the daemon rung of the
+    /// [`AgentMode`] resolution chain (see [`crate::session_mode`]).
+    pub default_mode: AgentMode,
 }
 
 impl AgentConfig {
@@ -97,6 +105,7 @@ impl AgentConfig {
             verify: VerifyConfig::defaults(),
             automaton: AutomatonConfig::defaults(),
             simple_model_override: None,
+            default_mode: AgentMode::Agent,
         }
     }
 
@@ -117,7 +126,30 @@ impl AgentConfig {
             verify: VerifyConfig::from_env()?,
             automaton: AutomatonConfig::defaults(),
             simple_model_override: lookup_string(AURA_SIMPLE_MODEL),
+            default_mode: default_mode_from_env()?,
         })
+    }
+}
+
+fn default_mode_from_env() -> Result<AgentMode, crate::ConfigError> {
+    let Some((name, raw)) = lookup_string(AURA_DEFAULT_MODE)
+        .map(|raw| (AURA_DEFAULT_MODE, raw))
+        .or_else(|| {
+            lookup_string(AURA_FLEET_DEFAULT_MODE).map(|raw| (AURA_FLEET_DEFAULT_MODE, raw))
+        })
+    else {
+        return Ok(AgentMode::Agent);
+    };
+    match raw.to_lowercase().as_str() {
+        "agent" => Ok(AgentMode::Agent),
+        "plan" => Ok(AgentMode::Plan),
+        "ask" => Ok(AgentMode::Ask),
+        "debug" => Ok(AgentMode::Debug),
+        _ => Err(crate::ConfigError::InvalidValue {
+            name,
+            raw,
+            message: "expected one of agent|plan|ask|debug".to_string(),
+        }),
     }
 }
 
@@ -173,5 +205,46 @@ impl LoopConfig {
 impl Default for LoopConfig {
     fn default() -> Self {
         Self::defaults()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::ENV_TEST_LOCK;
+
+    fn clear_mode_env() {
+        std::env::remove_var(AURA_DEFAULT_MODE);
+        std::env::remove_var(AURA_FLEET_DEFAULT_MODE);
+    }
+
+    #[test]
+    fn default_mode_is_agent_when_unset() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_mode_env();
+        assert_eq!(default_mode_from_env().unwrap(), AgentMode::Agent);
+    }
+
+    #[test]
+    fn default_mode_parses_and_prefers_the_new_name() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_mode_env();
+        std::env::set_var(AURA_FLEET_DEFAULT_MODE, "plan");
+        assert_eq!(default_mode_from_env().unwrap(), AgentMode::Plan);
+        std::env::set_var(AURA_DEFAULT_MODE, "ask");
+        assert_eq!(default_mode_from_env().unwrap(), AgentMode::Ask);
+        clear_mode_env();
+    }
+
+    #[test]
+    fn default_mode_rejects_unknown_values() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_mode_env();
+        std::env::set_var(AURA_DEFAULT_MODE, "yolo");
+        assert!(matches!(
+            default_mode_from_env(),
+            Err(crate::ConfigError::InvalidValue { .. })
+        ));
+        clear_mode_env();
     }
 }

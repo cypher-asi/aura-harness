@@ -5,13 +5,13 @@
 //! auditor can replay parent intent without diffing the resolved
 //! [`crate::SubagentSpec`] against the parent context.
 
-use aura_core_modes::{AgentMode, JoinPolicy, KernelMode, ReplayMode, SpawnMode};
+use aura_core_modes::{AgentMode, KernelMode, ReplayMode, SpawnMode};
 use serde::{Deserialize, Serialize};
 
 /// Single explicit override entry.
 ///
 /// `Serialize` + `Deserialize` derives land in Phase 7a so the
-/// fleet-layer spawn writes the manifest into the audit log
+/// a spawn can write the manifest into the audit log
 /// (`RecordKind::SubagentSpawn` payload) via
 /// `aura-agent-kernel::write_system_record`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,8 +49,6 @@ pub enum OverriddenField {
     Kind(String),
     /// Spawn mode was set explicitly.
     SpawnMode(SpawnMode),
-    /// Join policy was set explicitly.
-    JoinPolicy(JoinPolicy),
     /// Replay mode was overridden (rare; only legal target today is
     /// the same as the default).
     ReplayMode(ReplayMode),
@@ -86,7 +84,7 @@ pub enum OverriddenField {
 /// derivation.
 ///
 /// `Serialize` + `Deserialize` derives land in Phase 7a so the
-/// fleet-layer spawn writes the manifest into the audit log via
+/// a spawn can write the manifest into the audit log via
 /// `aura-agent-kernel::write_system_record`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverrideManifest {

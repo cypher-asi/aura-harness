@@ -64,15 +64,14 @@ pub enum RecordKind {
     /// children are tied to the parent's stack frame; this is the
     /// audit record stamped when the parent goes away.
     ChildCancelledByParentDeath,
-    /// Phase 7b: child agent was promoted to an orphan because its
-    /// parent's task future was dropped AND the child had been
-    /// spawned in `SpawnMode::Detached` (or `SpawnMode::Batch` with
-    /// `JoinPolicy::Abandon`). The orphan continues running and its
-    /// state is persisted under `~/.aura/state/orphans/<id>.json`.
+    /// Legacy: written by the removed fleet layer when a detached
+    /// child outlived its parent. No production writer emits this
+    /// kind today; the variant is kept so the wire tag stays stable
+    /// for logs written by earlier builds.
     ChildOrphanedByParentDeath,
-    /// Phase 7b: an orphan was reaped via `aura agents reap`. The
-    /// payload carries the agent id, the reap source (cli /
-    /// shutdown), and the wall-clock cancellation result.
+    /// Legacy: written by the removed `aura agents reap` command. No
+    /// production writer emits this kind today; the variant is kept
+    /// so the wire tag stays stable for logs written by earlier builds.
     OrphanReaped,
     /// Reserved session lifecycle end marker. No production writer
     /// emits this kind today; the variant is kept so the wire tag

@@ -21,11 +21,10 @@
 //! - [`automaton`] — `AutomatonBridge` that wires `aura-automaton`'s
 //!   dev-loop / task-run automatons through per-agent kernels with
 //!   recorded `System::AutomatonLifecycle` audit entries.
-//! - [`child_runner`] — [`aura_fleet_spawn::ChildRunner`] impl that
-//!   drives the scheduler for foreground subagent dispatch. The
-//!   fleet-layer dispatcher (`aura-fleet-subagent`) consumes this
-//!   via the `Arc<dyn ChildRunner>` trait object so the agent layer
-//!   stays free of fleet deps.
+//! - [`agents`] — `AgentHost`: recursive agents. Any agent can spawn
+//!   child agents (`task`, `spawn_agent`) that run through the
+//!   scheduler and can spawn their own, and agents message each other
+//!   through the host's local `AgentControlHook` / `AgentReadHook`.
 //! - [`memory_observer`] — `TurnObserver` adapter feeding completed
 //!   turns into [`aura_context_memory::MemoryManager`].
 //! - [`capabilities`] — `record_runtime_capabilities` helper called by
@@ -62,19 +61,20 @@
     clippy::struct_field_names
 )]
 
+pub mod agents;
 pub mod automaton;
 pub mod capabilities;
-pub mod child_kernel;
-pub mod child_runner;
 pub mod executor;
 pub mod memory_observer;
 pub mod model_context;
 pub mod scheduler;
 pub mod worker;
 
+pub use agents::{
+    AgentEnv, AgentHooks, AgentHost, AgentHostConfig, AgentInfo, AgentState, ChildKernel,
+    ChildKernelFactory, ChildKernelRequest, InboxMessage, MessageKind, ParentInbox, RootAgent,
+};
 pub use automaton::{AutomatonBridge, EventSubscription};
-pub use child_kernel::{ChildKernelFactory, ChildKernelRequest};
-pub use child_runner::RuntimeChildRunner;
 pub use memory_observer::{turn_summary_from_result, MemoryTurnObserver};
 pub use model_context::context_window_for_model;
 pub use scheduler::{AgentIdentity, AgentIdentityRegistry, Scheduler, SchedulerError};

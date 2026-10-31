@@ -14,8 +14,8 @@ pub struct AgentModeInputs {
     /// Mode explicitly requested for this session: the `--mode` CLI
     /// flag or the `mode` field on a `RuntimeRequest`.
     pub requested: Option<AgentMode>,
-    /// Daemon-wide default (`FleetConfig::default_mode`, overridable
-    /// via `AURA_FLEET_DEFAULT_MODE`).
+    /// Daemon-wide default (`AgentConfig::default_mode`, overridable
+    /// via `AURA_DEFAULT_MODE`).
     pub daemon_default: Option<AgentMode>,
 }
 

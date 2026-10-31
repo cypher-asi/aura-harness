@@ -15,7 +15,7 @@
 //! ## Layer order (lowest → highest)
 //!
 //! `core` < `store` < `config` < `model` < `context` < `plugin` <
-//! `exec` < `agent` < `fleet` < `surface`.
+//! `exec` < `agent` < `surface`.
 //!
 //! Equal or downward edges are silently accepted. Upward edges cause
 //! the test to fail.
@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 /// Layer rank — lower numbers depend "downward" (allowed); higher
 /// numbers depend "upward" (advisory warning).
 const LAYER_ORDER: &[&str] = &[
-    "core", "store", "config", "model", "context", "plugin", "exec", "agent", "fleet", "surface",
+    "core", "store", "config", "model", "context", "plugin", "exec", "agent", "surface",
 ];
 
 /// Explicit layer assignments for crate names that don't follow the
@@ -116,24 +116,6 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-plugin-hooks", "plugin"),
     ("aura-plugin-mcp", "plugin"),
     ("aura-plugin-connectors", "plugin"),
-    // Fleet layer:
-    //   aura-fleet-registry — in-memory agent slot directory
-    //   aura-fleet-quota    — tracking-only quota pool
-    //   aura-fleet-spawn    — spawn mechanics + per-parent audit lease
-    //
-    // Fleet sits ABOVE agent and BELOW surface in the layer stack.
-    // Fleet crates may depend on agent/exec/plugin/context/model/
-    // store/config/core crates (downward); agent crates MUST NOT
-    // depend on fleet crates (upward). The auto-classification
-    // already maps `aura-fleet-*` correctly via `LAYER_ORDER`, but
-    // the explicit entries below keep the table self-documenting.
-    ("aura-fleet-registry", "fleet"),
-    ("aura-fleet-quota", "fleet"),
-    ("aura-fleet-spawn", "fleet"),
-    // Phase B / Commit 3 / Step 3a: fleet-layer concrete
-    // SubagentDispatchHook impl. Wraps FleetSpawner; depends on the
-    // agent-layer registry + adapter helpers in aura-agent-subagent.
-    ("aura-fleet-subagent", "fleet"),
     // CLI composition root (ModeFlag, `--mode` resolution input).
     ("aura-surface-cli", "surface"),
 ];
@@ -357,10 +339,7 @@ fn parse_package_name(toml: &str) -> Option<String> {
 ///
 /// `[dev-dependencies]` blocks are skipped: they only affect the
 /// test compilation graph, not the production crate graph, so a
-/// dev-dep edge cannot violate the runtime layer ordering. Phase B's
-/// `aura-fleet-subagent` integration tests pull `aura-engine` in as
-/// a dev-dep to construct a real `RuntimeChildRunner` — that's a
-/// test-only convenience and explicitly NOT a production upward edge.
+/// dev-dep edge cannot violate the runtime layer ordering.
 fn parse_workspace_dep_names(
     toml: &str,
     layer_map: &BTreeMap<String, &'static str>,

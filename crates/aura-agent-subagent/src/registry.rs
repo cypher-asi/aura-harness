@@ -5,7 +5,7 @@
 //!
 //! Phase B / Commit 3 / Step 3a relocated this module from
 //! `aura-runtime/src/subagent_registry.rs` so the agent layer owns the
-//! pure-data subagent surface. No fleet deps are added — the
+//! pure-data subagent surface. No runtime deps are added — the
 //! `aura-core` types are sufficient.
 
 use aura_core_types::{Capability, SubagentBudget, SubagentKindSpec};
@@ -113,8 +113,21 @@ fn general_purpose() -> SubagentKindSpec {
             "write_file".into(),
             "delete_file".into(),
             "run_command".into(),
+            "task".into(),
+            "spawn_agent".into(),
+            "send_to_agent".into(),
+            "delegate_task".into(),
+            "agent_lifecycle".into(),
+            "get_agent_state".into(),
+            "list_agents".into(),
         ],
-        allowed_capabilities: vec![Capability::ReadAgent, Capability::InvokeProcess],
+        allowed_capabilities: vec![
+            Capability::ReadAgent,
+            Capability::InvokeProcess,
+            Capability::SpawnAgent,
+            Capability::ControlAgent,
+            Capability::ListAgents,
+        ],
         readonly: false,
         default_model: None,
         budget: SubagentBudget {

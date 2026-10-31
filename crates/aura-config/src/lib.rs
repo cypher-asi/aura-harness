@@ -54,22 +54,15 @@
 //! | `AURA_LLM_BACKOFF_CAP_MS` | u64 | `30_000` | [`LlmRetryConfig::backoff_cap`] (millis) |
 //! | `AURA_DEV_LOOP_ENABLED_THINKING` | bool | `false` | [`ReasonerThinkingConfig::dev_loop_enabled_thinking`] |
 //!
-//! ### Phase 4a fleet / subagent / conflict / aura-home env vars
+//! ### Session mode / subagent / conflict / aura-home env vars
 //!
-//! These knobs land alongside `AuraHome` resolution and the Phase 4a
-//! `[fleet] / [subagent] / [conflict] / [plugins]` config tables.
-//! They have no agent-loop wiring yet — Phase 6+ (fleet) and Phase 7
-//! (subagent) consume them. `AURA_HOME` is consumed today by
-//! [`AuraHome::resolve`].
+//! `AURA_HOME` is consumed by [`AuraHome::resolve`].
 //!
 //! | Env var | Type | Default | Field |
 //! | --- | --- | --- | --- |
-//! | `AURA_FLEET_EMBEDDED_DAEMON` | bool | `true` | [`FleetConfig::embedded_daemon`] |
-//! | `AURA_FLEET_MAX_CONCURRENT_AGENTS` | u32 | `32` | [`FleetConfig::max_concurrent_agents`] |
-//! | `AURA_FLEET_SHUTDOWN_GRACE_MS` | u64 | `30_000` | [`FleetConfig::shutdown_grace_ms`] |
-//! | `AURA_FLEET_ORPHAN_ON_PARENT_DEATH` | bool | `true` | [`FleetConfig::orphan_on_parent_death`] |
-//! | `AURA_FLEET_DEFAULT_MODE` | string | `agent` | [`FleetConfig::default_mode`] |
+//! | `AURA_DEFAULT_MODE` (older name `AURA_FLEET_DEFAULT_MODE`) | string | `agent` | [`AgentConfig::default_mode`] |
 //! | `AURA_SUBAGENT_MAX_DEPTH` | u32 | `8` | [`SubagentConfig::max_depth`] |
+//! | `AURA_SUBAGENT_MAX_RUNNING` | usize | `32` | [`SubagentConfig::max_running`] |
 //! | `AURA_SUBAGENT_DEFAULT_MAX_TOKENS` | u32 | `64_000` | [`SubagentConfig::default_max_tokens`] |
 //! | `AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS` | u32 | `50` | [`SubagentConfig::default_max_iterations`] |
 //! | `AURA_SUBAGENT_DEFAULT_TIMEOUT_MS` | u64 | `300_000` | [`SubagentConfig::default_timeout_ms`] |
@@ -130,7 +123,6 @@ pub mod automaton;
 pub mod compaction;
 pub mod conflict;
 pub mod env;
-pub mod fleet;
 pub mod plugins;
 pub mod prompts;
 pub mod reasoner;
@@ -148,7 +140,6 @@ pub use automaton::AutomatonConfig;
 pub use compaction::CompactionConfig;
 pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
-pub use fleet::FleetConfig;
 pub use plugins::{PluginConfig, PluginsConfig, PluginsTable};
 pub use prompts::PromptsConfig;
 pub use reasoner::{LlmRetryConfig, ReasonerConfig, ReasonerThinkingConfig};
@@ -206,8 +197,8 @@ pub use verify::{
 /// [`ReasonerConfig`] sub-tree (consumed by `aura-reasoner` and the
 /// agent streaming retry paths).
 ///
-/// Phase 4a added the [`FleetConfig`], [`SubagentConfig`],
-/// [`ConflictConfig`], and [`PluginsConfig`] sub-trees. They are
+/// Phase 4a added the [`SubagentConfig`], [`ConflictConfig`], and
+/// [`PluginsConfig`] sub-trees. They are
 /// populated from env overrides today; the on-disk TOML schema
 /// landed in Phase 4b.
 #[derive(Debug, Clone)]
@@ -216,11 +207,7 @@ pub struct AuraConfig {
     pub agent: AgentConfig,
     /// Shared LLM retry and thinking knobs.
     pub reasoner: ReasonerConfig,
-    /// Fleet daemon + spawn knobs (Phase 4a; consumed by future
-    /// fleet plumbing).
-    pub fleet: FleetConfig,
-    /// Subagent derivation + budget knobs (Phase 4a; consumed by the
-    /// Phase 6a derivation path).
+    /// Spawned-agent limits and budget defaults.
     pub subagent: SubagentConfig,
     /// Conflict-lock knobs (Phase 4a; no consumer today).
     pub conflict: ConflictConfig,
@@ -236,7 +223,6 @@ impl AuraConfig {
         Self {
             agent: AgentConfig::defaults(),
             reasoner: ReasonerConfig::defaults(),
-            fleet: FleetConfig::defaults(),
             subagent: SubagentConfig::defaults(),
             conflict: ConflictConfig::defaults(),
             plugins: PluginsConfig::defaults(),
@@ -254,7 +240,6 @@ impl AuraConfig {
         Ok(Self {
             agent: AgentConfig::from_env()?,
             reasoner: ReasonerConfig::from_env()?,
-            fleet: FleetConfig::from_env()?,
             subagent: SubagentConfig::from_env()?,
             conflict: ConflictConfig::from_env()?,
             // Plugin config has no env-var surface today; it loads
@@ -304,13 +289,13 @@ pub fn loaded() -> AuraConfig {
 }
 
 /// Resolve a session's [`aura_core_modes::AgentMode`]: the requested
-/// mode, else the daemon default ([`FleetConfig::default_mode`]), else
+/// mode, else the daemon default ([`AgentConfig::default_mode`]), else
 /// `Agent`.
 #[must_use]
 pub fn session_mode(requested: Option<aura_core_modes::AgentMode>) -> aura_core_modes::AgentMode {
     aura_core_modes::resolve_session_mode(aura_core_modes::AgentModeInputs {
         requested,
-        daemon_default: Some(current().fleet.default_mode),
+        daemon_default: Some(current().agent.default_mode),
     })
 }
 

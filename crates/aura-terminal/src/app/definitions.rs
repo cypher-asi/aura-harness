@@ -1,5 +1,5 @@
-//! Permanent agents panel: selecting, spawning, editing, and deleting
-//! permanent agents.
+//! The agents panel's tabs, and its roster of permanent agents: selecting,
+//! spawning, editing, and deleting them.
 
 use super::{contains, follow_selection, App, AppState, NotificationType};
 use crate::events::{AgentDefinitionSummary, UiEvent};
@@ -7,7 +7,89 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use std::path::PathBuf;
 
+/// Views of the agents panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentsTab {
+    /// Live agents: the ones the user talks to and the instances they spawned.
+    #[default]
+    Projects,
+    /// The roster of permanent agents that can be spawned by name.
+    Roster,
+}
+
+impl AgentsTab {
+    pub const ALL: [Self; 2] = [Self::Projects, Self::Roster];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Projects => "Projects",
+            Self::Roster => "Agents",
+        }
+    }
+
+    const fn other(self) -> Self {
+        match self {
+            Self::Projects => Self::Roster,
+            Self::Roster => Self::Projects,
+        }
+    }
+
+    /// Each tab with the first column and width of its ` label ` cell in a
+    /// tab bar that starts with one column of margin. The renderer draws
+    /// the bar with this layout and clicks are mapped back through it.
+    pub fn layout() -> impl Iterator<Item = (Self, u16, u16)> {
+        let mut x = 1u16;
+        Self::ALL.into_iter().map(move |tab| {
+            let width = u16::try_from(tab.label().len() + 2).unwrap_or(u16::MAX);
+            let start = x;
+            x = x.saturating_add(width);
+            (tab, start, width)
+        })
+    }
+}
+
 impl App {
+    /// Which list the agents panel shows.
+    #[must_use]
+    pub const fn agents_tab(&self) -> AgentsTab {
+        self.agents_tab
+    }
+
+    /// Record where the agents panel's tab bar was drawn this frame.
+    pub fn set_agent_tabs_area(&mut self, area: Rect) {
+        self.areas.agent_tabs = Some(area);
+    }
+
+    pub(super) fn show_agents_tab(&mut self, tab: AgentsTab) {
+        self.agents_tab = tab;
+        self.pending_delete = None;
+    }
+
+    pub(super) fn toggle_agents_tab(&mut self) {
+        self.show_agents_tab(self.agents_tab.other());
+    }
+
+    /// Clicking a tab shows it; clicking a row acts on the visible list.
+    pub(super) fn click_agents_panel(&mut self, column: u16, row: u16) {
+        if let Some(bar) = self
+            .areas
+            .agent_tabs
+            .filter(|&bar| contains(Some(bar), column, row))
+        {
+            let offset = column - bar.x;
+            if let Some((tab, _, _)) = AgentsTab::layout()
+                .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
+            {
+                self.show_agents_tab(tab);
+            }
+            return;
+        }
+        match self.agents_tab {
+            AgentsTab::Projects => self.click_agent_row(column, row),
+            AgentsTab::Roster => self.click_definition_row(column, row),
+        }
+    }
     /// Permanent agents shown in the panel.
     #[must_use]
     pub fn definitions(&self) -> &[AgentDefinitionSummary] {
@@ -89,6 +171,8 @@ impl App {
             return;
         }
         self.send(UiEvent::InstantiateDefinition(name.to_string()));
+        // The new instance becomes the active agent, listed under Projects.
+        self.show_agents_tab(AgentsTab::Projects);
     }
 
     /// Open the permanent agent `name` in the editor, or a new one for `None`.
@@ -153,6 +237,7 @@ impl App {
             KeyCode::Home => self.select_definition_row(0),
             KeyCode::End => self.select_definition_row(last),
             KeyCode::Enter => self.activate_definition_row(),
+            KeyCode::Left | KeyCode::Right => self.toggle_agents_tab(),
             _ => {}
         }
     }

@@ -296,12 +296,20 @@ async fn drive_idle(
     attach_count: &Arc<AtomicUsize>,
     shutdown: &CancellationToken,
 ) -> IdleAction {
+    let mailbox = session.agent_mailbox.clone();
+    if let Some(message) = mailbox.pop() {
+        return start_agent_message_turn(message, session, outbound_tx, ctx).await;
+    }
     tokio::select! {
         biased;
         () = shutdown.cancelled() => {
             info!(session_id = %session.session_id, "Chat run stopped while idle");
             IdleAction::Close
         }
+        () = mailbox.ready() => match mailbox.pop() {
+            Some(message) => start_agent_message_turn(message, session, outbound_tx, ctx).await,
+            None => IdleAction::Continue,
+        },
         result = tokio::time::timeout(CHAT_RUN_IDLE_RETENTION, commands_rx.recv()) => {
             match result {
                 Ok(Some(msg)) => dispatch_idle_message(msg, session, outbound_tx, ctx).await,
@@ -321,6 +329,24 @@ async fn drive_idle(
                 }
             }
         }
+    }
+}
+
+/// Run a turn for a message from an agent this session spawned.
+async fn start_agent_message_turn(
+    message: aura_engine::InboxMessage,
+    session: &mut Session,
+    outbound_tx: &mpsc::Sender<OutboundMessage>,
+    ctx: &WsContext,
+) -> IdleAction {
+    let msg = UserMessage {
+        content: message.render(),
+        tool_hints: None,
+        attachments: None,
+    };
+    match start_turn(session, msg, outbound_tx, ctx).await {
+        Some(turn) => IdleAction::StartTurn(ActiveTurn::Agent(turn)),
+        None => IdleAction::Continue,
     }
 }
 
@@ -874,6 +900,12 @@ mod tests {
         std::mem::forget(workspace);
         std::mem::forget(db_dir);
 
+        let agent_host = aura_engine::AgentHost::new(
+            store.clone(),
+            scheduler.clone(),
+            aura_engine::AgentHostConfig::default(),
+        );
+
         WsContext {
             workspace_base,
             provider,
@@ -891,6 +923,7 @@ mod tests {
             aura_os_server_url: None,
             chat_runs: Arc::new(dashmap::DashMap::new()),
             run_id: None,
+            agent_host,
         }
     }
 

@@ -94,7 +94,7 @@ pub struct RuntimeRequest {
     pub user_id: String,
 
     /// Session mode (`agent` / `plan` / `ask` / `debug`). `None` falls
-    /// back to the daemon default (`AURA_FLEET_DEFAULT_MODE`), then
+    /// back to the daemon default (`AURA_DEFAULT_MODE`), then
     /// `agent`. The kernel denies any tool call the mode does not allow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(

@@ -28,8 +28,6 @@ aura-runtime = { path = "../aura-runtime" }
 # `aura-runtime::memory_observer` into the engine crate.
 aura-engine = { path = "../aura-engine" }
 aura-plugin-core = { path = "../aura-plugin-core" }
-aura-fleet-spawn = { path = "../aura-fleet-spawn" }
-aura-fleet-registry = { path = "../aura-fleet-registry" }
 clap = { version = "4.5", features = ["derive"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
@@ -49,16 +47,10 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
-tabwriter = "1.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tower = { workspace = true }
-
-# `aura-fleet-registry` is held for the incremental migration of
-# the fleet wiring into the composition root.
-[package.metadata.cargo-machete]
-ignored = ["aura-fleet-registry"]
 
 [lints]
 workspace = true

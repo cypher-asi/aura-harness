@@ -638,6 +638,12 @@ mod driver_tests {
         std::mem::forget(workspace);
         std::mem::forget(db_dir);
 
+        let agent_host = aura_engine::AgentHost::new(
+            store.clone(),
+            scheduler.clone(),
+            aura_engine::AgentHostConfig::default(),
+        );
+
         WsContext {
             workspace_base,
             provider,
@@ -655,6 +661,7 @@ mod driver_tests {
             aura_os_server_url: None,
             chat_runs: Arc::new(DashMap::new()),
             run_id: None,
+            agent_host,
         }
     }
 

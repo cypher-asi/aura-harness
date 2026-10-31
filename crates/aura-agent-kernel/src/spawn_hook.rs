@@ -244,6 +244,7 @@ mod tests {
                     parent_tool_permissions: None,
                     system_prompt_override: Some("be fast".into()),
                     preassigned_agent_id: None,
+                    initial_prompt: None,
                 },
             )
             .await
@@ -295,6 +296,7 @@ mod tests {
                     parent_tool_permissions: None,
                     system_prompt_override: None,
                     preassigned_agent_id: None,
+                    initial_prompt: None,
                 },
             )
             .await

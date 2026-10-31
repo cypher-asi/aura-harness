@@ -24,14 +24,12 @@ Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src
 | `aura plugins install <dir> [--trust]` | Install a plugin from a local directory into `AURA_HOME/plugins/`. |
 | `aura plugins list` | List installed plugins and their active versions. |
 | `aura plugins enable <id> [--yes\|--no]` / `disable <id>` | Toggle a plugin in `AURA_HOME/config.toml`, answering the trust prompt if required. |
-| `aura agents inspect [--alive\|--orphans\|--all]` | List live and orphaned subagents. |
-| `aura agents reap <AGENT_ID>` / `--all-orphans` | Remove orphaned subagents. |
 
 ## Global flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode <agent\|plan\|ask\|debug>` | `AURA_FLEET_DEFAULT_MODE`, else `agent` | Session mode for the terminal UI. The kernel denies any tool call the mode does not allow. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` carries its own optional `mode`. |
+| `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Session mode for the terminal UI. The kernel denies any tool call the mode does not allow. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` carries its own optional `mode`. |
 
 ## `aura run` flags
 

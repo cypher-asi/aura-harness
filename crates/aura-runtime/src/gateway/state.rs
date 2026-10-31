@@ -96,6 +96,9 @@ pub struct RouterState {
     /// so a dropped server↔harness socket can be re-established without
     /// killing the turn. Multiple attaches to the same run are allowed.
     pub(crate) chat_runs: crate::gateway::session::chat_run::ChatRunRegistry,
+    /// Every agent spawned on this node, from any session. Shared so
+    /// agents outlive the request that started them.
+    pub(crate) agent_host: aura_engine::AgentHost,
 }
 
 /// Input bundle for [`RouterState::new`].
@@ -132,6 +135,15 @@ impl RouterState {
     /// reason to share that map across `RouterState` instances.
     #[must_use]
     pub fn new(cfg: RouterStateConfig) -> Self {
+        let limits = aura_config::loaded().subagent;
+        let agent_host = aura_engine::AgentHost::new(
+            cfg.store.clone(),
+            cfg.scheduler.clone(),
+            aura_engine::AgentHostConfig {
+                max_depth: limits.max_depth,
+                max_running: limits.max_running,
+            },
+        );
         Self {
             store: cfg.store,
             scheduler: cfg.scheduler,
@@ -151,6 +163,7 @@ impl RouterState {
             router_url: cfg.router_url,
             ws_slots: Arc::new(Semaphore::new(ws::MAX_WS_CONNS_PER_NODE)),
             chat_runs: Arc::new(DashMap::new()),
+            agent_host,
         }
     }
 }
@@ -176,6 +189,7 @@ impl Clone for RouterState {
             router_url: self.router_url.clone(),
             ws_slots: self.ws_slots.clone(),
             chat_runs: self.chat_runs.clone(),
+            agent_host: self.agent_host.clone(),
         }
     }
 }

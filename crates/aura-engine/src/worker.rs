@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, instrument, warn};
 
-const AGENT_LOOP_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const AGENT_LOOP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Summary returned after draining an agent inbox.
 #[derive(Debug, Default)]
@@ -48,12 +48,16 @@ pub async fn process_agent_detailed(
         tools,
         event_tx,
         Some(AGENT_LOOP_TIMEOUT),
+        Vec::new(),
     )
     .await
 }
 
 /// Child runners supply their own cancellable deadline; avoid a competing
 /// worker timer that turns a normal timeout into an internal dispatch error.
+///
+/// `history` seeds the conversation for the first dequeued prompt only;
+/// later prompts in the same drain start fresh, as before.
 pub(crate) async fn process_agent_with_timeout(
     agent_id: AgentId,
     kernel: Arc<Kernel>,
@@ -61,6 +65,7 @@ pub(crate) async fn process_agent_with_timeout(
     tools: &[ToolDefinition],
     event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
     timeout: Option<Duration>,
+    mut history: Vec<Message>,
 ) -> anyhow::Result<ProcessedAgent> {
     let mut processed = 0u64;
     let mut last_result = None;
@@ -88,7 +93,8 @@ pub(crate) async fn process_agent_with_timeout(
 
         let prompt = String::from_utf8(tx.payload.to_vec())
             .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))?;
-        let messages = vec![Message::user(prompt)];
+        let mut messages = std::mem::take(&mut history);
+        messages.push(Message::user(prompt));
 
         let run = agent_loop.run_with_events(
             &model_gateway,
@@ -245,7 +251,16 @@ mod tests {
         let mut config = aura_agent::AgentLoopConfig::for_agent("claude-opus-4-7");
         config.stream_timeout = Duration::from_secs(400);
         let agent_loop = AgentLoop::new(config);
-        process_agent_with_timeout(agent_id, kernel, &agent_loop, &[], None, timeout).await
+        process_agent_with_timeout(
+            agent_id,
+            kernel,
+            &agent_loop,
+            &[],
+            None,
+            timeout,
+            Vec::new(),
+        )
+        .await
     }
 
     #[tokio::test(start_paused = true)]

@@ -4,7 +4,7 @@
 //!
 //! Lifecycle hook engine for first-party Aura plugins. Phase 4c shipped
 //! the [`HookEvent`] taxonomy + [`HookEngine`] shell; later phases wire
-//! firing through the agent loop / fleet spawner lifecycle points.
+//! firing through the agent loop / agent host lifecycle points.
 //!
 //! ## Surfaces
 //!

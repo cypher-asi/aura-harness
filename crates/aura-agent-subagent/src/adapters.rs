@@ -3,8 +3,8 @@
 //!
 //! Phase B / Commit 3 / Step 3a moved these helpers out of the
 //! gateway-side `aura-runtime/src/subagent_dispatch.rs` so the
-//! fleet-layer dispatcher can be sliced cleanly out. None of them
-//! touch fleet types — they translate parent context, narrowing
+//! dispatcher can be sliced cleanly out. None of them touch
+//! runtime types — they translate parent context, narrowing
 //! policy, and override fields between the wire/core types in
 //! `aura_core_types` and the agent-layer types this crate already owns.
 
@@ -114,7 +114,6 @@ pub fn overrides_from_request(
             .or_else(|| kind.default_model.clone()),
         kind: Some(kind.name.clone()),
         spawn_mode: request.spawn_mode,
-        join_policy: None,
         replay_mode: None,
         budget,
         tool_subset: Some(tool_subset),

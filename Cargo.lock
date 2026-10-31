@@ -171,8 +171,6 @@ dependencies = [
  "aura-core-permissions",
  "aura-core-protocol",
  "aura-core-types",
- "aura-fleet-registry",
- "aura-fleet-spawn",
  "aura-model-reasoner",
  "aura-protocol",
  "aura-runtime",
@@ -483,7 +481,6 @@ dependencies = [
  "aura-context-prompts",
  "aura-core-types",
  "aura-domain-http",
- "aura-fleet-spawn",
  "aura-model-reasoner",
  "aura-protocol",
  "aura-store-db",
@@ -496,6 +493,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -530,85 +528,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "aura-fleet-quota"
-version = "0.1.0"
-dependencies = [
- "aura-core-types",
- "parking_lot",
- "thiserror 1.0.69",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "aura-fleet-registry"
-version = "0.1.0"
-dependencies = [
- "aura-core-modes",
- "aura-core-permissions",
- "aura-core-types",
- "chrono",
- "parking_lot",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "aura-fleet-spawn"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aura-agent",
- "aura-agent-kernel",
- "aura-agent-subagent",
- "aura-core-modes",
- "aura-core-permissions",
- "aura-core-types",
- "aura-fleet-quota",
- "aura-fleet-registry",
- "aura-plugin-hooks",
- "aura-store-db",
- "aura-store-record",
- "bytes",
- "chrono",
- "dirs",
- "futures-util",
- "parking_lot",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "aura-fleet-subagent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "aura-agent",
- "aura-agent-kernel",
- "aura-agent-subagent",
- "aura-core-modes",
- "aura-core-permissions",
- "aura-core-types",
- "aura-engine",
- "aura-fleet-quota",
- "aura-fleet-registry",
- "aura-fleet-spawn",
- "aura-model-reasoner",
- "aura-store-db",
- "aura-tools",
- "insta",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -720,10 +639,6 @@ dependencies = [
  "aura-core-types",
  "aura-domain-http",
  "aura-engine",
- "aura-fleet-quota",
- "aura-fleet-registry",
- "aura-fleet-spawn",
- "aura-fleet-subagent",
  "aura-model-reasoner",
  "aura-plugin-core",
  "aura-plugin-hooks",
@@ -820,8 +735,6 @@ dependencies = [
  "aura-core-modes",
  "aura-core-types",
  "aura-engine",
- "aura-fleet-registry",
- "aura-fleet-spawn",
  "aura-model-reasoner",
  "aura-plugin-core",
  "aura-runtime",
@@ -837,7 +750,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "tabwriter",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -3866,15 +3778,6 @@ checksum = "a75fb188eb626b924683e3b95e3a48e63551fcfb51949de2f06a9d91dbee93c9"
 dependencies = [
  "core-foundation-sys",
  "libc",
-]
-
-[[package]]
-name = "tabwriter"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fce91f2f0ec87dff7e6bcbbeb267439aa1188703003c6055193c821487400432"
-dependencies = [
- "unicode-width",
 ]
 
 [[package]]

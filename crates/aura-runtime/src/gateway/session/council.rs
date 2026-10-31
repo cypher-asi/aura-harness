@@ -9,7 +9,7 @@
 //! emits ordinary task spawns the UI can't group), the coordinator
 //! dispatches the N member child runs DIRECTLY through the same
 //! [`super::subagent_stream::RuntimeSubagentObservabilityHook`] +
-//! [`aura_fleet_subagent::FleetSubagentDispatcher`] the `task` tool uses.
+//! [`aura_engine::AgentHooks`] the `task` tool uses.
 //! That reuses all the existing, already-working subagent machinery
 //! (child-run registration, live WS-attachable threads, status frames)
 //! while giving the council exactly the shape the UI expects:
@@ -44,7 +44,7 @@ use aura_core_types::{
     AgentId, AgentPermissions, AgentToolPermissions, SubagentDispatchRequest, SubagentExit,
     SubagentResult, UserToolDefaults,
 };
-use aura_fleet_subagent::FleetSubagentDispatcher;
+use aura_engine::AgentHooks;
 use aura_protocol::{
     ConversationMessage, CouncilMechanism, CouncilMember, CouncilMemberRole, RuntimeRequest,
     RuntimeRequestType,
@@ -55,7 +55,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::chat_run::{spawn_event_forwarder, ChatEventChannel, ChatRunHandle, ChatRunRegistry};
-use super::helpers::{build_fleet_subagent_dispatcher, prepare_chat_session, ChatRequestError};
+use super::helpers::{prepare_chat_session, register_session_agent, ChatRequestError};
 use super::subagent_stream::RuntimeSubagentObservabilityHook;
 use super::WsContext;
 use crate::protocol::{InboundMessage, OutboundMessage, UserMessage};
@@ -103,7 +103,7 @@ struct CouncilDispatchParams {
     originating_user_id: String,
     parent_model_id: String,
     chat_runs: ChatRunRegistry,
-    dispatcher: Arc<FleetSubagentDispatcher>,
+    dispatcher: AgentHooks,
     /// Combine mechanism stamped onto every member's `SubagentSpawned`
     /// so the UI can label the council panel with the active mechanism.
     mechanism: CouncilMechanism,
@@ -179,17 +179,15 @@ pub(crate) async fn start_council_run(
 
     let session = prepare_chat_session(chat_req, &ctx).await?;
 
-    // Build the member-dispatch surface and snapshot the parent identity
-    // / permissions BEFORE `session` + `ctx` are moved into the driver.
-    // The dispatcher is the SAME per-session fleet dispatcher the
-    // `task`-tool path constructs, so members inherit the parent's
-    // identity / permissions / workspace and run the full real-agent
-    // loop with only their model overridden.
-    let dispatcher =
-        build_fleet_subagent_dispatcher(&session, &ctx).map_err(|e| ChatRequestError {
-            code: "council_dispatcher_build_failed",
-            message: format!("failed to build council member dispatcher: {e}"),
-        })?;
+    // Register the parent as a root agent and snapshot its identity /
+    // permissions BEFORE `session` + `ctx` are moved into the driver.
+    // Members dispatch through the SAME hooks the `task` tool uses, so
+    // they inherit the parent's identity / permissions / workspace and
+    // run the full real-agent loop with only their model overridden.
+    let dispatcher = register_session_agent(&session, &ctx).map_err(|e| ChatRequestError {
+        code: "council_dispatcher_build_failed",
+        message: format!("failed to build council member dispatcher: {e}"),
+    })?;
     let user_tool_defaults =
         super::helpers::session_user_defaults(&session, &ctx).map_err(|e| ChatRequestError {
             code: "council_user_defaults_failed",
@@ -317,7 +315,7 @@ async fn dispatch_members(
     let parent_outbound = spawn_event_forwarder(handle.events.clone());
     let hook = Arc::new(
         RuntimeSubagentObservabilityHook::new(
-            params.dispatcher.clone(),
+            Arc::new(params.dispatcher.clone()),
             parent_outbound,
             params.chat_runs.clone(),
             Some(shutdown.clone()),

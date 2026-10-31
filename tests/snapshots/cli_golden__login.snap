@@ -8,7 +8,7 @@ Usage: aura login [OPTIONS]
 
 Options:
       --mode <MODE>
-          Session mode for the interactive terminal. Overrides the daemon default (`AURA_FLEET_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
+          Session mode for the interactive terminal. Overrides the daemon default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
 
           Possible values:
           - agent: Full unrestricted operation subject to user permissions

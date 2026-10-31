@@ -7,6 +7,42 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Recursive agents replace the fleet
+
+Subagents are now ordinary agents started by other agents, and they can
+start agents of their own. One node-wide `AgentHost` in
+`aura-engine::agents` replaces the four `aura-fleet-*` crates.
+
+##### Changed
+
+- `task` starts a child of a bundled kind to get a job done and returns
+  its result. `general_purpose` children get `task` and `spawn_agent`
+  too, so work can be split recursively, down to `AURA_SUBAGENT_MAX_DEPTH`
+  levels (default 8). A task child is removed once its job is done.
+- `spawn_agent` starts a long-lived named child. It keeps its
+  conversation across `send_to_agent` / `delegate_task` messages until
+  `agent_lifecycle` stops it. It can take an `initial_prompt`.
+- A detached `task` returns at once; the child's result arrives later as
+  a message. In a chat session that message starts a new turn once the
+  session is idle.
+- Children may only narrow what their parent has: mode, permissions,
+  model and tools. A spawn that asks for more permissions is rejected.
+- `AURA_FLEET_DEFAULT_MODE` is renamed `AURA_DEFAULT_MODE`
+  (`AgentConfig::default_mode`). The old name is still read when the new
+  one is unset.
+- New `AURA_SUBAGENT_MAX_RUNNING` (default 32) caps how many spawned
+  agents run at once across the node.
+
+##### Removed
+
+- The `aura-fleet-registry`, `aura-fleet-quota`, `aura-fleet-spawn` and
+  `aura-fleet-subagent` crates, and the `fleet` layer.
+- `SpawnMode::Batch` and `JoinPolicy`. Run several `task` calls in one
+  turn instead.
+- Orphan files under `~/.aura/state/orphans/` and the
+  `aura agents inspect` / `aura agents reap` commands. Stopping an agent
+  now stops its whole subtree.
+
 ### Terminal — permanent agents
 
 The terminal's left column is split. **Agents** (top) lists the running

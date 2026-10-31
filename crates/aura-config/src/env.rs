@@ -35,21 +35,14 @@ pub const AURA_LLM_BACKOFF_INITIAL_MS: &str = "AURA_LLM_BACKOFF_INITIAL_MS";
 pub const AURA_LLM_BACKOFF_CAP_MS: &str = "AURA_LLM_BACKOFF_CAP_MS";
 pub const AURA_DEV_LOOP_ENABLED_THINKING: &str = "AURA_DEV_LOOP_ENABLED_THINKING";
 
-// Phase 4a — fleet / subagent / conflict env-var names. These knobs
-// land in `aura-config` ahead of the actual fleet/subagent/exec-conflict
-// implementations (Phases 5+); the owning crate is `aura-config` so the
-// future call sites read them through `aura_config::loaded().fleet.*`
-// (etc.) rather than via `std::env::var(...)`.
-pub const AURA_FLEET_EMBEDDED_DAEMON: &str = "AURA_FLEET_EMBEDDED_DAEMON";
-pub const AURA_FLEET_MAX_CONCURRENT_AGENTS: &str = "AURA_FLEET_MAX_CONCURRENT_AGENTS";
-pub const AURA_FLEET_SHUTDOWN_GRACE_MS: &str = "AURA_FLEET_SHUTDOWN_GRACE_MS";
-pub const AURA_FLEET_ORPHAN_ON_PARENT_DEATH: &str = "AURA_FLEET_ORPHAN_ON_PARENT_DEATH";
-/// Phase 9 default mode for the fleet daemon. Wire format is the
+/// Mode for sessions that don't request one. Wire format is the
 /// snake-case [`aura_core_modes::AgentMode`] serde representation —
-/// `agent|plan|ask|debug`. Consumed by [`crate::fleet::FleetConfig`]
-/// as the daemon-default rung of the AgentMode resolution priority.
+/// `agent|plan|ask|debug`. Consumed by [`crate::AgentConfig::default_mode`].
+pub const AURA_DEFAULT_MODE: &str = "AURA_DEFAULT_MODE";
+/// Older name for [`AURA_DEFAULT_MODE`], read when the new one is unset.
 pub const AURA_FLEET_DEFAULT_MODE: &str = "AURA_FLEET_DEFAULT_MODE";
 pub const AURA_SUBAGENT_MAX_DEPTH: &str = "AURA_SUBAGENT_MAX_DEPTH";
+pub const AURA_SUBAGENT_MAX_RUNNING: &str = "AURA_SUBAGENT_MAX_RUNNING";
 pub const AURA_SUBAGENT_DEFAULT_MAX_TOKENS: &str = "AURA_SUBAGENT_DEFAULT_MAX_TOKENS";
 pub const AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS: &str = "AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS";
 pub const AURA_SUBAGENT_DEFAULT_TIMEOUT_MS: &str = "AURA_SUBAGENT_DEFAULT_TIMEOUT_MS";
@@ -81,12 +74,10 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_LLM_BACKOFF_INITIAL_MS,
     AURA_LLM_BACKOFF_CAP_MS,
     AURA_DEV_LOOP_ENABLED_THINKING,
-    AURA_FLEET_EMBEDDED_DAEMON,
-    AURA_FLEET_MAX_CONCURRENT_AGENTS,
-    AURA_FLEET_SHUTDOWN_GRACE_MS,
-    AURA_FLEET_ORPHAN_ON_PARENT_DEATH,
+    AURA_DEFAULT_MODE,
     AURA_FLEET_DEFAULT_MODE,
     AURA_SUBAGENT_MAX_DEPTH,
+    AURA_SUBAGENT_MAX_RUNNING,
     AURA_SUBAGENT_DEFAULT_MAX_TOKENS,
     AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS,
     AURA_SUBAGENT_DEFAULT_TIMEOUT_MS,

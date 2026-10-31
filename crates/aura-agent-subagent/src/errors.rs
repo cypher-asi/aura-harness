@@ -14,7 +14,7 @@ use thiserror::Error;
 pub enum DerivationError {
     /// Subagent depth would exceed the configured maximum. Computed
     /// before any other validation so deep recursion never holds
-    /// fleet-layer resources.
+    /// spawn resources.
     #[error("subagent depth exceeded: parent depth {parent_depth}, max {max_depth}")]
     DepthExceeded {
         /// Parent agent's current depth.

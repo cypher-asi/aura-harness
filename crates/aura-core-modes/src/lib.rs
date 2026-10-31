@@ -8,7 +8,7 @@
 //! ## Closed-enum invariant
 //!
 //! Adding a variant to [`AgentMode`], [`KernelMode`], [`SpawnMode`],
-//! [`JoinPolicy`], [`ReplayMode`], or [`SandboxMode`] is a breaking
+//! [`ReplayMode`], or [`SandboxMode`] is a breaking
 //! change. Plugins and downstream consumers cannot extend these enums.
 //! All match arms in this crate must be exhaustive (no `_` wildcard)
 //! so the compiler catches missing cases when a new variant is
@@ -56,7 +56,7 @@ mod violation;
 
 pub use capability_profile::CapabilityProfile;
 pub use gate::{DefaultModeGate, GatedAction, ModeGate};
-pub use modes::{AgentMode, AgentRole, JoinPolicy, KernelMode, ReplayMode, SandboxMode, SpawnMode};
+pub use modes::{AgentMode, AgentRole, KernelMode, ReplayMode, SandboxMode, SpawnMode};
 pub use profile::ModeProfile;
 pub use resolution::{resolve_session_mode, AgentModeInputs};
 pub use violation::ModeViolation;

@@ -77,7 +77,7 @@ pub struct SubagentKindSpec {
 ///
 /// Phase 7b additively extends the request with the parent's
 /// resolved `AgentMode` / `KernelMode` / `model_id` snapshot so the
-/// fleet adapter no longer synthesises placeholder values. The new
+/// dispatcher no longer synthesises placeholder values. The new
 /// fields are all `#[serde(default)]` so a Phase 7a-shaped JSON body
 /// continues to deserialise without change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

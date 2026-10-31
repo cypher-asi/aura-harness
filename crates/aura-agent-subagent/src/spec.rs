@@ -1,6 +1,6 @@
 //! Derived [`SubagentSpec`] + supporting attribution / lineage types.
 
-use aura_core_modes::{AgentMode, JoinPolicy, KernelMode, ModeProfile, ReplayMode, SpawnMode};
+use aura_core_modes::{AgentMode, KernelMode, ModeProfile, ReplayMode, SpawnMode};
 use aura_core_permissions::Permissions;
 use aura_core_types::{AgentId, AgentToolPermissions, UserToolDefaults};
 
@@ -38,8 +38,8 @@ impl SubagentLineage {
     }
 }
 
-/// Derived subagent spec — the input contract for
-/// `aura-fleet-spawn::spawn`.
+/// Derived subagent spec — the input contract for spawning a child
+/// agent.
 #[derive(Clone, Debug)]
 pub struct SubagentSpec {
     /// Spawning parent agent id.
@@ -64,8 +64,6 @@ pub struct SubagentSpec {
     pub kind: String,
     /// Child's [`SpawnMode`].
     pub spawn_mode: SpawnMode,
-    /// Child's join policy (only meaningful for batch spawns).
-    pub join_policy: JoinPolicy,
     /// Child's [`ReplayMode`].
     pub replay_mode: ReplayMode,
     /// Resolved budget.

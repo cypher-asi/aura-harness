@@ -15,6 +15,7 @@
 //! - [`ws_handler`] — top-level WebSocket handler and turn orchestration.
 //! - [`tests`] — unit tests extracted alongside the state split.
 
+mod agent_inbox;
 mod chat;
 pub(crate) mod chat_run;
 mod child_kernel;
@@ -106,6 +107,8 @@ pub(crate) struct WsContext {
     /// child subagent run's linkage. `None` outside a live run (the
     /// session bootstrap + test fixtures).
     pub(crate) run_id: Option<String>,
+    /// Node-wide agent host; sessions register as root agents.
+    pub(crate) agent_host: aura_engine::AgentHost,
 }
 
 impl WsContext {
@@ -133,6 +136,7 @@ impl WsContext {
             aura_os_server_url: state.config.aura_os_server_url.clone(),
             chat_runs: state.chat_runs.clone(),
             run_id: None,
+            agent_host: state.agent_host.clone(),
         }
     }
 }

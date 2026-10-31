@@ -33,8 +33,8 @@ Aura is built around **per-agent kernels with cross-agent parallelism**:
 - **Cross-agent parallelism is a first-class property, not an accident.**
   Unrelated agents process concurrently. The only intentional cross-agent
   serialization points are the per-agent processing claim (§12) and the
-  per-parent `SubagentSpawn` audit lease (§12 / §15). Quota admission
-  (`aura-fleet-quota::QuotaPool`) gates budgets, not record ordering.
+  per-parent `SubagentSpawn` audit lock (§12 / §15). The agent host's
+  running-children cap gates admission, not record ordering.
 - **Auditability survives parallelism.** Because every guarantee is per-agent,
   replaying any one agent's log is byte-deterministic regardless of which
   other agents were running concurrently. That is the property that lets us
@@ -52,7 +52,7 @@ flowchart LR
   storeA -.-> rocks[("RocksDB column families keyed by (agent_id, seq)")]
   storeB -.-> rocks
   storeC -.-> rocks
-  leaseP["ParentLeaseRegistry (per-parent SubagentSpawn ordering)"]
+  leaseP["AgentHost parent_lock (per-parent SubagentSpawn ordering)"]
   kernelA -. "spawn child" .-> leaseP
   leaseP -. "write_system_record" .-> kernelA
 ```
@@ -132,7 +132,7 @@ sync with the `Enforcement:` lines under each section.
 | # | Invariant | Enforcement |
 |---|---|---|
 | §1 | Each agent's kernel is the sole external gateway | CI-gated `rg` bands in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) + [`.github/workflows/invariants.yml`](../.github/workflows/invariants.yml) (`ModelProvider.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/src/agent_loop/`). Type-level seal: [`aura_agent::RecordingModelProvider`](../crates/aura-agent/src/kernel_gateway.rs) is a crate-sealed marker trait; automatons take `P: RecordingModelProvider` so only `KernelModelGateway` (the recording wrapper) can be plugged in. Git-mutation surface covered by [`crates/aura-tools/src/git_tool/tests.rs`](../crates/aura-tools/src/git_tool/tests.rs) (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by [`crates/aura-agent/src/kernel_domain_gateway/tests.rs`](../crates/aura-agent/src/kernel_domain_gateway/tests.rs). |
-| §2 | Every state change for agent A passes through agent A's kernel | [`tests/pipeline_tests.rs`](../tests/pipeline_tests.rs), [`tests/kernel_integration.rs`](../tests/kernel_integration.rs), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs), [`crates/aura-engine/src/automaton/tests.rs`](../crates/aura-engine/src/automaton/tests.rs) (`start_then_stop_records_two_automaton_lifecycle_entries`), and the end-to-end task-tool dispatch tests in [`crates/aura-fleet-subagent/tests/`](../crates/aura-fleet-subagent/tests/) (`task_tool_override_e2e.rs`, `task_tool_subagent_result_snapshot.rs`, `orphan_handoff.rs`). |
+| §2 | Every state change for agent A passes through agent A's kernel | [`tests/pipeline_tests.rs`](../tests/pipeline_tests.rs), [`tests/kernel_integration.rs`](../tests/kernel_integration.rs), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs), [`crates/aura-engine/src/automaton/tests.rs`](../crates/aura-engine/src/automaton/tests.rs) (`start_then_stop_records_two_automaton_lifecycle_entries`), and the recursive-spawn tests in [`crates/aura-engine/src/agents/tests.rs`](../crates/aura-engine/src/agents/tests.rs) (`task_children_spawn_their_own_children`, `detached_task_result_reaches_the_parent`). |
 | §3 | Every LLM call is recorded | [`crates/aura-agent/src/recording_stream.rs`](../crates/aura-agent/src/recording_stream.rs) tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs) (`reason_sync_error_records_failed`, `reason_streaming_handshake_error_records_failed`), [`tests/automaton_reasoning_recording.rs`](../tests/automaton_reasoning_recording.rs). |
 | §8 | Gateway transparency | [`crates/aura-agent/src/agent_loop/parity_tests.rs`](../crates/aura-agent/src/agent_loop/parity_tests.rs). |
 | §9 | AgentLoop isolation | Architectural / `rg` grep bands (see Declared Exceptions) — CI-gated via [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) (`aura_store` import band scoped to `aura-agent/src/agent_loop/`). |
@@ -144,8 +144,8 @@ sync with the `Enforcement:` lines under each section.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| §12 | Single writer per agent | [`crates/aura-engine/src/scheduler.rs`](../crates/aura-engine/src/scheduler.rs) (`test_processing_claim_released_after_error`, `scheduler must construct at most one Kernel per agent claim`), [`crates/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/aura-store-db/src/rocks_store/tests_concurrent.rs), [`crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs`](../crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs), and [`crates/aura-fleet-spawn/tests/spawn_idempotent_dedupe.rs`](../crates/aura-fleet-spawn/tests/spawn_idempotent_dedupe.rs). |
-| §15 | Cross-agent parallelism | [`crates/aura-fleet-spawn/tests/parent_lease_independent_parents.rs`](../crates/aura-fleet-spawn/tests/parent_lease_independent_parents.rs) (parallel across parents), [`crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs`](../crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs) (serialized within a parent), [`crates/aura-fleet-spawn/tests/parallel_subagents.rs`](../crates/aura-fleet-spawn/tests/parallel_subagents.rs), [`crates/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/aura-store-db/src/rocks_store/tests_concurrent.rs), [`crates/aura-agent-kernel/tests/replay_round_trip.rs`](../crates/aura-agent-kernel/tests/replay_round_trip.rs). |
+| §12 | Single writer per agent | [`crates/aura-engine/src/scheduler.rs`](../crates/aura-engine/src/scheduler.rs) (`test_processing_claim_released_after_error`, `scheduler must construct at most one Kernel per agent claim`), [`crates/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/aura-store-db/src/rocks_store/tests_concurrent.rs), and [`crates/aura-engine/src/agents/tests.rs`](../crates/aura-engine/src/agents/tests.rs). |
+| §15 | Cross-agent parallelism | [`crates/aura-engine/src/agents/tests.rs`](../crates/aura-engine/src/agents/tests.rs) (`task_child_is_visible_while_it_runs`), [`crates/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/aura-store-db/src/rocks_store/tests_concurrent.rs), [`crates/aura-agent-kernel/tests/replay_round_trip.rs`](../crates/aura-agent-kernel/tests/replay_round_trip.rs). |
 
 ### Principle 4 — The wire API is the contract
 
@@ -282,7 +282,7 @@ sequence of append-only entries.
 - The abstract per-agent append trait
   [`aura_store_record::RecordLog`](../crates/aura-store-record/src/log.rs) wraps
   the same surface with `append` / `head_seq` / `scan` for layered consumers
-  (kernel replay, fleet-spawn). `impl RecordLog for RocksStore` lives in
+  (kernel replay). `impl RecordLog for RocksStore` lives in
   [`crates/aura-store-db/src/record_log_bridge.rs`](../crates/aura-store-db/src/record_log_bridge.rs)
   and delegates to `append_entry_direct` + `get_head_seq`.
 - No `update_entry`, `delete_entry`, or `truncate_record` operations exist.
@@ -344,21 +344,17 @@ band. Production holders:
   — `WsContext` handed to `Kernel::new`.
 - [`crates/aura-runtime/src/gateway/session/child_kernel.rs`](../crates/aura-runtime/src/gateway/session/child_kernel.rs)
   — session-scoped child-kernel factory captures the same store handle as
-  `WsContext` so nested child runs route through `RuntimeChildRunner` /
+  `WsContext` so nested child runs route through `AgentHost` /
   `Scheduler`.
-- [`crates/aura-engine/src/child_runner.rs`](../crates/aura-engine/src/child_runner.rs)
-  — `RuntimeChildRunner` constructs child kernels through the scheduler.
+- [`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs)
+  — `AgentHost` runs spawned agents through the scheduler and writes
+  `SubagentSpawn` audit rows and inbox fallback records.
 - [`crates/aura-runtime/src/node.rs`](../crates/aura-runtime/src/node.rs)
   — boots the process-wide store.
 - [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs)
   — HTTP-driven tool-permissions append serialized via the scheduler claim.
 - [`crates/aura-runtime/src/gateway/session/cross_agent_hook.rs`](../crates/aura-runtime/src/gateway/session/cross_agent_hook.rs)
   — cross-agent chat/spawn hook.
-- [`crates/aura-fleet-spawn/src/spawner.rs`](../crates/aura-fleet-spawn/src/spawner.rs)
-  — `FleetSpawner` holds the store handle for `write_system_record` audit rows.
-- [`crates/aura-fleet-subagent/src/dispatch.rs`](../crates/aura-fleet-subagent/src/dispatch.rs)
-  — `FleetSubagentDispatcher` carries the store handle along with the
-  `Arc<dyn ChildRunner>` produced by `aura-engine`.
 - [`crates/aura-surface-cli/src/runner.rs`](../crates/aura-surface-cli/src/runner.rs)
   — the interactive TUI composition root constructs a per-agent kernel for
   local sessions.
@@ -441,10 +437,11 @@ helper (so they still emit a kernel-built, context-hashed `RecordEntry`):
   (`append_agent_tool_permissions_entry` ~line 172) — HTTP-driven tool-permission
   PUT. Acquires the scheduler's per-agent processing claim first so the write
   serializes with concurrent inbox drains for the same agent.
-- [`crates/aura-fleet-spawn/src/spawner.rs`](../crates/aura-fleet-spawn/src/spawner.rs)
-  — appends the `TransactionType::SubagentSpawn` audit row (`spawner.rs` ~line 324,
-  ~line 602) and the `promote_to_orphan` audit row (~line 951) under the per-parent
-  `ParentLeaseRegistry` lease.
+- [`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs)
+  — `AgentHost::create_child` appends the `TransactionType::SubagentSpawn`
+  audit row to the parent under the per-parent spawn lock (§12.b). When a
+  root agent's inbox is gone, the host records the undelivered message as a
+  `System` entry on the root instead.
 
 Both sites are pinned by the §2 allowlist in
 [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other
@@ -483,9 +480,10 @@ State changes include:
   (`System` with the matching `SystemKind`).
 - Subagent spawn audit (`SubagentSpawn` — Phase 10 schema-v2 typed wire variant,
   defined in [`crates/aura-core-types/src/types/transaction.rs`](../crates/aura-core-types/src/types/transaction.rs)).
-- Orphan-related lifecycle events (`ChildCancelledByParentDeath`,
+- Legacy fleet lifecycle events (`ChildCancelledByParentDeath`,
   `ChildOrphanedByParentDeath`, `OrphanReaped` `RecordKind` variants in
   [`crates/aura-store-record/src/kind.rs`](../crates/aura-store-record/src/kind.rs)).
+  No current writer emits them; they stay so older logs still parse.
 
 The kernel's transaction dispatcher
 ([`crates/aura-agent-kernel/src/kernel/process.rs`](../crates/aura-agent-kernel/src/kernel/process.rs)
@@ -647,7 +645,7 @@ A `ModeViolation` becomes `PolicyVerdict::Deny` and is recorded through the
 normal decision path (§5). `Agent` mode skips the gate.
 
 The mode is resolved once per session as **request (`RuntimeRequest.mode` or
-the CLI `--mode` flag) → daemon default (`AURA_FLEET_DEFAULT_MODE`) →
+the CLI `--mode` flag) → daemon default (`AURA_DEFAULT_MODE`) →
 `Agent`** (`aura_config::session_mode`). Children take the mode from their
 derived `SubagentSpec`, which can only narrow. Dev-loop and task-run
 requests are rejected unless the resolved mode is `Agent`. The TUI `/mode`
@@ -825,48 +823,29 @@ The HTTP-driven non-kernel append in
 before calling `aura_agent_kernel::write_system_record` so it serializes correctly
 with concurrent scheduler drains for the same agent.
 
-### 12.b Per-parent SubagentSpawn audit lease
+### 12.b Per-parent SubagentSpawn audit lock
 
-Spawn composition uses a second per-parent serialization axis in
-[`crates/aura-fleet-spawn/src/lease.rs`](../crates/aura-fleet-spawn/src/lease.rs)
-(`ParentLeaseRegistry`). Each parent owns its own `Arc<Mutex<()>>` that is
-held across derive → quota → audit-record write → registry insert. This
-replaces the prior global `spawn_lock` that lived in the pre-Phase-B
-`aura-runtime/src/subagent_dispatch.rs`; the concrete dispatcher impl now
-lives at the fleet layer in
-[`crates/aura-fleet-subagent/src/dispatch.rs`](../crates/aura-fleet-subagent/src/dispatch.rs)
-and the surface-layer `ChildRunner` impl that drives the scheduler lives at
-[`crates/aura-engine/src/child_runner.rs`](../crates/aura-engine/src/child_runner.rs).
+`AgentHost` in
+[`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs)
+keeps one `tokio::sync::Mutex<()>` per parent (`parent_lock`). It is held
+while the host writes the parent's `TransactionType::SubagentSpawn` audit row
+via `aura_agent_kernel::write_system_record` and creates the child, so a
+parent's audit chain stays linearised.
 
 - **Per-parent, not global**: unrelated parents spawn in parallel.
-- The lease orders the `TransactionType::SubagentSpawn` audit rows the
-  spawner writes via `aura_agent_kernel::write_system_record`
-  ([`crates/aura-fleet-spawn/src/spawner.rs`](../crates/aura-fleet-spawn/src/spawner.rs)
-  ~line 324, ~line 602) so a parent's audit chain stays linearised.
 
-### 12.c Spawn dedupe window
-
-`(parent_agent_id, tool_call_id)` is consulted against an LRU dedupe window
-in the same `ParentLeaseRegistry`. Idempotent re-dispatch (e.g. retried tool
-calls) returns the cached `SpawnHandle` outcome with zero new children and
-zero new audit rows. See
-[`crates/aura-fleet-spawn/tests/spawn_idempotent_dedupe.rs`](../crates/aura-fleet-spawn/tests/spawn_idempotent_dedupe.rs).
-
-Foreground subagents do not create an alternate execution lane: the
-fleet-layer `FleetSubagentDispatcher`
-([`crates/aura-fleet-subagent/src/dispatch.rs`](../crates/aura-fleet-subagent/src/dispatch.rs))
-hands the engine-layer `RuntimeChildRunner` an `Arc<dyn ChildRunner>` that
-creates a full child agent, enqueues a child `UserPrompt`, and then invokes
-`Scheduler::schedule_agent_with_overrides`, so child work inherits the same
-per-agent claim and record pipeline as ordinary scheduled work.
+Spawned agents do not create an alternate execution lane: the host creates a
+full child agent, enqueues a `UserPrompt` for it, and runs it with
+`Scheduler::schedule_agent_with_options`, so child work inherits the same
+per-agent claim and record pipeline as ordinary scheduled work. That holds
+at every depth, since children use the same host to spawn their own
+children.
 
 **Enforcement:** [`crates/aura-engine/src/scheduler.rs`](../crates/aura-engine/src/scheduler.rs)
 (`test_processing_claim_released_after_error`, "scheduler must construct at
 most one Kernel per agent claim"),
 [`crates/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/aura-store-db/src/rocks_store/tests_concurrent.rs),
-[`crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs`](../crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs),
-[`crates/aura-fleet-spawn/tests/parent_lease_independent_parents.rs`](../crates/aura-fleet-spawn/tests/parent_lease_independent_parents.rs),
-[`crates/aura-fleet-spawn/tests/spawn_idempotent_dedupe.rs`](../crates/aura-fleet-spawn/tests/spawn_idempotent_dedupe.rs).
+[`crates/aura-engine/src/agents/tests.rs`](../crates/aura-engine/src/agents/tests.rs).
 
 ---
 
@@ -874,7 +853,7 @@ most one Kernel per agent claim"),
 
 **Unrelated agents execute concurrently. The only cross-agent serialization
 points are the per-agent processing claim (§12.a) and the per-parent
-SubagentSpawn audit lease (§12.b). Determinism survives parallelism because
+SubagentSpawn audit lock (§12.b). Determinism survives parallelism because
 every other guarantee in this document is per-agent.**
 
 This invariant promotes what was previously an implementation footnote into
@@ -884,8 +863,8 @@ fast parallel execution without weakening §6/§7/§10 replay determinism.
 | Boundary | Scope | Effect |
 |---|---|---|
 | Per-agent processing claim ([`scheduler.rs`](../crates/aura-engine/src/scheduler.rs)) | One agent | Same agent serializes; different agents parallel. |
-| Per-parent `ParentLeaseRegistry` ([`lease.rs`](../crates/aura-fleet-spawn/src/lease.rs)) | One parent's spawn audit chain | Same parent's spawns serialize; different parents parallel. |
-| `QuotaPool` ([`aura-fleet-quota`](../crates/aura-fleet-quota/src/lib.rs)) | Budget admission only | Gates concurrency limits; does **not** create cross-agent record ordering. |
+| Per-parent spawn lock (`AgentHost::parent_lock` in [`host.rs`](../crates/aura-engine/src/agents/host.rs)) | One parent's spawn audit chain | Same parent's spawns serialize; different parents parallel. |
+| Running-children cap (`AURA_SUBAGENT_MAX_RUNNING`) | Admission only | Rejects spawns past the limit; does **not** create cross-agent record ordering. |
 | No global writer mutex | — | Intentional absence: there is no global lock across agent kernels. |
 
 Because every guarantee in §1–§14 is scoped to a single agent's kernel and
@@ -895,11 +874,8 @@ without any reference to each other. Parallelism is therefore a property of
 the system, not a hazard the design tolerates.
 
 **Enforcement:**
-[`crates/aura-fleet-spawn/tests/parent_lease_independent_parents.rs`](../crates/aura-fleet-spawn/tests/parent_lease_independent_parents.rs)
-(parallel across parents),
-[`crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs`](../crates/aura-fleet-spawn/tests/parent_lease_concurrent_spawns.rs)
-(serialized within a parent),
-[`crates/aura-fleet-spawn/tests/parallel_subagents.rs`](../crates/aura-fleet-spawn/tests/parallel_subagents.rs),
+[`crates/aura-engine/src/agents/tests.rs`](../crates/aura-engine/src/agents/tests.rs)
+(nested and concurrent children),
 [`crates/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/aura-store-db/src/rocks_store/tests_concurrent.rs)
 (concurrent appends across distinct agents),
 [`crates/aura-agent-kernel/tests/replay_round_trip.rs`](../crates/aura-agent-kernel/tests/replay_round_trip.rs)
@@ -925,13 +901,12 @@ CI failures; there is no allowlist.**
 Layer order, lowest → highest:
 
 ```
-core < store < config < model < context < plugin < exec < agent < fleet < surface
+core < store < config < model < context < plugin < exec < agent < surface
 ```
 
 ```mermaid
 flowchart LR
-  surface[surface] --> fleet[fleet]
-  fleet --> agent[agent]
+  surface[surface] --> agent[agent]
   agent --> exec[exec]
   exec --> plugin[plugin]
   plugin --> context[context]
@@ -972,7 +947,7 @@ The following operations intentionally do NOT route through `Kernel::process_*`:
 | `git worktree add` / `worktree remove` in [`crates/aura-exec-isolation/src/lib.rs`](../crates/aura-exec-isolation/src/lib.rs) (`WorktreeIsolation::provision` / `teardown`) | Workspace-isolation primitive for parallel-safe subagent dispatch. No remote, no commit/push mutation; analogous to sandbox directory creation. Allowlisted in the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
 | Hosted Safe Workspace Git lifecycle in [`crates/aura-runtime/src/gateway/handlers/safe_workspace.rs`](../crates/aura-runtime/src/gateway/handlers/safe_workspace.rs) | Control-plane isolation for an explicitly user-selected hosted rollback boundary. It may initialize an imported local project, create/remove a detached worktree, create local shadow checkpoints, restore one, or apply its patch back to the source workspace. It never contacts a Git remote: the module's closed subcommand allowlist rejects clone/fetch/pull/push/remote operations and sets `GIT_TERMINAL_PROMPT=0`. Pinned by the exact-file §1 exception plus unit coverage for the local-only allowlist. |
 | HTTP-driven `write_system_record` in [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs) | Tool-permissions PUT handler appends a `System` record entry via `aura_agent_kernel::write_system_record` so the operator's UI write is durable on the response. Acquires the scheduler's per-agent processing claim first (§12.a) so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other non-kernel/non-store `append_entry_*` call is a CI failure. |
-| Fleet-spawn `write_system_record` callers in [`crates/aura-fleet-spawn/src/spawner.rs`](../crates/aura-fleet-spawn/src/spawner.rs) (`SubagentSpawn` audit rows, `promote_to_orphan`) | Spawn composition writes audit rows directly via `aura_agent_kernel::write_system_record`. Each call holds the per-parent `ParentLeaseRegistry` lease (§12.b) so sibling spawns of the same parent linearise. Not a raw `append_entry_*` call — the entry is built by the kernel helper and committed via the sealed `WriteStore` surface. |
+| Agent-host `write_system_record` callers in [`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs) (`SubagentSpawn` audit rows, undelivered-message fallback records on a root) | Spawning writes audit rows directly via `aura_agent_kernel::write_system_record`. Spawn rows hold the per-parent spawn lock (§12.b) so sibling spawns of the same parent linearise. Not a raw `append_entry_*` call — the entry is built by the kernel helper and committed via the sealed `WriteStore` surface. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
 | Plugin hook subprocesses ([`crates/aura-plugin-hooks/src/engine.rs`](../crates/aura-plugin-hooks/src/engine.rs)) | Lifecycle hook scripts run with scrubbed env (§14). They never touch `append_entry_*`, `ModelProvider`, or `DomainApi`. Their only kernel-visible effect is the `PermissionRequest` carve-out 5b in §4. |
 | MCP server stdio child processes ([`crates/aura-plugin-mcp/src/client.rs`](../crates/aura-plugin-mcp/src/client.rs)) | First-active-wins JSON-RPC clients run with cleared env and per-request timeouts (§14). MCP-routed tool calls that reach a model must still pass through the kernel gateway. |

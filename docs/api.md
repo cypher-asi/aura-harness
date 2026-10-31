@@ -8,7 +8,7 @@ All routes are defined in [`gateway/middleware.rs`](../crates/aura-runtime/src/g
 
 A run is the entry point for all work. Start a chat session, dev-loop automaton, or single-task automaton by posting an [`aura_protocol::RuntimeRequest`](../crates/aura-protocol/src/runtime_request.rs) to `/v1/run`. The [`RuntimeRunResponse`](../crates/aura-protocol/src/runtime_request.rs) carries a `run_id` and the WebSocket path the client opens to receive events (and, on chat runs, to send user messages).
 
-`RuntimeRequest.mode` (`agent` / `plan` / `ask` / `debug`, optional) sets the session mode. When omitted it falls back to `AURA_FLEET_DEFAULT_MODE`, then `agent`. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `agent`.
+`RuntimeRequest.mode` (`agent` / `plan` / `ask` / `debug`, optional) sets the session mode. When omitted it falls back to `AURA_DEFAULT_MODE`, then `agent`. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `agent`.
 
 | Method | Path | Purpose |
 |--------|------|---------|

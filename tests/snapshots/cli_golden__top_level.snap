@@ -14,12 +14,11 @@ Commands:
   hello    Print "Hello, World!" and exit (Spec 01)
   migrate  Phase 4a stub: migrate aura state (no-op today)
   plugins  Manage declarative plugins (Phase 4b)
-  agents   Inspect / manage live + orphaned subagents (Phase 7b)
   help     Print this message or the help of the given subcommand(s)
 
 Options:
       --mode <MODE>
-          Session mode for the interactive terminal. Overrides the daemon default (`AURA_FLEET_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
+          Session mode for the interactive terminal. Overrides the daemon default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
 
           Possible values:
           - agent: Full unrestricted operation subject to user permissions

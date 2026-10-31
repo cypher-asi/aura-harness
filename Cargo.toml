@@ -63,7 +63,7 @@ members = [
     "crates/aura-automaton",
     # Phase B / Commit 3 surface-layer extraction: the orchestration
     # engine (scheduler / worker / automaton bridge / memory observer /
-    # capabilities / executor / RuntimeChildRunner) lives in
+    # capabilities / executor / agent host) lives in
     # `aura-engine`; `aura-runtime` is shrinking toward the gateway-only
     # composition root.
     "crates/aura-engine",
@@ -82,18 +82,6 @@ members = [
     "crates/aura-plugin-hooks",
     "crates/aura-plugin-mcp",
     "crates/aura-plugin-connectors",
-    # Fleet layer:
-    #   aura-fleet-registry — RwLock<HashMap<AgentId, AgentSlot>>
-    #   aura-fleet-quota    — QuotaPool + BudgetTicket
-    #   aura-fleet-spawn    — FleetSpawner + ParentLeaseRegistry + orphans
-    "crates/aura-fleet-registry",
-    "crates/aura-fleet-quota",
-    "crates/aura-fleet-spawn",
-    # Phase B / Commit 3 / Step 3a: fleet-layer concrete
-    # SubagentDispatchHook impl. Was `RuntimeSubagentDispatch` in
-    # aura-runtime; now sits at the fleet layer so the agent layer
-    # (`aura-agent-subagent`) stays free of fleet deps.
-    "crates/aura-fleet-subagent",
     # Surface layer CLI composition root (+ ModeFlag). The TUI
     # (aura-terminal), automaton host (aura-automaton) and zOS auth
     # client (aura-auth) are listed above.
@@ -244,8 +232,6 @@ aura-tools = { path = "crates/aura-tools" }
 aura-protocol = { path = "crates/aura-protocol" }
 aura-core-modes = { path = "crates/aura-core-modes" }
 aura-core-protocol = { path = "crates/aura-core-protocol" }
-aura-fleet-spawn = { path = "crates/aura-fleet-spawn" }
-aura-fleet-registry = { path = "crates/aura-fleet-registry" }
 aura-store-record = { path = "crates/aura-store-record" }
 aura-core-types = { path = "crates/aura-core-types" }
 aura-core-permissions = { path = "crates/aura-core-permissions" }

@@ -152,6 +152,9 @@ pub struct Session {
     /// Session mode, resolved once from the request and the daemon
     /// default. The kernel policy denies any tool call it does not allow.
     pub(crate) mode: aura_core_types::AgentMode,
+    /// Messages from agents this session spawned, waiting for an idle
+    /// moment to run as a turn.
+    pub(crate) agent_mailbox: Arc<super::agent_inbox::AgentMailbox>,
 }
 
 impl Session {
@@ -201,6 +204,7 @@ impl Session {
             computer_use: false,
             computer_executor_url: None,
             mode: aura_core_types::AgentMode::Agent,
+            agent_mailbox: Arc::default(),
         }
     }
 

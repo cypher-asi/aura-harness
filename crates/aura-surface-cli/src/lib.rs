@@ -22,7 +22,7 @@
 //! The `aura --mode <agent|plan|ask|debug>` flag ([`ModeFlag`]) is the
 //! requested mode for the interactive terminal session. It resolves via
 //! [`aura_config::session_mode`]: the flag, else the daemon default
-//! ([`aura_config::FleetConfig::default_mode`]), else
+//! ([`aura_config::AgentConfig::default_mode`]), else
 //! [`AgentMode::Agent`]. The result lands on the kernel's
 //! `PolicyConfig::mode`, which gates every tool call. The headless node
 //! ignores the flag; it resolves a mode per `POST /v1/run` request.

@@ -32,8 +32,8 @@ use aura_plugin_core::load_enabled_plugins;
 use aura_plugin_hooks::HookEvent;
 use tempfile::TempDir;
 
-/// Closed list of every lifecycle event the agent loop, fleet
-/// daemon, and fleet spawner can fire. Adding a variant requires
+/// Closed list of every lifecycle event the agent loop and agent
+/// host can fire. Adding a variant requires
 /// updating this list (and the host's per-event firing API).
 const ALL_EVENTS: &[HookEvent] = &[
     HookEvent::SessionStart,

@@ -31,7 +31,7 @@
 //! * **Process crash while claimed** – the persisted claim can remain set after
 //!   a hard crash. A future lease timestamp/owner can recover abandoned claims.
 
-use crate::worker::{process_agent_detailed, process_agent_with_timeout, ProcessedAgent};
+use crate::worker::{process_agent_with_timeout, ProcessedAgent, AGENT_LOOP_TIMEOUT};
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
 use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
 use aura_core_types::{AgentId, AgentStatus};
@@ -73,13 +73,19 @@ pub struct ScheduleOverrides {
     pub workspace_override: Option<(std::path::PathBuf, bool)>,
     /// Optional pre-built executor router. `None` keeps the legacy
     /// behavior of building a router from the scheduler's shared
-    /// (bare node-level) executor list. Subagent child runs inject a
+    /// (bare node-level) executor list. Child agent runs inject a
     /// session-equivalent router here — built via
     /// [`crate::child_kernel::ChildKernelFactory`] — so the child gets
-    /// the same subagent dispatch, spawn hooks, caller permissions, and
-    /// parent-chain as a real top-level turn instead of the bare
-    /// resolver that lacks all of the above.
+    /// the same spawn hooks, caller permissions, and parent chain as a
+    /// real top-level turn instead of the bare resolver.
     pub router_override: Option<ExecutorRouter>,
+    /// Tool definitions shown to the model for this run. `None` uses
+    /// the scheduler's shared list, which omits capability-gated tools.
+    pub tools_override: Option<Vec<ToolDefinition>>,
+    /// Earlier conversation to continue from. The first dequeued prompt
+    /// is appended to it, so a long-lived agent keeps its context
+    /// across runs.
+    pub history: Vec<aura_model_reasoner::Message>,
 }
 
 /// Per-agent identity recorded by the chat WS / automaton bridge / `/tx`
@@ -161,9 +167,9 @@ impl AgentIdentity {
 /// - `automaton_bridge::start_dev_loop_with_capabilities` /
 ///   `run_task_with_capabilities` — registers the dev-loop / task-run identity
 ///   alongside the existing `AgentRunnerConfig` plumbing (commit `d12fe29`).
-/// - `FleetSubagentDispatcher::dispatch` — registers a child agent's identity
-///   after `spawn_child` allocates the child id, so foreground subagent
-///   dispatch goes out with the resolved model + parent IDs.
+/// - `AgentHost::spawn_agent` — registers a spawned agent's identity after
+///   allocating the child id, so its turns go out with the resolved model +
+///   parent IDs.
 ///
 /// The HTTP `/tx` and `/agents/:id/tool_permissions` paths do **not** carry
 /// per-call identity. They rely on the entry registered by the upstream
@@ -411,10 +417,8 @@ impl Scheduler {
             ScheduleOverrides {
                 loop_config: agent_loop_config,
                 policy,
-                event_tx: None,
-                workspace_override: None,
-                router_override: None,
                 caller_owns_deadline: false,
+                ..ScheduleOverrides::default()
             },
         )
         .await
@@ -439,6 +443,8 @@ impl Scheduler {
             event_tx,
             workspace_override,
             router_override,
+            tools_override,
+            history,
         } = overrides;
         let status = self.store.get_agent_status(agent_id)?;
         if status != AgentStatus::Active {
@@ -521,13 +527,19 @@ impl Scheduler {
                 ));
         }
         let agent_loop = AgentLoop::new(config);
+        let tools = tools_override.as_deref().unwrap_or(&self.tools);
 
-        let result = if caller_owns_deadline {
-            process_agent_with_timeout(agent_id, kernel, &agent_loop, &self.tools, event_tx, None)
-                .await
-        } else {
-            process_agent_detailed(agent_id, kernel, &agent_loop, &self.tools, event_tx).await
-        };
+        let timeout = (!caller_owns_deadline).then_some(AGENT_LOOP_TIMEOUT);
+        let result = process_agent_with_timeout(
+            agent_id,
+            kernel,
+            &agent_loop,
+            tools,
+            event_tx,
+            timeout,
+            history,
+        )
+        .await;
         let release_result = claim.release();
 
         match (result, release_result) {

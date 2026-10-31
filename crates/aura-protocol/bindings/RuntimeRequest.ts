@@ -74,7 +74,7 @@ auth_jwt: string | null,
 user_id: string, 
 /**
  * Session mode (`agent` / `plan` / `ask` / `debug`). `None` falls
- * back to the daemon default (`AURA_FLEET_DEFAULT_MODE`), then
+ * back to the daemon default (`AURA_DEFAULT_MODE`), then
  * `agent`. The kernel denies any tool call the mode does not allow.
  */
 mode?: "agent" | "plan" | "ask" | "debug" | null, };

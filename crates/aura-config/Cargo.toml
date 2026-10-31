@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-core-types = { path = "../aura-core-types" }
-# Phase 9: FleetConfig::default_mode carries an AgentMode primitive.
+# AgentConfig::default_mode carries an AgentMode primitive.
 aura-core-modes = { path = "../aura-core-modes" }
 dirs = { workspace = true }
 serde = { workspace = true }

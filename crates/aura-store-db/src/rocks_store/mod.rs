@@ -66,8 +66,8 @@ pub struct RocksStore {
     /// both commit `seq = N + 1` — the second silently overwrites the
     /// first (a lost update) and leaves `head = N + 1`. The scheduler's
     /// per-agent processing claim prevents most contention, but
-    /// out-of-band system appends (e.g. the fleet's `SubagentSpawn`
-    /// audit record written while the parent's turn is in flight) are
+    /// out-of-band system appends (e.g. an agent-host fallback record
+    /// written while the target's turn is in flight) are
     /// not covered by that claim. Holding this lock across the
     /// check+commit turns the only observable concurrency failure into
     /// a clean [`StoreError::SequenceMismatch`] the caller can retry.

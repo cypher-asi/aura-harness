@@ -393,7 +393,7 @@ pub fn tx_type_label(tx_type: TransactionType) -> (&'static str, &'static str) {
         TransactionType::ToolExecution => ("ToolRes", "KERNEL"),
         TransactionType::ProcessComplete => ("Complete", "SYSTEM"),
         TransactionType::Reasoning => ("LLM", "KERNEL"),
-        TransactionType::SubagentSpawn => ("Spawn", "FLEET"),
+        TransactionType::SubagentSpawn => ("Spawn", "AGENT"),
     }
 }
 

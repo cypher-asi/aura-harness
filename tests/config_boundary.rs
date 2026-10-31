@@ -201,8 +201,6 @@ fn env_var_patterns(name: &str) -> Vec<String> {
 fn accessor_hint(env_name: &str) -> &'static str {
     if env_name.starts_with("AURA_LLM_") || env_name == "AURA_DEV_LOOP_ENABLED_THINKING" {
         "`aura_config::reasoner().…`"
-    } else if env_name.starts_with("AURA_FLEET_") {
-        "`aura_config::loaded().fleet.…`"
     } else if env_name.starts_with("AURA_SUBAGENT_") {
         "`aura_config::loaded().subagent.…`"
     } else if env_name.starts_with("AURA_CONFLICT_") {

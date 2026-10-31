@@ -6,9 +6,9 @@
 //! [`aura_protocol::RuntimeRequest`] entry endpoints (`POST /v1/run`,
 //! `WS /stream/:run_id`) and the management surfaces (skills, memory,
 //! tool defaults, files, transactions). Composes
-//! [`aura_engine`] for orchestration and
-//! [`aura_fleet_subagent::FleetSubagentDispatcher`] for the `task`
-//! tool's child-spawn surface.
+//! [`aura_engine`] for orchestration, including the
+//! [`aura_engine::AgentHost`] behind `task`, `spawn_agent` and agent
+//! messaging.
 //!
 //! The compiled binary name (`aura-node`) is declared in
 //! `Cargo.toml`'s `[[bin]]` section and is deliberately decoupled
@@ -17,11 +17,9 @@
 //!
 //! Phase B / Commit 3 extracted the orchestration engine into the
 //! `aura-engine` crate. The scheduler, worker, automaton bridge,
-//! memory observer, runtime capabilities, executor factory, and
-//! `RuntimeChildRunner` live there now. The subagent dispatcher
-//! impl moved to the new `aura-fleet-subagent` crate (fleet layer);
-//! the bundled registry + pure-data adapter helpers moved to
-//! `aura-agent-subagent` (agent layer).
+//! memory observer, runtime capabilities, executor factory, and agent
+//! host live there now; the bundled subagent registry + pure-data
+//! adapter helpers live in `aura-agent-subagent` (agent layer).
 //!
 //! Phase C / Commit 4 pulled the HTTP `DomainApi` impl into the
 //! `aura-domain-http` crate (along with the JWT-injecting wrapper

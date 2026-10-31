@@ -18,7 +18,7 @@ pub const TASK_TOOL_NAME: &str = "task";
 ///
 /// Kept in lockstep with the authoritative derivation cap
 /// (`SubagentDerivationConfig::max_depth`, currently 8). This early check is a
-/// fast-fail guard so an over-deep `task` call is rejected before any fleet
+/// fast-fail guard so an over-deep `task` call is rejected before any spawn
 /// resource is acquired; the derivation re-validates depth as the real source
 /// of truth. The two values previously diverged (3 here vs 8 in derivation),
 /// which would have spuriously rejected legitimately-allowed depth-3..=7 spawns

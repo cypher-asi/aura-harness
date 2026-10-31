@@ -111,21 +111,3 @@ fn cli_golden_plugins_disable_help() {
     let help = run_help(&["plugins", "disable"]);
     insta::assert_snapshot!("plugins_disable", help);
 }
-
-#[test]
-fn cli_golden_agents_help() {
-    let help = run_help(&["agents"]);
-    insta::assert_snapshot!("agents", help);
-}
-
-#[test]
-fn cli_golden_agents_inspect_help() {
-    let help = run_help(&["agents", "inspect"]);
-    insta::assert_snapshot!("agents_inspect", help);
-}
-
-#[test]
-fn cli_golden_agents_reap_help() {
-    let help = run_help(&["agents", "reap"]);
-    insta::assert_snapshot!("agents_reap", help);
-}

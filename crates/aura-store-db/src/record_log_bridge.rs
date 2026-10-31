@@ -1,7 +1,7 @@
 //! Bridge from [`RocksStore`] to the
 //! [`aura_store_record::RecordLog`] trait.
 //!
-//! Phase 2 carve-out: layered consumers (kernel, fleet) bind to a
+//! Phase 2 carve-out: layered consumers (the kernel) bind to a
 //! small `Arc<dyn RecordLog>` instead of the full
 //! `WriteStore`/`ReadStore` surface. The bridge here delegates to the
 //! existing `append_entry_direct` and `get_head_seq` paths and maps

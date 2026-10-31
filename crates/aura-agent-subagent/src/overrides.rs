@@ -1,10 +1,10 @@
 //! Caller-supplied overrides + per-child budget.
 
-use aura_core_modes::{AgentMode, JoinPolicy, KernelMode, ReplayMode, SpawnMode};
+use aura_core_modes::{AgentMode, KernelMode, ReplayMode, SpawnMode};
 use aura_core_permissions::Permissions;
 use aura_core_types::{AgentToolPermissions, UserToolDefaults};
 
-/// Per-spawn budget passed through to the agent loop / fleet.
+/// Per-spawn budget passed through to the agent loop / agent host.
 ///
 /// Phase 6a treats the budget as a flat triple of caps; the wire
 /// shape and richer surface (per-tool token caps, hierarchical
@@ -54,8 +54,6 @@ pub struct SubagentOverrides {
     pub kind: Option<String>,
     /// Override the child's [`SpawnMode`].
     pub spawn_mode: Option<SpawnMode>,
-    /// Override the join policy applied to a batch spawn.
-    pub join_policy: Option<JoinPolicy>,
     /// Override the child's [`ReplayMode`]. Defaults to [`ReplayMode::Live`].
     pub replay_mode: Option<ReplayMode>,
     /// Override the child's budget.

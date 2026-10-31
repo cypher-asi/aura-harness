@@ -1,6 +1,6 @@
 # Configuration
 
-The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-runtime/src/config/mod.rs`](../crates/aura-runtime/src/config/mod.rs); agent and fleet settings come from [`aura-config`](../crates/aura-config). Copy [`.env.example`](../.env.example) as a starting point.
+The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-runtime/src/config/mod.rs`](../crates/aura-runtime/src/config/mod.rs); agent and subagent settings come from [`aura-config`](../crates/aura-config). Copy [`.env.example`](../.env.example) as a starting point.
 
 ## LLM routing
 
@@ -27,7 +27,8 @@ Further optional tuning (read by `AnthropicConfig::from_env`): `AURA_LLM_BACKOFF
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AURA_FLEET_DEFAULT_MODE` | `agent` | Session mode when the request (or `--mode`) does not set one: `agent`, `plan`, `ask` or `debug`. A non-`agent` default makes dev-loop and task-run requests fail with `400` unless they pass `mode: "agent"`. |
+| `AURA_DEFAULT_MODE` | `agent` | Session mode when the request (or `--mode`) does not set one: `agent`, `plan`, `ask` or `debug`. A non-`agent` default makes dev-loop and task-run requests fail with `400` unless they pass `mode: "agent"`. The older name `AURA_FLEET_DEFAULT_MODE` is still read when the new one is unset. |
+| `AURA_SUBAGENT_MAX_RUNNING` | `32` | Most spawned agents (from `task` or `spawn_agent`) that may run at once across the node. A spawn beyond the limit fails with an error the parent agent sees. |
 
 ## Node runtime
 

@@ -117,30 +117,10 @@ pub enum SpawnMode {
     /// current turn.
     #[default]
     Wait,
-    /// Child runs in the background; parent receives a handle
-    /// immediately. Parent cancellation does not propagate; fleet
-    /// shutdown still cancels it, and an orphan record keeps it
-    /// inspectable/reapable after parent death.
+    /// Child runs in the background; parent receives the child's id
+    /// immediately and the child's result arrives later as a message.
+    /// Parent cancellation does not propagate.
     Detached,
-    /// One or more children run under an explicit [`JoinPolicy`].
-    /// Parent cancellation propagates for `All` / `Any`; abandoned
-    /// batches are promoted through the orphan path.
-    Batch,
-}
-
-/// Join semantics for `task_group`-style multi-child dispatch.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum JoinPolicy {
-    /// Wait for every child to finish.
-    #[default]
-    All,
-    /// Wait for the first success; cancel the rest.
-    Any,
-    /// Fire-and-forget; do not wait, do not propagate cancellation.
-    Abandon,
 }
 
 /// Kernel replay state.

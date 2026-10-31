@@ -7,14 +7,13 @@
 //!   permissions (via [`AgentPermissions::contains`]).
 //! - If `agent_id` is provided and already appears in the caller's
 //!   [`crate::ToolContext::parent_chain`], the call is rejected (cycle
-//!   prevention). There is **no depth cap** — strict-subset plus the
-//!   caller's budget are the natural bounds.
+//!   prevention). The depth cap is enforced by the host behind the hook.
 //! - On success the tool invokes [`aura_exec_traits::SpawnHook`] when one is
-//!   attached to the [`ToolContext`] so a production kernel writer can
-//!   create the new `Identity`, seed the child's record log, and append
-//!   the `Delegate` transaction on the caller's log. The tool's stdout
-//!   carries a [`SpawnAgentOutcome`] with the final child id and parent
-//!   chain metadata.
+//!   attached to the [`ToolContext`]. The engine's agent host creates the
+//!   child's `Identity`, appends the `Delegate` transaction on the caller's
+//!   log, and keeps the child running; an optional `prompt` starts it
+//!   working right away. The tool's stdout carries a [`SpawnAgentOutcome`]
+//!   with the final child id and parent chain metadata.
 //! - Without a hook the tool still runs the permission gate and returns a
 //!   synthetic outcome — useful for unit tests and "dry-run" contexts.
 
@@ -37,7 +36,13 @@ pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 pub struct SpawnAgentInput {
     pub name: String,
     pub role: String,
-    pub permissions: AgentPermissions,
+    /// Grants for the child. Omitted means the caller's own permissions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<AgentPermissions>,
+    /// Optional first message. The child starts on it right away and its
+    /// answer is delivered back to the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
     /// Optional explicit agent id for the child. When omitted a fresh id is
     /// generated. When provided, the id is checked against the caller's
     /// ancestor chain for cycles.
@@ -75,24 +80,42 @@ impl SpawnAgentTool {
     pub fn definition() -> ToolDefinition {
         ToolDefinition::new(
             SPAWN_AGENT_TOOL_NAME,
-            "Spawn a subordinate agent whose scope + capabilities are a strict \
-             subset of the caller's. Returns the new child's agent id. Requires \
-             Capability::SpawnAgent on the caller.",
+            "Start a long-lived agent that works for you. It has the same tools you \
+             do (so it can start agents of its own), keeps its conversation between \
+             messages, and runs until you stop it with agent_lifecycle. Give it a \
+             `prompt` to start it working right away; its answer is delivered back to \
+             you as a message. Talk to it later with send_to_agent using the returned \
+             child_agent_id. Its permissions can only be narrower than yours. For a \
+             one-off job whose result you want back in this turn, use `task` instead.",
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string" },
-                    "role": { "type": "string" },
+                    "name": {
+                        "type": "string",
+                        "description": "Short name for the agent; other agents can address it by this name."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "What the agent is responsible for."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Optional first message. The agent starts on it immediately."
+                    },
+                    "system_prompt": {
+                        "type": "string",
+                        "description": "Optional system prompt replacing the one inherited from you."
+                    },
                     "permissions": {
                         "type": "object",
-                        "description": "AgentPermissions bundle; must be a subset of caller's."
+                        "description": "Optional AgentPermissions bundle; must be a subset of yours. Defaults to your permissions."
                     },
                     "agent_id": {
                         "type": "string",
                         "description": "Optional preassigned child agent id. Checked for cycles against the caller's ancestor chain."
                     }
                 },
-                "required": ["name", "role", "permissions"]
+                "required": ["name", "role"]
             }),
         )
     }
@@ -109,7 +132,11 @@ impl SpawnAgentTool {
             )
         })?;
 
-        if !caller_permissions.contains(&input.permissions) {
+        let permissions = input
+            .permissions
+            .clone()
+            .unwrap_or_else(|| caller_permissions.clone());
+        if !caller_permissions.contains(&permissions) {
             return Err(ToolError::InvalidArguments(
                 "permissions: requested grants exceed caller (strict subset required)".into(),
             ));
@@ -147,18 +174,11 @@ impl SpawnAgentTool {
             .clone()
             .unwrap_or_else(|| AgentId::generate().to_string());
 
-        // TODO(phase5-part-2): invoke a SpawnHook here to (a) create the
-        // kernel `Identity` record for the new agent, (b) seed its record log
-        // with a SessionStart, and (c) emit the `Delegate` transaction with
-        // parent_agent_id + originating_user_id on the *caller's* log so the
-        // record chain captures the spawn. The test harness below asserts the
-        // outcome payload a hook would consume.
-
         Ok(SpawnAgentOutcome {
             child_agent_id: child_id,
             name: input.name.clone(),
             role: input.role.clone(),
-            permissions: input.permissions.clone(),
+            permissions,
             parent_agent_id: ctx.caller_agent_id.map(|id| id.to_string()),
             originating_user_id: ctx.originating_user_id.clone(),
         })
@@ -215,11 +235,12 @@ impl Tool for SpawnAgentTool {
         let spec = ChildAgentSpec {
             name: input.name.clone(),
             role: input.role.clone(),
-            permissions: input.permissions.clone(),
+            permissions: outcome.permissions.clone(),
             tool_permissions: input.tool_permissions.clone(),
             parent_tool_permissions: ctx.caller_tool_permissions.clone(),
             system_prompt_override: input.system_prompt.clone(),
             preassigned_agent_id: preassigned,
+            initial_prompt: input.prompt.clone(),
         };
 
         match hook
@@ -327,16 +348,17 @@ pub(crate) mod tests {
         let input = SpawnAgentInput {
             name: "child".into(),
             role: "worker".into(),
-            permissions: AgentPermissions {
+            permissions: Some(AgentPermissions {
                 scope: AgentScope {
                     orgs: vec!["a".into(), "b".into()],
                     ..AgentScope::default()
                 },
                 capabilities: vec![Capability::SpawnAgent],
-            },
+            }),
             agent_id: None,
             system_prompt: None,
             tool_permissions: None,
+            prompt: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -354,13 +376,14 @@ pub(crate) mod tests {
         let input = SpawnAgentInput {
             name: "child".into(),
             role: "worker".into(),
-            permissions: AgentPermissions {
+            permissions: Some(AgentPermissions {
                 scope: AgentScope::default(),
                 capabilities: vec![Capability::SpawnAgent, Capability::ManageBilling],
-            },
+            }),
             agent_id: None,
             system_prompt: None,
             tool_permissions: None,
+            prompt: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -375,10 +398,11 @@ pub(crate) mod tests {
         let input = SpawnAgentInput {
             name: "child".into(),
             role: "worker".into(),
-            permissions: AgentPermissions::empty(),
+            permissions: Some(AgentPermissions::empty()),
             agent_id: Some(ancestor.to_string()),
             system_prompt: None,
             tool_permissions: None,
+            prompt: None,
         };
 
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
@@ -393,13 +417,14 @@ pub(crate) mod tests {
         let input = SpawnAgentInput {
             name: "child".into(),
             role: "worker".into(),
-            permissions: AgentPermissions {
+            permissions: Some(AgentPermissions {
                 scope: AgentScope::default(),
                 capabilities: vec![Capability::SpawnAgent],
-            },
+            }),
             agent_id: None,
             system_prompt: None,
             tool_permissions: None,
+            prompt: None,
         };
 
         let outcome = SpawnAgentTool::evaluate(&ctx, &input).unwrap();
@@ -417,10 +442,11 @@ pub(crate) mod tests {
         let input = SpawnAgentInput {
             name: "x".into(),
             role: "x".into(),
-            permissions: AgentPermissions::empty(),
+            permissions: Some(AgentPermissions::empty()),
             agent_id: None,
             system_prompt: None,
             tool_permissions: None,
+            prompt: None,
         };
         let err = SpawnAgentTool::evaluate(&ctx, &input).unwrap_err();
         assert!(err.to_string().contains("caller_permissions"), "got: {err}");

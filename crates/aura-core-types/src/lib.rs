@@ -70,8 +70,8 @@ pub use types::{
 // crates can pull from one place once they're migrated. These do not
 // create cycles because aura-core-types depends on both.
 pub use aura_core_modes::{
-    AgentMode, AgentRole, CapabilityProfile, DefaultModeGate, GatedAction, JoinPolicy, KernelMode,
-    ModeGate, ModeProfile, ModeViolation, ReplayMode, SandboxMode, SpawnMode,
+    AgentMode, AgentRole, CapabilityProfile, DefaultModeGate, GatedAction, KernelMode, ModeGate,
+    ModeProfile, ModeViolation, ReplayMode, SandboxMode, SpawnMode,
 };
 pub use aura_core_permissions::{
     allows, allows_tool, effective, intersect, is_effectively_full_access, narrow,
