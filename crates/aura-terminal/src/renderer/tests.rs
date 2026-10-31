@@ -257,8 +257,16 @@ fn test_default_layout_shows_agents_column() {
     ));
     let rows = render_rows(&mut app, 120);
     let screen = rows.join("\n");
-    assert!(rows.iter().any(|r| r.contains("reviewer  Reviews")));
+    assert!(screen.contains("•  reviewer"));
+    assert!(!screen.contains("Reviews"));
     assert!(screen.contains("+  New agent"));
+    let column_of = |needle: &str| {
+        rows.iter()
+            .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
+            .unwrap()
+    };
+    assert_eq!(column_of("•"), column_of("+"));
+    assert_eq!(column_of("reviewer"), column_of("New agent"));
     assert!(screen.contains("⏎ spawn e edit d del"));
     assert!(!screen.contains("Researcher"));
 }

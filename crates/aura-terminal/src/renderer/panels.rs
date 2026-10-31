@@ -468,8 +468,8 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     lines
 }
 
-/// Roster rows: each permanent agent with its description, then
-/// "+ New agent".
+/// Roster rows: "•  name" for each permanent agent, then "+  New agent",
+/// with the markers and the names in the same columns.
 fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_definition();
@@ -486,23 +486,10 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
         } else {
             ("   ", Style::default().fg(theme.colors.secondary))
         };
-        let name_width = width.saturating_sub(prefix.len()).max(1);
-        let name = truncate_agent_name(&definition.name, name_width);
-        let description_width = width.saturating_sub(prefix.len() + display_width(&name) + 2);
-        let mut spans = vec![
-            Span::styled(prefix, name_style),
-            Span::styled(name, name_style),
-        ];
-        if description_width > 1 && !definition.description.is_empty() {
-            spans.push(Span::styled(
-                format!(
-                    "  {}",
-                    truncate_agent_name(&definition.description, description_width)
-                ),
-                Style::default().fg(theme.colors.muted),
-            ));
-        }
-        lines.push(Line::from(spans));
+        lines.push(Line::from(Span::styled(
+            truncate_agent_name(&format!("{prefix}•  {}", definition.name), width.max(1)),
+            name_style,
+        )));
     }
 
     let new_selected = selected == app.definitions().len() && is_focused;
