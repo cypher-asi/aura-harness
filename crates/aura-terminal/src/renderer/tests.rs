@@ -558,6 +558,30 @@ fn type_text(app: &mut crate::App, text: &str) {
 }
 
 #[test]
+fn test_prompt_colors_user_green_and_host_gray() {
+    let theme = test_theme();
+    let cyan = theme.colors.primary;
+    let spans = super::input::prompt_spans("[n3o@arch-aura aura-harness]$ ", cyan, &theme);
+    let parts: Vec<(&str, Option<Color>)> = spans
+        .iter()
+        .map(|s| (s.content.as_ref(), s.style.fg))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("[", Some(cyan)),
+            ("n3o", Some(theme.colors.success)),
+            ("@arch-aura", Some(theme.colors.muted)),
+            (" aura-harness]$ ", Some(cyan)),
+        ]
+    );
+
+    let email = super::input::prompt_spans("Email: ", cyan, &theme);
+    assert_eq!(email.len(), 1);
+    assert_eq!(email[0].style.fg, Some(cyan));
+}
+
+#[test]
 fn test_prompt_starts_at_chat_left_border() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("[u@h d]$ ");

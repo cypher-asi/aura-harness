@@ -114,7 +114,7 @@ pub(super) fn render_input(
     };
 
     frame.render_widget(
-        Paragraph::new(Span::styled(prompt_str, Style::default().fg(prompt_color))),
+        Paragraph::new(Line::from(prompt_spans(prompt_str, prompt_color, theme))),
         prompt_area,
     );
     frame.render_widget(
@@ -129,4 +129,27 @@ pub(super) fn render_input(
         let cursor_x = typing_x.saturating_add(u16::try_from(cursor_pos).unwrap_or(u16::MAX));
         frame.set_cursor_position((cursor_x, area.y));
     }
+}
+
+/// `[user@host dir]$ ` with the user in the success color and `@host` muted;
+/// any other prompt is drawn in `color`.
+pub(super) fn prompt_spans<'a>(
+    prompt: &'a str,
+    color: ratatui::style::Color,
+    theme: &Theme,
+) -> Vec<Span<'a>> {
+    let plain = || vec![Span::styled(prompt, Style::default().fg(color))];
+    let Some(body) = prompt.strip_prefix('[') else {
+        return plain();
+    };
+    let Some(at) = body.find('@') else {
+        return plain();
+    };
+    let host_end = body[at..].find(' ').map_or(body.len(), |i| at + i);
+    vec![
+        Span::styled("[", Style::default().fg(color)),
+        Span::styled(&body[..at], Style::default().fg(theme.colors.success)),
+        Span::styled(&body[at..host_end], Style::default().fg(theme.colors.muted)),
+        Span::styled(&body[host_end..], Style::default().fg(color)),
+    ]
 }
