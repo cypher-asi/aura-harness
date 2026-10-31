@@ -146,7 +146,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             MessageRole::Assistant,
             String::from_utf8_lossy(&tx.payload).into_owned(),
         ),
-        TransactionType::ToolExecution => {
+        TransactionType::ToolProposal | TransactionType::ToolExecution => {
             let info = extract_tool_info(tx);
             if info.is_empty() {
                 return None;
@@ -175,7 +175,10 @@ pub fn build_record_summary(
     entry: &RecordEntry,
     timestamp: String,
 ) -> RecordSummary {
-    let (tx_kind, sender) = tx_type_label(tx.tx_type);
+    let (tx_kind, mut sender) = tx_type_label(tx.tx_type);
+    if is_user_proposal(tx) {
+        sender = "USER";
+    }
 
     let message = truncate_chars(&String::from_utf8_lossy(&tx.payload), 200);
 
@@ -434,8 +437,21 @@ fn primary_arg(args: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether `tx` is a tool proposal the user made directly.
+fn is_user_proposal(tx: &Transaction) -> bool {
+    tx.tx_type == TransactionType::ToolProposal
+        && serde_json::from_slice::<ToolProposal>(&tx.payload)
+            .is_ok_and(|p| p.source.as_deref() == Some(crate::event_loop::run_command::USER_SOURCE))
+}
+
 /// Extract the command string from cmd_run tool arguments.
 fn extract_cmd_run_command(args: &Value) -> String {
+    if let Some(script) = ["shell_script", "command"]
+        .iter()
+        .find_map(|key| args.get(*key).and_then(Value::as_str))
+    {
+        return script.to_string();
+    }
     let program = args["program"].as_str().unwrap_or("");
     let cmd_args: Vec<&str> = args["args"]
         .as_array()

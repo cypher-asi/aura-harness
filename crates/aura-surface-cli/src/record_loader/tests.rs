@@ -145,6 +145,57 @@ fn tool_proposal_run_command() {
     assert_eq!(summarize_record(&t), "run_command cargo test -p x");
 }
 
+fn proposal_tx(proposal: &ToolProposal) -> Transaction {
+    Transaction::tool_proposal(AgentId::generate(), proposal).unwrap()
+}
+
+#[test]
+fn user_command_is_a_tool_call_from_user() {
+    let proposal = crate::event_loop::run_command::user_command_proposal("ls | head -n 2");
+    let t = proposal_tx(&proposal);
+    let entry = RecordEntry::builder(7, t.clone()).build();
+
+    let summary = build_record_summary(7, &t, &entry, "12:00:00".into());
+
+    assert_eq!(summary.tx_kind, "ToolCall");
+    assert_eq!(summary.sender, "USER");
+    assert_eq!(summary.info, "run_command ls | head -n 2");
+}
+
+#[test]
+fn model_tool_call_keeps_llm_sender() {
+    let t = proposal_tx(&ToolProposal::new(
+        "t1",
+        "read_file",
+        json!({"path": "a.rs"}),
+    ));
+    let entry = RecordEntry::builder(1, t.clone()).build();
+
+    let summary = build_record_summary(1, &t, &entry, "12:00:00".into());
+
+    assert_eq!(summary.tx_kind, "ToolCall");
+    assert_eq!(summary.sender, "LLM");
+}
+
+#[test]
+fn tool_proposals_appear_in_conversation_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let proposal = crate::event_loop::run_command::user_command_proposal("ls -la");
+    append(
+        &store,
+        1,
+        Transaction::tool_proposal(agent, &proposal).unwrap(),
+    );
+
+    let history = conversation_history(&store, agent).unwrap();
+
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].role, MessageRole::System);
+    assert_eq!(history[0].content, "🔧 ls -la");
+}
+
 fn execution(decision: ToolGateVerdict, result: Option<&str>, is_error: bool) -> Transaction {
     let exec = ToolExecution {
         tool_use_id: "t1".into(),

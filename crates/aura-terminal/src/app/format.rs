@@ -18,6 +18,12 @@ pub(super) fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
 fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> String {
     match tool_name {
         "run_command" => {
+            if let Some(script) = ["shell_script", "command"]
+                .iter()
+                .find_map(|key| args.get(*key).and_then(|v| v.as_str()))
+            {
+                return script.to_string();
+            }
             let program = args.get("program").and_then(|v| v.as_str()).unwrap_or("");
             let cmd_args = args
                 .get("args")

@@ -6,6 +6,7 @@
 mod commands;
 mod format;
 mod keys;
+mod shell_input;
 
 #[cfg(test)]
 mod tests;

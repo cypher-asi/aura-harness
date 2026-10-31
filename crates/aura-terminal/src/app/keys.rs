@@ -380,6 +380,15 @@ impl App {
             return self.handle_command(&text);
         }
 
+        if let Some(command) = super::shell_input::parse(&text) {
+            self.state = AppState::Processing;
+            self.status = "Running...".to_string();
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(UiEvent::RunCommand(command));
+            }
+            return KeyResult::continue_running();
+        }
+
         self.add_message(crate::components::Message::new(
             crate::components::MessageRole::User,
             &text,

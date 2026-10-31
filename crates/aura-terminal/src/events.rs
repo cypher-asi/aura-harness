@@ -12,6 +12,9 @@ pub enum UiEvent {
     /// User submitted a message
     UserMessage(String),
 
+    /// User typed a shell command to run in the agent's workspace
+    RunCommand(String),
+
     /// User approved a pending tool request
     Approve(String),
 

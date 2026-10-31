@@ -4,6 +4,7 @@ pub(crate) mod agent_events;
 pub(crate) mod agents;
 pub(crate) mod handlers;
 pub(crate) mod record_ui;
+pub(crate) mod run_command;
 
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelFactory};
@@ -183,6 +184,10 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
             handle_user_message(state, text).await;
             agents::send_agent_list(state).await;
         }
+        UiEvent::RunCommand(command) => {
+            run_command::handle_run_command(state, &command).await;
+            agents::send_agent_list(state).await;
+        }
         UiEvent::Approve(_id) => debug!("Approval received"),
         UiEvent::Deny(_id) => debug!("Denial received"),
         UiEvent::Quit => {
@@ -225,7 +230,8 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
 
     drain_stale_inbox(state).await;
 
-    let (tx, token) = match enqueue_and_dequeue(state, &text).await {
+    let prompt_tx = Transaction::user_prompt(state.session.agent_id(), text.clone());
+    let (tx, token) = match enqueue_and_dequeue(state, prompt_tx).await {
         Some(v) => v,
         None => return,
     };
@@ -309,10 +315,9 @@ async fn drain_stale_inbox(state: &mut LoopState<'_>) {
 
 async fn enqueue_and_dequeue(
     state: &mut LoopState<'_>,
-    text: &str,
+    tx: Transaction,
 ) -> Option<(Transaction, aura_store_db::DequeueToken)> {
     let store = state.session.kernel.store();
-    let tx = Transaction::user_prompt(state.session.agent_id(), text.to_string());
     if let Err(e) = store.enqueue_tx(&tx) {
         error!(error = %e, "Failed to enqueue transaction");
         let _ = state

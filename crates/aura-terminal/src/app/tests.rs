@@ -175,6 +175,46 @@ fn test_clear_command_emits_clear_event() {
     assert!(matches!(rx.try_recv(), Ok(UiEvent::Clear)));
 }
 
+fn submit(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+}
+
+#[test]
+fn test_prefixed_input_runs_as_command() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let mut app = App::new().with_event_sender(tx);
+
+    submit(&mut app, "!echo hi");
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::RunCommand(cmd)) if cmd == "echo hi"));
+    assert_eq!(app.state(), AppState::Processing);
+    assert!(app.messages().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_executable_on_path_runs_as_command() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let mut app = App::new().with_event_sender(tx);
+
+    submit(&mut app, "ls -la");
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::RunCommand(cmd)) if cmd == "ls -la"));
+}
+
+#[test]
+fn test_prose_is_sent_as_user_message() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let mut app = App::new().with_event_sender(tx);
+
+    submit(&mut app, "what is in here?");
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage(text)) if text == "what is in here?"));
+}
+
 // ========================================================================
 // Panel focus
 // ========================================================================
