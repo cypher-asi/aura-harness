@@ -103,7 +103,11 @@ fn sandbox_line<'a>(row: &SandboxRow, highlighted: bool, width: usize, theme: &T
         SandboxEntryKind::Dir => (
             if row.expanded { "▾ " } else { "▸ " },
             format!("{}/", row.name),
-            theme.colors.foreground,
+            if row.name.starts_with('.') {
+                theme.colors.muted
+            } else {
+                theme.colors.foreground
+            },
         ),
         SandboxEntryKind::File => ("  ", row.name.clone(), theme.colors.muted),
         SandboxEntryKind::Symlink => ("  ", format!("{}@", row.name), theme.colors.muted),
@@ -124,4 +128,37 @@ fn sandbox_line<'a>(row: &SandboxRow, highlighted: bool, width: usize, theme: &T
         Span::styled(marker, Style::default().fg(theme.colors.muted)),
         Span::styled(label, style),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn dir_row(name: &str) -> SandboxRow {
+        SandboxRow {
+            path: PathBuf::from(name),
+            name: name.to_string(),
+            depth: 0,
+            kind: SandboxEntryKind::Dir,
+            expanded: false,
+        }
+    }
+
+    fn label_color(row: &SandboxRow, theme: &Theme) -> Option<ratatui::style::Color> {
+        sandbox_line(row, false, 40, theme).spans[3].style.fg
+    }
+
+    #[test]
+    fn dot_folders_are_muted() {
+        let theme = Theme::cyber();
+        assert_eq!(
+            label_color(&dir_row("src"), &theme),
+            Some(theme.colors.foreground)
+        );
+        assert_eq!(
+            label_color(&dir_row(".git"), &theme),
+            Some(theme.colors.muted)
+        );
+    }
 }
