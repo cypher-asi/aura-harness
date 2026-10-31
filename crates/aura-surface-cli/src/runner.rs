@@ -544,9 +544,11 @@ async fn run_terminal(
         .or_else(|| std::env::var("AURA_DATA_DIR").ok().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("./aura_data"));
 
-    let workspace_root = data_dir.join("workspaces");
+    // Tools run in the directory the terminal was launched from, so typed
+    // commands and model tool calls see the user's project rather than an
+    // empty per-agent scratch dir under `data_dir`.
+    let workspace_root = std::env::current_dir().context("resolving working directory")?;
     tokio::fs::create_dir_all(&data_dir).await?;
-    tokio::fs::create_dir_all(&workspace_root).await?;
 
     let registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
     let identity = registry.active().identity();
@@ -618,6 +620,7 @@ async fn run_terminal(
 
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
+        use_workspace_base_as_root: true,
         policy: aura_agent_kernel::PolicyConfig::default()
             .with_mode(aura_config::session_mode(requested_mode)),
         ..KernelConfig::default()

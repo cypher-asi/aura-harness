@@ -262,7 +262,7 @@ impl App {
                 result,
                 success,
             } => {
-                self.cmd_complete_tool(&id, result, success);
+                self.cmd_complete_tool(&id, &result, success);
             }
             UiCommand::RequestApproval {
                 id,
@@ -358,11 +358,16 @@ impl App {
         ));
     }
 
-    fn cmd_complete_tool(&mut self, id: &str, result: String, success: bool) {
-        let mut tool_name = String::new();
+    fn cmd_complete_tool(&mut self, id: &str, result: &str, success: bool) {
+        let tool_name = self
+            .tools
+            .iter()
+            .find(|tool| tool.id() == id)
+            .map(|tool| tool.name().to_string())
+            .unwrap_or_default();
+        let result = super::format::format_tool_result(&tool_name, result);
         for tool in &mut self.tools {
             if tool.id() == id {
-                tool_name = tool.name().to_string();
                 tool.set_status(if success {
                     ToolStatus::Success
                 } else {
@@ -377,8 +382,9 @@ impl App {
             } else {
                 ("✗", "Error: ")
             };
-            let display_result = if result.len() > 200 {
-                format!("{}...", &result[..197])
+            let display_result = if result.chars().count() > 200 {
+                let head: String = result.chars().take(197).collect();
+                format!("{head}...")
             } else {
                 result
             };

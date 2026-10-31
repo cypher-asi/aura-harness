@@ -14,6 +14,48 @@ pub(super) fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
     )
 }
 
+/// Format a tool result for display.
+///
+/// `run_command` results arrive as the `{ ok, exit_code, stdout, stderr }`
+/// envelope; they are shown as the command's output text. Anything else
+/// (or an envelope that fails to parse) is returned unchanged.
+pub(super) fn format_tool_result(tool_name: &str, result: &str) -> String {
+    if tool_name != "run_command" {
+        return result.to_string();
+    }
+    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(result) else {
+        return result.to_string();
+    };
+    let field = |key: &str| {
+        envelope
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map_or("", str::trim_end)
+    };
+    let (stdout, stderr) = (field("stdout"), field("stderr"));
+    let ok = envelope
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+
+    let mut parts = Vec::new();
+    if !ok {
+        if let Some(code) = envelope.get("exit_code").and_then(serde_json::Value::as_i64) {
+            parts.push(format!("exit {code}"));
+        }
+    }
+    if !stdout.is_empty() {
+        parts.push(stdout.to_string());
+    }
+    if !stderr.is_empty() {
+        parts.push(format!("stderr:\n{stderr}"));
+    }
+    if stdout.is_empty() && stderr.is_empty() {
+        parts.push("(no output)".to_string());
+    }
+    parts.join("\n")
+}
+
 /// Format a tool summary given parsed JSON args.
 fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> String {
     match tool_name {
@@ -88,3 +130,6 @@ fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> 
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
