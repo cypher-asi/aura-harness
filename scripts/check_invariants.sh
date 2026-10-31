@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check_invariants.sh — rg-band enforcement for architectural invariants
-# §1, §2, §3, §9, §10 (see `docs/invariants.md` Part A / Part C).
+# §1, §2, §3, §9, §10 (see `docs/invariants.md` Principles 1 and 2).
 #
 # This script is executed from CI (`.github/workflows/invariants.yml`) and
 # can be run locally: `bash scripts/check_invariants.sh`. It uses ripgrep

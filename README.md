@@ -5,8 +5,8 @@
 ---
 
 <p align="center">
-  <strong>Deterministic Multi-Agent Runtime</strong><br/>
-  An append-only, pluggable-reasoning runtime for running many agents concurrently with sandboxed tool execution.
+  <strong>Auditable Multi-Agent Runtime</strong><br/>
+  A per-agent, append-only runtime for running many agents concurrently with kernel-mediated tool execution.
 </p>
 
 <p align="center">
@@ -22,7 +22,9 @@
 
 ## Overview
 
-Aura is a deterministic multi-agent runtime for running many agents concurrently. The system is built around **per-agent kernels with cross-agent parallelism**: each agent owns its own `Kernel` and append-only record log, a deterministic kernel advances that agent's state by consuming transactions, and reasoning is delegated to a proxy-routed LLM provider. All side effects flow through authorized executors, so any one agent's full history is replayable from its record alone — regardless of which other agents were running at the same time.
+Aura is a multi-agent runtime for running many agents concurrently. The system is built around **per-agent kernels with cross-agent parallelism**: each agent owns its own `Kernel` and append-only record log, the kernel advances that agent's state by consuming transactions, and reasoning is delegated to a proxy-routed LLM provider. Effects cross the kernel and are recorded, so any one agent's history can be audited and replayed from its record alone — regardless of which other agents were running at the same time.
+
+"Replay" means re-reading the recorded decisions (model outputs, policy verdicts, tool effects). It does not mean re-running the model and expecting the same behavior: LLM output is not reproducible, so the record stores it rather than re-deriving it.
 
 The runtime supports interactive terminal sessions (TUI), headless server deployments, and long-running automaton workflows — all backed by the same kernel, storage, and reasoning stack.
 
@@ -31,33 +33,29 @@ The runtime supports interactive terminal sessions (TUI), headless server deploy
 Core ideas:
 
 1. **The Record.** The fundamental unit of truth. Every agent has its own append-only log of record entries, strictly ordered by per-agent sequence number. All state is derivable from the record; there is no hidden state.
-2. **The Kernel.** A deterministic per-agent processor that builds context from the record, calls the reasoner, enforces policy, executes actions through the executor, and commits new entries. Given the same record, the kernel always produces the same output. The record-append surface is sealed to the kernel: only the kernel's `Arc<dyn WriteStore>` can commit a record entry.
-3. **Modes & Policy.** Before any external effect, the resolved `AgentMode` (`Agent` / `Plan` / `Ask` / `Debug`) gates the action; the policy layer then narrows further per-tool. The mode gate runs *before* the policy check, not as a substitute for it.
+2. **The Kernel.** A per-agent processor that builds context from the record, calls the reasoner, enforces policy, executes actions through the executor, and commits new entries. Context hashing is deterministic over the agent's own transaction window. The record-append surface is sealed to the kernel: only the kernel's `Arc<dyn WriteStore>` can commit a record entry.
+3. **Modes & Policy.** Every tool call is authorized in a fixed order: the session's `AgentMode` (`Agent` / `Plan` / `Ask` / `Debug`) gate first, then capabilities and scope, required integrations, and the per-tool `on` / `off` / `ask` state. A mode denial is a recorded `Deny` verdict like any other.
 4. **Reasoning.** Probabilistic LLM calls are isolated behind a provider trait and recorded by the kernel. There is exactly one real provider: an Anthropic-shaped client that always routes through the JWT-authenticated `aura-router` proxy. A mock provider is available for tests. There is no direct-to-Anthropic path.
 5. **Tools & Executors.** All side effects (filesystem, shell commands, domain APIs, automaton actions) are explicit. The executor router dispatches authorized actions and captures structured effects, keeping the kernel boundary clean.
-6. **Memory & Skills.** Per-agent memory (facts, events, procedures) and `SKILL.md`-based skill packages extend an agent's abilities at runtime without widening the deterministic kernel.
+6. **Memory & Skills.** Per-agent memory (facts, events, procedures) and `SKILL.md`-based skill packages extend an agent's abilities at runtime without widening the kernel boundary. They are derived indexes, not part of the record.
 
 ## Principles
 
-1. **Per-Agent Order** — Within each agent, record entries are strictly ordered by sequence number; no reordering, no gaps.
-2. **Atomic Commit** — Transaction processing is all-or-nothing via RocksDB batch writes (inbox dequeue + record append in one `WriteBatch`).
-3. **No Hidden State** — All state is replayable from the record. If it is not in the log, it did not happen.
-4. **Deterministic Kernel** — The kernel advances only by consuming transactions. Same input, same output; the per-agent context hash depends only on that agent's transaction and record window.
-5. **Explicit Side Effects** — Every tool call flows through an authorized executor; effects are captured and recorded.
-6. **Single Writer, Parallel Agents** — At most one task processes a given agent's queue at a time, while unrelated agents run fully concurrently. Determinism survives parallelism because every guarantee is per-agent.
-7. **Open Source** — MIT-licensed Rust workspace. Every layer is auditable and reusable.
+1. **Per-agent audit log** — Each agent has one append-only record log, strictly ordered by per-agent sequence number with no gaps. Each entry carries a context hash computed only from that agent's transaction window, and each commit is atomic (inbox dequeue + record append in one RocksDB `WriteBatch`). The log is replayable per agent. Memory and skills are derived indexes stored beside the log; they are not covered by its hashes.
+2. **Mediated effects** — Model calls, tool calls, domain mutations and subagent spawns cross the agent's kernel and leave a record entry. A small, frozen set of named control-plane writers (tool-permission updates, subagent spawn and orphan audit rows) append audited `System` rows outside a turn; they are listed under Declared Exceptions in [`docs/invariants.md`](docs/invariants.md).
+3. **One writer per agent, unrelated agents in parallel** — A store-backed claim lets at most one task process a given agent's queue at a time, while unrelated agents run fully concurrently. Every guarantee above is per-agent, so parallelism does not weaken it.
+4. **The wire API is the contract** — External consumers talk to `aura-runtime` over HTTP and WebSocket (`POST /v1/run`, `WS /stream/:run_id`, management endpoints). Crates are internal packaging: the layer stack keeps them organized, but none of them is a public Rust API.
 
 ## Architectural Invariants
 
-The runtime upholds 15 architectural invariants, grouped into five parts. Each is guarded by CI — either the ripgrep-band gate in [`scripts/check_invariants.sh`](scripts/check_invariants.sh) or a dedicated Rust test suite. Full definitions and the per-invariant enforcement map live in [`docs/invariants.md`](docs/invariants.md).
+The runtime upholds 15 numbered architectural invariants, grouped under the four principles. Each is guarded by CI — either the ripgrep-band gate in [`scripts/check_invariants.sh`](scripts/check_invariants.sh) or a dedicated Rust test suite. Full definitions and the per-invariant enforcement map live in [`docs/invariants.md`](docs/invariants.md).
 
-| Part | Theme | Invariants |
-|------|-------|------------|
-| A | **Kernel boundary & mediation** — the per-agent kernel is the sole external gateway; every state change and every LLM call passes through it and is recorded; gateways are transparent; the agent loop is isolated from kernel-owned resources. | §1, §2, §3, §8, §9 |
-| B | **Policy & authorization** — every tool call passes the full `Policy::check()`; live `ask` decisions are session-scoped. | §4, §11 |
-| C | **Record, audit, determinism & replay** — complete audit trail per entry; per-agent deterministic context hash; per-agent monotonic sequencing; per-agent append-only (sealed `WriteStore`). | §5, §6, §7, §10 |
-| D | **Concurrency & cross-agent parallelism** — single writer per agent (store-backed claim) and per-parent spawn-audit lease; unrelated agents run in parallel. | §12, §15 |
-| E | **Workspace & plugin structure** — strict downward-only layer stack; plugins run sandboxed and cannot bypass the kernel boundary. | §13, §14 |
+| Principle | What it binds | Invariants |
+|-----------|---------------|------------|
+| 1. Per-agent audit log | Complete audit trail per entry; per-agent deterministic context hash; per-agent monotonic sequencing; per-agent append-only (sealed `WriteStore`). | §5, §6, §7, §10 |
+| 2. Mediated effects | The per-agent kernel is the sole external gateway; every LLM call is recorded; gateways are transparent; the agent loop is isolated from kernel-owned resources; every tool call passes the mode gate and the full `Policy::check()`; live `ask` decisions are session-scoped; plugins run sandboxed. | §1, §2, §3, §4, §8, §9, §11, §14 |
+| 3. One writer per agent | Store-backed per-agent claim and per-parent spawn-audit lease; unrelated agents run in parallel. | §12, §15 |
+| 4. The wire API is the contract | Strict downward-only crate layer stack with no allowlisted upward edges. | §13 |
 
 ## Prerequisites
 
@@ -147,7 +145,7 @@ Global flags (apply to every subcommand):
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode <agent\|plan\|ask\|debug>` | (see resolution chain) | Top rung of the documented `AgentMode` resolution priority (CLI > TUI slash > SDK field > daemon default > `Agent` fallback). Resolved at session start by `aura_fleet_daemon::resolve_session_mode`. |
+| `--mode <agent\|plan\|ask\|debug>` | `AURA_FLEET_DEFAULT_MODE`, else `agent` | Session mode for the interactive terminal. The kernel denies any tool call the mode does not allow. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` request carries its own optional `mode`. |
 
 Flags for `aura run`:
 
@@ -169,45 +167,42 @@ core  <  store  <  config  <  model  <  context  <
 plugin  <  exec  <  agent   <  fleet  <  surface
 ```
 
-A crate may depend only on crates in the same layer or any lower layer. Every `crates/<crate>/src/lib.rs` carries a `//! Layer: <layer>` doc tag that must match the boundary test. There is **one** allowlisted carve-out today — `aura-tools → aura-kernel` (a Phase 10 follow-up to relocate the `Executor` / `ExecuteContext` / `SpawnHook` traits down to the exec layer).
+A crate may depend only on crates in the same layer or any lower layer. Every `crates/<crate>/src/lib.rs` carries a `//! Layer: <layer>` doc tag that must match the boundary test. There are no allowlisted upward edges.
 
 ### Crates by layer
 
-All **58** workspace members, grouped by layer (lowest → highest). Crates marked `(shell)` are thin re-export shells that preserve historical import paths after a split/rename. Full per-crate reference (key types, modules) lives in [`docs/architecture.md`](docs/architecture.md).
+All **39** crates under `crates/`, grouped by layer (lowest → highest). Full per-crate reference (key types, modules) lives in [`docs/architecture.md`](docs/architecture.md).
 
-**core** — behavior-free IDs, capability enums, mode primitives, wire types. No I/O, no async, no `aura-*` deps.
+**core** — behavior-free IDs, capability enums, mode primitives, wire types. No I/O, no async.
 
 | Crate | Role |
 |-------|------|
-| [`aura-core-types`](crates/aura-core-types) | Identifier newtypes (`TurnId`, `RunId`, `ToolCallId`, `SessionId`) + share-by-value structs. |
-| [`aura-core-modes`](crates/aura-core-modes) | Closed `AgentMode` enum, `ModeGate` / `ModeViolation`, `CapabilityProfile`, `KernelMode`. |
-| [`aura-core-permissions`](crates/aura-core-permissions) | `Capability`, `Permissions`, `EffectivePermissions` + pure `narrow` / `intersect` / `effective` math. |
-| [`aura-core-auth`](crates/aura-core-auth) | Auth primitive types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError` (data only). |
+| [`aura-core-types`](crates/aura-core-types) | Identifier newtypes plus the shared domain types (`Transaction`, `Action`, `Effect`, `RecordEntry`, `ToolCall`). |
+| [`aura-core-modes`](crates/aura-core-modes) | Closed `AgentMode` enum, `DefaultModeGate` / `GatedAction` / `ModeViolation`, `resolve_session_mode`, `KernelMode`. |
+| [`aura-core-permissions`](crates/aura-core-permissions) | `Capability`, `Permissions`, `EffectivePermissions`, `UserToolDefaults` + pure `narrow` / `intersect` / `effective` math. |
+| [`aura-core-auth`](crates/aura-core-auth) | Auth primitive types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession` (data only). |
 | [`aura-core-protocol`](crates/aura-core-protocol) | Wire-protocol primitives: `ProtocolVersion`, `PROTOCOL_VERSION`. |
-| [`aura-core`](crates/aura-core) `(shell)` | Compatibility shell; still hosts larger domain types (`Transaction`, `Action`, `Effect`, `RecordEntry`, `ToolCall`, `AuraError`). |
-| [`aura-protocol`](crates/aura-protocol) | Serde wire types for `POST /v1/run` (`RuntimeRequest`, `RuntimeRunResponse`, `InboundMessage`, `OutboundMessage`). Self-contained for external clients. |
+| [`aura-protocol`](crates/aura-protocol) | Serde wire types for `POST /v1/run` (`RuntimeRequest`, `RuntimeRunResponse`, `InboundMessage`, `OutboundMessage`) + generated TypeScript bindings. |
 
 **store** — durable storage. Owns the append-only record log + RocksDB column families. The record-append surface is sealed to `WriteStore` (Invariant §10).
 
 | Crate | Role |
 |-------|------|
 | [`aura-store-db`](crates/aura-store-db) | RocksDB storage: column families, key encoders, atomic `WriteBatch` commit, sealed `WriteStore` + `ReadStore`. |
-| [`aura-store-record`](crates/aura-store-record) | Backend-independent record types + `RecordLog` trait (`RecordEntry`, `RecordKind`, `SCHEMA_VERSION`). |
-| [`aura-store-snapshot`](crates/aura-store-snapshot) | Content-addressed snapshot store trait for AuditedLite replay (`SnapshotStore`, `NoopSnapshotStore`). |
-| [`aura-store`](crates/aura-store) `(shell)` | Re-export shell over `aura-store-db`. |
+| [`aura-store-record`](crates/aura-store-record) | Backend-independent record types + `RecordLog` trait (`RecordKind`, `SCHEMA_VERSION`). |
+| [`aura-store-snapshot`](crates/aura-store-snapshot) | `SnapshotStore` seam for AuditedLite replay. Only the no-op `NoopSnapshotStore` exists today. |
 
 **config** — single source of truth for env vars + TOML config.
 
 | Crate | Role |
 |-------|------|
-| [`aura-config`](crates/aura-config) | `AuraConfig` aggregate + `AgentConfig` / `ReasonerConfig` / `FleetConfig` (`default_mode`) + env loader. Hosts the `aura migrate` stub. |
+| [`aura-config`](crates/aura-config) | `AuraConfig` aggregate + `AgentConfig` / `ReasonerConfig` / `FleetConfig` (`default_mode`) + env loader + `session_mode`. Hosts the `aura migrate` stub. |
 
 **model** — LLM provider abstraction. One real provider, always proxy-routed (Invariant §1: only the kernel gateway may hold it in production).
 
 | Crate | Role |
 |-------|------|
 | [`aura-model-reasoner`](crates/aura-model-reasoner) | `ModelProvider` trait, `ModelRequest` / `ModelResponse`, `StreamEvent` / `StreamAccumulator`, proxy-routed `AnthropicProvider`, `MockProvider`. |
-| [`aura-reasoner`](crates/aura-reasoner) `(shell)` | Re-export shell over `aura-model-reasoner`. |
 
 **context** — read-only context assembly: pulls signal *into* the prompt without side effects.
 
@@ -217,10 +212,6 @@ All **58** workspace members, grouped by layer (lowest → highest). Crates mark
 | [`aura-context-memory`](crates/aura-context-memory) | Per-agent memory: facts / events / procedures, two-stage write pipeline, deterministic retrieval, consolidation. |
 | [`aura-context-compaction`](crates/aura-context-compaction) | Pure compaction: history tiers, redaction, cached tool-result summaries, `SummaryInput` / `SummaryOutput`. |
 | [`aura-context-skills`](crates/aura-context-skills) | `SKILL.md` loader/registry/manager + `SkillInstallStore` (Claude Code `AgentSkills`-compatible). |
-| [`aura-prompts`](crates/aura-prompts) `(shell)` | Re-export shell over `aura-context-prompts`. |
-| [`aura-memory`](crates/aura-memory) `(shell)` | Re-export shell over `aura-context-memory`. |
-| [`aura-compaction`](crates/aura-compaction) `(shell)` | Re-export shell over `aura-context-compaction`. |
-| [`aura-skills`](crates/aura-skills) `(shell)` | Re-export shell over `aura-context-skills`. |
 
 **plugin** — plugin runtime: contributor API + on-disk manifest pipeline + runtime surfaces (hooks, MCP, connectors). Sandboxed (Invariant §14).
 
@@ -232,58 +223,46 @@ All **58** workspace members, grouped by layer (lowest → highest). Crates mark
 | [`aura-plugin-mcp`](crates/aura-plugin-mcp) | Stdio MCP JSON-RPC client + first-active-wins connection manager. |
 | [`aura-plugin-connectors`](crates/aura-plugin-connectors) | Thread-safe registry of plugin-contributed external endpoints (last-wins). |
 
-**exec** — tool execution surface: catalog down through sandbox, conflict locks, worktree isolation.
+**exec** — tool execution: catalog, executor, sandbox, worktree isolation.
 
 | Crate | Role |
 |-------|------|
-| [`aura-exec-conflict`](crates/aura-exec-conflict) | Domain-scoped advisory locks (`ConflictRegistry`, `LockHandle`) to reduce sibling collisions. |
-| [`aura-exec-isolation`](crates/aura-exec-isolation) | Subagent workspace isolation: `WorktreeIsolation` (preferred) + `CopyIsolation` fallback. |
-| [`aura-exec-policy`](crates/aura-exec-policy) | Pure capability-satisfaction `evaluate` over `EffectivePermissions` (not a substitute for `Policy::check`). |
+| [`aura-tools`](crates/aura-tools) | Tool catalog, resolver, `ToolExecutor`, sandboxed FS/command tools, git tools, domain tools, `task` tool, automaton tools. |
+| [`aura-exec-traits`](crates/aura-exec-traits) | `Executor`, `ExecuteContext`, `SpawnHook` traits shared by `aura-tools` and the kernel. |
 | [`aura-exec-sandbox`](crates/aura-exec-sandbox) | OS containment primitives: `FsSandbox` (path/symlink guard) + `ProcessSandbox`. |
-| [`aura-exec-tools`](crates/aura-exec-tools) `(shell)` | Re-export shell over `aura-tools` + `sandbox` / `policy` sub-modules. |
-| [`aura-exec-runner`](crates/aura-exec-runner) `(shell)` | Layered alias for `ToolExecutor` + `conflict` / `isolation` re-exports. |
-| [`aura-tools`](crates/aura-tools) | Tool catalog, resolver, sandboxed FS/command tools, git tools, domain tools, `task` tool, automaton tools. Implements `Executor`. |
+| [`aura-exec-isolation`](crates/aura-exec-isolation) | Subagent workspace isolation: `WorktreeIsolation` (preferred) + `CopyIsolation` fallback. |
 
-**agent** — the deterministic core of a single agent. Invariants §1–§11 are owned here.
+**agent** — a single agent: kernel, turn loop, steering, subagent derivation. Invariants §1–§11 are owned here.
 
 | Crate | Role |
 |-------|------|
-| [`aura-agent-kernel`](crates/aura-agent-kernel) | The deterministic kernel: context build, reason, policy, `ExecutorRouter`, `RecordEntry` production, replay. |
-| [`aura-agent-loop`](crates/aura-agent-loop) `(shell)` | Re-export shell exposing `AgentLoop`, `AgentLoopConfig`, `TurnEvent`, `RunOptions`. |
+| [`aura-agent-kernel`](crates/aura-agent-kernel) | The kernel: context build, reason, mode gate + policy, `ExecutorRouter`, `RecordEntry` production, replay. |
+| [`aura-agent`](crates/aura-agent) | Turn loop (`AgentLoop`, `AgentLoopEvent`) + kernel gateways (`KernelModelGateway`, `KernelToolGateway`, `KernelDomainGateway`) + sealed `RecordingModelProvider`. |
 | [`aura-agent-steering`](crates/aura-agent-steering) | Per-turn steering evaluators (`RepeatedReadTracker`, `ImplementNow`, `EarlyOracle`) + `SteeringRegistry`. |
 | [`aura-agent-subagent`](crates/aura-agent-subagent) | Subagent derivation/inheritance/registry + pure-data dispatcher adapters (`derive_subagent`, may only narrow). |
-| [`aura-agent`](crates/aura-agent) | Multi-step orchestration loop + kernel gateways (`KernelModelGateway`, `KernelToolGateway`, `KernelDomainGateway`) + sealed `RecordingModelProvider`. |
-| [`aura-kernel`](crates/aura-kernel) `(shell)` | Re-export shell over `aura-agent-kernel`. |
 
-**fleet** — the multi-agent runtime above the single-agent kernel. Invariant §12 / §15 live here.
+**fleet** — subagent spawning above the single-agent kernel. Invariants §12 / §15 live here.
 
 | Crate | Role |
 |-------|------|
 | [`aura-fleet-registry`](crates/aura-fleet-registry) | In-memory directory of live/terminated agents (`FleetRegistry`, `AgentSlot`, `AgentState`). |
 | [`aura-fleet-quota`](crates/aura-fleet-quota) | Concurrency/resource budgets: `QuotaPool` + RAII `BudgetTicket`. |
 | [`aura-fleet-spawn`](crates/aura-fleet-spawn) | Spawn pipeline: dedupe, per-parent audit lease (`ParentLeaseRegistry`), quota, orphan handoff (`OrphanStore`). |
-| [`aura-fleet-dispatch`](crates/aura-fleet-dispatch) | Routes `AgentJob` items into `FleetSpawner::spawn`. |
-| [`aura-fleet-mailbox`](crates/aura-fleet-mailbox) | Bounded MPSC mailbox of `AgentJob` with backpressure + typed send errors. |
-| [`aura-fleet-daemon`](crates/aura-fleet-daemon) | Composition root wiring registry/spawner/dispatcher/quota/mailbox; hosts `resolve_session_mode`. |
 | [`aura-fleet-subagent`](crates/aura-fleet-subagent) | Concrete `FleetSubagentDispatcher` impl of `SubagentDispatchHook` (composes spawn + registry + quota + `ChildRunner`). |
 
 **surface** — composition roots: each assembles lower layers into a runnable entry point or side-effectful client.
 
 | Crate | Role |
 |-------|------|
-| [`aura-surface-cli`](crates/aura-surface-cli) | CLI composition root: clap `Cli` / `Commands` / `RunArgs`, `ModeFlag`, event loop, session helpers. |
-| [`aura-surface-sdk`](crates/aura-surface-sdk) | External SDK types (`AuraClient`, `AuraSession`, `SessionConfig.mode`); pluggable transport. |
-| [`aura-surface-terminal`](crates/aura-surface-terminal) `(shell)` | Shell over `aura-terminal` + typed `SlashModeCommand`. |
-| [`aura-surface-automaton`](crates/aura-surface-automaton) `(shell)` | Shell over `aura-automaton`. |
-| [`aura-surface-auth`](crates/aura-surface-auth) `(shell)` | Shell for zOS HTTP client + credential storage (`ZosClient`, `CredentialStore`). |
-| [`aura-runtime`](crates/aura-runtime) | HTTP/WS **gateway** crate + `aura-node` composition root. **Sole Cargo surface** for external Rust consumers. |
+| [`aura-runtime`](crates/aura-runtime) | HTTP/WS **gateway** crate + `aura-node` composition root. Owns the external wire API. |
 | [`aura-engine`](crates/aura-engine) | Orchestration engine: per-agent `Scheduler`, worker, `AutomatonBridge`, `MemoryTurnObserver`, `RuntimeChildRunner`. |
+| [`aura-surface-cli`](crates/aura-surface-cli) | CLI composition root: clap `Cli` / `Commands` / `RunArgs`, `ModeFlag`, event loop, session helpers. |
 | [`aura-domain-http`](crates/aura-domain-http) | HTTP `DomainApi` impl (`HttpDomainApi`) + JWT-injecting wrapper (`JwtDomainApi`). |
-| [`aura-terminal`](crates/aura-terminal) | Ratatui TUI library: themed rendering, components, input handling, `App` state machine. |
+| [`aura-terminal`](crates/aura-terminal) | Ratatui TUI library: themed rendering, components, input handling, `App` state machine, `SlashModeCommand` parser (not yet wired). |
 | [`aura-automaton`](crates/aura-automaton) | Long-running automatons: `ChatAutomaton`, `DevLoopAutomaton`, `SpecGenAutomaton`, `TaskRunAutomaton`. |
 | [`aura-auth`](crates/aura-auth) | zOS login client + credential persistence (keyring + `~/.aura/credentials.json`). |
 
-> **External-consumer invariant:** [`aura-runtime`](crates/aura-runtime) is the sole Cargo surface for any external Rust consumer. External repos interact with the harness over the wire (`POST /v1/run`, `WS /stream/:run_id`, and the management endpoints) — never by depending on `aura-engine`, `aura-domain-http`, or any other lower-layer crate directly.
+> **External contract:** external repos interact with the harness over the wire (`POST /v1/run`, `WS /stream/:run_id`, and the management endpoints served by [`aura-runtime`](crates/aura-runtime)) — never by depending on a workspace crate. `aura-os` keeps its own mirror of the `aura-protocol` wire types; a wire change (such as `RuntimeRequest.mode`) has to land in both.
 
 All members are declared in [`Cargo.toml`](Cargo.toml) under `[workspace].members`.
 
@@ -296,7 +275,7 @@ aura-harness/
   .env.example              # environment variable template
   index.html                # landing page
   src/                      # `aura` binary entry (CLI body lives in aura-surface-cli)
-  crates/                   # 58 crates organized into the 10 layers above
+  crates/                   # 39 crates organized into the 10 layers above
                             #   (see docs/architecture.md for the per-crate reference)
   tests/                    # workspace integration, e2e, proptest, pipeline tests
   docs/                     # supplementary documentation
@@ -401,6 +380,8 @@ Tri-state (`on` / `off` / `ask`) tool configuration consumed by the policy gate 
 ### Runs (chat / dev-loop / task-run)
 
 A "run" is the canonical entry point — any chat session, dev-loop automaton, or single-task automaton is started by POSTing an [`aura_protocol::RuntimeRequest`](crates/aura-protocol/src/runtime_request.rs) to `/v1/run`. The [`RuntimeRunResponse`](crates/aura-protocol/src/runtime_request.rs) carries a `run_id` plus the WS path the client should open to receive events (and, on chat runs, to send user messages).
+
+`RuntimeRequest.mode` (`agent` / `plan` / `ask` / `debug`, optional) sets the session mode; when omitted it falls back to `AURA_FLEET_DEFAULT_MODE`, then `agent`. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `agent`.
 
 | Method | Path | Purpose |
 |--------|------|---------|

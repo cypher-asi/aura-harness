@@ -7,6 +7,95 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Simplification — enforce modes, collapse crates, sync docs
+
+Three phases that make the runtime match what it documents: the
+`AgentMode` enum is now enforced, scaffolding crates with no
+production caller are gone, and the principles are restated as the
+four the code actually upholds. The workspace goes from 51 to 39
+member crates.
+
+#### Phase 1 — `AgentMode` enforcement (commit `421421e`)
+
+##### Breaking changes
+
+- `aura_protocol::RuntimeRequest` gains `mode: Option<AgentMode>`
+  (`"agent" | "plan" | "ask" | "debug"`, absent = `agent`).
+  Consumers that mirror the struct (e.g. `aura-os`) must add the
+  field to round-trip it.
+- `POST /v1/run` with `task_run` / `dev_loop` and a resolved mode
+  other than `agent` returns `400`. Setting
+  `AURA_FLEET_DEFAULT_MODE` to a non-agent mode therefore rejects
+  those requests unless they pass `mode: "agent"` explicitly.
+
+##### Added
+
+- Mode gate (`aura-agent-kernel` `policy/check/mode_gate.rs`): the
+  first stage of `evaluate_delegate`. Every catalog tool maps to a
+  `ToolModeClass` via an explicit table; unclassified tools are
+  treated as `Network`, and file-write tools targeting `.md` /
+  `.markdown` paths are classified as `WriteMarkdown` so Plan mode
+  can write plans. Denials are recorded with the mode and violation in the
+  reason.
+- `PolicyConfig::mode` / `with_mode`, plumbed through the gateway
+  session helpers, `child_runner` (child specs keep their own
+  mode), and the CLI runner.
+- `aura_core_modes::resolve_session_mode` + `AgentModeInputs`
+  (moved from `aura-fleet-daemon`) and the `aura_config::session_mode`
+  wrapper: request → `AURA_FLEET_DEFAULT_MODE` → `agent`.
+- `aura --mode <agent|plan|ask|debug>` CLI flag.
+- Tests: per-mode policy matrix, mode-before-tool-state ordering,
+  a kernel Plan-mode denial/record test, and
+  `aura-engine/tests/mode_gate_catalog.rs`, which fails if a
+  catalog tool lacks a classification.
+
+##### Removed
+
+- `core_to_modes_mode` conversion shim.
+
+#### Phase 2 — crate collapse (commits `a14a22d`, `5a1b294`)
+
+##### Removed
+
+- Crates with no production caller: `aura-fleet-daemon`,
+  `aura-fleet-dispatch`, `aura-fleet-mailbox`, `aura-exec-policy`,
+  `aura-exec-conflict`, `aura-surface-sdk`, plus
+  `tests/sdk_smoke.rs` and `tests/daemon_shutdown.rs`.
+- Re-export shells, with dependents repointed at the owning crate:
+  `aura-exec-tools` / `aura-exec-runner` → `aura-tools`,
+  `aura-agent-loop` → `aura-agent`, `aura-surface-automaton` →
+  `aura-automaton`, `aura-surface-auth` → `aura-auth`,
+  `aura-surface-terminal` → `aura-terminal`.
+- The `tests/layer_boundary.rs` warn-only allowlist; the test is
+  now `no_upward_layer_dependencies` and fails on any upward edge.
+
+##### Changed
+
+- `aura-terminal` owns the `/mode` slash-command parser
+  (`SlashModeCommand`) formerly in `aura-surface-terminal`. It is
+  still not wired into the TUI input loop.
+- Doc comments that described removed or unused machinery now say
+  so (`SessionStop` is reserved with no production writer,
+  `load_enabled_plugins` has no production caller, the conflict
+  config knobs have no consumer, fleet registry/quota/lease state
+  is per chat session).
+
+#### Phase 3 — principles and docs
+
+##### Changed
+
+- `README.md`: four principles (per-agent audit log, mediated
+  effects, one writer per agent, the wire API is the contract),
+  invariants grouped under them, 39-crate tables, `--mode` and
+  `RuntimeRequest.mode` documented.
+- `docs/invariants.md`: reorganized under the four principles with
+  every `§N` anchor preserved; adds §4.0 (mode gate), a definition
+  of "deterministic", and corrects §5.a (AuditedLite replay ends in
+  `SnapshotMissing`). Declared exceptions are frozen.
+- `docs/architecture.md`: new layer map, `AgentMode` resolution
+  chain, tool authorization pipeline diagram, and removal of the
+  deleted crates.
+
 ### Architecture refactor — aura-runtime gateway refactor (Phases A–C)
 
 Phases A through C of the `aura-runtime gateway refactor` plan

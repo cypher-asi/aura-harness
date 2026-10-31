@@ -234,7 +234,7 @@ fn aura_runtime_reexports_canonical_wire_types() {
 }
 
 #[test]
-fn warn_on_upward_layer_dependencies() {
+fn no_upward_layer_dependencies() {
     let workspace_root = workspace_root();
     let crates_dir = workspace_root.join("crates");
 
