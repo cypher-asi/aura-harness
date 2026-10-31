@@ -1,149 +1,237 @@
 //! Loading and displaying historical records from the store.
 
-use aura_core_types::{AgentId, EffectStatus, Identity, Transaction, TransactionType};
-use aura_store_db::{ReadStore, RocksStore};
+use crate::agent_registry::AgentRegistry;
+use aura_core_types::{AgentId, EffectStatus, RecordEntry, Transaction, TransactionType};
+use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
-    events::{AgentSummary, RecordStatus, RecordSummary},
+    events::{AgentSummary, MessageData, MessageRole, RecordStatus, RecordSummary},
     UiCommand,
 };
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+/// Number of entries shown in the Record panel.
+const RECORD_PANEL_LIMIT: usize = 100;
+
+/// Number of trailing entries scanned when rebuilding an agent's chat.
+const HISTORY_SCAN_LIMIT: usize = 500;
+
+/// Number of chat messages kept after rebuilding (matches the UI cap).
+const HISTORY_MESSAGE_LIMIT: usize = 100;
+
+/// Load the most recent record entries for an agent as UI summaries,
+/// oldest first.
+///
+/// # Errors
+/// Returns the store error if the head sequence or scan fails.
+pub fn recent_record_summaries(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+) -> Result<Vec<RecordSummary>, StoreError> {
+    Ok(scan_tail(store, agent_id, RECORD_PANEL_LIMIT)?
+        .iter()
+        .map(record_summary)
+        .collect())
+}
+
 /// Load existing records from the store and send to UI.
+///
+/// Uses `try_send`, so it is only suitable before the UI starts draining
+/// the channel (startup); async callers should send summaries themselves.
 pub fn load_existing_records(
-    store: &Arc<RocksStore>,
+    store: &dyn ReadStore,
     agent_id: AgentId,
     commands: &mpsc::Sender<UiCommand>,
 ) {
-    let head_seq = match store.get_head_seq(agent_id) {
-        Ok(seq) => seq,
+    match recent_record_summaries(store, agent_id) {
+        Ok(summaries) => {
+            for summary in summaries {
+                let _ = commands.try_send(UiCommand::NewRecord(summary));
+            }
+        }
         Err(e) => {
-            warn!(error = %e, "Failed to get head sequence");
+            warn!(error = %e, "Failed to load records");
             let _ = commands.try_send(UiCommand::ShowWarning(format!(
                 "Could not load record history: {e}"
             )));
-            return;
         }
-    };
-
-    if head_seq == 0 {
-        return;
-    }
-
-    let from_seq = head_seq.saturating_sub(99).max(1);
-    let records = match store.scan_record(agent_id, from_seq, 100) {
-        Ok(entries) => entries,
-        Err(e) => {
-            warn!(from_seq, head_seq, error = %e, "Failed to load records");
-            let _ = commands.try_send(UiCommand::ShowWarning(format!(
-                "Could not load {head_seq} historical records: {e}"
-            )));
-            return;
-        }
-    };
-
-    for entry in records {
-        let (tx_kind, sender) = tx_type_label(entry.tx.tx_type);
-        let (tx_kind, sender) = (tx_kind.to_string(), sender.to_string());
-
-        let message = String::from_utf8_lossy(&entry.tx.payload).to_string();
-        let message = if message.len() > 200 {
-            format!("{}...", &message[..197])
-        } else {
-            message
-        };
-
-        let effect_count = entry.effects.len();
-        let ok_count = entry
-            .effects
-            .iter()
-            .filter(|e| matches!(e.status, EffectStatus::Committed))
-            .count();
-        let pending_count = entry
-            .effects
-            .iter()
-            .filter(|e| matches!(e.status, EffectStatus::Pending))
-            .count();
-        let err_count = effect_count - ok_count - pending_count;
-
-        let effect_status = if effect_count == 0 {
-            "-".to_string()
-        } else if err_count == 0 {
-            format!("{ok_count} ok")
-        } else {
-            format!("{ok_count} ok, {err_count} err")
-        };
-
-        let status = if err_count > 0 {
-            RecordStatus::Error
-        } else if pending_count > 0 {
-            RecordStatus::Pending
-        } else {
-            RecordStatus::Ok
-        };
-
-        let error_details: String = entry
-            .effects
-            .iter()
-            .filter(|e| matches!(e.status, EffectStatus::Failed))
-            .filter_map(|e| String::from_utf8(e.payload.to_vec()).ok())
-            .collect::<Vec<_>>()
-            .join("; ");
-
-        let info = extract_tool_info(&entry.tx);
-
-        let full_hash = entry.context_hash.as_hex();
-        let hash_suffix = full_hash[full_hash.len() - 4..].to_string();
-
-        let timestamp = chrono::DateTime::from_timestamp_millis(entry.tx.ts_ms as i64)
-            .map(|dt| dt.format("%H:%M:%S").to_string())
-            .unwrap_or_else(|| "??:??:??".to_string());
-
-        let record_summary = RecordSummary {
-            seq: entry.seq,
-            timestamp,
-            full_hash,
-            hash_suffix,
-            tx_kind,
-            sender,
-            message,
-            action_count: entry.actions.len(),
-            effect_status,
-            status,
-            info,
-            error_details,
-            tx_id: hex::encode(entry.tx.hash.as_bytes()),
-            agent_id: hex::encode(entry.tx.agent_id.as_bytes()),
-            ts_ms: entry.tx.ts_ms,
-        };
-
-        let _ = commands.try_send(UiCommand::NewRecord(record_summary));
     }
 }
 
-/// Send initial agent info to the UI.
-pub fn send_initial_agent(
-    identity: &Identity,
-    store: &Arc<RocksStore>,
-    commands: &mpsc::Sender<UiCommand>,
-) {
-    let record_count = store.get_head_seq(identity.agent_id).unwrap_or(0);
-    let last_active = chrono::Local::now().format("%H:%M:%S").to_string();
+/// Rebuild an agent's chat transcript from its record, oldest first.
+///
+/// # Errors
+/// Returns the store error if the head sequence or scan fails.
+pub fn conversation_history(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+) -> Result<Vec<MessageData>, StoreError> {
+    let history: Vec<MessageData> = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)?
+        .iter()
+        .filter_map(|entry| history_message(&entry.tx))
+        .collect();
+    let skip = history.len().saturating_sub(HISTORY_MESSAGE_LIMIT);
+    Ok(history.into_iter().skip(skip).collect())
+}
 
-    let agent = AgentSummary {
-        id: hex::encode(identity.agent_id.as_bytes()),
-        name: identity.name.clone(),
-        zns_id: identity.zns_id.clone(),
-        is_active: true,
-        record_count,
-        last_active,
+/// Build the agents-column rows for every registered agent.
+#[must_use]
+pub fn agent_summaries(
+    registry: &AgentRegistry,
+    store: &dyn ReadStore,
+    active: AgentId,
+) -> Vec<AgentSummary> {
+    registry
+        .agents()
+        .iter()
+        .map(|agent| {
+            let agent_id = agent.agent_id();
+            let record_count = store.get_head_seq(agent_id).unwrap_or(0);
+            let last_active = if record_count == 0 {
+                "-".to_string()
+            } else {
+                store
+                    .get_record_entry(agent_id, record_count)
+                    .map(|entry| format_local_time(entry.tx.ts_ms))
+                    .unwrap_or_else(|_| "-".to_string())
+            };
+            AgentSummary {
+                id: agent_id.to_hex(),
+                name: agent.name.clone(),
+                zns_id: agent.zns_id.clone(),
+                is_active: agent_id == active,
+                record_count,
+                last_active,
+            }
+        })
+        .collect()
+}
+
+fn scan_tail(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+    limit: usize,
+) -> Result<Vec<RecordEntry>, StoreError> {
+    let head_seq = store.get_head_seq(agent_id)?;
+    if head_seq == 0 {
+        return Ok(Vec::new());
+    }
+    let window = u64::try_from(limit).unwrap_or(u64::MAX);
+    let from_seq = head_seq.saturating_sub(window.saturating_sub(1)).max(1);
+    store.scan_record(agent_id, from_seq, limit)
+}
+
+fn history_message(tx: &Transaction) -> Option<MessageData> {
+    let (role, content) = match tx.tx_type {
+        TransactionType::UserPrompt => (
+            MessageRole::User,
+            String::from_utf8_lossy(&tx.payload).into_owned(),
+        ),
+        TransactionType::AgentMsg => (
+            MessageRole::Assistant,
+            String::from_utf8_lossy(&tx.payload).into_owned(),
+        ),
+        TransactionType::ToolExecution => {
+            let info = extract_tool_info(tx);
+            if info.is_empty() {
+                return None;
+            }
+            (MessageRole::System, format!("🔧 {info}"))
+        }
+        TransactionType::SessionStart => (MessageRole::System, "── new session ──".to_string()),
+        _ => return None,
+    };
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(MessageData {
+        role,
+        content,
+        is_streaming: false,
+        timestamp_ms: Some(tx.ts_ms),
+    })
+}
+
+fn record_summary(entry: &RecordEntry) -> RecordSummary {
+    let (tx_kind, sender) = tx_type_label(entry.tx.tx_type);
+
+    let message = String::from_utf8_lossy(&entry.tx.payload).to_string();
+    let message = if message.chars().count() > 200 {
+        let truncated: String = message.chars().take(197).collect();
+        format!("{truncated}...")
+    } else {
+        message
     };
 
-    let _ = commands.try_send(UiCommand::SetAgents(vec![agent]));
-    let _ = commands.try_send(UiCommand::SetActiveAgent(hex::encode(
-        identity.agent_id.as_bytes(),
-    )));
+    let effect_count = entry.effects.len();
+    let ok_count = entry
+        .effects
+        .iter()
+        .filter(|e| matches!(e.status, EffectStatus::Committed))
+        .count();
+    let pending_count = entry
+        .effects
+        .iter()
+        .filter(|e| matches!(e.status, EffectStatus::Pending))
+        .count();
+    let err_count = effect_count - ok_count - pending_count;
+
+    let effect_status = if effect_count == 0 {
+        "-".to_string()
+    } else if err_count == 0 {
+        format!("{ok_count} ok")
+    } else {
+        format!("{ok_count} ok, {err_count} err")
+    };
+
+    let status = if err_count > 0 {
+        RecordStatus::Error
+    } else if pending_count > 0 {
+        RecordStatus::Pending
+    } else {
+        RecordStatus::Ok
+    };
+
+    let error_details: String = entry
+        .effects
+        .iter()
+        .filter(|e| matches!(e.status, EffectStatus::Failed))
+        .filter_map(|e| String::from_utf8(e.payload.to_vec()).ok())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let full_hash = entry.context_hash.as_hex();
+    let hash_suffix = full_hash[full_hash.len() - 4..].to_string();
+
+    RecordSummary {
+        seq: entry.seq,
+        timestamp: format_local_time(entry.tx.ts_ms),
+        full_hash,
+        hash_suffix,
+        tx_kind: tx_kind.to_string(),
+        sender: sender.to_string(),
+        message,
+        action_count: entry.actions.len(),
+        effect_status,
+        status,
+        info: extract_tool_info(&entry.tx),
+        error_details,
+        tx_id: hex::encode(entry.tx.hash.as_bytes()),
+        agent_id: hex::encode(entry.tx.agent_id.as_bytes()),
+        ts_ms: entry.tx.ts_ms,
+    }
+}
+
+fn format_local_time(ts_ms: u64) -> String {
+    i64::try_from(ts_ms)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| "??:??:??".to_string())
 }
 
 /// Map a transaction type to its display label and sender name.
@@ -206,3 +294,6 @@ fn extract_cmd_run_command(args: &serde_json::Value) -> String {
         format!("{program} {}", cmd_args.join(" "))
     }
 }
+
+#[cfg(test)]
+mod tests;

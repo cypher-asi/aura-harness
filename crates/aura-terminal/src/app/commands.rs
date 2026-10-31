@@ -13,7 +13,7 @@ impl App {
     pub(super) fn handle_command(&mut self, text: &str) -> KeyResult {
         let parts: Vec<&str> = text[1..].splitn(2, ' ').collect();
         let cmd = parts[0].to_lowercase();
-        let _arg = parts.get(1).unwrap_or(&"");
+        let arg = parts.get(1).map_or("", |a| a.trim());
 
         match cmd.as_str() {
             "quit" | "exit" | "q" => {
@@ -62,6 +62,12 @@ impl App {
                     }
                 }
             }
+            "agents" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::RefreshAgents);
+                }
+            }
+            "agent" | "a" => self.handle_agent_command(arg),
             "login" => {
                 self.state = AppState::LoginEmail;
                 self.login_email.clear();
@@ -98,6 +104,60 @@ impl App {
             }
         }
         KeyResult::continue_running()
+    }
+
+    /// Handle `/agent new [name]` and `/agent <number|name>`.
+    fn handle_agent_command(&mut self, arg: &str) {
+        let mut parts = arg.splitn(2, ' ');
+        let first = parts.next().unwrap_or("");
+        if first.eq_ignore_ascii_case("new") {
+            if matches!(
+                self.state,
+                AppState::Processing | AppState::AwaitingApproval
+            ) {
+                self.notification = Some((
+                    "Wait for the current turn to finish before creating an agent".to_string(),
+                    NotificationType::Warning,
+                ));
+                return;
+            }
+            let name = parts
+                .next()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(UiEvent::CreateAgent(name));
+            }
+            return;
+        }
+        if arg.is_empty() {
+            self.notification = Some((
+                "Usage: /agent new [name] | /agent <number|name>".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        let target = arg
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|idx| self.agents.get(idx))
+            .or_else(|| {
+                self.agents
+                    .iter()
+                    .find(|a| a.name.eq_ignore_ascii_case(arg))
+            })
+            .map(|a| a.id.clone());
+        match target {
+            Some(agent_id) => self.request_agent_switch(agent_id),
+            None => {
+                self.notification = Some((
+                    format!("No agent matching '{arg}'"),
+                    NotificationType::Warning,
+                ));
+            }
+        }
     }
 
     /// Process a UI command from the kernel.
@@ -152,7 +212,9 @@ impl App {
             UiCommand::ClearRecords => {
                 self.records.clear();
                 self.selected_record = 0;
+                self.showing_record_detail = false;
             }
+            UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -269,6 +331,26 @@ impl App {
         self.tools.clear();
         self.thinking_content.clear();
         self.is_thinking = false;
+    }
+
+    fn cmd_load_conversation(&mut self, history: Vec<crate::events::MessageData>) {
+        self.cmd_clear_conversation();
+        self.streaming_content.clear();
+        for data in history {
+            let mut msg = Message::new(data.role, &data.content);
+            if let Some(ts) = data
+                .timestamp_ms
+                .and_then(|ms| i64::try_from(ms).ok())
+                .and_then(chrono::DateTime::from_timestamp_millis)
+            {
+                msg = msg.with_timestamp(ts);
+            }
+            self.messages.push_back(msg);
+        }
+        while self.messages.len() > super::MAX_MESSAGES {
+            self.messages.pop_front();
+        }
+        self.scroll_offset = 0;
     }
 
     fn cmd_new_record(&mut self, record: crate::events::RecordSummary) {
