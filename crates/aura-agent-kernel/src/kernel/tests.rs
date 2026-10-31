@@ -694,3 +694,68 @@ fn write_system_record_resolves_concurrent_appends_without_loss() {
     );
     assert_eq!(store.get_head_seq(agent_id).unwrap(), WRITERS);
 }
+
+#[tokio::test]
+async fn plan_mode_denial_is_recorded_and_markdown_write_passes_the_gate() {
+    let db_dir = TempDir::new().unwrap();
+    let ws_dir = TempDir::new().unwrap();
+    let agent_id = AgentId::generate();
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("test response"));
+    let config = KernelConfig {
+        workspace_base: ws_dir.path().to_path_buf(),
+        policy: crate::policy::PolicyConfig::default().with_mode(aura_core_modes::AgentMode::Plan),
+        ..KernelConfig::default()
+    };
+    let kernel = Kernel::new(
+        store.clone(),
+        provider,
+        ExecutorRouter::new(),
+        config,
+        agent_id,
+    )
+    .unwrap();
+
+    let code_write = ToolProposal::new(
+        "tool-use-rs",
+        "write_file",
+        serde_json::json!({ "path": "src/lib.rs", "content": "fn main() {}" }),
+    );
+    let result = kernel
+        .process_direct(Transaction::tool_proposal(agent_id, &code_write).unwrap())
+        .await
+        .unwrap();
+    let output = result.tool_output.expect("tool output");
+    assert!(output.is_error);
+    assert!(output.content.contains("Plan mode"), "{}", output.content);
+
+    let entries = store.scan_record(agent_id, 1, 10).unwrap();
+    let denied = entries.last().expect("denial must be recorded");
+    assert!(denied.actions.is_empty());
+    assert!(
+        denied
+            .decision
+            .rejected
+            .iter()
+            .any(|r| r.reason.contains("Plan mode")),
+        "rejection reason must be in the record: {:?}",
+        denied.decision
+    );
+
+    let doc_write = ToolProposal::new(
+        "tool-use-md",
+        "write_file",
+        serde_json::json!({ "path": "PLAN.md", "content": "# Plan" }),
+    );
+    let result = kernel
+        .process_direct(Transaction::tool_proposal(agent_id, &doc_write).unwrap())
+        .await
+        .unwrap();
+    let output = result.tool_output.expect("tool output");
+    assert!(
+        !output.content.contains("Plan mode"),
+        "markdown write must pass the mode gate: {}",
+        output.content
+    );
+}

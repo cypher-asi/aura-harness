@@ -17,24 +17,15 @@
 //! `aura-runtime` for headless-mode wiring; this crate re-exports it
 //! as [`run_node`] so the documented surface path remains callable.
 //!
-//! ## Mode resolution priority
+//! ## Mode resolution
 //!
-//! Phase 9 wires four input rungs:
-//!
-//! 1. **CLI flag** — `aura --mode <agent|plan|ask|debug>` and the
-//!    per-subcommand variants. The [`ModeFlag`] type below is the
-//!    `clap`-derived shape.
-//! 2. **TUI slash command** — `/mode <agent|plan|ask|debug>` from
-//!    inside `aura-surface-terminal`. Parsed by
-//!    [`aura_surface_terminal::SlashModeCommand`].
-//! 3. **SDK field** — [`aura_surface_sdk::SessionConfig::mode`].
-//! 4. **Daemon default** — [`aura_config::FleetConfig::default_mode`].
-//! 5. **Fallback** — [`AgentMode::Agent`].
-//!
-//! The actual resolution math (lowest → highest precedence) lives in
-//! `aura_fleet_daemon::resolve_session_mode` so child agents can be
-//! propagated identically. This crate only exposes the surface-side
-//! input plumbing.
+//! The `aura --mode <agent|plan|ask|debug>` flag ([`ModeFlag`]) is the
+//! requested mode for the interactive terminal session. It resolves via
+//! [`aura_config::session_mode`]: the flag, else the daemon default
+//! ([`aura_config::FleetConfig::default_mode`]), else
+//! [`AgentMode::Agent`]. The result lands on the kernel's
+//! `PolicyConfig::mode`, which gates every tool call. The headless node
+//! ignores the flag; it resolves a mode per `POST /v1/run` request.
 //!
 //! ## Invariants ([`.cursor/rules.md`] §13)
 //!

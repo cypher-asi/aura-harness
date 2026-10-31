@@ -64,6 +64,7 @@ pub fn hello_world() {
 /// remaining `anyhow`-using boundary in the workspace.
 pub async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let requested_mode = cli.mode.map(aura_core_modes::AgentMode::from);
 
     match cli.command {
         Some(Commands::Hello) => {
@@ -76,8 +77,8 @@ pub async fn run() -> anyhow::Result<()> {
         Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Plugins(args)) => cmd_plugins(args),
         Some(Commands::Agents(args)) => cmd_agents(args).await,
-        Some(Commands::Run(args)) => run_with_args(args).await,
-        None => run_with_args(RunArgs::default()).await,
+        Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
+        None => run_with_args(RunArgs::default(), requested_mode).await,
     }
 }
 
@@ -405,9 +406,12 @@ fn update_plugin_enable(
     Ok(())
 }
 
-async fn run_with_args(args: RunArgs) -> anyhow::Result<()> {
+async fn run_with_args(
+    args: RunArgs,
+    requested_mode: Option<aura_core_modes::AgentMode>,
+) -> anyhow::Result<()> {
     match args.ui {
-        UiMode::Terminal => run_terminal(args).await,
+        UiMode::Terminal => run_terminal(args, requested_mode).await,
         UiMode::None => {
             let filter = if args.verbose {
                 EnvFilter::from_default_env().add_directive("aura=debug".parse()?)
@@ -423,6 +427,13 @@ async fn run_with_args(args: RunArgs) -> anyhow::Result<()> {
                 .with(filter)
                 .init();
 
+            if let Some(mode) = requested_mode {
+                warn!(
+                    ?mode,
+                    "--mode does not apply to the headless node; set the per-run `mode` \
+                     field on POST /v1/run or AURA_FLEET_DEFAULT_MODE instead"
+                );
+            }
             run_headless(args).await
         }
     }
@@ -508,7 +519,10 @@ fn cmd_whoami() -> anyhow::Result<()> {
 // Terminal Mode
 // ============================================================================
 
-async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
+async fn run_terminal(
+    args: RunArgs,
+    requested_mode: Option<aura_core_modes::AgentMode>,
+) -> anyhow::Result<()> {
     let theme = Theme::by_name(&args.theme);
 
     let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(100);
@@ -597,7 +611,8 @@ async fn run_terminal(args: RunArgs) -> anyhow::Result<()> {
 
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
-        policy: aura_agent_kernel::PolicyConfig::default(),
+        policy: aura_agent_kernel::PolicyConfig::default()
+            .with_mode(aura_config::session_mode(requested_mode)),
         ..KernelConfig::default()
     };
     let agent_id = identity.agent_id;

@@ -275,7 +275,8 @@ impl ChildRunner for RuntimeChildRunner {
                 model_id: child_model.clone(),
             })
         });
-        let policy = policy_for(child_permissions, child_tool_permissions, &user_defaults);
+        let policy = policy_for(child_permissions, child_tool_permissions, &user_defaults)
+            .with_mode(ctx.spec.mode);
 
         // Hand the optional streaming sink to the scheduler so the
         // child loop runs via `run_with_events` and its

@@ -149,6 +149,9 @@ pub struct Session {
     /// forwards actions to. `None` disables forwarding even when
     /// [`Self::computer_use`] is set.
     pub(crate) computer_executor_url: Option<String>,
+    /// Session mode, resolved once from the request and the daemon
+    /// default. The kernel policy denies any tool call it does not allow.
+    pub(crate) mode: aura_core_types::AgentMode,
 }
 
 impl Session {
@@ -197,6 +200,7 @@ impl Session {
             typed_chat_prompt: false,
             computer_use: false,
             computer_executor_url: None,
+            mode: aura_core_types::AgentMode::Agent,
         }
     }
 
@@ -221,6 +225,7 @@ impl Session {
             agent_capabilities,
             auth_jwt,
             user_id,
+            mode,
         } = request;
 
         let conversation_messages = match r#type {
@@ -241,6 +246,7 @@ impl Session {
         if user_id.trim().is_empty() {
             return Err("user_id is required".into());
         }
+        self.mode = aura_config::session_mode(mode);
 
         let project_info_ref = project.as_ref().and_then(|p| p.project_info.as_ref());
         let typed_prompt = build_typed_chat_system_prompt(

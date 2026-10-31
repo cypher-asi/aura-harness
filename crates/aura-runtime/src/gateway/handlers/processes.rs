@@ -279,6 +279,7 @@ pub(in crate::gateway) async fn trigger_process_handler(
         agent_capabilities: Default::default(),
         auth_jwt: None,
         user_id: format!("process:{id}"),
+        mode: None,
     };
 
     let ctx = WsContext::from_state(&state, None);

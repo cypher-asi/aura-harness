@@ -677,6 +677,7 @@ mod driver_tests {
             agent_capabilities: AgentCapabilities::default(),
             auth_jwt: None,
             user_id: "user-test".to_string(),
+            mode: None,
         }
     }
 
