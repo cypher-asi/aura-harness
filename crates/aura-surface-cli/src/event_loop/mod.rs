@@ -185,8 +185,8 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
             handle_user_message(state, text).await;
             agents::send_agent_list(state).await;
         }
-        UiEvent::RunCommand(command) => {
-            run_command::handle_run_command(state, &command).await;
+        UiEvent::RunCommand { command, cols } => {
+            run_command::handle_run_command(state, &command, cols).await;
             agents::send_agent_list(state).await;
         }
         UiEvent::Approve(_id) => debug!("Approval received"),

@@ -276,6 +276,17 @@ impl App {
                 self.cmd_complete_tool(&id, &result, success);
                 self.refresh_sandbox();
             }
+            UiCommand::CommandFinished { output, exit_code } => {
+                if let Some(message) = self
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.is_running_shell())
+                {
+                    message.finish_shell(&output, exit_code);
+                }
+                self.refresh_sandbox();
+            }
             UiCommand::RequestApproval {
                 id,
                 tool,
@@ -445,7 +456,14 @@ impl App {
         self.cmd_clear_conversation();
         self.streaming_content.clear();
         for data in history {
-            let mut msg = Message::new(data.role, &data.content);
+            let mut msg = data.command.as_deref().map_or_else(
+                || Message::new(data.role, &data.content),
+                |command| {
+                    let mut msg = Message::shell(&self.shell_prompt, command);
+                    msg.finish_shell("", None);
+                    msg
+                },
+            );
             if let Some(ts) = data
                 .timestamp_ms
                 .and_then(|ms| i64::try_from(ms).ok())

@@ -7,6 +7,8 @@ use aura_core_types::{Capability, ToolDefinition};
 use std::path::Path;
 use tracing::{debug, instrument};
 
+mod pty;
+
 /// Result of a threshold-based wait operation.
 ///
 /// When a command is run with a sync threshold:
@@ -963,6 +965,10 @@ impl Tool for CmdRunTool {
                     "timeout_secs": {
                         "type": "integer",
                         "description": "Timeout in seconds (alternative to timeout_ms)"
+                    },
+                    "tty_cols": {
+                        "type": "integer",
+                        "description": "Run in a pseudo-terminal this many columns wide; output keeps terminal layout and ANSI colors, with stderr merged into stdout"
                     }
                 }
             }),
@@ -999,6 +1005,7 @@ impl Tool for CmdRunTool {
 /// - `shell_script`: alias-resolved (`shell_script` / legacy `command`).
 /// - `program` + `cmd_args`: direct-spawn form. Mutually exclusive with
 ///   `shell_script` (enforced in policy).
+/// - `tty_cols`: run in a pseudo-terminal of that width instead of pipes.
 struct RunArgs {
     cwd: Option<String>,
     timeout_ms: u64,
@@ -1006,6 +1013,7 @@ struct RunArgs {
     shell_script: Option<String>,
     program: Option<String>,
     cmd_args: Vec<String>,
+    tty_cols: Option<u16>,
 }
 
 /// Pull every `run_command` field out of the JSON envelope without
@@ -1049,6 +1057,11 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
         })
         .unwrap_or_default();
 
+    let tty_cols = args["tty_cols"]
+        .as_u64()
+        .and_then(|cols| u16::try_from(cols).ok())
+        .filter(|cols| *cols > 0);
+
     RunArgs {
         cwd,
         timeout_ms,
@@ -1056,6 +1069,7 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
         shell_script,
         program,
         cmd_args,
+        tty_cols,
     }
 }
 
@@ -1173,10 +1187,37 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
         shell_script,
         program,
         cmd_args,
+        tty_cols,
         ..
     } = args;
 
     let sandbox = ctx.sandbox.clone();
+
+    if let Some(cols) = tty_cols {
+        let sandbox = sandbox.clone();
+        let (cwd, shell_script, program, cmd_args) = (
+            cwd.clone(),
+            shell_script.clone(),
+            program.clone(),
+            cmd_args.clone(),
+        );
+        let in_pty = tokio::task::spawn_blocking(move || {
+            let command = match (&shell_script, &program) {
+                (Some(script), _) => pty::PtyCommand::ShellScript(script),
+                (None, Some(program)) => pty::PtyCommand::Program {
+                    program,
+                    args: &cmd_args,
+                },
+                (None, None) => return None,
+            };
+            pty::cmd_run_in_pty(&sandbox, &command, cwd.as_deref(), cols, timeout_ms)
+        })
+        .await
+        .map_err(|e| ToolError::CommandFailed(format!("terminal task failed: {e}")))?;
+        if let Some(result) = in_pty {
+            return result;
+        }
+    }
 
     if let Some(script) = shell_script {
         return super::spawn_blocking_tool(move || {

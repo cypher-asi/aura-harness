@@ -390,10 +390,15 @@ impl App {
         }
 
         if let Some(command) = super::shell_input::parse(&text) {
+            self.add_message(crate::components::Message::shell(
+                &self.shell_prompt,
+                &command,
+            ));
             self.state = AppState::Processing;
             self.status = "Running...".to_string();
+            let cols = self.command_columns();
             if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::RunCommand(command));
+                let _ = tx.try_send(UiEvent::RunCommand { command, cols });
             }
             return KeyResult::continue_running();
         }

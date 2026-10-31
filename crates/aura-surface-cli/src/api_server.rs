@@ -159,6 +159,7 @@ pub async fn start_api_server(
                             content: format!("API server bearer token: {token}"),
                             is_streaming: false,
                             timestamp_ms: None,
+                            command: None,
                         },
                     ));
                 }

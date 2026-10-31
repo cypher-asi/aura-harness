@@ -14,7 +14,12 @@ pub enum UiEvent {
     UserMessage(String),
 
     /// User typed a shell command to run in the agent's workspace
-    RunCommand(String),
+    RunCommand {
+        /// Command line
+        command: String,
+        /// Width of the terminal the command's output is shown in
+        cols: u16,
+    },
 
     /// User approved a pending tool request
     Approve(String),
@@ -113,6 +118,14 @@ pub enum UiCommand {
         success: bool,
     },
 
+    /// Output of the shell command from the last [`UiEvent::RunCommand`]
+    CommandFinished {
+        /// Terminal output, possibly with ANSI styling
+        output: String,
+        /// Exit code when the command failed
+        exit_code: Option<i32>,
+    },
+
     /// Request user approval for a tool
     RequestApproval {
         /// Tool use ID
@@ -200,6 +213,9 @@ pub struct MessageData {
     /// When the message was originally sent (ms since epoch); `None` means now
     #[serde(default)]
     pub timestamp_ms: Option<u64>,
+    /// Shell command the user ran, shown as a terminal prompt line
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// Message role for display purposes.

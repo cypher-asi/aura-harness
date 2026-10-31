@@ -7,7 +7,7 @@ mod commands;
 mod format;
 mod keys;
 pub mod sandbox;
-mod shell_input;
+pub(crate) mod shell_input;
 mod shell_prompt;
 
 #[cfg(test)]
@@ -21,12 +21,21 @@ use crate::{
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use sandbox::SandboxTree;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// Maximum number of messages to keep in history.
 const MAX_MESSAGES: usize = 100;
+
+/// Width of the `[HH:MM:SS] ` column; shell command output starts after it.
+pub(crate) const TIMESTAMP_WIDTH: usize = 11;
+
+/// Terminal width given to commands run before the chat is first drawn.
+const DEFAULT_COMMAND_COLUMNS: u16 = 80;
+
+/// Narrowest terminal a command is given.
+const MIN_COMMAND_COLUMNS: u16 = 20;
 
 /// Maximum number of records to keep in the list.
 const MAX_RECORDS: usize = 100;
@@ -160,6 +169,12 @@ pub struct App {
     pub(super) processing_since: Option<Instant>,
     /// `[user@host dir]$ ` shown before the input line
     pub(super) shell_prompt: String,
+    /// Width of the chat text area in the last frame (0 before the first)
+    pub(super) chat_width: u16,
+    /// Whether each program name typed so far is on `PATH`
+    pub(super) path_lookups: HashMap<String, bool>,
+    /// Whether Enter would run the current input as a shell command
+    pub(super) input_is_command: bool,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -244,6 +259,9 @@ impl App {
             areas: PanelAreas::default(),
             processing_since: None,
             shell_prompt: shell_prompt::detect(),
+            chat_width: 0,
+            path_lookups: HashMap::new(),
+            input_is_command: false,
         }
     }
 
@@ -304,6 +322,15 @@ impl App {
             .is_some_and(|m| m.is_streaming() && !m.content().is_empty());
         if reply_streaming {
             return None;
+        }
+        if let Some(run) = self
+            .messages
+            .back()
+            .filter(|m| m.is_running_shell())
+            .and_then(Message::shell_run)
+        {
+            let program = run.command.split_whitespace().next().unwrap_or_default();
+            return Some(format!("running {program}"));
         }
         if let Some(tool) = self
             .tools
@@ -671,6 +698,45 @@ impl App {
     #[cfg(test)]
     pub(crate) fn set_shell_prompt(&mut self, prompt: &str) {
         self.shell_prompt = prompt.to_string();
+    }
+
+    /// Whether Enter would run the current input as a shell command, as of
+    /// the last [`Self::sync_input_kind`].
+    #[must_use]
+    pub const fn input_is_command(&self) -> bool {
+        self.input_is_command
+    }
+
+    /// Re-check whether the current input is a shell command. Looking a
+    /// program up on `PATH` is cached, so this is cheap to call per frame.
+    pub fn sync_input_kind(&mut self) {
+        if matches!(self.state, AppState::LoginEmail | AppState::LoginPassword) {
+            self.input_is_command = false;
+            return;
+        }
+        let lookups = &mut self.path_lookups;
+        self.input_is_command = shell_input::parse_with(&self.input, |program| {
+            *lookups
+                .entry(program.to_string())
+                .or_insert_with(|| shell_input::on_path(program))
+        })
+        .is_some();
+    }
+
+    /// Record the width of the chat text area drawn this frame.
+    pub fn set_chat_width(&mut self, width: u16) {
+        self.chat_width = width;
+    }
+
+    /// Terminal width for a command, matching where its output is drawn.
+    pub(super) fn command_columns(&self) -> u16 {
+        if self.chat_width == 0 {
+            return DEFAULT_COMMAND_COLUMNS;
+        }
+        let indent = u16::try_from(TIMESTAMP_WIDTH).unwrap_or(u16::MAX);
+        self.chat_width
+            .saturating_sub(indent)
+            .max(MIN_COMMAND_COLUMNS)
     }
 
     /// Highlighted row in the model selector.

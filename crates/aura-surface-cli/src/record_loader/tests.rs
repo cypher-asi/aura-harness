@@ -151,7 +151,7 @@ fn proposal_tx(proposal: &ToolProposal) -> Transaction {
 
 #[test]
 fn user_command_is_a_tool_call_from_user() {
-    let proposal = crate::event_loop::run_command::user_command_proposal("ls | head -n 2");
+    let proposal = crate::event_loop::run_command::user_command_proposal("ls | head -n 2", None);
     let t = proposal_tx(&proposal);
     let entry = RecordEntry::builder(7, t.clone()).build();
 
@@ -178,11 +178,11 @@ fn model_tool_call_keeps_llm_sender() {
 }
 
 #[test]
-fn tool_proposals_appear_in_conversation_history() {
+fn user_commands_appear_in_conversation_history_as_shell_commands() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
     let agent = AgentId::generate();
-    let proposal = crate::event_loop::run_command::user_command_proposal("ls -la");
+    let proposal = crate::event_loop::run_command::user_command_proposal("ls -la", Some(80));
     append(
         &store,
         1,
@@ -192,8 +192,8 @@ fn tool_proposals_appear_in_conversation_history() {
     let history = conversation_history(&store, agent).unwrap();
 
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].role, MessageRole::System);
-    assert_eq!(history[0].content, "🔧 ls -la");
+    assert_eq!(history[0].role, MessageRole::User);
+    assert_eq!(history[0].command.as_deref(), Some("ls -la"));
 }
 
 fn execution(decision: ToolGateVerdict, result: Option<&str>, is_error: bool) -> Transaction {

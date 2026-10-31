@@ -884,6 +884,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "glob",
+ "portable-pty",
  "regex",
  "reqwest",
  "serde",

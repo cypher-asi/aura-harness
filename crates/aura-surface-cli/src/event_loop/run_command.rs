@@ -3,14 +3,16 @@
 //! The command becomes a `ToolProposal` transaction (source `user`) that
 //! goes through the agent's inbox and `Kernel::process_dequeued`, so it
 //! gets the same policy check, sandboxed execution and record entry as a
-//! tool call proposed by the model. The call and its result are then
-//! appended to the conversation as a tool-use / tool-result pair.
+//! tool call proposed by the model. It runs in a pseudo-terminal as wide
+//! as the chat, so the TUI can show its output as a terminal would. The
+//! call and its result (without ANSI styling) are then appended to the
+//! conversation as a tool-use / tool-result pair.
 
 use super::{drain_stale_inbox, send_record_to_ui, LoopState};
 use aura_agent_kernel::{Kernel, KernelError, ProcessResult};
 use aura_core_types::{ToolProposal, Transaction};
 use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
-use aura_terminal::{events::ToolData, UiCommand};
+use aura_terminal::{ansi::strip_ansi, UiCommand};
 use serde_json::{json, Value};
 use tracing::{error, info};
 
@@ -26,24 +28,35 @@ const SHELL_SYNTAX: &[char] = &[
     '~', '#', '=', '%', '\n',
 ];
 
-/// `run_command` arguments for a typed command line.
+/// `run_command` arguments for a typed command line, run in a terminal
+/// `tty_cols` wide when given.
 ///
 /// Plain commands use the direct `program` + `args` form; anything with
 /// shell syntax uses the opt-in `shell_script` form.
-pub(crate) fn command_args(command: &str) -> Value {
-    if command.contains(SHELL_SYNTAX) {
-        return json!({ "shell_script": command, "allow_shell": true });
+pub(crate) fn command_args(command: &str, tty_cols: Option<u16>) -> Value {
+    let mut args = if command.contains(SHELL_SYNTAX) {
+        json!({ "shell_script": command, "allow_shell": true })
+    } else {
+        let mut words = command.split_whitespace();
+        let program = words.next().unwrap_or_default();
+        let args: Vec<&str> = words.collect();
+        json!({ "program": program, "args": args })
+    };
+    if let Some(cols) = tty_cols {
+        args["tty_cols"] = json!(cols);
     }
-    let mut words = command.split_whitespace();
-    let program = words.next().unwrap_or_default();
-    let args: Vec<&str> = words.collect();
-    json!({ "program": program, "args": args })
+    args
 }
 
 /// Build the tool proposal for a typed command.
-pub(crate) fn user_command_proposal(command: &str) -> ToolProposal {
+pub(crate) fn user_command_proposal(command: &str, tty_cols: Option<u16>) -> ToolProposal {
     let tool_use_id = format!("user_{}", uuid::Uuid::new_v4().simple());
-    ToolProposal::new(tool_use_id, RUN_COMMAND_TOOL, command_args(command)).with_source(USER_SOURCE)
+    ToolProposal::new(
+        tool_use_id,
+        RUN_COMMAND_TOOL,
+        command_args(command, tty_cols),
+    )
+    .with_source(USER_SOURCE)
 }
 
 /// Enqueue `proposal` in the agent's inbox and process it through the kernel.
@@ -71,21 +84,62 @@ pub(crate) async fn process_user_proposal(
     Ok((dequeued, result))
 }
 
-pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str) {
-    info!(command = %command, "Running user command");
+/// What the terminal shows for a command's tool output: its output text
+/// and, when it failed, its exit code.
+///
+/// Command results arrive as the `{ ok, exit_code, stdout, stderr }`
+/// envelope. Anything else is an error from before the command ran
+/// (policy, spawn), shown the way a shell reports its own errors.
+pub(crate) fn terminal_output(content: &str, is_error: bool) -> (String, Option<i32>) {
+    let Some(envelope) = serde_json::from_str::<Value>(content)
+        .ok()
+        .filter(|v| v.get("stdout").is_some())
+    else {
+        let text = if is_error {
+            format!("aura: {content}\n")
+        } else {
+            content.to_string()
+        };
+        return (text, None);
+    };
+    let field = |key: &str| envelope.get(key).and_then(Value::as_str).unwrap_or("");
+    let mut output = field("stdout").to_string();
+    output.push_str(field("stderr"));
+    let ok = envelope
+        .get("ok")
+        .and_then(Value::as_bool)
+        .unwrap_or(!is_error);
+    let exit_code = envelope
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok())
+        .filter(|_| !ok);
+    (output, exit_code)
+}
+
+/// `content` with ANSI styling removed from the envelope's output fields,
+/// for the model's copy of the result.
+pub(crate) fn model_content(content: &str) -> String {
+    let Ok(mut envelope) = serde_json::from_str::<Value>(content) else {
+        return strip_ansi(content);
+    };
+    let Some(fields) = envelope.as_object_mut() else {
+        return strip_ansi(content);
+    };
+    for key in ["stdout", "stderr"] {
+        if let Some(Value::String(text)) = fields.get_mut(key) {
+            *text = strip_ansi(text);
+        }
+    }
+    envelope.to_string()
+}
+
+pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str, cols: u16) {
+    info!(command = %command, cols, "Running user command");
 
     drain_stale_inbox(state).await;
 
-    let proposal = user_command_proposal(command);
-    let _ = state
-        .commands
-        .send(UiCommand::ShowTool(ToolData {
-            id: proposal.tool_use_id.clone(),
-            name: proposal.tool.clone(),
-            args: proposal.args.to_string(),
-        }))
-        .await;
-
+    let proposal = user_command_proposal(command, Some(cols));
     let kernel = state.session.kernel.clone();
     let (tx, result) = match process_user_proposal(&kernel, &proposal).await {
         Ok(processed) => processed,
@@ -93,15 +147,10 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str)
             error!(error = %e, "Failed to process user command via kernel");
             let _ = state
                 .commands
-                .send(UiCommand::CompleteTool {
-                    id: proposal.tool_use_id.clone(),
-                    result: String::new(),
-                    success: false,
+                .send(UiCommand::CommandFinished {
+                    output: format!("aura: kernel error: {e}\n"),
+                    exit_code: None,
                 })
-                .await;
-            let _ = state
-                .commands
-                .send(UiCommand::ShowError(format!("Kernel error: {e}")))
                 .await;
             let _ = state.commands.send(UiCommand::Complete).await;
             return;
@@ -115,13 +164,10 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str)
         |o| (o.content, o.is_error),
     );
 
+    let (output, exit_code) = terminal_output(&content, is_error);
     let _ = state
         .commands
-        .send(UiCommand::CompleteTool {
-            id: proposal.tool_use_id.clone(),
-            result: content.clone(),
-            success: !is_error,
-        })
+        .send(UiCommand::CommandFinished { output, exit_code })
         .await;
 
     state.session.messages.push(Message::new(
@@ -134,7 +180,7 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str)
     ));
     state.session.messages.push(Message::tool_results(vec![(
         proposal.tool_use_id,
-        ToolResultContent::text(content),
+        ToolResultContent::text(model_content(&content)),
         is_error,
     )]));
 

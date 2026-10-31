@@ -35,6 +35,7 @@
 #![warn(clippy::all)]
 
 pub mod animation;
+pub mod ansi;
 pub mod components;
 pub mod events;
 pub mod input;

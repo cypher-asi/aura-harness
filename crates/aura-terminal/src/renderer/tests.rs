@@ -746,3 +746,107 @@ fn test_truncate_record_info_zero_width() {
     assert_eq!(truncate_record_info("anything", 0), "");
     assert_eq!(truncate_record_info("", 20), "");
 }
+
+fn render_buffer(app: &mut crate::App, width: u16) -> ratatui::buffer::Buffer {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, app, &test_theme()))
+        .unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// Column of `needle` in row `y`, and the cell style there.
+fn find_cell(buffer: &ratatui::buffer::Buffer, y: u16, needle: &str) -> Option<(u16, Style)> {
+    let needle: Vec<String> = needle.chars().map(String::from).collect();
+    let width = buffer.area.width;
+    let n = u16::try_from(needle.len()).ok()?;
+    let col = (0..width.saturating_sub(n)).find(|&x| {
+        needle
+            .iter()
+            .zip(x..)
+            .all(|(c, cx)| buffer[(cx, y)].symbol() == c)
+    })?;
+    Some((col, buffer[(col, y)].style()))
+}
+
+#[test]
+fn test_command_input_is_highlighted() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    type_text(&mut app, "!echo -n hi");
+    let buffer = render_buffer(&mut app, 120);
+    let input_y = buffer.area.height - 2;
+
+    let (_, program) = find_cell(&buffer, input_y, "echo").unwrap();
+    assert_eq!(program.fg, Some(theme.colors.success));
+    assert!(program.add_modifier.contains(Modifier::BOLD));
+    let (_, flag) = find_cell(&buffer, input_y, "-n").unwrap();
+    assert_eq!(flag.fg, Some(theme.colors.warning));
+}
+
+#[test]
+fn test_prose_input_stays_muted() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    type_text(&mut app, "please explain");
+    let buffer = render_buffer(&mut app, 120);
+
+    let (_, style) = find_cell(&buffer, buffer.area.height - 2, "please").unwrap();
+    assert_eq!(style.fg, Some(theme.colors.muted));
+}
+
+#[test]
+fn test_command_output_renders_like_a_terminal() {
+    use crate::events::UiCommand;
+
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    app.set_shell_prompt("[u@h d]$ ");
+    submit_message(&mut app, "!ls -la");
+    app.process_command(UiCommand::CommandFinished {
+        output: "total 0\ndrwxr-xr-x  2 u u  40 \x1b[01;34msrc\x1b[0m\n".to_string(),
+        exit_code: None,
+    });
+    app.process_command(UiCommand::Complete);
+
+    let buffer = render_buffer(&mut app, 120);
+    let rows = render_rows(&mut app, 120);
+    let echo = rows
+        .iter()
+        .position(|r| r.contains("[u@h d]$ ls -la"))
+        .unwrap();
+    let total = &rows[echo + 1];
+    let listing = &rows[echo + 2];
+    assert!(total.contains("total 0"), "{total:?}");
+    assert!(listing.contains("drwxr-xr-x  2 u u  40 src"), "{listing:?}");
+    assert!(!rows.join("\n").contains('\x1b'));
+    assert_eq!(
+        total.find("total"),
+        rows[echo].find("[u@h"),
+        "output starts under the prompt"
+    );
+
+    let y = u16::try_from(echo + 2).unwrap();
+    let (_, dir) = find_cell(&buffer, y, "src").unwrap();
+    assert_eq!(dir.fg, Some(Color::Indexed(4)));
+    assert!(dir.add_modifier.contains(Modifier::BOLD));
+    let (_, plain) = find_cell(&buffer, y, "drwx").unwrap();
+    assert_eq!(plain.fg, Some(theme.colors.foreground));
+}
+
+#[test]
+fn test_failed_command_shows_exit_code() {
+    use crate::events::UiCommand;
+
+    let mut app = app_with_model(None);
+    submit_message(&mut app, "!false");
+    app.process_command(UiCommand::CommandFinished {
+        output: String::new(),
+        exit_code: Some(1),
+    });
+
+    let rows = render_rows(&mut app, 120);
+    let echo = rows.iter().position(|r| r.contains("$ false")).unwrap();
+    assert!(rows[echo + 1].contains("exit 1"), "{:?}", rows[echo + 1]);
+}

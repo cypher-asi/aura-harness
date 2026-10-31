@@ -137,6 +137,16 @@ fn scan_tail(
 }
 
 fn history_message(tx: &Transaction) -> Option<MessageData> {
+    if is_user_proposal(tx) {
+        let command = extract_tool_info(tx);
+        return (!command.is_empty()).then(|| MessageData {
+            role: MessageRole::User,
+            content: command.clone(),
+            is_streaming: false,
+            timestamp_ms: Some(tx.ts_ms),
+            command: Some(command),
+        });
+    }
     let (role, content) = match tx.tx_type {
         TransactionType::UserPrompt => (
             MessageRole::User,
@@ -164,6 +174,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
         content,
         is_streaming: false,
         timestamp_ms: Some(tx.ts_ms),
+        command: None,
     })
 }
 

@@ -33,6 +33,7 @@ walkdir = { workspace = true }
 which = { workspace = true }
 futures-util = { workspace = true }
 uuid = { workspace = true }
+portable-pty = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

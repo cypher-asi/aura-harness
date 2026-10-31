@@ -1,5 +1,6 @@
 //! Panel rendering: Chat, Swarm, Record, and Thinking section.
 
+use super::command::shell_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
     message_style, nick_label, render_code_segment, render_text_segment, NICK_WIDTH,
@@ -103,6 +104,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         width: messages_area.width.saturating_sub(4),
         height: messages_area.height.saturating_sub(1),
     };
+    app.set_chat_width(padded.width);
 
     let working_line = working_indicator_line(app, theme);
     if app.messages().is_empty() && working_line.is_none() {
@@ -189,8 +191,12 @@ fn build_chat_lines<'a>(app: &App, content_width: usize, theme: &Theme) -> Vec<L
     let mut lines: Vec<Line> = Vec::new();
 
     for message in app.messages() {
-        let (nick, nick_color, msg_color) = message_style(message.role(), theme);
         let timestamp = message.timestamp_local();
+        if let Some(run) = message.shell_run() {
+            lines.extend(shell_lines(run, &timestamp, content_width, theme));
+            continue;
+        }
+        let (nick, nick_color, msg_color) = message_style(message.role(), theme);
         let prefix_width = 11 + NICK_WIDTH + 2 + 1;
         let first_line_width = content_width.saturating_sub(prefix_width);
         let continuation_width = content_width.saturating_sub(prefix_width);

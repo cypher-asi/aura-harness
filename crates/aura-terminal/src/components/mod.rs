@@ -17,7 +17,7 @@ pub use code_block::CodeBlock;
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;
 pub use input::InputField;
-pub use message::Message;
+pub use message::{Message, ShellRun};
 pub use progress::ProgressBar;
 pub use status::StatusBar;
 pub use tool_card::{ToolCard, ToolStatus};

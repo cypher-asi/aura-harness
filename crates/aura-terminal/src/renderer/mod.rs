@@ -1,5 +1,6 @@
 //! Simple IRC-style renderer for the terminal UI.
 
+mod command;
 mod input;
 mod markdown;
 mod overlays;
@@ -36,6 +37,7 @@ fn inset_edges(area: Rect) -> Rect {
 /// Render the full application UI in IRC style.
 pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let area = frame.area();
+    app.sync_input_kind();
 
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)

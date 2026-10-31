@@ -190,9 +190,46 @@ fn test_prefixed_input_runs_as_command() {
 
     submit(&mut app, "!echo hi");
 
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::RunCommand(cmd)) if cmd == "echo hi"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RunCommand { command, cols: 80 }) if command == "echo hi"
+    ));
     assert_eq!(app.state(), AppState::Processing);
-    assert!(app.messages().is_empty());
+    let run = app.messages()[0].shell_run().expect("shell message");
+    assert_eq!(run.command, "echo hi");
+    assert_eq!(run.output, None);
+    assert_eq!(app.working_label().as_deref(), Some("running echo"));
+}
+
+#[test]
+fn test_command_output_fills_the_shell_message() {
+    let mut app = App::new();
+    submit(&mut app, "!false");
+
+    app.process_command(UiCommand::CommandFinished {
+        output: "nope\n".to_string(),
+        exit_code: Some(1),
+    });
+    app.process_command(UiCommand::Complete);
+
+    let run = app.messages()[0].shell_run().expect("shell message");
+    assert_eq!(run.output.as_deref(), Some("nope\n"));
+    assert_eq!(run.exit_code, Some(1));
+    assert_eq!(app.working_label(), None);
+}
+
+#[test]
+fn test_command_width_follows_the_chat() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let mut app = App::new().with_event_sender(tx);
+    app.set_chat_width(111);
+
+    submit(&mut app, "!ls");
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RunCommand { cols: 100, .. })
+    ));
 }
 
 #[cfg(unix)]
@@ -203,7 +240,28 @@ fn test_executable_on_path_runs_as_command() {
 
     submit(&mut app, "ls -la");
 
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::RunCommand(cmd)) if cmd == "ls -la"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RunCommand { command, .. }) if command == "ls -la"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_input_kind_tracks_what_enter_would_do() {
+    let mut app = App::new();
+    for (text, is_command) in [
+        ("l", false),
+        ("ls", true),
+        ("ls -la", true),
+        ("ls what is here?", false),
+        ("!anything", true),
+        ("hello there", false),
+    ] {
+        app.input = text.to_string();
+        app.sync_input_kind();
+        assert_eq!(app.input_is_command(), is_command, "{text:?}");
+    }
 }
 
 #[test]
@@ -484,17 +542,29 @@ fn test_load_conversation_replaces_messages() {
             content: "hi".to_string(),
             is_streaming: false,
             timestamp_ms: None,
+            command: None,
         },
         crate::events::MessageData {
             role: MessageRole::Assistant,
             content: "hello".to_string(),
             is_streaming: false,
             timestamp_ms: None,
+            command: None,
+        },
+        crate::events::MessageData {
+            role: MessageRole::User,
+            content: "ls -la".to_string(),
+            is_streaming: false,
+            timestamp_ms: None,
+            command: Some("ls -la".to_string()),
         },
     ]));
 
     let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
-    assert_eq!(contents, ["hi", "hello"]);
+    assert_eq!(contents, ["hi", "hello", "ls -la"]);
+    let run = app.messages()[2].shell_run().expect("shell message");
+    assert_eq!(run.command, "ls -la");
+    assert!(!app.messages()[2].is_running_shell());
     assert!(!app.is_thinking());
     assert!(app.messages().iter().all(|m| !m.is_streaming()));
     assert_eq!(app.scroll_offset(), 0);

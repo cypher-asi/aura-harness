@@ -117,13 +117,15 @@ pub(super) fn render_input(
         Paragraph::new(Line::from(prompt_spans(prompt_str, prompt_color, theme))),
         prompt_area,
     );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            display_input,
+    let input_line = if app.input_is_command() {
+        Line::from(super::command::command_spans(&display_input, theme))
+    } else {
+        Line::from(Span::styled(
+            display_input.as_str(),
             Style::default().fg(theme.colors.muted),
-        )),
-        input_area,
-    );
+        ))
+    };
+    frame.render_widget(Paragraph::new(input_line), input_area);
 
     if !is_thinking {
         let cursor_x = typing_x.saturating_add(u16::try_from(cursor_pos).unwrap_or(u16::MAX));

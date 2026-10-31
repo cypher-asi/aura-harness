@@ -23,6 +23,21 @@ pub struct Message {
     timestamp: DateTime<Utc>,
     /// Whether the message is still streaming
     is_streaming: bool,
+    /// Set when the message is a shell command the user ran
+    shell: Option<ShellRun>,
+}
+
+/// A shell command typed by the user and its terminal output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellRun {
+    /// `[user@host dir]$ ` prompt shown before the command
+    pub prompt: String,
+    /// Command line as typed
+    pub command: String,
+    /// Terminal output (may contain ANSI styling); `None` while running
+    pub output: Option<String>,
+    /// Exit code of a failed command
+    pub exit_code: Option<i32>,
 }
 
 impl Message {
@@ -34,6 +49,40 @@ impl Message {
             content: content.to_string(),
             timestamp: Utc::now(),
             is_streaming: false,
+            shell: None,
+        }
+    }
+
+    /// A shell command the user ran; output is filled in by [`Self::finish_shell`].
+    #[must_use]
+    pub fn shell(prompt: &str, command: &str) -> Self {
+        let mut message = Self::new(MessageRole::User, command);
+        message.shell = Some(ShellRun {
+            prompt: prompt.to_string(),
+            command: command.to_string(),
+            output: None,
+            exit_code: None,
+        });
+        message
+    }
+
+    /// The shell command this message shows, if it is one.
+    #[must_use]
+    pub const fn shell_run(&self) -> Option<&ShellRun> {
+        self.shell.as_ref()
+    }
+
+    /// Whether this is a shell command still waiting for its output.
+    #[must_use]
+    pub fn is_running_shell(&self) -> bool {
+        self.shell.as_ref().is_some_and(|run| run.output.is_none())
+    }
+
+    /// Record the output of a shell command message.
+    pub fn finish_shell(&mut self, output: &str, exit_code: Option<i32>) {
+        if let Some(run) = &mut self.shell {
+            run.output = Some(output.to_string());
+            run.exit_code = exit_code;
         }
     }
 
