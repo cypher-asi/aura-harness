@@ -429,12 +429,13 @@ fn test_header_shows_local_url_and_model_moves_to_input() {
     let header = rows[..3].join("\n");
     assert!(!header.contains("qwen3:4b"));
 
-    let input_row = rows.last().unwrap().trim_end();
-    assert!(
-        input_row.ends_with("qwen3:4b · local  /model"),
-        "{input_row:?}"
-    );
-    assert!(input_row.contains("Ready"));
+    let n = rows.len();
+    assert!(rows[n - 3].trim().is_empty(), "top padding row");
+    assert!(rows[n - 1].trim().is_empty(), "bottom padding row");
+    let input_row = rows[n - 2].trim_end();
+    assert!(input_row.contains("> "), "{input_row:?}");
+    assert!(input_row.ends_with("Ready  qwen3:4b"), "{input_row:?}");
+    assert!(!input_row.contains("/model"));
 }
 
 #[test]
@@ -449,7 +450,7 @@ fn test_header_shows_logged_in_user() {
 #[test]
 fn test_input_hides_model_when_narrow() {
     let rows = render_with_user(None, 50);
-    let input_row = rows.last().unwrap();
+    let input_row = &rows[rows.len() - 2];
     assert!(!input_row.contains("qwen3:4b"));
     assert!(input_row.contains("Ready"));
 }

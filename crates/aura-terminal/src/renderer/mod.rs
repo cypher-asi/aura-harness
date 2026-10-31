@@ -28,9 +28,14 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(3),
-            Constraint::Length(1),
+            Constraint::Length(3),
         ])
         .split(area);
+    let input_row = Rect {
+        y: main_chunks[2].y + 1,
+        height: 1,
+        ..main_chunks[2]
+    };
 
     render_header(frame, main_chunks[0], app, theme);
 
@@ -48,7 +53,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         0
     };
 
-    input::render_input(frame, main_chunks[2], app, theme, swarm_offset);
+    input::render_input(frame, input_row, app, theme, swarm_offset);
 
     overlays::render_overlays(frame, app, theme);
 }
@@ -148,27 +153,16 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     spans
 }
 
-/// `qwen3:4b · local  /model` — empty until the kernel reports a model.
+/// `qwen3:4b` — empty until the kernel reports a model.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     if app.current_model().is_empty() {
         return Vec::new();
     }
-    let (label, local) = app.current_model_option().map_or_else(
-        || {
-            (
-                app.current_model(),
-                app.current_model().starts_with("local/"),
-            )
-        },
-        |m| (m.label.as_str(), m.local),
-    );
-    let backend = if local { "local" } else { "cloud" };
-    vec![
-        Span::styled(label, Style::default().fg(theme.colors.primary)),
-        Span::styled(
-            format!(" · {backend}"),
-            Style::default().fg(theme.colors.muted),
-        ),
-        Span::styled("  /model", Style::default().fg(theme.colors.secondary)),
-    ]
+    let label = app
+        .current_model_option()
+        .map_or_else(|| app.current_model(), |m| m.label.as_str());
+    vec![Span::styled(
+        label,
+        Style::default().fg(theme.colors.primary),
+    )]
 }
