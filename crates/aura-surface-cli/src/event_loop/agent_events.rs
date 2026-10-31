@@ -34,16 +34,30 @@ impl UiCommandSink {
             self.state.thinking_active = false;
         }
     }
+
+    /// End the reply message being streamed, so text that follows a tool
+    /// call or more thinking starts a new message below them.
+    async fn finish_streaming_if_active(&mut self) {
+        if self.state.streaming_active {
+            let _ = self.commands.send(UiCommand::FinishStreaming).await;
+            self.state.streaming_active = false;
+        }
+    }
 }
 
 #[async_trait]
 impl TurnEventSink for UiCommandSink {
     async fn on_thinking_delta(&mut self, text: String) {
         if !self.state.thinking_active {
+            self.finish_streaming_if_active().await;
             let _ = self.commands.send(UiCommand::StartThinking).await;
             self.state.thinking_active = true;
         }
         let _ = self.commands.send(UiCommand::AppendThinking(text)).await;
+    }
+
+    async fn on_thinking_complete(&mut self) {
+        self.finish_thinking_if_active().await;
     }
 
     async fn on_text_delta(&mut self, text: String) {
@@ -58,6 +72,7 @@ impl TurnEventSink for UiCommandSink {
 
     async fn on_tool_start(&mut self, id: String, name: String) {
         self.finish_thinking_if_active().await;
+        self.finish_streaming_if_active().await;
         let _ = self
             .commands
             .send(UiCommand::ShowTool(ToolData {
@@ -68,8 +83,11 @@ impl TurnEventSink for UiCommandSink {
             .await;
     }
 
-    async fn on_tool_input_snapshot(&mut self, id: String, _name: String, _input: String) {
-        debug!(tool_id = %id, "Tool input streaming");
+    async fn on_tool_input_snapshot(&mut self, id: String, _name: String, input: String) {
+        let _ = self
+            .commands
+            .send(UiCommand::UpdateToolArgs { id, args: input })
+            .await;
     }
 
     async fn on_tool_result(
@@ -90,6 +108,42 @@ impl TurnEventSink for UiCommandSink {
             .await;
     }
 
+    async fn on_tool_call_retrying(
+        &mut self,
+        tool_use_id: String,
+        _tool_name: String,
+        attempt: u32,
+        max_attempts: u32,
+        _delay_ms: u64,
+        reason: String,
+    ) {
+        debug!(tool_id = %tool_use_id, %reason, "Tool call retrying");
+        let _ = self
+            .commands
+            .send(UiCommand::ToolRetrying {
+                id: tool_use_id,
+                attempt,
+                max_attempts,
+            })
+            .await;
+    }
+
+    async fn on_tool_call_failed(
+        &mut self,
+        tool_use_id: String,
+        _tool_name: String,
+        reason: String,
+    ) {
+        let _ = self
+            .commands
+            .send(UiCommand::CompleteTool {
+                id: tool_use_id,
+                result: reason,
+                success: false,
+            })
+            .await;
+    }
+
     async fn on_stream_reset(
         &mut self,
         reason: String,
@@ -97,14 +151,8 @@ impl TurnEventSink for UiCommandSink {
         _thinking_bytes: usize,
     ) {
         debug!(reason = %reason, "Stream reset received");
-        if self.state.streaming_active {
-            let _ = self.commands.send(UiCommand::FinishStreaming).await;
-            self.state.streaming_active = false;
-        }
-        if self.state.thinking_active {
-            let _ = self.commands.send(UiCommand::FinishThinking).await;
-            self.state.thinking_active = false;
-        }
+        self.finish_streaming_if_active().await;
+        self.finish_thinking_if_active().await;
         self.state.had_text = false;
     }
 
@@ -116,9 +164,9 @@ impl TurnEventSink for UiCommandSink {
         let _ = self.commands.send(UiCommand::ShowWarning(message)).await;
     }
 
-    // `ThinkingComplete`, `IterationComplete`, `StepComplete`,
-    // `ToolComplete`, `Debug` — intentionally use the default no-op
-    // impls; the TUI derives UI transitions from the deltas above.
+    // `IterationComplete`, `StepComplete`, `ToolComplete`, `Debug` —
+    // intentionally use the default no-op impls; the TUI derives UI
+    // transitions from the events above.
 }
 
 /// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s.

@@ -120,6 +120,24 @@ pub enum UiCommand {
     /// Show a tool execution card
     ShowTool(ToolData),
 
+    /// Replace a running tool's arguments (they stream in as partial JSON)
+    UpdateToolArgs {
+        /// Tool use ID
+        id: String,
+        /// Arguments as JSON so far
+        args: String,
+    },
+
+    /// A tool call failed and is about to be retried
+    ToolRetrying {
+        /// Tool use ID
+        id: String,
+        /// 1-based attempt about to run
+        attempt: u32,
+        /// Total attempts allowed
+        max_attempts: u32,
+    },
+
     /// Update a tool's completion status
     CompleteTool {
         /// Tool use ID
@@ -234,6 +252,56 @@ pub struct MessageData {
     /// Shell command the user ran, shown as a terminal prompt line
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Agent step (thinking or a tool call), shown as a collapsible block
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<ActivityData>,
+}
+
+impl MessageData {
+    /// A finished message with `role` and `content`, sent now.
+    #[must_use]
+    pub fn new(role: MessageRole, content: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            is_streaming: false,
+            timestamp_ms: None,
+            command: None,
+            activity: None,
+        }
+    }
+}
+
+/// A finished agent step, as restored from the record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ActivityData {
+    /// Model thinking
+    Thinking {
+        /// Thinking text
+        text: String,
+        /// How long the model thought
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+    },
+    /// A tool call
+    Tool {
+        /// Tool use ID
+        id: String,
+        /// Tool name
+        name: String,
+        /// Arguments as JSON
+        args: String,
+        /// Output, if the tool ran
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+        /// Whether the call failed or was denied
+        #[serde(default)]
+        is_error: bool,
+        /// How long the call took
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+    },
 }
 
 /// Message role for display purposes.

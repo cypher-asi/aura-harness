@@ -160,6 +160,7 @@ pub async fn start_api_server(
                             is_streaming: false,
                             timestamp_ms: None,
                             command: None,
+                            activity: None,
                         },
                     ));
                 }

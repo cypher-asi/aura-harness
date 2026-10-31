@@ -1,5 +1,6 @@
 //! Simple IRC-style renderer for the terminal UI.
 
+mod activity;
 mod chat_lines;
 mod command;
 mod input;

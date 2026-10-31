@@ -1,5 +1,6 @@
 //! Chat lines for each message, kept between frames.
 
+use super::activity::activity_lines;
 use super::command::shell_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{message_header, message_style, render_code_segment, render_text_segment};
@@ -22,10 +23,17 @@ pub struct ChatLineCache {
 
 impl ChatLineCache {
     /// Bring the cache up to date with `messages` drawn `width` columns wide.
+    /// Activity still in progress is redrawn every frame, with `spinner`.
     ///
     /// Returns `true` when every message was reflowed because the width or
     /// theme changed, so line positions from the last frame no longer apply.
-    pub fn update(&mut self, messages: &VecDeque<Message>, width: usize, theme: &Theme) -> bool {
+    pub fn update(
+        &mut self,
+        messages: &VecDeque<Message>,
+        width: usize,
+        theme: &Theme,
+        spinner: &str,
+    ) -> bool {
         let reflowed = self.width != width || self.theme.as_ref() != Some(theme);
         if reflowed {
             self.width = width;
@@ -34,13 +42,16 @@ impl ChatLineCache {
         }
         for message in messages {
             let (id, revision) = message.version();
-            if self
-                .entries
-                .get(&id)
-                .is_none_or(|(cached, _)| *cached != revision)
+            if message.is_live_activity()
+                || self
+                    .entries
+                    .get(&id)
+                    .is_none_or(|(cached, _)| *cached != revision)
             {
-                self.entries
-                    .insert(id, (revision, message_lines(message, width, theme)));
+                self.entries.insert(
+                    id,
+                    (revision, message_lines(message, width, theme, spinner)),
+                );
             }
         }
         if self.entries.len() > messages.len() {
@@ -58,8 +69,23 @@ impl ChatLineCache {
     }
 }
 
+/// Whether a blank line goes above message `index`: between every two
+/// messages, except that consecutive activity blocks sit together.
+pub(super) fn gap_before(messages: &VecDeque<Message>, index: usize) -> bool {
+    let is_activity = |i: usize| messages.get(i).is_some_and(|m| m.activity_step().is_some());
+    index > 0 && !(is_activity(index) && is_activity(index - 1))
+}
+
 /// The header and body lines of one chat message.
-pub(super) fn message_lines(message: &Message, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+pub(super) fn message_lines(
+    message: &Message,
+    width: usize,
+    theme: &Theme,
+    spinner: &str,
+) -> Vec<Line<'static>> {
+    if let Some(activity) = message.activity_step() {
+        return activity_lines(activity, message.is_expanded(), spinner, width, theme);
+    }
     let timestamp = message.timestamp_local();
     if let Some(run) = message.shell_run() {
         return shell_lines(run, &timestamp, width, theme);

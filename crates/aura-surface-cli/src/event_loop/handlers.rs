@@ -141,6 +141,7 @@ async fn emit_response_to_ui(
                     is_streaming: false,
                     timestamp_ms: None,
                     command: None,
+                    activity: None,
                 }))
                 .await;
         }
@@ -192,6 +193,7 @@ async fn show_system_message(state: &LoopState<'_>, content: String) {
             is_streaming: false,
             timestamp_ms: None,
             command: None,
+            activity: None,
         }))
         .await;
 }
@@ -381,6 +383,7 @@ pub(super) async fn handle_whoami(state: &LoopState<'_>) {
                     is_streaming: false,
                     timestamp_ms: None,
                     command: None,
+                    activity: None,
                 }))
                 .await;
         }
@@ -395,6 +398,7 @@ pub(super) async fn handle_whoami(state: &LoopState<'_>) {
                     is_streaming: false,
                     timestamp_ms: None,
                     command: None,
+                    activity: None,
                 }))
                 .await;
         }

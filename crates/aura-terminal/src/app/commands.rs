@@ -2,7 +2,7 @@
 
 use super::{App, AppState, NotificationType, PanelFocus, PendingApproval};
 use crate::{
-    components::{Message, MessageRole, ToolCard, ToolStatus},
+    components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
     events::{UiCommand, UiEvent},
     terminal::KeyResult,
 };
@@ -27,10 +27,7 @@ impl App {
             }
             "clear" => {
                 self.messages.clear();
-                self.tools.clear();
                 self.scroll_offset = 0;
-                self.thinking_content.clear();
-                self.is_thinking = false;
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::Clear);
                 }
@@ -99,11 +96,8 @@ impl App {
             }
             "new" | "n" => {
                 self.messages.clear();
-                self.tools.clear();
                 self.scroll_offset = 0;
                 self.streaming_content.clear();
-                self.thinking_content.clear();
-                self.is_thinking = false;
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::NewSession);
                 }
@@ -281,14 +275,21 @@ impl App {
             UiCommand::StartStreaming => self.cmd_start_streaming(),
             UiCommand::AppendText(text) => self.cmd_append_text(&text),
             UiCommand::FinishStreaming => self.cmd_finish_streaming(),
-            UiCommand::StartThinking => {
-                self.thinking_content.clear();
-                self.is_thinking = true;
-            }
-            UiCommand::AppendThinking(thinking) => self.thinking_content.push_str(&thinking),
-            UiCommand::FinishThinking => self.is_thinking = false,
+            UiCommand::StartThinking => self.add_activity(Activity::thinking()),
+            UiCommand::AppendThinking(thinking) => self.cmd_append_thinking(&thinking),
+            UiCommand::FinishThinking => self.cmd_finish_thinking(),
             UiCommand::ShowMessage(data) => self.cmd_show_message(&data),
-            UiCommand::ShowTool(data) => self.cmd_show_tool(&data),
+            UiCommand::ShowTool(data) => {
+                self.add_activity(Activity::tool(&data.id, &data.name, &data.args));
+            }
+            UiCommand::UpdateToolArgs { id, args } => {
+                self.update_tool(&id, |tool| tool.args = args);
+            }
+            UiCommand::ToolRetrying {
+                id,
+                attempt,
+                max_attempts,
+            } => self.update_tool(&id, |tool| tool.retry = Some((attempt, max_attempts))),
             UiCommand::CompleteTool {
                 id,
                 result,
@@ -360,8 +361,6 @@ impl App {
 
     fn cmd_start_streaming(&mut self) {
         self.streaming_content.clear();
-        self.thinking_content.clear();
-        self.is_thinking = false;
         let mut msg = Message::new(MessageRole::Assistant, "");
         msg.set_streaming(true);
         self.add_message(msg);
@@ -398,50 +397,72 @@ impl App {
         self.add_message(msg);
     }
 
-    fn cmd_show_tool(&mut self, data: &crate::events::ToolData) {
-        let tool = ToolCard::new(&data.id, &data.name).with_args(&data.args);
-        self.add_tool(tool);
-        let tool_summary = super::format::format_tool_summary(&data.name, &data.args);
-        self.add_message(Message::new(
-            MessageRole::System,
-            &format!("$ {} {}", data.name, tool_summary),
-        ));
+    fn add_activity(&mut self, activity: Activity) {
+        self.add_message(Message::activity(activity, self.activity_expanded));
+    }
+
+    /// The last thinking block still streaming.
+    fn live_thinking(&mut self) -> Option<&mut Message> {
+        self.messages
+            .iter_mut()
+            .rev()
+            .find(|m| matches!(m.activity_step(), Some(Activity::Thinking(step)) if step.running))
+    }
+
+    fn cmd_append_thinking(&mut self, text: &str) {
+        if self.live_thinking().is_none() {
+            self.add_activity(Activity::thinking());
+        }
+        if let Some(message) = self.live_thinking() {
+            message.update_activity(|activity| {
+                if let Activity::Thinking(step) = activity {
+                    step.text.push_str(text);
+                }
+            });
+        }
+    }
+
+    fn cmd_finish_thinking(&mut self) {
+        if let Some(message) = self.live_thinking() {
+            message.update_activity(|activity| activity.finish(""));
+        }
+    }
+
+    /// Apply `update` to the tool call with use id `id`.
+    fn update_tool(&mut self, id: &str, update: impl FnOnce(&mut ToolStep)) {
+        let found = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| matches!(m.activity_step(), Some(Activity::Tool(tool)) if tool.id == id));
+        if let Some(message) = found {
+            message.update_activity(|activity| {
+                if let Activity::Tool(tool) = activity {
+                    update(tool);
+                }
+            });
+        }
     }
 
     fn cmd_complete_tool(&mut self, id: &str, result: &str, success: bool) {
-        let tool_name = self
-            .tools
-            .iter()
-            .find(|tool| tool.id() == id)
-            .map(|tool| tool.name().to_string())
-            .unwrap_or_default();
-        let result = super::format::format_tool_result(&tool_name, result);
-        for tool in &mut self.tools {
-            if tool.id() == id {
-                tool.set_status(if success {
-                    ToolStatus::Success
-                } else {
-                    ToolStatus::Error
-                });
-                tool.set_result(&result);
+        self.update_tool(id, |tool| {
+            tool.result = Some(super::format::format_tool_result(&tool.name, result));
+            tool.status = if success {
+                ToolStatus::Success
+            } else {
+                ToolStatus::Error
+            };
+            tool.retry = None;
+            tool.duration_ms = elapsed_ms(tool.started);
+        });
+    }
+
+    /// End every activity block still in progress, e.g. when the turn ends.
+    fn finish_live_activity(&mut self) {
+        for message in &mut self.messages {
+            if message.is_live_activity() {
+                message.update_activity(|activity| activity.finish("interrupted"));
             }
-        }
-        if !result.is_empty() {
-            let (icon, prefix) = if success {
-                ("✓", "")
-            } else {
-                ("✗", "error: ")
-            };
-            let display_result = if result.chars().count() > 200 {
-                let head: String = result.chars().take(197).collect();
-                format!("{head}...")
-            } else {
-                result
-            };
-            self.add_message(Message::new(
-                MessageRole::System,
-                &format!("   {icon} {tool_name}: {prefix}{display_result}"),
-            ));
         }
     }
 
@@ -462,31 +483,28 @@ impl App {
             }
         }
         self.streaming_content.clear();
-        self.is_thinking = false;
+        self.finish_live_activity();
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
-        self.tools.clear();
     }
 
     fn cmd_clear_conversation(&mut self) {
         self.messages.clear();
-        self.tools.clear();
-        self.thinking_content.clear();
-        self.is_thinking = false;
     }
 
     fn cmd_load_conversation(&mut self, history: Vec<crate::events::MessageData>) {
         self.cmd_clear_conversation();
         self.streaming_content.clear();
         for data in history {
-            let mut msg = data.command.as_deref().map_or_else(
-                || Message::new(data.role, &data.content),
-                |command| {
-                    let mut msg = Message::shell(command);
-                    msg.finish_shell("", None);
-                    msg
-                },
-            );
+            let mut msg = if let Some(activity) = &data.activity {
+                Message::activity(Activity::from(activity), self.activity_expanded)
+            } else if let Some(command) = data.command.as_deref() {
+                let mut msg = Message::shell(command);
+                msg.finish_shell("", None);
+                msg
+            } else {
+                Message::new(data.role, &data.content)
+            };
             if let Some(ts) = data
                 .timestamp_ms
                 .and_then(|ms| i64::try_from(ms).ok())

@@ -150,6 +150,10 @@ impl App {
             self.create_agent();
             return KeyResult::continue_running();
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+            self.toggle_all_activity();
+            return KeyResult::continue_running();
+        }
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
                 KeyCode::Up => {

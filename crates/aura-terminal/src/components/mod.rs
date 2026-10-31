@@ -3,6 +3,7 @@
 //! Each component is a self-contained rendering unit that can be composed
 //! to build the full terminal UI.
 
+mod activity;
 mod code_block;
 mod diff;
 mod header;
@@ -13,6 +14,8 @@ mod status;
 mod tool_card;
 
 pub use crate::events::MessageRole;
+pub(crate) use activity::elapsed_ms;
+pub use activity::{Activity, ThinkingStep, ToolStep};
 pub use code_block::CodeBlock;
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;

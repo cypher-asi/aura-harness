@@ -319,16 +319,14 @@ fn policy_decision_names_the_rule_and_carries_detail() {
 }
 
 #[test]
-fn tool_call_history_shows_command_then_policy_line() {
+fn tool_call_history_shows_tool_block_then_policy_line() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
     let agent = AgentId::generate();
     let proposal = ToolProposal::new("t1", "read_file", json!({"path": "a.rs"}));
-    append(
-        &store,
-        1,
-        Transaction::tool_proposal(agent, &proposal).unwrap(),
-    );
+    let proposal_tx = Transaction::tool_proposal(agent, &proposal).unwrap();
+    let proposed_at = proposal_tx.ts_ms;
+    append(&store, 1, proposal_tx);
     append(&store, 2, policy_decision_tx(agent).0);
     let exec = ToolExecution {
         tool_use_id: "t1".into(),
@@ -336,6 +334,48 @@ fn tool_call_history_shows_command_then_policy_line() {
         args: json!({"path": "a.rs"}),
         decision: ToolGateVerdict::Approved,
         reason: None,
+        result: Some("fn main() {}".into()),
+        is_error: false,
+        parent_agent_id: agent,
+        originating_user_id: String::new(),
+    };
+    let exec_tx = Transaction::tool_execution(agent, &exec).unwrap();
+    let took = exec_tx.ts_ms - proposed_at;
+    append(&store, 3, exec_tx);
+
+    let history = conversation_history(&store, agent).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+        history[0].activity,
+        Some(ActivityData::Tool {
+            id: "t1".into(),
+            name: "read_file".into(),
+            args: r#"{"path":"a.rs"}"#.into(),
+            result: Some("fn main() {}".into()),
+            is_error: false,
+            duration_ms: Some(took),
+        })
+    );
+    assert_eq!(history[1].content, "policy: run_command allowed by user.on");
+}
+
+#[test]
+fn denied_tool_call_history_is_an_error_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let proposal = ToolProposal::new("t1", "run_command", json!({"command": "rm -rf /"}));
+    append(
+        &store,
+        1,
+        Transaction::tool_proposal(agent, &proposal).unwrap(),
+    );
+    let exec = ToolExecution {
+        tool_use_id: "t1".into(),
+        tool: "run_command".into(),
+        args: json!({"command": "rm -rf /"}),
+        decision: ToolGateVerdict::Denied,
+        reason: Some("blocked by policy".into()),
         result: None,
         is_error: false,
         parent_agent_id: agent,
@@ -343,15 +383,54 @@ fn tool_call_history_shows_command_then_policy_line() {
     };
     append(
         &store,
-        3,
+        2,
         Transaction::tool_execution(agent, &exec).unwrap(),
     );
 
     let history = conversation_history(&store, agent).unwrap();
-    let rendered: Vec<&str> = history.iter().map(|m| m.content.as_str()).collect();
+    let Some(ActivityData::Tool {
+        result, is_error, ..
+    }) = &history[0].activity
+    else {
+        panic!("expected a tool block: {history:?}");
+    };
+    assert!(is_error);
+    assert_eq!(result.as_deref(), Some("denied: blocked by policy"));
+}
+
+#[test]
+fn reasoning_with_thinking_becomes_a_thinking_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let with_thinking = json!({
+        "model": "m",
+        "thinking": "Let me check.",
+        "thinking_ms": 1500,
+    });
+    append(
+        &store,
+        1,
+        text_tx(
+            agent,
+            TransactionType::Reasoning,
+            &with_thinking.to_string(),
+        ),
+    );
+    append(
+        &store,
+        2,
+        text_tx(agent, TransactionType::Reasoning, r#"{"model":"m"}"#),
+    );
+
+    let history = conversation_history(&store, agent).unwrap();
+    assert_eq!(history.len(), 1);
     assert_eq!(
-        rendered,
-        ["$ read_file", "policy: run_command allowed by user.on"]
+        history[0].activity,
+        Some(ActivityData::Thinking {
+            text: "Let me check.".into(),
+            duration_ms: Some(1500),
+        })
     );
 }
 

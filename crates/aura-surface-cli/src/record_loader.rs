@@ -9,11 +9,14 @@ use aura_core_types::{
 };
 use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
-    events::{AgentSummary, MessageData, MessageRole, PolicyDetail, RecordStatus, RecordSummary},
+    events::{
+        ActivityData, AgentSummary, MessageData, MessageRole, PolicyDetail, RecordStatus,
+        RecordSummary,
+    },
     UiCommand,
 };
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -21,10 +24,11 @@ use tracing::warn;
 const RECORD_PANEL_LIMIT: usize = 100;
 
 /// Number of trailing entries scanned when rebuilding an agent's chat.
-const HISTORY_SCAN_LIMIT: usize = 500;
+const HISTORY_SCAN_LIMIT: usize = 1000;
 
-/// Number of chat messages kept after rebuilding (matches the UI cap).
-const HISTORY_MESSAGE_LIMIT: usize = 100;
+/// Number of chat messages kept after rebuilding, activity blocks included
+/// (matches the UI cap).
+const HISTORY_MESSAGE_LIMIT: usize = 300;
 
 /// Upper bound on the summary string; the panel truncates to its own
 /// width, this only keeps huge prompts from being copied around.
@@ -84,12 +88,109 @@ pub fn conversation_history(
     store: &dyn ReadStore,
     agent_id: AgentId,
 ) -> Result<Vec<MessageData>, StoreError> {
-    let history: Vec<MessageData> = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)?
-        .iter()
-        .filter_map(|entry| history_message(&entry.tx))
-        .collect();
+    let mut history: Vec<MessageData> = Vec::new();
+    // Tool use id -> (index in `history`, proposal time)
+    let mut tool_calls: HashMap<String, (usize, u64)> = HashMap::new();
+    for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
+        let tx = &entry.tx;
+        match tx.tx_type {
+            TransactionType::Reasoning => history.extend(thinking_message(tx)),
+            TransactionType::ToolProposal if !is_user_proposal(tx) => {
+                match serde_json::from_slice::<ToolProposal>(&tx.payload) {
+                    Ok(proposal) => {
+                        tool_calls.insert(proposal.tool_use_id.clone(), (history.len(), tx.ts_ms));
+                        history.push(tool_call_message(&proposal, tx.ts_ms));
+                    }
+                    Err(_) => history.extend(history_message(tx)),
+                }
+            }
+            TransactionType::ToolExecution => {
+                let Some(execution) = tool_execution(&entry) else {
+                    continue;
+                };
+                if let Some(&(index, proposed_at)) = tool_calls.get(&execution.tool_use_id) {
+                    finish_tool_call(
+                        &mut history[index],
+                        &execution,
+                        tx.ts_ms.saturating_sub(proposed_at),
+                    );
+                }
+            }
+            _ => history.extend(history_message(tx)),
+        }
+    }
     let skip = history.len().saturating_sub(HISTORY_MESSAGE_LIMIT);
     Ok(history.into_iter().skip(skip).collect())
+}
+
+/// The model's thinking from a `Reasoning` entry, when it thought.
+fn thinking_message(tx: &Transaction) -> Option<MessageData> {
+    let payload = json_payload(tx)?;
+    let text = payload.get("thinking").and_then(Value::as_str)?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(MessageData {
+        timestamp_ms: Some(tx.ts_ms),
+        activity: Some(ActivityData::Thinking {
+            text: text.to_string(),
+            duration_ms: payload.get("thinking_ms").and_then(Value::as_u64),
+        }),
+        ..MessageData::new(MessageRole::Assistant, "")
+    })
+}
+
+/// A tool call the model proposed, without its outcome yet.
+fn tool_call_message(proposal: &ToolProposal, ts_ms: u64) -> MessageData {
+    MessageData {
+        timestamp_ms: Some(ts_ms),
+        activity: Some(ActivityData::Tool {
+            id: proposal.tool_use_id.clone(),
+            name: proposal.tool.clone(),
+            args: proposal.args.to_string(),
+            result: None,
+            is_error: false,
+            duration_ms: None,
+        }),
+        ..MessageData::new(MessageRole::Assistant, "")
+    }
+}
+
+/// Fill in a tool call's outcome from its execution entry.
+fn finish_tool_call(message: &mut MessageData, execution: &ToolExecution, took_ms: u64) {
+    let Some(ActivityData::Tool {
+        result,
+        is_error,
+        duration_ms,
+        ..
+    }) = &mut message.activity
+    else {
+        return;
+    };
+    *is_error = execution.is_error || execution.decision != ToolGateVerdict::Approved;
+    *result = match execution.decision {
+        ToolGateVerdict::Approved => execution.result.clone(),
+        ToolGateVerdict::Denied => Some(execution.reason.as_deref().map_or_else(
+            || "denied".to_string(),
+            |reason| format!("denied: {reason}"),
+        )),
+        ToolGateVerdict::PendingApproval => Some("awaiting approval".to_string()),
+    };
+    *duration_ms = Some(took_ms);
+}
+
+/// The tool execution in `entry`, with its output read from the entry's
+/// effects (the kernel no longer copies it into the payload).
+fn tool_execution(entry: &RecordEntry) -> Option<ToolExecution> {
+    let mut execution = serde_json::from_slice::<ToolExecution>(&entry.tx.payload).ok()?;
+    if execution.result.is_none() {
+        if let Some(effect) = entry.effects.first() {
+            let decoded = decode_tool_effect(effect);
+            execution.is_error |= decoded.is_error;
+            execution.result = Some(decoded.content);
+        }
+    }
+    Some(execution)
 }
 
 /// Build the agents-column rows for every registered agent, each followed
@@ -154,6 +255,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             is_streaming: false,
             timestamp_ms: Some(tx.ts_ms),
             command: Some(command),
+            activity: None,
         });
     }
     let (role, content) = match tx.tx_type {
@@ -190,6 +292,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
         is_streaming: false,
         timestamp_ms: Some(tx.ts_ms),
         command: None,
+        activity: None,
     })
 }
 
@@ -347,14 +450,7 @@ const fn verdict_label(verdict: ToolGateVerdict) -> &'static str {
 /// the entry's effects (the kernel no longer copies it into the payload).
 fn summarize_entry(tx: &Transaction, entry: &RecordEntry) -> String {
     if tx.tx_type == TransactionType::ToolExecution {
-        if let Ok(mut execution) = serde_json::from_slice::<ToolExecution>(&tx.payload) {
-            if execution.result.is_none() {
-                if let Some(effect) = entry.effects.first() {
-                    let decoded = decode_tool_effect(effect);
-                    execution.is_error |= decoded.is_error;
-                    execution.result = Some(decoded.content);
-                }
-            }
+        if let Some(execution) = tool_execution(entry) {
             return truncate_chars(
                 &collapse_whitespace(&summarize_tool_execution(&execution)),
                 MAX_INFO_CHARS,

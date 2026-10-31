@@ -754,6 +754,60 @@ fn test_working_indicator_names_running_tool() {
 }
 
 #[test]
+fn test_turn_activity_renders_inline_between_prompt_and_reply() {
+    use crate::events::{ToolData, UiCommand};
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "fix it");
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::AppendThinking("Look at main first.".to_string()));
+    let live = render_rows(&mut app, 120).join("\n");
+    assert!(live.contains("Thinking…"), "{live}");
+    assert!(live.contains("│ Look at main first."), "{live}");
+    assert!(!live.contains("Thinker"), "{live}");
+
+    app.process_command(UiCommand::FinishThinking);
+    for (id, path) in [("t1", "src/main.rs"), ("t2", "src/lib.rs")] {
+        app.process_command(UiCommand::ShowTool(ToolData {
+            id: id.to_string(),
+            name: "read_file".to_string(),
+            args: format!(r#"{{"path":"{path}"}}"#),
+        }));
+        app.process_command(UiCommand::CompleteTool {
+            id: id.to_string(),
+            result: "fn main() {}".to_string(),
+            success: true,
+        });
+    }
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("Fixed.".to_string()));
+    app.process_command(UiCommand::Complete);
+
+    let rows = render_rows(&mut app, 120);
+    let find = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")))
+    };
+    let thought = find("▸ Thought for");
+    let first = find("▸ ✓ read_file src/main.rs");
+    let second = find("▸ ✓ read_file src/lib.rs");
+    let reply = find("Fixed.");
+    assert!(find("fix it") < thought);
+    assert_eq!((first, second), (thought + 1, thought + 2));
+    assert!(second < reply);
+    assert!(!rows.join("\n").contains("Look at main first."));
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    assert!(render_rows(&mut app, 120)
+        .join("\n")
+        .contains("│ Look at main first."));
+}
+
+#[test]
 fn test_truncate_record_info_zero_width() {
     assert_eq!(truncate_record_info("anything", 0), "");
     assert_eq!(truncate_record_info("", 20), "");

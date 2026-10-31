@@ -18,6 +18,7 @@
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use aura_agent_kernel::ReasonStreamHandle;
 use aura_model_reasoner::{ReasonerError, StreamAccumulator, StreamEvent, StreamEventStream};
@@ -34,6 +35,8 @@ pub(crate) struct RecordingStream {
     inner: StreamEventStream,
     handle: Option<ReasonStreamHandle>,
     accumulator: StreamAccumulator,
+    /// First and latest thinking delta, to record how long the model thought
+    thinking_span: Option<(Instant, Instant)>,
 }
 
 impl RecordingStream {
@@ -42,6 +45,7 @@ impl RecordingStream {
             inner,
             handle: Some(handle),
             accumulator: StreamAccumulator::new(),
+            thinking_span: None,
         }
     }
 
@@ -71,7 +75,18 @@ impl RecordingStream {
             cache_read_input_tokens: self.accumulator.cache_read_input_tokens,
         };
 
-        if let Err(e) = handle.record_completed(&model, stop_reason, &usage, &tool_uses) {
+        let thinking_ms = self.thinking_span.map(|(first, last)| {
+            u64::try_from(last.duration_since(first).as_millis()).unwrap_or(u64::MAX)
+        });
+
+        if let Err(e) = handle.record_completed(
+            &model,
+            stop_reason,
+            &usage,
+            &tool_uses,
+            &self.accumulator.thinking_content,
+            thinking_ms,
+        ) {
             tracing::warn!(error = %e, "RecordingStream failed to record completed reasoning entry");
         }
     }
@@ -101,6 +116,11 @@ impl Stream for RecordingStream {
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
                 this.accumulator.process(&event);
+                if matches!(event, StreamEvent::ThinkingDelta { .. }) {
+                    let now = Instant::now();
+                    let first = this.thinking_span.map_or(now, |(first, _)| first);
+                    this.thinking_span = Some((first, now));
+                }
                 match &event {
                     StreamEvent::MessageStop => {
                         this.finalize_completed();
@@ -408,5 +428,82 @@ mod tests {
             err_text, STREAM_DROPPED_REASON,
             "mid-stream error must not be attributed to the Drop path"
         );
+    }
+
+    struct ThinkingProvider;
+
+    #[async_trait::async_trait]
+    impl ModelProvider for ThinkingProvider {
+        fn name(&self) -> &'static str {
+            "thinking-mock"
+        }
+
+        async fn complete(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<aura_model_reasoner::ModelResponse, ReasonerError> {
+            Err(ReasonerError::Internal("streaming-only mock".into()))
+        }
+
+        async fn complete_streaming(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<aura_model_reasoner::StreamEventStream, ReasonerError> {
+            let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
+                Ok(StreamEvent::MessageStart {
+                    message_id: "msg-think-1".to_string(),
+                    model: "mock-stream-model".to_string(),
+                    input_tokens: Some(3),
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                }),
+                Ok(StreamEvent::ThinkingDelta {
+                    thinking: "Let me ".to_string(),
+                }),
+                Ok(StreamEvent::ThinkingDelta {
+                    thinking: "check.".to_string(),
+                }),
+                Ok(StreamEvent::TextDelta {
+                    text: "Done".to_string(),
+                }),
+                Ok(StreamEvent::MessageStop),
+            ];
+            Ok(Box::pin(stream::iter(events)))
+        }
+
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_records_thinking_text() {
+        let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(ThinkingProvider);
+        let (kernel, _db) = create_kernel(provider);
+
+        let request = ModelRequest::builder("mock-stream-model", "system")
+            .message(Message::user("hi"))
+            .try_build()
+            .unwrap();
+        let (handle, inner) = kernel.reason_streaming(request).await.unwrap();
+        let mut stream = RecordingStream::new(inner, handle);
+        while stream.next().await.is_some() {}
+        drop(stream);
+
+        let entries = kernel
+            .store()
+            .scan_record(kernel.agent_id, 0, 64)
+            .expect("scan_record");
+        let reasoning = entries
+            .iter()
+            .find(|e| e.tx.tx_type == TransactionType::Reasoning)
+            .expect("reasoning entry");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&reasoning.tx.payload).expect("reasoning payload is json");
+        assert_eq!(
+            payload.get("thinking").and_then(|v| v.as_str()),
+            Some("Let me check.")
+        );
+        assert!(payload.get("thinking_ms").is_some(), "{payload}");
     }
 }

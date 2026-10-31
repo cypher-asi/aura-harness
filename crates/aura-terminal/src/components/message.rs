@@ -10,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::components::Activity;
 use crate::events::MessageRole;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,6 +33,10 @@ pub struct Message {
     is_streaming: bool,
     /// Set when the message is a shell command the user ran
     shell: Option<ShellRun>,
+    /// Set when the message is a step the agent took (thinking, a tool call)
+    activity: Option<Activity>,
+    /// Whether an activity block shows its full detail
+    expanded: bool,
     /// Unique to this message, clones included
     id: u64,
     /// Bumped on every change
@@ -46,6 +51,8 @@ impl Clone for Message {
             timestamp: self.timestamp,
             is_streaming: self.is_streaming,
             shell: self.shell.clone(),
+            activity: self.activity.clone(),
+            expanded: self.expanded,
             id: next_message_id(),
             revision: 0,
         }
@@ -73,8 +80,54 @@ impl Message {
             timestamp: Utc::now(),
             is_streaming: false,
             shell: None,
+            activity: None,
+            expanded: false,
             id: next_message_id(),
             revision: 0,
+        }
+    }
+
+    /// A step the agent took, drawn as a collapsible block.
+    #[must_use]
+    pub fn activity(activity: Activity, expanded: bool) -> Self {
+        let mut message = Self::new(MessageRole::Assistant, "");
+        message.activity = Some(activity);
+        message.expanded = expanded;
+        message
+    }
+
+    /// The agent step this message shows, if it is one.
+    #[must_use]
+    pub const fn activity_step(&self) -> Option<&Activity> {
+        self.activity.as_ref()
+    }
+
+    /// Change the agent step this message shows.
+    pub fn update_activity(&mut self, update: impl FnOnce(&mut Activity)) {
+        if let Some(activity) = &mut self.activity {
+            update(activity);
+            self.touch();
+        }
+    }
+
+    /// Whether this is an agent step still in progress (drawn with a
+    /// spinner and a running clock).
+    #[must_use]
+    pub fn is_live_activity(&self) -> bool {
+        self.activity.as_ref().is_some_and(Activity::is_running)
+    }
+
+    /// Whether an activity block shows its full detail.
+    #[must_use]
+    pub const fn is_expanded(&self) -> bool {
+        self.expanded
+    }
+
+    /// Show or hide an activity block's full detail.
+    pub fn set_expanded(&mut self, expanded: bool) {
+        if self.activity.is_some() && self.expanded != expanded {
+            self.expanded = expanded;
+            self.touch();
         }
     }
 

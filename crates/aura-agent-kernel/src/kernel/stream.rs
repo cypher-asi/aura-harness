@@ -67,6 +67,10 @@ impl ReasonStreamHandle {
 
     /// Record a successfully completed streaming response.
     ///
+    /// `thinking` is the model's extended thinking text (empty when it did
+    /// not think) and `thinking_ms` how long it streamed; both are kept so
+    /// the conversation can be shown again with its thinking.
+    ///
     /// Consumes the handle so that double-finalization is impossible by
     /// construction.
     ///
@@ -78,14 +82,17 @@ impl ReasonStreamHandle {
         stop_reason: StopReason,
         usage: &Usage,
         tool_uses: &[String],
+        thinking: &str,
+        thinking_ms: Option<u64>,
     ) -> Result<RecordEntry, crate::KernelError> {
-        let reasoning_payload = serde_json::json!({
+        let mut reasoning_payload = serde_json::json!({
             "model": model,
             "stop_reason": format!("{stop_reason:?}"),
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "tool_uses": tool_uses,
         });
+        add_thinking(&mut reasoning_payload, thinking, thinking_ms);
         let payload_bytes = serde_json::to_vec(&reasoning_payload)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
 
@@ -122,5 +129,17 @@ impl ReasonStreamHandle {
         );
 
         self.append(tx)
+    }
+}
+
+/// Add `thinking` (and `thinking_ms`) to a `Reasoning` payload when the
+/// model thought.
+pub(crate) fn add_thinking(payload: &mut serde_json::Value, thinking: &str, ms: Option<u64>) {
+    if thinking.trim().is_empty() {
+        return;
+    }
+    payload["thinking"] = serde_json::Value::from(thinking);
+    if let Some(ms) = ms {
+        payload["thinking_ms"] = serde_json::Value::from(ms);
     }
 }

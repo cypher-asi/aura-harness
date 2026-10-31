@@ -1,6 +1,6 @@
 use super::*;
-use crate::components::{Message, MessageRole};
-use crate::events::{ModelOptionView, UiCommand, UiEvent};
+use crate::components::{Activity, Message, MessageRole, ToolStatus};
+use crate::events::{ActivityData, MessageData, ModelOptionView, UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -881,37 +881,172 @@ fn test_load_conversation_replaces_messages() {
     app.scroll_offset = 7;
 
     app.process_command(UiCommand::LoadConversation(vec![
-        crate::events::MessageData {
-            role: MessageRole::User,
-            content: "hi".to_string(),
-            is_streaming: false,
-            timestamp_ms: None,
-            command: None,
+        MessageData::new(MessageRole::User, "hi"),
+        MessageData {
+            activity: Some(ActivityData::Thinking {
+                text: "hmm".to_string(),
+                duration_ms: Some(1200),
+            }),
+            ..MessageData::new(MessageRole::Assistant, "")
         },
-        crate::events::MessageData {
-            role: MessageRole::Assistant,
-            content: "hello".to_string(),
-            is_streaming: false,
-            timestamp_ms: None,
-            command: None,
+        MessageData {
+            activity: Some(ActivityData::Tool {
+                id: "t1".to_string(),
+                name: "read_file".to_string(),
+                args: r#"{"path":"a.rs"}"#.to_string(),
+                result: Some("fn main() {}".to_string()),
+                is_error: false,
+                duration_ms: Some(5),
+            }),
+            ..MessageData::new(MessageRole::Assistant, "")
         },
-        crate::events::MessageData {
-            role: MessageRole::User,
-            content: "ls -la".to_string(),
-            is_streaming: false,
-            timestamp_ms: None,
+        MessageData::new(MessageRole::Assistant, "hello"),
+        MessageData {
             command: Some("ls -la".to_string()),
+            ..MessageData::new(MessageRole::User, "ls -la")
         },
     ]));
 
     let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
-    assert_eq!(contents, ["hi", "hello", "ls -la"]);
-    let run = app.messages()[2].shell_run().expect("shell message");
+    assert_eq!(contents, ["hi", "", "", "hello", "ls -la"]);
+    assert!(matches!(
+        app.messages()[1].activity_step(),
+        Some(Activity::Thinking(step)) if step.text == "hmm" && !step.running
+    ));
+    assert!(matches!(
+        app.messages()[2].activity_step(),
+        Some(Activity::Tool(tool)) if tool.status == ToolStatus::Success
+    ));
+    let run = app.messages()[4].shell_run().expect("shell message");
     assert_eq!(run.command, "ls -la");
-    assert!(!app.messages()[2].is_running_shell());
-    assert!(!app.is_thinking());
+    assert!(!app.messages()[4].is_running_shell());
+    assert!(!app.has_live_activity());
     assert!(app.messages().iter().all(|m| !m.is_streaming()));
     assert_eq!(app.scroll_offset(), 0);
+}
+
+// ========================================================================
+// Activity blocks
+// ========================================================================
+
+fn tool_data(id: &str, name: &str) -> UiCommand {
+    UiCommand::ShowTool(crate::events::ToolData {
+        id: id.to_string(),
+        name: name.to_string(),
+        args: String::new(),
+    })
+}
+
+fn activities(app: &App) -> Vec<&Activity> {
+    app.messages()
+        .iter()
+        .filter_map(Message::activity_step)
+        .collect()
+}
+
+#[test]
+fn test_thinking_streams_into_one_block() {
+    let mut app = App::new();
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::AppendThinking("Let me ".to_string()));
+    app.process_command(UiCommand::AppendThinking("look.".to_string()));
+    assert!(app.has_live_activity());
+
+    app.process_command(UiCommand::FinishThinking);
+    let [Activity::Thinking(step)] = activities(&app)[..] else {
+        panic!("expected one thinking block");
+    };
+    assert_eq!(step.text, "Let me look.");
+    assert!(!step.running);
+    assert!(step.duration_ms.is_some());
+}
+
+#[test]
+fn test_tool_block_updates_in_place() {
+    let mut app = App::new();
+    app.process_command(tool_data("t1", "read_file"));
+    app.process_command(tool_data("t2", "run_command"));
+    app.process_command(UiCommand::UpdateToolArgs {
+        id: "t1".to_string(),
+        args: r#"{"path":"a.rs"}"#.to_string(),
+    });
+    app.process_command(UiCommand::ToolRetrying {
+        id: "t2".to_string(),
+        attempt: 2,
+        max_attempts: 3,
+    });
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: "fn main() {}".to_string(),
+        success: true,
+    });
+
+    let [Activity::Tool(first), Activity::Tool(second)] = activities(&app)[..] else {
+        panic!("expected two tool blocks");
+    };
+    assert_eq!(first.args, r#"{"path":"a.rs"}"#);
+    assert_eq!(first.status, ToolStatus::Success);
+    assert_eq!(first.result.as_deref(), Some("fn main() {}"));
+    assert_eq!(second.status, ToolStatus::Running);
+    assert_eq!(second.retry, Some((2, 3)));
+    assert_eq!(app.messages().len(), 2);
+}
+
+#[test]
+fn test_complete_ends_running_activity() {
+    let mut app = App::new();
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(tool_data("t1", "run_command"));
+    app.process_command(UiCommand::Complete);
+
+    assert!(!app.has_live_activity());
+    let [_, Activity::Tool(tool)] = activities(&app)[..] else {
+        panic!("expected thinking then a tool");
+    };
+    assert_eq!(tool.status, ToolStatus::Error);
+}
+
+#[test]
+fn test_ctrl_o_toggles_every_block_and_new_ones_follow() {
+    let mut app = App::new();
+    app.process_command(tool_data("t1", "read_file"));
+    assert!(!app.messages()[0].is_expanded());
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(app.messages()[0].is_expanded());
+    app.process_command(UiCommand::StartThinking);
+    assert!(app.messages()[1].is_expanded());
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(app.messages().iter().all(|m| !m.is_expanded()));
+    assert!(app.input().is_empty());
+}
+
+#[test]
+fn test_clicking_a_block_header_toggles_only_it() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = App::new();
+    app.process_command(tool_data("t1", "read_file"));
+    app.process_command(tool_data("t2", "read_file"));
+    let ids: Vec<u64> = app.messages().iter().map(|m| m.version().0).collect();
+    app.areas.chat = Some(Rect::new(0, 0, 60, 20));
+    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
+    app.set_chat_layout(vec![(0, ids[0]), (1, ids[1])], 0);
+
+    let click = |app: &mut App, kind| {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column: 10,
+            row: 2,
+            modifiers: KeyModifiers::empty(),
+        });
+    };
+    click(&mut app, MouseEventKind::Down(MouseButton::Left));
+    click(&mut app, MouseEventKind::Up(MouseButton::Left));
+
+    assert!(!app.messages()[0].is_expanded());
+    assert!(app.messages()[1].is_expanded());
 }
 
 // ========================================================================

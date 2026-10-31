@@ -7,6 +7,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal — agent activity in the chat
+
+The terminal chat shows what the agent is doing while it works: each
+stretch of thinking and each tool call is a block between your prompt
+and the reply, collapsed to one line and expandable.
+
+##### Added
+
+- Thinking streams into a block in the chat (spinner, running clock and
+  its last few lines), then collapses to `Thought for 4.2s`. This
+  replaces the three-line Thinker strip under the chat.
+- Each tool call is a block: `▸ ✓ read_file src/main.rs · 3 lines ·
+  12ms`. While it runs it shows a spinner, its elapsed time, the
+  arguments as they stream in, and `retrying (n/m)`. A failed call shows
+  the first line of its error.
+- `Ctrl+O` expands or collapses every block (new blocks follow suit);
+  clicking a block's header toggles just that one. Expanded, a tool call
+  shows its full arguments and output (up to 200 lines).
+- Kernel `Reasoning` records now keep the model's thinking text
+  (`thinking`, `thinking_ms`), so reopening a conversation rebuilds its
+  thinking and tool-call blocks from the record.
+
+##### Changed
+
+- Reply text that follows a tool call gets its own message below the
+  tool's block.
+- Tool calls no longer appear as `$ tool` and `✓ tool: …` system lines.
+
 ### Recursive agents replace the fleet
 
 Subagents are now ordinary agents started by other agents, and they can

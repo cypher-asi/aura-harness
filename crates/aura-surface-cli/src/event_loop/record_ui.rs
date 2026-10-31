@@ -72,6 +72,7 @@ impl ToolAuditObserver for UiToolAuditObserver {
                     is_streaming: false,
                     timestamp_ms: Some(entry.tx.ts_ms),
                     command: None,
+                    activity: None,
                 }));
             }
         }

@@ -5,7 +5,7 @@
 
 mod commands;
 mod definitions;
-mod format;
+pub(crate) mod format;
 mod keys;
 mod line_edit;
 pub mod sandbox;
@@ -18,7 +18,7 @@ mod slash_menu;
 mod tests;
 
 use crate::{
-    components::{Message, ToolCard, ToolStatus},
+    components::{Activity, Message},
     events::{
         AgentDefinitionSummary, AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent,
     },
@@ -38,8 +38,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-/// Maximum number of messages to keep in history.
-const MAX_MESSAGES: usize = 100;
+/// Maximum number of messages to keep in history (activity blocks included).
+const MAX_MESSAGES: usize = 300;
 
 /// Terminal width given to commands run before the chat is first drawn.
 const DEFAULT_COMMAND_COLUMNS: u16 = 80;
@@ -106,8 +106,6 @@ pub struct App {
     pub(super) state: AppState,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
-    /// Active tool cards
-    pub(super) tools: Vec<ToolCard>,
     /// Current input text
     pub(super) input: String,
     /// Input history for navigation
@@ -124,6 +122,13 @@ pub struct App {
     pub(super) chat_lines: ChatLineCache,
     /// Total chat lines in the last frame
     pub(super) chat_line_count: usize,
+    /// Header line of each activity block in the last frame, with its
+    /// message id, for toggling a block by clicking it
+    pub(super) activity_headers: Vec<(usize, u64)>,
+    /// First chat line shown in the last frame
+    pub(super) chat_first_line: usize,
+    /// Whether new activity blocks start expanded (`Ctrl+O` toggles)
+    pub(super) activity_expanded: bool,
     /// Whether verbose mode is enabled
     pub(super) verbose: bool,
     /// Event sender (for sending events to kernel)
@@ -132,10 +137,6 @@ pub struct App {
     pub(super) command_rx: Option<mpsc::Receiver<UiCommand>>,
     /// Current streaming message (being built)
     pub(super) streaming_content: String,
-    /// Current thinking content (being built)
-    pub(super) thinking_content: String,
-    /// Whether currently streaming thinking
-    pub(super) is_thinking: bool,
     /// Notification message (ephemeral)
     pub(super) notification: Option<(String, NotificationType)>,
     /// Which panel has focus
@@ -292,7 +293,6 @@ impl App {
         Self {
             state: AppState::Idle,
             messages: VecDeque::new(),
-            tools: Vec::new(),
             input: String::new(),
             input_history: InputHistory::new(),
             cursor_pos: 0,
@@ -301,12 +301,13 @@ impl App {
             scroll_offset: 0,
             chat_lines: ChatLineCache::default(),
             chat_line_count: 0,
+            activity_headers: Vec::new(),
+            chat_first_line: 0,
+            activity_expanded: false,
             verbose: false,
             event_tx: None,
             command_rx: None,
             streaming_content: String::new(),
-            thinking_content: String::new(),
-            is_thinking: false,
             notification: None,
             focus: PanelFocus::default(),
             record_panel_visible: true,
@@ -420,13 +421,14 @@ impl App {
             let program = run.command.split_whitespace().next().unwrap_or_default();
             return Some(format!("running {program}"));
         }
-        if let Some(tool) = self
-            .tools
+        if let Some(Activity::Tool(tool)) = self
+            .messages
             .iter()
             .rev()
-            .find(|t| t.status() == ToolStatus::Running)
+            .filter_map(Message::activity_step)
+            .find(|a| a.is_running())
         {
-            return Some(format!("running {}", tool.name()));
+            return Some(format!("running {}", tool.name));
         }
         if self.status.starts_with("Running") {
             return Some("running".to_string());
@@ -446,22 +448,56 @@ impl App {
         &self.messages
     }
 
-    /// Get the current thinking content.
+    /// Whether an activity block (thinking, a tool call) is in progress.
     #[must_use]
-    pub fn thinking_content(&self) -> &str {
-        &self.thinking_content
+    pub fn has_live_activity(&self) -> bool {
+        self.messages.iter().rev().any(Message::is_live_activity)
     }
 
-    /// Check if currently streaming thinking.
+    /// Whether new activity blocks start expanded.
     #[must_use]
-    pub const fn is_thinking(&self) -> bool {
-        self.is_thinking
+    pub const fn activity_expanded(&self) -> bool {
+        self.activity_expanded
     }
 
-    /// Get the active tool cards.
-    #[must_use]
-    pub fn tools(&self) -> &[ToolCard] {
-        &self.tools
+    /// Expand every activity block, or collapse them all if they were
+    /// expanded. New blocks follow suit.
+    pub fn toggle_all_activity(&mut self) {
+        self.activity_expanded = !self.activity_expanded;
+        let expanded = self.activity_expanded;
+        for message in &mut self.messages {
+            message.set_expanded(expanded);
+        }
+    }
+
+    /// Record where activity blocks were drawn: `headers` holds the chat
+    /// line of each block's header and its message id, and `first_line`
+    /// is the chat line at the top of the view.
+    pub(crate) fn set_chat_layout(&mut self, headers: Vec<(usize, u64)>, first_line: usize) {
+        self.activity_headers = headers;
+        self.chat_first_line = first_line;
+    }
+
+    /// Expand or collapse the activity block whose header is at screen
+    /// `row`. Returns whether a block was toggled.
+    fn toggle_activity_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(area) = self
+            .areas
+            .chat_text
+            .filter(|a| contains(Some(*a), column, row))
+        else {
+            return false;
+        };
+        let line = self.chat_first_line + usize::from(row - area.y);
+        let Some(&(_, id)) = self.activity_headers.iter().find(|(l, _)| *l == line) else {
+            return false;
+        };
+        let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
+            return false;
+        };
+        let expanded = !message.is_expanded();
+        message.set_expanded(expanded);
+        true
     }
 
     /// Get the current input text.
@@ -731,6 +767,7 @@ impl App {
                         self.copy_requested = true;
                     } else {
                         self.selection = None;
+                        self.toggle_activity_at(mouse.column, mouse.row);
                     }
                 }
                 return;
@@ -1105,11 +1142,6 @@ impl App {
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::SelectAgent(agent_id));
         }
-    }
-
-    /// Add a tool card.
-    pub fn add_tool(&mut self, tool: ToolCard) {
-        self.tools.push(tool);
     }
 
     /// Process pending updates from the command channel.

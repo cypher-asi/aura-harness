@@ -68,8 +68,8 @@ pub enum TerminalError {
 
 // Component re-exports
 pub use components::{
-    DiffLine, DiffView, HeaderBar, InputField, Message, MessageRole, ProgressBar, StatusBar,
-    ToolCard, ToolStatus,
+    Activity, DiffLine, DiffView, HeaderBar, InputField, Message, MessageRole, ProgressBar,
+    StatusBar, ThinkingStep, ToolCard, ToolStatus, ToolStep,
 };
 
 /// Library version

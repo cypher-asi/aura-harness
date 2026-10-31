@@ -1,17 +1,11 @@
 //! Tool summary formatting helpers.
 
-/// Format a tool summary from tool name and JSON args for display.
-pub(super) fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(args_json).map_or_else(
-        |_| {
-            if args_json.len() > 50 {
-                format!("{}...", &args_json[..47])
-            } else {
-                args_json.to_string()
-            }
-        },
-        |args| format_tool_summary_from_value(tool_name, &args),
-    )
+/// Format a tool summary from tool name and JSON args for display. Empty
+/// while the args are not yet valid JSON (they stream in piece by piece).
+pub(crate) fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(args_json)
+        .map(|args| format_tool_summary_from_value(tool_name, &args))
+        .unwrap_or_default()
 }
 
 /// Format a tool result for display.
@@ -19,7 +13,7 @@ pub(super) fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
 /// `run_command` results arrive as the `{ ok, exit_code, stdout, stderr }`
 /// envelope; they are shown as the command's output text. Anything else
 /// (or an envelope that fails to parse) is returned unchanged.
-pub(super) fn format_tool_result(tool_name: &str, result: &str) -> String {
+pub(crate) fn format_tool_result(tool_name: &str, result: &str) -> String {
     if tool_name != "run_command" {
         return result.to_string();
     }

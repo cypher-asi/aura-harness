@@ -1,81 +1,18 @@
-//! Panel rendering: Chat, Swarm, Record, and Thinking section.
+//! Panel rendering: Chat, Swarm and Record.
 
-use super::text::{display_width, wrap_words};
+use super::chat_lines::gap_before;
+use super::text::display_width;
 use crate::{
     app::{AgentsTab, PanelFocus},
     App, Theme,
 };
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-
-/// Render the thinking section at the bottom of the chat panel.
-pub(super) fn render_thinking_section(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let divider_width = area.width as usize;
-
-    let label = if app.is_thinking() {
-        format!(" Thinker  {}  ", app.spinner_char())
-    } else {
-        " Thinker ".to_string()
-    };
-    let right_dashes = divider_width.saturating_sub(label.chars().count());
-
-    let divider_spans = vec![
-        Span::styled(label, Style::default().fg(theme.colors.muted)),
-        Span::styled(
-            "─".repeat(right_dashes),
-            Style::default().fg(theme.colors.muted),
-        ),
-    ];
-
-    let content_lines = build_thinking_lines(app, area);
-
-    let mut lines = vec![Line::from(divider_spans)];
-    for line_text in content_lines.iter().take(3) {
-        lines.push(Line::from(vec![
-            Span::styled(" ", Style::default()),
-            Span::styled(
-                line_text.clone(),
-                Style::default()
-                    .fg(theme.colors.muted)
-                    .add_modifier(Modifier::DIM),
-            ),
-        ]));
-    }
-    while lines.len() < 4 {
-        lines.push(Line::from(""));
-    }
-
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn build_thinking_lines(app: &App, area: Rect) -> Vec<String> {
-    let thinking_content = app.thinking_content();
-    if thinking_content.is_empty() {
-        if app.is_thinking() {
-            return vec!["...".to_string()];
-        }
-        return vec![];
-    }
-    let max_width = area.width.saturating_sub(2) as usize;
-    let mut wrapped_lines: Vec<String> = Vec::new();
-    for line in thinking_content.lines().rev() {
-        if wrapped_lines.len() >= 3 {
-            break;
-        }
-        if line.is_empty() {
-            wrapped_lines.insert(0, String::new());
-        } else {
-            wrapped_lines.splice(0..0, wrap_words(line, max_width));
-        }
-    }
-    let start = wrapped_lines.len().saturating_sub(3);
-    wrapped_lines.split_off(start)
-}
 
 /// Render the Chat panel.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -94,12 +31,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let (messages_area, thinking_area) = split_chat_area(inner, app);
-    if let Some(think_area) = thinking_area {
-        render_thinking_section(frame, think_area, app, theme);
-    }
-
-    let padded = centered_text_area(messages_area);
+    let padded = centered_text_area(inner);
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
@@ -122,10 +54,18 @@ fn render_chat_lines(
     theme: &Theme,
     working_line: Option<&Line<'static>>,
 ) {
+    let spinner = app.spinner_char();
     let (messages, cache) = app.chat_line_cache();
-    let reflowed = cache.update(messages, padded.width as usize, theme);
-    let separators = messages.len().saturating_sub(1);
-    let message_rows = messages.iter().map(|m| cache.lines(m).len()).sum::<usize>() + separators;
+    let reflowed = cache.update(messages, padded.width as usize, theme, spinner);
+    let mut activity_headers = Vec::new();
+    let mut message_rows = 0;
+    for (i, message) in messages.iter().enumerate() {
+        message_rows += usize::from(gap_before(messages, i));
+        if message.activity_step().is_some() {
+            activity_headers.push((message_rows, message.version().0));
+        }
+        message_rows += cache.lines(message).len();
+    }
     let working_rows = match working_line {
         Some(_) if message_rows > 0 => 2,
         Some(_) => 1,
@@ -136,6 +76,7 @@ fn render_chat_lines(
         padded.height as usize,
         reflowed,
     );
+    app.set_chat_layout(activity_headers, start);
 
     let (messages, cache) = app.chat_line_cache();
     let blank = Line::default();
@@ -147,7 +88,7 @@ fn render_chat_lines(
         .iter()
         .enumerate()
         .flat_map(|(i, message)| {
-            (i > 0)
+            gap_before(messages, i)
                 .then_some(&blank)
                 .into_iter()
                 .chain(cache.lines(message))
@@ -208,6 +149,9 @@ pub(super) fn centered_text_area(area: Rect) -> Rect {
 /// `AURA  ⠹ thinking… 12s` — shown below the conversation while a turn is
 /// in flight and no reply text is streaming.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
+    if app.has_live_activity() {
+        return None;
+    }
     let label = app.working_label()?;
     let mut spans = vec![
         Span::styled(
@@ -245,24 +189,6 @@ pub(super) fn format_elapsed(elapsed: std::time::Duration) -> String {
         format!("{secs}s")
     } else {
         format!("{}m {:02}s", secs / 60, secs % 60)
-    }
-}
-
-fn split_chat_area(inner: Rect, app: &App) -> (Rect, Option<Rect>) {
-    let thinking_section_height = 4u16;
-    let show_thinking_section = app.is_thinking() || !app.thinking_content().is_empty();
-
-    if show_thinking_section && inner.height > thinking_section_height + 3 {
-        let split = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(3),
-                Constraint::Length(thinking_section_height),
-            ])
-            .split(inner);
-        (split[0], Some(split[1]))
-    } else {
-        (inner, None)
     }
 }
 

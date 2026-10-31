@@ -82,7 +82,7 @@ fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {
 
 /// Break spans into rows at most `width` columns wide, splitting anywhere
 /// and keeping all whitespace, like a terminal does.
-fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+pub(super) fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
     if width == 0 {
         return vec![spans];
     }

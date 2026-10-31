@@ -70,12 +70,24 @@ impl Kernel {
             }
         };
 
-        let reasoning_payload = serde_json::json!({
+        let mut reasoning_payload = serde_json::json!({
             "model": response.trace.model,
             "stop_reason": format!("{:?}", response.stop_reason),
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
         });
+        let thinking: String = response
+            .message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                aura_model_reasoner::ContentBlock::Thinking { thinking, .. } => {
+                    Some(thinking.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        super::stream::add_thinking(&mut reasoning_payload, &thinking, None);
         let payload_bytes = serde_json::to_vec(&reasoning_payload)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
 
