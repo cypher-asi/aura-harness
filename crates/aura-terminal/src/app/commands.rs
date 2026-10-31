@@ -45,13 +45,13 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
-            "record" | "r" => {
+            "records" | "record" | "r" => {
                 self.record_panel_visible = !self.record_panel_visible;
                 if !self.record_panel_visible && self.focus == PanelFocus::Records {
                     self.focus = PanelFocus::Chat;
                 }
             }
-            "swarm" | "sw" => {
+            "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
                 if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
                     self.focus = PanelFocus::Chat;
@@ -62,9 +62,12 @@ impl App {
                     }
                 }
             }
-            "agents" => {
-                if let Some(tx) = &self.event_tx {
-                    let _ = tx.try_send(UiEvent::RefreshAgents);
+            "files" | "sandbox" | "f" => {
+                self.sandbox_panel_visible = !self.sandbox_panel_visible;
+                if self.sandbox_panel_visible {
+                    self.sandbox.refresh();
+                } else if self.focus == PanelFocus::Sandbox {
+                    self.focus = PanelFocus::Chat;
                 }
             }
             "agent" | "a" => self.handle_agent_command(arg),
@@ -114,6 +117,14 @@ impl App {
             }
         }
         KeyResult::continue_running()
+    }
+
+    /// Re-read the sandbox tree when the panel is on screen, so files the
+    /// agent writes show up.
+    fn refresh_sandbox(&mut self) {
+        if self.sandbox_panel_visible {
+            self.sandbox.refresh();
+        }
     }
 
     /// Enter the email/password login flow.
@@ -263,6 +274,7 @@ impl App {
                 success,
             } => {
                 self.cmd_complete_tool(&id, &result, success);
+                self.refresh_sandbox();
             }
             UiCommand::RequestApproval {
                 id,
@@ -285,7 +297,10 @@ impl App {
             UiCommand::ShowWarning(msg) => {
                 self.cmd_notification(&msg, "⚠ Warning: ", NotificationType::Warning);
             }
-            UiCommand::Complete => self.cmd_complete(),
+            UiCommand::Complete => {
+                self.cmd_complete();
+                self.refresh_sandbox();
+            }
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
@@ -296,6 +311,7 @@ impl App {
                 self.showing_record_detail = false;
             }
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
+            UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;

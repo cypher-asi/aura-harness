@@ -1,11 +1,12 @@
 //! Application state machine for the terminal UI.
 //!
 //! Manages the overall application state, conversation history,
-//! panels (Chat and Record), and coordinates between input handling and rendering.
+//! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
 mod commands;
 mod format;
 mod keys;
+pub mod sandbox;
 mod shell_input;
 mod shell_prompt;
 
@@ -19,6 +20,7 @@ use crate::{
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use sandbox::SandboxTree;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -39,6 +41,8 @@ pub enum PanelFocus {
     Chat,
     /// Records panel
     Records,
+    /// Sandbox panel (file tree)
+    Sandbox,
 }
 
 /// Application state.
@@ -112,6 +116,10 @@ pub struct App {
     pub(super) record_panel_visible: bool,
     /// Whether the Swarm panel is visible
     pub(super) swarm_panel_visible: bool,
+    /// Whether the Sandbox panel is visible
+    pub(super) sandbox_panel_visible: bool,
+    /// File tree of the active agent's sandbox
+    pub(super) sandbox: SandboxTree,
     /// Animation frame counter for spinners
     pub(super) animation_frame: usize,
     /// Kernel records list
@@ -165,6 +173,12 @@ pub struct PanelAreas {
     pub chat: Option<Rect>,
     /// Record panel (including border)
     pub records: Option<Rect>,
+    /// Sandbox panel (including border)
+    pub sandbox: Option<Rect>,
+    /// Rows of the sandbox tree inside the panel
+    pub sandbox_rows: Option<Rect>,
+    /// Tree row shown at the top of `sandbox_rows`
+    pub sandbox_scroll: usize,
 }
 
 fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
@@ -208,6 +222,8 @@ impl App {
             focus: PanelFocus::default(),
             record_panel_visible: true,
             swarm_panel_visible: true,
+            sandbox_panel_visible: true,
+            sandbox: SandboxTree::default(),
             animation_frame: 0,
             records: VecDeque::new(),
             selected_record: 0,
@@ -377,6 +393,10 @@ impl App {
             PanelFocus::Swarm => {
                 self.select_agent_row(self.selected_agent.saturating_sub(lines));
             }
+            PanelFocus::Sandbox => {
+                self.sandbox
+                    .move_by(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
         }
     }
 
@@ -393,6 +413,10 @@ impl App {
             }
             PanelFocus::Swarm => {
                 self.select_agent_row(self.selected_agent.saturating_add(lines));
+            }
+            PanelFocus::Sandbox => {
+                self.sandbox
+                    .move_by(isize::try_from(lines).unwrap_or(isize::MAX));
             }
         }
     }
@@ -465,11 +489,20 @@ impl App {
         self.areas.agent_rows = Some(area);
     }
 
+    /// Record where the sandbox tree rows were drawn this frame and which
+    /// tree row is at the top.
+    pub fn set_sandbox_rows_area(&mut self, area: Rect, scroll: usize) {
+        self.areas.sandbox_rows = Some(area);
+        self.areas.sandbox_scroll = scroll;
+    }
+
     fn panel_at(&self, column: u16, row: u16) -> Option<PanelFocus> {
         if contains(self.areas.swarm, column, row) {
             Some(PanelFocus::Swarm)
         } else if contains(self.areas.records, column, row) {
             Some(PanelFocus::Records)
+        } else if contains(self.areas.sandbox, column, row) {
+            Some(PanelFocus::Sandbox)
         } else if contains(self.areas.chat, column, row) {
             Some(PanelFocus::Chat)
         } else {
@@ -478,7 +511,8 @@ impl App {
     }
 
     /// Handle a mouse event: the wheel scrolls the panel under the pointer,
-    /// a left click focuses it, and clicking an agent row switches to it.
+    /// a left click focuses it, clicking an agent row switches to it, and
+    /// clicking a sandbox row selects it and opens or closes a directory.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
         if self.state != AppState::Idle && self.state != AppState::Processing {
             return;
@@ -492,12 +526,29 @@ impl App {
             MouseEventKind::ScrollDown => self.scroll_panel_down(panel, step),
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = panel;
-                if panel == PanelFocus::Swarm {
-                    self.click_agent_row(mouse.column, mouse.row);
+                match panel {
+                    PanelFocus::Swarm => self.click_agent_row(mouse.column, mouse.row),
+                    PanelFocus::Sandbox => self.click_sandbox_row(mouse.column, mouse.row),
+                    PanelFocus::Chat | PanelFocus::Records => {}
                 }
             }
             _ => {}
         }
+    }
+
+    fn click_sandbox_row(&mut self, column: u16, row: u16) {
+        let Some(rows) = self.areas.sandbox_rows else {
+            return;
+        };
+        if !contains(Some(rows), column, row) {
+            return;
+        }
+        let index = self.areas.sandbox_scroll + usize::from(row - rows.y);
+        if index >= self.sandbox.rows().len() {
+            return;
+        }
+        self.sandbox.select(index);
+        self.sandbox.toggle_selected();
     }
 
     fn click_agent_row(&mut self, column: u16, row: u16) {
@@ -543,6 +594,18 @@ impl App {
     #[must_use]
     pub const fn swarm_panel_visible(&self) -> bool {
         self.swarm_panel_visible
+    }
+
+    /// Check if the Sandbox panel is visible.
+    #[must_use]
+    pub const fn sandbox_panel_visible(&self) -> bool {
+        self.sandbox_panel_visible
+    }
+
+    /// File tree of the active agent's sandbox.
+    #[must_use]
+    pub const fn sandbox(&self) -> &SandboxTree {
+        &self.sandbox
     }
 
     /// Get the list of agents.

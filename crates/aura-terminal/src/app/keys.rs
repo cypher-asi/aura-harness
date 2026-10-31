@@ -195,29 +195,31 @@ impl App {
             PanelFocus::Chat => self.handle_chat_key(key),
             PanelFocus::Records => self.handle_records_key(key),
             PanelFocus::Swarm => self.handle_swarm_key(key),
+            PanelFocus::Sandbox => self.handle_sandbox_key(key),
         }
     }
 
-    /// Get the next panel focus when Tab is pressed.
-    const fn next_panel_focus(&self) -> PanelFocus {
-        match self.focus {
-            PanelFocus::Chat => {
-                if self.record_panel_visible {
-                    PanelFocus::Records
-                } else if self.swarm_panel_visible {
-                    PanelFocus::Swarm
-                } else {
-                    PanelFocus::Chat
-                }
-            }
-            PanelFocus::Records => {
-                if self.swarm_panel_visible {
-                    PanelFocus::Swarm
-                } else {
-                    PanelFocus::Chat
-                }
-            }
-            PanelFocus::Swarm => PanelFocus::Chat,
+    /// Get the next visible panel when Tab is pressed.
+    fn next_panel_focus(&self) -> PanelFocus {
+        const CYCLE: [PanelFocus; 4] = [
+            PanelFocus::Chat,
+            PanelFocus::Records,
+            PanelFocus::Sandbox,
+            PanelFocus::Swarm,
+        ];
+        let current = CYCLE.iter().position(|&p| p == self.focus).unwrap_or(0);
+        (1..CYCLE.len())
+            .map(|step| CYCLE[(current + step) % CYCLE.len()])
+            .find(|&panel| self.panel_visible(panel))
+            .unwrap_or(PanelFocus::Chat)
+    }
+
+    const fn panel_visible(&self, panel: PanelFocus) -> bool {
+        match panel {
+            PanelFocus::Chat => true,
+            PanelFocus::Records => self.record_panel_visible,
+            PanelFocus::Sandbox => self.sandbox_panel_visible,
+            PanelFocus::Swarm => self.swarm_panel_visible,
         }
     }
 
@@ -331,6 +333,21 @@ impl App {
                     self.input.remove(self.cursor_pos);
                 }
             }
+            _ => {}
+        }
+        KeyResult::continue_running()
+    }
+
+    /// Handle key when sandbox panel is focused: arrows move through the
+    /// tree, Enter/Right toggles a directory, Left goes up a level.
+    fn handle_sandbox_key(&mut self, key: KeyEvent) -> KeyResult {
+        match key.code {
+            KeyCode::Up => self.sandbox.move_by(-1),
+            KeyCode::Down => self.sandbox.move_by(1),
+            KeyCode::PageUp => self.sandbox.move_by(-5),
+            KeyCode::PageDown => self.sandbox.move_by(5),
+            KeyCode::Enter | KeyCode::Right => self.sandbox.toggle_selected(),
+            KeyCode::Left => self.sandbox.collapse_or_parent(),
             _ => {}
         }
         KeyResult::continue_running()

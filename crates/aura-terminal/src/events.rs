@@ -5,6 +5,7 @@
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Events sent from the UI to the application logic.
 #[derive(Debug, Clone)]
@@ -151,6 +152,9 @@ pub enum UiCommand {
 
     /// Replace the conversation with an agent's history (when switching agents)
     LoadConversation(Vec<MessageData>),
+
+    /// Set the sandbox directory shown in the Sandbox panel (the active agent's workspace)
+    SetSandboxRoot(PathBuf),
 
     /// Set the API status (URL and whether it's active)
     SetApiStatus {

@@ -433,6 +433,53 @@ fn test_chat_message_text_column_is_aligned() {
     assert_ne!(rows[aura + 1].chars().nth(text_col), Some(' '));
 }
 
+fn submit(app: &mut crate::App, text: &str) {
+    use crossterm::event::{KeyCode, KeyEvent};
+    for c in text.chars() {
+        let _ = app.handle_key(KeyEvent::from(KeyCode::Char(c)));
+    }
+    let _ = app.handle_key(KeyEvent::from(KeyCode::Enter));
+}
+
+#[test]
+fn test_sandbox_panel_sits_below_record() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+
+    let mut app = crate::App::new();
+    app.process_command(crate::events::UiCommand::SetSandboxRoot(
+        dir.path().to_path_buf(),
+    ));
+    let rows = render_rows(&mut app, 120);
+
+    let record = rows.iter().position(|r| r.contains(" RECORD ")).unwrap();
+    let sandbox = rows.iter().position(|r| r.contains(" SANDBOX ")).unwrap();
+    assert!(sandbox > record + 10, "record={record} sandbox={sandbox}");
+    let column = |row: &str, title: &str| row[..row.find(title).unwrap()].chars().count();
+    assert_eq!(
+        column(&rows[record], " RECORD "),
+        column(&rows[sandbox], " SANDBOX ")
+    );
+    assert!(rows[sandbox + 1].contains("▸ src/"));
+    assert!(rows[sandbox + 2].contains("Cargo.toml"));
+}
+
+#[test]
+fn test_files_command_toggles_sandbox_panel() {
+    let mut app = crate::App::new();
+    submit(&mut app, "/records");
+    submit(&mut app, "/files");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(!screen.contains(" RECORD "));
+    assert!(!screen.contains(" SANDBOX "));
+
+    submit(&mut app, "/files");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains(" SANDBOX "));
+    assert!(!screen.contains(" RECORD "));
+}
+
 fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
     render_rows(&mut app_with_model(user), width)
 }

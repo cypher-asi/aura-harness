@@ -4,6 +4,7 @@ mod input;
 mod markdown;
 mod overlays;
 mod panels;
+mod sandbox;
 mod segments;
 mod text;
 
@@ -60,7 +61,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     render_content_panels(frame, main_chunks[1], app, theme);
 
     let swarm_offset = if app.swarm_panel_visible() {
-        let swarm_percent: u32 = if app.record_panel_visible() { 20 } else { 25 };
+        let swarm_percent: u32 = if right_column_visible(app) { 20 } else { 25 };
         #[expect(
             clippy::cast_possible_truncation,
             reason = "UI widths are always < u16::MAX"
@@ -82,12 +83,17 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     overlays::render_overlays(frame, app, theme);
 }
 
-/// Render the content panels (Swarm, Chat, Record) based on visibility.
+/// Whether the right column (Record above Sandbox) has anything to show.
+const fn right_column_visible(app: &App) -> bool {
+    app.record_panel_visible() || app.sandbox_panel_visible()
+}
+
+/// Render the content panels (Swarm, Chat, Record, Sandbox) based on visibility.
 fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let swarm_visible = app.swarm_panel_visible();
-    let record_visible = app.record_panel_visible();
+    let right_visible = right_column_visible(app);
 
-    let areas = match (swarm_visible, record_visible) {
+    let (swarm, chat, right) = match (swarm_visible, right_visible) {
         (true, true) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
@@ -97,43 +103,31 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
                     Constraint::Percentage(30),
                 ])
                 .split(area);
-            PanelAreas {
-                swarm: Some(chunks[0]),
-                agent_rows: None,
-                chat: Some(chunks[1]),
-                records: Some(chunks[2]),
-            }
+            (Some(chunks[0]), chunks[1], Some(chunks[2]))
         }
         (true, false) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
                 .split(area);
-            PanelAreas {
-                swarm: Some(chunks[0]),
-                agent_rows: None,
-                chat: Some(chunks[1]),
-                records: None,
-            }
+            (Some(chunks[0]), chunks[1], None)
         }
         (false, true) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
                 .split(area);
-            PanelAreas {
-                swarm: None,
-                agent_rows: None,
-                chat: Some(chunks[0]),
-                records: Some(chunks[1]),
-            }
+            (None, chunks[0], Some(chunks[1]))
         }
-        (false, false) => PanelAreas {
-            swarm: None,
-            agent_rows: None,
-            chat: Some(area),
-            records: None,
-        },
+        (false, false) => (None, area, None),
+    };
+    let (records, sandbox) = split_right_column(right, app);
+    let areas = PanelAreas {
+        swarm,
+        chat: Some(chat),
+        records,
+        sandbox,
+        ..PanelAreas::default()
     };
     app.set_panel_areas(areas);
 
@@ -145,6 +139,29 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
     }
     if let Some(records) = areas.records {
         panels::render_record_panel(frame, records, app, theme);
+    }
+    if let Some(sandbox) = areas.sandbox {
+        sandbox::render_sandbox_panel(frame, sandbox, app, theme);
+    }
+}
+
+/// Record on the top half and Sandbox on the bottom half; either one takes
+/// the whole column when the other is hidden.
+fn split_right_column(right: Option<Rect>, app: &App) -> (Option<Rect>, Option<Rect>) {
+    let Some(area) = right else {
+        return (None, None);
+    };
+    match (app.record_panel_visible(), app.sandbox_panel_visible()) {
+        (true, true) => {
+            let halves = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            (Some(halves[0]), Some(halves[1]))
+        }
+        (true, false) => (Some(area), None),
+        (false, true) => (None, Some(area)),
+        (false, false) => (None, None),
     }
 }
 

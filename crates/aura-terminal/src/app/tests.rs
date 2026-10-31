@@ -390,10 +390,44 @@ fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
         swarm: Some(swarm),
         agent_rows: None,
         chat: Some(Rect::new(20, 3, 60, 10)),
-        records: None,
+        ..crate::app::PanelAreas::default()
     });
     app.set_agent_rows_area(Rect::new(1, 4, 18, 7));
     (app, rx)
+}
+
+#[test]
+fn test_click_sandbox_row_selects_and_toggles_dir() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+    std::fs::write(dir.path().join("notes.md"), "").unwrap();
+
+    let mut app = App::new();
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    app.set_panel_areas(crate::app::PanelAreas {
+        sandbox: Some(Rect::new(80, 10, 30, 10)),
+        ..crate::app::PanelAreas::default()
+    });
+    app.set_sandbox_rows_area(Rect::new(81, 11, 28, 8), 0);
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 85, 11));
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+    let names: Vec<&str> = app
+        .sandbox()
+        .rows()
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(names, ["src", "lib.rs", "notes.md"]);
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 85, 13));
+    assert_eq!(app.sandbox().selected(), 2);
+    assert_eq!(app.sandbox().rows().len(), 3);
+
+    app.handle_mouse(mouse(MouseEventKind::ScrollUp, 85, 15));
+    assert_eq!(app.sandbox().selected(), 0);
 }
 
 #[test]
@@ -572,6 +606,119 @@ fn test_model_command_passes_unlisted_id_through() {
         Ok(UiEvent::SelectModel(id)) if id == "local/qwen3:8b"
     ));
     assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn test_panel_commands_toggle_visibility() {
+    let mut app = App::new();
+    assert!(app.record_panel_visible());
+    assert!(app.sandbox_panel_visible());
+    assert!(app.swarm_panel_visible());
+
+    app.handle_command("/records");
+    app.handle_command("/files");
+    app.handle_command("/agents");
+    assert!(!app.record_panel_visible());
+    assert!(!app.sandbox_panel_visible());
+    assert!(!app.swarm_panel_visible());
+
+    app.handle_command("/records");
+    app.handle_command("/files");
+    app.handle_command("/agents");
+    assert!(app.record_panel_visible());
+    assert!(app.sandbox_panel_visible());
+    assert!(app.swarm_panel_visible());
+}
+
+#[test]
+fn test_agents_command_refreshes_when_opened() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_command("/agents");
+    assert!(rx.try_recv().is_err());
+    app.handle_command("/agents");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::RefreshAgents)));
+}
+
+#[test]
+fn test_closing_focused_sandbox_returns_focus_to_chat() {
+    let mut app = App::new();
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+    app.handle_command("/files");
+    assert_eq!(app.focus(), PanelFocus::Chat);
+}
+
+#[test]
+fn test_tab_cycles_visible_panels() {
+    let mut app = App::new();
+    let mut order = Vec::new();
+    for _ in 0..4 {
+        app.handle_key(key(KeyCode::Tab));
+        order.push(app.focus());
+    }
+    assert_eq!(
+        order,
+        [
+            PanelFocus::Records,
+            PanelFocus::Sandbox,
+            PanelFocus::Swarm,
+            PanelFocus::Chat
+        ]
+    );
+
+    app.handle_command("/records");
+    app.handle_command("/agents");
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus(), PanelFocus::Chat);
+}
+
+#[test]
+fn test_sandbox_keys_navigate_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+    std::fs::write(dir.path().join("notes.md"), "").unwrap();
+
+    let mut app = App::new();
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    app.handle_key(key(KeyCode::Tab));
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+
+    app.handle_key(key(KeyCode::Enter));
+    let names: Vec<&str> = app
+        .sandbox()
+        .rows()
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(names, ["src", "lib.rs", "notes.md"]);
+
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.sandbox().selected(), 0);
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.sandbox().rows().len(), 2);
+}
+
+#[test]
+fn test_sandbox_refreshes_after_tool_completes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new();
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    assert!(app.sandbox().rows().is_empty());
+
+    std::fs::write(dir.path().join("out.txt"), "").unwrap();
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: String::new(),
+        success: true,
+    });
+    assert_eq!(app.sandbox().rows().len(), 1);
 }
 
 #[test]

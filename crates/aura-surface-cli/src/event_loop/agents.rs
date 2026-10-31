@@ -186,7 +186,21 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
         .send(UiCommand::LoadConversation(history))
         .await;
 
+    send_sandbox_root(state).await;
     send_agent_list(state).await;
+}
+
+/// Point the Sandbox panel at the active agent's workspace, creating it
+/// so the panel has something to show before the first tool call.
+pub(super) async fn send_sandbox_root(state: &LoopState<'_>) {
+    let workspace = state.session.kernel.agent_workspace();
+    if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
+        warn!(path = %workspace.display(), error = %e, "Failed to create agent workspace");
+    }
+    let _ = state
+        .commands
+        .send(UiCommand::SetSandboxRoot(workspace))
+        .await;
 }
 
 pub(super) async fn send_agent_list(state: &LoopState<'_>) {

@@ -115,6 +115,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     };
     install_memory_observer(&mut state);
 
+    agents::send_sandbox_root(&state).await;
     handlers::announce_models(&mut state).await;
 
     loop {

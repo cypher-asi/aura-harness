@@ -40,7 +40,10 @@ pub(super) fn format_tool_result(tool_name: &str, result: &str) -> String {
 
     let mut parts = Vec::new();
     if !ok {
-        if let Some(code) = envelope.get("exit_code").and_then(serde_json::Value::as_i64) {
+        if let Some(code) = envelope
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+        {
             parts.push(format!("exit {code}"));
         }
     }

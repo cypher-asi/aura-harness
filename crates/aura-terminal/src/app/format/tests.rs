@@ -8,7 +8,10 @@ fn envelope(ok: bool, exit_code: i32, stdout: &str, stderr: &str) -> String {
 #[test]
 fn run_command_shows_stdout() {
     let result = envelope(true, 0, "Cargo.toml\nsrc\n", "");
-    assert_eq!(format_tool_result("run_command", &result), "Cargo.toml\nsrc");
+    assert_eq!(
+        format_tool_result("run_command", &result),
+        "Cargo.toml\nsrc"
+    );
 }
 
 #[test]

@@ -440,7 +440,9 @@ impl Kernel {
         Ok(base)
     }
 
-    pub(super) fn agent_workspace(&self) -> PathBuf {
+    /// Directory the agent's tools run in.
+    #[must_use]
+    pub fn agent_workspace(&self) -> PathBuf {
         if self.config.use_workspace_base_as_root {
             self.config.workspace_base.clone()
         } else {
