@@ -37,6 +37,13 @@ impl Message {
         }
     }
 
+    /// Override the timestamp (e.g. when restoring history from the record).
+    #[must_use]
+    pub const fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
     /// Get the message role.
     #[must_use]
     pub const fn role(&self) -> MessageRole {

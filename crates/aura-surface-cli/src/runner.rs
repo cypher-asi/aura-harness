@@ -4,6 +4,7 @@
 //! lives in this module. The `aura-node` entrypoint lives in
 //! `aura_runtime::run_node` and is re-exported from this crate root.
 
+use crate::agent_registry::AgentRegistry;
 use crate::cli::{
     AgentsCommand, AgentsSubcommand, Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand,
     RunArgs, UiMode,
@@ -11,11 +12,9 @@ use crate::cli::{
 use crate::{api_server, event_loop, record_loader, session_helpers};
 
 use anyhow::Context;
-use aura_agent::{
-    AgentLoop, KernelModelGateway, KernelToolGateway, ProcessManager, ProcessManagerConfig,
-};
+use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
 use aura_agent_kernel::{Kernel, KernelConfig};
-use aura_core_types::{Identity, Transaction};
+use aura_core_types::Transaction;
 use aura_model_reasoner::ModelProvider;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use aura_tools::ToolConfig;
@@ -548,21 +547,25 @@ async fn run_terminal(
     tokio::fs::create_dir_all(&data_dir).await?;
     tokio::fs::create_dir_all(&workspace_root).await?;
 
-    let identity_file = data_dir.join("agent_identity.txt");
-    let zns_id = if identity_file.exists() {
-        tokio::fs::read_to_string(&identity_file).await?
-    } else {
-        let new_id = format!("0://terminal/{}", uuid::Uuid::new_v4());
-        tokio::fs::write(&identity_file, &new_id).await?;
-        new_id
-    };
-    let identity = Identity::new(&zns_id, "Terminal Agent");
+    let registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
+    let identity = registry.active().identity();
 
     let store_path = session_helpers::resolve_store_path(&data_dir);
     let store = session_helpers::open_store(&store_path)?;
 
-    record_loader::load_existing_records(&store, identity.agent_id, &cmd_tx);
-    record_loader::send_initial_agent(&identity, &store, &cmd_tx);
+    record_loader::load_existing_records(store.as_ref(), identity.agent_id, &cmd_tx);
+    match record_loader::conversation_history(store.as_ref(), identity.agent_id) {
+        Ok(history) => {
+            let _ = cmd_tx.try_send(UiCommand::LoadConversation(history));
+        }
+        Err(e) => warn!(error = %e, "Failed to rebuild conversation from record"),
+    }
+    let _ = cmd_tx.try_send(UiCommand::SetAgents(record_loader::agent_summaries(
+        &registry,
+        store.as_ref(),
+        identity.agent_id,
+    )));
+    let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
     let mut tool_config = ToolConfig::for_autonomous_dev_loop();
@@ -578,7 +581,7 @@ async fn run_terminal(
             "run_command enabled"
         );
     }
-    let (executor_router, tools) = session_helpers::build_executor_router_with_config(&tool_config);
+    let (_, tools) = session_helpers::build_executor_router_with_config(&tool_config);
 
     // The terminal harness is the one surface that legitimately
     // resolves its model from environment configuration (no WS init,
@@ -615,17 +618,22 @@ async fn run_terminal(
             .with_mode(aura_config::session_mode(requested_mode)),
         ..KernelConfig::default()
     };
-    let agent_id = identity.agent_id;
-    let kernel = Arc::new(Kernel::new(
-        store.clone() as Arc<dyn aura_store_db::Store>,
-        provider,
-        executor_router,
-        kernel_config,
-        agent_id,
-    )?);
-
-    let model_gateway = KernelModelGateway::new(kernel.clone());
-    let tool_gateway = KernelToolGateway::new(kernel.clone());
+    let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
+    let factory = event_loop::KernelFactory::new(
+        store,
+        Box::new(move |agent_id| {
+            let (executor_router, _) =
+                session_helpers::build_executor_router_with_config(&tool_config);
+            Ok(Kernel::new(
+                Arc::clone(&kernel_store),
+                Arc::clone(&provider),
+                executor_router,
+                kernel_config.clone(),
+                agent_id,
+            )?)
+        }),
+    );
+    let session = factory.open(identity)?;
 
     let cmd_tx_clone = cmd_tx.clone();
     let process_manager_clone = Arc::clone(&process_manager);
@@ -637,11 +645,10 @@ async fn run_terminal(
             process_completions: process_rx,
             commands: cmd_tx_clone,
             agent_loop: &mut agent_loop,
-            model_gateway: &model_gateway,
-            tool_gateway: &tool_gateway,
             tools: &tools,
-            kernel,
-            agent_id,
+            session,
+            factory,
+            registry,
             _process_manager: process_manager_clone,
             memory_manager: None,
         };

@@ -57,6 +57,7 @@ use aura_core_modes::AgentMode;
 use clap::ValueEnum;
 use thiserror::Error;
 
+pub mod agent_registry;
 pub mod api_server;
 pub mod cli;
 pub mod event_loop;

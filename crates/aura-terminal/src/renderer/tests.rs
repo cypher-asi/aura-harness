@@ -2,6 +2,7 @@ use super::markdown::{
     find_next_marker, parse_content_segments, parse_markdown_inline, parse_markdown_line,
     ContentSegment, MarkerType,
 };
+use super::panels::truncate_record_info;
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::Theme;
 use ratatui::{
@@ -330,4 +331,94 @@ fn test_find_next_marker_prefers_earliest() {
 fn test_find_next_marker_skips_triple_backticks() {
     let result = find_next_marker("```rust");
     assert!(result.is_none());
+}
+
+// ========================================================================
+// Layout
+// ========================================================================
+
+#[test]
+fn test_default_layout_shows_agents_column() {
+    use crate::events::{AgentSummary, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![
+        AgentSummary {
+            id: "aa".to_string(),
+            name: "Terminal Agent".to_string(),
+            zns_id: "0://terminal/aa".to_string(),
+            is_active: true,
+            record_count: 12,
+            last_active: "-".to_string(),
+        },
+        AgentSummary {
+            id: "bb".to_string(),
+            name: "Researcher".to_string(),
+            zns_id: "0://terminal/bb".to_string(),
+            is_active: false,
+            record_count: 0,
+            last_active: "-".to_string(),
+        },
+    ]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    let screen = rows.join("\n");
+    assert!(screen.contains("Agents"));
+    assert!(screen.contains("Chat"));
+    assert!(screen.contains("Record"));
+    assert!(rows
+        .iter()
+        .any(|r| r.contains("● 1. Terminal") && r.contains("12│")));
+    assert!(screen.contains("2. Researcher"));
+}
+
+// ========================================================================
+// Record Info Truncation Tests
+// ========================================================================
+
+#[test]
+fn test_truncate_record_info_fits() {
+    assert_eq!(
+        truncate_record_info("read_file src/main.rs", 40),
+        "read_file src/main.rs"
+    );
+}
+
+#[test]
+fn test_truncate_record_info_adds_ellipsis() {
+    let out = truncate_record_info("fix the login redirect bug", 10);
+    assert_eq!(out, "fix the l…");
+    assert!(display_width(&out) <= 10);
+}
+
+#[test]
+fn test_truncate_record_info_folds_newlines() {
+    let out = truncate_record_info("line one\nline two\r\n\tthree", 80);
+    assert_eq!(out, "line one line two three");
+}
+
+#[test]
+fn test_truncate_record_info_wide_chars_no_panic() {
+    let out = truncate_record_info("修复登录错误 🚀 then more text", 7);
+    assert!(display_width(&out) <= 7, "too wide: {out:?}");
+    assert!(out.ends_with('…'));
+}
+
+#[test]
+fn test_truncate_record_info_zero_width() {
+    assert_eq!(truncate_record_info("anything", 0), "");
+    assert_eq!(truncate_record_info("", 20), "");
 }
