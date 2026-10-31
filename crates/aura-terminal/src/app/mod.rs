@@ -163,7 +163,7 @@ impl App {
             notification: None,
             focus: PanelFocus::default(),
             record_panel_visible: true,
-            swarm_panel_visible: false,
+            swarm_panel_visible: true,
             animation_frame: 0,
             records: VecDeque::new(),
             selected_record: 0,
@@ -424,6 +424,29 @@ impl App {
             self.messages.pop_front();
         }
         self.scroll_offset = 0;
+    }
+
+    /// Request a switch to another agent.
+    ///
+    /// Refused while a turn is in flight, because the backend processes one
+    /// agent's turn at a time and the streamed output belongs to the current agent.
+    pub(super) fn request_agent_switch(&mut self, agent_id: String) {
+        if matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        ) {
+            self.notification = Some((
+                "Wait for the current turn to finish before switching agents".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if agent_id == self.active_agent_id {
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SelectAgent(agent_id));
+        }
     }
 
     /// Add a tool card.

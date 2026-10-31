@@ -210,7 +210,7 @@ pub(super) fn render_swarm_panel(frame: &mut Frame, area: Rect, app: &App, theme
     };
 
     let block = Block::default()
-        .title(" Swarm ")
+        .title(" Agents ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -245,11 +245,11 @@ fn render_empty_swarm(frame: &mut Frame, inner: Rect, theme: &Theme) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  Use /swarm to",
+            "  Use /agent new",
             Style::default().fg(theme.colors.muted),
         )),
         Line::from(Span::styled(
-            "  manage agents.",
+            "  to create one.",
             Style::default().fg(theme.colors.muted),
         )),
     ];
@@ -284,10 +284,19 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             Style::default().fg(theme.colors.muted)
         };
 
-        let display_name = truncate_agent_name(&agent.name, inner.width.saturating_sub(4) as usize);
+        let index = format!("{}. ", i + 1);
+        let count = format!(" {}", agent.record_count);
+        let name_width = (inner.width as usize)
+            .saturating_sub(display_width(prefix) + index.len() + count.len())
+            .max(1);
+        let display_name = truncate_agent_name(&agent.name, name_width);
+        let padding = name_width.saturating_sub(display_width(&display_name));
         lines.push(Line::from(vec![
-            Span::styled(format!("{prefix} "), line_style),
+            Span::styled(prefix, line_style),
+            Span::styled(index, line_style),
             Span::styled(display_name, line_style),
+            Span::raw(" ".repeat(padding)),
+            Span::styled(count, Style::default().fg(theme.colors.muted)),
         ]));
     }
     lines

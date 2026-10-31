@@ -1,63 +1,170 @@
 //! Loading and displaying historical records from the store.
 
+use crate::agent_registry::AgentRegistry;
 use aura_core_types::{
-    ActionResultPayload, AgentId, EffectStatus, Identity, RecordEntry, ToolExecution,
-    ToolGateVerdict, ToolProposal, Transaction, TransactionType,
+    ActionResultPayload, AgentId, EffectStatus, RecordEntry, ToolExecution, ToolGateVerdict,
+    ToolProposal, Transaction, TransactionType,
 };
-use aura_store_db::{ReadStore, RocksStore};
+use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
-    events::{AgentSummary, RecordStatus, RecordSummary},
+    events::{AgentSummary, MessageData, MessageRole, RecordStatus, RecordSummary},
     UiCommand,
 };
 use serde_json::Value;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::warn;
+
+/// Number of entries shown in the Record panel.
+const RECORD_PANEL_LIMIT: usize = 100;
+
+/// Number of trailing entries scanned when rebuilding an agent's chat.
+const HISTORY_SCAN_LIMIT: usize = 500;
+
+/// Number of chat messages kept after rebuilding (matches the UI cap).
+const HISTORY_MESSAGE_LIMIT: usize = 100;
 
 /// Upper bound on the summary string; the panel truncates to its own
 /// width, this only keeps huge prompts from being copied around.
 const MAX_INFO_CHARS: usize = 240;
 
+/// Load the most recent record entries for an agent as UI summaries,
+/// oldest first.
+///
+/// # Errors
+/// Returns the store error if the head sequence or scan fails.
+pub fn recent_record_summaries(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+) -> Result<Vec<RecordSummary>, StoreError> {
+    Ok(scan_tail(store, agent_id, RECORD_PANEL_LIMIT)?
+        .iter()
+        .map(|entry| {
+            build_record_summary(
+                entry.seq,
+                &entry.tx,
+                entry,
+                format_local_time(entry.tx.ts_ms),
+            )
+        })
+        .collect())
+}
+
 /// Load existing records from the store and send to UI.
+///
+/// Uses `try_send`, so it is only suitable before the UI starts draining
+/// the channel (startup); async callers should send summaries themselves.
 pub fn load_existing_records(
-    store: &Arc<RocksStore>,
+    store: &dyn ReadStore,
     agent_id: AgentId,
     commands: &mpsc::Sender<UiCommand>,
 ) {
-    let head_seq = match store.get_head_seq(agent_id) {
-        Ok(seq) => seq,
+    match recent_record_summaries(store, agent_id) {
+        Ok(summaries) => {
+            for summary in summaries {
+                let _ = commands.try_send(UiCommand::NewRecord(summary));
+            }
+        }
         Err(e) => {
-            warn!(error = %e, "Failed to get head sequence");
+            warn!(error = %e, "Failed to load records");
             let _ = commands.try_send(UiCommand::ShowWarning(format!(
                 "Could not load record history: {e}"
             )));
-            return;
         }
-    };
+    }
+}
 
+/// Rebuild an agent's chat transcript from its record, oldest first.
+///
+/// # Errors
+/// Returns the store error if the head sequence or scan fails.
+pub fn conversation_history(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+) -> Result<Vec<MessageData>, StoreError> {
+    let history: Vec<MessageData> = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)?
+        .iter()
+        .filter_map(|entry| history_message(&entry.tx))
+        .collect();
+    let skip = history.len().saturating_sub(HISTORY_MESSAGE_LIMIT);
+    Ok(history.into_iter().skip(skip).collect())
+}
+
+/// Build the agents-column rows for every registered agent.
+#[must_use]
+pub fn agent_summaries(
+    registry: &AgentRegistry,
+    store: &dyn ReadStore,
+    active: AgentId,
+) -> Vec<AgentSummary> {
+    registry
+        .agents()
+        .iter()
+        .map(|agent| {
+            let agent_id = agent.agent_id();
+            let record_count = store.get_head_seq(agent_id).unwrap_or(0);
+            let last_active = if record_count == 0 {
+                "-".to_string()
+            } else {
+                store
+                    .get_record_entry(agent_id, record_count)
+                    .map(|entry| format_local_time(entry.tx.ts_ms))
+                    .unwrap_or_else(|_| "-".to_string())
+            };
+            AgentSummary {
+                id: agent_id.to_hex(),
+                name: agent.name.clone(),
+                zns_id: agent.zns_id.clone(),
+                is_active: agent_id == active,
+                record_count,
+                last_active,
+            }
+        })
+        .collect()
+}
+
+fn scan_tail(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+    limit: usize,
+) -> Result<Vec<RecordEntry>, StoreError> {
+    let head_seq = store.get_head_seq(agent_id)?;
     if head_seq == 0 {
-        return;
+        return Ok(Vec::new());
     }
+    let window = u64::try_from(limit).unwrap_or(u64::MAX);
+    let from_seq = head_seq.saturating_sub(window.saturating_sub(1)).max(1);
+    store.scan_record(agent_id, from_seq, limit)
+}
 
-    let from_seq = head_seq.saturating_sub(99).max(1);
-    let records = match store.scan_record(agent_id, from_seq, 100) {
-        Ok(entries) => entries,
-        Err(e) => {
-            warn!(from_seq, head_seq, error = %e, "Failed to load records");
-            let _ = commands.try_send(UiCommand::ShowWarning(format!(
-                "Could not load {head_seq} historical records: {e}"
-            )));
-            return;
+fn history_message(tx: &Transaction) -> Option<MessageData> {
+    let (role, content) = match tx.tx_type {
+        TransactionType::UserPrompt => (
+            MessageRole::User,
+            String::from_utf8_lossy(&tx.payload).into_owned(),
+        ),
+        TransactionType::AgentMsg => (
+            MessageRole::Assistant,
+            String::from_utf8_lossy(&tx.payload).into_owned(),
+        ),
+        TransactionType::ToolExecution => {
+            let info = extract_tool_info(tx);
+            if info.is_empty() {
+                return None;
+            }
+            (MessageRole::System, format!("🔧 {info}"))
         }
+        TransactionType::SessionStart => (MessageRole::System, "── new session ──".to_string()),
+        _ => return None,
     };
-
-    for entry in records {
-        let timestamp = chrono::DateTime::from_timestamp_millis(entry.tx.ts_ms as i64)
-            .map(|dt| dt.format("%H:%M:%S").to_string())
-            .unwrap_or_else(|| "??:??:??".to_string());
-        let record_summary = build_record_summary(entry.seq, &entry.tx, &entry, timestamp);
-        let _ = commands.try_send(UiCommand::NewRecord(record_summary));
+    if content.trim().is_empty() {
+        return None;
     }
+    Some(MessageData {
+        role,
+        content,
+        is_streaming: false,
+        timestamp_ms: Some(tx.ts_ms),
+    })
 }
 
 /// Build the UI summary for a record entry. Shared by the history
@@ -131,28 +238,16 @@ pub fn build_record_summary(
     }
 }
 
-/// Send initial agent info to the UI.
-pub fn send_initial_agent(
-    identity: &Identity,
-    store: &Arc<RocksStore>,
-    commands: &mpsc::Sender<UiCommand>,
-) {
-    let record_count = store.get_head_seq(identity.agent_id).unwrap_or(0);
-    let last_active = chrono::Local::now().format("%H:%M:%S").to_string();
-
-    let agent = AgentSummary {
-        id: hex::encode(identity.agent_id.as_bytes()),
-        name: identity.name.clone(),
-        zns_id: identity.zns_id.clone(),
-        is_active: true,
-        record_count,
-        last_active,
-    };
-
-    let _ = commands.try_send(UiCommand::SetAgents(vec![agent]));
-    let _ = commands.try_send(UiCommand::SetActiveAgent(hex::encode(
-        identity.agent_id.as_bytes(),
-    )));
+fn format_local_time(ts_ms: u64) -> String {
+    i64::try_from(ts_ms)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| "??:??:??".to_string())
 }
 
 /// Map a transaction type to its display label and sender name.
@@ -354,6 +449,25 @@ fn extract_cmd_run_command(args: &Value) -> String {
     }
 }
 
+/// Tool name (or the command line for `run_command`) of a tool proposal
+/// or execution; empty for other transaction types.
+pub fn extract_tool_info(tx: &Transaction) -> String {
+    let call = match tx.tx_type {
+        TransactionType::ToolProposal => serde_json::from_slice::<ToolProposal>(&tx.payload)
+            .ok()
+            .map(|p| (p.tool, p.args)),
+        TransactionType::ToolExecution => serde_json::from_slice::<ToolExecution>(&tx.payload)
+            .ok()
+            .map(|e| (e.tool, e.args)),
+        _ => None,
+    };
+    match call {
+        Some((tool, args)) if tool == "run_command" => extract_cmd_run_command(&args),
+        Some((tool, _)) => tool,
+        None => String::new(),
+    }
+}
+
 fn json_payload(tx: &Transaction) -> Option<Value> {
     serde_json::from_slice::<Value>(&tx.payload)
         .ok()
@@ -412,153 +526,4 @@ fn format_duration_ms(ms: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn tx(tx_type: TransactionType, payload: impl Into<Vec<u8>>) -> Transaction {
-        Transaction::new_chained(AgentId::generate(), tx_type, payload.into(), None)
-    }
-
-    fn json_tx(tx_type: TransactionType, payload: &Value) -> Transaction {
-        tx(tx_type, serde_json::to_vec(payload).unwrap())
-    }
-
-    #[test]
-    fn labels_fit_kind_column() {
-        for t in [
-            TransactionType::UserPrompt,
-            TransactionType::AgentMsg,
-            TransactionType::Trigger,
-            TransactionType::ActionResult,
-            TransactionType::System,
-            TransactionType::SessionStart,
-            TransactionType::ToolProposal,
-            TransactionType::ToolExecution,
-            TransactionType::ProcessComplete,
-            TransactionType::Reasoning,
-            TransactionType::SubagentSpawn,
-        ] {
-            assert!(tx_type_label(t).0.len() <= 8, "{t:?} label too long");
-        }
-    }
-
-    #[test]
-    fn prompt_collapses_to_one_line() {
-        let t = tx(
-            TransactionType::UserPrompt,
-            "fix the login\n\n  redirect bug\tplease",
-        );
-        assert_eq!(summarize_record(&t), "fix the login redirect bug please");
-    }
-
-    #[test]
-    fn long_prompt_is_capped_char_safely() {
-        let t = tx(TransactionType::UserPrompt, "修".repeat(500));
-        let out = summarize_record(&t);
-        assert_eq!(out.chars().count(), MAX_INFO_CHARS);
-        assert!(out.ends_with("..."));
-    }
-
-    #[test]
-    fn tool_proposal_shows_primary_arg() {
-        let t = json_tx(
-            TransactionType::ToolProposal,
-            &json!({"tool_use_id": "t1", "tool": "read_file", "args": {"path": "src/main.rs"}}),
-        );
-        assert_eq!(summarize_record(&t), "read_file src/main.rs");
-    }
-
-    #[test]
-    fn tool_proposal_run_command() {
-        let t = json_tx(
-            TransactionType::ToolProposal,
-            &json!({"tool_use_id": "t1", "tool": "run_command",
-                    "args": {"program": "cargo", "args": ["test", "-p", "x"]}}),
-        );
-        assert_eq!(summarize_record(&t), "run_command cargo test -p x");
-    }
-
-    fn execution(decision: ToolGateVerdict, result: Option<&str>, is_error: bool) -> Transaction {
-        let exec = ToolExecution {
-            tool_use_id: "t1".into(),
-            tool: "read_file".into(),
-            args: json!({"path": "a.rs"}),
-            decision,
-            reason: Some("policy says no".into()),
-            result: result.map(str::to_string),
-            is_error,
-            parent_agent_id: AgentId::generate(),
-            originating_user_id: "u".into(),
-        };
-        tx(
-            TransactionType::ToolExecution,
-            serde_json::to_vec(&exec).unwrap(),
-        )
-    }
-
-    #[test]
-    fn tool_execution_outcomes() {
-        assert_eq!(
-            summarize_record(&execution(ToolGateVerdict::Approved, Some("hello"), false)),
-            "read_file a.rs · ok 5B"
-        );
-        assert_eq!(
-            summarize_record(&execution(
-                ToolGateVerdict::Approved,
-                Some("\nNo such file\nmore"),
-                true
-            )),
-            "read_file a.rs · err: No such file"
-        );
-        assert_eq!(
-            summarize_record(&execution(ToolGateVerdict::Denied, None, false)),
-            "read_file a.rs · denied: policy says no"
-        );
-    }
-
-    #[test]
-    fn reasoning_completed_and_failed() {
-        let ok = json_tx(
-            TransactionType::Reasoning,
-            &json!({"model": "claude-opus-4-6", "stop_reason": "ToolUse",
-                    "input_tokens": 1234, "output_tokens": 340,
-                    "tool_uses": ["read_file", "grep"]}),
-        );
-        assert_eq!(
-            summarize_record(&ok),
-            "claude-opus-4-6 · 1.2k/340 tok · ToolUse · tools: read_file, grep"
-        );
-        let failed = json_tx(
-            TransactionType::Reasoning,
-            &json!({"status": "failed", "error": "rate limited"}),
-        );
-        assert_eq!(summarize_record(&failed), "failed: rate limited");
-    }
-
-    #[test]
-    fn system_kind_and_detail() {
-        let t = json_tx(
-            TransactionType::System,
-            &json!({"system_kind": "domain_mutation", "phase": "request", "method": "create_spec"}),
-        );
-        assert_eq!(
-            summarize_record(&t),
-            "domain_mutation · create_spec request"
-        );
-    }
-
-    #[test]
-    fn session_start() {
-        let t = tx(TransactionType::SessionStart, "session_start");
-        assert_eq!(summarize_record(&t), "new session");
-    }
-
-    #[test]
-    fn unparseable_json_falls_back_to_text() {
-        let t = tx(TransactionType::Reasoning, "not json");
-        assert_eq!(summarize_record(&t), "not json");
-        let binary = tx(TransactionType::ToolProposal, vec![0xff, 0xfe]);
-        assert_eq!(summarize_record(&binary), "");
-    }
-}
+mod tests;
