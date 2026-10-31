@@ -399,6 +399,10 @@ fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
         current: "local/qwen3:4b".to_string(),
         user: user.map(str::to_string),
     });
+    app.process_command(UiCommand::SetApiStatus {
+        url: Some("http://127.0.0.1:8080".to_string()),
+        active: true,
+    });
 
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
@@ -417,11 +421,12 @@ fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
 }
 
 #[test]
-fn test_header_shows_guest_auth_and_model_moves_to_input() {
+fn test_header_shows_local_url_and_model_moves_to_input() {
     let rows = render_with_user(None, 120);
+    assert!(rows[1]
+        .trim_end()
+        .ends_with("● local  http://127.0.0.1:8080"));
     let header = rows[..3].join("\n");
-    assert!(header.contains("not logged in"));
-    assert!(header.contains("/login"));
     assert!(!header.contains("qwen3:4b"));
 
     let input_row = rows.last().unwrap().trim_end();
@@ -435,9 +440,10 @@ fn test_header_shows_guest_auth_and_model_moves_to_input() {
 #[test]
 fn test_header_shows_logged_in_user() {
     let rows = render_with_user(Some("alice"), 120);
-    let header = rows[..3].join("\n");
-    assert!(header.contains("logged in as alice"));
-    assert!(!header.contains("not logged in"));
+    assert!(rows[1]
+        .trim_end()
+        .ends_with("● alice  http://127.0.0.1:8080"));
+    assert!(!rows[..3].join("\n").contains("local"));
 }
 
 #[test]

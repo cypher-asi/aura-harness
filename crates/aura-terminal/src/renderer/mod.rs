@@ -96,9 +96,9 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
 
 /// Render the header bar.
 fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let auth_spans = auth_indicator_spans(app, theme);
-    let auth_width = spans_width(&auth_spans);
-    let right_width = u16::try_from(auth_width.max(30) + 1).unwrap_or(u16::MAX);
+    let status_spans = header_status_spans(app, theme);
+    let status_width = spans_width(&status_spans);
+    let right_width = u16::try_from(status_width.max(30) + 1).unwrap_or(u16::MAX);
 
     let header_layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -115,22 +115,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     ];
     frame.render_widget(Paragraph::new(title), header_layout[0]);
 
-    let api_line = app.api_url().map_or_else(
-        || Line::from(""),
-        |url| {
-            let (icon, color) = if app.api_active() {
-                (" ● ", theme.colors.primary)
-            } else {
-                (" ○ ", theme.colors.error)
-            };
-            Line::from(vec![
-                Span::styled(icon, Style::default().fg(color)),
-                Span::styled(url, Style::default().fg(theme.colors.muted)),
-            ])
-        },
-    );
-
-    let right = vec![Line::from(""), Line::from(auth_spans), api_line];
+    let right = vec![Line::from(""), Line::from(status_spans), Line::from("")];
     frame.render_widget(
         Paragraph::new(right).alignment(Alignment::Right),
         header_layout[1],
@@ -141,26 +126,26 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| text::display_width(&s.content)).sum()
 }
 
-/// `● logged in as alice` or `○ not logged in  /login`.
-fn auth_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
-    app.user().map_or_else(
-        || {
-            vec![
-                Span::styled("○ ", Style::default().fg(theme.colors.warning)),
-                Span::styled("not logged in", Style::default().fg(theme.colors.muted)),
-                Span::styled("  /login", Style::default().fg(theme.colors.secondary)),
-            ]
-        },
-        |user| {
-            vec![
-                Span::styled("● ", Style::default().fg(theme.colors.primary)),
-                Span::styled(
-                    format!("logged in as {user}"),
-                    Style::default().fg(theme.colors.muted),
-                ),
-            ]
-        },
-    )
+/// `● local  http://127.0.0.1:8080`, or the user's name in place of `local`
+/// when logged in. The dot reflects API connectivity.
+fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+    let (icon, icon_color) = if app.api_active() {
+        ("● ", theme.colors.primary)
+    } else {
+        ("○ ", theme.colors.error)
+    };
+    let who = app.user().map_or_else(
+        || Span::styled("local", Style::default().fg(theme.colors.muted)),
+        |user| Span::styled(user, Style::default().fg(theme.colors.primary)),
+    );
+    let mut spans = vec![Span::styled(icon, Style::default().fg(icon_color)), who];
+    if let Some(url) = app.api_url() {
+        spans.push(Span::styled(
+            format!("  {url}"),
+            Style::default().fg(theme.colors.muted),
+        ));
+    }
+    spans
 }
 
 /// `qwen3:4b · local  /model` — empty until the kernel reports a model.
