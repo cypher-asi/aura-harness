@@ -1,12 +1,16 @@
 //! Loading and displaying historical records from the store.
 
 use crate::agent_registry::AgentRegistry;
-use aura_core_types::{AgentId, EffectStatus, RecordEntry, Transaction, TransactionType};
+use aura_core_types::{
+    ActionResultPayload, AgentId, EffectStatus, RecordEntry, ToolExecution, ToolGateVerdict,
+    ToolProposal, Transaction, TransactionType,
+};
 use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
     events::{AgentSummary, MessageData, MessageRole, RecordStatus, RecordSummary},
     UiCommand,
 };
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -19,6 +23,10 @@ const HISTORY_SCAN_LIMIT: usize = 500;
 /// Number of chat messages kept after rebuilding (matches the UI cap).
 const HISTORY_MESSAGE_LIMIT: usize = 100;
 
+/// Upper bound on the summary string; the panel truncates to its own
+/// width, this only keeps huge prompts from being copied around.
+const MAX_INFO_CHARS: usize = 240;
+
 /// Load the most recent record entries for an agent as UI summaries,
 /// oldest first.
 ///
@@ -30,7 +38,14 @@ pub fn recent_record_summaries(
 ) -> Result<Vec<RecordSummary>, StoreError> {
     Ok(scan_tail(store, agent_id, RECORD_PANEL_LIMIT)?
         .iter()
-        .map(record_summary)
+        .map(|entry| {
+            build_record_summary(
+                entry.seq,
+                &entry.tx,
+                entry,
+                format_local_time(entry.tx.ts_ms),
+            )
+        })
         .collect())
 }
 
@@ -152,16 +167,17 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
     })
 }
 
-fn record_summary(entry: &RecordEntry) -> RecordSummary {
-    let (tx_kind, sender) = tx_type_label(entry.tx.tx_type);
+/// Build the UI summary for a record entry. Shared by the history
+/// loader and the live record feed so both render identically.
+pub fn build_record_summary(
+    seq: u64,
+    tx: &Transaction,
+    entry: &RecordEntry,
+    timestamp: String,
+) -> RecordSummary {
+    let (tx_kind, sender) = tx_type_label(tx.tx_type);
 
-    let message = String::from_utf8_lossy(&entry.tx.payload).to_string();
-    let message = if message.chars().count() > 200 {
-        let truncated: String = message.chars().take(197).collect();
-        format!("{truncated}...")
-    } else {
-        message
-    };
+    let message = truncate_chars(&String::from_utf8_lossy(&tx.payload), 200);
 
     let effect_count = entry.effects.len();
     let ok_count = entry
@@ -201,11 +217,11 @@ fn record_summary(entry: &RecordEntry) -> RecordSummary {
         .join("; ");
 
     let full_hash = entry.context_hash.as_hex();
-    let hash_suffix = full_hash[full_hash.len() - 4..].to_string();
+    let hash_suffix = full_hash[full_hash.len().saturating_sub(4)..].to_string();
 
     RecordSummary {
-        seq: entry.seq,
-        timestamp: format_local_time(entry.tx.ts_ms),
+        seq,
+        timestamp,
         full_hash,
         hash_suffix,
         tx_kind: tx_kind.to_string(),
@@ -214,11 +230,11 @@ fn record_summary(entry: &RecordEntry) -> RecordSummary {
         action_count: entry.actions.len(),
         effect_status,
         status,
-        info: extract_tool_info(&entry.tx),
+        info: summarize_record(tx),
         error_details,
-        tx_id: hex::encode(entry.tx.hash.as_bytes()),
-        agent_id: hex::encode(entry.tx.agent_id.as_bytes()),
-        ts_ms: entry.tx.ts_ms,
+        tx_id: hex::encode(tx.hash.as_bytes()),
+        agent_id: hex::encode(tx.agent_id.as_bytes()),
+        ts_ms: tx.ts_ms,
     }
 }
 
@@ -235,53 +251,191 @@ fn format_local_time(ts_ms: u64) -> String {
 }
 
 /// Map a transaction type to its display label and sender name.
+///
+/// Labels are kept to at most 8 characters so they fit the Record
+/// panel's fixed-width kind column.
 pub fn tx_type_label(tx_type: TransactionType) -> (&'static str, &'static str) {
     match tx_type {
         TransactionType::UserPrompt => ("Prompt", "USER"),
         TransactionType::ActionResult => ("Action", "SYSTEM"),
         TransactionType::System => ("System", "SYSTEM"),
-        TransactionType::AgentMsg => ("Response", "AURA"),
+        TransactionType::AgentMsg => ("Reply", "AURA"),
         TransactionType::Trigger => ("Trigger", "SYSTEM"),
         TransactionType::SessionStart => ("Session", "SYSTEM"),
-        TransactionType::ToolProposal => ("Propose", "LLM"),
-        TransactionType::ToolExecution => ("Execute", "KERNEL"),
+        TransactionType::ToolProposal => ("ToolCall", "LLM"),
+        TransactionType::ToolExecution => ("ToolRes", "KERNEL"),
         TransactionType::ProcessComplete => ("Complete", "SYSTEM"),
-        TransactionType::Reasoning => ("Reasoning", "KERNEL"),
+        TransactionType::Reasoning => ("LLM", "KERNEL"),
         TransactionType::SubagentSpawn => ("Spawn", "FLEET"),
     }
 }
 
-/// Extract tool name or other info from a transaction payload.
-pub fn extract_tool_info(tx: &Transaction) -> String {
-    match tx.tx_type {
-        TransactionType::ToolProposal => {
-            if let Ok(proposal) =
-                serde_json::from_slice::<aura_core_types::ToolProposal>(&tx.payload)
-            {
-                if proposal.tool == "run_command" {
-                    return extract_cmd_run_command(&proposal.args);
-                }
-                return proposal.tool;
+/// One-line, human-readable summary of what a transaction contains.
+pub fn summarize_record(tx: &Transaction) -> String {
+    let summary = match tx.tx_type {
+        TransactionType::UserPrompt | TransactionType::AgentMsg | TransactionType::Trigger => {
+            payload_text(tx)
+        }
+        TransactionType::ToolProposal => serde_json::from_slice::<ToolProposal>(&tx.payload)
+            .map_or_else(
+                |_| payload_text(tx),
+                |p| summarize_tool_call(&p.tool, &p.args),
+            ),
+        TransactionType::ToolExecution => serde_json::from_slice::<ToolExecution>(&tx.payload)
+            .map_or_else(|_| payload_text(tx), |e| summarize_tool_execution(&e)),
+        TransactionType::ActionResult | TransactionType::ProcessComplete => {
+            serde_json::from_slice::<ActionResultPayload>(&tx.payload)
+                .map_or_else(|_| payload_text(tx), |r| summarize_action_result(&r))
+        }
+        TransactionType::Reasoning => {
+            json_payload(tx).map_or_else(|| payload_text(tx), |v| summarize_reasoning(&v))
+        }
+        TransactionType::System => {
+            json_payload(tx).map_or_else(|| payload_text(tx), |v| summarize_system(&v))
+        }
+        TransactionType::SessionStart => "new session".to_string(),
+        TransactionType::SubagentSpawn => {
+            json_payload(tx).map_or_else(String::new, |v| summarize_spawn(&v))
+        }
+    };
+    truncate_chars(&collapse_whitespace(&summary), MAX_INFO_CHARS)
+}
+
+fn summarize_tool_call(tool: &str, args: &Value) -> String {
+    let detail = if tool == "run_command" {
+        extract_cmd_run_command(args)
+    } else {
+        primary_arg(args).unwrap_or_default()
+    };
+    if detail.is_empty() {
+        tool.to_string()
+    } else {
+        format!("{tool} {detail}")
+    }
+}
+
+fn summarize_tool_execution(execution: &ToolExecution) -> String {
+    let call = summarize_tool_call(&execution.tool, &execution.args);
+    match execution.decision {
+        ToolGateVerdict::Denied => match execution.reason.as_deref() {
+            Some(reason) if !reason.is_empty() => format!("{call} · denied: {reason}"),
+            _ => format!("{call} · denied"),
+        },
+        ToolGateVerdict::PendingApproval => format!("{call} · awaiting approval"),
+        ToolGateVerdict::Approved if execution.is_error => {
+            let first_line = execution
+                .result
+                .as_deref()
+                .and_then(|r| r.lines().find(|l| !l.trim().is_empty()))
+                .unwrap_or("");
+            if first_line.is_empty() {
+                format!("{call} · err")
+            } else {
+                format!("{call} · err: {first_line}")
             }
         }
-        TransactionType::ToolExecution => {
-            if let Ok(execution) =
-                serde_json::from_slice::<aura_core_types::ToolExecution>(&tx.payload)
-            {
-                if execution.tool == "run_command" {
-                    return extract_cmd_run_command(&execution.args);
-                }
-                return execution.tool;
-            }
-        }
-        _ => {}
+        ToolGateVerdict::Approved => match execution.result.as_deref() {
+            Some(result) => format!("{call} · ok {}", format_bytes(result.len())),
+            None => format!("{call} · ok"),
+        },
+    }
+}
+
+fn summarize_action_result(result: &ActionResultPayload) -> String {
+    let outcome = if result.success { "ok" } else { "failed" };
+    let duration = format_duration_ms(result.duration_ms);
+    match result.exit_code {
+        Some(code) => format!("{outcome} · exit {code} · {duration}"),
+        None => format!("{outcome} · {duration}"),
+    }
+}
+
+fn summarize_reasoning(payload: &Value) -> String {
+    if payload.get("status").and_then(Value::as_str) == Some("failed") {
+        let error = payload.get("error").and_then(Value::as_str).unwrap_or("");
+        return format!("failed: {error}");
     }
 
-    String::new()
+    let mut parts = Vec::new();
+    if let Some(model) = payload.get("model").and_then(Value::as_str) {
+        parts.push(model.to_string());
+    }
+    let input = payload.get("input_tokens").and_then(Value::as_u64);
+    let output = payload.get("output_tokens").and_then(Value::as_u64);
+    if input.is_some() || output.is_some() {
+        parts.push(format!(
+            "{}/{} tok",
+            input.map_or_else(|| "?".to_string(), format_tokens),
+            output.map_or_else(|| "?".to_string(), format_tokens),
+        ));
+    }
+    if let Some(stop) = payload.get("stop_reason").and_then(Value::as_str) {
+        parts.push(stop.to_string());
+    }
+    let tools: Vec<&str> = payload
+        .get("tool_uses")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !tools.is_empty() {
+        parts.push(format!("tools: {}", tools.join(", ")));
+    }
+    parts.join(" · ")
+}
+
+fn summarize_system(payload: &Value) -> String {
+    let kind = payload
+        .get("system_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("system");
+    let detail: Vec<&str> = ["method", "event", "action", "scope", "phase"]
+        .iter()
+        .filter_map(|key| payload.get(*key).and_then(Value::as_str))
+        .collect();
+    if detail.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind} · {}", detail.join(" "))
+    }
+}
+
+fn summarize_spawn(payload: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(mode) = payload.get("spawn_mode").and_then(Value::as_str) {
+        parts.push(mode.to_string());
+    }
+    if let Some(child) = payload.get("child_agent_id").and_then(Value::as_str) {
+        let short: String = child.chars().take(8).collect();
+        parts.push(format!("child {short}"));
+    }
+    let overrides = payload
+        .pointer("/override_manifest/applied")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if overrides > 0 {
+        parts.push(format!("{overrides} overrides"));
+    }
+    parts.join(" · ")
+}
+
+/// Pick the argument that best identifies what a tool call targets.
+fn primary_arg(args: &Value) -> Option<String> {
+    const KEYS: &[&str] = &[
+        "path",
+        "file_path",
+        "pattern",
+        "query",
+        "url",
+        "command",
+        "name",
+    ];
+    KEYS.iter()
+        .find_map(|key| args.get(*key).and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 /// Extract the command string from cmd_run tool arguments.
-fn extract_cmd_run_command(args: &serde_json::Value) -> String {
+fn extract_cmd_run_command(args: &Value) -> String {
     let program = args["program"].as_str().unwrap_or("");
     let cmd_args: Vec<&str> = args["args"]
         .as_array()
@@ -292,6 +446,82 @@ fn extract_cmd_run_command(args: &serde_json::Value) -> String {
         program.to_string()
     } else {
         format!("{program} {}", cmd_args.join(" "))
+    }
+}
+
+/// Tool name (or the command line for `run_command`) of a tool proposal
+/// or execution; empty for other transaction types.
+pub fn extract_tool_info(tx: &Transaction) -> String {
+    let call = match tx.tx_type {
+        TransactionType::ToolProposal => serde_json::from_slice::<ToolProposal>(&tx.payload)
+            .ok()
+            .map(|p| (p.tool, p.args)),
+        TransactionType::ToolExecution => serde_json::from_slice::<ToolExecution>(&tx.payload)
+            .ok()
+            .map(|e| (e.tool, e.args)),
+        _ => None,
+    };
+    match call {
+        Some((tool, args)) if tool == "run_command" => extract_cmd_run_command(&args),
+        Some((tool, _)) => tool,
+        None => String::new(),
+    }
+}
+
+fn json_payload(tx: &Transaction) -> Option<Value> {
+    serde_json::from_slice::<Value>(&tx.payload)
+        .ok()
+        .filter(Value::is_object)
+}
+
+fn payload_text(tx: &Transaction) -> String {
+    std::str::from_utf8(&tx.payload)
+        .map(str::to_string)
+        .unwrap_or_default()
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max_chars.saturating_sub(3)).collect();
+    format!("{kept}...")
+}
+
+/// `n / unit` rendered with one truncated decimal, e.g. `1234 / 1000` -> `1.2`.
+fn one_decimal(n: u64, unit: u64) -> String {
+    let tenths = n.saturating_mul(10) / unit;
+    format!("{}.{}", tenths / 10, tenths % 10)
+}
+
+fn format_tokens(n: u64) -> String {
+    if n < 1000 {
+        n.to_string()
+    } else {
+        format!("{}k", one_decimal(n, 1000))
+    }
+}
+
+fn format_bytes(n: usize) -> String {
+    let n = n as u64;
+    if n < 1024 {
+        format!("{n}B")
+    } else if n < 1024 * 1024 {
+        format!("{}KB", one_decimal(n, 1024))
+    } else {
+        format!("{}MB", one_decimal(n, 1024 * 1024))
+    }
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{}s", one_decimal(ms, 1000))
     }
 }
 

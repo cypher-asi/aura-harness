@@ -84,7 +84,7 @@ jobs:
   # `rust-version` in the workspace Cargo.toml.
   # ---------------------------------------------------------------------------
   msrv:
-    name: cargo check (MSRV 1.80.0)
+    name: cargo check (MSRV 1.85.0)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -94,11 +94,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
 
-      - uses: dtolnay/rust-toolchain@1.80.0
+      - uses: dtolnay/rust-toolchain@1.85.0
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: msrv-1.80.0
+          key: msrv-1.85.0
 
       - name: cargo check --workspace --locked (MSRV)
         run: cargo check --workspace --all-targets --locked
