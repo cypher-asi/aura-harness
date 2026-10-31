@@ -15,7 +15,7 @@ id: string,
 /**
  * Model driving this member.
  */
-model: ModelSelection,
+model: ModelSelection, 
 /**
  * Optional semantic role for specialized Council-backed flows.
  * Ordinary AURA Council requests omit this field. Second Opinion

@@ -7,12 +7,7 @@
 //! workspace-internal dependency edge that points "upward" in the
 //! layer stack.
 //!
-//! Phase 6c (context-memory inversion) introduced the
-//! [`WARN_ONLY_UPWARD_EDGES`] allowlist with a single carve-out
-//! for an outstanding `aura-tools -> aura-kernel` edge that Phase 5
-//! left behind. Phase 9 promotes the rest of the workspace to
-//! strict mode: every upward edge that is NOT in
-//! [`WARN_ONLY_UPWARD_EDGES`] now fails CI. The Phase 9 audit also
+//! Every upward edge fails CI; there is no allowlist. The audit also
 //! validates that every `crates/<crate>/src/lib.rs` carries a
 //! `//! Layer: <layer>` doc-comment tag that matches the
 //! `KNOWN_CRATES` / naming-convention assignment.
@@ -22,9 +17,8 @@
 //! `core` < `store` < `config` < `model` < `context` < `plugin` <
 //! `exec` < `agent` < `fleet` < `surface`.
 //!
-//! Equal or downward edges are silently accepted. Upward edges and
-//! cross-shortcut edges produce a single `eprintln!` line each
-//! and (unless allowlisted) cause the test to fail.
+//! Equal or downward edges are silently accepted. Upward edges cause
+//! the test to fail.
 //!
 //! ## Parsing
 //!
@@ -46,41 +40,13 @@ const LAYER_ORDER: &[&str] = &[
     "core", "store", "config", "model", "context", "plugin", "exec", "agent", "fleet", "surface",
 ];
 
-/// Explicit overrides for crate names that don't follow the
-/// `aura-<layer>-<name>` convention yet. Empty string means "no
-/// layer assigned — skip from the warnings" (most legacy crates fall
-/// here today; later phases rename them and remove the entry).
-/// Upward dependency edges that have not yet been retired but are
-/// accepted for now (warn-only) because they belong to a future phase.
-///
-/// Each entry is `(consumer, dependency)` matching exactly how the
-/// edge appears in the `crates/*/Cargo.toml` files. Adding to this
-/// list requires a phase reference and a TODO so it can be retired.
-///
-/// Phase 9 strict-mode rule: this list should be EMPTY (or every
-/// entry must carry an explicit TODO with a phase reference and a
-/// reason why the edge cannot be broken without follow-up work).
-/// Silent allowlist entries are forbidden.
-///
-/// The single Phase 9 carve-out is the legacy exec→agent edge from
-/// `aura-tools` (Phase 5 exec split) to `aura-kernel` (a Phase 6a
-/// compatibility shell). The deep fix is to relocate
-/// `ExecuteContext`, `Executor`, `ExecutorError`, and `SpawnHook`
-/// from `aura-agent-kernel` to the exec layer (likely
-/// `aura-exec-runner` or a new `aura-exec-traits` crate); the
-/// follow-up is tracked as **Phase 10** and is intentionally NOT
-/// inlined into Phase 9 to keep this commit focused on the
-/// surface-layer split and CI-strict promotion.
-const WARN_ONLY_UPWARD_EDGES: &[(&str, &str)] = &[];
-
+/// Explicit layer assignments for crate names that don't follow the
+/// `aura-<layer>-<name>` convention. Empty string means "no layer
+/// assigned — skip".
 const KNOWN_CRATES: &[(&str, &str)] = &[
     // Root binary + dev/CI stuff — not a crate-layer thing.
     ("aura", "surface"),
     ("aura-node", "surface"),
-    // Pre-Phase-1 legacy names. The mapping below reflects the
-    // intended final layer for each. The layer-rank check uses these
-    // assignments, so today's warnings show where the as-is graph
-    // does not match the intended layering.
     ("aura-config", "config"),
     // Phase 2 store layer split:
     //   aura-store-db     — RocksDB-backed durable storage impl
@@ -89,20 +55,13 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-store-db", "store"),
     ("aura-store-record", "store"),
     ("aura-store-snapshot", "store"),
-    ("aura-tools", "exec"),
-    // Phase 5 exec layer split (1 legacy shell + 6 new crates):
-    //   aura-exec-conflict  — domain-scoped advisory locks (no aura-* deps)
+    // Exec layer: aura-tools holds the Tool impls, catalog and
+    // executor; the aura-exec-* crates are its primitives.
     //   aura-exec-isolation — worktree + copy isolation (no aura-* deps)
-    //   aura-exec-policy    — verdict over EffectivePermissions (depends on aura-core-permissions)
     //   aura-exec-sandbox   — FsSandbox + ProcessSandbox primitives (no aura-* deps)
-    //   aura-exec-tools     — re-export shell over aura-tools + sandbox + policy
-    //   aura-exec-runner    — re-export shell over aura-exec-tools + conflict + isolation
-    ("aura-exec-conflict", "exec"),
+    ("aura-tools", "exec"),
     ("aura-exec-isolation", "exec"),
-    ("aura-exec-policy", "exec"),
     ("aura-exec-sandbox", "exec"),
-    ("aura-exec-tools", "exec"),
-    ("aura-exec-runner", "exec"),
     // Phase 1 refactor: low-level executor/spawn traits relocated out
     // of aura-agent-kernel so aura-tools no longer depends upward.
     ("aura-exec-traits", "exec"),
@@ -121,7 +80,6 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // Phase 6a renamed `aura-kernel` to `aura-agent-kernel`; the
     // shell was removed in Phase 4.
     ("aura-agent-kernel", "agent"),
-    ("aura-agent-loop", "agent"),
     ("aura-agent-subagent", "agent"),
     ("aura-terminal", "surface"),
     ("aura-agent", "agent"),
@@ -158,12 +116,10 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-plugin-hooks", "plugin"),
     ("aura-plugin-mcp", "plugin"),
     ("aura-plugin-connectors", "plugin"),
-    // Phase 7a fleet layer (5 new crates):
+    // Fleet layer:
     //   aura-fleet-registry — in-memory agent slot directory
-    //   aura-fleet-quota    — tracking-only quota pool (Phase 7b enforces)
+    //   aura-fleet-quota    — tracking-only quota pool
     //   aura-fleet-spawn    — spawn mechanics + per-parent audit lease
-    //   aura-fleet-dispatch — Phase 7a single-source job adapter
-    //   aura-fleet-daemon   — composition root for the four above
     //
     // Fleet sits ABOVE agent and BELOW surface in the layer stack.
     // Fleet crates may depend on agent/exec/plugin/context/model/
@@ -174,32 +130,12 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-fleet-registry", "fleet"),
     ("aura-fleet-quota", "fleet"),
     ("aura-fleet-spawn", "fleet"),
-    ("aura-fleet-dispatch", "fleet"),
-    ("aura-fleet-mailbox", "fleet"),
-    ("aura-fleet-daemon", "fleet"),
     // Phase B / Commit 3 / Step 3a: fleet-layer concrete
     // SubagentDispatchHook impl. Wraps FleetSpawner; depends on the
     // agent-layer registry + adapter helpers in aura-agent-subagent.
-    // All edges downward — no WARN_ONLY_UPWARD_EDGES additions.
     ("aura-fleet-subagent", "fleet"),
-    // Phase 9 surface layer (5 new crates):
-    //   aura-surface-cli       — CLI composition root (ModeFlag,
-    //                            mode-resolution priority inputs).
-    //   aura-surface-sdk       — external AuraClient / AuraSession
-    //                            shape over aura-core-protocol.
-    //   aura-surface-terminal  — TUI surface-layer shell over the
-    //                            legacy aura-terminal crate, adds
-    //                            SlashModeCommand parsing.
-    //   aura-surface-automaton — automaton host surface-layer shell
-    //                            over the legacy aura-automaton.
-    //   aura-surface-auth      — zOS HTTP client + credential
-    //                            storage surface-layer shell over
-    //                            the legacy aura-auth.
+    // CLI composition root (ModeFlag, `--mode` resolution input).
     ("aura-surface-cli", "surface"),
-    ("aura-surface-sdk", "surface"),
-    ("aura-surface-terminal", "surface"),
-    ("aura-surface-automaton", "surface"),
-    ("aura-surface-auth", "surface"),
 ];
 
 /// Phase 9 strict-mode addition: verify every `crates/<name>/src/lib.rs`
@@ -329,7 +265,6 @@ fn warn_on_upward_layer_dependencies() {
         manifests.push((name, manifest));
     }
 
-    let mut warnings = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
     for (consumer, manifest) in &manifests {
@@ -347,27 +282,15 @@ fn warn_on_upward_layer_dependencies() {
             };
             let dep_rank = rank_of(dep_layer);
             if dep_rank > consumer_rank {
-                let is_warn_only = WARN_ONLY_UPWARD_EDGES
-                    .iter()
-                    .any(|(c, d)| *c == consumer.as_str() && *d == dep.as_str());
-                if is_warn_only {
-                    eprintln!(
-                        "LAYER WARN: {consumer} ({consumer_layer}) depends on {dep} \
-                         ({dep_layer}) — upward edge (allowlisted, see WARN_ONLY_UPWARD_EDGES)"
-                    );
-                    warnings += 1;
-                } else {
-                    failures.push(format!(
-                        "{consumer} ({consumer_layer}) depends on {dep} ({dep_layer}) — \
-                         upward edge not in WARN_ONLY_UPWARD_EDGES allowlist"
-                    ));
-                }
+                failures.push(format!(
+                    "{consumer} ({consumer_layer}) depends on {dep} ({dep_layer}) — upward edge"
+                ));
             }
         }
     }
 
     eprintln!(
-        "LAYER INFO: {} crates classified, {warnings} allowlisted warning(s), {} new violation(s)",
+        "LAYER INFO: {} crates classified, {} violation(s)",
         layer_map.len(),
         failures.len()
     );

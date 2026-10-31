@@ -222,8 +222,7 @@ pub struct AuraConfig {
     /// Subagent derivation + budget knobs (Phase 4a; consumed by the
     /// Phase 6a derivation path).
     pub subagent: SubagentConfig,
-    /// Conflict-lock knobs (Phase 4a; consumed by future
-    /// `aura-exec-conflict`).
+    /// Conflict-lock knobs (Phase 4a; no consumer today).
     pub conflict: ConflictConfig,
     /// Plugin enable/disable + per-plugin overrides (Phase 4a;
     /// populated from operator config in Phase 4b).

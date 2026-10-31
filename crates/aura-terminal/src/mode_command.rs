@@ -1,38 +1,8 @@
-//! # aura-surface-terminal
+//! Typed `/mode <name>` slash-command parser.
 //!
-//! Layer: surface
-//!
-//! Phase 9 relocation shell for the Aura TUI. The underlying TUI
-//! implementation continues to live in the legacy `aura-terminal`
-//! crate; this surface-layer crate re-exports it so the layered
-//! `aura-<layer>-<name>` convention applies to the binary front-end
-//! the same way it applies to `aura-fleet-*` and `aura-agent-*`
-//! crates.
-//!
-//! Code that was previously written against `aura_terminal::*` may
-//! import from `aura_surface_terminal::*` instead; both paths are
-//! source-compatible while the migration completes.
-//!
-//! ## Invariants ([`.cursor/rules.md`] §13)
-//!
-//! - This crate adds no runtime behaviour. It exists to make the
-//!   workspace `Cargo.toml` topology match the documented layer
-//!   stack. The single semantic addition is [`SlashModeCommand`],
-//!   the typed `/mode` slash-command shape used at session start to
-//!   feed the [`aura_core_modes::AgentMode`] resolution priority.
-//! - No upward dependency on `aura-runtime` or `aura-fleet-*`. The
-//!   TUI talks to a fleet daemon through the surface-layer
-//!   composition root (`aura-surface-cli`), never directly.
-//!
-//! ## Failure modes
-//!
-//! - [`ModeCommandError::UnknownMode`] — operator typed `/mode foo`
-//!   with `foo` not in {`agent`, `plan`, `ask`, `debug`}.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::all)]
-
-pub use aura_terminal::*;
+//! Not wired into the TUI input loop yet: changing mode mid-session
+//! must append a System record before the next tool proposal, so the
+//! `/mode` command is not part of the documented resolution chain.
 
 use aura_core_modes::AgentMode;
 use thiserror::Error;
@@ -49,10 +19,6 @@ pub enum ModeCommandError {
 }
 
 /// Parsed `/mode <name>` slash-command payload.
-///
-/// Surfaced from the TUI input layer to the surface-layer
-/// composition root so the resolution priority described in the
-/// Phase 9 plan can be applied uniformly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlashModeCommand {
     /// The parsed mode the operator typed.

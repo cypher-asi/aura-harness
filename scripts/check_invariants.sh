@@ -7,13 +7,12 @@
 # to detect forbidden code patterns outside their allowed modules and
 # fails with exit code 1 on the first violation.
 #
-# Active crate layout (post-Phase-10):
-#   - kernel: `aura-agent-kernel/` (active) + `aura-kernel/` (Phase 6a shell)
-#   - store:  `aura-store-db/` (active) + `aura-store/` (Phase 2 shell) +
-#             `aura-store-record/` (per-agent RecordLog trait) +
-#             `aura-store-snapshot/` (replay snapshot trait)
-#   - reasoner: `aura-model-reasoner/` (active) + `aura-reasoner/` (shell)
-#   - memory:   `aura-context-memory/` (active) + `aura-memory/` (shell)
+# Crate layout:
+#   - kernel:   `aura-agent-kernel/`
+#   - store:    `aura-store-db/` + `aura-store-record/` (per-agent RecordLog
+#               trait) + `aura-store-snapshot/` (replay snapshot trait)
+#   - reasoner: `aura-model-reasoner/`
+#   - memory:   `aura-context-memory/`
 #
 # When a legitimate new call-site needs to land (e.g. a newly-approved
 # gateway that routes `.complete(` through the kernel, or a fleet-layer
@@ -74,26 +73,22 @@ run_band() {
 }
 
 # §1/§3 — `.complete(` must only appear inside:
-#   - the kernel itself (`aura-agent-kernel/`; `aura-kernel/` is a Phase 6a
-#     re-export shell)
+#   - the kernel itself (`aura-agent-kernel/`)
 #   - the agent-side recording seams (kernel_gateway.rs, recording_stream.rs)
-#   - the reasoner provider internals and their mocks (`aura-model-reasoner/`;
-#     `aura-reasoner/` is the Phase 3 re-export shell)
+#   - the reasoner provider internals and their mocks (`aura-model-reasoner/`)
 #   - the automaton runtime (wraps its provider with KernelModelGateway before
 #     handing it over)
 #   - the memory subsystem, which only ever holds an Arc<KernelModelGateway>
-#     (`aura-context-memory/`; `aura-memory/` is the Phase 3 shell)
+#     (`aura-context-memory/`)
 #   - any *test* file (unit, integration, harness shims)
 run_band "§1/§3" "direct ModelProvider::complete call outside the recording seam" \
     '\.complete\(' \
-    '^(crates/aura-agent-kernel/|crates/aura-kernel/|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-agent/src/event_sequence_tests\.rs|crates/aura-model-reasoner/|crates/aura-reasoner/|crates/aura-automaton/|crates/aura-context-memory/|crates/aura-memory/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-agent-kernel/|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-agent/src/event_sequence_tests\.rs|crates/aura-model-reasoner/|crates/aura-automaton/|crates/aura-context-memory/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §2 — direct store append functions bypass the per-agent kernel's
 # seq/context-hash pipeline unless they are inside:
-#   - the active kernel impl (`aura-agent-kernel/`; `aura-kernel/` is the
-#     Phase 6a re-export shell)
-#   - the active store impl (`aura-store-db/`; `aura-store/` is the Phase 2
-#     re-export shell)
+#   - the kernel impl (`aura-agent-kernel/`)
+#   - the store impl (`aura-store-db/`)
 #   - the abstract per-agent `RecordLog` trait (`aura-store-record/`)
 #   - tests
 #
@@ -108,7 +103,7 @@ run_band "§1/§3" "direct ModelProvider::complete call outside the recording se
 # never names an `append_entry_*` symbol, so no allowlist entry is needed.
 run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
     'append_entry_(atomic|dequeued|direct|entries_batch)' \
-    '^(crates/aura-agent-kernel/|crates/aura-kernel/|crates/aura-store-db/|crates/aura-store/|crates/aura-store-record/|crates/aura-runtime/src/tool_permissions\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-agent-kernel/|crates/aura-store-db/|crates/aura-store-record/|crates/aura-runtime/src/tool_permissions\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — raw `git` processes must live in a kernel-mediated executor or in a
 # declared infrastructure exception.
@@ -139,9 +134,8 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared excepti
 # `Arc<dyn Store>` exposes the sealed `WriteStore` surface. It is only
 # legitimate in:
 #
-#   * The active kernel + store impl crates (`aura-agent-kernel`,
-#     `aura-store-db`, `aura-store-record`) and their Phase-2/6 re-export
-#     shells (`aura-kernel`, `aura-store`).
+#   * The kernel + store impl crates (`aura-agent-kernel`,
+#     `aura-store-db`, `aura-store-record`).
 #   * Test scaffolding (`mod tests`, `tests/`, `*_tests.rs`).
 #   * A bounded set of production sites that must hand a store handle to a
 #     per-agent `Kernel::new` (which still takes `Arc<dyn Store>`). Each is
@@ -168,8 +162,6 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared excepti
 #   - crates/aura-runtime/src/node.rs            — boots the process-wide store and wires runtime surfaces
 #   - crates/aura-runtime/src/tool_permissions.rs — HTTP-driven tool-permissions
 #                                                  append serialized via the §12.a claim
-#   - crates/aura-fleet-daemon/src/lib.rs        — FleetDaemon::new holds the store handle
-#                                                  passed to FleetSpawner
 #   - crates/aura-fleet-spawn/src/spawner.rs     — FleetSpawner holds the store for
 #                                                  write_system_record SubagentSpawn audit rows
 #                                                  (§12.b ParentLeaseRegistry serialises these)
@@ -184,14 +176,13 @@ run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared excepti
 #   - crates/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/aura-agent-kernel/|crates/aura-kernel/|crates/aura-store-db/|crates/aura-store/|crates/aura-store-record/|crates/aura-runtime/src/gateway/state\.rs|crates/aura-runtime/src/gateway/session/mod\.rs|crates/aura-runtime/src/gateway/session/cross_agent_hook\.rs|crates/aura-runtime/src/gateway/session/child_kernel\.rs|crates/aura-engine/src/scheduler\.rs|crates/aura-engine/src/automaton/|crates/aura-engine/src/child_runner\.rs|crates/aura-engine/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|crates/aura-fleet-daemon/|crates/aura-fleet-spawn/|crates/aura-fleet-subagent/src/dispatch\.rs|crates/aura-surface-cli/src/runner\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-memory/src/test_kernel\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-agent-kernel/|crates/aura-store-db/|crates/aura-store-record/|crates/aura-runtime/src/gateway/state\.rs|crates/aura-runtime/src/gateway/session/mod\.rs|crates/aura-runtime/src/gateway/session/cross_agent_hook\.rs|crates/aura-runtime/src/gateway/session/child_kernel\.rs|crates/aura-engine/src/scheduler\.rs|crates/aura-engine/src/automaton/|crates/aura-engine/src/child_runner\.rs|crates/aura-engine/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|crates/aura-fleet-spawn/|crates/aura-fleet-subagent/src/dispatch\.rs|crates/aura-surface-cli/src/runner\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files
 # in the same tree are exempt since they assemble scaffolding.
 #
-# The pattern catches both `use aura_store_db::` (the Phase 2 re-export shell)
-# and `use aura_store_db::` (the active impl crate).
+# The pattern catches `use aura_store_db::` and the legacy `use aura_store::`.
 store_hits=$(rg -n --hidden --glob '!target/**' --glob '!.git/**' --type rust \
     --glob 'crates/aura-agent/src/agent_loop/**' \
     --glob '!**/*test*.rs' --glob '!**/*tests*.rs' \
