@@ -7,6 +7,7 @@ mod commands;
 mod format;
 mod keys;
 mod shell_input;
+mod shell_prompt;
 
 #[cfg(test)]
 mod tests;
@@ -149,6 +150,8 @@ pub struct App {
     pub(super) areas: PanelAreas,
     /// When the in-flight turn started (`None` unless processing)
     pub(super) processing_since: Option<Instant>,
+    /// `[user@host dir]$ ` shown before the input line
+    pub(super) shell_prompt: String,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -224,6 +227,7 @@ impl App {
             agents_scroll: 0,
             areas: PanelAreas::default(),
             processing_since: None,
+            shell_prompt: shell_prompt::detect(),
         }
     }
 
@@ -593,6 +597,17 @@ impl App {
     #[must_use]
     pub fn user(&self) -> Option<&str> {
         self.user.as_deref()
+    }
+
+    /// Bash-style `[user@host dir]$ ` prompt shown before the input line.
+    #[must_use]
+    pub fn shell_prompt(&self) -> &str {
+        &self.shell_prompt
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_shell_prompt(&mut self, prompt: &str) {
+        self.shell_prompt = prompt.to_string();
     }
 
     /// Highlighted row in the model selector.

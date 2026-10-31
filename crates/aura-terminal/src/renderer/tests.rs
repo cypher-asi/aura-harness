@@ -434,9 +434,14 @@ fn test_chat_message_text_column_is_aligned() {
 }
 
 fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
+    render_rows(&mut app_with_model(user), width)
+}
+
+fn app_with_model(user: Option<&str>) -> crate::App {
     use crate::events::{ModelOptionView, UiCommand};
 
     let mut app = crate::App::new();
+    app.set_shell_prompt("[n3o@arch-aura aura-harness]$ ");
     app.process_command(UiCommand::SetModels {
         options: vec![ModelOptionView {
             id: "local/qwen3:4b".to_string(),
@@ -451,7 +456,7 @@ fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
         url: Some("http://127.0.0.1:8080".to_string()),
         active: true,
     });
-    render_rows(&mut app, width)
+    app
 }
 
 fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
@@ -488,9 +493,53 @@ fn test_header_shows_local_url_and_model_moves_to_input() {
         rows[n - 1]
     );
     let input_row = rows[n - 2].trim_end();
-    assert!(input_row.contains("> "), "{input_row:?}");
+    assert!(
+        input_row.contains("[n3o@arch-aura aura-harness]$ "),
+        "{input_row:?}"
+    );
+    assert!(!input_row.contains("> "), "{input_row:?}");
     assert!(input_row.ends_with("qwen3:4b  ● Ready"), "{input_row:?}");
     assert!(!input_row.contains("/model"));
+}
+
+fn type_text(app: &mut crate::App, text: &str) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    for c in text.chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+}
+
+#[test]
+fn test_prompt_sits_in_gutter_left_of_chat_aligned_typing() {
+    let mut app = app_with_model(None);
+    app.set_shell_prompt("[u@h d]$ ");
+    type_text(&mut app, "hello");
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+
+    // Swarm takes 20% of 120 columns; typing starts past the chat padding
+    // (3) and indent (2), the same column the old `> ` chevron led to.
+    let typing_col = 24 + 3 + 2;
+    let chars: Vec<char> = input_row.chars().collect();
+    let prompt: String = chars[typing_col - 9..typing_col].iter().collect();
+    let typed: String = chars[typing_col..typing_col + 5].iter().collect();
+    assert_eq!(prompt, "[u@h d]$ ", "{input_row:?}");
+    assert_eq!(typed, "hello", "{input_row:?}");
+}
+
+#[test]
+fn test_prompt_pushes_typing_right_without_gutter() {
+    let mut app = app_with_model(None);
+    submit_message(&mut app, "/swarm");
+    type_text(&mut app, "hello");
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+
+    assert!(
+        input_row.starts_with(" [n3o@arch-aura aura-harness]$ hello"),
+        "{input_row:?}"
+    );
 }
 
 #[test]

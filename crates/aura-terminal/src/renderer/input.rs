@@ -14,6 +14,8 @@ use ratatui::{
 const MODEL_GAP: u16 = 2;
 /// Below this many typing columns the model indicator is hidden.
 const MIN_INPUT_WIDTH: u16 = 20;
+/// Columns between the chat-aligned input edge and the typing column.
+const TYPING_INDENT: u16 = 2;
 
 /// Render input line with the current model and status on the right.
 /// `left_offset` shifts the input area to align with the chat panel when swarm is visible.
@@ -77,7 +79,7 @@ pub(super) fn render_input(
         frame.render_widget(Paragraph::new(Line::from(model_spans)), model_area);
     }
 
-    let input_width = usable_width.saturating_sub(status_len + 2 + left_offset + left_reserved);
+    let input_right = area.x + usable_width.saturating_sub(status_len + 2 + left_reserved);
 
     let status_area = Rect {
         x: area.x + usable_width.saturating_sub(status_len),
@@ -88,39 +90,45 @@ pub(super) fn render_input(
     let status_line = Line::from(Span::styled(&status_text, status_style));
     frame.render_widget(Paragraph::new(status_line), status_area);
 
-    let chat_padding: u16 = if left_offset > 0 { 3 } else { EDGE_INSET };
-    let input_area = Rect {
-        x: area.x + left_offset + chat_padding,
-        y: area.y,
-        width: input_width.saturating_sub(chat_padding),
-        height: 1,
-    };
-
     let (prompt_str, display_input) = match app.state() {
         AppState::LoginEmail => ("Email: ", input.to_string()),
         AppState::LoginPassword => ("Password: ", "•".repeat(input.len())),
-        _ => ("> ", input.to_string()),
+        _ => (app.shell_prompt(), input.to_string()),
+    };
+    let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
+
+    // The prompt sits in the gutter left of the chat-aligned typing column,
+    // and only pushes typing right when the gutter is too narrow for it.
+    let chat_padding: u16 = if left_offset > 0 { 3 } else { EDGE_INSET };
+    let typing_x = (area.x + left_offset + chat_padding + TYPING_INDENT)
+        .max(area.x + EDGE_INSET + prompt_width);
+    let prompt_area = Rect {
+        x: typing_x - prompt_width,
+        y: area.y,
+        width: prompt_width.min(input_right.saturating_sub(typing_x - prompt_width)),
+        height: 1,
+    };
+    let input_area = Rect {
+        x: typing_x,
+        y: area.y,
+        width: input_right.saturating_sub(typing_x),
+        height: 1,
     };
 
-    let content = Line::from(vec![
-        Span::styled(prompt_str, Style::default().fg(prompt_color)),
-        Span::styled(display_input, Style::default().fg(theme.colors.muted)),
-    ]);
-
-    frame.render_widget(Paragraph::new(content), input_area);
+    frame.render_widget(
+        Paragraph::new(Span::styled(prompt_str, Style::default().fg(prompt_color))),
+        prompt_area,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            display_input,
+            Style::default().fg(theme.colors.muted),
+        )),
+        input_area,
+    );
 
     if !is_thinking {
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "cursor position fits in terminal width"
-        )]
-        let prompt_len = prompt_str.len() as u16;
-        let cursor_x = area.x
-            + left_offset
-            + chat_padding
-            + prompt_len
-            + u16::try_from(cursor_pos).unwrap_or(u16::MAX);
-        let cursor_y = area.y;
-        frame.set_cursor_position((cursor_x, cursor_y));
+        let cursor_x = typing_x.saturating_add(u16::try_from(cursor_pos).unwrap_or(u16::MAX));
+        frame.set_cursor_position((cursor_x, area.y));
     }
 }
