@@ -30,8 +30,6 @@ pub struct Message {
 /// A shell command typed by the user and its terminal output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellRun {
-    /// `[user@host dir]$ ` prompt shown before the command
-    pub prompt: String,
     /// Command line as typed
     pub command: String,
     /// Terminal output (may contain ANSI styling); `None` while running
@@ -55,10 +53,9 @@ impl Message {
 
     /// A shell command the user ran; output is filled in by [`Self::finish_shell`].
     #[must_use]
-    pub fn shell(prompt: &str, command: &str) -> Self {
+    pub fn shell(command: &str) -> Self {
         let mut message = Self::new(MessageRole::User, command);
         message.shell = Some(ShellRun {
-            prompt: prompt.to_string(),
             command: command.to_string(),
             output: None,
             exit_code: None,

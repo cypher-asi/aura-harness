@@ -459,7 +459,7 @@ impl App {
             let mut msg = data.command.as_deref().map_or_else(
                 || Message::new(data.role, &data.content),
                 |command| {
-                    let mut msg = Message::shell(&self.shell_prompt, command);
+                    let mut msg = Message::shell(command);
                     msg.finish_shell("", None);
                     msg
                 },

@@ -814,17 +814,19 @@ fn test_command_output_renders_like_a_terminal() {
     let rows = render_rows(&mut app, 120);
     let echo = rows
         .iter()
-        .position(|r| r.contains("[u@h d]$ ls -la"))
+        .position(|r| r.contains("<YOU>  ls -la"))
         .unwrap();
+    assert!(!rows.join("\n").contains("[u@h d]$ ls"));
     let total = &rows[echo + 1];
     let listing = &rows[echo + 2];
     assert!(total.contains("total 0"), "{total:?}");
     assert!(listing.contains("drwxr-xr-x  2 u u  40 src"), "{listing:?}");
     assert!(!rows.join("\n").contains('\x1b'));
+    let column = |row: &str, needle: &str| row.find(needle).map(|i| row[..i].chars().count());
     assert_eq!(
-        total.find("total"),
-        rows[echo].find("[u@h"),
-        "output starts under the prompt"
+        column(total, "total"),
+        column(&rows[echo], "ls -la"),
+        "output starts under the command"
     );
 
     let y = u16::try_from(echo + 2).unwrap();
@@ -847,6 +849,9 @@ fn test_failed_command_shows_exit_code() {
     });
 
     let rows = render_rows(&mut app, 120);
-    let echo = rows.iter().position(|r| r.contains("$ false")).unwrap();
+    let echo = rows
+        .iter()
+        .position(|r| r.contains("<YOU>  false"))
+        .unwrap();
     assert!(rows[echo + 1].contains("exit 1"), "{:?}", rows[echo + 1]);
 }

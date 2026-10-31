@@ -222,7 +222,7 @@ fn test_command_output_fills_the_shell_message() {
 fn test_command_width_follows_the_chat() {
     let (tx, mut rx) = mpsc::channel(1);
     let mut app = App::new().with_event_sender(tx);
-    app.set_chat_width(111);
+    app.set_chat_width(118);
 
     submit(&mut app, "!ls");
 

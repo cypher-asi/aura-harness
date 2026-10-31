@@ -28,8 +28,9 @@ use tokio::sync::mpsc;
 /// Maximum number of messages to keep in history.
 const MAX_MESSAGES: usize = 100;
 
-/// Width of the `[HH:MM:SS] ` column; shell command output starts after it.
-pub(crate) const TIMESTAMP_WIDTH: usize = 11;
+/// Columns before a chat message's text: `[HH:MM:SS] <AURA> `. Shell
+/// command output starts here too.
+pub(crate) const MESSAGE_BODY_INDENT: usize = 18;
 
 /// Terminal width given to commands run before the chat is first drawn.
 const DEFAULT_COMMAND_COLUMNS: u16 = 80;
@@ -733,7 +734,7 @@ impl App {
         if self.chat_width == 0 {
             return DEFAULT_COMMAND_COLUMNS;
         }
-        let indent = u16::try_from(TIMESTAMP_WIDTH).unwrap_or(u16::MAX);
+        let indent = u16::try_from(MESSAGE_BODY_INDENT).unwrap_or(u16::MAX);
         self.chat_width
             .saturating_sub(indent)
             .max(MIN_COMMAND_COLUMNS)

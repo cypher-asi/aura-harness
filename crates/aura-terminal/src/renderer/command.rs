@@ -1,9 +1,9 @@
 //! Shell command rendering: highlighted command lines and terminal output.
 
-use super::input::prompt_spans;
+use super::segments::{message_style, nick_label};
 use crate::app::shell_input::{tokens, TokenKind};
-use crate::app::TIMESTAMP_WIDTH;
-use crate::components::ShellRun;
+use crate::app::MESSAGE_BODY_INDENT;
+use crate::components::{MessageRole, ShellRun};
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
@@ -36,30 +36,34 @@ fn token_style(kind: TokenKind, theme: &Theme) -> Style {
     }
 }
 
-/// Chat lines for a shell command: `[HH:MM:SS] [user@host dir]$ ls -la`,
-/// then the output below the prompt as a terminal would show it.
+/// Chat lines for a shell command: `[HH:MM:SS] <YOU>  ls -la`, then the
+/// output below the command as a terminal would show it.
 pub(super) fn shell_lines(
     run: &ShellRun,
     timestamp: &str,
     content_width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let width = content_width.saturating_sub(TIMESTAMP_WIDTH);
-    let indent = || Span::raw(" ".repeat(TIMESTAMP_WIDTH));
+    let width = content_width.saturating_sub(MESSAGE_BODY_INDENT);
+    let indent = || Span::raw(" ".repeat(MESSAGE_BODY_INDENT));
     let mut lines = Vec::new();
 
-    let mut echo = prompt_spans(&run.prompt, theme.colors.primary, theme);
-    echo.extend(command_spans(&run.command, theme));
-    for (i, row) in wrap_spans(owned(echo), width).into_iter().enumerate() {
+    let (nick, nick_color, _) = message_style(MessageRole::User, theme);
+    let echo = owned(command_spans(&run.command, theme));
+    for (i, row) in wrap_spans(echo, width).into_iter().enumerate() {
         let lead = if i == 0 {
-            Span::styled(
-                format!("[{timestamp}] "),
-                Style::default().fg(theme.colors.muted),
-            )
+            vec![
+                Span::styled(
+                    format!("[{timestamp}] "),
+                    Style::default().fg(theme.colors.muted),
+                ),
+                Span::styled(nick_label(nick), Style::default().fg(nick_color)),
+                Span::raw(" "),
+            ]
         } else {
-            indent()
+            vec![indent()]
         };
-        lines.push(Line::from([vec![lead], row].concat()));
+        lines.push(Line::from([lead, row].concat()));
     }
 
     let output = run.output.as_deref().unwrap_or_default();

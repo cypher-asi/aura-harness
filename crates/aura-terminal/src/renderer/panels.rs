@@ -2,11 +2,12 @@
 
 use super::command::shell_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
-use super::segments::{
-    message_style, nick_label, render_code_segment, render_text_segment, NICK_WIDTH,
-};
+use super::segments::{message_style, nick_label, render_code_segment, render_text_segment};
 use super::text::{display_width, wrap_words};
-use crate::{app::PanelFocus, App, Theme};
+use crate::{
+    app::{PanelFocus, MESSAGE_BODY_INDENT},
+    App, Theme,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -197,7 +198,7 @@ fn build_chat_lines<'a>(app: &App, content_width: usize, theme: &Theme) -> Vec<L
             continue;
         }
         let (nick, nick_color, msg_color) = message_style(message.role(), theme);
-        let prefix_width = 11 + NICK_WIDTH + 2 + 1;
+        let prefix_width = MESSAGE_BODY_INDENT;
         let first_line_width = content_width.saturating_sub(prefix_width);
         let continuation_width = content_width.saturating_sub(prefix_width);
 

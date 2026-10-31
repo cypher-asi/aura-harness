@@ -390,10 +390,7 @@ impl App {
         }
 
         if let Some(command) = super::shell_input::parse(&text) {
-            self.add_message(crate::components::Message::shell(
-                &self.shell_prompt,
-                &command,
-            ));
+            self.add_message(crate::components::Message::shell(&command));
             self.state = AppState::Processing;
             self.status = "Running...".to_string();
             let cols = self.command_columns();
