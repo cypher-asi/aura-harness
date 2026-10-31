@@ -1,13 +1,14 @@
 //! Loading and displaying historical records from the store.
 
 use crate::agent_registry::AgentRegistry;
+use aura_agent_kernel::decode_tool_effect;
 use aura_core_types::{
-    ActionResultPayload, AgentId, EffectStatus, RecordEntry, ToolExecution, ToolGateVerdict,
-    ToolProposal, Transaction, TransactionType,
+    ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
+    RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
 };
 use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
-    events::{AgentSummary, MessageData, MessageRole, RecordStatus, RecordSummary},
+    events::{AgentSummary, MessageData, MessageRole, PolicyDetail, RecordStatus, RecordSummary},
     UiCommand,
 };
 use serde_json::Value;
@@ -156,13 +157,19 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             MessageRole::Assistant,
             String::from_utf8_lossy(&tx.payload).into_owned(),
         ),
-        TransactionType::ToolProposal | TransactionType::ToolExecution => {
+        TransactionType::ToolProposal => {
             let info = extract_tool_info(tx);
             if info.is_empty() {
                 return None;
             }
-            (MessageRole::System, format!("🔧 {info}"))
+            (MessageRole::System, format!("$ {info}"))
         }
+        TransactionType::PolicyDecision => (
+            MessageRole::System,
+            serde_json::from_slice::<PolicyDecision>(&tx.payload)
+                .ok()
+                .map(|decision| policy_chat_line(&decision))?,
+        ),
         TransactionType::SessionStart => (MessageRole::System, "── new session ──".to_string()),
         _ => return None,
     };
@@ -244,15 +251,108 @@ pub fn build_record_summary(
         action_count: entry.actions.len(),
         effect_status,
         status,
-        info: summarize_record(tx),
+        info: summarize_entry(tx, entry),
         error_details,
         tx_id: hex::encode(tx.hash.as_bytes()),
         agent_id: hex::encode(tx.agent_id.as_bytes()),
         ts_ms: tx.ts_ms,
+        policy: policy_detail(tx),
     }
 }
 
-fn format_local_time(ts_ms: u64) -> String {
+/// One-line chat rendering of a policy decision, e.g.
+/// `policy: read_file allowed by user_default.full_access`.
+#[must_use]
+pub fn policy_chat_line(decision: &PolicyDecision) -> String {
+    let outcome = match decision.verdict {
+        ToolGateVerdict::Approved => "allowed",
+        ToolGateVerdict::Denied => "denied",
+        ToolGateVerdict::PendingApproval => "needs approval",
+    };
+    format!(
+        "policy: {} {outcome} by {}",
+        decision.tool, decision.decided_by
+    )
+}
+
+/// Policy provenance for the record detail view; `None` for entries that
+/// are not policy decisions.
+fn policy_detail(tx: &Transaction) -> Option<PolicyDetail> {
+    if tx.tx_type != TransactionType::PolicyDecision {
+        return None;
+    }
+    let decision = serde_json::from_slice::<PolicyDecision>(&tx.payload).ok()?;
+    let approval = decision
+        .approval
+        .as_ref()
+        .map_or_else(String::new, |approval| {
+            let approver = match &approval.approver {
+                PolicyApprover::Hook => "hook".to_string(),
+                PolicyApprover::User { user_id: Some(id) } => format!("user {id}"),
+                PolicyApprover::User { user_id: None } => "user".to_string(),
+            };
+            match approval.remember.as_deref() {
+                Some(remember) => format!("{approver} ({remember})"),
+                None => approver,
+            }
+        });
+    Some(PolicyDetail {
+        tool: decision.tool.clone(),
+        verdict: verdict_label(decision.verdict).to_string(),
+        decided_by: decision.decided_by.to_string(),
+        reason: decision.reason.clone().unwrap_or_default(),
+        trace: decision
+            .trace
+            .iter()
+            .map(|check| {
+                let outcome = match check.outcome {
+                    PolicyCheckOutcome::Allow => "allow",
+                    PolicyCheckOutcome::Deny => "deny ",
+                    PolicyCheckOutcome::Ask => "ask  ",
+                };
+                format!("{outcome} {}", check.rule)
+            })
+            .collect(),
+        approval,
+        mode: decision.mode,
+        policy_hash: decision.policy_hash,
+        proposal_tx: tx
+            .reference_tx_hash
+            .map(|hash| hash.to_hex())
+            .unwrap_or_default(),
+    })
+}
+
+const fn verdict_label(verdict: ToolGateVerdict) -> &'static str {
+    match verdict {
+        ToolGateVerdict::Approved => "approved",
+        ToolGateVerdict::Denied => "denied",
+        ToolGateVerdict::PendingApproval => "pending_approval",
+    }
+}
+
+/// Like [`summarize_record`], but tool executions read their output from
+/// the entry's effects (the kernel no longer copies it into the payload).
+fn summarize_entry(tx: &Transaction, entry: &RecordEntry) -> String {
+    if tx.tx_type == TransactionType::ToolExecution {
+        if let Ok(mut execution) = serde_json::from_slice::<ToolExecution>(&tx.payload) {
+            if execution.result.is_none() {
+                if let Some(effect) = entry.effects.first() {
+                    let decoded = decode_tool_effect(effect);
+                    execution.is_error |= decoded.is_error;
+                    execution.result = Some(decoded.content);
+                }
+            }
+            return truncate_chars(
+                &collapse_whitespace(&summarize_tool_execution(&execution)),
+                MAX_INFO_CHARS,
+            );
+        }
+    }
+    summarize_record(tx)
+}
+
+pub(crate) fn format_local_time(ts_ms: u64) -> String {
     i64::try_from(ts_ms)
         .ok()
         .and_then(chrono::DateTime::from_timestamp_millis)
@@ -277,6 +377,7 @@ pub fn tx_type_label(tx_type: TransactionType) -> (&'static str, &'static str) {
         TransactionType::Trigger => ("Trigger", "SYSTEM"),
         TransactionType::SessionStart => ("Session", "SYSTEM"),
         TransactionType::ToolProposal => ("ToolCall", "LLM"),
+        TransactionType::PolicyDecision => ("Policy", "KERNEL"),
         TransactionType::ToolExecution => ("ToolRes", "KERNEL"),
         TransactionType::ProcessComplete => ("Complete", "SYSTEM"),
         TransactionType::Reasoning => ("LLM", "KERNEL"),
@@ -297,6 +398,8 @@ pub fn summarize_record(tx: &Transaction) -> String {
             ),
         TransactionType::ToolExecution => serde_json::from_slice::<ToolExecution>(&tx.payload)
             .map_or_else(|_| payload_text(tx), |e| summarize_tool_execution(&e)),
+        TransactionType::PolicyDecision => serde_json::from_slice::<PolicyDecision>(&tx.payload)
+            .map_or_else(|_| payload_text(tx), |d| summarize_policy_decision(&d)),
         TransactionType::ActionResult | TransactionType::ProcessComplete => {
             serde_json::from_slice::<ActionResultPayload>(&tx.payload)
                 .map_or_else(|_| payload_text(tx), |r| summarize_action_result(&r))
@@ -353,6 +456,15 @@ fn summarize_tool_execution(execution: &ToolExecution) -> String {
             None => format!("{call} · ok"),
         },
     }
+}
+
+fn summarize_policy_decision(decision: &PolicyDecision) -> String {
+    let verdict = match decision.verdict {
+        ToolGateVerdict::Approved => "allow",
+        ToolGateVerdict::Denied => "deny",
+        ToolGateVerdict::PendingApproval => "ask",
+    };
+    format!("{} · {verdict} · {}", decision.tool, decision.decided_by)
 }
 
 fn summarize_action_result(result: &ActionResultPayload) -> String {

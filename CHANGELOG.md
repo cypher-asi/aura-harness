@@ -7,6 +7,43 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Auditable tool calls — policy decisions in the record
+
+Every tool call is now three record entries, so the record shows which
+policy rule allowed (or denied) each call.
+
+##### Breaking changes
+
+- Record schema `SCHEMA_VERSION` is now `3`. A tool call is recorded
+  as a bare `ToolProposal` entry, then a `PolicyDecision` entry
+  (references the proposal hash; carries the decision), then, for
+  approved calls only, a `ToolExecution` entry (references the
+  decision hash; carries the actions and effects). Batched calls record
+  every proposal/decision pair before any execution. The kernel writes
+  only v3; earlier entries stay readable.
+- `ProcessResult.entry` for a tool call is the last entry written (the
+  execution, or the decision when the call did not run). The new
+  `ProcessResult.policy_decision` points at the decision and proposal.
+- `PolicyDecision` and `ToolExecution` transactions are kernel-only:
+  `process_direct` / `process_dequeued` reject them.
+
+##### Added
+
+- `aura_core_types::PolicyDecision`: the verdict, the deciding
+  `PolicyRule` (`source` + `rule`, e.g.
+  `user_default.per_tool[run_command]=on`), the trace of every gate
+  evaluated, any live approval (hook or user, with its remember scope),
+  the agent mode, and a hash of the evaluated policy configuration.
+- `KernelConfig.tool_audit_observer` (`ToolAuditObserver`): called as
+  each tool-call entry is persisted.
+- WebSocket `tool_policy_decision` outbound message, sent when a
+  decision is recorded and before the tool runs.
+- `GET /agents/:agent_id/tool_calls/:tool_use_id/audit` returns the
+  proposal, decision, and execution entries for one tool call.
+- Terminal UI: tool-call entries appear live in the RECORD panel, each
+  decision adds a `policy: <tool> allowed by <rule>` chat line, and the
+  record detail view has a "Policy decision" section.
+
 ### Simplification — enforce modes, collapse crates, sync docs
 
 Three phases that make the runtime match what it documents: the

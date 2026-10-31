@@ -292,7 +292,7 @@ sequence of append-only entries.
 ### Schema versioning
 
 [`aura_store_record::SCHEMA_VERSION`](../crates/aura-store-record/src/lib.rs) is
-currently `2`. The Phase 10 bump consolidated three closed-enum additions:
+currently `3`. The Phase 10 bump (v2) consolidated three closed-enum additions:
 
 - `RecordKind::SessionStop` — reserved session-lifecycle tag. No production
   writer emits it today; the variant keeps the wire tag stable.
@@ -304,7 +304,21 @@ currently `2`. The Phase 10 bump consolidated three closed-enum additions:
 Older binaries reading v2 logs gracefully degrade unknown tags via
 `RecordKind::Unknown` (serde `#[serde(other)]` fallback in
 [`crates/aura-store-record/src/kind.rs`](../crates/aura-store-record/src/kind.rs)).
-The kernel writes only v2 going forward.
+
+Version `3` adds `TransactionType::PolicyDecision` and records every tool
+call as linked entries:
+
+1. `ToolProposal` — the bare proposal, no decision or effects.
+2. `PolicyDecision` — `reference_tx_hash` = proposal hash; payload names the
+   verdict, the rule that decided (`decided_by`), the ordered gate trace, any
+   live approval (hook or user + remember scope), and a hash of the policy
+   configuration. `entry.proposals` / `entry.decision` live here.
+3. `ToolExecution` — only for approved calls; `reference_tx_hash` = decision
+   hash; carries `entry.actions` / `entry.effects`.
+
+Entries 1 and 2 are persisted before the executor runs. `PolicyDecision` and
+`ToolExecution` are kernel-only and rejected by `POST /tx`. v2 single-entry
+tool rows still parse and render. The kernel writes only v3 going forward.
 
 **Enforcement:** [`crates/aura-store-db/tests/invariant_atomicity.rs`](../crates/aura-store-db/tests/invariant_atomicity.rs)
 — `static_assertions::assert_impl_all!(RocksStore: WriteStore, Store)` pins

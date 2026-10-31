@@ -184,7 +184,8 @@ fn build_replay_kernel(
 async fn replay_reproduces_recorded_decisions_and_state_hash() {
     let fixture = build_live_kernel(b"small-result".to_vec(), KernelMode::Audited);
 
-    // Record a user prompt (seq=1) and a tool execution (seq=2).
+    // Record a user prompt (seq=1) and a tool call: proposal (seq=2),
+    // policy decision (seq=3), execution (seq=4).
     fixture
         .kernel
         .process_direct(Transaction::user_prompt(
@@ -210,7 +211,7 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
         "tool execution must succeed; tool_output={:?}",
         result.tool_output
     );
-    assert_eq!(result.entry.seq, 2);
+    assert_eq!(result.entry.seq, 4);
 
     // Snapshot the recorded entries so we can compare per-entry
     // decisions after replay.
@@ -218,7 +219,7 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
         .store
         .scan_record(fixture.agent_id, 1, 10)
         .expect("scan recorded entries");
-    assert_eq!(recorded.len(), 2, "fixture should have recorded 2 entries");
+    assert_eq!(recorded.len(), 4, "fixture should have recorded 4 entries");
 
     // Replay 1.
     let replay_kernel_a = build_replay_kernel(&fixture, 0, Arc::new(NoopSnapshotStore))
@@ -228,8 +229,8 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
         .expect("replay kernel must produce a report")
         .clone();
 
-    assert_eq!(report_a.replayed_seqs, vec![1, 2]);
-    assert_eq!(report_a.decisions.len(), 2);
+    assert_eq!(report_a.replayed_seqs, vec![1, 2, 3, 4]);
+    assert_eq!(report_a.decisions.len(), 4);
     for (seq_idx, decision) in report_a.decisions.iter().enumerate() {
         assert_eq!(
             decision,
@@ -239,7 +240,7 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
         );
     }
     assert_eq!(
-        report_a.final_state_hash, recorded[1].context_hash,
+        report_a.final_state_hash, recorded[3].context_hash,
         "final_state_hash must equal the last entry's context_hash"
     );
 
@@ -398,8 +399,9 @@ async fn replay_aborts_on_snapshot_missing_for_audited_lite_summary() {
         Ok(_) => panic!("replay must abort when AuditedLite snapshot is missing"),
         Err(KernelError::Replay(ReplayError::SnapshotMissing { seq, full_hash })) => {
             assert_eq!(
-                seq, 1,
-                "the SnapshotMissing report must carry the seq of the summarised entry"
+                seq, 3,
+                "the SnapshotMissing report must carry the seq of the summarised \
+                 ToolExecution entry (after proposal and policy decision)"
             );
             assert!(
                 !full_hash.is_empty(),

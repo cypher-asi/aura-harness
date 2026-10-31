@@ -623,6 +623,9 @@ async fn run_terminal(
         use_workspace_base_as_root: true,
         policy: aura_agent_kernel::PolicyConfig::default()
             .with_mode(aura_config::session_mode(requested_mode)),
+        tool_audit_observer: Some(Arc::new(event_loop::UiToolAuditObserver::new(
+            cmd_tx.clone(),
+        ))),
         ..KernelConfig::default()
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;

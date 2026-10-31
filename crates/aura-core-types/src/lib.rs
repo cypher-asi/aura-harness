@@ -57,11 +57,12 @@ pub use types::{
     InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, LineDiff,
-    ProcessPending, Proposal, ProposalSet, RecordEntry, RecordEntryBuilder, RejectedProposal,
-    RuntimeCapabilityInstall, SubagentBudget, SubagentDispatchRequest, SubagentExit,
-    SubagentKindSpec, SubagentResult, SystemKind, ToolAuth, ToolCall, ToolCallContext,
-    ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult, ToolResultContent,
-    ToolResultImage, ToolResultKind, Trace, Transaction, TransactionType,
+    PolicyApproval, PolicyApprover, PolicyCheck, PolicyCheckOutcome, PolicyDecision, PolicyRule,
+    PolicySource, ProcessPending, Proposal, ProposalSet, RecordEntry, RecordEntryBuilder,
+    RejectedProposal, RuntimeCapabilityInstall, SubagentBudget, SubagentDispatchRequest,
+    SubagentExit, SubagentKindSpec, SubagentResult, SystemKind, ToolAuth, ToolCall,
+    ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
+    ToolResultContent, ToolResultImage, ToolResultKind, Trace, Transaction, TransactionType,
     DEFAULT_SUBAGENT_TIMEOUT_MS, KERNEL_VERSION, MAX_TURNS,
 };
 
@@ -74,7 +75,8 @@ pub use aura_core_modes::{
 };
 pub use aura_core_permissions::{
     allows, allows_tool, effective, intersect, is_effectively_full_access, narrow,
-    resolve_effective_permission, AgentPermissions, AgentScope, AgentToolPermissions, Capability,
-    EffectivePermissions, GrantSource, PermissionDecision, PermissionError, Permissions,
-    PrivilegeGrant, ToolState, UserDefaultMode, UserToolDefaults,
+    resolve_effective_permission, resolve_effective_permission_with_source, AgentPermissions,
+    AgentScope, AgentToolPermissions, Capability, EffectivePermissions, GrantSource,
+    PermissionDecision, PermissionError, PermissionLayer, Permissions, PrivilegeGrant, ToolState,
+    UserDefaultMode, UserToolDefaults,
 };

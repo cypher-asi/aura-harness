@@ -64,7 +64,7 @@ pub use common::{ToolApprovalDecision, ToolApprovalRemember, ToolStateWire};
 pub use context::{ContextContents, ContextSegment};
 pub use conversions::{
     agent_tool_permissions_from_wire, installed_integration_to_core, installed_tool_to_core,
-    tool_state_from_wire, tool_state_to_wire,
+    tool_policy_decision_from_entry, tool_state_from_wire, tool_state_to_wire,
 };
 pub use installed::{
     InstalledIntegration, InstalledTool, InstalledToolIntegrationRequirement,
@@ -82,9 +82,10 @@ pub use runtime_request::{
 pub use server::{
     AssistantMessageEnd, AssistantMessageStart, ContextBreakdown, ErrorMsg, FileDiff, FileOp,
     FilesChanged, GenerationCompleted, GenerationErrorMsg, GenerationPartialImage,
-    GenerationProgressMsg, GenerationStart, OutboundMessage, ProgressMsg, SessionReady,
-    SessionUsage, SkillInfo, SubagentSpawned, SubagentStatus, TextDelta, ThinkingDelta,
-    ToolApprovalPrompt, ToolCallSnapshot, ToolInfo, ToolResultMsg, ToolUseStart,
+    GenerationProgressMsg, GenerationStart, OutboundMessage, PolicyCheckWire, PolicyRuleWire,
+    ProgressMsg, SessionReady, SessionUsage, SkillInfo, SubagentSpawned, SubagentStatus, TextDelta,
+    ThinkingDelta, ToolApprovalPrompt, ToolCallSnapshot, ToolInfo, ToolPolicyDecision,
+    ToolResultMsg, ToolUseStart,
 };
 
 #[cfg(all(test, feature = "typescript"))]

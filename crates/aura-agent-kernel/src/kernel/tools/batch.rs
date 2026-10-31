@@ -1,18 +1,15 @@
 //! Batch tool-proposal processing flow.
 //!
 //! Used when the runtime hands the kernel multiple [`ToolProposal`]s in
-//! a single turn. Approved proposals execute concurrently via
-//! `futures_util::join_all`; all entries (approved + denied) are then
-//! written through `append_entries_batch` against a single contiguous
-//! sequence range so the batch is atomic.
+//! a single turn. Each proposal is recorded and then decided in order
+//! (`ToolProposal`, `PolicyDecision`, ...), so every policy decision is
+//! persisted before any tool runs. Approved proposals then execute
+//! concurrently via `futures_util::join_all`, and their `ToolExecution`
+//! entries are appended in proposal order.
 
-use super::shared::{record_entry_for_tool_outcome, ToolOutcomeInputs};
-use crate::context::hash_tx_with_window;
+use super::steps::{finish_tool_call, Authorized};
 use crate::kernel::{Kernel, ProcessResult};
-use crate::policy::PolicyVerdict;
-use aura_core_types::{
-    Action, ActionId, ActionKind, Effect, EffectKind, Proposal, ToolProposal, Transaction,
-};
+use aura_core_types::{Action, ActionId, Effect, EffectKind, ToolProposal, Transaction};
 use aura_exec_traits::ExecuteContext;
 use bytes::Bytes;
 
@@ -24,26 +21,17 @@ pub(super) async fn process_many(
         return Ok(vec![]);
     }
 
-    let mut kernel_proposals: Vec<Proposal> = Vec::with_capacity(tool_proposals.len());
-    let mut verdicts: Vec<PolicyVerdict> = Vec::with_capacity(tool_proposals.len());
     let runtime_capabilities = kernel.load_runtime_capabilities()?;
-
-    for proposal in &tool_proposals {
-        let kernel_proposal = kernel.kernel_proposal_from_tool_proposal(proposal)?;
-        let verdict = kernel.policy.check_with_runtime_capabilities_verdict(
-            &kernel_proposal,
-            runtime_capabilities.as_ref(),
+    let mut authorized: Vec<Authorized> = Vec::with_capacity(tool_proposals.len());
+    for proposal in tool_proposals {
+        let tx = Transaction::tool_proposal(kernel.agent_id, &proposal)
+            .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
+        let proposal_entry = kernel.record_tool_proposal(tx, None)?;
+        authorized.push(
+            kernel
+                .authorize_tool_proposal(proposal, &proposal_entry, runtime_capabilities.as_ref())
+                .await?,
         );
-        let verdict = kernel
-            .resolve_live_ask_verdict(
-                &proposal.tool,
-                &proposal.args,
-                proposal.tool_use_id.clone(),
-                verdict,
-            )
-            .await?;
-        verdicts.push(verdict);
-        kernel_proposals.push(kernel_proposal);
     }
 
     let workspace = kernel.agent_workspace();
@@ -55,43 +43,34 @@ pub(super) async fn process_many(
     // executor dispatch. Any handler returning
     // `HookOutcome::Block` causes us to skip the executor for
     // that slot and substitute a synthetic failed
-    // [`aura_core_types::Effect`] carrying the block reason; a parallel
-    // `tool_call_blocked_by_hook` System audit row is written by
-    // [`fire_pre_tool_use_for_batch`] so the audit log can
-    // distinguish the block from a normal executor failure.
+    // [`aura_core_types::Effect`] carrying the block reason, so the
+    // `ToolExecution` entry distinguishes the block from a normal
+    // executor failure.
     //
     // We pre-allocate per-proposal slots so the post-execution
     // pairing loop walks the same `(proposal, action, effect)`
     // tuples without a side index map.
-    let total = tool_proposals.len();
-    let mut per_slot_action: Vec<Option<Action>> = vec![None; total];
+    let total = authorized.len();
     let mut per_slot_effect: Vec<Option<Effect>> = vec![None; total];
     let mut dispatch_indices: Vec<usize> = Vec::new();
     let mut dispatch_contexts: Vec<ExecuteContext> = Vec::new();
     let mut dispatch_actions: Vec<Action> = Vec::new();
     let mut dispatch_tool_names: Vec<String> = Vec::new();
 
-    for (i, proposal) in tool_proposals.iter().enumerate() {
-        let verdict = &verdicts[i];
-        if !verdict.is_allowed() {
+    for (i, slot) in authorized.iter().enumerate() {
+        let Some(action) = slot.action.clone() else {
             continue;
-        }
-        let action_id = ActionId::generate();
-        let action = Action::new(
-            action_id,
-            ActionKind::Delegate,
-            kernel_proposals[i].payload.clone(),
-        );
+        };
+        let action_id = action.action_id;
+        let proposal = &slot.proposal;
 
         if let Some(host) = kernel.config.plugin_hooks.as_ref() {
             if let Some(effect) = fire_pre_tool_use_for_batch(host, proposal, action_id)? {
-                per_slot_action[i] = Some(action);
                 per_slot_effect[i] = Some(effect);
                 continue;
             }
         }
 
-        per_slot_action[i] = Some(action.clone());
         let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace.clone())
             .with_tool_use_id(proposal.tool_use_id.clone());
         dispatch_indices.push(i);
@@ -111,53 +90,17 @@ pub(super) async fn process_many(
         per_slot_effect[*slot] = Some(effect);
     }
 
-    let base_seq = kernel.reserve_seq_range(total)?;
-
     let mut results = Vec::with_capacity(total);
-    let mut entries = Vec::with_capacity(total);
-
-    for (i, proposal) in tool_proposals.into_iter().enumerate() {
-        let seq = base_seq + i as u64;
-        let tx = Transaction::tool_proposal(kernel.agent_id, &proposal)
-            .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
-
-        let window = kernel.load_window(seq)?;
-        let context_hash = hash_tx_with_window(&tx, &window)?;
-        let tool_use_id = proposal.tool_use_id.clone();
-
-        let verdict = &verdicts[i];
-        let executed = if verdict.is_allowed() {
-            let action = per_slot_action[i]
-                .take()
-                .expect("allowed verdict must have produced an action");
-            let effect = per_slot_effect[i]
-                .take()
-                .expect("allowed verdict must have produced an effect");
-            Some((action, effect))
-        } else {
-            None
+    for (slot, effect) in authorized.into_iter().zip(per_slot_effect) {
+        let executed = match slot.action.clone() {
+            Some(action) => {
+                let effect = effect.expect("allowed verdict must have produced an effect");
+                Some(kernel.record_tool_execution(&slot, action, effect)?)
+            }
+            None => None,
         };
-
-        let result = record_entry_for_tool_outcome(ToolOutcomeInputs {
-            seq,
-            tx,
-            context_hash,
-            kernel_proposal: kernel_proposals[i].clone(),
-            verdict,
-            tool_use_id,
-            tool_name: &proposal.tool,
-            executed,
-            lite_threshold: kernel.lite_payload_threshold(),
-        });
-
-        entries.push(result.entry.clone());
-        results.push(result);
+        results.push(finish_tool_call(slot, executed));
     }
-
-    kernel
-        .store
-        .append_entries_batch(kernel.agent_id, base_seq, &entries)
-        .map_err(|e| crate::KernelError::Store(format!("append_entries_batch: {e}")))?;
 
     Ok(results)
 }
@@ -165,10 +108,8 @@ pub(super) async fn process_many(
 /// Phase 10 carve-out 5a — `PreToolUse` pre-dispatch firing for the
 /// batch flow. Mirrors `single::fire_pre_tool_use_and_maybe_block`:
 /// the synthetic [`Effect`] carries a `tool_call_blocked_by_hook`
-/// JSON-discriminated payload so a single deterministic sequence
-/// number is consumed per blocked slot (no parallel
-/// `write_system_record` write that would race the batch's
-/// `reserve_seq_range`).
+/// JSON-discriminated payload and is recorded on the slot's
+/// `ToolExecution` entry.
 fn fire_pre_tool_use_for_batch(
     host: &aura_plugin_hooks::PluginHookHost,
     proposal: &ToolProposal,

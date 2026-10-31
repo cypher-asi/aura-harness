@@ -1,6 +1,7 @@
 use super::super::errors::ApiError;
 use super::super::*;
 use super::util::parse_agent_id;
+use aura_core_types::{PolicyDecision, RecordEntry};
 
 #[derive(Debug, Deserialize)]
 pub(in crate::gateway) struct SubmitTxRequest {
@@ -265,4 +266,100 @@ pub(in crate::gateway) async fn scan_record_handler(
         })?;
 
     Ok(Json(entries))
+}
+
+// === Tool Call Audit ===
+
+/// How far back from head the audit endpoint searches for a decision.
+const AUDIT_DECISION_SCAN_LIMIT: u64 = 10_000;
+/// How far past the decision the audit endpoint searches for its execution
+/// (batched calls record every decision before any execution).
+const AUDIT_EXECUTION_SCAN_LIMIT: usize = 1_000;
+const AUDIT_SCAN_PAGE: usize = 500;
+
+#[derive(Debug, Serialize)]
+pub(in crate::gateway) struct ToolCallAuditResponse {
+    agent_id: String,
+    tool_use_id: String,
+    /// The `ToolProposal` entry the decision references.
+    proposal: Option<RecordEntry>,
+    /// The `PolicyDecision` entry.
+    policy_decision: RecordEntry,
+    /// The decoded decision payload (verdict, rule, trace, approval).
+    decision: PolicyDecision,
+    /// The `ToolExecution` entry; absent for denied or pending calls.
+    execution: Option<RecordEntry>,
+}
+
+/// Return the proposal → policy decision → execution chain for one tool call.
+#[instrument(skip(state))]
+pub(in crate::gateway) async fn tool_call_audit_handler(
+    State(state): State<RouterState>,
+    Path((agent_id_hex, tool_use_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
+    let storage_err = |e: aura_store_db::StoreError| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {e}"),
+        )
+    };
+
+    let head_seq = state.store.get_head_seq(agent_id).map_err(storage_err)?;
+    let floor = head_seq.saturating_sub(AUDIT_DECISION_SCAN_LIMIT).max(1);
+    let mut cursor = head_seq;
+    let mut found: Option<(RecordEntry, PolicyDecision)> = None;
+    while cursor >= floor && found.is_none() {
+        let page = state
+            .store
+            .scan_record_descending(agent_id, cursor, AUDIT_SCAN_PAGE)
+            .map_err(storage_err)?;
+        let Some(last) = page.last() else { break };
+        let next_cursor = last.seq.saturating_sub(1);
+        found = page.into_iter().find_map(|entry| {
+            if entry.tx.tx_type != TransactionType::PolicyDecision {
+                return None;
+            }
+            let decision: PolicyDecision = serde_json::from_slice(&entry.tx.payload).ok()?;
+            (decision.tool_use_id == tool_use_id).then_some((entry, decision))
+        });
+        if next_cursor == 0 {
+            break;
+        }
+        cursor = next_cursor;
+    }
+    let Some((decision_entry, decision)) = found else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("No policy decision recorded for tool_use_id '{tool_use_id}'"),
+        ));
+    };
+
+    let proposal = match (decision_entry.tx.reference_tx_hash, decision_entry.seq) {
+        (Some(proposal_hash), seq) if seq > 1 => state
+            .store
+            .get_record_entry(agent_id, seq - 1)
+            .ok()
+            .filter(|entry| entry.tx.hash == proposal_hash),
+        _ => None,
+    };
+
+    let execution = state
+        .store
+        .scan_record(agent_id, decision_entry.seq + 1, AUDIT_EXECUTION_SCAN_LIMIT)
+        .map_err(storage_err)?
+        .into_iter()
+        .find(|entry| {
+            entry.tx.tx_type == TransactionType::ToolExecution
+                && entry.tx.reference_tx_hash == Some(decision_entry.tx.hash)
+        });
+
+    Ok(Json(ToolCallAuditResponse {
+        agent_id: agent_id_hex,
+        tool_use_id,
+        proposal,
+        policy_decision: decision_entry,
+        decision,
+        execution,
+    }))
 }

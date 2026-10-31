@@ -8,7 +8,7 @@ use aura_core_types::{
     ActionKind, AgentPermissions, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
     InstalledToolIntegrationRequirement, UserToolDefaults,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ============================================================================
 // Policy Configuration
@@ -147,5 +147,48 @@ impl PolicyConfig {
     pub fn with_mode(mut self, mode: AgentMode) -> Self {
         self.mode = mode;
         self
+    }
+
+    /// BLAKE3 hex digest over a canonical JSON rendering of every field
+    /// that can change a tool verdict. Map and set fields are sorted so
+    /// equal configurations always hash equally.
+    #[must_use]
+    pub fn snapshot_hash(&self) -> String {
+        let mut action_kinds: Vec<String> = self
+            .allowed_action_kinds
+            .iter()
+            .map(|kind| format!("{kind:?}"))
+            .collect();
+        action_kinds.sort();
+        let capability_requirements: BTreeMap<&String, String> = self
+            .tool_capability_requirements
+            .iter()
+            .map(|(tool, cap)| (tool, format!("{cap:?}")))
+            .collect();
+        let integration_requirements: BTreeMap<&String, serde_json::Value> = self
+            .tool_integration_requirements
+            .iter()
+            .map(|(tool, req)| (tool, serde_json::to_value(req).unwrap_or_default()))
+            .collect();
+        let mut integrations: Vec<serde_json::Value> = self
+            .installed_integrations
+            .iter()
+            .map(|i| serde_json::to_value(i).unwrap_or_default())
+            .collect();
+        integrations.sort_by_key(ToString::to_string);
+        let snapshot = serde_json::json!({
+            "allowed_action_kinds": action_kinds,
+            "max_proposals": self.max_proposals,
+            "installed_integrations": integrations,
+            "tool_integration_requirements": integration_requirements,
+            "agent_permissions": self.agent_permissions,
+            "tool_capability_requirements": capability_requirements,
+            "user_default": self.user_default,
+            "agent_override": self.agent_override,
+            "mode": format!("{:?}", self.mode),
+        });
+        blake3::hash(snapshot.to_string().as_bytes())
+            .to_hex()
+            .to_string()
     }
 }

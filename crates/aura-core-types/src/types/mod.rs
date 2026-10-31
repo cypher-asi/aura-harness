@@ -34,9 +34,10 @@ pub use tool::{
     installed_integrations_satisfy, integration_match, InstalledIntegrationDefinition,
     InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
     InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
-    InstalledToolRuntimeProviderExecution, LineDiff, RuntimeCapabilityInstall, ToolAuth, ToolCall,
-    ToolCallContext, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult, ToolResultImage,
-    ToolResultKind,
+    InstalledToolRuntimeProviderExecution, LineDiff, PolicyApproval, PolicyApprover, PolicyCheck,
+    PolicyCheckOutcome, PolicyDecision, PolicyRule, PolicySource, RuntimeCapabilityInstall,
+    ToolAuth, ToolCall, ToolCallContext, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
+    ToolResultImage, ToolResultKind,
 };
 pub use transaction::{SystemKind, Transaction, TransactionType};
 
@@ -90,6 +91,7 @@ mod tests {
             Just(TransactionType::SessionStart),
             Just(TransactionType::ToolProposal),
             Just(TransactionType::ToolExecution),
+            Just(TransactionType::PolicyDecision),
             Just(TransactionType::ProcessComplete),
             Just(TransactionType::Reasoning),
             Just(TransactionType::SubagentSpawn),
@@ -382,6 +384,7 @@ mod tests {
             TransactionType::SessionStart,
             TransactionType::ToolProposal,
             TransactionType::ToolExecution,
+            TransactionType::PolicyDecision,
             TransactionType::ProcessComplete,
             TransactionType::Reasoning,
             TransactionType::SubagentSpawn,

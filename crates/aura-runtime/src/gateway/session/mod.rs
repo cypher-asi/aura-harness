@@ -31,6 +31,7 @@ mod tests;
 #[cfg(test)]
 mod execution_profile_tests;
 mod tool_approval;
+mod tool_policy;
 
 pub(crate) use chat_run::{handle_chat_ws_attach, spawn_chat_run};
 pub(crate) use council::start_council_run;

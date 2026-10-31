@@ -9,7 +9,9 @@
 use super::scope::scope_violation;
 use super::verdict::{PolicyResult, PolicyVerdict};
 use super::Policy;
-use aura_core_types::{resolve_effective_permission, ToolCall, ToolState};
+use aura_core_types::{
+    resolve_effective_permission_with_source, PermissionLayer, ToolCall, ToolState,
+};
 
 impl Policy {
     /// Resolve the tri-state `on` / `off` / `ask` [`ToolState`] for
@@ -18,7 +20,13 @@ impl Policy {
     /// kernel gate consults for per-tool enablement.
     #[must_use]
     pub fn resolve_tool_state(&self, tool: &str) -> ToolState {
-        resolve_effective_permission(
+        self.resolve_tool_state_with_source(tool).0
+    }
+
+    /// [`Self::resolve_tool_state`] plus the permission layer that decided.
+    #[must_use]
+    pub fn resolve_tool_state_with_source(&self, tool: &str) -> (ToolState, PermissionLayer) {
+        resolve_effective_permission_with_source(
             &self.config.user_default,
             self.config.agent_override.as_ref(),
             tool,

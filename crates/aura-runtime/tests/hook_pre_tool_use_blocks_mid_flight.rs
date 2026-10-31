@@ -211,12 +211,12 @@ async fn pre_tool_use_block_aborts_single_proposal_dispatch() {
     );
 
     // (b) the audit-log entry carries a `tool_call_blocked_by_hook`
-    //     discriminated payload (this surfaces the schema-v2
+    //     discriminated payload (this surfaces the
     //     `RecordKind::ToolCallBlockedByHook` taxonomy at the
-    //     effect-payload level — the surrounding `RecordEntry`
-    //     remains tagged with the original
-    //     `TransactionType::ToolProposal`).
+    //     effect-payload level — the surrounding `RecordEntry` is
+    //     the call's `TransactionType::ToolExecution` entry).
     let entry = result.entry;
+    assert_eq!(entry.tx.tx_type, TransactionType::ToolExecution);
     assert_eq!(
         entry.effects.len(),
         1,
@@ -272,9 +272,19 @@ async fn pre_tool_use_block_persists_discriminator_to_record_log() {
     assert_eq!(executor.call_count(), 0, "executor must not be reached");
 
     let entries = store.scan_record(agent_id, 1, 50).expect("scan record");
+    let types: Vec<TransactionType> = entries.iter().map(|entry| entry.tx.tx_type).collect();
+    assert_eq!(
+        types,
+        [
+            TransactionType::ToolProposal,
+            TransactionType::PolicyDecision,
+            TransactionType::ToolExecution,
+        ],
+        "a hook block is recorded after an approving policy decision"
+    );
     let discriminator_count: usize = entries
         .iter()
-        .filter(|entry| entry.tx.tx_type == TransactionType::ToolProposal)
+        .filter(|entry| entry.tx.tx_type == TransactionType::ToolExecution)
         .map(|entry| {
             entry
                 .effects

@@ -259,15 +259,42 @@ pub fn resolve_effective_permission(
     agent_override: Option<&AgentToolPermissions>,
     tool: &str,
 ) -> ToolState {
+    resolve_effective_permission_with_source(user_default, agent_override, tool).0
+}
+
+/// Which layer of the two-level permission model produced a
+/// [`ToolState`] in [`resolve_effective_permission_with_source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PermissionLayer {
+    /// The per-agent override map had an entry for the tool.
+    AgentOverride,
+    /// User default mode is `full_access`.
+    UserFullAccess,
+    /// User default mode is `auto_review`.
+    UserAutoReview,
+    /// User `default_permissions` map had an entry for the tool.
+    UserPerTool,
+    /// User `default_permissions` fallback applied.
+    UserFallback,
+}
+
+/// [`resolve_effective_permission`] plus the layer that decided.
+#[must_use]
+pub fn resolve_effective_permission_with_source(
+    user_default: &UserToolDefaults,
+    agent_override: Option<&AgentToolPermissions>,
+    tool: &str,
+) -> (ToolState, PermissionLayer) {
     if let Some(state) = agent_override.and_then(|o| o.per_tool.get(tool)) {
-        return *state;
+        return (*state, PermissionLayer::AgentOverride);
     }
     match &user_default.mode {
-        UserDefaultMode::FullAccess => ToolState::Allow,
-        UserDefaultMode::AutoReview => ToolState::Ask,
-        UserDefaultMode::DefaultPermissions { per_tool, fallback } => {
-            per_tool.get(tool).copied().unwrap_or(*fallback)
-        }
+        UserDefaultMode::FullAccess => (ToolState::Allow, PermissionLayer::UserFullAccess),
+        UserDefaultMode::AutoReview => (ToolState::Ask, PermissionLayer::UserAutoReview),
+        UserDefaultMode::DefaultPermissions { per_tool, fallback } => match per_tool.get(tool) {
+            Some(state) => (*state, PermissionLayer::UserPerTool),
+            None => (*fallback, PermissionLayer::UserFallback),
+        },
     }
 }
 

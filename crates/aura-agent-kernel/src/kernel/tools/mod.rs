@@ -1,43 +1,43 @@
 //! Tool-proposal processing.
 //!
 //! Single-proposal ([`Kernel::process_tool_proposal`]) and batch
-//! ([`Kernel::process_tools`]) paths both:
-//! 1. Route each proposal through the full
-//!    `Policy::check_with_runtime_capabilities_verdict` pipeline
-//!    (Invariant §4).
-//! 2. Resolve any live `ask` prompt surfaced by
-//!    [`crate::PolicyVerdict::RequireApproval`].
-//! 3. Execute approved tools via `ExecutorRouter`.
-//! 4. Build a `RecordEntry` with the proposal set, decision, actions,
-//!    and effects attached (Invariant §5).
-//!
-//! The batch path additionally reserves a contiguous sequence range and
-//! writes all entries via `append_entries_batch` for atomicity.
+//! ([`Kernel::process_tools`]) paths both record every tool call as
+//! three linked entries (Invariant §5):
+//! 1. `ToolProposal` — appended before the policy runs.
+//! 2. `PolicyDecision` — the verdict of the full
+//!    `Policy::evaluate_proposal` pipeline (Invariant §4) plus any live
+//!    `ask` resolution, naming the rule that decided. Appended before
+//!    execution and referencing the proposal.
+//! 3. `ToolExecution` — approved tools only, executed via
+//!    `ExecutorRouter`; carries the action and effect and references the
+//!    decision.
 //!
 //! The implementation is split for readability:
 //! - [`shared`] — helpers used by both paths (`execute_with_timeout`,
-//!   `kernel_proposal_from_tool_proposal`, `resolve_live_ask_verdict`,
-//!   and the unified `record_entry_for_tool_outcome` builder).
+//!   `kernel_proposal_from_tool_proposal`, `resolve_live_ask`).
+//! - [`steps`] — appending the three entries and building the
+//!   `ProcessResult`.
 //! - [`single`] — the single-proposal flow.
-//! - [`batch`] — the batch flow with atomic append.
+//! - [`batch`] — the batch flow.
 
 mod batch;
 mod shared;
 mod single;
+mod steps;
 
 use super::{Kernel, ProcessResult};
-use aura_core_types::{ContextHash, ToolProposal, Transaction};
+use aura_core_types::{ToolProposal, Transaction};
+use aura_store_db::DequeueToken;
 use tracing::instrument;
 
 impl Kernel {
-    #[instrument(skip(self, tx), fields(seq))]
+    #[instrument(skip(self, tx, token))]
     pub(super) async fn process_tool_proposal(
         &self,
-        tx: &Transaction,
-        seq: u64,
-        context_hash: ContextHash,
+        tx: Transaction,
+        token: Option<DequeueToken>,
     ) -> Result<ProcessResult, crate::KernelError> {
-        single::process_one(self, tx, seq, context_hash).await
+        single::process_one(self, tx, token).await
     }
 
     /// Process a batch of tool proposals, executing approved tools in parallel.

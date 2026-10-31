@@ -25,14 +25,18 @@ mod tests;
 mod verdict;
 
 pub use mode_gate::{gated_action, tool_mode_class, ToolModeClass};
-pub use verdict::{PolicyResult, PolicyVerdict};
+pub use verdict::{PolicyEvaluation, PolicyResult, PolicyVerdict};
 
 use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
-use aura_core_types::{ActionKind, Proposal, RuntimeCapabilityInstall, ToolState};
+use aura_core_types::{
+    ActionKind, PermissionLayer, PolicyCheck, PolicyCheckOutcome, PolicyRule, PolicySource,
+    Proposal, RuntimeCapabilityInstall, ToolState,
+};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::{debug, warn};
+use verdict::outcome_of;
 
 // ============================================================================
 // Policy Engine
@@ -49,15 +53,18 @@ use tracing::{debug, warn};
 pub struct Policy {
     pub(super) config: PolicyConfig,
     session_tool_states: Mutex<HashMap<String, ToolState>>,
+    snapshot_hash: String,
 }
 
 impl Policy {
     /// Create a new policy with the given config.
     #[must_use]
     pub fn new(config: PolicyConfig) -> Self {
+        let snapshot_hash = config.snapshot_hash();
         Self {
             config,
             session_tool_states: Mutex::new(HashMap::new()),
+            snapshot_hash,
         }
     }
 
@@ -98,42 +105,188 @@ impl Policy {
         has_live_session: bool,
         remember_options: Vec<ToolApprovalRemember>,
     ) -> Option<PolicyVerdict> {
-        if let Some(state) = self
-            .session_tool_states
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(tool)
-            .copied()
-        {
+        self.live_tool_prompt_explained(
+            tool,
+            args,
+            agent_id,
+            request_id,
+            has_live_session,
+            remember_options,
+        )
+        .map(|(verdict, _)| verdict)
+    }
+
+    /// [`Self::live_tool_prompt_verdict`] plus the rule that produced the
+    /// verdict.
+    #[must_use]
+    pub fn live_tool_prompt_explained(
+        &self,
+        tool: &str,
+        args: &serde_json::Value,
+        agent_id: aura_core_types::AgentId,
+        request_id: String,
+        has_live_session: bool,
+        remember_options: Vec<ToolApprovalRemember>,
+    ) -> Option<(PolicyVerdict, PolicyRule)> {
+        if let Some(state) = self.session_tool_state(tool) {
             return match state {
-                ToolState::Allow => None,
-                ToolState::Deny => Some(PolicyVerdict::Deny {
-                    reason: format!("Tool '{tool}' was denied for this session"),
-                }),
-                ToolState::Ask => None,
+                ToolState::Allow | ToolState::Ask => None,
+                ToolState::Deny => Some((
+                    PolicyVerdict::Deny {
+                        reason: format!("Tool '{tool}' was denied for this session"),
+                    },
+                    session_rule(tool, state),
+                )),
             };
         }
 
-        if self.resolve_tool_state(tool) != ToolState::Ask {
+        let (state, layer) = self.resolve_tool_state_with_source(tool);
+        if state != ToolState::Ask {
             return None;
         }
 
         if !has_live_session {
-            return Some(PolicyVerdict::Deny {
-                reason: format!("tool {tool} is set to ask; no session to prompt"),
-            });
+            return Some((
+                PolicyVerdict::Deny {
+                    reason: format!("tool {tool} is set to ask; no session to prompt"),
+                },
+                PolicyRule::new(PolicySource::NoLiveSession, format!("{tool}=ask")),
+            ));
         }
 
-        Some(PolicyVerdict::RequireApproval {
-            reason: format!("Tool '{tool}' is set to ask"),
-            prompt: Some(PendingToolPrompt {
-                request_id,
-                tool_name: tool.to_string(),
-                args: args.clone(),
-                agent_id,
-                remember_options,
-            }),
-        })
+        Some((
+            PolicyVerdict::RequireApproval {
+                reason: format!("Tool '{tool}' is set to ask"),
+                prompt: Some(PendingToolPrompt {
+                    request_id,
+                    tool_name: tool.to_string(),
+                    args: args.clone(),
+                    agent_id,
+                    remember_options,
+                }),
+            },
+            permission_rule(tool, state, layer),
+        ))
+    }
+
+    fn session_tool_state(&self, tool: &str) -> Option<ToolState> {
+        self.session_tool_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(tool)
+            .copied()
+    }
+
+    /// Evaluate a proposal through the full authorization pipeline,
+    /// recording every gate and the rule that produced the verdict.
+    ///
+    /// [`Self::check_with_runtime_capabilities_verdict`] is a thin
+    /// wrapper over this, so the recorded provenance can never drift from
+    /// the enforced verdict.
+    #[must_use]
+    pub fn evaluate_proposal(
+        &self,
+        proposal: &Proposal,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+    ) -> PolicyEvaluation {
+        let mut trace = Vec::new();
+        let kind_rule = PolicyRule::new(
+            PolicySource::ActionKind,
+            format!("{:?}", proposal.action_kind).to_ascii_lowercase(),
+        );
+        if !self
+            .config
+            .allowed_action_kinds
+            .contains(&proposal.action_kind)
+        {
+            warn!(kind = ?proposal.action_kind, "Action kind not allowed");
+            trace.push(PolicyCheck {
+                rule: kind_rule.clone(),
+                outcome: PolicyCheckOutcome::Deny,
+            });
+            return PolicyEvaluation::new(
+                PolicyVerdict::Deny {
+                    reason: format!("Action kind {:?} not allowed", proposal.action_kind),
+                },
+                kind_rule,
+                trace,
+            );
+        }
+        trace.push(PolicyCheck {
+            rule: kind_rule.clone(),
+            outcome: PolicyCheckOutcome::Allow,
+        });
+
+        if proposal.action_kind == ActionKind::Delegate {
+            let (verdict, rule) = self.evaluate_delegate_explained(
+                &proposal.payload,
+                runtime_capabilities,
+                &mut trace,
+            );
+            if !verdict.is_allowed() {
+                return PolicyEvaluation::new(verdict, rule, trace);
+            }
+            debug!(kind = ?proposal.action_kind, "Proposal allowed");
+            return PolicyEvaluation::new(PolicyVerdict::Allow, rule, trace);
+        }
+
+        debug!(kind = ?proposal.action_kind, "Proposal allowed");
+        PolicyEvaluation::new(PolicyVerdict::Allow, kind_rule, trace)
+    }
+
+    /// Integration, session-grant, and tri-state tool gate with
+    /// provenance. Shared by the delegate pipeline and
+    /// [`Self::check_tool_with_runtime_capabilities_verdict`].
+    pub(super) fn tool_gate_explained(
+        &self,
+        tool: &str,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        trace: &mut Vec<PolicyCheck>,
+    ) -> (PolicyVerdict, PolicyRule) {
+        let integration_rule = PolicyRule::new(PolicySource::Integration, "requirements");
+        if let Some(reason) = self.integration_requirement_satisfied(tool, runtime_capabilities) {
+            trace.push(PolicyCheck {
+                rule: integration_rule.clone(),
+                outcome: PolicyCheckOutcome::Deny,
+            });
+            return (PolicyVerdict::Deny { reason }, integration_rule);
+        }
+        trace.push(PolicyCheck {
+            rule: integration_rule,
+            outcome: PolicyCheckOutcome::Allow,
+        });
+
+        let (verdict, rule) = if let Some(state) = self.session_tool_state(tool) {
+            let verdict = match state {
+                ToolState::Allow => PolicyVerdict::Allow,
+                ToolState::Deny => PolicyVerdict::Deny {
+                    reason: format!("Tool '{tool}' was denied for this session"),
+                },
+                ToolState::Ask => PolicyVerdict::RequireApproval {
+                    reason: format!("Tool '{tool}' is set to ask"),
+                    prompt: None,
+                },
+            };
+            (verdict, session_rule(tool, state))
+        } else {
+            let (state, layer) = self.resolve_tool_state_with_source(tool);
+            let verdict = match state {
+                ToolState::Deny => PolicyVerdict::Deny {
+                    reason: format!("Tool '{tool}' is not allowed"),
+                },
+                ToolState::Allow => PolicyVerdict::Allow,
+                ToolState::Ask => PolicyVerdict::RequireApproval {
+                    reason: format!("Tool '{tool}' is set to ask"),
+                    prompt: None,
+                },
+            };
+            (verdict, permission_rule(tool, state, layer))
+        };
+        trace.push(PolicyCheck {
+            rule: rule.clone(),
+            outcome: outcome_of(&verdict),
+        });
+        (verdict, rule)
     }
 
     /// Check if a proposal is allowed.
@@ -163,26 +316,8 @@ impl Policy {
         proposal: &Proposal,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> PolicyVerdict {
-        if !self
-            .config
-            .allowed_action_kinds
-            .contains(&proposal.action_kind)
-        {
-            warn!(kind = ?proposal.action_kind, "Action kind not allowed");
-            return PolicyVerdict::Deny {
-                reason: format!("Action kind {:?} not allowed", proposal.action_kind),
-            };
-        }
-
-        if proposal.action_kind == ActionKind::Delegate {
-            let verdict = self.evaluate_delegate(&proposal.payload, runtime_capabilities);
-            if !verdict.is_allowed() {
-                return verdict;
-            }
-        }
-
-        debug!(kind = ?proposal.action_kind, "Proposal allowed");
-        PolicyVerdict::Allow
+        self.evaluate_proposal(proposal, runtime_capabilities)
+            .verdict
     }
 
     /// Check if a tool call is allowed (includes session approval check).
@@ -213,44 +348,65 @@ impl Policy {
         _input: &serde_json::Value,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> PolicyVerdict {
-        if let Some(reason) = self.integration_requirement_satisfied(tool, runtime_capabilities) {
-            return PolicyVerdict::Deny { reason };
-        }
+        self.tool_gate_explained(tool, runtime_capabilities, &mut Vec::new())
+            .0
+    }
 
-        if let Some(state) = self
-            .session_tool_states
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(tool)
-            .copied()
-        {
-            return match state {
-                ToolState::Allow => PolicyVerdict::Allow,
-                ToolState::Deny => PolicyVerdict::Deny {
-                    reason: format!("Tool '{tool}' was denied for this session"),
-                },
-                ToolState::Ask => PolicyVerdict::RequireApproval {
-                    reason: format!("Tool '{tool}' is set to ask"),
-                    prompt: None,
-                },
-            };
-        }
+    /// Hash of the policy configuration snapshot, recorded on every
+    /// `PolicyDecision` so auditors can tell which configuration decided.
+    #[must_use]
+    pub fn snapshot_hash(&self) -> &str {
+        &self.snapshot_hash
+    }
 
-        match self.resolve_tool_state(tool) {
-            ToolState::Deny => PolicyVerdict::Deny {
-                reason: format!("Tool '{tool}' is not allowed"),
-            },
-            ToolState::Allow => PolicyVerdict::Allow,
-            ToolState::Ask => PolicyVerdict::RequireApproval {
-                reason: format!("Tool '{tool}' is set to ask"),
-                prompt: None,
-            },
-        }
+    /// Lower-case label of the session mode this policy enforces.
+    #[must_use]
+    pub fn mode_label(&self) -> String {
+        delegate_gate::mode_label(self.config.mode)
     }
 
     /// Get maximum allowed proposals.
     #[must_use]
     pub const fn max_proposals(&self) -> usize {
         self.config.max_proposals
+    }
+}
+
+/// Wire label of a tri-state, matching its serde form (`on`/`off`/`ask`).
+pub(crate) const fn tool_state_label(state: ToolState) -> &'static str {
+    match state {
+        ToolState::Allow => "on",
+        ToolState::Deny => "off",
+        ToolState::Ask => "ask",
+    }
+}
+
+fn session_rule(tool: &str, state: ToolState) -> PolicyRule {
+    PolicyRule::new(
+        PolicySource::SessionGrant,
+        format!("{tool}={}", tool_state_label(state)),
+    )
+}
+
+fn permission_rule(tool: &str, state: ToolState, layer: PermissionLayer) -> PolicyRule {
+    let state = tool_state_label(state);
+    match layer {
+        PermissionLayer::AgentOverride => PolicyRule::new(
+            PolicySource::AgentOverride,
+            format!("per_tool[{tool}]={state}"),
+        ),
+        PermissionLayer::UserFullAccess => {
+            PolicyRule::new(PolicySource::UserDefault, "full_access")
+        }
+        PermissionLayer::UserAutoReview => {
+            PolicyRule::new(PolicySource::UserDefault, "auto_review")
+        }
+        PermissionLayer::UserPerTool => PolicyRule::new(
+            PolicySource::UserDefault,
+            format!("per_tool[{tool}]={state}"),
+        ),
+        PermissionLayer::UserFallback => {
+            PolicyRule::new(PolicySource::UserDefault, format!("fallback={state}"))
+        }
     }
 }

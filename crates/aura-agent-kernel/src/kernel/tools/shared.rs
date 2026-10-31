@@ -3,21 +3,15 @@
 //!
 //! Centralizing these here removes the duplication audit Phase 2a was
 //! aimed at: building the `Proposal` from a `ToolProposal`, applying the
-//! per-tool timeout, resolving live `ask` prompts, and turning a
-//! `(verdict, optional execution outcome)` pair into the final
-//! `ProcessResult` shape.
+//! per-tool timeout, and resolving live `ask` prompts with provenance.
 
-use crate::kernel::{
-    ApprovalRequiredInfo, Kernel, PendingToolPrompt, ProcessResult, ToolApprovalRemember,
-    ToolApprovalResponse, ToolDecision, ToolOutput,
-};
-use crate::policy::PolicyVerdict;
+use crate::kernel::{Kernel, PendingToolPrompt, ToolApprovalRemember, ToolApprovalResponse};
+use crate::policy::{PolicyEvaluation, PolicyVerdict};
 use aura_core_types::{
-    Action, ActionKind, ContextHash, Decision, Effect, EffectKind, EffectStatus, Proposal,
-    ProposalSet, RecordEntry, ToolCall, ToolProposal, ToolState, Transaction, UserDefaultMode,
-    UserToolDefaults,
+    Action, ActionKind, Effect, EffectKind, PolicyApproval, PolicyApprover, PolicyRule,
+    PolicySource, Proposal, ToolCall, ToolProposal, ToolState, UserDefaultMode, UserToolDefaults,
 };
-use aura_exec_traits::{decode_tool_effect, ExecuteContext};
+use aura_exec_traits::ExecuteContext;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -97,36 +91,31 @@ impl Kernel {
 
     /// Resolve the additive tri-state `ask` layer.
     ///
-    /// If the legacy verdict is a hard `Deny`, returns it unchanged.
+    /// If the policy verdict is a hard `Deny`, returns it unchanged.
     /// Otherwise consults the live-prompt bridge and may upgrade the
     /// verdict (e.g. an `Allow` becomes a `RequireApproval` or a
-    /// user-confirmed `Deny`).
-    pub(super) async fn resolve_live_ask_verdict(
+    /// user-confirmed `Deny`). Every change is recorded on the
+    /// evaluation's `decided_by`, trace, and approval details.
+    pub(super) async fn resolve_live_ask(
         &self,
         tool_name: &str,
         args: &serde_json::Value,
-        tool_use_id: String,
-        legacy_verdict: PolicyVerdict,
-    ) -> Result<PolicyVerdict, crate::KernelError> {
-        if matches!(legacy_verdict, PolicyVerdict::Deny { .. }) {
-            return Ok(legacy_verdict);
+        tool_use_id: &str,
+        mut evaluation: PolicyEvaluation,
+    ) -> Result<PolicyEvaluation, crate::KernelError> {
+        let verdict = &evaluation.verdict;
+        if matches!(verdict, PolicyVerdict::Deny { .. }) {
+            return Ok(evaluation);
         }
-        if matches!(
-            legacy_verdict,
-            PolicyVerdict::RequireApproval { prompt: None, .. }
-        ) && self.policy.resolve_tool_state(tool_name) != ToolState::Ask
-        {
-            return Ok(legacy_verdict);
+        let ask_without_prompt =
+            matches!(verdict, PolicyVerdict::RequireApproval { prompt: None, .. });
+        if ask_without_prompt && self.policy.resolve_tool_state(tool_name) != ToolState::Ask {
+            return Ok(evaluation);
         }
-        if legacy_verdict.is_allowed()
-            || matches!(
-                legacy_verdict,
-                PolicyVerdict::RequireApproval { prompt: None, .. }
-            )
-        {
+        if verdict.is_allowed() || ask_without_prompt {
             let request_id = format!("{}:{tool_use_id}", self.agent_id.to_hex());
             let remember_options = self.live_prompt_remember_options();
-            if let Some(verdict) = self.policy.live_tool_prompt_verdict(
+            if let Some((verdict, rule)) = self.policy.live_tool_prompt_explained(
                 tool_name,
                 args,
                 self.agent_id,
@@ -134,22 +123,23 @@ impl Kernel {
                 self.config.tool_approval_prompter.is_some(),
                 remember_options,
             ) {
-                return self.resolve_prompt_verdict(verdict).await;
+                evaluation.decide(verdict, rule);
+                return self.resolve_prompt(evaluation).await;
             }
         }
-        Ok(legacy_verdict)
+        Ok(evaluation)
     }
 
-    async fn resolve_prompt_verdict(
+    async fn resolve_prompt(
         &self,
-        verdict: PolicyVerdict,
-    ) -> Result<PolicyVerdict, crate::KernelError> {
+        mut evaluation: PolicyEvaluation,
+    ) -> Result<PolicyEvaluation, crate::KernelError> {
         let PolicyVerdict::RequireApproval {
             reason,
             prompt: Some(prompt),
-        } = verdict
+        } = evaluation.verdict.clone()
         else {
-            return Ok(verdict);
+            return Ok(evaluation);
         };
 
         // Phase 10 carve-out 5b: fire the PermissionRequest hook
@@ -162,24 +152,38 @@ impl Kernel {
             let args_text = serde_json::to_string(&prompt.args).unwrap_or_default();
             let outcome =
                 host.fire_permission_request(&prompt.tool_name, &args_text, "ask", &reason);
-            match outcome.decision {
-                HookOutcome::Approve => return Ok(PolicyVerdict::Allow),
+            let hook_verdict = match outcome.decision {
+                HookOutcome::Approve => Some((PolicyVerdict::Allow, "approve")),
                 HookOutcome::Deny {
                     reason: hook_reason,
-                } => {
-                    return Ok(PolicyVerdict::Deny {
+                } => Some((
+                    PolicyVerdict::Deny {
                         reason: hook_reason,
-                    });
-                }
+                    },
+                    "deny",
+                )),
                 HookOutcome::Continue
                 | HookOutcome::TimedOut
                 | HookOutcome::Block { .. }
-                | HookOutcome::Replace { .. } => {}
+                | HookOutcome::Replace { .. } => None,
+            };
+            if let Some((verdict, rule)) = hook_verdict {
+                evaluation.decide(verdict, PolicyRule::new(PolicySource::PermissionHook, rule));
+                evaluation.approval = Some(PolicyApproval {
+                    approver: PolicyApprover::Hook,
+                    remember: None,
+                    request_id: Some(prompt.request_id.clone()),
+                });
+                return Ok(evaluation);
             }
         }
 
         let Some(prompter) = self.config.tool_approval_prompter.as_ref() else {
-            return Ok(PolicyVerdict::Deny { reason });
+            evaluation.decide(
+                PolicyVerdict::Deny { reason },
+                PolicyRule::new(PolicySource::NoLiveSession, "no_prompter"),
+            );
+            return Ok(evaluation);
         };
 
         let response = prompter.prompt(prompt.clone()).await.map_err(|e| {
@@ -191,16 +195,29 @@ impl Kernel {
 
         self.apply_live_approval_response(&prompt, response)?;
 
-        match response.decision {
-            ToolState::Allow => Ok(PolicyVerdict::Allow),
-            ToolState::Deny => Ok(PolicyVerdict::Deny {
+        evaluation.approval = Some(PolicyApproval {
+            approver: PolicyApprover::User {
+                user_id: self.config.originating_user_id.clone(),
+            },
+            remember: Some(remember_label(response.remember).to_string()),
+            request_id: Some(prompt.request_id.clone()),
+        });
+        let user_rule = PolicyRule::new(
+            PolicySource::User,
+            crate::policy::tool_state_label(response.decision),
+        );
+        let verdict = match response.decision {
+            ToolState::Allow => PolicyVerdict::Allow,
+            ToolState::Deny => PolicyVerdict::Deny {
                 reason: format!("Tool '{}' was denied by the user", prompt.tool_name),
-            }),
-            ToolState::Ask => Ok(PolicyVerdict::RequireApproval {
+            },
+            ToolState::Ask => PolicyVerdict::RequireApproval {
                 reason,
                 prompt: Some(prompt),
-            }),
-        }
+            },
+        };
+        evaluation.decide(verdict, user_rule);
+        Ok(evaluation)
     }
 
     fn apply_live_approval_response(
@@ -246,6 +263,14 @@ impl Kernel {
     }
 }
 
+const fn remember_label(remember: ToolApprovalRemember) -> &'static str {
+    match remember {
+        ToolApprovalRemember::Once => "once",
+        ToolApprovalRemember::Session => "session",
+        ToolApprovalRemember::Forever => "forever",
+    }
+}
+
 fn fold_tool_state_into_defaults(
     defaults: &UserToolDefaults,
     tool_name: &str,
@@ -260,27 +285,6 @@ fn fold_tool_state_into_defaults(
     UserToolDefaults::default_permissions(per_tool, fallback)
 }
 
-/// Inputs for [`record_entry_for_tool_outcome`].
-///
-/// Bundled into a struct so the unified record-builder doesn't trip
-/// clippy's `too_many_arguments` lint and so single/batch call sites
-/// stay readable. Construct it inline at the call site.
-pub(super) struct ToolOutcomeInputs<'a> {
-    pub seq: u64,
-    pub tx: Transaction,
-    pub context_hash: ContextHash,
-    pub kernel_proposal: Proposal,
-    pub verdict: &'a PolicyVerdict,
-    pub tool_use_id: String,
-    pub tool_name: &'a str,
-    pub executed: Option<(Action, Effect)>,
-    /// `Some(threshold)` when the kernel is in
-    /// [`aura_core_modes::KernelMode::AuditedLite`] — effect payloads
-    /// above `threshold` bytes are summarised before write. `None`
-    /// (Audited mode) stores payloads verbatim.
-    pub lite_threshold: Option<usize>,
-}
-
 /// Apply [`aura_core_modes::KernelMode::AuditedLite`] summarisation to
 /// `effect.payload` if `lite_threshold` is `Some(n)` and the payload
 /// exceeds `n`. The summary is serialised through the
@@ -290,7 +294,10 @@ pub(super) struct ToolOutcomeInputs<'a> {
 ///
 /// In [`aura_core_modes::KernelMode::Audited`] mode (`None`), or for
 /// payloads below the threshold, the effect is returned unchanged.
-fn maybe_summarise_effect_payload(mut effect: Effect, lite_threshold: Option<usize>) -> Effect {
+pub(super) fn maybe_summarise_effect_payload(
+    mut effect: Effect,
+    lite_threshold: Option<usize>,
+) -> Effect {
     if let Some(threshold) = lite_threshold {
         if effect.payload.len() > threshold {
             let summary = aura_store_record::summarize_payload(&effect.payload, threshold);
@@ -299,127 +306,6 @@ fn maybe_summarise_effect_payload(mut effect: Effect, lite_threshold: Option<usi
         }
     }
     effect
-}
-
-/// Build a [`RecordEntry`] and the surrounding [`ProcessResult`] from
-/// the policy verdict and an optional execution outcome.
-///
-/// Contract: `inputs.executed.is_some()` iff `inputs.verdict.is_allowed()`.
-/// Both single and batch callers honor that — `executed` is the
-/// `(Action, Effect)` pair returned by `execute_with_timeout` for
-/// approved proposals, and `None` for any verdict that didn't reach
-/// execution.
-pub(super) fn record_entry_for_tool_outcome(inputs: ToolOutcomeInputs<'_>) -> ProcessResult {
-    let ToolOutcomeInputs {
-        seq,
-        tx,
-        context_hash,
-        kernel_proposal,
-        verdict,
-        tool_use_id,
-        tool_name,
-        executed,
-        lite_threshold,
-    } = inputs;
-
-    let mut proposals = ProposalSet::new();
-    proposals.proposals.push(kernel_proposal);
-
-    if let Some((action, effect)) = executed {
-        let effect = maybe_summarise_effect_payload(effect, lite_threshold);
-        let effect_failed = effect.status == EffectStatus::Failed;
-        let decoded = decode_tool_effect(&effect);
-        let had_failures = effect_failed || decoded.is_error;
-        let line_diff = decoded.line_diff;
-        let kind = decoded.kind;
-        // Drop any image on a failed effect: the screenshot is only
-        // meaningful for a successful computer-use action.
-        let image = if had_failures { None } else { decoded.image };
-        let output_content = decoded.content;
-
-        let mut decision = Decision::new();
-        decision.accept(action.action_id);
-
-        let entry = RecordEntry::builder(seq, tx)
-            .context_hash(context_hash)
-            .proposals(proposals)
-            .decision(decision)
-            .actions(vec![action])
-            .effects(vec![effect])
-            .build();
-
-        ProcessResult {
-            entry,
-            tool_output: Some(ToolOutput {
-                tool_use_id,
-                content: output_content,
-                is_error: had_failures,
-                kind,
-                approval_required: None,
-                line_diff,
-                image,
-            }),
-            had_failures,
-            runtime_capability_update: None,
-            clear_runtime_capabilities: false,
-            tool_decision: Some(ToolDecision::Allowed),
-        }
-    } else {
-        let denial_reason = verdict
-            .reason()
-            .map_or_else(|| "Policy denied".to_string(), str::to_string);
-        let prompt = match verdict {
-            PolicyVerdict::RequireApproval { prompt, .. } => prompt.clone(),
-            _ => None,
-        };
-        let needs_approval = matches!(verdict, PolicyVerdict::RequireApproval { .. });
-
-        let mut decision = Decision::new();
-        decision.reject(0, &denial_reason);
-
-        let entry = RecordEntry::builder(seq, tx)
-            .context_hash(context_hash)
-            .proposals(proposals)
-            .decision(decision)
-            .build();
-
-        let (approval_required, tool_decision) = if needs_approval {
-            (
-                Some(ApprovalRequiredInfo {
-                    tool: tool_name.to_string(),
-                    prompt: prompt.clone(),
-                }),
-                ToolDecision::NeedsApproval {
-                    reason: denial_reason.clone(),
-                    prompt,
-                },
-            )
-        } else {
-            (
-                None,
-                ToolDecision::Denied {
-                    reason: denial_reason.clone(),
-                },
-            )
-        };
-
-        ProcessResult {
-            entry,
-            tool_output: Some(ToolOutput {
-                tool_use_id,
-                content: denial_reason,
-                is_error: true,
-                kind: aura_core_types::ToolResultKind::AgentError,
-                approval_required,
-                line_diff: None,
-                image: None,
-            }),
-            had_failures: false,
-            runtime_capability_update: None,
-            clear_runtime_capabilities: false,
-            tool_decision: Some(tool_decision),
-        }
-    }
 }
 
 #[cfg(test)]

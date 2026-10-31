@@ -1,6 +1,6 @@
 use super::*;
 use aura_agent_kernel::KernelConfig;
-use aura_core_types::{AgentId, EffectStatus, TransactionType};
+use aura_core_types::{AgentId, EffectStatus, ToolGateVerdict, TransactionType};
 use aura_model_reasoner::{MockProvider, ModelProvider};
 use aura_store_db::{ReadStore, RocksStore};
 use aura_tools::ToolConfig;
@@ -113,14 +113,24 @@ async fn command_is_recorded_as_an_executed_tool_proposal() {
     assert!(!output.is_error, "output was {}", output.content);
     assert!(output.content.contains("marker.txt"), "{}", output.content);
 
-    let entry = store
+    let execution = store
         .get_record_entry(kernel.agent_id, result.entry.seq)
         .unwrap();
-    assert_eq!(entry.tx.tx_type, TransactionType::ToolProposal);
-    assert_eq!(entry.actions.len(), 1);
-    assert_eq!(entry.effects.len(), 1);
-    assert_eq!(entry.effects[0].status, EffectStatus::Committed);
-    let recorded: ToolProposal = serde_json::from_slice(&entry.tx.payload).unwrap();
+    assert_eq!(execution.tx.tx_type, TransactionType::ToolExecution);
+    assert_eq!(execution.actions.len(), 1);
+    assert_eq!(execution.effects.len(), 1);
+    assert_eq!(execution.effects[0].status, EffectStatus::Committed);
+
+    let decision = result.policy_decision.expect("policy decision recorded");
+    assert_eq!(execution.tx.reference_tx_hash, Some(decision.tx_hash));
+    assert_eq!(decision.decision.verdict, ToolGateVerdict::Approved);
+
+    let proposal_entry = store
+        .get_record_entry(kernel.agent_id, decision.proposal_seq)
+        .unwrap();
+    assert_eq!(proposal_entry.tx.tx_type, TransactionType::ToolProposal);
+    assert_eq!(proposal_entry.tx.hash, tx.hash);
+    let recorded: ToolProposal = serde_json::from_slice(&proposal_entry.tx.payload).unwrap();
     assert_eq!(recorded.source.as_deref(), Some(USER_SOURCE));
     assert!(store.dequeue_tx(kernel.agent_id).unwrap().is_none());
 }

@@ -8,6 +8,8 @@
 //! - [`proposal`] — `ToolProposal`, `ToolGateVerdict` (audit-log enum;
 //!   exported with a deprecated `ToolDecision` alias for back-compat).
 //! - [`execution`] — `ToolExecution`, `ToolCallContext`.
+//! - [`policy_decision`] — `PolicyDecision` and the rule / trace types
+//!   recorded between a proposal and its execution.
 //! - [`installed`] — `InstalledToolDefinition` and the catalog shapes.
 //! - [`runtime_capability`] — `RuntimeCapabilityInstall` plus the
 //!   canonical `integration_match` / `installed_integrations_satisfy`
@@ -18,6 +20,7 @@
 mod call;
 mod execution;
 mod installed;
+mod policy_decision;
 mod proposal;
 mod result;
 mod runtime_capability;
@@ -28,6 +31,10 @@ pub use installed::{
     InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, ToolAuth,
+};
+pub use policy_decision::{
+    PolicyApproval, PolicyApprover, PolicyCheck, PolicyCheckOutcome, PolicyDecision, PolicyRule,
+    PolicySource,
 };
 #[allow(deprecated)]
 pub use proposal::ToolDecision;

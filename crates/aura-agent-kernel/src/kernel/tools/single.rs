@@ -1,63 +1,47 @@
 //! Single-proposal tool processing flow.
 //!
 //! Used when the runtime hands the kernel exactly one [`ToolProposal`]
-//! (typically because the model emitted a single tool-use block in a
-//! turn). The flow:
+//! transaction (via `process_direct` / `process_dequeued`). The flow:
 //!
-//! 1. Build the kernel-internal `Delegate` proposal from the
-//!    `ToolProposal` payload.
-//! 2. Run the policy + runtime-capability gate.
-//! 3. Resolve any live `ask` prompt.
-//! 4. **Phase 10 carve-out 5a**: fire `PreToolUse` BEFORE dispatch
+//! 1. Append the bare `ToolProposal` entry (consuming the inbox token,
+//!    when there is one).
+//! 2. Run the policy + runtime-capability gate and resolve any live
+//!    `ask` prompt, then append the `PolicyDecision` entry.
+//! 3. **Phase 10 carve-out 5a**: fire `PreToolUse` BEFORE dispatch
 //!    when a [`crate::kernel::KernelConfig::plugin_hooks`] is
 //!    attached. On [`aura_plugin_hooks::HookOutcome::Block`] the
-//!    executor is skipped, a parallel `tool_call_blocked_by_hook`
-//!    System audit row is written, and a synthetic
+//!    executor is skipped and a synthetic
 //!    [`aura_core_types::Effect::failed`] is surfaced so the agent loop
 //!    sees a clean rejection.
-//! 5. If approved (and not blocked), execute under the per-tool
-//!    timeout.
-//! 6. Build the `RecordEntry` + `ProcessResult` via
-//!    [`super::shared::record_entry_for_tool_outcome`].
+//! 4. If approved (and not blocked), execute under the per-tool
+//!    timeout, then append the `ToolExecution` entry.
 
-use super::shared::{record_entry_for_tool_outcome, ToolOutcomeInputs};
+use super::steps::finish_tool_call;
 use crate::kernel::{Kernel, ProcessResult};
-use aura_core_types::{
-    Action, ActionId, ActionKind, ContextHash, Effect, EffectKind, ToolProposal, Transaction,
-};
+use aura_core_types::{ActionId, Effect, EffectKind, ToolProposal, Transaction};
 use aura_exec_traits::ExecuteContext;
+use aura_store_db::DequeueToken;
 use bytes::Bytes;
 
 pub(super) async fn process_one(
     kernel: &Kernel,
-    tx: &Transaction,
-    seq: u64,
-    context_hash: ContextHash,
+    tx: Transaction,
+    token: Option<DequeueToken>,
 ) -> Result<ProcessResult, crate::KernelError> {
     let proposal: ToolProposal = serde_json::from_slice(&tx.payload)
         .map_err(|e| crate::KernelError::Serialization(format!("deserialize ToolProposal: {e}")))?;
-
-    let tool_use_id = proposal.tool_use_id.clone();
-    let tool_name = proposal.tool.clone();
-
-    let kernel_proposal = kernel.kernel_proposal_from_tool_proposal(&proposal)?;
-
     let runtime_capabilities = kernel.load_runtime_capabilities()?;
-    let verdict = kernel
-        .policy
-        .check_with_runtime_capabilities_verdict(&kernel_proposal, runtime_capabilities.as_ref());
 
-    let verdict = kernel
-        .resolve_live_ask_verdict(&tool_name, &proposal.args, tool_use_id.clone(), verdict)
+    let proposal_entry = kernel.record_tool_proposal(tx, token)?;
+    let authorized = kernel
+        .authorize_tool_proposal(proposal, &proposal_entry, runtime_capabilities.as_ref())
         .await?;
 
-    let executed = if verdict.is_allowed() {
-        let action_id = ActionId::generate();
-        let action = Action::new(
-            action_id,
-            ActionKind::Delegate,
-            kernel_proposal.payload.clone(),
-        );
+    let executed = if let Some(action) = authorized.action.clone() {
+        let action_id = action.action_id;
+        let proposal = &authorized.proposal;
+        let tool_use_id = proposal.tool_use_id.clone();
+        let tool_name = proposal.tool.clone();
 
         // Phase 10 carve-out 5a: fire `PreToolUse` BEFORE dispatch.
         // On `HookOutcome::Block` we never invoke the executor — a
@@ -68,38 +52,28 @@ pub(super) async fn process_one(
         // taxonomy at the effect-payload level so consumers can
         // distinguish a hook block from a normal executor failure.
         let blocked_effect = if let Some(host) = kernel.config.plugin_hooks.as_ref() {
-            fire_pre_tool_use_and_maybe_block(host, &proposal, action_id)?
+            fire_pre_tool_use_and_maybe_block(host, proposal, action_id)?
         } else {
             None
         };
 
-        if let Some(effect) = blocked_effect {
-            Some((action, effect))
+        let effect = if let Some(effect) = blocked_effect {
+            effect
         } else {
             let workspace = kernel.agent_workspace();
             tokio::fs::create_dir_all(&workspace)
                 .await
                 .map_err(|e| crate::KernelError::Internal(format!("create workspace: {e}")))?;
             let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace)
-                .with_tool_use_id(tool_use_id.clone());
-            let effect = kernel.execute_with_timeout(&ctx, &action, &tool_name).await;
-            Some((action, effect))
-        }
+                .with_tool_use_id(tool_use_id);
+            kernel.execute_with_timeout(&ctx, &action, &tool_name).await
+        };
+        Some(kernel.record_tool_execution(&authorized, action, effect)?)
     } else {
         None
     };
 
-    Ok(record_entry_for_tool_outcome(ToolOutcomeInputs {
-        seq,
-        tx: tx.clone(),
-        context_hash,
-        kernel_proposal,
-        verdict: &verdict,
-        tool_use_id,
-        tool_name: &tool_name,
-        executed,
-        lite_threshold: kernel.lite_payload_threshold(),
-    }))
+    Ok(finish_tool_call(authorized, executed))
 }
 
 /// Fire `PreToolUse` and translate the aggregate outcome.
@@ -117,9 +91,9 @@ pub(super) async fn process_one(
 /// discriminator surfaces the Phase 10 schema-v2
 /// [`aura_store_record::RecordKind::ToolCallBlockedByHook`]
 /// taxonomy at the effect-payload level so an auditor can
-/// distinguish a hook block from a normal executor failure while
-/// the surrounding `RecordEntry` keeps a single deterministic
-/// sequence number (no parallel `write_system_record` write).
+/// distinguish a hook block from a normal executor failure. The block
+/// lands on the `ToolExecution` entry, after the `PolicyDecision` entry
+/// that approved the call.
 fn fire_pre_tool_use_and_maybe_block(
     host: &aura_plugin_hooks::PluginHookHost,
     proposal: &ToolProposal,

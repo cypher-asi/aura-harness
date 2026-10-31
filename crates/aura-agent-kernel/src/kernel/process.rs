@@ -2,7 +2,9 @@
 //!
 //! `process_direct` and `process_dequeued` bracket the `process_tx`
 //! dispatcher, feeding the resulting `ProcessResult` to the matching store
-//! append variant (direct / dequeued / capability-aware). `process_tx`
+//! append variant (direct / dequeued / capability-aware). Tool proposals
+//! bypass `process_tx` because they append several linked entries of
+//! their own (see [`super::tools`]). `process_tx`
 //! itself routes each transaction to the appropriate handler based on its
 //! [`TransactionType`] and owns the `System`-transaction capability-install
 //! decode path.
@@ -21,6 +23,10 @@ impl Kernel {
         &self,
         tx: Transaction,
     ) -> Result<ProcessResult, crate::KernelError> {
+        Self::reject_kernel_only(&tx)?;
+        if tx.tx_type == TransactionType::ToolProposal {
+            return self.process_tool_proposal(tx, None).await;
+        }
         let seq = self.next_seq()?;
         let result = self.process_tx(&tx, seq).await?;
         self.store
@@ -48,6 +54,10 @@ impl Kernel {
         tx: Transaction,
         token: DequeueToken,
     ) -> Result<ProcessResult, crate::KernelError> {
+        Self::reject_kernel_only(&tx)?;
+        if tx.tx_type == TransactionType::ToolProposal {
+            return self.process_tool_proposal(tx, Some(token)).await;
+        }
         let seq = self.next_seq()?;
         let result = self.process_tx(&tx, seq).await?;
         self.store
@@ -67,6 +77,22 @@ impl Kernel {
         Ok(result)
     }
 
+    /// `PolicyDecision` and `ToolExecution` entries are written only by the
+    /// kernel's tool pipeline; accepting them from callers would let a
+    /// submitter forge the audit trail of what policy allowed a call.
+    fn reject_kernel_only(tx: &Transaction) -> Result<(), crate::KernelError> {
+        if matches!(
+            tx.tx_type,
+            TransactionType::PolicyDecision | TransactionType::ToolExecution
+        ) {
+            return Err(crate::KernelError::Internal(format!(
+                "{:?} transactions are written only by the kernel tool pipeline",
+                tx.tx_type
+            )));
+        }
+        Ok(())
+    }
+
     pub(super) async fn process_tx(
         &self,
         tx: &Transaction,
@@ -76,9 +102,6 @@ impl Kernel {
         let context_hash = hash_tx_with_window(tx, &window)?;
 
         match tx.tx_type {
-            TransactionType::ToolProposal => {
-                self.process_tool_proposal(tx, seq, context_hash).await
-            }
             TransactionType::SessionStart => {
                 self.policy.clear_session_approvals();
                 let entry = RecordEntry::builder(seq, tx.clone())
@@ -91,6 +114,7 @@ impl Kernel {
                     runtime_capability_update: None,
                     clear_runtime_capabilities: true,
                     tool_decision: None,
+                    policy_decision: None,
                 })
             }
             TransactionType::System => {
@@ -110,6 +134,7 @@ impl Kernel {
                     runtime_capability_update,
                     clear_runtime_capabilities: false,
                     tool_decision: None,
+                    policy_decision: None,
                 })
             }
             TransactionType::SubagentSpawn => {
@@ -129,6 +154,7 @@ impl Kernel {
                     runtime_capability_update: None,
                     clear_runtime_capabilities: false,
                     tool_decision: None,
+                    policy_decision: None,
                 })
             }
             _ => {
@@ -142,6 +168,7 @@ impl Kernel {
                     runtime_capability_update: None,
                     clear_runtime_capabilities: false,
                     tool_decision: None,
+                    policy_decision: None,
                 })
             }
         }

@@ -284,6 +284,136 @@ async fn test_submit_tx_invalid_kind() {
 }
 
 #[tokio::test]
+async fn test_submit_tx_rejects_kernel_only_kinds() {
+    let store = create_test_store();
+    let state = test_router_state(store);
+    let app = create_router(state);
+
+    let agent_id = AgentId::generate();
+    for kind in ["policy_decision", "tool_execution", "tool_proposal"] {
+        let body = serde_json::json!({
+            "agent_id": agent_id.to_hex(),
+            "kind": kind,
+            "payload": "e30=",
+        });
+        let req = authed_request()
+            .method("POST")
+            .uri("/tx")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "kind {kind}");
+    }
+}
+
+fn append_tool_call_chain(
+    store: &Arc<dyn Store>,
+    agent_id: AgentId,
+    first_seq: u64,
+    tool_use_id: &str,
+) -> (
+    aura_core_types::Hash,
+    aura_core_types::Hash,
+    aura_core_types::Hash,
+) {
+    use aura_core_types::{
+        PolicyDecision, PolicyRule, PolicySource, RecordEntry, ToolExecution, ToolGateVerdict,
+        ToolProposal, Transaction,
+    };
+
+    let proposal = ToolProposal::new(tool_use_id, "read_file", serde_json::json!({"path": "a"}));
+    let proposal_tx = Transaction::tool_proposal(agent_id, &proposal).unwrap();
+    let decision = PolicyDecision {
+        tool_use_id: tool_use_id.into(),
+        tool: "read_file".into(),
+        verdict: ToolGateVerdict::Approved,
+        reason: None,
+        decided_by: PolicyRule::new(PolicySource::UserDefault, "full_access"),
+        trace: Vec::new(),
+        approval: None,
+        mode: "agent".into(),
+        policy_hash: "h".into(),
+        action_id: None,
+    };
+    let decision_tx = Transaction::policy_decision(agent_id, &decision, proposal_tx.hash).unwrap();
+    let execution = ToolExecution {
+        tool_use_id: tool_use_id.into(),
+        tool: "read_file".into(),
+        args: serde_json::json!({"path": "a"}),
+        decision: ToolGateVerdict::Approved,
+        reason: None,
+        result: None,
+        is_error: false,
+        parent_agent_id: agent_id,
+        originating_user_id: String::new(),
+    };
+    let execution_tx =
+        Transaction::tool_execution_for_decision(agent_id, &execution, decision_tx.hash).unwrap();
+
+    let hashes = (proposal_tx.hash, decision_tx.hash, execution_tx.hash);
+    for (offset, tx) in [proposal_tx, decision_tx, execution_tx]
+        .into_iter()
+        .enumerate()
+    {
+        let seq = first_seq + offset as u64;
+        store
+            .append_entry_direct(agent_id, seq, &RecordEntry::builder(seq, tx).build())
+            .unwrap();
+    }
+    hashes
+}
+
+#[tokio::test]
+async fn test_tool_call_audit_returns_proposal_decision_and_execution() {
+    let store = create_test_store();
+    let agent_id = AgentId::generate();
+    append_tool_call_chain(&store, agent_id, 1, "tu-other");
+    let (proposal_hash, decision_hash, execution_hash) =
+        append_tool_call_chain(&store, agent_id, 4, "tu-1");
+    let app = create_router(test_router_state(store));
+
+    let req = authed_request()
+        .uri(format!(
+            "/agents/{}/tool_calls/tu-1/audit",
+            agent_id.to_hex()
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["proposal"]["tx"]["hash"],
+        serde_json::to_value(proposal_hash).unwrap()
+    );
+    assert_eq!(json["proposal"]["seq"], 4);
+    assert_eq!(
+        json["policy_decision"]["tx"]["hash"],
+        serde_json::to_value(decision_hash).unwrap()
+    );
+    assert_eq!(json["decision"]["decided_by"]["source"], "user_default");
+    assert_eq!(json["decision"]["decided_by"]["rule"], "full_access");
+    assert_eq!(
+        json["execution"]["tx"]["hash"],
+        serde_json::to_value(execution_hash).unwrap()
+    );
+
+    let missing = authed_request()
+        .uri(format!(
+            "/agents/{}/tool_calls/nope/audit",
+            agent_id.to_hex()
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(missing).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_submit_tx_invalid_base64() {
     let store = create_test_store();
     let state = test_router_state(store);
@@ -1491,6 +1621,7 @@ const PROTECTED_ROUTES: &[(&str, &str)] = &[
     ("GET", "/tx/status/deadbeef/abcd"),
     ("GET", "/agents/deadbeef/head"),
     ("GET", "/agents/deadbeef/record"),
+    ("GET", "/agents/deadbeef/tool_calls/tu-1/audit"),
     ("GET", "/ws/terminal"),
     ("GET", "/ws/preview/tcp/5173"),
     ("GET", "/stream/test-run"),

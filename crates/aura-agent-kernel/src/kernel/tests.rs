@@ -156,9 +156,15 @@ async fn process_tools_batch_reconciles_stale_kernel_sequence_with_store_head() 
         .await
         .unwrap();
 
-    assert_eq!(results[0].entry.seq, 2);
-    assert_eq!(results[1].entry.seq, 3);
-    assert_eq!(store.get_head_seq(agent_id).unwrap(), 3);
+    // Proposal + decision pairs are recorded first (2..=5), then the two
+    // executions (6, 7).
+    let first_decision = results[0].policy_decision.as_ref().unwrap();
+    let second_decision = results[1].policy_decision.as_ref().unwrap();
+    assert_eq!((first_decision.proposal_seq, first_decision.seq), (2, 3));
+    assert_eq!((second_decision.proposal_seq, second_decision.seq), (4, 5));
+    assert_eq!(results[0].entry.seq, 6);
+    assert_eq!(results[1].entry.seq, 7);
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 7);
 }
 
 #[tokio::test]

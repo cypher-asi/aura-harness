@@ -2,13 +2,14 @@
 //!
 //! The command becomes a `ToolProposal` transaction (source `user`) that
 //! goes through the agent's inbox and `Kernel::process_dequeued`, so it
-//! gets the same policy check, sandboxed execution and record entry as a
-//! tool call proposed by the model. It runs in a pseudo-terminal as wide
+//! gets the same policy check, sandboxed execution and record entries
+//! (proposal, policy decision, execution) as a tool call proposed by the
+//! model. It runs in a pseudo-terminal as wide
 //! as the chat, so the TUI can show its output as a terminal would. The
 //! call and its result (without ANSI styling) are then appended to the
 //! conversation as a tool-use / tool-result pair.
 
-use super::{drain_stale_inbox, send_record_to_ui, LoopState};
+use super::{drain_stale_inbox, LoopState};
 use aura_agent_kernel::{Kernel, KernelError, ProcessResult};
 use aura_core_types::{ToolProposal, Transaction};
 use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
@@ -141,7 +142,7 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str,
 
     let proposal = user_command_proposal(command, Some(cols));
     let kernel = state.session.kernel.clone();
-    let (tx, result) = match process_user_proposal(&kernel, &proposal).await {
+    let (_, result) = match process_user_proposal(&kernel, &proposal).await {
         Ok(processed) => processed,
         Err(e) => {
             error!(error = %e, "Failed to process user command via kernel");
@@ -156,8 +157,6 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str,
             return;
         }
     };
-
-    send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
 
     let (content, is_error) = result.tool_output.map_or_else(
         || ("No output from kernel".to_string(), true),

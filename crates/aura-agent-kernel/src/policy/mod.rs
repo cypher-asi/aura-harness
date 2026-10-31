@@ -20,7 +20,9 @@
 mod check;
 mod config;
 
+pub(crate) use check::tool_state_label;
 pub use check::{
-    gated_action, tool_mode_class, Policy, PolicyResult, PolicyVerdict, ToolModeClass,
+    gated_action, tool_mode_class, Policy, PolicyEvaluation, PolicyResult, PolicyVerdict,
+    ToolModeClass,
 };
 pub use config::PolicyConfig;

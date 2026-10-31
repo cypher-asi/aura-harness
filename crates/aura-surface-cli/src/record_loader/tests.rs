@@ -101,6 +101,7 @@ fn labels_fit_kind_column() {
         TransactionType::SessionStart,
         TransactionType::ToolProposal,
         TransactionType::ToolExecution,
+        TransactionType::PolicyDecision,
         TransactionType::ProcessComplete,
         TransactionType::Reasoning,
         TransactionType::SubagentSpawn,
@@ -231,6 +232,126 @@ fn tool_execution_outcomes() {
     assert_eq!(
         summarize_record(&execution(ToolGateVerdict::Denied, None, false)),
         "read_file a.rs · denied: policy says no"
+    );
+}
+
+#[test]
+fn tool_execution_reads_output_from_effects() {
+    use aura_core_types::{ActionId, Effect, EffectKind, ToolResult};
+
+    let t = execution(ToolGateVerdict::Approved, None, false);
+    let result = ToolResult::success("read_file", "hello");
+    let effect = Effect::new(
+        ActionId::generate(),
+        EffectKind::Agreement,
+        EffectStatus::Committed,
+        serde_json::to_vec(&result).unwrap(),
+    );
+    let entry = RecordEntry::builder(3, t.clone())
+        .effects(vec![effect])
+        .build();
+
+    let summary = build_record_summary(3, &t, &entry, "12:00:00".into());
+    assert_eq!(summary.tx_kind, "ToolRes");
+    assert_eq!(summary.info, "read_file a.rs · ok 5B");
+    assert!(summary.policy.is_none());
+}
+
+fn policy_decision_tx(agent_id: AgentId) -> (Transaction, aura_core_types::Hash) {
+    use aura_core_types::{
+        PolicyApproval, PolicyCheck, PolicyCheckOutcome, PolicyRule, PolicySource,
+    };
+
+    let proposal = proposal_tx(&ToolProposal::new("t1", "run_command", json!({})));
+    let decision = PolicyDecision {
+        tool_use_id: "t1".into(),
+        tool: "run_command".into(),
+        verdict: ToolGateVerdict::Approved,
+        reason: None,
+        decided_by: PolicyRule::new(PolicySource::User, "on"),
+        trace: vec![
+            PolicyCheck {
+                rule: PolicyRule::new(PolicySource::Mode, "agent"),
+                outcome: PolicyCheckOutcome::Allow,
+            },
+            PolicyCheck {
+                rule: PolicyRule::new(PolicySource::UserDefault, "auto_review"),
+                outcome: PolicyCheckOutcome::Ask,
+            },
+        ],
+        approval: Some(PolicyApproval {
+            approver: PolicyApprover::User {
+                user_id: Some("u-1".into()),
+            },
+            remember: Some("session".into()),
+            request_id: None,
+        }),
+        mode: "agent".into(),
+        policy_hash: "abc123".into(),
+        action_id: None,
+    };
+    (
+        Transaction::policy_decision(agent_id, &decision, proposal.hash).unwrap(),
+        proposal.hash,
+    )
+}
+
+#[test]
+fn policy_decision_names_the_rule_and_carries_detail() {
+    let (t, proposal_hash) = policy_decision_tx(AgentId::generate());
+    let entry = RecordEntry::builder(2, t.clone()).build();
+
+    let summary = build_record_summary(2, &t, &entry, "12:00:00".into());
+
+    assert_eq!(summary.tx_kind, "Policy");
+    assert_eq!(summary.sender, "KERNEL");
+    assert_eq!(summary.info, "run_command · allow · user.on");
+    let policy = summary.policy.expect("policy detail");
+    assert_eq!(policy.verdict, "approved");
+    assert_eq!(policy.decided_by, "user.on");
+    assert_eq!(policy.approval, "user u-1 (session)");
+    assert_eq!(
+        policy.trace,
+        ["allow mode.agent", "ask   user_default.auto_review"]
+    );
+    assert_eq!(policy.proposal_tx, proposal_hash.to_hex());
+    assert_eq!(policy.policy_hash, "abc123");
+}
+
+#[test]
+fn tool_call_history_shows_command_then_policy_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let proposal = ToolProposal::new("t1", "read_file", json!({"path": "a.rs"}));
+    append(
+        &store,
+        1,
+        Transaction::tool_proposal(agent, &proposal).unwrap(),
+    );
+    append(&store, 2, policy_decision_tx(agent).0);
+    let exec = ToolExecution {
+        tool_use_id: "t1".into(),
+        tool: "read_file".into(),
+        args: json!({"path": "a.rs"}),
+        decision: ToolGateVerdict::Approved,
+        reason: None,
+        result: None,
+        is_error: false,
+        parent_agent_id: agent,
+        originating_user_id: String::new(),
+    };
+    append(
+        &store,
+        3,
+        Transaction::tool_execution(agent, &exec).unwrap(),
+    );
+
+    let history = conversation_history(&store, agent).unwrap();
+    let rendered: Vec<&str> = history.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(
+        rendered,
+        ["$ read_file", "policy: run_command allowed by user.on"]
     );
 }
 

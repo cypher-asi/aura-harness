@@ -30,7 +30,9 @@ use crate::replay::{ReplayConsumer, ReplayReport};
 use crate::ExecutorRouter;
 use async_trait::async_trait;
 use aura_core_modes::KernelMode;
-use aura_core_types::{AgentId, RecordEntry, RuntimeCapabilityInstall, ToolState};
+use aura_core_types::{
+    AgentId, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall, ToolState,
+};
 use aura_model_reasoner::ModelProvider;
 use aura_plugin_hooks::PluginHookHost;
 use aura_store_db::Store;
@@ -44,6 +46,8 @@ mod reason;
 mod stream;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tool_audit_tests;
 mod tools;
 
 pub use stream::ReasonStreamHandle;
@@ -134,6 +138,10 @@ pub struct KernelConfig {
     /// kernel never fires `PermissionRequest` hooks and the
     /// interactive prompt is always reached when configured.
     pub plugin_hooks: Option<Arc<PluginHookHost>>,
+    /// Notified with every tool-call record entry (`ToolProposal`,
+    /// `PolicyDecision`, `ToolExecution`) immediately after it is
+    /// persisted, so UIs can show the policy decision before the tool runs.
+    pub tool_audit_observer: Option<Arc<dyn ToolAuditObserver>>,
 }
 
 impl Default for KernelConfig {
@@ -152,6 +160,7 @@ impl Default for KernelConfig {
             kernel_mode: KernelMode::Audited,
             audited_lite_threshold_bytes: DEFAULT_SUMMARY_CHUNK_BYTES,
             plugin_hooks: None,
+            tool_audit_observer: None,
         }
     }
 }
@@ -248,6 +257,29 @@ pub trait ToolApprovalPrompter: Send + Sync + std::fmt::Debug {
     ) -> Result<ToolApprovalResponse, ToolApprovalError>;
 }
 
+/// Receives tool-call record entries as the kernel persists them.
+///
+/// Called synchronously on the kernel's processing task; implementations
+/// must not block (forward to a channel instead).
+pub trait ToolAuditObserver: Send + Sync + std::fmt::Debug {
+    fn on_tool_entry(&self, entry: &RecordEntry);
+}
+
+/// Where the policy decision for a tool call was recorded.
+#[derive(Debug, Clone)]
+pub struct PolicyDecisionRef {
+    /// Sequence number of the `ToolProposal` entry.
+    pub proposal_seq: u64,
+    /// Hash of the `ToolProposal` transaction.
+    pub proposal_tx_hash: Hash,
+    /// Sequence number of the `PolicyDecision` entry.
+    pub seq: u64,
+    /// Hash of the `PolicyDecision` transaction.
+    pub tx_hash: Hash,
+    /// The recorded decision payload.
+    pub decision: PolicyDecision,
+}
+
 /// Decision produced by [`Kernel::process_tool_proposal`] for a single
 /// tool call. Surfaced on [`ProcessResult`] so HTTP routers (and any
 /// other caller) can distinguish "needs operator sign-off" from
@@ -275,7 +307,9 @@ pub enum ToolDecision {
 /// Result of processing a transaction.
 #[derive(Debug)]
 pub struct ProcessResult {
-    /// The record entry created
+    /// The record entry created. For tool proposals this is the last
+    /// entry written for the call: the `ToolExecution` entry when the call
+    /// ran, otherwise the `PolicyDecision` entry.
     pub entry: RecordEntry,
     /// Tool output, if a tool was executed or denied
     pub tool_output: Option<ToolOutput>,
@@ -288,6 +322,8 @@ pub struct ProcessResult {
     /// Structured policy decision, set when this `ProcessResult` came
     /// from a tool-proposal path. `None` for non-tool transactions.
     pub tool_decision: Option<ToolDecision>,
+    /// Recorded `PolicyDecision` entry for tool proposals.
+    pub policy_decision: Option<PolicyDecisionRef>,
 }
 
 /// Result of a reasoning call.
@@ -424,20 +460,6 @@ impl Kernel {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *seq = next + 1;
         Ok(next)
-    }
-
-    pub(super) fn reserve_seq_range(&self, count: usize) -> Result<u64, crate::KernelError> {
-        let head_seq = self
-            .store
-            .get_head_seq(self.agent_id)
-            .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
-        let base = head_seq + 1;
-        let mut seq = self
-            .seq
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *seq = base + count as u64;
-        Ok(base)
     }
 
     /// Directory the agent's tools run in.

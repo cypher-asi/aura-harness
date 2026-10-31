@@ -6,7 +6,7 @@ use crate::ids::{AgentId, Hash, TxId};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{ActionResultPayload, ToolExecution, ToolProposal};
+use super::{ActionResultPayload, PolicyDecision, ToolExecution, ToolProposal};
 
 /// The type of transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -28,6 +28,10 @@ pub enum TransactionType {
     ToolProposal,
     /// Tool execution result (after kernel policy decision)
     ToolExecution,
+    /// Kernel policy decision on a tool proposal. Written between the
+    /// proposal and its execution; `reference_tx_hash` points at the
+    /// proposal. Kernel-only: never accepted from external submitters.
+    PolicyDecision,
     /// Async process completion (callback from background process)
     ProcessComplete,
     /// LLM call record (model request + response metadata)
@@ -228,6 +232,44 @@ impl Transaction {
             payload,
             None,
         ))
+    }
+
+    /// Create a tool execution transaction that references the policy
+    /// decision which authorized it.
+    ///
+    /// # Errors
+    /// Returns `AuraError::Serialization` if the execution cannot be serialized.
+    pub fn tool_execution_for_decision(
+        agent_id: AgentId,
+        execution: &ToolExecution,
+        decision_tx_hash: Hash,
+    ) -> Result<Self, AuraError> {
+        let mut tx = Self::tool_execution(agent_id, execution)?;
+        tx.reference_tx_hash = Some(decision_tx_hash);
+        Ok(tx)
+    }
+
+    /// Create a policy decision transaction for a tool proposal.
+    ///
+    /// `reference_tx_hash` is set to the proposal transaction's hash so the
+    /// decision can always be traced back to what was proposed.
+    ///
+    /// # Errors
+    /// Returns `AuraError::Serialization` if the decision cannot be serialized.
+    pub fn policy_decision(
+        agent_id: AgentId,
+        decision: &PolicyDecision,
+        proposal_tx_hash: Hash,
+    ) -> Result<Self, AuraError> {
+        let payload = serde_json::to_vec(decision)?;
+        let mut tx = Self::new_chained(
+            agent_id,
+            TransactionType::PolicyDecision,
+            payload,
+            Some(&proposal_tx_hash),
+        );
+        tx.reference_tx_hash = Some(proposal_tx_hash);
+        Ok(tx)
     }
 
     /// Create a process completion transaction.

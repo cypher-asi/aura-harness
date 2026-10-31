@@ -80,7 +80,13 @@ pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 ///
 /// See `CHANGELOG.md` Phase 10 entry for the operator-facing
 /// migration note.
-pub const SCHEMA_VERSION: u32 = 2;
+///
+/// v3 adds [`aura_core_types::TransactionType::PolicyDecision`] and splits
+/// each tool call into three linked entries: `ToolProposal` (bare),
+/// `PolicyDecision` (verdict + the policy rule that decided, referencing
+/// the proposal), and `ToolExecution` (actions + effects, referencing the
+/// decision; approved calls only). v2 single-entry tool rows still parse.
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[cfg(test)]
 mod tests;

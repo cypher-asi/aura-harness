@@ -76,7 +76,8 @@ use super::handlers::tool_permissions::{
     put_agent_tool_permissions_handler, put_user_tool_defaults_handler,
 };
 use super::handlers::tx::{
-    get_head_handler, scan_record_handler, submit_tx_handler, tx_status_handler,
+    get_head_handler, scan_record_handler, submit_tx_handler, tool_call_audit_handler,
+    tx_status_handler,
 };
 use super::RouterState;
 
@@ -187,6 +188,10 @@ pub fn create_router(state: RouterState) -> Router {
         .route(
             "/agents/:agent_id/record",
             get(scan_record_handler).route_layer(body_limit_16k),
+        )
+        .route(
+            "/agents/:agent_id/tool_calls/:tool_use_id/audit",
+            get(tool_call_audit_handler).route_layer(body_limit_1k),
         )
         .route(
             "/users/:user_id/tool-defaults",

@@ -9,6 +9,7 @@ pub(crate) mod run_command;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelFactory};
 pub(crate) use record_ui::send_record_to_ui;
+pub use record_ui::UiToolAuditObserver;
 
 use crate::agent_registry::AgentRegistry;
 use crate::model_selection::ModelSelection;
@@ -282,7 +283,7 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
             error!(error = %e, "Agent loop failed");
             let _ = state
                 .commands
-                .send(UiCommand::ShowError(format!("Error: {e}")))
+                .send(UiCommand::ShowError(e.to_string()))
                 .await;
             let _ = state.commands.send(UiCommand::Complete).await;
         }

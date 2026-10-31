@@ -1,7 +1,9 @@
-use crate::record_loader::build_record_summary;
-use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
+use crate::record_loader::{build_record_summary, format_local_time, policy_chat_line};
+use aura_agent_kernel::ToolAuditObserver;
+use aura_core_types::{AgentId, PolicyDecision, RecordEntry, Transaction, TransactionType};
+use aura_terminal::events::{MessageData, MessageRole};
 use aura_terminal::UiCommand;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TrySendError};
 
 /// Send a record summary to the UI (matching the stored format).
 pub(crate) async fn send_record_to_ui(
@@ -23,4 +25,52 @@ pub(crate) fn create_response_transaction(agent_id: AgentId, response_text: &str
         response_text.as_bytes().to_vec(),
         None,
     )
+}
+
+/// Streams each tool-call record entry (proposal, policy decision,
+/// execution) to the RECORD panel as the kernel persists it, plus a chat
+/// line naming the policy rule behind every decision.
+#[derive(Debug)]
+pub struct UiToolAuditObserver {
+    commands: mpsc::Sender<UiCommand>,
+}
+
+impl UiToolAuditObserver {
+    #[must_use]
+    pub const fn new(commands: mpsc::Sender<UiCommand>) -> Self {
+        Self { commands }
+    }
+
+    fn send(&self, command: UiCommand) {
+        if let Err(TrySendError::Full(command)) = self.commands.try_send(command) {
+            // Runs on the kernel task, so never block; wait for capacity
+            // on a separate task instead.
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let commands = self.commands.clone();
+                handle.spawn(async move {
+                    let _ = commands.send(command).await;
+                });
+            }
+        }
+    }
+}
+
+impl ToolAuditObserver for UiToolAuditObserver {
+    fn on_tool_entry(&self, entry: &RecordEntry) {
+        let timestamp = format_local_time(entry.tx.ts_ms);
+        self.send(UiCommand::NewRecord(build_record_summary(
+            entry.seq, &entry.tx, entry, timestamp,
+        )));
+        if entry.tx.tx_type == TransactionType::PolicyDecision {
+            if let Ok(decision) = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload) {
+                self.send(UiCommand::ShowMessage(MessageData {
+                    role: MessageRole::System,
+                    content: policy_chat_line(&decision),
+                    is_streaming: false,
+                    timestamp_ms: Some(entry.tx.ts_ms),
+                    command: None,
+                }));
+            }
+        }
+    }
 }

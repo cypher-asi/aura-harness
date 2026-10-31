@@ -42,11 +42,13 @@ pub use billing::walk_parent_chain;
 pub use context::{hash_tx_with_window, Context, ContextBuilder};
 pub use kernel::{
     write_system_record, ApprovalRequiredInfo, Kernel, KernelConfig, PendingToolPrompt,
-    ProcessResult, ReasonResult, ReasonStreamHandle, ToolApprovalError, ToolApprovalPrompter,
-    ToolApprovalRemember, ToolApprovalResponse, ToolDecision, ToolOutput,
+    PolicyDecisionRef, ProcessResult, ReasonResult, ReasonStreamHandle, ToolApprovalError,
+    ToolApprovalPrompter, ToolApprovalRemember, ToolApprovalResponse, ToolAuditObserver,
+    ToolDecision, ToolOutput,
 };
 pub use policy::{
-    gated_action, tool_mode_class, Policy, PolicyConfig, PolicyResult, PolicyVerdict, ToolModeClass,
+    gated_action, tool_mode_class, Policy, PolicyConfig, PolicyEvaluation, PolicyResult,
+    PolicyVerdict, ToolModeClass,
 };
 pub use replay::{ReplayConsumer, ReplayError, ReplayReport};
 pub use spawn_hook::KernelSpawnHook;

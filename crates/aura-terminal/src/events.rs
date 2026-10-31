@@ -279,6 +279,32 @@ pub struct RecordSummary {
     /// Raw timestamp in milliseconds since epoch
     #[serde(default)]
     pub ts_ms: u64,
+    /// Policy provenance, set for policy decision entries.
+    #[serde(default)]
+    pub policy: Option<PolicyDetail>,
+}
+
+/// Why the kernel allowed, denied, or paused a tool call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyDetail {
+    /// Tool the decision applies to
+    pub tool: String,
+    /// `approved`, `denied`, or `pending_approval`
+    pub verdict: String,
+    /// The deciding rule, rendered as `source.rule`
+    pub decided_by: String,
+    /// Denial / pending reason, empty when approved
+    pub reason: String,
+    /// Evaluated gates in order, each rendered as `outcome source.rule`
+    pub trace: Vec<String>,
+    /// Live approver (`hook` or `user`, with remember scope), empty if none
+    pub approval: String,
+    /// Agent mode at decision time
+    pub mode: String,
+    /// Hash of the policy configuration that was evaluated
+    pub policy_hash: String,
+    /// Hash of the `ToolProposal` transaction this decision answers
+    pub proposal_tx: String,
 }
 
 /// Status of a record entry.

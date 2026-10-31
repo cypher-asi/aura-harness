@@ -43,6 +43,10 @@ impl ToolApprovalBroker {
         }
     }
 
+    pub(crate) fn outbound(&self) -> mpsc::Sender<OutboundMessage> {
+        self.outbound.clone()
+    }
+
     pub(crate) fn respond(&self, response: ProtocolResponse) -> Result<(), String> {
         let request_id = response.request_id.clone();
         let response = ToolApprovalResponse {

@@ -227,7 +227,13 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
     } else {
         0
     };
-    let modal_height = (base_height + error_lines).min(area.height.saturating_sub(4));
+    #[allow(clippy::cast_possible_truncation)]
+    let policy_lines = record
+        .policy
+        .as_ref()
+        .map_or(0, |policy| 10 + policy.trace.len() as u16);
+    let modal_height =
+        (base_height + error_lines + policy_lines).min(area.height.saturating_sub(4));
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -247,6 +253,9 @@ fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
     let mut content = build_record_header(record, theme);
     build_transaction_section(&mut content, record, theme);
     build_processing_section(&mut content, record, theme);
+    if let Some(policy) = &record.policy {
+        build_policy_section(&mut content, policy, theme);
+    }
 
     if has_error {
         build_error_section(&mut content, record, modal_width, theme);
@@ -364,6 +373,82 @@ fn build_processing_section<'a>(
             Style::default().fg(theme.colors.foreground),
         ),
     ]));
+}
+
+fn build_policy_section<'a>(
+    content: &mut Vec<Line<'a>>,
+    policy: &'a crate::events::PolicyDetail,
+    theme: &Theme,
+) {
+    let label = |text: &'static str| Span::styled(text, Style::default().fg(theme.colors.muted));
+    let verdict_color = match policy.verdict.as_str() {
+        "approved" => theme.colors.success,
+        "denied" => theme.colors.error,
+        _ => theme.colors.pending,
+    };
+
+    content.push(Line::from(""));
+    content.push(Line::from(Span::styled(
+        "── Policy decision ──",
+        Style::default().fg(theme.colors.muted),
+    )));
+    content.push(Line::from(vec![
+        label("Tool:        "),
+        Span::styled(&policy.tool, Style::default().fg(theme.colors.foreground)),
+    ]));
+    content.push(Line::from(vec![
+        label("Verdict:     "),
+        Span::styled(&policy.verdict, Style::default().fg(verdict_color)),
+    ]));
+    content.push(Line::from(vec![
+        label("Decided by:  "),
+        Span::styled(
+            &policy.decided_by,
+            Style::default().fg(theme.colors.primary),
+        ),
+    ]));
+    if !policy.reason.is_empty() {
+        content.push(Line::from(vec![
+            label("Reason:      "),
+            Span::styled(&policy.reason, Style::default().fg(theme.colors.foreground)),
+        ]));
+    }
+    if !policy.approval.is_empty() {
+        content.push(Line::from(vec![
+            label("Approved by: "),
+            Span::styled(
+                &policy.approval,
+                Style::default().fg(theme.colors.foreground),
+            ),
+        ]));
+    }
+    content.push(Line::from(vec![
+        label("Mode:        "),
+        Span::styled(&policy.mode, Style::default().fg(theme.colors.foreground)),
+    ]));
+    content.push(Line::from(vec![
+        label("Proposal tx: "),
+        Span::styled(
+            &policy.proposal_tx,
+            Style::default().fg(theme.colors.secondary),
+        ),
+    ]));
+    content.push(Line::from(vec![
+        label("Policy hash: "),
+        Span::styled(
+            &policy.policy_hash,
+            Style::default().fg(theme.colors.secondary),
+        ),
+    ]));
+    if !policy.trace.is_empty() {
+        content.push(Line::from(label("Checks:")));
+        for check in &policy.trace {
+            content.push(Line::from(Span::styled(
+                format!("  {check}"),
+                Style::default().fg(theme.colors.foreground),
+            )));
+        }
+    }
 }
 
 fn build_error_section<'a>(

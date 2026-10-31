@@ -15,10 +15,11 @@ import type { TextDelta } from "./TextDelta";
 import type { ThinkingDelta } from "./ThinkingDelta";
 import type { ToolApprovalPrompt } from "./ToolApprovalPrompt";
 import type { ToolCallSnapshot } from "./ToolCallSnapshot";
+import type { ToolPolicyDecision } from "./ToolPolicyDecision";
 import type { ToolResultMsg } from "./ToolResultMsg";
 import type { ToolUseStart } from "./ToolUseStart";
 
 /**
  * Top-level outbound message envelope.
  */
-export type OutboundMessage = { "type": "session_ready" } & SessionReady | { "type": "assistant_message_start" } & AssistantMessageStart | { "type": "text_delta" } & TextDelta | { "type": "thinking_delta" } & ThinkingDelta | { "type": "tool_use_start" } & ToolUseStart | { "type": "tool_call_snapshot" } & ToolCallSnapshot | { "type": "tool_result" } & ToolResultMsg | { "type": "tool_approval_prompt" } & ToolApprovalPrompt | { "type": "assistant_message_end" } & AssistantMessageEnd | { "type": "error" } & ErrorMsg | { "type": "progress" } & ProgressMsg | { "type": "generation_start" } & GenerationStart | { "type": "generation_progress" } & GenerationProgressMsg | { "type": "generation_partial_image" } & GenerationPartialImage | { "type": "generation_completed" } & GenerationCompleted | { "type": "generation_error" } & GenerationErrorMsg | { "type": "subagent_spawned" } & SubagentSpawned | { "type": "subagent_status" } & SubagentStatus;
+export type OutboundMessage = { "type": "session_ready" } & SessionReady | { "type": "assistant_message_start" } & AssistantMessageStart | { "type": "text_delta" } & TextDelta | { "type": "thinking_delta" } & ThinkingDelta | { "type": "tool_use_start" } & ToolUseStart | { "type": "tool_call_snapshot" } & ToolCallSnapshot | { "type": "tool_result" } & ToolResultMsg | { "type": "tool_approval_prompt" } & ToolApprovalPrompt | { "type": "tool_policy_decision" } & ToolPolicyDecision | { "type": "assistant_message_end" } & AssistantMessageEnd | { "type": "error" } & ErrorMsg | { "type": "progress" } & ProgressMsg | { "type": "generation_start" } & GenerationStart | { "type": "generation_progress" } & GenerationProgressMsg | { "type": "generation_partial_image" } & GenerationPartialImage | { "type": "generation_completed" } & GenerationCompleted | { "type": "generation_error" } & GenerationErrorMsg | { "type": "subagent_spawned" } & SubagentSpawned | { "type": "subagent_status" } & SubagentStatus;
