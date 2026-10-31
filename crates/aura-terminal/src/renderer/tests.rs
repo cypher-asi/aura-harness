@@ -385,6 +385,69 @@ fn test_default_layout_shows_agents_column() {
     assert!(screen.contains("2. Researcher"));
 }
 
+fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
+    use crate::events::{ModelOptionView, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetModels {
+        options: vec![ModelOptionView {
+            id: "local/qwen3:4b".to_string(),
+            label: "qwen3:4b".to_string(),
+            local: true,
+            installed: true,
+        }],
+        current: "local/qwen3:4b".to_string(),
+        user: user.map(str::to_string),
+    });
+
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn test_header_shows_guest_auth_and_model_moves_to_input() {
+    let rows = render_with_user(None, 120);
+    let header = rows[..3].join("\n");
+    assert!(header.contains("not logged in"));
+    assert!(header.contains("/login"));
+    assert!(!header.contains("qwen3:4b"));
+
+    let input_row = rows.last().unwrap().trim_end();
+    assert!(
+        input_row.ends_with("qwen3:4b · local  /model"),
+        "{input_row:?}"
+    );
+    assert!(input_row.contains("Ready"));
+}
+
+#[test]
+fn test_header_shows_logged_in_user() {
+    let rows = render_with_user(Some("alice"), 120);
+    let header = rows[..3].join("\n");
+    assert!(header.contains("logged in as alice"));
+    assert!(!header.contains("not logged in"));
+}
+
+#[test]
+fn test_input_hides_model_when_narrow() {
+    let rows = render_with_user(None, 50);
+    let input_row = rows.last().unwrap();
+    assert!(!input_row.contains("qwen3:4b"));
+    assert!(input_row.contains("Ready"));
+}
+
 // ========================================================================
 // Record Info Truncation Tests
 // ========================================================================

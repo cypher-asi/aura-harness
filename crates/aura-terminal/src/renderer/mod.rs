@@ -96,12 +96,9 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
 
 /// Render the header bar.
 fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let model_spans = model_indicator_spans(app, theme);
-    let model_width: usize = model_spans
-        .iter()
-        .map(|s| text::display_width(&s.content))
-        .sum();
-    let right_width = u16::try_from(model_width.max(30) + 1).unwrap_or(u16::MAX);
+    let auth_spans = auth_indicator_spans(app, theme);
+    let auth_width = spans_width(&auth_spans);
+    let right_width = u16::try_from(auth_width.max(30) + 1).unwrap_or(u16::MAX);
 
     let header_layout = Layout::default()
         .direction(Direction::Horizontal)
@@ -133,15 +130,41 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         },
     );
 
-    let right = vec![Line::from(""), Line::from(model_spans), api_line];
+    let right = vec![Line::from(""), Line::from(auth_spans), api_line];
     frame.render_widget(
         Paragraph::new(right).alignment(Alignment::Right),
         header_layout[1],
     );
 }
 
-/// `qwen3:4b · local · guest  /model` — empty until the kernel reports a model.
-fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| text::display_width(&s.content)).sum()
+}
+
+/// `● logged in as alice` or `○ not logged in  /login`.
+fn auth_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+    app.user().map_or_else(
+        || {
+            vec![
+                Span::styled("○ ", Style::default().fg(theme.colors.warning)),
+                Span::styled("not logged in", Style::default().fg(theme.colors.muted)),
+                Span::styled("  /login", Style::default().fg(theme.colors.secondary)),
+            ]
+        },
+        |user| {
+            vec![
+                Span::styled("● ", Style::default().fg(theme.colors.primary)),
+                Span::styled(
+                    format!("logged in as {user}"),
+                    Style::default().fg(theme.colors.muted),
+                ),
+            ]
+        },
+    )
+}
+
+/// `qwen3:4b · local  /model` — empty until the kernel reports a model.
+pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     if app.current_model().is_empty() {
         return Vec::new();
     }
@@ -155,11 +178,10 @@ fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
         |m| (m.label.as_str(), m.local),
     );
     let backend = if local { "local" } else { "cloud" };
-    let user = app.user().unwrap_or("guest");
     vec![
         Span::styled(label, Style::default().fg(theme.colors.primary)),
         Span::styled(
-            format!(" · {backend} · {user}"),
+            format!(" · {backend}"),
             Style::default().fg(theme.colors.muted),
         ),
         Span::styled("  /model", Style::default().fg(theme.colors.secondary)),

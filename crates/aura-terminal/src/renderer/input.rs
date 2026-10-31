@@ -10,7 +10,12 @@ use ratatui::{
     Frame,
 };
 
-/// Render input line with status on the right.
+/// Columns between the status and the model indicator.
+const MODEL_GAP: u16 = 2;
+/// Below this many typing columns the model indicator is hidden.
+const MIN_INPUT_WIDTH: u16 = 20;
+
+/// Render input line with status and the current model on the right.
 /// `left_offset` shifts the input area to align with the chat panel when swarm is visible.
 pub(super) fn render_input(
     frame: &mut Frame,
@@ -49,10 +54,36 @@ pub(super) fn render_input(
     )]
     let status_len = display_width(&status_text) as u16;
 
-    let input_width = area.width.saturating_sub(status_len + 2 + left_offset);
+    let model_spans = super::model_indicator_spans(app, theme);
+    let model_len = u16::try_from(super::spans_width(&model_spans)).unwrap_or(u16::MAX);
+    let model_reserved = if model_len == 0 {
+        0
+    } else {
+        model_len + MODEL_GAP
+    };
+    let show_model = model_len > 0
+        && area
+            .width
+            .saturating_sub(status_len + 2 + left_offset + model_reserved)
+            >= MIN_INPUT_WIDTH;
+    let right_reserved = if show_model { model_reserved } else { 0 };
+
+    if show_model {
+        let model_area = Rect {
+            x: area.x + area.width.saturating_sub(model_len),
+            y: area.y,
+            width: model_len,
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(Line::from(model_spans)), model_area);
+    }
+
+    let input_width = area
+        .width
+        .saturating_sub(status_len + 2 + left_offset + right_reserved);
 
     let status_area = Rect {
-        x: area.x + area.width.saturating_sub(status_len),
+        x: area.x + area.width.saturating_sub(status_len + right_reserved),
         y: area.y,
         width: status_len,
         height: 1,
