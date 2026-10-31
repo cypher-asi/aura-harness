@@ -7,8 +7,8 @@
 //! 1. **Per-launch bearer token.** A random 32-byte hex token is minted
 //!    every time [`start_api_server`] is called and every non-`/health`
 //!    request must present `Authorization: Bearer <token>`. The token
-//!    is logged to stderr once, in the same vein as `jupyter notebook`,
-//!    so the operator can copy it into tooling. It is never persisted.
+//!    is shown once in the TUI chat so the operator can copy it into
+//!    tooling. It is never persisted.
 //!
 //! 2. **Sandboxed file access.** The `/api/files` and `/api/read-file`
 //!    handlers route every incoming path through [`aura_tools::Sandbox`],
@@ -103,8 +103,7 @@ pub async fn start_api_server(
 
     // The embedded TUI API server follows the same `AURA_NODE_REQUIRE_AUTH`
     // gate as the aura-runtime HTTP server. When auth is disabled we mint
-    // no token, skip the bearer middleware, and suppress the stderr
-    // banner so unattended local dev workflows don't get log noise.
+    // no token and skip the bearer middleware.
     let require_auth = auth_required_from_env();
     let token = if require_auth {
         generate_token()
@@ -148,19 +147,20 @@ pub async fn start_api_server(
                 let url = format!("http://{addr}");
                 info!(%url, "API server listening");
 
-                // Log once to stderr — matches the `jupyter` UX so the
-                // operator can copy the token into curl / browser
-                // tooling. Do NOT promote this to stdout or a file: the
-                // token is only as strong as its handling. Suppressed
-                // when `AURA_NODE_REQUIRE_AUTH` is off, because in that
-                // mode there is no token to leak and the banner would
-                // only add log noise.
+                // The TUI owns the screen, so writing to stdout/stderr here
+                // would corrupt it. The URL is shown in the header; the
+                // token goes into the chat once so the operator can copy
+                // it. Do NOT write it to a file: the token is only as
+                // strong as its handling.
                 if require_auth {
-                    eprintln!("[aura] API server listening on {url} — bearer token: {token}");
-                } else {
-                    eprintln!(
-                        "[aura] API server listening on {url} — bearer auth disabled (set AURA_NODE_REQUIRE_AUTH=1 to enable)"
-                    );
+                    let _ = cmd_tx.try_send(UiCommand::ShowMessage(
+                        aura_terminal::events::MessageData {
+                            role: aura_terminal::events::MessageRole::System,
+                            content: format!("API server bearer token: {token}"),
+                            is_streaming: false,
+                            timestamp_ms: None,
+                        },
+                    ));
                 }
 
                 if port != API_PORT {
