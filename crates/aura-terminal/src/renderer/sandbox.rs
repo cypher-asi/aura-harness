@@ -103,9 +103,9 @@ fn sandbox_line<'a>(row: &SandboxRow, highlighted: bool, width: usize, theme: &T
         SandboxEntryKind::Dir => (
             if row.expanded { "▾ " } else { "▸ " },
             format!("{}/", row.name),
-            theme.colors.secondary,
+            theme.colors.foreground,
         ),
-        SandboxEntryKind::File => ("  ", row.name.clone(), theme.colors.foreground),
+        SandboxEntryKind::File => ("  ", row.name.clone(), theme.colors.muted),
         SandboxEntryKind::Symlink => ("  ", format!("{}@", row.name), theme.colors.muted),
         SandboxEntryKind::More(_) => ("  ", row.name.clone(), theme.colors.muted),
     };
