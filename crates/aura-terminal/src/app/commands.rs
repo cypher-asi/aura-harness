@@ -289,13 +289,13 @@ impl App {
                 self.state = AppState::AwaitingApproval;
             }
             UiCommand::ShowError(msg) => {
-                self.cmd_notification(&msg, "⛔ Error: ", NotificationType::Error);
+                self.cmd_notification(&msg, "error: ", NotificationType::Error);
             }
             UiCommand::ShowSuccess(msg) => {
                 self.cmd_notification(&msg, "✓ ", NotificationType::Success);
             }
             UiCommand::ShowWarning(msg) => {
-                self.cmd_notification(&msg, "⚠ Warning: ", NotificationType::Warning);
+                self.cmd_notification(&msg, "warning: ", NotificationType::Warning);
             }
             UiCommand::Complete => {
                 self.cmd_complete();
@@ -370,7 +370,7 @@ impl App {
         let tool_summary = super::format::format_tool_summary(&data.name, &data.args);
         self.add_message(Message::new(
             MessageRole::System,
-            &format!("🔧 {} : {}", data.name, tool_summary),
+            &format!("$ {} {}", data.name, tool_summary),
         ));
     }
 
@@ -396,7 +396,7 @@ impl App {
             let (icon, prefix) = if success {
                 ("✓", "")
             } else {
-                ("✗", "Error: ")
+                ("✗", "error: ")
             };
             let display_result = if result.chars().count() > 200 {
                 let head: String = result.chars().take(197).collect();
