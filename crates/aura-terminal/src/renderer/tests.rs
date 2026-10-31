@@ -2,6 +2,7 @@ use super::markdown::{
     find_next_marker, parse_content_segments, parse_markdown_inline, parse_markdown_line,
     ContentSegment, MarkerType,
 };
+use super::panels::truncate_record_info;
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::Theme;
 use ratatui::{
@@ -330,4 +331,42 @@ fn test_find_next_marker_prefers_earliest() {
 fn test_find_next_marker_skips_triple_backticks() {
     let result = find_next_marker("```rust");
     assert!(result.is_none());
+}
+
+// ========================================================================
+// Record Info Truncation Tests
+// ========================================================================
+
+#[test]
+fn test_truncate_record_info_fits() {
+    assert_eq!(
+        truncate_record_info("read_file src/main.rs", 40),
+        "read_file src/main.rs"
+    );
+}
+
+#[test]
+fn test_truncate_record_info_adds_ellipsis() {
+    let out = truncate_record_info("fix the login redirect bug", 10);
+    assert_eq!(out, "fix the l…");
+    assert!(display_width(&out) <= 10);
+}
+
+#[test]
+fn test_truncate_record_info_folds_newlines() {
+    let out = truncate_record_info("line one\nline two\r\n\tthree", 80);
+    assert_eq!(out, "line one line two three");
+}
+
+#[test]
+fn test_truncate_record_info_wide_chars_no_panic() {
+    let out = truncate_record_info("修复登录错误 🚀 then more text", 7);
+    assert!(display_width(&out) <= 7, "too wide: {out:?}");
+    assert!(out.ends_with('…'));
+}
+
+#[test]
+fn test_truncate_record_info_zero_width() {
+    assert_eq!(truncate_record_info("anything", 0), "");
+    assert_eq!(truncate_record_info("", 20), "");
 }
