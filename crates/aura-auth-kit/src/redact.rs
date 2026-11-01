@@ -2,12 +2,12 @@
 //!
 //! Centralises the scrub we want before a raw [`anyhow::Error`] /
 //! [`std::io::Error`] / upstream API message crosses a trust boundary.
-//! The existing [`crate::zos_client`] truncation covered the zOS body;
-//! this module generalises it and adds a handful of cheap pattern
-//! strippers so absolute paths, session UUIDs, and long token / digest
-//! blobs don't escape into logs or HTTP error bodies.
+//! The zOS client's truncation covered the zOS body; this module
+//! generalises it and adds a handful of cheap pattern strippers so
+//! absolute paths, session UUIDs, and long token / digest blobs don't
+//! escape into logs or HTTP error bodies.
 //!
-//! Intentionally regex-free — `aura-auth` already compiles on a minimal
+//! Intentionally regex-free — the auth crates compile on a minimal
 //! dep surface and we don't want to pull `regex` in just for this.
 //! The four patterns are narrow enough to hand-roll cleanly and the
 //! helper runs only on error paths, so the scan cost is immaterial.

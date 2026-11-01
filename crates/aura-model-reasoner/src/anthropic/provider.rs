@@ -737,6 +737,13 @@ impl AnthropicProvider {
         if request_uses_computer_tool(&request_ctx.tools) {
             beta_tokens.push(COMPUTER_USE_BETA);
         }
+        for (name, value) in &request_ctx.extra_headers {
+            if name.eq_ignore_ascii_case("anthropic-beta") {
+                beta_tokens.extend(value.split(',').map(str::trim).filter(|v| !v.is_empty()));
+            } else {
+                req_builder = req_builder.header(name.as_str(), value.as_str());
+            }
+        }
         if !beta_tokens.is_empty() {
             req_builder = req_builder.header("anthropic-beta", beta_tokens.join(","));
         }

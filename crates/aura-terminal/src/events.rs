@@ -77,8 +77,24 @@ pub enum UiEvent {
         password: String,
     },
 
-    /// User requested logout
+    /// User requested zOS logout
     Logout,
+
+    /// User asked to link a personal plan (`claude`, `chatgpt`). With
+    /// `paste`, the provider shows a code to paste instead of
+    /// redirecting to a local callback.
+    LinkSubscription {
+        /// Provider id
+        provider: String,
+        /// Use the paste-code flow
+        paste: bool,
+    },
+
+    /// User pasted the code for the pending plan link
+    LinkCode(String),
+
+    /// User asked to unlink a personal plan
+    Unlink(String),
 
     /// User requested auth status
     Whoami,
@@ -222,6 +238,16 @@ pub enum UiCommand {
         /// Display name of the logged-in user, `None` when browsing as guest
         user: Option<String>,
     },
+
+    /// Ask the user to paste the code shown by `provider`'s sign-in page
+    PromptLinkCode {
+        /// Provider label shown in the prompt
+        provider: String,
+    },
+
+    /// A plan link attempt finished (successfully or not); drop any model
+    /// pick that was waiting on it
+    EndLink,
 }
 
 /// One entry in the model selector.
@@ -235,6 +261,12 @@ pub struct ModelOptionView {
     pub local: bool,
     /// For local models: whether it is installed on the local server
     pub installed: bool,
+    /// Selector group heading (e.g. "Cloud (aura-router)")
+    pub group: String,
+    /// Provider that must be signed in (`zos`, `claude`, `chatgpt`), if any
+    pub provider: Option<String>,
+    /// Whether the required sign-in is present
+    pub available: bool,
 }
 
 /// Data for displaying a message.

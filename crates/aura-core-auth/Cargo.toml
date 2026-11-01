@@ -1,6 +1,6 @@
 [package]
 name = "aura-core-auth"
-description = "Token / session primitives for Aura (no network, no storage)"
+description = "Auth primitives and provider traits for Aura (no network, no storage)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 

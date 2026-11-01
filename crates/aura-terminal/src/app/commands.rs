@@ -69,7 +69,7 @@ impl App {
             }
             "agent" | "a" => self.handle_agent_command(arg),
             "spawn" => self.handle_spawn_command(arg),
-            "login" => self.start_login(),
+            "login" => self.handle_login_command(arg),
             "model" | "models" | "m" => {
                 if arg.is_empty() {
                     self.open_model_selector();
@@ -85,8 +85,19 @@ impl App {
                 }
             }
             "logout" => {
+                let event = match plan_provider(arg) {
+                    Some(provider) => UiEvent::Unlink(provider.to_string()),
+                    None if arg.is_empty() || arg.eq_ignore_ascii_case("zos") => UiEvent::Logout,
+                    None => {
+                        self.notification = Some((
+                            format!("Unknown provider: {arg}. Use zos, claude or chatgpt."),
+                            NotificationType::Warning,
+                        ));
+                        return KeyResult::continue_running();
+                    }
+                };
                 if let Some(tx) = &self.event_tx {
-                    let _ = tx.try_send(UiEvent::Logout);
+                    let _ = tx.try_send(event);
                 }
             }
             "whoami" | "me" => {
@@ -122,6 +133,37 @@ impl App {
         }
     }
 
+    /// `/login` (zOS), `/login zos`, or `/login <plan> [paste]`.
+    fn handle_login_command(&mut self, arg: &str) {
+        let mut words = arg.split_whitespace();
+        let target = words.next().unwrap_or("");
+        let paste = words
+            .next()
+            .is_some_and(|w| w.eq_ignore_ascii_case("paste"));
+        if target.is_empty() || target.eq_ignore_ascii_case("zos") {
+            self.start_login();
+        } else if let Some(provider) = plan_provider(target) {
+            self.start_link(provider, paste);
+        } else {
+            self.notification = Some((
+                format!("Unknown provider: {target}. Use zos, claude or chatgpt."),
+                NotificationType::Warning,
+            ));
+        }
+    }
+
+    /// Ask the event loop to link a personal plan.
+    fn start_link(&mut self, provider: &str, paste: bool) {
+        self.state = AppState::Idle;
+        self.status = format!("Linking {provider}...");
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::LinkSubscription {
+                provider: provider.to_string(),
+                paste,
+            });
+        }
+    }
+
     /// Enter the email/password login flow.
     pub(super) fn start_login(&mut self) {
         self.state = AppState::LoginEmail;
@@ -148,22 +190,26 @@ impl App {
         self.state = AppState::SelectingModel;
     }
 
-    /// Select `id` for the next turn. Cloud models start the login flow
-    /// first when browsing as guest.
+    /// Select `id` for the next turn. Models whose sign-in is missing
+    /// start that sign-in first and are selected once it succeeds.
     pub(super) fn choose_model(&mut self, id: &str) {
-        let needs_login = self
+        let missing = self
             .models
             .iter()
-            .find(|m| m.id == id)
-            .is_some_and(|m| !m.local)
-            && self.user.is_none();
-        if needs_login {
+            .find(|m| m.id == id && !m.available)
+            .map(|m| m.provider.clone().unwrap_or_default());
+        if let Some(provider) = missing {
             self.pending_model = Some(id.to_string());
-            self.start_login();
-            self.notification = Some((
-                "Cloud models need a login — enter email (Esc to stay local)".to_string(),
-                NotificationType::Warning,
-            ));
+            match plan_provider(&provider) {
+                Some(plan) => self.start_link(plan, false),
+                None => {
+                    self.start_login();
+                    self.notification = Some((
+                        "Cloud models need a login — enter email (Esc to stay local)".to_string(),
+                        NotificationType::Warning,
+                    ));
+                }
+            }
             return;
         }
         self.state = AppState::Idle;
@@ -186,10 +232,30 @@ impl App {
         if self.model_cursor >= self.models.len() {
             self.model_cursor = self.models.len().saturating_sub(1);
         }
-        if self.user.is_some() {
+        let pending_ready = self
+            .pending_model
+            .as_deref()
+            .is_some_and(|id| self.models.iter().any(|m| m.id == id && m.available));
+        if pending_ready {
             if let Some(id) = self.pending_model.take() {
                 self.choose_model(&id);
             }
+        }
+    }
+
+    fn cmd_prompt_link_code(&mut self, provider: &str) {
+        self.state = AppState::LinkCode;
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.status = format!("{provider} — paste the code from the sign-in page");
+    }
+
+    fn cmd_end_link(&mut self) {
+        self.pending_model = None;
+        if self.state == AppState::LinkCode {
+            self.state = AppState::Idle;
+            self.input.clear();
+            self.cursor_pos = 0;
         }
     }
 
@@ -356,6 +422,8 @@ impl App {
                 current,
                 user,
             } => self.cmd_set_models(options, current, user),
+            UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
+            UiCommand::EndLink => self.cmd_end_link(),
         }
     }
 
@@ -550,5 +618,14 @@ impl App {
         if let Some(idx) = self.agents.iter().position(|a| a.is_active) {
             self.selected_agent = idx;
         }
+    }
+}
+
+/// Canonical plan id for `/login` and `/logout` arguments.
+fn plan_provider(arg: &str) -> Option<&'static str> {
+    match arg.trim().to_ascii_lowercase().as_str() {
+        "claude" | "anthropic" => Some("claude"),
+        "chatgpt" | "openai" => Some("chatgpt"),
+        _ => None,
     }
 }

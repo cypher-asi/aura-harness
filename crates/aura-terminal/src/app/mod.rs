@@ -84,6 +84,8 @@ pub enum AppState {
     LoginEmail,
     /// Login flow: waiting for password
     LoginPassword,
+    /// Plan link flow: waiting for the pasted sign-in code
+    LinkCode,
     /// Model selector overlay is open
     SelectingModel,
 }
@@ -1021,7 +1023,10 @@ impl App {
     /// [`COMMAND_HIGHLIGHT_DELAY`] (or starts with `!`), and stops being one
     /// as soon as it no longer parses as one.
     pub fn sync_input_kind(&mut self) {
-        if matches!(self.state, AppState::LoginEmail | AppState::LoginPassword) {
+        if matches!(
+            self.state,
+            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
+        ) {
             self.input_is_command = false;
             return;
         }

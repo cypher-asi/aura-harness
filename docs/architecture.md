@@ -29,7 +29,7 @@ plugin  <  exec  <  agent   <  surface
 | plugin   | Plugin manifest schema, in-process API, hooks, MCP, connectors.                  | `aura-plugin-api`, `aura-plugin-core`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`. |
 | exec     | Tool catalog + executor, executor traits, sandbox, isolation.                    | `aura-tools`, `aura-exec-traits`, `aura-exec-sandbox`, `aura-exec-isolation`. |
 | agent    | Single-agent kernel + turn loop + steering + subagent derivation.                | `aura-agent-kernel`, `aura-agent`, `aura-agent-steering`, `aura-agent-subagent`. |
-| surface  | Composition roots: HTTP/WS gateway, orchestration engine, CLI, TUI, automaton host, domain HTTP, auth. | `aura-runtime`, `aura-engine`, `aura-surface-cli`, `aura-domain-http`, `aura-terminal`, `aura-automaton`, `aura-auth`. |
+| surface  | Composition roots: HTTP/WS gateway, orchestration engine, CLI, TUI, automaton host, domain HTTP, auth. | `aura-runtime`, `aura-engine`, `aura-surface-cli`, `aura-domain-http`, `aura-terminal`, `aura-automaton`, `aura-auth`, `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`. |
 
 ### Dependency rules
 
@@ -188,7 +188,7 @@ Privilege types (`Capability`, `Permissions`, `EffectivePermissions`) and the pu
 
 #### [`aura-core-auth`](../crates/aura-core-auth)
 
-Auth primitive types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError`. The surface-layer `aura-auth` crate provides the keyring and HTTP implementations; this crate is data only.
+Auth primitives and the contracts each auth method implements. Types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError`, `ProviderKind` (`local`, `zos`, `chatgpt`, `claude`), `Owner`, `OAuthTokens`, `LinkedAccount`, `InferenceCredential`. Traits: `IdentityProvider` (zOS), `SubscriptionProvider` (ChatGPT, Claude) and `CredentialResolver`, which the model layer calls for a fresh plan credential per request. Keeping the traits here means provider crates never depend on each other and `aura-model-reasoner` never depends on a surface crate. No I/O.
 
 #### [`aura-core-protocol`](../crates/aura-core-protocol)
 
@@ -457,7 +457,16 @@ Long-running automaton workflows that drive `AgentLoop` on a schedule. Built-ins
 
 #### [`aura-auth`](../crates/aura-auth)
 
-zOS login client (`ZosClient`) and credential persistence (`CredentialStore` over `~/.aura/credentials.json` + OS keyring). Re-exports the pure token types from `aura-core-auth`.
+Auth composition root. `AuthManager` registers the identity provider (zOS) and the subscription providers (ChatGPT, Claude), links plans to the active identity (`Owner::Local` while signed out, otherwise the zOS user), and implements `CredentialResolver`. Refreshes are single-flight per link, rotated tokens are saved before use, and a revoked grant marks the link `ReauthRequired`. `Vault` stores the zOS session in the legacy slot (OS keyring, falling back to `~/.aura/credentials.json`, so existing logins still work), link metadata in `~/.aura/auth/index.json`, and each link's tokens in its own keyring entry or 0600 file. `CredentialStore` remains as a static shim over the zOS slot.
+
+Each auth method is its own crate:
+
+| Crate | Provides |
+|-------|----------|
+| [`aura-auth-kit`](../crates/aura-auth-kit) | Shared plumbing: PKCE attempts, the loopback callback listener, pasted-code parsing, the OAuth HTTP client and refresh-error classification, error redaction, and the browser opener. |
+| [`aura-auth-zos`](../crates/aura-auth-zos) | `ZosClient` and `ZosIdentity` (email/password login, JWT for aura-router). |
+| [`aura-auth-chatgpt`](../crates/aura-auth-chatgpt) | Sign in with ChatGPT: dynamic client id per host, `id_token` checked against the issuer's JWKS, refresh and revocation. |
+| [`aura-auth-claude`](../crates/aura-auth-claude) | Claude Pro/Max through Claude Code's public OAuth client. Inference needs the `oauth-2025-04-20` beta header and the Claude Code system prompt opening. Anthropic does not publish this flow for other apps. |
 
 ---
 
@@ -469,7 +478,16 @@ The same kernel/AgentLoop pipeline drives every front-end. Every tool call passe
 
 Default mode when a user runs `cargo run` or `aura`. Participants (left → right): **User**, **TUI** (`aura-terminal`), **EL** (event loop in `aura-surface-cli`), **AL** (`AgentLoop` in `aura-agent`), **MP** (`ModelProvider` in `aura-model-reasoner`), **KTG** (`KernelToolGateway` + `ExecutorRouter` in `aura-agent-kernel`), **Tools** (`ToolExecutor` in `aura-tools`).
 
-Here **MP** is the `RoutedProvider`. The session starts on the local default model (`local/qwen3:4b` via Ollama), so no login is required. `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models.
+Here **MP** is the `RoutedProvider`, which picks a backend from the model id prefix:
+
+- `local/*` goes to Ollama.
+- `claude/*` goes to the Anthropic API.
+- `chatgpt/*` goes to the OpenAI Responses API through `openai_responses::OpenAiResponsesProvider`.
+- Any other id goes to aura-router.
+
+For the two plan routes, a `CredentialedProvider` asks `AuthManager` for the plan credential on each request. It strips the route prefix, adds the provider's headers and system prompt opening, and removes the Aura billing headers. There is no fallback between routes.
+
+The session starts on the local default model (`local/qwen3:4b`), so no login is required. `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models, and `/login claude` or `/login chatgpt` links a plan. Browser sign-ins finish in a background task that reports back to the EL. Paste sign-ins prompt for the code.
 
 ```text
  User       TUI         EL            AL              MP           KTG         Tools

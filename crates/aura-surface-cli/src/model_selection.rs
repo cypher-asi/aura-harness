@@ -2,12 +2,16 @@
 //! persistence of the last choice.
 //!
 //! The TUI defaults to a small local model served by Ollama so it works
-//! without an account; `/login` unlocks the aura-router cloud models.
+//! without an account. `/login` unlocks the aura-router cloud models and
+//! `/login claude` / `/login chatgpt` unlock models billed to a linked
+//! plan. Each model id names its route, so switching never silently
+//! changes who is billed.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use aura_agent::AgentLoopConfig;
+use aura_auth::{AuthSummary, ProviderKind};
 use aura_model_reasoner::model_catalog::{
     self, backend_for, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
 };
@@ -38,7 +42,7 @@ pub struct ModelSelection {
     default_local: String,
     local_url: String,
     local_status: LocalServerStatus,
-    user: Option<String>,
+    auth: AuthSummary,
     router_limits: RouterLimits,
     prefs_path: Option<PathBuf>,
 }
@@ -46,8 +50,8 @@ pub struct ModelSelection {
 impl ModelSelection {
     /// Resolve the startup model and apply it to `config`.
     ///
-    /// `user` is the logged-in display name (`None` for guests).
-    pub fn init(config: &mut AgentLoopConfig, user: Option<String>) -> Self {
+    /// `auth` describes what the active identity can use.
+    pub fn init(config: &mut AgentLoopConfig, auth: AuthSummary) -> Self {
         let prefs_path = prefs_path();
         let persisted = prefs_path
             .as_deref()
@@ -61,14 +65,14 @@ impl ModelSelection {
             env_model.as_deref(),
             persisted.as_deref(),
             &default_local,
-            user.is_some(),
+            |id| usable(&auth, id),
         );
         let mut selection = Self {
             current: String::new(),
             default_local,
             local_url: model_catalog::local_base_url(),
             local_status: LocalServerStatus::Unreachable,
-            user,
+            auth,
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -85,14 +89,20 @@ impl ModelSelection {
         &self.current
     }
 
-    /// Whether the user is logged in to aura-router.
+    /// Whether the user is logged in to zOS (and so aura-router).
     pub const fn logged_in(&self) -> bool {
-        self.user.is_some()
+        self.auth.zos_user.is_some()
     }
 
-    /// Update the logged-in user (`None` after logout).
-    pub fn set_user(&mut self, user: Option<String>) {
-        self.user = user;
+    /// Update what the active identity can use (after login, logout,
+    /// link or unlink).
+    pub fn set_auth(&mut self, auth: AuthSummary) {
+        self.auth = auth;
+    }
+
+    /// Whether `id` can run with the current sign-ins.
+    pub fn usable(&self, id: &str) -> bool {
+        usable(&self.auth, id)
     }
 
     /// Re-probe the local model server.
@@ -118,13 +128,16 @@ impl ModelSelection {
                     .unwrap_or(&self.current)
                     .to_string(),
                 backend,
-                installed: backend == ModelBackend::Router || self.local_installed(&self.current),
+                installed: backend != ModelBackend::Local || self.local_installed(&self.current),
             });
         }
         options
             .into_iter()
             .map(|o| ModelOptionView {
                 local: o.backend == ModelBackend::Local,
+                group: group_heading(o.backend).to_string(),
+                provider: o.required_provider().map(|p| p.id().to_string()),
+                available: self.usable(&o.id),
                 id: o.id,
                 label: o.label,
                 installed: o.installed,
@@ -137,7 +150,7 @@ impl ModelSelection {
         aura_terminal::UiCommand::SetModels {
             options: self.options(),
             current: self.current.clone(),
-            user: self.user.clone(),
+            user: self.auth.zos_user.clone(),
         }
     }
 
@@ -152,20 +165,19 @@ impl ModelSelection {
         if id.is_empty() {
             return Err("Model id is empty".to_string());
         }
-        if backend_for(id) == ModelBackend::Router && !self.logged_in() {
-            return Err(format!(
-                "{id} is a cloud model — use /login first, or pick a local model"
-            ));
+        if !self.usable(id) {
+            return Err(unusable_reason(id));
         }
         self.apply(config, id);
         self.persist();
         Ok(())
     }
 
-    /// Fall back to the default local model when the current model needs a login.
-    /// Returns `true` when the model changed.
+    /// Fall back to the default local model when the current model needs
+    /// a sign-in the user no longer has. Returns `true` when the model
+    /// changed. Never falls back to a different paid route.
     pub fn ensure_usable(&mut self, config: &mut AgentLoopConfig) -> bool {
-        if backend_for(&self.current) == ModelBackend::Router && !self.logged_in() {
+        if !self.usable(&self.current) {
             let local = self.default_local.clone();
             self.apply(config, &local);
             return true;
@@ -255,7 +267,7 @@ impl ModelLimits {
                 config.stream_timeout = LOCAL_STREAM_TIMEOUT;
                 config.stream_event_timeout = LOCAL_STREAM_TIMEOUT;
             }
-            ModelBackend::Router => {
+            ModelBackend::Router | ModelBackend::Claude | ModelBackend::Chatgpt => {
                 config.max_tokens = limits.max_tokens;
                 config.stream_timeout = limits.stream_timeout;
                 config.stream_event_timeout = limits.stream_event_timeout;
@@ -275,23 +287,51 @@ impl ModelLimits {
 }
 
 /// Startup model: explicit `AURA_DEFAULT_MODEL` wins, then the persisted
-/// choice (unless it needs a login the user doesn't have), then the
+/// choice (unless it needs a sign-in the user doesn't have), then the
 /// default local model.
 fn resolve_startup_model(
     env_model: Option<&str>,
     persisted: Option<&str>,
     default_local: &str,
-    logged_in: bool,
+    usable: impl Fn(&str) -> bool,
 ) -> String {
     if let Some(model) = env_model.map(str::trim).filter(|m| !m.is_empty()) {
         return model.to_string();
     }
     if let Some(model) = persisted.map(str::trim).filter(|m| !m.is_empty()) {
-        if logged_in || backend_for(model) == ModelBackend::Local {
+        if usable(model) {
             return model.to_string();
         }
     }
     default_local.to_string()
+}
+
+fn usable(auth: &AuthSummary, id: &str) -> bool {
+    backend_for(id)
+        .required_provider()
+        .is_none_or(|provider| auth.can_use(provider))
+}
+
+fn unusable_reason(id: &str) -> String {
+    match backend_for(id).required_provider() {
+        Some(ProviderKind::Zos) | None => {
+            format!("{id} is a cloud model — use /login first, or pick a local model")
+        }
+        Some(provider) => format!(
+            "{id} runs on your {} plan — use /login {} first, or pick another model",
+            provider.label(),
+            provider.id()
+        ),
+    }
+}
+
+const fn group_heading(backend: ModelBackend) -> &'static str {
+    match backend {
+        ModelBackend::Local => "Local (no login)",
+        ModelBackend::Router => "Cloud (aura-router)",
+        ModelBackend::Claude => "Claude plan (direct)",
+        ModelBackend::Chatgpt => "ChatGPT plan (direct)",
+    }
 }
 
 fn prefs_path() -> Option<PathBuf> {
@@ -313,30 +353,48 @@ mod tests {
 
     #[test]
     fn startup_defaults_to_local_model() {
-        assert_eq!(resolve_startup_model(None, None, LOCAL, false), LOCAL);
-        assert_eq!(resolve_startup_model(Some("  "), None, LOCAL, true), LOCAL);
+        assert_eq!(resolve_startup_model(None, None, LOCAL, |_| false), LOCAL);
+        assert_eq!(
+            resolve_startup_model(Some("  "), None, LOCAL, |_| true),
+            LOCAL
+        );
     }
 
     #[test]
     fn startup_env_model_wins() {
         assert_eq!(
-            resolve_startup_model(Some("aura-claude-opus-4-7"), Some(LOCAL), LOCAL, false),
+            resolve_startup_model(Some("aura-claude-opus-4-7"), Some(LOCAL), LOCAL, |_| false),
             "aura-claude-opus-4-7"
         );
     }
 
     #[test]
-    fn startup_persisted_cloud_model_requires_login() {
-        let persisted = Some("aura-claude-sonnet-4-6");
-        assert_eq!(resolve_startup_model(None, persisted, LOCAL, false), LOCAL);
+    fn startup_persisted_model_requires_its_sign_in() {
+        let guest = AuthSummary::default();
+        let zos = signed_in(Some("alice"), &[]);
+        let claude = signed_in(None, &[ProviderKind::Claude]);
+        let start = |persisted: &str, auth: &AuthSummary| {
+            resolve_startup_model(None, Some(persisted), LOCAL, |id| usable(auth, id))
+        };
+        assert_eq!(start("aura-claude-sonnet-4-6", &guest), LOCAL);
         assert_eq!(
-            resolve_startup_model(None, persisted, LOCAL, true),
+            start("aura-claude-sonnet-4-6", &zos),
             "aura-claude-sonnet-4-6"
         );
+        assert_eq!(start("local/llama3.2:3b", &guest), "local/llama3.2:3b");
+        assert_eq!(start("claude/claude-sonnet-4-6", &zos), LOCAL);
         assert_eq!(
-            resolve_startup_model(None, Some("local/llama3.2:3b"), LOCAL, false),
-            "local/llama3.2:3b"
+            start("claude/claude-sonnet-4-6", &claude),
+            "claude/claude-sonnet-4-6"
         );
+        assert_eq!(start("aura-claude-sonnet-4-6", &claude), LOCAL);
+    }
+
+    fn signed_in(user: Option<&str>, plans: &[ProviderKind]) -> AuthSummary {
+        AuthSummary {
+            zos_user: user.map(str::to_string),
+            subscriptions: plans.to_vec(),
+        }
     }
 
     fn selection(user: Option<&str>) -> (ModelSelection, AgentLoopConfig) {
@@ -349,7 +407,7 @@ mod tests {
                 version: "0.14.0".to_string(),
                 models: vec!["qwen3:4b".to_string()],
             },
-            user: user.map(str::to_string),
+            auth: signed_in(user, &[]),
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -396,9 +454,40 @@ mod tests {
         selection
             .select(&mut config, "aura-claude-sonnet-4-6")
             .expect("select cloud");
-        selection.set_user(None);
+        selection.set_auth(AuthSummary::default());
         assert!(selection.ensure_usable(&mut config));
         assert_eq!(config.model, LOCAL);
+    }
+
+    #[test]
+    fn plan_models_need_their_own_link() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        let err = selection
+            .select(&mut config, "claude/claude-sonnet-4-6")
+            .unwrap_err();
+        assert!(err.contains("/login claude"), "{err}");
+
+        selection.set_auth(signed_in(Some("alice"), &[ProviderKind::Claude]));
+        selection
+            .select(&mut config, "claude/claude-sonnet-4-6")
+            .expect("linked plan");
+        assert_eq!(config.max_tokens, 16_384);
+        assert_eq!(config.max_context_tokens, Some(1_000_000));
+
+        let options = selection.options();
+        let plan = options
+            .iter()
+            .find(|o| o.id == "chatgpt/gpt-5.4")
+            .expect("chatgpt models listed");
+        assert!(!plan.available);
+        assert_eq!(plan.provider.as_deref(), Some("chatgpt"));
+
+        selection.set_auth(signed_in(Some("alice"), &[]));
+        assert!(selection.ensure_usable(&mut config));
+        assert_eq!(
+            config.model, LOCAL,
+            "unlinking never switches to another paid route"
+        );
     }
 
     #[test]

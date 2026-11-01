@@ -1071,18 +1071,100 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
                 label: "qwen3:4b".to_string(),
                 local: true,
                 installed: true,
+                group: "Local (no login)".to_string(),
+                provider: None,
+                available: true,
             },
             ModelOptionView {
                 id: "aura-claude-sonnet-4-6".to_string(),
                 label: "Claude Sonnet 4.6".to_string(),
                 local: false,
                 installed: true,
+                group: "Cloud (aura-router)".to_string(),
+                provider: Some("zos".to_string()),
+                available: user.is_some(),
+            },
+            ModelOptionView {
+                id: "claude/claude-sonnet-4-6".to_string(),
+                label: "Claude Sonnet 4.6".to_string(),
+                local: false,
+                installed: true,
+                group: "Claude plan (direct)".to_string(),
+                provider: Some("claude".to_string()),
+                available: false,
             },
         ],
         current: "local/qwen3:4b".to_string(),
         user: user.map(str::to_string),
     });
     (app, rx)
+}
+
+fn available(models: &[ModelOptionView]) -> Vec<ModelOptionView> {
+    models
+        .iter()
+        .cloned()
+        .map(|m| ModelOptionView {
+            available: true,
+            ..m
+        })
+        .collect()
+}
+
+#[test]
+fn test_unlinked_plan_pick_starts_link_then_selects() {
+    let (mut app, mut rx) = app_with_models(Some("alice"));
+    app.handle_command("/model claude/claude-sonnet-4-6");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::LinkSubscription { provider, paste: false }) if provider == "claude"
+    ));
+
+    app.process_command(UiCommand::SetModels {
+        options: available(app.models()),
+        current: "local/qwen3:4b".to_string(),
+        user: Some("alice".to_string()),
+    });
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SelectModel(id)) if id == "claude/claude-sonnet-4-6"
+    ));
+}
+
+#[test]
+fn test_failed_link_drops_pending_model() {
+    let (mut app, mut rx) = app_with_models(Some("alice"));
+    app.handle_command("/model claude/claude-sonnet-4-6");
+    let _ = rx.try_recv();
+    app.process_command(UiCommand::PromptLinkCode {
+        provider: "Claude".to_string(),
+    });
+    assert_eq!(app.state(), AppState::LinkCode);
+    app.process_command(UiCommand::EndLink);
+    assert_eq!(app.state(), AppState::Idle);
+
+    app.process_command(UiCommand::SetModels {
+        options: available(app.models()),
+        current: "local/qwen3:4b".to_string(),
+        user: Some("alice".to_string()),
+    });
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_login_and_logout_take_a_provider() {
+    let (mut app, mut rx) = app_with_models(None);
+    app.handle_command("/login chatgpt paste");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::LinkSubscription { provider, paste: true }) if provider == "chatgpt"
+    ));
+    app.handle_command("/logout anthropic");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Unlink(p)) if p == "claude"));
+    app.handle_command("/logout");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Logout)));
+    app.handle_command("/login");
+    assert_eq!(app.state(), AppState::LoginEmail);
 }
 
 #[test]
@@ -1121,7 +1203,7 @@ fn test_guest_cloud_pick_starts_login_then_selects() {
     assert!(rx.try_recv().is_err());
 
     app.process_command(UiCommand::SetModels {
-        options: app.models().to_vec(),
+        options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
         user: Some("alice".to_string()),
     });
@@ -1139,7 +1221,7 @@ fn test_cancelled_login_drops_pending_model() {
     app.handle_key(key(KeyCode::Esc));
 
     app.process_command(UiCommand::SetModels {
-        options: app.models().to_vec(),
+        options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
         user: Some("alice".to_string()),
     });

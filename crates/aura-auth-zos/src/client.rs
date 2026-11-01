@@ -12,8 +12,8 @@
 //! | User info | `GET`    | `/api/users/current`                        |
 //! | Logout    | `DELETE` | `/authentication/session`                   |
 
-use crate::credentials::StoredSession;
-use crate::error::AuthError;
+use crate::error::ZosError;
+use aura_core_auth::StoredSession;
 use chrono::Utc;
 use serde::Deserialize;
 use std::time::Duration;
@@ -26,7 +26,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximum length (chars) of zOS error messages propagated into logs and
-/// `AuthError::ZosApi`. Anything longer is truncated + marked redacted so
+/// `ZosError::Api`. Anything longer is truncated + marked redacted so
 /// a server-side stack trace cannot leak through our observability.
 /// (Wave 5 / T5.)
 const ZOS_ERROR_MESSAGE_MAX_CHARS: usize = 80;
@@ -75,7 +75,7 @@ impl ZosClient {
     /// # Errors
     ///
     /// Returns an error if the HTTP client cannot be built.
-    pub fn new() -> Result<Self, AuthError> {
+    pub fn new() -> Result<Self, ZosError> {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
@@ -90,9 +90,9 @@ impl ZosClient {
     ///
     /// # Errors
     ///
-    /// Returns [`AuthError::ZosApi`] if the credentials are rejected, or
-    /// [`AuthError::Http`] on network failure.
-    pub async fn login(&self, email: &str, password: &str) -> Result<StoredSession, AuthError> {
+    /// Returns [`ZosError::Api`] if the credentials are rejected, or
+    /// [`ZosError::Http`] on network failure.
+    pub async fn login(&self, email: &str, password: &str) -> Result<StoredSession, ZosError> {
         debug!("Authenticating via zOS API");
 
         let res = self
@@ -122,7 +122,7 @@ impl ZosClient {
     }
 
     /// Fetch the current user's profile using a Bearer token.
-    async fn fetch_user_info(&self, token: &str) -> Result<ZosUserResponse, AuthError> {
+    async fn fetch_user_info(&self, token: &str) -> Result<ZosUserResponse, ZosError> {
         debug!("Fetching user info from zOS API");
 
         let res = self
@@ -164,7 +164,7 @@ impl ZosClient {
 /// can contain reflected input, internal traces, or other PII. We log only
 /// `status` + `code` + `message_len`, and propagate a truncated message
 /// (≤ 80 chars) to the caller for UX purposes. (Wave 5 / T5.)
-async fn parse_zos_error(res: reqwest::Response) -> AuthError {
+async fn parse_zos_error(res: reqwest::Response) -> ZosError {
     let status = res.status().as_u16();
     let body = res.text().await.unwrap_or_default();
 
@@ -182,7 +182,7 @@ async fn parse_zos_error(res: reqwest::Response) -> AuthError {
     // `redact_error` shortens to 200 chars with `…`, and
     // `truncate_error_message` further caps to 80 and appends
     // `[redacted]` when it bites.
-    let scrubbed = crate::redact::redact_error(&raw_message);
+    let scrubbed = aura_auth_kit::redact_error(&raw_message);
     let (message, truncated) = truncate_error_message(&scrubbed, ZOS_ERROR_MESSAGE_MAX_CHARS);
 
     error!(
@@ -194,7 +194,7 @@ async fn parse_zos_error(res: reqwest::Response) -> AuthError {
         "zOS API error"
     );
 
-    AuthError::ZosApi {
+    ZosError::Api {
         status,
         code,
         message,

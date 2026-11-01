@@ -80,34 +80,97 @@ fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// Break spans into rows at most `width` columns wide, splitting anywhere
-/// and keeping all whitespace, like a terminal does.
+/// Break spans into rows at most `width` columns wide, keeping whitespace so
+/// indentation and columns survive. Words move to the next row whole unless
+/// they are wider than a row; whitespace at a break is dropped.
 pub(super) fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
     if width == 0 {
         return vec![spans];
     }
-    let mut rows = vec![Vec::new()];
-    let mut used = 0;
-    for span in spans {
-        let mut chunk = String::new();
-        for c in span.content.chars() {
-            let w = c.width().unwrap_or(0);
-            if used + w > width && used > 0 {
-                push_chunk(&mut rows, &mut chunk, span.style);
-                rows.push(Vec::new());
-                used = 0;
+    let mut rows = Rows {
+        rows: vec![Vec::new()],
+        used: 0,
+        width,
+    };
+    for token in tokenize(spans) {
+        let overflows = rows.used + token.width > width;
+        if token.is_space {
+            if overflows {
+                if rows.used > 0 {
+                    rows.break_row();
+                }
+                continue;
             }
-            chunk.push(c);
-            used += w;
+        } else if overflows && rows.used > 0 {
+            rows.break_row();
         }
-        push_chunk(&mut rows, &mut chunk, span.style);
+        rows.push(token);
     }
-    rows
+    rows.rows
 }
 
-fn push_chunk(rows: &mut [Vec<Span<'static>>], chunk: &mut String, style: Style) {
-    if let (false, Some(row)) = (chunk.is_empty(), rows.last_mut()) {
-        row.push(Span::styled(std::mem::take(chunk), style));
+/// A run of either whitespace or non-whitespace text, possibly spanning
+/// several styles.
+struct Token {
+    pieces: Vec<(String, Style)>,
+    width: usize,
+    is_space: bool,
+}
+
+fn tokenize(spans: Vec<Span<'static>>) -> Vec<Token> {
+    let mut tokens: Vec<Token> = Vec::new();
+    for span in spans {
+        for c in span.content.chars() {
+            let is_space = c.is_whitespace();
+            if tokens.last().is_none_or(|last| last.is_space != is_space) {
+                tokens.push(Token {
+                    pieces: Vec::new(),
+                    width: 0,
+                    is_space,
+                });
+            }
+            if let Some(token) = tokens.last_mut() {
+                match token.pieces.last_mut() {
+                    Some((text, style)) if *style == span.style => text.push(c),
+                    _ => token.pieces.push((c.to_string(), span.style)),
+                }
+                token.width += c.width().unwrap_or(0);
+            }
+        }
+    }
+    tokens
+}
+
+struct Rows {
+    rows: Vec<Vec<Span<'static>>>,
+    used: usize,
+    width: usize,
+}
+
+impl Rows {
+    fn break_row(&mut self) {
+        self.rows.push(Vec::new());
+        self.used = 0;
+    }
+
+    /// Append `token`, hard-breaking it wherever it overflows the row.
+    fn push(&mut self, token: Token) {
+        for (text, style) in token.pieces {
+            for c in text.chars() {
+                let w = c.width().unwrap_or(0);
+                if self.used + w > self.width && self.used > 0 {
+                    self.break_row();
+                }
+                let Some(row) = self.rows.last_mut() else {
+                    return;
+                };
+                match row.last_mut() {
+                    Some(span) if span.style == style => span.content.to_mut().push(c),
+                    _ => row.push(Span::styled(c.to_string(), style)),
+                }
+                self.used += w;
+            }
+        }
     }
 }
 
@@ -123,9 +186,27 @@ mod tests {
     }
 
     #[test]
-    fn wraps_at_width_keeping_spaces() {
-        let rows = wrap_spans(vec![Span::raw("ab  "), Span::raw("cdef")], 3);
-        assert_eq!(row_texts(&rows), ["ab ", " cd", "ef"]);
+    fn moves_whole_words_to_the_next_row() {
+        let rows = wrap_spans(vec![Span::raw("aura: forbidden binary_allowlist")], 20);
+        assert_eq!(row_texts(&rows), ["aura: forbidden ", "binary_allowlist"]);
+    }
+
+    #[test]
+    fn keeps_leading_indentation() {
+        let rows = wrap_spans(vec![Span::raw("  ab cd")], 5);
+        assert_eq!(row_texts(&rows), ["  ab ", "cd"]);
+    }
+
+    #[test]
+    fn drops_whitespace_at_a_break() {
+        let rows = wrap_spans(vec![Span::raw("ab  "), Span::raw("cd")], 3);
+        assert_eq!(row_texts(&rows), ["ab", "cd"]);
+    }
+
+    #[test]
+    fn splits_words_wider_than_a_row() {
+        let rows = wrap_spans(vec![Span::raw("ab cdefgh")], 4);
+        assert_eq!(row_texts(&rows), ["ab ", "cdef", "gh"]);
     }
 
     #[test]

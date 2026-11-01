@@ -22,7 +22,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -47,18 +47,12 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Min(3),
             Constraint::Length(2),
         ])
         .split(area);
     let input_row = Rect {
-        height: 1,
-        ..main_chunks[2]
-    };
-    // Mirrors the panel border above so the input sits centered between two rules.
-    let input_rule = Rect {
-        y: main_chunks[2].y + 1,
         height: 1,
         ..main_chunks[2]
     };
@@ -72,12 +66,6 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let chat_left = chat.x.saturating_sub(input_row.x);
 
     input::render_input(frame, input_row, app, theme, chat_left);
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(theme.colors.muted)),
-        input_rule,
-    );
 
     slash_menu::render_slash_menu(frame, chat, app, theme);
     overlays::render_overlays(frame, app, theme);
@@ -184,11 +172,10 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Span::styled("AURA", Style::default().fg(theme.colors.foreground)),
             Span::styled(" CLI", Style::default().fg(theme.colors.muted)),
         ]),
-        Line::from(""),
     ];
     frame.render_widget(Paragraph::new(title), header_layout[0]);
 
-    let right = vec![Line::from(""), Line::from(status_spans), Line::from("")];
+    let right = vec![Line::from(""), Line::from(status_spans)];
     frame.render_widget(
         Paragraph::new(right).alignment(Alignment::Right),
         header_layout[1],

@@ -2,9 +2,15 @@
 source: tests/cli_golden.rs
 expression: help
 ---
-Authenticate with zOS to obtain a JWT for proxy mode
+Sign in to zOS, or link a Claude / ChatGPT plan
 
-Usage: aura login [OPTIONS]
+Usage: aura login [OPTIONS] [PROVIDER]
+
+Arguments:
+  [PROVIDER]
+          `zos` (default) for cloud models via aura-router, or `claude` / `chatgpt` to use your own plan directly
+          
+          [default: zos]
 
 Options:
       --mode <MODE>
@@ -15,6 +21,9 @@ Options:
           - plan:  Read + markdown writes + read-only subprocesses
           - ask:   Read-only
           - debug: Read + sandboxed probes only
+
+      --paste
+          Paste the code shown by the provider instead of using a local browser redirect (for SSH and headless machines)
 
   -h, --help
           Print help (see a summary with '-h')

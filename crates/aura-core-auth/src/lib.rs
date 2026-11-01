@@ -2,10 +2,11 @@
 //!
 //! Layer: core
 //!
-//! Pure auth primitive types only — no network, no storage, no
-//! provider implementations. The login flow and credential persistence
-//! live in the surface-layer `aura-auth` crate (which re-exports the
-//! types below for source compatibility).
+//! Pure auth primitive types and provider traits only — no network, no
+//! storage, no provider implementations. Each auth method lives in its
+//! own surface-layer crate (`aura-auth-zos`, `aura-auth-chatgpt`,
+//! `aura-auth-claude`) implementing the traits below; `aura-auth`
+//! composes them with credential storage.
 //!
 //! ## Invariants
 //!
@@ -14,6 +15,8 @@
 //! - [`AccessToken`] / [`RefreshToken`] are opaque strings; the crate
 //!   has no opinion on format (JWT vs. opaque) — that lives in the
 //!   provider implementation.
+//! - The model layer depends on [`CredentialResolver`] only, never on
+//!   a concrete auth backend.
 //!
 //! ## Failure modes
 //!
@@ -25,10 +28,20 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+mod oauth;
+mod provider;
+mod traits;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use aura_core_types::UserId;
+pub use oauth::{
+    AuthorizationRequest, CallbackParams, InferenceCredential, LinkGrant, LinkStatus,
+    LinkedAccount, LoopbackRedirect, OAuthTokens, RedirectStrategy,
+};
+pub use provider::{Owner, ProviderKind, UnknownProvider};
+pub use traits::{CredentialResolver, IdentityProvider, SubscriptionProvider};
 
 /// Errors produced by pure auth primitives.
 ///
@@ -57,6 +70,21 @@ pub enum AuthError {
     /// Local storage backend reported an unrecoverable error.
     #[error("auth storage error: {0}")]
     Storage(String),
+    /// No account for this provider is linked to the active identity.
+    #[error("no {0} account is linked; run `aura login {id}`", id = .0.id())]
+    NotLinked(ProviderKind),
+    /// Stored credentials were revoked or expired; the user must sign in again.
+    #[error("{0}")]
+    ReauthRequired(String),
+    /// The provider is temporarily unreachable; stored credentials are kept.
+    #[error("{0}")]
+    Unavailable(String),
+    /// The user declined or abandoned the sign-in.
+    #[error("{0}")]
+    Declined(String),
+    /// A callback, state or argument failed validation.
+    #[error("{0}")]
+    Invalid(String),
 }
 
 /// An opaque access token issued by the upstream auth provider.
@@ -99,7 +127,7 @@ pub enum Token {
     },
 }
 
-/// Persisted authentication session.
+/// Persisted zOS authentication session.
 ///
 /// Wire-compatible with the legacy `aura_auth::StoredSession`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +142,16 @@ pub struct StoredSession {
     pub primary_zid: String,
     /// When the session was created.
     pub created_at: DateTime<Utc>,
+}
+
+impl StoredSession {
+    /// The identity that owns subscription links created under this session.
+    #[must_use]
+    pub fn owner(&self) -> Owner {
+        Owner::Zos {
+            user_id: self.user_id.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,6 +170,12 @@ mod tests {
         let json = serde_json::to_string(&session).unwrap();
         let back: StoredSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.user_id, session.user_id);
+        assert_eq!(
+            back.owner(),
+            Owner::Zos {
+                user_id: "u".into()
+            }
+        );
     }
 
     #[test]
@@ -140,5 +184,11 @@ mod tests {
         let json = serde_json::to_value(&t).unwrap();
         assert_eq!(json["kind"], "access");
         assert_eq!(json["value"], "x");
+    }
+
+    #[test]
+    fn not_linked_names_the_login_command() {
+        let message = AuthError::NotLinked(ProviderKind::Chatgpt).to_string();
+        assert!(message.contains("aura login chatgpt"), "{message}");
     }
 }

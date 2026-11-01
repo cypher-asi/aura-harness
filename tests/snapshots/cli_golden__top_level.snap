@@ -8,9 +8,10 @@ Usage: aura [OPTIONS] [COMMAND]
 
 Commands:
   run      Run the agent (default when no subcommand is given)
-  login    Authenticate with zOS to obtain a JWT for proxy mode
-  logout   Clear stored authentication credentials
-  whoami   Show current authentication status
+  login    Sign in to zOS, or link a Claude / ChatGPT plan
+  logout   Sign out of zOS, or unlink a plan
+  whoami   Show the zOS sign-in and linked plans
+  auth     Manage linked plans
   hello    Print "Hello, World!" and exit (Spec 01)
   migrate  Phase 4a stub: migrate aura state (no-op today)
   plugins  Manage declarative plugins (Phase 4b)

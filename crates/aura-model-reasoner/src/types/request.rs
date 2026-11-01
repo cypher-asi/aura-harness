@@ -328,6 +328,10 @@ pub struct ModelRequest {
     pub auth_token: Option<String>,
     /// Optional upstream provider family hint for managed proxy routing.
     pub upstream_provider_family: Option<String>,
+    /// Extra HTTP headers required by a direct subscription route
+    /// (e.g. `anthropic-beta` flags). `anthropic-beta` values are merged
+    /// into the provider's own beta header.
+    pub extra_headers: Vec<(String, String)>,
     /// Project ID for X-Aura-Project-Id billing header.
     pub aura_project_id: Option<String>,
     /// Project-agent UUID for X-Aura-Agent-Id billing header.
@@ -563,6 +567,7 @@ impl ModelRequestBuilder {
             parallel_tool_use: self.parallel_tool_use,
             auth_token: self.auth_token,
             upstream_provider_family: self.upstream_provider_family,
+            extra_headers: Vec::new(),
             aura_project_id: self.aura_project_id,
             aura_agent_id: self.aura_agent_id,
             aura_session_id: self.aura_session_id,

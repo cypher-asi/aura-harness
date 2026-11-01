@@ -2,50 +2,48 @@
 //!
 //! Layer: surface
 //!
-//! Authentication client and credential storage for the Aura CLI.
+//! Composition root for Aura authentication. Each auth method is its
+//! own unit:
 //!
-//! Phase 9 reclassifies this crate at the surface layer: the
-//! network client (`ZosClient`) and the OS-keyring/file
-//! credential persistence (`CredentialStore`) are surface-side
-//! concerns per the plan's "Secrets" bullet (§5 cross-cutting
-//! ownership). Token primitive types (`AccessToken`,
-//! `RefreshToken`, `Token`, `StoredSession`, `AuthError`) remain
-//! at the core layer in `aura-core-auth` and are re-exported here
-//! for source compatibility.
+//! | Method  | Where                | Role                                  |
+//! |---------|----------------------|---------------------------------------|
+//! | local   | [`Identity::Local`]  | identity with no account              |
+//! | zOS     | `aura-auth-zos`      | identity; JWT for aura-router         |
+//! | ChatGPT | `aura-auth-chatgpt`  | subscription; OpenAI Responses        |
+//! | Claude  | `aura-auth-claude`   | subscription; Anthropic Messages      |
 //!
-//! Provides:
-//! - [`ZosClient`] for authenticating against the zOS API (`zosapi.zero.tech`)
-//! - [`CredentialStore`] for persisting JWT tokens to `~/.aura/credentials.json`
-//! - [`StoredSession`] (re-exported from `aura-core-auth`) as the
-//!   serializable session type
+//! Shared OAuth plumbing is in `aura-auth-kit`; the provider traits and
+//! primitives are in `aura-core-auth`. This crate adds the [`Vault`]
+//! (keyring-first storage) and [`AuthManager`], which links
+//! subscriptions to the active identity and implements
+//! [`aura_core_auth::CredentialResolver`] for the model layer.
 //!
-//! The pure auth primitives ([`StoredSession`], the
-//! [`AccessToken`]/[`RefreshToken`]/[`Token`] enum, and a primitive
-//! [`PrimitiveAuthError`]) live in `aura-core-auth` and are
-//! re-exported here for source compatibility. Backend-flavoured
-//! variants of [`AuthError`] (HTTP + keyring) stay in this crate.
-//!
-//! # Login flow
-//!
-//! 1. Prompt the user for email and password.
-//! 2. Call [`ZosClient::login`] to obtain a JWT access token.
-//! 3. Call [`CredentialStore::save`] to persist the session to disk.
-//! 4. The JWT is then available via [`CredentialStore::load_token`] for proxy
-//!    mode requests.
+//! Subscription links are owned by the identity active when they were
+//! created: [`aura_core_auth::Owner::Local`] while signed out, or the
+//! zOS user id. Signing out of zOS hides that user's links; signing
+//! back in restores them.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
 mod credentials;
 mod error;
-mod redact;
-mod zos_client;
+mod identity;
+mod manager;
+mod vault;
 
 pub use credentials::{CredentialStore, StoredSession};
-pub use error::AuthError;
-pub use redact::redact_error;
-pub use zos_client::ZosClient;
+pub use error::{AuthError, ZosError};
+pub use identity::Identity;
+pub use manager::{sign_in_notice, AuthManager, AuthSummary, LinkMode, PendingLink};
+pub use vault::Vault;
+
+pub use aura_auth_kit::{open_browser, redact_error};
+pub use aura_auth_zos::{ZosClient, ZosIdentity};
 
 // Re-export the pure primitive types from aura-core-auth so callers
 // can pull token primitives without depending on the backend crate.
-pub use aura_core_auth::{AccessToken, AuthError as PrimitiveAuthError, RefreshToken, Token};
+pub use aura_core_auth::{
+    AccessToken, AuthError as PrimitiveAuthError, CredentialResolver, InferenceCredential,
+    LinkStatus, LinkedAccount, Owner, ProviderKind, RefreshToken, Token,
+};

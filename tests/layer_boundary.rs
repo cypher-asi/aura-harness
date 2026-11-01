@@ -90,6 +90,12 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // (CredentialStore) are surface-side concerns. Token primitive
     // types stay at the core layer in aura-core-auth.
     ("aura-auth", "surface"),
+    // One crate per auth method (provider traits live in
+    // aura-core-auth); aura-auth composes them with the vault.
+    ("aura-auth-kit", "surface"),
+    ("aura-auth-zos", "surface"),
+    ("aura-auth-chatgpt", "surface"),
+    ("aura-auth-claude", "surface"),
     ("aura-automaton", "surface"),
     // Phase B / Commit 3 surface-layer extraction: orchestration
     // engine pulled out of aura-runtime into aura-engine. Both live at

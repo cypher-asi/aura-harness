@@ -227,10 +227,7 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
     show_active_agent(state).await;
     let _ = state
         .commands
-        .send(UiCommand::SetStatus(format!(
-            "Switched to {}",
-            registered.name
-        )))
+        .send(UiCommand::SetStatus("Ready".to_string()))
         .await;
 }
 

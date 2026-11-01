@@ -25,15 +25,18 @@
 
 pub mod anthropic;
 pub mod console;
+mod credentialed;
 mod error;
 mod kernel_propose;
 mod mock;
 pub mod model_catalog;
+pub mod openai_responses;
 pub mod provider_factory;
 pub mod response_stream;
 mod routed;
 pub mod types;
 
+pub use credentialed::CredentialedProvider;
 pub use provider_factory::{
     default_provider as default_provider_from_env, mock_provider, routed_provider,
     with_session_overrides, ProviderSelection, SessionOverrides,

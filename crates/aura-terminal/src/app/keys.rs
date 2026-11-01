@@ -23,7 +23,9 @@ impl App {
                 self.state = AppState::Idle;
                 KeyResult::continue_running()
             }
-            AppState::LoginEmail | AppState::LoginPassword => self.handle_login_key(key),
+            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
+                self.handle_login_key(key)
+            }
             AppState::SelectingModel => self.handle_model_selector_key(key),
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
         }
@@ -97,6 +99,13 @@ impl App {
                                 email,
                                 password: value,
                             });
+                        }
+                    }
+                    AppState::LinkCode => {
+                        self.state = AppState::Idle;
+                        self.status = "Linking...".to_string();
+                        if let Some(tx) = &self.event_tx {
+                            let _ = tx.try_send(UiEvent::LinkCode(value.trim().to_string()));
                         }
                     }
                     _ => {}

@@ -3,7 +3,7 @@
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
-use aura_core_types::{SystemKind, Transaction, TransactionType};
+use aura_core_types::Transaction;
 use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -184,7 +184,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
         .await;
 }
 
-async fn show_system_message(state: &LoopState<'_>, content: String) {
+pub(super) async fn show_system_message(state: &LoopState<'_>, content: String) {
     let _ = state
         .commands
         .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
@@ -233,174 +233,4 @@ pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
         }
     }
     let _ = state.commands.send(state.models.ui_command()).await;
-}
-
-pub(super) async fn handle_login(state: &mut LoopState<'_>, email: &str, password: &str) {
-    let _ = state
-        .commands
-        .send(UiCommand::SetStatus("Authenticating...".to_string()))
-        .await;
-    match aura_auth::ZosClient::new() {
-        Ok(client) => match client.login(email, password).await {
-            Ok(stored) => {
-                let display = stored.display_name.clone();
-                let zid = stored.primary_zid.clone();
-                let token = stored.access_token.clone();
-                if let Err(e) = aura_auth::CredentialStore::save(&stored) {
-                    let _ = state
-                        .commands
-                        .send(UiCommand::ShowError(format!(
-                            "Failed to save credentials: {e}"
-                        )))
-                        .await;
-                } else {
-                    state.agent_loop.set_auth_token(Some(token));
-                    let auth_payload = serde_json::json!({
-                        "system_kind": SystemKind::AuthChange,
-                        "action": "login",
-                        "display_name": display,
-                        "zid": zid,
-                    });
-                    if let Ok(payload_bytes) = serde_json::to_vec(&auth_payload) {
-                        let auth_tx = Transaction::new_chained(
-                            state.session.agent_id(),
-                            TransactionType::System,
-                            payload_bytes,
-                            None,
-                        );
-                        if let Err(e) = state.session.kernel.process_direct(auth_tx).await {
-                            warn!(error = %e, "Failed to record auth login via kernel");
-                        }
-                    } else {
-                        warn!("Failed to serialize auth login payload");
-                    }
-                    let _ = state
-                        .commands
-                        .send(UiCommand::ShowSuccess(format!(
-                            "Logged in as {display} ({zid})"
-                        )))
-                        .await;
-                    show_system_message(
-                        state,
-                        "Cloud models unlocked — use /model to switch.".to_string(),
-                    )
-                    .await;
-                    state.models.set_user(Some(display));
-                    let _ = state.commands.send(state.models.ui_command()).await;
-                }
-            }
-            Err(e) => {
-                let _ = state
-                    .commands
-                    .send(UiCommand::ShowError(format!("Login failed: {e}")))
-                    .await;
-            }
-        },
-        Err(e) => {
-            let _ = state
-                .commands
-                .send(UiCommand::ShowError(format!("Auth client error: {e}")))
-                .await;
-        }
-    }
-    let _ = state.commands.send(UiCommand::Complete).await;
-}
-
-pub(super) async fn handle_logout(state: &mut LoopState<'_>) {
-    let session_before = aura_auth::CredentialStore::load();
-    if let Some(stored) = session_before.as_ref() {
-        if let Ok(client) = aura_auth::ZosClient::new() {
-            client.logout(&stored.access_token).await;
-        }
-    }
-    match aura_auth::CredentialStore::clear() {
-        Ok(()) => {
-            state.agent_loop.set_auth_token(None);
-            if let Some(stored) = session_before {
-                let auth_payload = serde_json::json!({
-                    "system_kind": SystemKind::AuthChange,
-                    "action": "logout",
-                    "display_name": stored.display_name,
-                    "zid": stored.primary_zid,
-                });
-                if let Ok(payload_bytes) = serde_json::to_vec(&auth_payload) {
-                    let auth_tx = Transaction::new_chained(
-                        state.session.agent_id(),
-                        TransactionType::System,
-                        payload_bytes,
-                        None,
-                    );
-                    if let Err(e) = state.session.kernel.process_direct(auth_tx).await {
-                        warn!(error = %e, "Failed to record auth logout via kernel");
-                    }
-                } else {
-                    warn!("Failed to serialize auth logout payload");
-                }
-            }
-            let _ = state
-                .commands
-                .send(UiCommand::ShowSuccess("Logged out".to_string()))
-                .await;
-            state.models.set_user(None);
-            if state.models.ensure_usable(state.agent_loop.config_mut()) {
-                show_system_message(
-                    state,
-                    format!(
-                        "Switched to local model {}.",
-                        crate::model_selection::ModelSelection::label(state.models.current())
-                    ),
-                )
-                .await;
-            }
-            let _ = state.commands.send(state.models.ui_command()).await;
-        }
-        Err(e) => {
-            let _ = state
-                .commands
-                .send(UiCommand::ShowError(format!(
-                    "Failed to clear credentials: {e}"
-                )))
-                .await;
-        }
-    }
-}
-
-pub(super) async fn handle_whoami(state: &LoopState<'_>) {
-    match aura_auth::CredentialStore::load() {
-        Some(session) => {
-            let msg = format!(
-                "Logged in as {} (zID: {}, User: {}, Since: {})",
-                session.display_name,
-                session.primary_zid,
-                session.user_id,
-                session.created_at.format("%Y-%m-%d %H:%M UTC"),
-            );
-            let _ = state
-                .commands
-                .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
-                    role: aura_terminal::events::MessageRole::System,
-                    content: msg,
-                    is_streaming: false,
-                    timestamp_ms: None,
-                    command: None,
-                    activity: None,
-                }))
-                .await;
-        }
-        None => {
-            let _ = state
-                .commands
-                .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
-                    role: aura_terminal::events::MessageRole::System,
-                    content: "Not logged in — using local models as a guest. \
-                              Use /login to unlock cloud models."
-                        .to_string(),
-                    is_streaming: false,
-                    timestamp_ms: None,
-                    command: None,
-                    activity: None,
-                }))
-                .await;
-        }
-    }
 }

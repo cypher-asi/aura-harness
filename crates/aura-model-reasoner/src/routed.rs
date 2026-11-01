@@ -1,5 +1,8 @@
-//! Provider that dispatches each request to the local model server or to
-//! aura-router based on the request's model id (see [`crate::model_catalog`]).
+//! Provider that dispatches each request by its model id (see
+//! [`crate::model_catalog`]): `local/*` to the local model server,
+//! `claude/*` and `chatgpt/*` to the user's linked plan, everything else
+//! to aura-router. Routes never fall back to one another, so the billing
+//! target is always the one the user picked.
 
 use std::sync::Arc;
 
@@ -11,36 +14,71 @@ use crate::{
     StreamEventStream,
 };
 
-/// Routes `local/*` models to `local` and everything else to `router`.
+type SharedProvider = Arc<dyn ModelProvider + Send + Sync>;
+
+/// Routes requests to the backend their model id names.
 pub struct RoutedProvider {
-    local: Arc<dyn ModelProvider + Send + Sync>,
-    router: Arc<dyn ModelProvider + Send + Sync>,
+    local: SharedProvider,
+    router: SharedProvider,
+    claude: Option<SharedProvider>,
+    chatgpt: Option<SharedProvider>,
 }
 
 impl RoutedProvider {
     /// Combine a local provider and a router provider.
     #[must_use]
-    pub fn new(
-        local: Arc<dyn ModelProvider + Send + Sync>,
-        router: Arc<dyn ModelProvider + Send + Sync>,
-    ) -> Self {
-        Self { local, router }
+    pub fn new(local: SharedProvider, router: SharedProvider) -> Self {
+        Self {
+            local,
+            router,
+            claude: None,
+            chatgpt: None,
+        }
+    }
+
+    /// Serve `claude/*` models with `provider`.
+    #[must_use]
+    pub fn with_claude(mut self, provider: SharedProvider) -> Self {
+        self.claude = Some(provider);
+        self
+    }
+
+    /// Serve `chatgpt/*` models with `provider`.
+    #[must_use]
+    pub fn with_chatgpt(mut self, provider: SharedProvider) -> Self {
+        self.chatgpt = Some(provider);
+        self
     }
 
     /// Pick the backend for `request`, rewriting local requests so the
     /// local server sees its own model name and never receives the JWT.
-    fn route(&self, mut request: ModelRequest) -> (&dyn ModelProvider, ModelRequest) {
-        match backend_for(request.model.as_str()) {
+    fn route(
+        &self,
+        mut request: ModelRequest,
+    ) -> Result<(&dyn ModelProvider, ModelRequest), ReasonerError> {
+        let backend = backend_for(request.model.as_str());
+        let subscription = match backend {
             ModelBackend::Local => {
                 if let Some(name) = local_model_name(request.model.as_str()) {
                     request.model = ModelName::from(name);
                 }
                 request.auth_token = None;
                 request.upstream_provider_family = None;
-                (self.local.as_ref(), request)
+                return Ok((self.local.as_ref(), request));
             }
-            ModelBackend::Router => (self.router.as_ref(), request),
-        }
+            ModelBackend::Router => return Ok((self.router.as_ref(), request)),
+            ModelBackend::Claude => self.claude.as_deref(),
+            ModelBackend::Chatgpt => self.chatgpt.as_deref(),
+        };
+        subscription
+            .map(|provider| (provider as &dyn ModelProvider, request))
+            .ok_or_else(|| ReasonerError::Api {
+                status: 401,
+                message: format!(
+                    "{} models are not available in this session",
+                    backend.label()
+                ),
+            })
     }
 }
 
@@ -51,7 +89,7 @@ impl ModelProvider for RoutedProvider {
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
-        let (provider, request) = self.route(request);
+        let (provider, request) = self.route(request)?;
         provider.complete(request).await
     }
 
@@ -59,7 +97,7 @@ impl ModelProvider for RoutedProvider {
         &self,
         request: ModelRequest,
     ) -> Result<StreamEventStream, ReasonerError> {
-        let (provider, request) = self.route(request);
+        let (provider, request) = self.route(request)?;
         provider.complete_streaming(request).await
     }
 
@@ -67,7 +105,7 @@ impl ModelProvider for RoutedProvider {
         &self,
         request: ModelRequest,
     ) -> Result<ResponseEventStream, ReasonerError> {
-        let (provider, request) = self.route(request);
+        let (provider, request) = self.route(request)?;
         provider.complete_response_stream(request).await
     }
 
@@ -100,7 +138,7 @@ mod tests {
     #[test]
     fn local_requests_strip_prefix_and_jwt() {
         let provider = routed();
-        let (target, rewritten) = provider.route(request("local/qwen3:4b"));
+        let (target, rewritten) = provider.route(request("local/qwen3:4b")).unwrap();
         assert!(std::ptr::eq(
             std::ptr::from_ref(target).cast::<u8>(),
             Arc::as_ptr(&provider.local).cast::<u8>()
@@ -189,12 +227,29 @@ mod tests {
     #[test]
     fn router_requests_keep_model_and_jwt() {
         let provider = routed();
-        let (target, rewritten) = provider.route(request("aura-claude-sonnet-4-6"));
+        let (target, rewritten) = provider.route(request("aura-claude-sonnet-4-6")).unwrap();
         assert!(std::ptr::eq(
             std::ptr::from_ref(target).cast::<u8>(),
             Arc::as_ptr(&provider.router).cast::<u8>()
         ));
         assert_eq!(rewritten.model.as_str(), "aura-claude-sonnet-4-6");
         assert_eq!(rewritten.auth_token.as_deref(), Some("jwt"));
+    }
+    #[test]
+    fn subscription_routes_never_fall_back_to_router() {
+        let provider = routed();
+        let err = provider
+            .route(request("claude/claude-sonnet-4-6"))
+            .err()
+            .expect("no claude backend configured");
+        assert!(matches!(err, ReasonerError::Api { status: 401, .. }));
+
+        let provider = routed().with_chatgpt(Arc::new(MockProvider::simple_response("chatgpt")));
+        let (target, rewritten) = provider.route(request("chatgpt/gpt-5.4")).unwrap();
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(target).cast::<u8>(),
+            Arc::as_ptr(provider.chatgpt.as_ref().unwrap()).cast::<u8>()
+        ));
+        assert_eq!(rewritten.model.as_str(), "chatgpt/gpt-5.4");
     }
 }

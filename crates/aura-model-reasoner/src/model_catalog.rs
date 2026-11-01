@@ -1,16 +1,32 @@
 //! Model catalog shared by the terminal surface's model selector and the
 //! [`crate::RoutedProvider`].
 //!
-//! Model identifiers carrying the [`LOCAL_PREFIX`] (`local/qwen3:4b`) are
-//! served by a local Anthropic-compatible endpoint (Ollama >= 0.14). Every
-//! other identifier is an aura-router alias and needs a JWT from `/login`.
+//! The model id carries its route, chosen by the user:
+//!
+//! - [`LOCAL_PREFIX`] (`local/qwen3:4b`): local Anthropic-compatible
+//!   endpoint (Ollama >= 0.14); no login.
+//! - [`CLAUDE_PREFIX`] (`claude/claude-sonnet-4-6`): Anthropic API billed
+//!   to the user's linked Claude plan.
+//! - [`CHATGPT_PREFIX`] (`chatgpt/gpt-5.4`): OpenAI Responses API billed
+//!   to the user's linked ChatGPT plan.
+//! - anything else: an aura-router alias that needs a zOS JWT from `/login`.
+//!
+//! There is no automatic fallback between routes.
 
 use std::time::Duration;
 
 use serde::Deserialize;
 
+use aura_core_auth::ProviderKind;
+
 /// Prefix that marks a model as served by the local endpoint.
 pub const LOCAL_PREFIX: &str = "local/";
+
+/// Prefix that marks a model as served directly with a Claude subscription.
+pub const CLAUDE_PREFIX: &str = "claude/";
+
+/// Prefix that marks a model as served directly with a ChatGPT subscription.
+pub const CHATGPT_PREFIX: &str = "chatgpt/";
 
 /// Lightweight local model used when nothing else is configured: small
 /// enough for CPU-only laptops and supports native tool calling.
@@ -36,8 +52,12 @@ const MIN_OLLAMA_VERSION: (u32, u32) = (0, 14);
 pub enum ModelBackend {
     /// Local Anthropic-compatible server; no login required.
     Local,
-    /// aura-router proxy; requires a JWT.
+    /// aura-router proxy; requires a zOS JWT.
     Router,
+    /// Anthropic API with the user's Claude subscription.
+    Claude,
+    /// OpenAI Responses API with the user's ChatGPT subscription.
+    Chatgpt,
 }
 
 impl ModelBackend {
@@ -47,6 +67,19 @@ impl ModelBackend {
         match self {
             Self::Local => "local",
             Self::Router => "cloud",
+            Self::Claude => "claude plan",
+            Self::Chatgpt => "chatgpt plan",
+        }
+    }
+
+    /// Auth provider that must be signed in for this backend, if any.
+    #[must_use]
+    pub const fn required_provider(self) -> Option<ProviderKind> {
+        match self {
+            Self::Local => None,
+            Self::Router => Some(ProviderKind::Zos),
+            Self::Claude => Some(ProviderKind::Claude),
+            Self::Chatgpt => Some(ProviderKind::Chatgpt),
         }
     }
 }
@@ -70,6 +103,12 @@ impl ModelOption {
     pub fn requires_login(&self) -> bool {
         self.backend == ModelBackend::Router
     }
+
+    /// Auth provider that must be signed in to use this model, if any.
+    #[must_use]
+    pub const fn required_provider(&self) -> Option<ProviderKind> {
+        self.backend.required_provider()
+    }
 }
 
 /// Curated aura-router aliases offered in the selector.
@@ -80,14 +119,39 @@ const ROUTER_MODELS: &[(&str, &str)] = &[
     ("aura-gpt-5-4", "GPT-5.4"),
 ];
 
+/// Curated models offered with a linked Claude plan.
+const CLAUDE_MODELS: &[(&str, &str)] = &[
+    ("claude/claude-opus-4-7", "Claude Opus 4.7"),
+    ("claude/claude-sonnet-4-6", "Claude Sonnet 4.6"),
+    ("claude/claude-haiku-4-5", "Claude Haiku 4.5"),
+];
+
+/// Curated models offered with a linked ChatGPT plan.
+const CHATGPT_MODELS: &[(&str, &str)] = &[("chatgpt/gpt-5.4", "GPT-5.4")];
+
 /// Backend serving `model`.
 #[must_use]
 pub fn backend_for(model: &str) -> ModelBackend {
     if model.starts_with(LOCAL_PREFIX) {
         ModelBackend::Local
+    } else if model.starts_with(CLAUDE_PREFIX) {
+        ModelBackend::Claude
+    } else if model.starts_with(CHATGPT_PREFIX) {
+        ModelBackend::Chatgpt
     } else {
         ModelBackend::Router
     }
+}
+
+/// Model name as the serving backend knows it: strips the `local/`,
+/// `claude/` or `chatgpt/` route prefix; router aliases are unchanged.
+#[must_use]
+pub fn upstream_model_name(model: &str) -> &str {
+    [LOCAL_PREFIX, CLAUDE_PREFIX, CHATGPT_PREFIX]
+        .iter()
+        .find_map(|prefix| model.strip_prefix(prefix))
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(model)
 }
 
 /// Model name as the local server knows it (`local/qwen3:4b` -> `qwen3:4b`).
@@ -137,7 +201,9 @@ pub fn local_context_tokens() -> u64 {
 }
 
 /// Build the selector catalog: the default local model, any other
-/// installed local models, then the curated router aliases.
+/// installed local models, the curated router aliases, then the
+/// subscription models (shown regardless of link state; selection is
+/// gated by [`ModelOption::required_provider`]).
 #[must_use]
 pub fn catalog(default_local: &str, installed_local: &[String]) -> Vec<ModelOption> {
     let mut options = Vec::new();
@@ -158,13 +224,19 @@ pub fn catalog(default_local: &str, installed_local: &[String]) -> Vec<ModelOpti
             });
         }
     }
-    for (id, label) in ROUTER_MODELS {
-        options.push(ModelOption {
-            id: (*id).to_string(),
-            label: (*label).to_string(),
-            backend: ModelBackend::Router,
-            installed: true,
-        });
+    for (models, backend) in [
+        (ROUTER_MODELS, ModelBackend::Router),
+        (CLAUDE_MODELS, ModelBackend::Claude),
+        (CHATGPT_MODELS, ModelBackend::Chatgpt),
+    ] {
+        for (id, label) in models {
+            options.push(ModelOption {
+                id: (*id).to_string(),
+                label: (*label).to_string(),
+                backend,
+                installed: true,
+            });
+        }
     }
     options
 }
@@ -269,6 +341,37 @@ mod tests {
         assert_eq!(backend_for("local/qwen3:4b"), ModelBackend::Local);
         assert_eq!(backend_for("aura-claude-sonnet-4-6"), ModelBackend::Router);
         assert_eq!(backend_for("qwen3:4b"), ModelBackend::Router);
+        assert_eq!(backend_for("claude/claude-opus-4-7"), ModelBackend::Claude);
+        assert_eq!(backend_for("chatgpt/gpt-5.4"), ModelBackend::Chatgpt);
+        assert_eq!(
+            ModelBackend::Router.required_provider(),
+            Some(ProviderKind::Zos)
+        );
+        assert_eq!(ModelBackend::Local.required_provider(), None);
+    }
+
+    #[test]
+    fn upstream_name_strips_route_prefix() {
+        assert_eq!(
+            upstream_model_name("claude/claude-opus-4-7"),
+            "claude-opus-4-7"
+        );
+        assert_eq!(upstream_model_name("chatgpt/gpt-5.4"), "gpt-5.4");
+        assert_eq!(upstream_model_name("local/qwen3:4b"), "qwen3:4b");
+        assert_eq!(upstream_model_name("aura-gpt-5-4"), "aura-gpt-5-4");
+        assert_eq!(upstream_model_name("claude/"), "claude/");
+    }
+
+    #[test]
+    fn catalog_offers_both_routes_for_claude() {
+        let options = catalog("local/qwen3:4b", &[]);
+        assert!(options
+            .iter()
+            .any(|o| o.id == "aura-claude-opus-4-7" && o.backend == ModelBackend::Router));
+        assert!(options
+            .iter()
+            .any(|o| o.id == "claude/claude-opus-4-7" && o.backend == ModelBackend::Claude));
+        assert!(options.iter().any(|o| o.backend == ModelBackend::Chatgpt));
     }
 
     #[test]

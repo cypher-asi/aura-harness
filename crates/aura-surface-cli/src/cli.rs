@@ -24,12 +24,14 @@ pub struct Cli {
 pub enum Commands {
     /// Run the agent (default when no subcommand is given).
     Run(RunArgs),
-    /// Authenticate with zOS to obtain a JWT for proxy mode.
-    Login,
-    /// Clear stored authentication credentials.
-    Logout,
-    /// Show current authentication status.
+    /// Sign in to zOS, or link a Claude / ChatGPT plan.
+    Login(LoginArgs),
+    /// Sign out of zOS, or unlink a plan.
+    Logout(LogoutArgs),
+    /// Show the zOS sign-in and linked plans.
     Whoami,
+    /// Manage linked plans.
+    Auth(AuthCommand),
     /// Print "Hello, World!" and exit (Spec 01).
     Hello,
     /// Phase 4a stub: migrate aura state (no-op today).
@@ -47,6 +49,48 @@ pub enum Commands {
     /// agent-loop wiring lands until Phase 4c (hooks/MCP/connectors)
     /// and Phase 8 (full integration).
     Plugins(PluginsCommand),
+}
+
+/// Arguments for `aura login`.
+#[derive(Args, Debug)]
+pub struct LoginArgs {
+    /// `zos` (default) for cloud models via aura-router, or `claude` /
+    /// `chatgpt` to use your own plan directly.
+    #[arg(default_value = "zos")]
+    pub provider: String,
+    /// Paste the code shown by the provider instead of using a local
+    /// browser redirect (for SSH and headless machines).
+    #[arg(long)]
+    pub paste: bool,
+}
+
+/// Arguments for `aura logout`.
+#[derive(Args, Debug)]
+pub struct LogoutArgs {
+    /// `zos` (default) to sign out, or `claude` / `chatgpt` to unlink.
+    #[arg(default_value = "zos", conflicts_with = "all")]
+    pub provider: String,
+    /// Unlink every plan and sign out of zOS.
+    #[arg(long)]
+    pub all: bool,
+}
+
+/// `aura auth` parent command.
+#[derive(Args, Debug)]
+pub struct AuthCommand {
+    #[command(subcommand)]
+    pub action: AuthSubcommand,
+}
+
+/// Subcommands under `aura auth`.
+#[derive(Subcommand, Debug)]
+pub enum AuthSubcommand {
+    /// Attach plans linked while signed out to the signed-in zOS account.
+    Move {
+        /// Move to the signed-in zOS account (required).
+        #[arg(long, required = true)]
+        to_zos: bool,
+    },
 }
 
 /// Arguments for the `migrate` subcommand (Phase 4a stub).

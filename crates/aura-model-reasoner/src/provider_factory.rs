@@ -1,9 +1,10 @@
 //! Provider factory for Aura.
 //!
-//! There is exactly one real LLM wire client: an Anthropic-shaped HTTP
-//! client. It talks to `aura-router` (the Aura proxy) with a per-request
-//! JWT, and — for the terminal UI only — to a local Anthropic-compatible
-//! server (Ollama) via [`routed_provider`]. For tests, [`mock_provider`]
+//! The main wire client is Anthropic-shaped. It talks to `aura-router`
+//! (the Aura proxy) with a per-request JWT and, for the terminal UI only
+//! via [`routed_provider`], to a local Anthropic-compatible server
+//! (Ollama), to the Anthropic API with a Claude plan, and — through the
+//! Responses client — to OpenAI with a ChatGPT plan. For tests, [`mock_provider`]
 //! returns a fixture-friendly `MockProvider`.
 //!
 //! Per-session overrides — model, fallback model, prompt-caching toggle —
@@ -13,11 +14,14 @@
 
 use std::sync::Arc;
 
+use aura_core_auth::{CredentialResolver, ProviderKind};
 use tracing::info;
 
 use crate::anthropic::{AnthropicConfig, AnthropicProvider};
+use crate::credentialed::CredentialedProvider;
 use crate::error::ReasonerError;
 use crate::mock::MockProvider;
+use crate::openai_responses::OpenAiResponsesProvider;
 use crate::routed::RoutedProvider;
 use crate::ModelProvider;
 
@@ -105,24 +109,45 @@ pub fn with_session_overrides(
     })
 }
 
-/// Build the terminal provider: `local/*` models go to the local
-/// Anthropic-compatible server (Ollama), everything else to aura-router.
+/// Build the terminal provider. `local/*` models go to the local
+/// Anthropic-compatible server (Ollama), `claude/*` and `chatgpt/*` to
+/// the user's linked plan via `subscriptions`, everything else to
+/// aura-router. Without a resolver, plan models fail with an auth error.
 ///
 /// # Errors
 ///
 /// Returns [`ReasonerError`] if HTTP client construction fails.
-pub fn routed_provider() -> Result<ProviderSelection, ReasonerError> {
+pub fn routed_provider(
+    subscriptions: Option<Arc<dyn CredentialResolver>>,
+) -> Result<ProviderSelection, ReasonerError> {
     let local_cfg = AnthropicConfig::local_from_env();
     let router_cfg = AnthropicConfig::from_env();
     info!(
         local_url = %local_cfg.base_url,
         router_url = %router_cfg.base_url,
+        plans = subscriptions.is_some(),
         "LLM provider ready (local + router-backed proxy)"
     );
     let local = AnthropicProvider::new(local_cfg)?.with_sse_for_all_models();
     let router = AnthropicProvider::new(router_cfg)?;
+    let mut routed = RoutedProvider::new(Arc::new(local), Arc::new(router));
+    if let Some(resolver) = subscriptions {
+        let claude = AnthropicProvider::new(AnthropicConfig::anthropic_direct())?;
+        let chatgpt = OpenAiResponsesProvider::from_env()?;
+        routed = routed
+            .with_claude(Arc::new(CredentialedProvider::new(
+                ProviderKind::Claude,
+                Arc::new(claude),
+                resolver.clone(),
+            )))
+            .with_chatgpt(Arc::new(CredentialedProvider::new(
+                ProviderKind::Chatgpt,
+                Arc::new(chatgpt),
+                resolver,
+            )));
+    }
     Ok(ProviderSelection {
-        provider: Arc::new(RoutedProvider::new(Arc::new(local), Arc::new(router))),
+        provider: Arc::new(routed),
         name: "aura".to_string(),
     })
 }

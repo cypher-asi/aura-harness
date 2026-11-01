@@ -2,6 +2,7 @@
 
 pub(crate) mod agent_events;
 pub(crate) mod agents;
+pub(crate) mod auth;
 pub(crate) mod handlers;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
@@ -16,6 +17,7 @@ pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 use crate::model_selection::ModelSelection;
 use aura_agent::{AgentLoop, ProcessManager};
 use aura_agent_kernel::Kernel;
+use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::Message;
 use aura_terminal::{UiCommand, UiEvent};
@@ -41,6 +43,8 @@ pub struct EventLoopContext<'a> {
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     /// Model selection already applied to `agent_loop`.
     pub models: ModelSelection,
+    /// Sign-in state shared with the model provider.
+    pub auth: Arc<AuthManager>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -54,6 +58,9 @@ pub(super) struct LoopState<'a> {
     /// Previously opened agents, kept so their conversations survive switching.
     pub(super) parked: HashMap<AgentId, AgentSession>,
     pub(super) hub: Arc<AgentHub>,
+    pub(super) auth: Arc<AuthManager>,
+    /// Plan sign-in waiting for a pasted code.
+    pub(super) pending_link: Option<PendingLink>,
 }
 
 impl LoopState<'_> {
@@ -112,7 +119,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         _process_manager,
         memory_manager,
         models,
+        auth,
     } = ctx;
+    let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
 
     let mut state = LoopState {
         commands: &commands,
@@ -122,6 +131,8 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         session,
         parked: HashMap::new(),
         hub,
+        auth,
+        pending_link: None,
     };
     install_memory_observer(&mut state);
 
@@ -133,8 +144,11 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(completion_tx) = process_completions.recv() => {
                 handle_completion(&mut state, completion_tx).await;
             }
+            Some(outcome) = link_rx.recv() => {
+                auth::handle_link_outcome(&mut state, outcome).await;
+            }
             Some(event) = events.recv() => {
-                if handle_ui_event(&mut state, event).await {
+                if handle_ui_event(&mut state, event, &link_tx).await {
                     break;
                 }
             }
@@ -189,7 +203,11 @@ async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction
 }
 
 /// Returns `true` if the loop should break (quit).
-async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
+async fn handle_ui_event(
+    state: &mut LoopState<'_>,
+    event: UiEvent,
+    link_outcomes: &mpsc::Sender<auth::LinkOutcome>,
+) -> bool {
     match event {
         UiEvent::UserMessage(text) => {
             handle_user_message(state, text).await;
@@ -228,10 +246,15 @@ async fn handle_ui_event(state: &mut LoopState<'_>, event: UiEvent) -> bool {
         UiEvent::DeleteDefinition(name) => agents::handle_delete_definition(state, &name).await,
         UiEvent::DefinitionEdited(path) => agents::handle_definition_edited(state, &path).await,
         UiEvent::LoginCredentials { email, password } => {
-            handlers::handle_login(state, &email, &password).await;
+            auth::handle_login(state, &email, &password).await;
         }
-        UiEvent::Logout => handlers::handle_logout(state).await,
-        UiEvent::Whoami => handlers::handle_whoami(state).await,
+        UiEvent::Logout => auth::handle_logout(state).await,
+        UiEvent::Whoami => auth::handle_whoami(state).await,
+        UiEvent::LinkSubscription { provider, paste } => {
+            auth::handle_link(state, &provider, paste, link_outcomes).await;
+        }
+        UiEvent::LinkCode(code) => auth::handle_link_code(state, &code).await,
+        UiEvent::Unlink(provider) => auth::handle_unlink(state, &provider).await,
         UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
     }
     false

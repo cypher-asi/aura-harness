@@ -2,11 +2,20 @@
 source: tests/cli_golden.rs
 expression: help
 ---
-Clear stored authentication credentials
+Sign out of zOS, or unlink a plan
 
-Usage: aura logout [OPTIONS]
+Usage: aura logout [OPTIONS] [PROVIDER]
+
+Arguments:
+  [PROVIDER]
+          `zos` (default) to sign out, or `claude` / `chatgpt` to unlink
+          
+          [default: zos]
 
 Options:
+      --all
+          Unlink every plan and sign out of zOS
+
       --mode <MODE>
           Session mode for the interactive terminal. Overrides the daemon default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
 

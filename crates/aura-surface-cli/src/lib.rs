@@ -60,6 +60,7 @@ use thiserror::Error;
 pub mod agent_definitions;
 pub mod agent_registry;
 pub mod api_server;
+mod auth_commands;
 pub mod cli;
 pub mod event_loop;
 pub mod model_selection;

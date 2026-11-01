@@ -2,7 +2,7 @@
 source: tests/cli_golden.rs
 expression: help
 ---
-Show current authentication status
+Show the zOS sign-in and linked plans
 
 Usage: aura whoami [OPTIONS]
 

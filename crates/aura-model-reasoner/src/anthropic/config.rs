@@ -195,6 +195,26 @@ impl AnthropicConfig {
         }
     }
 
+    /// Build a config for the public Anthropic API, used with a Claude
+    /// plan credential. Reads `AURA_ANTHROPIC_API_URL` (default
+    /// `https://api.anthropic.com`). Router-edge protections (body cap,
+    /// Cloudflare retries, fallback model) are disabled.
+    #[must_use]
+    pub fn anthropic_direct() -> Self {
+        let base_url = std::env::var("AURA_ANTHROPIC_API_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+        let defaults = Self::from_env();
+        Self {
+            base_url,
+            fallback_model: None,
+            emergency_body_cap_bytes: 0,
+            cloudflare_max_retries: 0,
+            ..defaults
+        }
+    }
+
     /// Build a config with an explicit default model. Other fields take
     /// the same defaults as [`from_env`].
     #[must_use]

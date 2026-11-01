@@ -1,6 +1,6 @@
 [package]
 name = "aura-auth"
-description = "zOS authentication client and credential storage for Aura"
+description = "Auth composition for Aura: vault, identities and subscription links"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,16 +8,23 @@ license.workspace = true
 
 [dependencies]
 aura-core-auth = { path = "../aura-core-auth" }
-reqwest = { workspace = true }
+aura-auth-kit = { path = "../aura-auth-kit" }
+aura-auth-zos = { path = "../aura-auth-zos" }
+aura-auth-chatgpt = { path = "../aura-auth-chatgpt" }
+aura-auth-claude = { path = "../aura-auth-claude" }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 keyring = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
+reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 

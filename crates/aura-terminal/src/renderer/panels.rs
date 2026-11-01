@@ -328,18 +328,27 @@ fn build_tab_lines<'a>(app: &App, width: usize, theme: &Theme) -> Vec<Line<'a>> 
     vec![Line::from(labels), Line::from(rule)]
 }
 
+/// Projects are `# name`. Agents spawned under a project hang beneath it,
+/// indented, with a return-key hook (`↳`) and an `@` sigil:
+///
+/// ```text
+///   # Terminal Agent
+///   ↳ @ reviewer
+///     ↳ @ explorer
+///   + New project
+/// ```
 fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_agent();
     let active_id = app.active_agent_id();
     let mut lines: Vec<Line> = Vec::new();
-    let number_width = app.agents().len().max(1).to_string().len();
+    let agents = app.agents();
 
-    for (i, agent) in app.agents().iter().enumerate() {
+    for (i, agent) in agents.iter().enumerate() {
         let is_selected = i == selected;
         let is_active = agent.id == active_id;
 
-        let prefix = if is_selected && is_focused {
+        let gutter = if is_selected && is_focused {
             " > ".to_string()
         } else if agent.running {
             format!(" {} ", app.spinner_char())
@@ -359,25 +368,40 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             Style::default().fg(theme.colors.muted)
         };
 
-        let index = format!("{:>number_width$}. ", i + 1);
+        let (connector, sigil) = if agent.depth == 0 {
+            (String::new(), "# ")
+        } else {
+            (agent_return_connector(agent.depth), "@ ")
+        };
+
         let count = format!(" {}", agent.record_count);
-        let indent = "  ".repeat(agent.depth);
         let name_width = (inner.width as usize)
-            .saturating_sub(display_width(&prefix) + index.len() + indent.len() + count.len())
+            .saturating_sub(
+                display_width(&gutter)
+                    + display_width(&connector)
+                    + display_width(sigil)
+                    + display_width(&count),
+            )
             .max(1);
         let display_name = truncate_agent_name(&agent.name, name_width);
         let padding = name_width.saturating_sub(display_width(&display_name));
-        lines.push(Line::from(vec![
-            Span::styled(prefix, line_style),
-            Span::styled(index, line_style),
-            Span::raw(indent),
+        let mut spans = vec![Span::styled(gutter, line_style)];
+        if !connector.is_empty() {
+            spans.push(Span::styled(
+                connector,
+                Style::default().fg(theme.colors.muted),
+            ));
+        }
+        spans.extend([
+            Span::styled(sigil, line_style),
             Span::styled(display_name, line_style),
             Span::raw(" ".repeat(padding)),
             Span::styled(count, Style::default().fg(theme.colors.muted)),
-        ]));
+        ]);
+        lines.push(Line::from(spans));
     }
 
-    let new_selected = selected == app.agents().len() && is_focused;
+    let new_selected = selected == agents.len() && is_focused;
     let new_style = if new_selected {
         Style::default()
             .fg(theme.colors.primary)
@@ -385,15 +409,23 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     } else {
         Style::default().fg(theme.colors.muted)
     };
-    let prefix = if new_selected { " > " } else { "   " };
+    let gutter = if new_selected { " > " } else { "   " };
     lines.push(Line::from(Span::styled(
-        format!("{prefix}{:>number_width$}  New project", "+"),
+        format!("{gutter}+ New project"),
         new_style,
     )));
     lines
 }
 
-/// Roster rows: "•  name" for each permanent agent, then "+  New agent",
+/// `↳ ` under the parent, stepped two columns further in at each extra level.
+fn agent_return_connector(depth: usize) -> String {
+    let mut connector = "  ".repeat(depth.saturating_sub(1));
+    connector.push('↳');
+    connector.push(' ');
+    connector
+}
+
+/// Roster rows: "@  name" for each permanent agent, then "+  New agent",
 /// with the markers and the names in the same columns.
 fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let is_focused = app.focus() == PanelFocus::Swarm;
@@ -412,7 +444,7 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
             ("   ", Style::default().fg(theme.colors.secondary))
         };
         lines.push(Line::from(Span::styled(
-            truncate_agent_name(&format!("{prefix}•  {}", definition.name), width.max(1)),
+            truncate_agent_name(&format!("{prefix}@  {}", definition.name), width.max(1)),
             name_style,
         )));
     }

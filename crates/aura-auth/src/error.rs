@@ -1,26 +1,26 @@
-//! Error types for the auth crate.
+//! Error types for the auth composition crate.
 
 use std::path::PathBuf;
 
-/// Errors that can occur during zOS authentication or credential storage.
+pub use aura_auth_zos::ZosError;
+
+/// Errors from credential storage or any auth provider.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    /// HTTP request to zOS API failed.
-    #[error("zOS API request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    /// zOS API client failure.
+    #[error(transparent)]
+    Zos(#[from] ZosError),
 
-    /// zOS API returned an error response.
-    #[error("zOS API error (status {status}): {message}")]
-    ZosApi {
-        status: u16,
-        code: String,
-        message: String,
-    },
+    /// A provider-level failure (sign-in, refresh, validation).
+    #[error(transparent)]
+    Provider(#[from] aura_core_auth::AuthError),
 
     /// Failed to read or write the credentials file.
     #[error("credential file I/O error at {path}: {source}")]
     CredentialIo {
+        /// File that failed.
         path: PathBuf,
+        /// Underlying error.
         source: std::io::Error,
     },
 
@@ -35,8 +35,19 @@ pub enum AuthError {
     /// Unexpected OS keyring failure while saving / loading credentials.
     ///
     /// "No storage" and "no entry" failures are handled transparently
-    /// by [`crate::CredentialStore`]; this variant carries only the
-    /// keyring errors we don't know how to recover from. (Wave 5 / T5.)
+    /// by the vault; this variant carries only the keyring errors we
+    /// don't know how to recover from. (Wave 5 / T5.)
     #[error("keyring error: {0}")]
     CredentialKeyring(String),
+}
+
+impl From<AuthError> for aura_core_auth::AuthError {
+    fn from(error: AuthError) -> Self {
+        match error {
+            AuthError::Provider(e) => e,
+            AuthError::Zos(e) => e.into(),
+            AuthError::Serialization(e) => Self::Serialization(e),
+            other => Self::Storage(other.to_string()),
+        }
+    }
 }

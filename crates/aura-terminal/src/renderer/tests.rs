@@ -232,17 +232,21 @@ fn test_default_layout_shows_agents_column() {
         .any(|r| r.contains("Projects") && r.contains("Agents") && r.contains("←→")));
     assert!(rows
         .iter()
-        .any(|r| r.contains("● 1. Terminal") && r.contains("12│")));
-    assert!(screen.contains("2. Researcher"));
+        .any(|r| r.contains("●") && r.contains("# Terminal") && r.contains("12│")));
+    assert!(screen.contains("# Researcher"));
+    assert!(screen.contains("↳ @ reviewer #1"));
     let column_of = |needle: &str| {
         rows.iter()
             .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
             .unwrap()
     };
     assert_eq!(column_of("New project"), column_of("Researcher"));
-    assert_eq!(column_of("+"), column_of("2."));
+    let hash_row = rows.iter().find(|r| r.contains("# Terminal")).unwrap();
+    let plus_row = rows.iter().find(|r| r.contains("New project")).unwrap();
+    let char_col = |row: &str, needle: char| row.chars().position(|c| c == needle);
+    assert_eq!(char_col(hash_row, '#'), char_col(plus_row, '+'));
     assert!(screen.contains("Alt+↑↓ switch  ^N new"));
-    // Spawned instances sit indented under their parent.
+    // Spawned agents sit under the project on a return-key hook.
     assert_eq!(column_of("reviewer #1"), column_of("Researcher") + 2);
     assert!(!screen.contains("Reviews"));
 
@@ -257,7 +261,7 @@ fn test_default_layout_shows_agents_column() {
     ));
     let rows = render_rows(&mut app, 120);
     let screen = rows.join("\n");
-    assert!(screen.contains("•  reviewer"));
+    assert!(screen.contains("@  reviewer"));
     assert!(!screen.contains("Reviews"));
     assert!(screen.contains("+  New agent"));
     let column_of = |needle: &str| {
@@ -265,7 +269,7 @@ fn test_default_layout_shows_agents_column() {
             .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
             .unwrap()
     };
-    assert_eq!(column_of("•"), column_of("+"));
+    assert_eq!(column_of("@"), column_of("+"));
     assert_eq!(column_of("reviewer"), column_of("New agent"));
     assert!(screen.contains("⏎ spawn e edit d del"));
     assert!(!screen.contains("Researcher"));
@@ -454,6 +458,9 @@ fn app_with_model(user: Option<&str>) -> crate::App {
             label: "qwen3:4b".to_string(),
             local: true,
             installed: true,
+            group: "Local (no login)".to_string(),
+            provider: None,
+            available: true,
         }],
         current: "local/qwen3:4b".to_string(),
         user: user.map(str::to_string),
@@ -530,8 +537,8 @@ fn test_header_shows_local_url_and_model_moves_to_input() {
     let n = rows.len();
     assert!(rows[n - 3].contains('└'), "panel border above input");
     assert!(
-        rows[n - 1].chars().all(|c| c == '─'),
-        "rule below input: {:?}",
+        rows[n - 1].trim().is_empty(),
+        "blank row below input: {:?}",
         rows[n - 1]
     );
     let input_row = rows[n - 2].trim_end();

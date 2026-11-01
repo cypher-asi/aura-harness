@@ -73,28 +73,22 @@ fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApprov
     frame.render_widget(paragraph, modal_area);
 }
 
-/// Render the model selector, grouped into local and cloud models.
+/// Render the model selector, grouped by route (local, cloud, plans).
 fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
     let models = app.models();
-    let guest = app.user().is_none();
     let mut lines: Vec<Line<'_>> = Vec::new();
-    let mut last_group: Option<bool> = None;
+    let mut last_group: Option<&str> = None;
 
     for (idx, model) in models.iter().enumerate() {
-        if last_group != Some(model.local) {
+        if last_group != Some(model.group.as_str()) {
             if last_group.is_some() {
                 lines.push(Line::from(""));
             }
-            let heading = if model.local {
-                "Local (no login)"
-            } else {
-                "Cloud (aura-router)"
-            };
             lines.push(Line::from(Span::styled(
-                heading,
+                model.group.as_str(),
                 Style::default().fg(theme.colors.muted),
             )));
-            last_group = Some(model.local);
+            last_group = Some(model.group.as_str());
         }
 
         let selected = idx == app.model_cursor();
@@ -102,11 +96,14 @@ fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
         let marker = if selected { "› " } else { "  " };
         let check = if current { "● " } else { "  " };
         let note = if model.local && !model.installed {
-            "  not pulled"
-        } else if !model.local && guest {
-            "  login required"
+            "  not pulled".to_string()
+        } else if model.available {
+            String::new()
         } else {
-            ""
+            match model.provider.as_deref() {
+                Some(provider) if provider != "zos" => format!("  /login {provider}"),
+                _ => "  login required".to_string(),
+            }
         };
         let label_color = if selected {
             theme.colors.primary
@@ -179,8 +176,9 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/files     Toggle Sandbox panel",
         "/model     Choose model (local or cloud)",
         "/login     Login for cloud models",
-        "/logout    Clear credentials",
-        "/whoami     Show auth status",
+        "/login claude|chatgpt [paste]  Link a plan",
+        "/logout [claude|chatgpt]  Sign out / unlink",
+        "/whoami    Show auth status",
         "/quit      Exit",
         "",
         "Enter      Send message",

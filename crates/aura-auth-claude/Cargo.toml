@@ -1,0 +1,24 @@
+[package]
+name = "aura-auth-claude"
+description = "Claude Pro/Max subscription provider for Aura"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-auth = { path = "../aura-core-auth" }
+aura-auth-kit = { path = "../aura-auth-kit" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = "2.5"
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -8,7 +8,7 @@ use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::cli::{Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode};
 use crate::model_selection::ModelSelection;
-use crate::{api_server, event_loop, record_loader, session_helpers};
+use crate::{api_server, auth_commands, event_loop, record_loader, session_helpers};
 
 use anyhow::Context;
 use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
@@ -19,7 +19,6 @@ use aura_model_reasoner::ModelProvider;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
 use aura_tools::{ToolConfig, ToolExecutor};
 use clap::Parser;
-use colored::Colorize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -70,9 +69,10 @@ pub async fn run() -> anyhow::Result<()> {
             hello_world();
             Ok(())
         }
-        Some(Commands::Login) => cmd_login().await,
-        Some(Commands::Logout) => cmd_logout().await,
-        Some(Commands::Whoami) => cmd_whoami(),
+        Some(Commands::Login(args)) => auth_commands::cmd_login(args).await,
+        Some(Commands::Logout(args)) => auth_commands::cmd_logout(args).await,
+        Some(Commands::Whoami) => auth_commands::cmd_whoami(),
+        Some(Commands::Auth(args)) => auth_commands::cmd_auth(args),
         Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Plugins(args)) => cmd_plugins(args),
         Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
@@ -322,82 +322,6 @@ async fn run_with_args(
 }
 
 // ============================================================================
-// Auth Commands
-// ============================================================================
-
-async fn cmd_login() -> anyhow::Result<()> {
-    use std::io::Write;
-
-    print!("Email: ");
-    std::io::stdout().flush()?;
-
-    let mut email = String::new();
-    std::io::stdin().read_line(&mut email)?;
-    let email = email.trim();
-
-    if email.is_empty() {
-        anyhow::bail!("Email cannot be empty");
-    }
-
-    let password = rpassword::prompt_password("Password: ")?;
-    if password.is_empty() {
-        anyhow::bail!("Password cannot be empty");
-    }
-
-    println!("{} Authenticating...", "▶".blue().bold());
-
-    let client = aura_auth::ZosClient::new()?;
-    let session = client.login(email, &password).await?;
-
-    let display = session.display_name.clone();
-    let zid = session.primary_zid.clone();
-
-    aura_auth::CredentialStore::save(&session)?;
-
-    println!(
-        "{} Logged in as {} ({})",
-        "✓".green().bold(),
-        display.green(),
-        zid,
-    );
-
-    Ok(())
-}
-
-async fn cmd_logout() -> anyhow::Result<()> {
-    if let Some(stored) = aura_auth::CredentialStore::load() {
-        let client = aura_auth::ZosClient::new()?;
-        client.logout(&stored.access_token).await;
-    }
-
-    aura_auth::CredentialStore::clear()?;
-    println!("{} Logged out", "✓".green().bold());
-    Ok(())
-}
-
-fn cmd_whoami() -> anyhow::Result<()> {
-    match aura_auth::CredentialStore::load() {
-        Some(session) => {
-            println!("{}", "Authentication".cyan().bold());
-            println!("  Name:    {}", session.display_name);
-            println!("  zID:     {}", session.primary_zid);
-            println!("  User ID: {}", session.user_id);
-            println!(
-                "  Since:   {}",
-                session.created_at.format("%Y-%m-%d %H:%M UTC")
-            );
-        }
-        None => {
-            println!(
-                "{} Not logged in. Run `aura login` to authenticate.",
-                "ℹ".blue().bold()
-            );
-        }
-    }
-    Ok(())
-}
-
-// ============================================================================
 // Terminal Mode
 // ============================================================================
 
@@ -470,11 +394,9 @@ async fn run_terminal(
     // higher-level surfaces (chat WS, dev-loop, task-run) plumb the
     // user-selected model through their own paths.
     let mut config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
-    let user = config.auth_token.as_ref().map(|_| {
-        aura_auth::CredentialStore::load()
-            .map_or_else(|| "AURA_ROUTER_JWT".to_string(), |s| s.display_name)
-    });
-    let models = ModelSelection::init(&mut config, user);
+    let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
+    let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
+    let models = ModelSelection::init(&mut config, summary);
     info!(model = %models.current(), "Terminal model selected");
     let base_config = config.clone();
     let agent_loop = AgentLoop::new(config);
@@ -486,11 +408,13 @@ async fn run_terminal(
     ));
 
     // `mock` for explicit test / offline mode; otherwise the routed
-    // provider sends `local/*` models to the local server (Ollama) and
-    // everything else to aura-router.
+    // provider sends `local/*` models to the local server (Ollama),
+    // `claude/*` and `chatgpt/*` to the linked plan, and everything else
+    // to aura-router.
+    let resolver: Arc<dyn aura_auth::CredentialResolver> = auth.clone();
     let selection = match args.provider.as_str() {
         "mock" => Ok(aura_model_reasoner::mock_provider()),
-        _ => aura_model_reasoner::routed_provider(),
+        _ => aura_model_reasoner::routed_provider(Some(resolver)),
     }
     .context("building model provider")?;
     if selection.name == "mock" {
@@ -565,6 +489,7 @@ async fn run_terminal(
             _process_manager: process_manager_clone,
             memory_manager: None,
             models,
+            auth,
         };
         event_loop::run_event_loop(ctx).await
     });

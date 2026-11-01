@@ -60,6 +60,11 @@ members = [
     "crates/aura-agent",
     "crates/aura-agent-steering",
     "crates/aura-auth",
+    # One crate per auth method; aura-auth composes them.
+    "crates/aura-auth-kit",
+    "crates/aura-auth-zos",
+    "crates/aura-auth-chatgpt",
+    "crates/aura-auth-claude",
     "crates/aura-automaton",
     # Phase B / Commit 3 surface-layer extraction: the orchestration
     # engine (scheduler / worker / automaton bridge / memory observer /

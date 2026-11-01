@@ -287,6 +287,7 @@ pub(super) fn convert_messages_to_api(
             let content: Vec<ApiContent> = msg
                 .content
                 .iter()
+                .filter(|block| !crate::openai_responses::is_openai_reasoning(block))
                 .map(|block| match block {
                     ContentBlock::Text { text } => ApiContent::Text {
                         text: text.clone(),
