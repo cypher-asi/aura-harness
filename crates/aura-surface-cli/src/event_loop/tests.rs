@@ -169,6 +169,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         hub: Arc::clone(&fixture.hub),
         auth: Arc::clone(&b.auth),
         pending_link: None,
+        jobs: BackgroundJobs::new(mpsc::channel(1).0),
     }
 }
 
@@ -428,4 +429,85 @@ async fn switching_to_a_busy_agent_keeps_its_live_chat() {
     fixture.gate.add_permits(1);
     let finished = next_done(&mut done).await;
     handle_work_done(&mut state, finished).await;
+}
+
+#[tokio::test]
+async fn compact_summarizes_the_older_history() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let history: Vec<aura_model_reasoner::Message> =
+        std::iter::once(aura_model_reasoner::Message::user("build it"))
+            .chain((0..12).flat_map(|i| {
+                [
+                    aura_model_reasoner::Message::assistant(format!(
+                        "step {i}: {}",
+                        "x".repeat(400)
+                    )),
+                    aura_model_reasoner::Message::user(format!("ok {i}")),
+                ]
+            }))
+            .collect();
+    let before = history.len();
+    state.idle.get_mut(&first).unwrap().messages = history;
+
+    let compact = UiEvent::Compact {
+        agent_id: first.to_hex(),
+        focus: Some("the step numbers".to_string()),
+    };
+    handle_ui_event(&mut state, compact, &links).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    let messages = &state.idle[&first].messages;
+    assert!(messages.len() < before, "{} messages left", messages.len());
+    assert_eq!(messages[0].text_content(), "build it");
+    let commands = drain(&mut commands);
+    assert!(commands
+        .iter()
+        .any(|(_, c)| matches!(c, UiCommand::Compacted(_))));
+    assert_eq!(completed(&commands, first), 1);
+}
+
+#[tokio::test]
+async fn queued_work_is_counted_for_the_status_line() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow job", true), &links).await;
+    let command = UiEvent::RunCommand {
+        agent_id: first.to_hex(),
+        command: "true".to_string(),
+        cols: 80,
+    };
+    handle_ui_event(&mut state, command, &links).await;
+    let queued: Vec<usize> = drain(&mut commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::SetQueued(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(queued, [1]);
+
+    fixture.gate.add_permits(1);
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    let queued: Vec<usize> = drain(&mut commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::SetQueued(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(queued, [0]);
 }

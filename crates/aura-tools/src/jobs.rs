@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use aura_core_types::{AgentId, ToolDefinition, ToolResult};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, warn};
 
 use crate::error::ToolError;
@@ -143,6 +143,8 @@ pub struct BackgroundJobs {
     jobs: Mutex<HashMap<String, Arc<Job>>>,
     next_id: AtomicU64,
     finished: mpsc::Sender<JobFinished>,
+    /// Bumped whenever a job starts or exits
+    changes: Arc<watch::Sender<u64>>,
 }
 
 impl BackgroundJobs {
@@ -153,7 +155,14 @@ impl BackgroundJobs {
             jobs: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             finished,
+            changes: Arc::new(watch::channel(0).0),
         })
+    }
+
+    /// A receiver that sees a change whenever a job starts or exits.
+    #[must_use]
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
     }
 
     /// Track `child` as a new job and return its id. `child` must have
@@ -177,6 +186,7 @@ impl BackgroundJobs {
             killed: std::sync::atomic::AtomicBool::new(false),
         });
         lock(&self.jobs).insert(id.clone(), Arc::clone(&job));
+        self.changes.send_modify(|n| *n = n.wrapping_add(1));
 
         let readers: Vec<std::thread::JoinHandle<()>> = [
             child
@@ -205,6 +215,7 @@ impl BackgroundJobs {
         .collect();
 
         let finished = self.finished.clone();
+        let changes = Arc::clone(&self.changes);
         std::thread::spawn(move || {
             let code = match child.wait() {
                 Ok(status) => status.code(),
@@ -218,6 +229,7 @@ impl BackgroundJobs {
             }
             *lock(&job.state) = JobState::Exited { code };
             *lock(&job.finished_at) = Some(Instant::now());
+            changes.send_modify(|n| *n = n.wrapping_add(1));
             let notice = JobFinished {
                 job_id: job.id.clone(),
                 agent_id: job.agent_id,

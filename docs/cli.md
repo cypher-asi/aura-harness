@@ -50,6 +50,11 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **Talking to a busy agent.** A message you send while the agent works goes into its running turn, and the agent reads it before its next step. A message that arrives as the turn ends runs as the next turn. Shell commands typed in the chat still wait for the agent's current work.
 - **Background commands.** `run_command` with `background: true` starts a job and returns at once. The agent checks it with `job_output` and stops it with `job_kill`. When a job exits, the agent that started it is told: inside its running turn, or in a new turn if it is idle. Quitting the terminal stops every job.
 - **Foreground commands** time out after 2 minutes unless the call sets `timeout_ms`, up to 10 minutes.
+- **Status line.** The row under the input shows the agent on screen: context use (`ctx 62% ▰▰▰▰▱ 124k/200k`, yellow from 75%, red from 90%), prompt cache hits, estimated cost at API list prices, model calls, running background jobs (`2 bg`), queued work, and how often the history was summarized. Parts that don't fit are dropped from the right. The Chat panel's bottom border shows todo progress, e.g. `[3/7] ▸ Write the parser`.
+- **`/context`** shows how full the context window is and what fills it (system prompt, tools, skills, conversation) as of the last turn.
+- **`/cost`** lists the session's model calls, tokens (new input, cache reads and writes, output) and estimated cost.
+- **`/todos`** opens or closes the agent's full todo list above the input.
+- **`/compact [focus]`** summarizes the older history now instead of waiting for context pressure, keeping the first message and the recent steps as they are. Text after the command tells the summary what to keep. A busy agent does it when its current work ends. The summary replaces history only in the running session; the record keeps every message.
 
 ## Global flags
 

@@ -697,6 +697,36 @@ fn build_summary_input(
     })
 }
 
+/// Summary input for compacting `messages` on request rather than under
+/// pressure: everything between the first message and the recent tail,
+/// whatever the transcript's size. `None` when that middle is too short
+/// to be worth a summary.
+#[must_use]
+pub fn forced_summary_input(messages: &[Message]) -> Option<SummaryInput> {
+    let (compact_start, compact_end) = select_summary_range(messages)?;
+    let compactable_messages = messages[compact_start..compact_end].to_vec();
+    let compactable_chars = estimate_message_chars(&compactable_messages);
+    if compactable_chars == 0 {
+        return None;
+    }
+    let before_chars = estimate_message_chars(messages);
+    let max_summary_chars = compactable_chars.saturating_div(4).clamp(512, 12_000);
+    let target_total_chars = before_chars
+        .saturating_sub(compactable_chars)
+        .saturating_add(max_summary_chars)
+        .clamp(1_024, SUMMARY_TARGET_CEILING);
+    Some(SummaryInput {
+        compact_start,
+        compact_end,
+        compactable_messages,
+        recent_tail: messages[compact_end..].to_vec(),
+        original_chars: before_chars,
+        local_chars: before_chars,
+        target_total_chars,
+        max_summary_chars,
+    })
+}
+
 fn compact_content_block(
     block: &mut ContentBlock,
     config: &CompactionConfig,
@@ -1219,6 +1249,23 @@ pub fn compact_for_storage(messages: &mut [Message]) {
 mod tests {
     use super::*;
     use aura_model_reasoner::Role;
+
+    #[test]
+    fn forced_summary_covers_the_middle_of_any_size() {
+        let mut messages = vec![Message::user("goal")];
+        for i in 0..12 {
+            messages.push(Message::assistant(format!("step {i}")));
+            messages.push(Message::user(format!("ok {i}")));
+        }
+
+        let input = forced_summary_input(&messages).expect("long enough to summarize");
+
+        assert_eq!(input.compact_start, 1);
+        assert!(input.compact_end < messages.len());
+        assert_eq!(input.compactable_messages.len(), input.compact_end - 1);
+        assert_eq!(input.recent_tail.len(), messages.len() - input.compact_end);
+        assert!(forced_summary_input(&messages[..3]).is_none());
+    }
 
     /// Root-cause regression for the emergency-body-cap incidents:
     /// base64 images outside the preserved recent tail — including the

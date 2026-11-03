@@ -29,6 +29,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   caching (four breakpoints with the system prompt and tools), so a
   large batch of tool results no longer misses the cache.
   `AURA_PROMPT_CACHE_TTL=1h` uses the one-hour cache.
+- A status line under the input shows, for the agent on screen, how
+  full its context is, its prompt cache hit rate, the session's
+  estimated cost and model calls, running background jobs, and queued
+  work. The Chat panel's bottom border shows todo progress and the item
+  being worked on.
+- `/context` breaks down what fills the context window, `/cost` lists
+  the session's tokens and cost, `/todos` opens the agent's todo list,
+  and `/compact [focus]` summarizes the older history now, keeping
+  `focus` in particular.
 
 ##### Changed
 

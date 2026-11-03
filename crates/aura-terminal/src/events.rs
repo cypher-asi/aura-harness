@@ -123,6 +123,14 @@ pub enum UiEvent {
 
     /// User selected a model by id
     SelectModel(String),
+
+    /// User asked to summarize the older history of an agent now
+    Compact {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// What the summary should keep, in the user's words
+        focus: Option<String>,
+    },
 }
 
 /// Commands sent from the application logic to the UI.
@@ -234,6 +242,19 @@ pub enum UiCommand {
 
     /// A message the user sent to a busy agent went into its running turn
     UserSteered(String),
+
+    /// Usage of one model call, added to the agent's session totals
+    CallStats(CallStats),
+    /// Older history was summarized to free context; the text says how much
+    Compacted(String),
+    /// The agent's todo list
+    SetTodos(Vec<TodoView>),
+    /// The agent's background jobs
+    SetJobs(Vec<JobView>),
+    /// How many messages and commands wait for the agent's current work
+    SetQueued(usize),
+    /// What the agent's context is made of, as of its last turn
+    SetContext(ContextView),
 
     /// A command for the chat of one agent. Agents work in parallel, so
     /// anything an agent's turn sends is addressed to it; the UI applies it
@@ -356,6 +377,81 @@ pub struct CallUsage {
     /// Estimated cost at API list prices; `None` for local or unpriced models
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+}
+
+/// Tokens and cost of one model call, for the session totals.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CallStats {
+    /// Prompt tokens neither read from nor written to the cache
+    pub input_tokens: u64,
+    /// Prompt tokens read from the cache
+    pub cache_read_tokens: u64,
+    /// Prompt tokens written to the cache
+    pub cache_write_tokens: u64,
+    /// Output tokens
+    pub output_tokens: u64,
+    /// Estimated cost at API list prices; `None` for local or unpriced models
+    pub cost_usd: Option<f64>,
+    /// Context window of the model, when known
+    pub context_limit: Option<u64>,
+}
+
+impl CallStats {
+    /// The whole prompt: what the call put in the context window.
+    #[must_use]
+    pub const fn prompt_tokens(&self) -> u64 {
+        self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+}
+
+/// Status of a todo item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoState {
+    /// Not started
+    Pending,
+    /// Being worked on
+    InProgress,
+    /// Done
+    Completed,
+    /// Dropped
+    Cancelled,
+}
+
+/// One item of an agent's todo list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TodoView {
+    /// What needs doing
+    pub content: String,
+    /// Where it stands
+    pub state: TodoState,
+}
+
+/// A background job an agent started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobView {
+    /// Job id the agent uses, e.g. `job-1`
+    pub id: String,
+    /// The command line
+    pub command: String,
+    /// Whether it is still running
+    pub running: bool,
+}
+
+/// Estimated make-up of an agent's context.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContextView {
+    /// System prompt
+    pub system_tokens: u64,
+    /// Tool definitions
+    pub tools_tokens: u64,
+    /// Skills
+    pub skills_tokens: u64,
+    /// The conversation so far
+    pub conversation_tokens: u64,
+    /// Everything together
+    pub total_tokens: u64,
+    /// Context window of the model, when known
+    pub limit_tokens: Option<u64>,
 }
 
 impl MessageData {

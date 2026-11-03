@@ -7,12 +7,12 @@
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
-use super::handlers::{handle_agent_success, run_agent_turn};
+use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::record_ui::send_record_to_ui;
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use crate::long_run::LongRunSettings;
-use aura_agent::AgentLoop;
+use aura_agent::{AgentLoop, CompactHistoryError};
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::UiCommand;
@@ -27,6 +27,8 @@ pub(super) enum Work {
     Prompt { text: String, shown: bool },
     /// A shell command typed in the chat, run in a terminal `cols` wide.
     Command { command: String, cols: u16 },
+    /// Summarize the older history now, keeping `focus` in particular.
+    Compact { focus: Option<String> },
 }
 
 /// Work ready to run.
@@ -42,6 +44,11 @@ pub(super) enum Task {
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
+    /// A summary of the older history, written by `agent_loop`'s model.
+    Compact {
+        agent_loop: Box<AgentLoop>,
+        focus: Option<String>,
+    },
 }
 
 /// An agent's work that ended, handing its session back.
@@ -123,6 +130,10 @@ async fn run(
         }
         Task::Command { command, cols } => {
             run_user_command(&mut session, &command, cols, &ui).await;
+            Outcome::default()
+        }
+        Task::Compact { agent_loop, focus } => {
+            run_compact(&mut session, &agent_loop, focus.as_deref(), &ui, &cancel).await;
             Outcome::default()
         }
     };
@@ -212,6 +223,61 @@ async fn run_prompt(
         }
     };
     Outcome { failure, unseen }
+}
+
+/// Replace the older history of `session` with a summary. Only the
+/// conversation the model sees changes; the record keeps every message.
+async fn run_compact(
+    session: &mut AgentSession,
+    agent_loop: &AgentLoop,
+    focus: Option<&str>,
+    ui: &AgentUi,
+    cancel: &CancellationToken,
+) {
+    ui.send(UiCommand::SetStatus("Summarizing history...".to_string()))
+        .await;
+    let compacted = agent_loop
+        .compact_history(
+            &session.model_gateway,
+            &session.messages,
+            &session.todos,
+            focus,
+            Some(cancel),
+        )
+        .await;
+    match compacted {
+        Ok(compacted) => {
+            info!(
+                before = compacted.before_tokens,
+                after = compacted.after_tokens,
+                "Compacted history on request"
+            );
+            session.messages = compacted.messages;
+            ui.send(UiCommand::Compacted(format!(
+                "Summarized older history: ~{} → ~{} tokens",
+                compacted.before_tokens, compacted.after_tokens
+            )))
+            .await;
+        }
+        Err(CompactHistoryError::TooShort) => {
+            ui.send(system_message(
+                "Nothing to summarize yet: the history is still short".to_string(),
+            ))
+            .await;
+        }
+        Err(CompactHistoryError::Cancelled) => {
+            ui.send(UiCommand::ShowWarning("Summary cancelled".to_string()))
+                .await;
+        }
+        Err(e) => {
+            warn!(error = %e, "Compacting history failed");
+            ui.send(UiCommand::ShowWarning(format!(
+                "Could not summarize the history: {e}"
+            )))
+            .await;
+        }
+    }
+    ui.send(UiCommand::Complete).await;
 }
 
 /// Clear transactions left in the agent's inbox by an earlier run.

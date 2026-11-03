@@ -1599,3 +1599,148 @@ fn test_overflowing_panels_show_a_scrollbar() {
     let chat = chat_track(&rows);
     assert!(chat.starts_with('┃') && chat.ends_with('│'), "{chat:?}");
 }
+
+fn run_slash(app: &mut crate::App, command: &str) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    type_text(app, command);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+}
+
+fn todo(content: &str, state: crate::events::TodoState) -> crate::events::TodoView {
+    crate::events::TodoView {
+        content: content.to_string(),
+        state,
+    }
+}
+
+#[test]
+fn test_status_line_shows_context_cache_and_cost() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 4_000,
+        cache_read_tokens: 120_000,
+        cache_write_tokens: 0,
+        output_tokens: 900,
+        cost_usd: Some(3.42),
+        context_limit: Some(200_000),
+    }));
+    app.process_command(UiCommand::SetQueued(1));
+
+    let rows = render_rows(&mut app, 160);
+    let status = rows.last().unwrap();
+    assert!(status.contains("ctx 62% ▰▰▰▰▱ 124k/200k"), "{status:?}");
+    assert!(status.contains("cache 96%"), "{status:?}");
+    assert!(status.contains("$3.42"), "{status:?}");
+    assert!(status.contains("1 call"), "{status:?}");
+    assert!(status.contains("1 queued"), "{status:?}");
+}
+
+#[test]
+fn test_status_line_drops_trailing_parts_when_narrow() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 10_000,
+        context_limit: Some(200_000),
+        cost_usd: Some(0.5),
+        ..CallStats::default()
+    }));
+    let rows = render_rows(&mut app, 40);
+    let status = rows.last().unwrap();
+    assert!(status.contains("ctx 5%"), "{status:?}");
+    assert!(!status.contains("call"), "{status:?}");
+}
+
+#[test]
+fn test_todo_strip_and_list() {
+    use crate::events::{TodoState, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetTodos(vec![
+        todo("Read the parser", TodoState::Completed),
+        todo("Write the lexer", TodoState::InProgress),
+        todo("Run the tests", TodoState::Pending),
+    ]));
+
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("[1/3] ▸ Write the lexer"), "{screen}");
+    assert!(!screen.contains("TODOS"));
+
+    run_slash(&mut app, "/todos");
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("TODOS 1/3"), "{screen}");
+    assert!(screen.contains("✓ Read the parser"));
+    assert!(screen.contains("○ Run the tests"));
+
+    app.process_command(UiCommand::SetTodos(Vec::new()));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(!screen.contains("TODOS"));
+    assert!(!screen.contains("[1/3]"));
+}
+
+#[test]
+fn test_context_and_cost_commands_write_to_the_chat() {
+    use crate::events::{CallStats, ContextView, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 2_000,
+        cache_read_tokens: 8_000,
+        output_tokens: 500,
+        cost_usd: Some(0.02),
+        context_limit: Some(100_000),
+        ..CallStats::default()
+    }));
+    app.process_command(UiCommand::SetContext(ContextView {
+        system_tokens: 3_000,
+        tools_tokens: 4_000,
+        conversation_tokens: 3_000,
+        total_tokens: 10_000,
+        limit_tokens: Some(100_000),
+        ..ContextView::default()
+    }));
+
+    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/cost");
+    let texts: Vec<String> = app
+        .messages()
+        .iter()
+        .map(|m| m.content().to_string())
+        .collect();
+    assert!(texts[0].contains("10.0k of 100k tokens (10%)"), "{texts:?}");
+    assert!(texts[0].contains("tools"), "{texts:?}");
+    assert!(texts[0].contains("Prompt cache hits: 80%"), "{texts:?}");
+    assert!(texts[1].contains("$0.020"), "{texts:?}");
+}
+
+#[test]
+fn test_todos_stay_with_their_agent() {
+    use crate::events::{AgentSummary, TodoState, UiCommand};
+
+    let agent = |id: &str| AgentSummary {
+        id: id.to_string(),
+        name: id.to_string(),
+        ..Default::default()
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![agent("aa"), agent("bb")]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::ForAgent {
+        agent_id: "bb".to_string(),
+        command: Box::new(UiCommand::SetTodos(vec![todo(
+            "Background work",
+            TodoState::InProgress,
+        )])),
+    });
+
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(!screen.contains("Background work"), "{screen}");
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("[0/1] ▸ Background work"), "{screen}");
+}

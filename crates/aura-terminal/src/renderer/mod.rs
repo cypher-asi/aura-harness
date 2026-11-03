@@ -4,6 +4,7 @@ mod activity;
 mod chat_lines;
 mod command;
 mod detail;
+mod hud;
 mod input;
 mod markdown;
 mod overlays;
@@ -57,10 +58,16 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         height: 1,
         ..main_chunks[2]
     };
+    let status_row = Rect {
+        y: input_row.y.saturating_add(1),
+        height: main_chunks[2].height.saturating_sub(1),
+        ..main_chunks[2]
+    };
 
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
+    hud::render_todo_strip(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
@@ -68,7 +75,11 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let chat_left = chat.x.saturating_sub(input_row.x);
 
     input::render_input(frame, input_row, app, theme, chat_left);
+    if status_row.height > 0 {
+        hud::render_status_line(frame, inset_edges(status_row), app, theme);
+    }
 
+    hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);

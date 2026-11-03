@@ -492,6 +492,7 @@ async fn run_terminal(
 
     let cmd_tx_clone = cmd_tx.clone();
     let process_manager_clone = Arc::clone(&process_manager);
+    let loop_jobs = Arc::clone(&jobs);
 
     let processor_handle = tokio::spawn(async move {
         let mut agent_loop = agent_loop;
@@ -507,6 +508,7 @@ async fn run_terminal(
             models,
             auth,
             job_finished: job_rx,
+            jobs: loop_jobs,
         };
         event_loop::run_event_loop(ctx).await
     });

@@ -235,5 +235,27 @@ fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> 
     }
 }
 
+/// `950`, `12.4k`, `124k`, `1.2M`.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn format_tokens(tokens: u64) -> String {
+    match tokens {
+        0..1_000 => tokens.to_string(),
+        1_000..100_000 => format!("{:.1}k", tokens as f64 / 1_000.0),
+        100_000..1_000_000 => format!("{}k", tokens / 1_000),
+        _ => format!("{:.1}M", tokens as f64 / 1_000_000.0),
+    }
+}
+
+/// `<$0.01`, `$0.042`, `$3.50`.
+pub(crate) fn format_cost(usd: f64) -> String {
+    if usd < 0.01 {
+        "<$0.01".to_string()
+    } else if usd < 1.0 {
+        format!("${usd:.3}")
+    } else {
+        format!("${usd:.2}")
+    }
+}
+
 #[cfg(test)]
 mod tests;

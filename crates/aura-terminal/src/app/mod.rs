@@ -9,6 +9,7 @@ mod definitions;
 pub mod file_view;
 pub mod folder_picker;
 pub(crate) mod format;
+pub mod hud;
 mod keys;
 mod line_edit;
 pub mod sandbox;
@@ -34,6 +35,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
+use hud::Hud;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -269,6 +271,10 @@ pub struct App {
     pub(super) pending_delete: Option<String>,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
+    /// Usage, todos and jobs of the agent on screen
+    pub(super) hud: Hud,
+    /// Whether the full todo list is shown above the input
+    pub(super) todos_open: bool,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -479,6 +485,8 @@ impl App {
             editor_request: None,
             pending_delete: None,
             folder_picker: None,
+            hud: Hud::default(),
+            todos_open: false,
         }
     }
 
@@ -568,6 +576,18 @@ impl App {
     #[must_use]
     pub fn processing_elapsed(&self) -> Option<Duration> {
         self.processing_since.map(|since| since.elapsed())
+    }
+
+    /// Usage, todos and jobs of the agent on screen.
+    #[must_use]
+    pub const fn hud(&self) -> &Hud {
+        &self.hud
+    }
+
+    /// Whether the full todo list is shown above the input.
+    #[must_use]
+    pub const fn todos_open(&self) -> bool {
+        self.todos_open
     }
 
     /// Get the messages.

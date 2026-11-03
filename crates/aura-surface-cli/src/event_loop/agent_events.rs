@@ -6,8 +6,12 @@
 //! machine (streaming / thinking toggles, had-text tracking) and the
 //! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
+use super::hud::{call_stats, todo_views};
 use async_trait::async_trait;
-use aura_agent::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink};
+use aura_agent::{
+    map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink, PROGRESS_CONTEXT_SUMMARIZED,
+    PROGRESS_TODOS_UPDATED,
+};
 use aura_core_types::AgentId;
 use aura_model_reasoner::{model_catalog, Usage};
 use aura_terminal::{
@@ -64,6 +68,8 @@ pub(crate) struct ForwarderState {
     pub reply_usage: Option<CallUsage>,
     /// Estimated cost of every model call of the turn so far
     pub turn_cost_usd: f64,
+    /// Context window of the turn's model
+    pub context_limit: Option<u64>,
 }
 
 /// Stops a turn once its model calls cost more than `limit_usd`.
@@ -268,15 +274,20 @@ impl TurnEventSink for UiCommandSink {
             if model.is_empty() {
                 return;
             }
-            let usage = call_usage(
-                &model,
-                &Usage {
-                    input_tokens,
-                    output_tokens,
-                    cache_creation_input_tokens,
-                    cache_read_input_tokens,
-                },
-            );
+            let usage = Usage {
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+            };
+            self.ui
+                .send(UiCommand::CallStats(call_stats(
+                    &model,
+                    &usage,
+                    self.state.context_limit,
+                )))
+                .await;
+            let usage = call_usage(&model, &usage);
             self.ui
                 .send(UiCommand::SetReplyModel {
                     model: model.clone(),
@@ -287,6 +298,28 @@ impl TurnEventSink for UiCommandSink {
             self.state.reply_usage = usage;
             self.state.turn_cost_usd += usage.and_then(|u| u.cost_usd).unwrap_or(0.0);
             self.enforce_cost_cap().await;
+        }
+    }
+
+    async fn on_progress(
+        &mut self,
+        stage: String,
+        _tool_name: Option<String>,
+        _elapsed_ms: Option<u64>,
+        message: Option<String>,
+    ) {
+        let Some(message) = message else {
+            return;
+        };
+        match stage.as_str() {
+            PROGRESS_TODOS_UPDATED => {
+                match serde_json::from_str::<Vec<aura_tools::todo::TodoItem>>(&message) {
+                    Ok(todos) => self.ui.send(UiCommand::SetTodos(todo_views(&todos))).await,
+                    Err(e) => debug!(error = %e, "Unreadable todo list update"),
+                }
+            }
+            PROGRESS_CONTEXT_SUMMARIZED => self.ui.send(UiCommand::Compacted(message)).await,
+            _ => {}
         }
     }
 
@@ -301,10 +334,14 @@ pub(crate) async fn forward_agent_events(
     mut rx: tokio::sync::mpsc::Receiver<AgentLoopEvent>,
     ui: AgentUi,
     cost_cap: Option<CostCap>,
+    context_limit: Option<u64>,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         ui,
-        state: ForwarderState::default(),
+        state: ForwarderState {
+            context_limit,
+            ..ForwarderState::default()
+        },
         open_tools: Vec::new(),
         cost_cap,
     };

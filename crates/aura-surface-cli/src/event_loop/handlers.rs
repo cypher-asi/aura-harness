@@ -2,6 +2,7 @@
 
 use super::agent_events::{AgentUi, CostCap, ForwarderState};
 use super::agents::AgentSession;
+use super::hud::{context_view, todo_views};
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::steering::Steering;
 use super::turns::record_user_prompt;
@@ -37,7 +38,12 @@ pub(super) async fn run_agent_turn(
         limit_usd,
         stop: turn_cancel.clone(),
     });
-    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, ui.clone(), cost_cap));
+    let forwarder = tokio::spawn(forward_agent_events(
+        agent_event_rx,
+        ui.clone(),
+        cost_cap,
+        agent_loop.config().max_context_tokens,
+    ));
 
     let run = agent_loop.run_with_session(
         &session.model_gateway,
@@ -95,6 +101,13 @@ pub(super) async fn handle_agent_success(
 ) {
     session.messages.clone_from(&result.messages);
     session.todos.clone_from(&result.todos);
+    ui.send(UiCommand::SetContext(context_view(
+        &result,
+        forwarded.context_limit,
+    )))
+    .await;
+    ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
+        .await;
 
     for text in steered {
         if let Err(problem) = record_user_prompt(session, text.clone(), ui).await {
@@ -199,6 +212,13 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
 
     session.messages.clear();
     session.todos.clear();
+    let _ = state
+        .commands
+        .send(UiCommand::ForAgent {
+            agent_id: agent_id.to_hex(),
+            command: Box::new(UiCommand::SetTodos(Vec::new())),
+        })
+        .await;
 
     let _ = state
         .commands

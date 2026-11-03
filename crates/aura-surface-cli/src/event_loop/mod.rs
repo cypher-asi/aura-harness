@@ -10,6 +10,7 @@ pub(crate) mod agent_events;
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod handlers;
+mod hud;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
 mod steering;
@@ -31,7 +32,7 @@ use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
 use aura_terminal::{UiCommand, UiEvent};
-use aura_tools::jobs::JobFinished;
+use aura_tools::jobs::{BackgroundJobs, JobFinished};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,6 +64,8 @@ pub struct EventLoopContext<'a> {
     pub auth: Arc<AuthManager>,
     /// Background commands that exited.
     pub job_finished: mpsc::Receiver<JobFinished>,
+    /// Every background command, for the status line.
+    pub jobs: Arc<BackgroundJobs>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -87,6 +90,7 @@ pub(super) struct LoopState<'a> {
     pub(super) auth: Arc<AuthManager>,
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
+    pub(super) jobs: Arc<BackgroundJobs>,
 }
 
 impl LoopState<'_> {
@@ -140,7 +144,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         models,
         auth,
         mut job_finished,
+        jobs,
     } = ctx;
+    let mut job_changes = jobs.subscribe();
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
     let (done_tx, mut done_rx) = mpsc::channel::<WorkDone>(64);
 
@@ -159,9 +165,11 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         hub,
         auth,
         pending_link: None,
+        jobs,
     };
 
     agents::send_sandbox_root(&state).await;
+    hud::send_todos(&state, active).await;
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
@@ -179,6 +187,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             }
             Some(finished) = job_finished.recv() => {
                 handle_job_finished(&mut state, finished).await;
+            }
+            Ok(()) = job_changes.changed() => {
+                hud::send_jobs(&state).await;
             }
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
@@ -387,6 +398,10 @@ async fn handle_ui_event(
         UiEvent::LinkCode(code) => auth::handle_link_code(state, &code).await,
         UiEvent::Unlink(provider) => auth::handle_unlink(state, &provider).await,
         UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
+        UiEvent::Compact { agent_id, focus } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            submit(state, agent_id, Work::Compact { focus }).await;
+        }
     }
     false
 }
@@ -397,6 +412,7 @@ async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     if state.hub.is_running(agent_id) {
         info!(%agent_id, "Agent is busy; queueing work");
         state.queued.entry(agent_id).or_default().push_back(work);
+        hud::send_queued(state, agent_id).await;
         return;
     }
     start_work(state, agent_id, work).await;
@@ -411,6 +427,7 @@ async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
     if queue.is_empty() {
         state.queued.remove(&agent_id);
     }
+    hud::send_queued(state, agent_id).await;
     if let Some(work) = next {
         start_work(state, agent_id, work).await;
     }
@@ -459,6 +476,14 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
+        Work::Compact { focus } => {
+            state.sync_turn_base();
+            let (config, _) = state.hub.turn(session.definition.as_deref());
+            Task::Compact {
+                agent_loop: Box::new(AgentLoop::new(config)),
+                focus,
+            }
+        }
     };
 
     state.hub.start_running(

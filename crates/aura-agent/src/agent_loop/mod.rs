@@ -46,6 +46,7 @@ mod context_contents;
 mod cx;
 mod event_sink;
 mod iteration;
+mod manual_compaction;
 mod run;
 mod sampling;
 mod search_cache;
@@ -83,6 +84,7 @@ mod tests_advanced;
 
 pub use config::AgentLoopConfig;
 pub use cx::RunOptions;
+pub use manual_compaction::{CompactHistoryError, CompactedHistory};
 pub use task::TaskId;
 
 pub(crate) use cache::{ReadRangeEntry, ToolResultCache};

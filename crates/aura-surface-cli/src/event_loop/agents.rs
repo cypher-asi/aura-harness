@@ -346,6 +346,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
         AgentUi::new(state.commands.clone(), agent_id)
             .send(UiCommand::LoadConversation(history))
             .await;
+        super::hud::send_todos(state, agent_id).await;
     }
 
     send_sandbox_root(state).await;

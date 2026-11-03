@@ -112,10 +112,36 @@ impl App {
                     let _ = tx.try_send(UiEvent::Whoami);
                 }
             }
+            "context" | "ctx" => {
+                let report = self.hud.context_report();
+                self.add_message(Message::new(MessageRole::System, &report));
+            }
+            "cost" | "usage" => {
+                let report = self.hud.cost_report();
+                self.add_message(Message::new(MessageRole::System, &report));
+            }
+            "todos" | "todo" => {
+                if self.hud.todos.is_empty() {
+                    self.todos_open = false;
+                    self.notification = Some((
+                        "The agent has no todo list".to_string(),
+                        NotificationType::Warning,
+                    ));
+                } else {
+                    self.todos_open = !self.todos_open;
+                }
+            }
+            "compact" => self.handle_compact_command(arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
                 self.streaming_content.clear();
+                let jobs = std::mem::take(&mut self.hud.jobs);
+                self.hud = super::hud::Hud {
+                    jobs,
+                    ..Default::default()
+                };
+                self.todos_open = false;
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::NewSession);
                 }
@@ -332,6 +358,30 @@ impl App {
         }
     }
 
+    /// `/compact [focus]`: summarize the agent's older history now. A busy
+    /// agent does it once its current work ends.
+    fn handle_compact_command(&mut self, focus: &str) {
+        let Some(tx) = &self.event_tx else {
+            return;
+        };
+        let event = UiEvent::Compact {
+            agent_id: self.active_agent_id.clone(),
+            focus: (!focus.is_empty()).then(|| focus.to_string()),
+        };
+        if tx.try_send(event).is_err() {
+            return;
+        }
+        if self.agent_busy(&self.active_agent_id) {
+            self.notification = Some((
+                "Queued: the history is summarized when the current work ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else {
+            self.state = AppState::Processing;
+            self.status = "Summarizing history...".to_string();
+        }
+    }
+
     /// Process a UI command from the kernel.
     pub fn process_command(&mut self, cmd: UiCommand) {
         debug!(?cmd, "Processing UI command");
@@ -402,6 +452,25 @@ impl App {
             }
             UiCommand::TurnStarted { prompt } => self.cmd_turn_started(prompt),
             UiCommand::UserSteered(text) => self.cmd_user_steered(&text),
+            UiCommand::CallStats(call) => self.hud.stats.add(&call),
+            UiCommand::Compacted(text) => {
+                self.hud.stats.compactions = self.hud.stats.compactions.saturating_add(1);
+                self.add_message(Message::new(MessageRole::System, &text));
+            }
+            UiCommand::SetTodos(todos) => {
+                if todos.is_empty() {
+                    self.todos_open = false;
+                }
+                self.hud.todos = todos;
+            }
+            UiCommand::SetJobs(jobs) => self.hud.jobs = jobs,
+            UiCommand::SetQueued(queued) => self.hud.queued = queued,
+            UiCommand::SetContext(context) => {
+                if context.limit_tokens.is_some() {
+                    self.hud.stats.context_limit = context.limit_tokens;
+                }
+                self.hud.context = Some(context);
+            }
             UiCommand::ForAgent { agent_id, command } => {
                 self.process_agent_command(&agent_id, *command);
             }

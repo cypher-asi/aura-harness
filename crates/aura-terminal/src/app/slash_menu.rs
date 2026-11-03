@@ -38,6 +38,15 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         needs_args: false,
     },
     command("clear", "Clear messages"),
+    command("context", "Show what fills the context window"),
+    SlashCommand {
+        name: "compact",
+        args: "[focus]",
+        description: "Summarize older history now",
+        needs_args: false,
+    },
+    command("todos", "Toggle the agent's todo list"),
+    command("cost", "Show tokens and cost of the session"),
     SlashCommand {
         name: "agent",
         args: "new [name] | <n|name>",

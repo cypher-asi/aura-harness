@@ -2,6 +2,7 @@
 
 use super::markdown::render_markdown;
 use super::text::{display_width, wrap_words};
+use crate::app::format::{format_cost, format_tokens};
 use crate::components::{CodeBlock, MessageRole};
 use crate::events::CallUsage;
 use crate::Theme;
@@ -72,26 +73,6 @@ pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<S
         parts.extend(usage.cost_usd.map(format_cost));
     }
     parts
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn format_tokens(tokens: u64) -> String {
-    match tokens {
-        0..1_000 => tokens.to_string(),
-        1_000..100_000 => format!("{:.1}k", tokens as f64 / 1_000.0),
-        100_000..1_000_000 => format!("{}k", tokens / 1_000),
-        _ => format!("{:.1}M", tokens as f64 / 1_000_000.0),
-    }
-}
-
-fn format_cost(usd: f64) -> String {
-    if usd < 0.01 {
-        "<$0.01".to_string()
-    } else if usd < 1.0 {
-        format!("${usd:.3}")
-    } else {
-        format!("${usd:.2}")
-    }
 }
 
 pub(super) const fn message_style<'a>(
