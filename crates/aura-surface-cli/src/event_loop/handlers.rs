@@ -5,11 +5,16 @@ use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
 use aura_core_types::Transaction;
-use aura_terminal::UiCommand;
+use aura_terminal::{UiCommand, UiEvent};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Run one turn of the active agent on `agent_loop` with `tools`.
+///
+/// UI events keep flowing while the turn runs: Esc cancels it, quit
+/// cancels it and ends the session, and anything else waits in
+/// `state.deferred` until the turn is over. The returned flag is set
+/// when the user cancelled the turn.
 pub(super) async fn run_agent_turn(
     state: &mut LoopState<'_>,
     agent_loop: &aura_agent::AgentLoop,
@@ -17,6 +22,7 @@ pub(super) async fn run_agent_turn(
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
+    bool,
 ) {
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
 
@@ -24,9 +30,10 @@ pub(super) async fn run_agent_turn(
     let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, fwd_commands));
 
     let cancel_token = CancellationToken::new();
-    let cancel_for_timeout = cancel_token.clone();
+    let cancel_for_turn = cancel_token.clone();
+    let mut cancelled = false;
 
-    let process_result = match tokio::time::timeout(
+    let turn = tokio::time::timeout(
         TURN_TIMEOUT,
         agent_loop.run_with_events(
             &state.session.model_gateway,
@@ -36,16 +43,34 @@ pub(super) async fn run_agent_turn(
             Some(agent_event_tx),
             Some(cancel_token),
         ),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            cancel_for_timeout.cancel();
-            Err(aura_agent::AgentError::Timeout(format!(
-                "Agent turn timed out after {} minutes",
-                TURN_TIMEOUT.as_secs() / 60
-            )))
+    );
+    tokio::pin!(turn);
+    let process_result = loop {
+        tokio::select! {
+            outcome = &mut turn => break match outcome {
+                Ok(result) => result,
+                Err(_) => {
+                    cancel_for_turn.cancel();
+                    Err(aura_agent::AgentError::Timeout(format!(
+                        "Agent turn timed out after {} minutes",
+                        TURN_TIMEOUT.as_secs() / 60
+                    )))
+                }
+            },
+            Some(event) = state.events.recv() => match event {
+                UiEvent::Cancel => {
+                    info!("Cancelling the running turn");
+                    cancel_for_turn.cancel();
+                    cancelled = true;
+                }
+                UiEvent::Quit => {
+                    info!("Quit during a turn; cancelling it");
+                    cancel_for_turn.cancel();
+                    cancelled = true;
+                    state.quit_requested = true;
+                }
+                other => state.deferred.push_back(other),
+            },
         }
     };
 
@@ -65,7 +90,7 @@ pub(super) async fn run_agent_turn(
         }
     };
 
-    (process_result, forwarded)
+    (process_result, forwarded, cancelled)
 }
 
 pub(super) async fn handle_agent_success(

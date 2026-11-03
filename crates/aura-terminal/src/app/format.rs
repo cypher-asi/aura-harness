@@ -1,12 +1,14 @@
 //! Tool summary formatting helpers.
 
 /// What a tool call did, as a short phrase: `Read main.rs L1-80`,
-/// `Grepped TODO in src`, `Ran cargo test`. Empty while the args are not
-/// yet valid JSON (they stream in piece by piece).
+/// `Grepped TODO in src`, `Ran cargo test`. While the args are still
+/// streaming in, the label is built from the fields that have arrived;
+/// it is empty until one has.
 pub(crate) fn format_tool_label(tool_name: &str, args_json: &str) -> String {
-    let Ok(args) = serde_json::from_str::<serde_json::Value>(args_json) else {
+    let args = parse_tool_args(args_json);
+    if args.as_object().is_some_and(serde_json::Map::is_empty) && !is_complete_json(args_json) {
         return String::new();
-    };
+    }
     let text = |key: &str| {
         args.get(key)
             .and_then(serde_json::Value::as_str)
@@ -53,6 +55,75 @@ pub(crate) fn format_tool_label(tool_name: &str, args_json: &str) -> String {
             }
         }
     }
+}
+
+/// Tool arguments as JSON. Arguments that are still streaming give an
+/// object of the top-level string fields that have fully arrived.
+pub(crate) fn parse_tool_args(args_json: &str) -> serde_json::Value {
+    serde_json::from_str(args_json)
+        .unwrap_or_else(|_| serde_json::Value::Object(complete_string_fields(args_json)))
+}
+
+/// Whether `args_json` is a whole JSON value rather than a streaming prefix.
+pub(crate) fn is_complete_json(args_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(args_json).is_ok()
+}
+
+/// The top-level string fields of a JSON object whose values have fully
+/// arrived, from a buffer that may stop anywhere.
+fn complete_string_fields(buf: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    let bytes = buf.as_bytes();
+    let mut depth = 0usize;
+    let mut key: Option<String> = None;
+    let mut in_value = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                let Some(end) = string_end(bytes, i) else {
+                    break;
+                };
+                if depth == 1 {
+                    let Ok(text) = serde_json::from_str::<String>(&buf[i..=end]) else {
+                        break;
+                    };
+                    if in_value {
+                        if let Some(key) = key.take() {
+                            fields.insert(key, serde_json::Value::String(text));
+                        }
+                        in_value = false;
+                    } else {
+                        key = Some(text);
+                    }
+                }
+                i = end;
+            }
+            b':' if depth == 1 => in_value = true,
+            b',' if depth == 1 => {
+                key = None;
+                in_value = false;
+            }
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        i += 1;
+    }
+    fields
+}
+
+/// Index of the quote closing the JSON string that opens at `start`.
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Last component of `path`.

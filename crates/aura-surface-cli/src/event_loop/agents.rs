@@ -61,7 +61,8 @@ impl KernelFactory {
     }
 
     /// Open a session (kernel + gateways) for `agent`, working in `folder`
-    /// (its project's folder, `None` for the launch directory).
+    /// (its project's folder, `None` for the launch directory). The model
+    /// picks up the conversation the record holds for the agent.
     ///
     /// # Errors
     /// Returns an error if the kernel cannot be constructed (e.g. the
@@ -78,12 +79,18 @@ impl KernelFactory {
             parent_chain,
             folder,
         )?);
+        let messages =
+            crate::record_loader::model_history(self.store.as_ref(), identity.agent_id)
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "Failed to rebuild model history from record");
+                    Vec::new()
+                });
         Ok(AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
             tool_gateway: KernelToolGateway::new(kernel.clone()),
             kernel,
-            messages: Vec::new(),
+            messages,
             definition: agent.definition.clone(),
         })
     }

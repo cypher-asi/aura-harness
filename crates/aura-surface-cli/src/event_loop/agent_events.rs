@@ -44,6 +44,8 @@ pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
 struct UiCommandSink {
     commands: mpsc::Sender<UiCommand>,
     state: ForwarderState,
+    /// Tool calls shown in the chat that have no result yet
+    open_tools: Vec<String>,
 }
 
 impl UiCommandSink {
@@ -92,6 +94,7 @@ impl TurnEventSink for UiCommandSink {
     async fn on_tool_start(&mut self, id: String, name: String) {
         self.finish_thinking_if_active().await;
         self.finish_streaming_if_active().await;
+        self.open_tools.push(id.clone());
         let _ = self
             .commands
             .send(UiCommand::ShowTool(ToolData {
@@ -117,6 +120,7 @@ impl TurnEventSink for UiCommandSink {
         is_error: bool,
         _image: Option<aura_core_types::ToolResultImage>,
     ) {
+        self.open_tools.retain(|id| *id != tool_use_id);
         let _ = self
             .commands
             .send(UiCommand::CompleteTool {
@@ -153,6 +157,7 @@ impl TurnEventSink for UiCommandSink {
         _tool_name: String,
         reason: String,
     ) {
+        self.open_tools.retain(|id| *id != tool_use_id);
         let _ = self
             .commands
             .send(UiCommand::CompleteTool {
@@ -173,6 +178,18 @@ impl TurnEventSink for UiCommandSink {
         self.finish_streaming_if_active().await;
         self.finish_thinking_if_active().await;
         self.state.had_text = false;
+        // The model starts its response over, so calls it was still
+        // writing will never get a result.
+        for id in std::mem::take(&mut self.open_tools) {
+            let _ = self
+                .commands
+                .send(UiCommand::CompleteTool {
+                    id,
+                    result: reason.clone(),
+                    success: false,
+                })
+                .await;
+        }
     }
 
     async fn on_warning(&mut self, message: String) {
@@ -230,6 +247,7 @@ pub(crate) async fn forward_agent_events(
     let mut sink = UiCommandSink {
         commands,
         state: ForwarderState::default(),
+        open_tools: Vec::new(),
     };
 
     while let Some(event) = rx.recv().await {

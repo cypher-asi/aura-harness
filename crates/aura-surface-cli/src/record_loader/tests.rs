@@ -65,6 +65,45 @@ fn conversation_history_rebuilds_chat_per_agent() {
 }
 
 #[test]
+fn model_history_resumes_the_conversation_since_the_last_session_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let entries = [
+        text_tx(agent, TransactionType::UserPrompt, "old question"),
+        text_tx(agent, TransactionType::AgentMsg, "old answer"),
+        Transaction::session_start(agent),
+        text_tx(agent, TransactionType::UserPrompt, "make an app"),
+        text_tx(agent, TransactionType::ToolExecution, "not json"),
+        text_tx(agent, TransactionType::AgentMsg, "Which stack?"),
+        text_tx(agent, TransactionType::UserPrompt, "a visualization"),
+        text_tx(agent, TransactionType::AgentMsg, ""),
+    ];
+    for (seq, tx) in (1..).zip(entries) {
+        append(&store, seq, tx);
+    }
+
+    let history = model_history(&store, agent).unwrap();
+    let rendered: Vec<(aura_model_reasoner::Role, &str)> = history
+        .iter()
+        .map(|m| match m.content.as_slice() {
+            [aura_model_reasoner::ContentBlock::Text { text }] => (m.role, text.as_str()),
+            other => panic!("expected one text block, got {other:?}"),
+        })
+        .collect();
+    use aura_model_reasoner::Role::{Assistant, User};
+    assert_eq!(
+        rendered,
+        [
+            (User, "make an app"),
+            (Assistant, "Which stack?"),
+            (User, "a visualization"),
+        ]
+    );
+    assert!(model_history(&store, AgentId::generate()).unwrap().is_empty());
+}
+
+#[test]
 fn recent_record_summaries_are_scoped_to_agent() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();

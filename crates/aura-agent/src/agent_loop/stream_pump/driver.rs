@@ -6,15 +6,14 @@
 //! sequence of `drive_stream` attempts lives one level up in
 //! [`super`].
 //!
-//! Layer E.4: takes an optional `event_tx` and emits per-`OutputItemDone`
-//! equivalents of the legacy `streaming::emit_stream_event` deltas
-//! (`TextDelta` / `ThinkingDelta` / `ToolStart` / `ToolInputSnapshot`)
-//! so consumers of the streaming sampling pump observe the same
-//! event surface they see on the buffered path. Granularity is at
-//! the block boundary (codex-shape `OutputItemDone` arrives once per
-//! finished block) rather than per-wire-frame — chat UI continuity
-//! for the pump-default flip; sub-block per-token deltas remain on
-//! the legacy buffered path until a follow-up wires a tap stream.
+//! Layer E.4: takes an optional `event_tx` and emits the same event
+//! surface as the legacy `streaming::emit_stream_event` path
+//! (`TextDelta` / `ThinkingDelta` / `ToolStart` / `ToolInputSnapshot`).
+//! Text and thinking stream per delta. A tool call is announced with
+//! `ToolStart` when its block opens and its partial arguments follow as
+//! throttled `ToolInputSnapshot`s, so a long tool input (a whole file
+//! for `write_file`) is visible while it streams. The executable call
+//! still waits for the block to close.
 
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -34,6 +33,69 @@ use crate::AgentError;
 
 use super::synthesize::synthesize_response;
 use super::{emit_event, StreamPumpOutcome};
+
+/// Shortest gap between two `ToolInputSnapshot`s of a streaming tool
+/// call. Each snapshot carries the whole input so far, so one per wire
+/// delta would copy a large `write_file` body thousands of times.
+const TOOL_INPUT_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
+
+/// The `tool_use` block currently streaming, announced to the client
+/// with `ToolStart` but not yet closed.
+struct OpenToolCall {
+    id: String,
+    name: String,
+    input_json: String,
+    last_snapshot: tokio::time::Instant,
+}
+
+/// Liveness/phase trail for one stream. `started` stamps the `t+` clock
+/// on phase-transition lines, and `logged_phase` debounces the trail so
+/// only an actual phase change emits a line (not every delta).
+///
+/// C2: a long, content-free time-to-first-token (or a long thinking /
+/// tool-input phase) used to be consumed silently. Each content-free
+/// frame now becomes throttled `model_thinking` progress so the aura-os
+/// sliding-idle watchdog (`AURA_TURN_MAX_TIMEOUT_SECS`) keeps resetting
+/// during slow model turns, without one event per ping.
+struct Liveness {
+    started: Instant,
+    logged_phase: Option<StreamPhase>,
+    heartbeat: Duration,
+    last_progress: Instant,
+}
+
+impl Liveness {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            logged_phase: None,
+            heartbeat: super::super::tool_pipeline::tool_heartbeat_interval(),
+            last_progress: Instant::now(),
+        }
+    }
+
+    /// Record a frame in `phase`. Pings are pure liveness and stay off
+    /// the transcript.
+    fn beat(&mut self, phase: StreamPhase, event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>) {
+        if phase != StreamPhase::Ping && self.logged_phase != Some(phase) {
+            console::stream_phase_line(phase, self.started.elapsed());
+            self.logged_phase = Some(phase);
+        }
+        if self.last_progress.elapsed() >= self.heartbeat {
+            let elapsed_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            emit_event(
+                event_tx,
+                AgentLoopEvent::Progress {
+                    stage: "model_thinking".to_string(),
+                    tool_name: None,
+                    elapsed_ms: Some(elapsed_ms),
+                    message: None,
+                },
+            );
+            self.last_progress = Instant::now();
+        }
+    }
+}
 
 /// Boxed per-tool future spawned into [`FuturesOrdered`] inside the
 /// pump. Carries the originating [`ToolCallInfo`] alongside the
@@ -96,19 +158,8 @@ pub(super) async fn drive_stream(
     let mut usage = Usage::default();
     let stream_event_timeout = config.stream_event_timeout;
     let per_tool_timeout = config.per_tool_timeout;
-    // Liveness/phase trail: `stream_started` stamps the `t+` clock on
-    // phase-transition lines, and `logged_phase` debounces the trail
-    // so only an actual phase change emits a line (not every delta).
-    let stream_started = Instant::now();
-    let mut logged_phase: Option<StreamPhase> = None;
-    // C2: a long, content-free time-to-first-token (or a long thinking /
-    // tool-input phase) produces only `Keepalive` events, which the
-    // legacy code consumed silently. We turn them into throttled
-    // `model_thinking` progress so the aura-os sliding-idle watchdog
-    // (`AURA_TURN_MAX_TIMEOUT_SECS`) keeps resetting during slow model
-    // turns, without flooding the broadcast with one event per ping.
-    let thinking_heartbeat = super::super::tool_pipeline::tool_heartbeat_interval();
-    let mut last_thinking_progress = Instant::now();
+    let mut liveness = Liveness::new();
+    let mut open_tool: Option<OpenToolCall> = None;
 
     loop {
         let next_step =
@@ -153,7 +204,7 @@ pub(super) async fn drive_stream(
                 let text_bytes = text_chunks.iter().map(String::len).sum();
                 console::stream_timeout_block(&console::StreamTimeoutView {
                     elapsed_ms,
-                    last_phase: logged_phase,
+                    last_phase: liveness.logged_phase,
                     thinking_bytes,
                     text_bytes,
                 });
@@ -179,6 +230,7 @@ pub(super) async fn drive_stream(
             }
             StreamStep::Event(event) => match event {
                 ResponseEvent::OutputItemDone(OutputItem::InvalidToolUse { id, name, reason }) => {
+                    open_tool = None;
                     let call = ToolCallInfo {
                         id: id.clone(),
                         name,
@@ -189,9 +241,11 @@ pub(super) async fn drive_stream(
                     cached_pairs.push((index, (call, ToolCallResult::error(id, reason))));
                 }
                 ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
+                    let announced = open_tool.take().is_some_and(|tool| tool.id == id);
                     if let Some(err) = handle_tool_use_event(
                         ctx,
                         ToolCallInfo { id, name, input },
+                        announced,
                         DriveLocals {
                             tool_calls_seen: &mut tool_calls_seen,
                             cached_pairs: &mut cached_pairs,
@@ -273,36 +327,46 @@ pub(super) async fn drive_stream(
                         thinking_bytes,
                     );
                 }
+                ResponseEvent::OutputToolUseStart { id, name } => {
+                    liveness.beat(StreamPhase::ToolInput, event_tx);
+                    emit_event(
+                        event_tx,
+                        AgentLoopEvent::ToolStart {
+                            id: id.clone(),
+                            name: name.clone(),
+                        },
+                    );
+                    open_tool = Some(OpenToolCall {
+                        id,
+                        name,
+                        input_json: String::new(),
+                        last_snapshot: tokio::time::Instant::now(),
+                    });
+                }
+                ResponseEvent::OutputToolInputDelta(chunk) => {
+                    liveness.beat(StreamPhase::ToolInput, event_tx);
+                    if let Some(tool) = open_tool.as_mut() {
+                        tool.input_json.push_str(&chunk);
+                        if tool.last_snapshot.elapsed() >= TOOL_INPUT_SNAPSHOT_INTERVAL {
+                            tool.last_snapshot = tokio::time::Instant::now();
+                            emit_event(
+                                event_tx,
+                                AgentLoopEvent::ToolInputSnapshot {
+                                    id: tool.id.clone(),
+                                    name: tool.name.clone(),
+                                    input: tool.input_json.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
                 ResponseEvent::Keepalive(phase) => {
                     // A ping or intra-block delta. Reaching this arm
                     // already reset the per-event liveness timeout
                     // (the stream yielded an item, so the loop
                     // re-enters `next_stream_step` with a fresh
-                    // window). A genuine content-phase change also
-                    // emits one transcript line so a long turn shows
-                    // its progress. Pings are pure liveness and stay
-                    // off the transcript to keep it quiet.
-                    if phase != StreamPhase::Ping && logged_phase != Some(phase) {
-                        console::stream_phase_line(phase, stream_started.elapsed());
-                        logged_phase = Some(phase);
-                    }
-                    // Throttled forward-progress signal for the server
-                    // watchdog: at most one `model_thinking` event per
-                    // `thinking_heartbeat`, regardless of ping cadence.
-                    if last_thinking_progress.elapsed() >= thinking_heartbeat {
-                        let elapsed_ms =
-                            u64::try_from(stream_started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        emit_event(
-                            event_tx,
-                            AgentLoopEvent::Progress {
-                                stage: "model_thinking".to_string(),
-                                tool_name: None,
-                                elapsed_ms: Some(elapsed_ms),
-                                message: None,
-                            },
-                        );
-                        last_thinking_progress = Instant::now();
-                    }
+                    // window).
+                    liveness.beat(phase, event_tx);
                 }
             },
         }
@@ -474,10 +538,12 @@ pub(super) struct DriveLocals<'a, 'b> {
 /// invariant-violation early-return must propagate to [`drive_stream`]
 /// (e.g. the per-run cache partition contract is broken). On the
 /// happy path returns `None` and pushes the call into the FIFO /
-/// cached_pairs bookkeeping.
+/// cached_pairs bookkeeping. `announced` is set when `ToolStart` already
+/// went out at block start.
 async fn handle_tool_use_event<'a, 'b>(
     ctx: super::StreamPumpCtx<'a>,
     call: ToolCallInfo,
+    announced: bool,
     locals: DriveLocals<'a, 'b>,
     per_tool_timeout: Duration,
     state: &mut super::super::LoopState,
@@ -498,19 +564,18 @@ async fn handle_tool_use_event<'a, 'b>(
     let submission_index = tool_calls_seen.len();
     tool_calls_seen.push(call.clone());
 
-    // Layer E.4: emit per-block ToolStart + ToolInputSnapshot so chat
-    // UX sees the same event sequence as the buffered streaming path
-    // (codex parity). The input snapshot carries the FULL parsed JSON
-    // (not partial) because the codex-shape stream surface only emits
-    // `OutputItemDone(ToolUse)` once the block has finished
-    // accumulating.
-    emit_event(
-        event_tx,
-        AgentLoopEvent::ToolStart {
-            id: call.id.clone(),
-            name: call.name.clone(),
-        },
-    );
+    // Layer E.4: emit ToolStart (unless the block start already did) and
+    // a final ToolInputSnapshot carrying the full parsed input, so chat
+    // UX sees the same event sequence as the buffered streaming path.
+    if !announced {
+        emit_event(
+            event_tx,
+            AgentLoopEvent::ToolStart {
+                id: call.id.clone(),
+                name: call.name.clone(),
+            },
+        );
+    }
     emit_event(
         event_tx,
         AgentLoopEvent::ToolInputSnapshot {

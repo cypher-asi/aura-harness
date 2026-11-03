@@ -180,6 +180,18 @@ pub enum ResponseEvent {
     /// so consumers that key off block close (e.g. the "Thought for
     /// Xs" pill) keep working.
     OutputThinkingDelta(String),
+    /// A `tool_use` block opened. Lets the client show the call while
+    /// its arguments stream in; the executable call still arrives as
+    /// [`OutputItem::ToolUse`] at `content_block_stop`.
+    OutputToolUseStart {
+        /// Provider-side tool-use id (e.g. `toolu_01…`).
+        id: String,
+        /// Tool name (e.g. `write_file`).
+        name: String,
+    },
+    /// A fragment of the open `tool_use` block's input JSON. Appending
+    /// the fragments in order gives the arguments so far.
+    OutputToolInputDelta(String),
     /// Terminal event for this sampling request. `end_turn` is `Some(true)`
     /// when the model signalled it intends to stop, `Some(false)` when
     /// it explicitly signalled more work, and `None` when the provider
@@ -370,12 +382,15 @@ impl AdapterState {
                     .push_back(Ok(ResponseEvent::Keepalive(StreamPhase::Connecting)));
             }
             StreamEvent::ContentBlockStart { content_type, .. } => {
-                let phase = match content_type {
-                    StreamContentType::Thinking => StreamPhase::Thinking,
-                    StreamContentType::Text => StreamPhase::Text,
-                    StreamContentType::ToolUse { .. } => StreamPhase::ToolInput,
+                let event = match content_type {
+                    StreamContentType::Thinking => ResponseEvent::Keepalive(StreamPhase::Thinking),
+                    StreamContentType::Text => ResponseEvent::Keepalive(StreamPhase::Text),
+                    StreamContentType::ToolUse { id, name } => ResponseEvent::OutputToolUseStart {
+                        id: id.clone(),
+                        name: name.clone(),
+                    },
                 };
-                self.pending.push_back(Ok(ResponseEvent::Keepalive(phase)));
+                self.pending.push_back(Ok(event));
             }
             // Carry the actual thinking text through so the pump can
             // stream it incrementally. The chunk also serves as a
@@ -396,9 +411,9 @@ impl AdapterState {
                 self.pending
                     .push_back(Ok(ResponseEvent::OutputTextDelta(text.clone())));
             }
-            StreamEvent::InputJsonDelta { .. } => {
+            StreamEvent::InputJsonDelta { partial_json } => {
                 self.pending
-                    .push_back(Ok(ResponseEvent::Keepalive(StreamPhase::ToolInput)));
+                    .push_back(Ok(ResponseEvent::OutputToolInputDelta(partial_json.clone())));
             }
         }
     }
@@ -635,6 +650,8 @@ mod tests {
                     ResponseEvent::Keepalive(_)
                         | ResponseEvent::OutputTextDelta(_)
                         | ResponseEvent::OutputThinkingDelta(_)
+                        | ResponseEvent::OutputToolUseStart { .. }
+                        | ResponseEvent::OutputToolInputDelta(_)
                 )
             })
             .collect();
@@ -709,6 +726,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_stream_from_event_stream_surfaces_tool_start_and_input() {
+        use crate::types::StreamContentType;
+        let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                content_type: StreamContentType::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "write_file".into(),
+                },
+            }),
+            Ok(StreamEvent::InputJsonDelta {
+                partial_json: "{\"path\":".into(),
+            }),
+            Ok(StreamEvent::InputJsonDelta {
+                partial_json: "\"a.html\"}".into(),
+            }),
+            Ok(StreamEvent::ContentBlockStop { index: 0 }),
+            Ok(StreamEvent::MessageStop),
+        ];
+        let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(events));
+        let mut stream = response_stream_from_event_stream(underlying);
+        let mut collected = Vec::new();
+        while let Some(event) = stream.next().await {
+            collected.push(event.expect("test stream never yields Err"));
+        }
+        assert!(matches!(
+            &collected[0],
+            ResponseEvent::OutputToolUseStart { id, name } if id == "toolu_1" && name == "write_file"
+        ));
+        let input: String = collected
+            .iter()
+            .filter_map(|e| match e {
+                ResponseEvent::OutputToolInputDelta(chunk) => Some(chunk.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(input, "{\"path\":\"a.html\"}");
+        assert!(collected.iter().any(|e| matches!(
+            e,
+            ResponseEvent::OutputItemDone(OutputItem::ToolUse { input, .. }) if input["path"] == "a.html"
+        )));
+    }
+
+    #[tokio::test]
     async fn response_stream_from_event_stream_propagates_transport_err() {
         use crate::types::StreamContentType;
         let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
@@ -759,11 +820,16 @@ mod tests {
         let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(events));
         let mut stream = response_stream_from_event_stream(underlying);
 
-        // Skip the liveness keepalives (message_start / content_block_start
-        // / input_json deltas) that now precede the terminal abort.
+        // Skip the message_start keepalive and the tool start / input
+        // deltas that precede the terminal abort.
         let terminal = loop {
             let event = stream.next().await.expect("stream should emit abort");
-            if !matches!(event, Ok(ResponseEvent::Keepalive(_))) {
+            if !matches!(
+                event,
+                Ok(ResponseEvent::Keepalive(_)
+                    | ResponseEvent::OutputToolUseStart { .. }
+                    | ResponseEvent::OutputToolInputDelta(_))
+            ) {
                 break event;
             }
         };

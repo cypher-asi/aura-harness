@@ -22,7 +22,7 @@ use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::Message;
 use aura_terminal::{UiCommand, UiEvent};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -51,6 +51,13 @@ pub struct EventLoopContext<'a> {
 /// Mutable state threaded through all event handlers.
 pub(super) struct LoopState<'a> {
     pub(super) commands: &'a mpsc::Sender<UiCommand>,
+    /// Events from the UI. A running turn reads them too, so Esc and quit
+    /// work mid-turn.
+    pub(super) events: &'a mut mpsc::Receiver<UiEvent>,
+    /// Events that arrived during a turn, handled once it ends
+    pub(super) deferred: VecDeque<UiEvent>,
+    /// Quit arrived during a turn
+    pub(super) quit_requested: bool,
     pub(super) agent_loop: &'a mut AgentLoop,
     pub(super) memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     pub(super) models: ModelSelection,
@@ -126,6 +133,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
 
     let mut state = LoopState {
         commands: &commands,
+        events,
+        deferred: VecDeque::new(),
+        quit_requested: false,
         agent_loop,
         memory_manager,
         models,
@@ -141,6 +151,15 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     handlers::announce_models(&mut state).await;
 
     loop {
+        if state.quit_requested {
+            break;
+        }
+        if let Some(event) = state.deferred.pop_front() {
+            if handle_ui_event(&mut state, event, &link_tx).await {
+                break;
+            }
+            continue;
+        }
         tokio::select! {
             Some(completion_tx) = process_completions.recv() => {
                 handle_completion(&mut state, completion_tx).await;
@@ -148,7 +167,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
             }
-            Some(event) = events.recv() => {
+            Some(event) = state.events.recv() => {
                 if handle_ui_event(&mut state, event, &link_tx).await {
                     break;
                 }
@@ -330,12 +349,23 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     state.sync_turn_base();
     let (config, tools) = state.hub.turn(state.session.definition.as_deref());
     let turn_loop = AgentLoop::new(config);
-    let (process_result, forwarded) = handlers::run_agent_turn(state, &turn_loop, tools).await;
+    let (process_result, forwarded, cancelled) =
+        handlers::run_agent_turn(state, &turn_loop, tools).await;
     state.park_finished_spawns();
+    if cancelled {
+        let _ = state
+            .commands
+            .send(UiCommand::ShowWarning("Turn cancelled".to_string()))
+            .await;
+    }
 
     match process_result {
         Ok(result) => {
             handlers::handle_agent_success(state, result, &forwarded).await;
+        }
+        Err(e) if cancelled => {
+            info!(error = %e, "Cancelled turn ended with an error");
+            let _ = state.commands.send(UiCommand::Complete).await;
         }
         Err(e) => {
             error!(error = %e, "Agent loop failed");

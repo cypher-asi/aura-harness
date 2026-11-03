@@ -5,7 +5,7 @@
 use super::command::wrap_spans;
 use super::panels::format_elapsed;
 use super::text::{display_width, wrap_words};
-use crate::app::format::{file_name, format_tool_label};
+use crate::app::format::{file_name, format_tool_label, is_complete_json, parse_tool_args};
 use crate::components::{Activity, ThinkingStep, ToolStatus, ToolStep};
 use crate::Theme;
 use ratatui::{
@@ -26,6 +26,9 @@ const LIVE_THINKING_LINES: usize = 3;
 
 /// Output lines shown in an expanded tool block.
 const MAX_RESULT_LINES: usize = 200;
+
+/// Streaming tool input at least this large shows its size in the header.
+const STREAMING_SIZE_MIN_BYTES: usize = 1024;
 
 /// Thinking shorter than this reads `Thought briefly`.
 const BRIEF_THOUGHT_MS: u64 = 2000;
@@ -153,10 +156,10 @@ impl Tally {
             self.failed += 1;
         }
         let path = || {
-            serde_json::from_str::<serde_json::Value>(&tool.args)
-                .ok()
-                .and_then(|args| args.get("path")?.as_str().map(str::to_string))
-                .unwrap_or_else(|| ".".to_string())
+            parse_tool_args(&tool.args)
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(|| ".".to_string(), str::to_string)
         };
         match tool.name.as_str() {
             "read_file" | "list_files" | "stat_file" => {
@@ -439,13 +442,17 @@ fn tool_header(
     Line::from(spans)
 }
 
-/// ` · retrying (2/3) · 12s` while running, ` · error: …` once failed.
+/// ` · retrying (2/3) · 12s` while running, with ` · 14 KB` while a large
+/// input is still streaming in; ` · error: …` once failed.
 fn tool_meta(step: &ToolStep) -> String {
     let mut parts = Vec::new();
     match step.status {
         ToolStatus::Running => {
             if let Some((attempt, max)) = step.retry {
                 parts.push(format!("retrying ({attempt}/{max})"));
+            }
+            if step.args.len() >= STREAMING_SIZE_MIN_BYTES && !is_complete_json(&step.args) {
+                parts.push(format!("{} KB", step.args.len() / 1024));
             }
             if let Some(elapsed) = live_elapsed(step.started) {
                 parts.push(elapsed);
@@ -659,6 +666,26 @@ mod tests {
         assert_eq!(display_width(header), 40, "{header}");
         assert!(header.starts_with("  ⠋ Ran xxx"), "{header}");
         assert!(header.ends_with("… · retrying (2/3)"), "{header}");
+    }
+
+    #[test]
+    fn streaming_write_shows_its_file_and_size() {
+        let args = format!(
+            r#"{{"path":"web/index.html","content":"{}"#,
+            "x".repeat(3000)
+        );
+        let step = tool_step("write_file", &args, ToolStatus::Running, None);
+        let lines = activity_lines(&step, false, false, "⠋", 80, &Theme::default());
+        assert_eq!(texts(&lines), ["  ⠋ Wrote index.html · 2 KB"]);
+
+        let done = tool_step(
+            "write_file",
+            r#"{"path":"web/index.html","content":"x"}"#,
+            ToolStatus::Running,
+            None,
+        );
+        let lines = activity_lines(&done, false, false, "⠋", 80, &Theme::default());
+        assert_eq!(texts(&lines), ["  ⠋ Wrote index.html"]);
     }
 
     #[test]

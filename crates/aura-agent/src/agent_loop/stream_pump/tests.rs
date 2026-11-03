@@ -603,6 +603,81 @@ async fn pump_emits_per_delta_events() {
     );
 }
 
+/// A tool call shows up when its block opens, and its arguments follow
+/// as throttled partial snapshots while they stream, so a long
+/// `write_file` body is not a silent gap.
+#[tokio::test(start_paused = true)]
+async fn pump_streams_tool_input_while_the_block_is_open() {
+    let executor = CountingExecutor::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
+    let events = vec![
+        ResponseEvent::OutputToolUseStart {
+            id: "toolu_w".into(),
+            name: "write_file".into(),
+        },
+        ResponseEvent::OutputToolInputDelta("{\"path\":\"a.html\",".into()),
+        ResponseEvent::OutputToolInputDelta("\"content\":\"<h1>".into()),
+        ResponseEvent::OutputToolInputDelta("</h1>\"}".into()),
+        ResponseEvent::OutputItemDone(OutputItem::ToolUse {
+            id: "toolu_w".into(),
+            name: "write_file".into(),
+            input: serde_json::json!({ "path": "a.html", "content": "<h1></h1>" }),
+        }),
+        ResponseEvent::Completed {
+            stop_reason: None,
+            end_turn: Some(false),
+            usage: Usage::new(1, 1),
+        },
+    ];
+    let stream: ResponseEventStream = Box::pin(futures_util::StreamExt::then(
+        futures_util::stream::iter(events),
+        |event| async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Ok::<_, aura_model_reasoner::StreamError>(event)
+        },
+    ));
+    let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+
+    let outcome = drive_stream(
+        StreamPumpCtx {
+            event_tx: Some(&tx),
+            ..test_ctx(&config, &executor)
+        },
+        stream,
+        &mut state,
+        "test-model",
+    )
+    .await;
+    assert!(matches!(outcome, StreamPumpOutcome::Completed { .. }));
+    drop(tx);
+
+    let mut events: Vec<AgentLoopEvent> = Vec::new();
+    while let Some(ev) = rx.recv().await {
+        events.push(ev);
+    }
+    let starts = events
+        .iter()
+        .filter(|e| matches!(e, AgentLoopEvent::ToolStart { id, .. } if id == "toolu_w"))
+        .count();
+    assert_eq!(starts, 1, "ToolStart must not repeat at block close: {events:?}");
+    let snapshots: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentLoopEvent::ToolInputSnapshot { input, .. } => Some(input.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        snapshots.first(),
+        Some(&"{\"path\":\"a.html\","),
+        "partial input must stream before the block closes: {events:?}"
+    );
+    let full: serde_json::Value =
+        serde_json::from_str(snapshots.last().expect("final snapshot")).expect("full JSON");
+    assert_eq!(full["content"], "<h1></h1>");
+}
+
 /// Regression: thinking (and text) must stream to the client
 /// *incrementally* — one `ThinkingDelta` per wire delta as it
 /// arrives — not a single coarse delta at block close. Feeds a

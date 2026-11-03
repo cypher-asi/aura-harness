@@ -8,7 +8,7 @@ use aura_core_types::{
     ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
     RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
 };
-use aura_model_reasoner::Usage;
+use aura_model_reasoner::{Message, Usage};
 use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
     events::{
@@ -80,6 +80,38 @@ pub fn load_existing_records(
             )));
         }
     }
+}
+
+/// Rebuild the conversation the model sees from an agent's record: its
+/// prompts and replies since the last session start, oldest first. Tool
+/// calls are left out; their `tool_use`/`tool_result` pairs can't be
+/// replayed safely, and the replies already describe what they did.
+///
+/// # Errors
+/// Returns the store error if the head sequence or scan fails.
+pub fn model_history(store: &dyn ReadStore, agent_id: AgentId) -> Result<Vec<Message>, StoreError> {
+    let mut messages = Vec::new();
+    for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
+        let tx = &entry.tx;
+        let text = || String::from_utf8_lossy(&tx.payload).trim().to_string();
+        match tx.tx_type {
+            TransactionType::SessionStart => messages.clear(),
+            TransactionType::UserPrompt => {
+                let text = text();
+                if !text.is_empty() {
+                    messages.push(Message::user(text));
+                }
+            }
+            TransactionType::AgentMsg => {
+                let text = text();
+                if !text.is_empty() {
+                    messages.push(Message::assistant(text));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(messages)
 }
 
 /// Rebuild an agent's chat transcript from its record, oldest first.
