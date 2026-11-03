@@ -644,8 +644,8 @@ fn test_chat_text_is_centered_with_margins() {
     let (left, right) = gaps(Rect::new(10, 0, 61, 20));
     assert!(left.abs_diff(right) <= 1);
     let wide = Rect::new(0, 0, 200, 20);
-    assert_eq!(centered_text_area(wide).width, 100);
-    assert_eq!(gaps(wide), (50, 50));
+    assert_eq!(centered_text_area(wide).width, 88);
+    assert_eq!(gaps(wide), (56, 56));
 }
 
 fn submit(app: &mut crate::App, text: &str) {

@@ -57,7 +57,9 @@ fn inline_bold_italic_strike_and_code() {
     let both = span_style(&spans, "both");
     assert!(has(both, Modifier::BOLD) && has(both, Modifier::ITALIC));
     assert!(has(span_style(&spans, "gone"), Modifier::CROSSED_OUT));
-    assert_eq!(span_style(&spans, "x * y").fg, Some(theme().colors.primary));
+    let code = span_style(&spans, "x * y");
+    assert_eq!(code.fg, Some(theme().colors.primary));
+    assert_eq!(code.bg, Some(theme().colors.surface));
 }
 
 #[test]
@@ -127,11 +129,31 @@ fn inline_link_with_url_as_label_shows_url_once() {
 #[test]
 fn headings_drop_hashes_and_are_bold() {
     let lines = render("# Title\n### Sub ###\n#hashtag", 40);
-    assert_eq!(texts(&lines), ["Title", "Sub", "#hashtag"]);
+    assert_eq!(texts(&lines), ["Title", "", "Sub", "#hashtag"]);
     assert!(has(lines[0].spans[0].style, Modifier::BOLD));
     assert!(has(lines[0].spans[0].style, Modifier::UNDERLINED));
-    assert!(has(lines[1].spans[0].style, Modifier::BOLD));
-    assert!(!has(lines[2].spans[0].style, Modifier::BOLD));
+    assert!(has(lines[2].spans[0].style, Modifier::BOLD));
+    assert_eq!(lines[2].spans[0].style.fg, Some(theme().colors.foreground));
+    assert!(!has(lines[3].spans[0].style, Modifier::BOLD));
+}
+
+#[test]
+fn headings_after_text_get_one_blank_line_above() {
+    let lines = render("intro\n## Next\nbody\n\n## Last", 40);
+    assert_eq!(texts(&lines), ["intro", "", "Next", "body", "", "Last"]);
+}
+
+#[test]
+fn bold_body_text_is_brighter_than_the_body() {
+    let theme = theme();
+    let body = Style::default().fg(theme.colors.text);
+    let spans = parse_inline("plain **strong** [**link**](https://x.dev)", body, &theme);
+    assert_eq!(span_style(&spans, "plain ").fg, Some(theme.colors.text));
+    assert_eq!(
+        span_style(&spans, "strong").fg,
+        Some(theme.colors.foreground)
+    );
+    assert_eq!(span_style(&spans, "link").fg, Some(theme.colors.warning));
 }
 
 #[test]

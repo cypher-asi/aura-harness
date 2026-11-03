@@ -177,7 +177,7 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
 const CHAT_SIDE_MARGIN: u16 = 4;
 
 /// Widest the chat text runs; wider panels grow the side margins instead.
-const CHAT_MAX_TEXT_WIDTH: u16 = 100;
+const CHAT_MAX_TEXT_WIDTH: u16 = 88;
 
 /// The chat text column, horizontally centered in `area` below a blank row.
 pub(super) fn centered_text_area(area: Rect) -> Rect {

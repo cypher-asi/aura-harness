@@ -24,7 +24,18 @@ pub(crate) fn parse_inline(text: &str, base: Style, theme: &Theme) -> Vec<Span<'
 }
 
 fn code_style(base: Style, theme: &Theme) -> Style {
-    base.fg(theme.colors.primary)
+    base.fg(theme.colors.primary).bg(theme.colors.surface)
+}
+
+/// Bold body text is drawn brighter than the body so it reads as emphasis;
+/// bold inside links, code or colored headings keeps its color.
+fn emphasis_style(base: Style, modifier: Modifier, theme: &Theme) -> Style {
+    let style = base.add_modifier(modifier);
+    if modifier.contains(Modifier::BOLD) && base.fg == Some(theme.colors.text) {
+        style.fg(theme.colors.foreground)
+    } else {
+        style
+    }
 }
 
 fn link_style(base: Style, theme: &Theme) -> Style {
@@ -66,7 +77,7 @@ impl Inline<'_> {
                 }),
                 b'*' | b'_' | b'~' => emphasis(text, i).map(|(inner, modifier, end)| {
                     self.push(&text[literal_start..i], style);
-                    self.parse(inner, style.add_modifier(modifier));
+                    self.parse(inner, emphasis_style(style, modifier, self.theme));
                     end
                 }),
                 b'[' | b'!' => link(text, i).map(|link| {

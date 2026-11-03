@@ -48,6 +48,7 @@ impl Theme {
             ThemeColors {
                 background: Color::Rgb(26, 26, 26),
                 foreground: Color::White,
+                text: Color::Rgb(210, 210, 210),
                 primary: Color::White,
                 secondary: Color::Rgb(136, 136, 136),
                 success: Color::Green,
@@ -71,6 +72,7 @@ impl Theme {
             ThemeColors {
                 background: Color::Black,
                 foreground: Color::Rgb(0, 255, 0),
+                text: Color::Rgb(0, 200, 0),
                 primary: Color::Rgb(0, 255, 0),
                 secondary: Color::Rgb(0, 128, 0),
                 success: Color::Rgb(0, 255, 0),
@@ -94,6 +96,7 @@ impl Theme {
             ThemeColors {
                 background: Color::Rgb(26, 26, 46),
                 foreground: Color::White,
+                text: Color::Rgb(220, 220, 232),
                 primary: Color::Rgb(255, 46, 151),  // hot pink
                 secondary: Color::Rgb(0, 212, 255), // electric blue
                 success: Color::Rgb(57, 255, 20),   // neon green
@@ -153,6 +156,7 @@ impl Default for Theme {
 /// | Purple      | #cb01f4  | Pending states, secondary accent   |
 /// | Red         | #f4012a  | Errors, danger                     |
 /// | White       | #ffffff  | Primary text                       |
+/// | Light gray  | #d4d4d4  | Body text of chat replies          |
 /// | Gray        | #888888  | Muted text, secondary info         |
 /// | Black       | #0d0d0d  | Background, text on selection      |
 /// | Sky         | #7cd4ff  | Selected list row                  |
@@ -164,6 +168,9 @@ pub struct ThemeColors {
     pub background: Color,
     /// Foreground/primary text color (#ffffff white)
     pub foreground: Color,
+    /// Body text of chat replies, a step softer than `foreground` so bold
+    /// text and headings stand out (#d4d4d4 light gray)
+    pub text: Color,
     /// Primary accent color - blue (#01a4f4)
     pub primary: Color,
     /// Secondary accent color - purple (#cb01f4)
@@ -317,6 +324,7 @@ mod tests {
         let colors = ThemeColors {
             background: Color::Black,
             foreground: Color::White,
+            text: Color::Gray,
             primary: Color::Blue,
             secondary: Color::Cyan,
             success: Color::Green,

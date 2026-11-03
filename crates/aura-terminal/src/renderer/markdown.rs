@@ -59,6 +59,9 @@ fn render_block_line(
     if trimmed.is_empty() {
         out.push(Line::default());
     } else if let Some((level, title)) = heading(trimmed) {
+        if out.last().is_some_and(|last| last.width() > 0) {
+            out.push(Line::default());
+        }
         let spans = parse_inline(title, heading_style(level, base, theme), theme);
         out.extend(wrap_spans(&spans, width, &[], &[]));
     } else if is_rule(trimmed) {
@@ -110,7 +113,7 @@ fn heading_style(level: usize, base: Style, theme: &Theme) -> Style {
             .fg(theme.colors.primary)
             .add_modifier(Modifier::UNDERLINED),
         2 => bold.fg(theme.colors.primary),
-        _ => bold,
+        _ => bold.fg(theme.colors.foreground),
     }
 }
 
