@@ -73,6 +73,8 @@ impl ToolAuditObserver for UiToolAuditObserver {
                     timestamp_ms: Some(entry.tx.ts_ms),
                     command: None,
                     activity: None,
+                    model: None,
+                    usage: None,
                 }));
             }
         }

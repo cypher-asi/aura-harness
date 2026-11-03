@@ -1,6 +1,6 @@
 use super::api_types::{ApiRequest, ApiResponse, StreamingApiRequest};
 use super::convert::{
-    build_system_block, convert_messages_to_api, convert_response_to_aura, convert_tool_choice,
+    build_request_system, convert_messages_to_api, convert_response_to_aura, convert_tool_choice,
     convert_tool_entries_to_api, request_uses_computer_tool, resolve_output_config,
     resolve_thinking, COMPUTER_USE_BETA,
 };
@@ -2857,7 +2857,7 @@ impl ModelProvider for AnthropicProvider {
                     self.anthropic_request_features_enabled(request_ref, &model);
                 let openai_features_enabled =
                     Self::supports_openai_proxy_features(request_ref, &model);
-                let system = build_system_block(&request_ref.system, prompt_caching_enabled);
+                let system = build_request_system(request_ref, prompt_caching_enabled);
                 let (openai_cache_key, openai_cache_retention) = if openai_features_enabled {
                     (
                         // Already clamped to OpenAI's 64-char limit when the
@@ -2870,7 +2870,7 @@ impl ModelProvider for AnthropicProvider {
                 } else {
                     (None, None)
                 };
-                let api_request = build_api_request(
+                let mut api_request = build_api_request(
                     request_ref,
                     &model,
                     system.as_ref(),
@@ -2879,6 +2879,9 @@ impl ModelProvider for AnthropicProvider {
                     openai_cache_key,
                     openai_cache_retention,
                 );
+                if !self.router_body_extensions {
+                    api_request.reasoning_effort = None;
+                }
 
                 debug!(
                     model = %model,
@@ -3003,7 +3006,7 @@ impl ModelProvider for AnthropicProvider {
                     self.anthropic_request_features_enabled(request_ref, &model);
                 let openai_features_enabled =
                     Self::supports_openai_proxy_features(request_ref, &model);
-                let system = build_system_block(&request_ref.system, prompt_caching_enabled);
+                let system = build_request_system(request_ref, prompt_caching_enabled);
                 let thinking = anthropic_features_enabled
                     .then(|| resolve_thinking(request_ref, &model))
                     .flatten();
@@ -3056,7 +3059,8 @@ impl ModelProvider for AnthropicProvider {
                     output_config,
                     reasoning_effort: request_ref
                         .thinking_effort
-                        .and_then(|effort| effort.reasoning_effort_wire()),
+                        .and_then(|effort| effort.reasoning_effort_wire())
+                        .filter(|_| self.router_body_extensions),
                     prompt_cache_key: openai_cache_key,
                     prompt_cache_retention: openai_cache_retention,
                 };

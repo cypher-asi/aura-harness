@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 const REGISTRY_FILE: &str = "agents.json";
 const LEGACY_IDENTITY_FILE: &str = "agent_identity.txt";
 const DEFAULT_AGENT_NAME: &str = "Terminal Agent";
+/// Name of the agent created with a new project.
+const DEFAULT_PROJECT_AGENT: &str = "Agent";
 
 /// One agent known to the terminal UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +29,14 @@ pub struct RegisteredAgent {
     /// ZNS id of the agent that spawned this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// Name of the project this root agent heads. Absent on older registries
+    /// and on agents spawned under another agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Folder this root agent's project works in. Absent on projects
+    /// created before folders were picked; they use the launch directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<PathBuf>,
 }
 
 impl RegisteredAgent {
@@ -83,6 +93,8 @@ impl AgentRegistry {
                 created_at: Utc::now(),
                 definition: None,
                 parent: None,
+                project: None,
+                folder: None,
             });
             registry.save()?;
         }
@@ -130,7 +142,84 @@ impl AgentRegistry {
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| format!("Agent {}", self.file.agents.len() + 1));
-        self.push(name, None, None)
+        self.push(Self::new_agent(name))
+    }
+
+    /// Register a project: a root agent named [`DEFAULT_PROJECT_AGENT`]
+    /// under the project name `name`, working in `folder`.
+    ///
+    /// # Errors
+    /// Returns an error if `name` is blank, `folder` is not a directory, or
+    /// the registry cannot be written.
+    pub fn create_project(&mut self, name: &str, folder: &Path) -> anyhow::Result<RegisteredAgent> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("project name cannot be empty");
+        }
+        let folder = folder
+            .canonicalize()
+            .with_context(|| format!("opening {}", folder.display()))?;
+        if !folder.is_dir() {
+            anyhow::bail!("{} is not a folder", folder.display());
+        }
+        self.push(RegisteredAgent {
+            project: Some(name.to_string()),
+            folder: Some(folder),
+            ..Self::new_agent(DEFAULT_PROJECT_AGENT.to_string())
+        })
+    }
+
+    /// Folder of the project that contains `agent_id`, if it has one.
+    #[must_use]
+    pub fn project_folder(&self, agent_id: AgentId) -> Option<PathBuf> {
+        let index = self
+            .file
+            .agents
+            .iter()
+            .position(|agent| agent.agent_id() == agent_id)?;
+        self.file.agents[self.root_of(index)].folder.clone()
+    }
+
+    /// Set the project name on the root agent that contains `agent_id`.
+    ///
+    /// # Errors
+    /// Returns an error if the name is blank, the agent is unknown, or the
+    /// registry cannot be written.
+    pub fn rename_project(&mut self, agent_id: AgentId, name: &str) -> anyhow::Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("project name cannot be empty");
+        }
+        let Some(start) = self
+            .file
+            .agents
+            .iter()
+            .position(|agent| agent.agent_id() == agent_id)
+        else {
+            anyhow::bail!("no such agent");
+        };
+        let root = self.root_of(start);
+        self.file.agents[root].project = Some(name.to_string());
+        self.save()
+    }
+
+    /// Walk `parent` links to the agent that heads a project.
+    fn root_of(&self, mut index: usize) -> usize {
+        for _ in 0..self.file.agents.len() {
+            let Some(parent) = self.file.agents[index].parent.as_deref() else {
+                break;
+            };
+            let Some(parent_index) = self
+                .file
+                .agents
+                .iter()
+                .position(|agent| agent.zns_id == parent)
+            else {
+                break;
+            };
+            index = parent_index;
+        }
+        index
     }
 
     /// Register an instance of the permanent agent `definition`, named
@@ -151,22 +240,27 @@ impl AgentRegistry {
             .filter(|a| a.definition.as_deref() == Some(definition))
             .count();
         let name = format!("{definition} #{}", count + 1);
-        self.push(name, Some(definition.to_string()), parent)
+        self.push(RegisteredAgent {
+            definition: Some(definition.to_string()),
+            parent,
+            ..Self::new_agent(name)
+        })
     }
 
-    fn push(
-        &mut self,
-        name: String,
-        definition: Option<String>,
-        parent: Option<String>,
-    ) -> anyhow::Result<RegisteredAgent> {
-        let agent = RegisteredAgent {
+    /// A fresh agent named `name`, not yet registered.
+    fn new_agent(name: String) -> RegisteredAgent {
+        RegisteredAgent {
             zns_id: format!("0://terminal/{}", uuid::Uuid::new_v4()),
             name,
             created_at: Utc::now(),
-            definition,
-            parent,
-        };
+            definition: None,
+            parent: None,
+            project: None,
+            folder: None,
+        }
+    }
+
+    fn push(&mut self, agent: RegisteredAgent) -> anyhow::Result<RegisteredAgent> {
         self.file.agents.push(agent.clone());
         self.save()?;
         Ok(agent)
@@ -315,5 +409,98 @@ mod tests {
                 (second.name.as_str(), 0),
             ]
         );
+    }
+
+    #[test]
+    fn create_project_names_it_and_adds_a_default_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let created = registry
+            .create_project("  Website  ", folder.path())
+            .unwrap();
+        assert_eq!(created.name, "Agent");
+        assert_eq!(created.project.as_deref(), Some("Website"));
+        assert!(created.parent.is_none());
+        let canonical = folder.path().canonicalize().unwrap();
+        assert_eq!(created.folder.as_deref(), Some(canonical.as_path()));
+
+        let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let stored = reloaded
+            .agents()
+            .iter()
+            .find(|agent| agent.zns_id == created.zns_id)
+            .unwrap();
+        assert_eq!(stored.project.as_deref(), Some("Website"));
+        assert_eq!(stored.folder.as_deref(), Some(canonical.as_path()));
+        assert!(registry.create_project("   ", folder.path()).is_err());
+    }
+
+    #[test]
+    fn create_project_rejects_a_missing_folder_or_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let before = registry.agents().len();
+        assert!(registry
+            .create_project("Gone", &dir.path().join("missing"))
+            .is_err());
+        let file = dir.path().join("notes.txt");
+        fs::write(&file, "").unwrap();
+        assert!(registry.create_project("File", &file).is_err());
+        assert_eq!(registry.agents().len(), before);
+    }
+
+    #[test]
+    fn spawned_agents_use_their_projects_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let legacy = registry.active().clone();
+        let root = registry.create_project("Site", folder.path()).unwrap();
+        let child = registry
+            .create_instance("reviewer", Some(root.zns_id.clone()))
+            .unwrap();
+        let grandchild = registry
+            .create_instance("explorer", Some(child.zns_id.clone()))
+            .unwrap();
+
+        let canonical = folder.path().canonicalize().unwrap();
+        assert_eq!(
+            registry.project_folder(grandchild.agent_id()),
+            Some(canonical)
+        );
+        assert!(child.folder.is_none());
+        assert_eq!(registry.project_folder(legacy.agent_id()), None);
+    }
+
+    #[test]
+    fn rename_project_updates_the_root_even_from_a_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let root = registry.active().clone();
+        let child = registry
+            .create_instance("reviewer", Some(root.zns_id.clone()))
+            .unwrap();
+        registry
+            .rename_project(child.agent_id(), "Renamed")
+            .unwrap();
+        let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
+        assert_eq!(
+            reloaded
+                .agents()
+                .iter()
+                .find(|agent| agent.zns_id == root.zns_id)
+                .unwrap()
+                .project
+                .as_deref(),
+            Some("Renamed")
+        );
+        assert!(reloaded
+            .agents()
+            .iter()
+            .find(|agent| agent.zns_id == child.zns_id)
+            .unwrap()
+            .project
+            .is_none());
     }
 }

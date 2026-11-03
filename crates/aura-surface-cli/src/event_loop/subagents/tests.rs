@@ -51,7 +51,7 @@ fn fixture(reply: &str) -> Fixture {
         let kernel_store = Arc::clone(&store);
         KernelFactory::new(
             store,
-            Box::new(move |agent_id, _parent_chain| {
+            Box::new(move |agent_id, _parent_chain, folder| {
                 let provider: Arc<dyn ModelProvider + Send + Sync> =
                     Arc::new(MockProvider::simple_response(reply.clone()));
                 Ok(Kernel::new(
@@ -59,7 +59,7 @@ fn fixture(reply: &str) -> Fixture {
                     provider,
                     build_executor_router_with_config(&ToolConfig::for_autonomous_dev_loop()).0,
                     KernelConfig {
-                        workspace_base: workspace_root.clone(),
+                        workspace_base: folder.unwrap_or_else(|| workspace_root.clone()),
                         use_workspace_base_as_root: true,
                         ..KernelConfig::default()
                     },
@@ -97,16 +97,31 @@ fn task_tool_lists_permanent_agents() {
     assert_eq!(tool.name, TASK_TOOL_NAME);
     assert_eq!(
         tool.input_schema["properties"]["subagent_type"]["enum"],
-        serde_json::json!(["explorer", "reviewer"])
+        serde_json::json!([
+            "engineer",
+            "explorer",
+            "frontend-engineer",
+            "product-manager",
+            "reviewer",
+            "rust-engineer",
+            "ui-designer",
+            "web-designer"
+        ])
     );
     assert!(tool.description.contains("- reviewer: "));
+    assert!(tool
+        .description
+        .contains("- ui-designer: Product UI designer"));
 }
 
 #[test]
 fn no_task_tool_without_permanent_agents() {
     let data = TempDir::new().unwrap();
-    std::fs::create_dir_all(data.path().join("agent_defs")).unwrap();
-    let definitions = AgentDefinitions::load_or_seed(data.path()).unwrap();
+    let mut definitions = AgentDefinitions::load_or_seed(data.path()).unwrap();
+    let names: Vec<String> = definitions.all().iter().map(|d| d.name.clone()).collect();
+    for name in names {
+        definitions.delete(&name).unwrap();
+    }
 
     assert!(task_tool_definition(&definitions).is_none());
 }
@@ -125,6 +140,11 @@ fn turn_applies_definition_rules_and_tools() {
     assert!(tools.iter().all(|t| t.name != TASK_TOOL_NAME));
     assert!(tools.iter().any(|t| t.name == "read_file"));
     assert!(tools.iter().all(|t| t.name != "write_file"));
+
+    let (config, tools) = fixture.hub.turn(Some("ui-designer"));
+    assert!(config.system_prompt.contains("--accent-ink: #1a1a1a;"));
+    assert!(tools.iter().any(|t| t.name == "write_file"));
+    assert!(tools.iter().all(|t| t.name != TASK_TOOL_NAME));
 }
 
 #[tokio::test]
@@ -139,7 +159,7 @@ async fn unknown_permanent_agent_is_rejected() {
         .unwrap();
 
     assert!(
-        matches!(&result.exit, SubagentExit::Rejected { reason } if reason.contains("explorer, reviewer"))
+        matches!(&result.exit, SubagentExit::Rejected { reason } if reason.contains("explorer, frontend-engineer"))
     );
     assert_eq!(lock(&fixture.hub.registry).agents().len(), 1);
 }
@@ -186,4 +206,26 @@ async fn spawn_runs_an_instance_under_its_parent() {
         }
     }
     assert!(saw_running);
+}
+
+#[tokio::test]
+async fn spawned_instance_works_in_its_projects_folder() {
+    let fixture = fixture("Done.");
+    let folder = TempDir::new().unwrap();
+    let parent = lock(&fixture.hub.registry)
+        .create_project("Site", folder.path())
+        .unwrap();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(parent.agent_id(), "reviewer", "Review it"))
+        .await
+        .unwrap();
+
+    assert!(matches!(result.exit, SubagentExit::Completed));
+    let finished = fixture.hub.take_finished();
+    assert_eq!(
+        finished[0].kernel.agent_workspace(),
+        folder.path().canonicalize().unwrap()
+    );
 }

@@ -3,7 +3,9 @@
 use super::activity::activity_lines;
 use super::command::shell_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
-use super::segments::{message_header, message_style, render_code_segment, render_text_segment};
+use super::segments::{
+    message_header, message_style, render_code_segment, render_text_segment, reply_meta,
+};
 use crate::components::Message;
 use crate::Theme;
 use ratatui::text::Line;
@@ -91,7 +93,10 @@ pub(super) fn message_lines(
         return shell_lines(run, &timestamp, width, theme);
     }
     let (nick, nick_color, msg_color) = message_style(message.role(), theme);
-    let mut lines = vec![message_header(nick, nick_color, &timestamp, theme)];
+    let meta = reply_meta(message.model(), message.usage());
+    let mut lines = vec![message_header(
+        nick, nick_color, &timestamp, &meta, width, theme,
+    )];
     for segment in parse_content_segments(message.content()) {
         match segment {
             ContentSegment::Text(text) => {

@@ -1,5 +1,6 @@
 //! Handler functions for agent turns, auth, and session lifecycle.
 
+use super::agent_events::ForwarderState;
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
@@ -15,7 +16,7 @@ pub(super) async fn run_agent_turn(
     tools: Vec<aura_model_reasoner::ToolDefinition>,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
-    bool,
+    ForwarderState,
 ) {
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
 
@@ -48,7 +49,7 @@ pub(super) async fn run_agent_turn(
         }
     };
 
-    let streamed_text = match forwarder.await {
+    let forwarded = match forwarder.await {
         Ok(fwd_state) => {
             if fwd_state.thinking_active {
                 let _ = state.commands.send(UiCommand::FinishThinking).await;
@@ -56,26 +57,26 @@ pub(super) async fn run_agent_turn(
             if fwd_state.streaming_active {
                 let _ = state.commands.send(UiCommand::FinishStreaming).await;
             }
-            fwd_state.had_text
+            fwd_state
         }
         Err(e) => {
             warn!(error = %e, "Event forwarder panicked");
-            false
+            ForwarderState::default()
         }
     };
 
-    (process_result, streamed_text)
+    (process_result, forwarded)
 }
 
 pub(super) async fn handle_agent_success(
     state: &mut LoopState<'_>,
     result: aura_agent::AgentLoopResult,
-    streamed_text: bool,
+    forwarded: &ForwarderState,
 ) {
     state.session.messages = result.messages.clone();
 
     persist_response_via_kernel(state, &result.total_text).await;
-    emit_response_to_ui(state, &result, streamed_text).await;
+    emit_response_to_ui(state, &result, forwarded).await;
 
     // Memory ingestion now fires automatically via TurnObserver inside
     // AgentLoop::run_with_events — no manual call needed here.
@@ -126,13 +127,13 @@ async fn persist_response_via_kernel(state: &mut LoopState<'_>, total_text: &str
 async fn emit_response_to_ui(
     state: &LoopState<'_>,
     result: &aura_agent::AgentLoopResult,
-    streamed_text: bool,
+    forwarded: &ForwarderState,
 ) {
     if !result.total_text.is_empty() {
         let preview: String = result.total_text.chars().take(100).collect();
         info!(response_preview = %preview, "Model response received");
 
-        if !streamed_text {
+        if !forwarded.had_text {
             let _ = state
                 .commands
                 .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
@@ -142,6 +143,8 @@ async fn emit_response_to_ui(
                     timestamp_ms: None,
                     command: None,
                     activity: None,
+                    model: forwarded.reply_model.clone(),
+                    usage: forwarded.reply_usage,
                 }))
                 .await;
         }
@@ -194,6 +197,8 @@ pub(super) async fn show_system_message(state: &LoopState<'_>, content: String) 
             timestamp_ms: None,
             command: None,
             activity: None,
+            model: None,
+            usage: None,
         }))
         .await;
 }
@@ -202,6 +207,9 @@ pub(super) async fn show_system_message(state: &LoopState<'_>, content: String) 
 /// to get the local default running when it isn't.
 pub(super) async fn announce_models(state: &mut LoopState<'_>) {
     state.models.refresh_local().await;
+    if let Some(note) = state.models.refresh_plans(state.auth.as_ref()).await {
+        show_system_message(state, note).await;
+    }
     let _ = state.commands.send(state.models.ui_command()).await;
     if let Some(hint) = state.models.local_hint() {
         show_system_message(state, hint).await;

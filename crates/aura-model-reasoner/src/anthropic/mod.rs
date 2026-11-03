@@ -12,7 +12,7 @@ mod convert;
 mod provider;
 mod sse;
 
-pub use config::{AnthropicConfig, ENV_FALLBACK_MODEL};
+pub use config::{anthropic_api_base, AnthropicConfig, ENV_FALLBACK_MODEL};
 pub use provider::exp_backoff_with_jitter;
 
 use crate::error::ReasonerError;
@@ -129,6 +129,8 @@ pub struct AnthropicProvider {
     // Non-Claude models are normally buffered because the router only
     // speaks Anthropic SSE for Claude upstreams.
     sse_for_all_models: bool,
+    // aura-router accepts body fields the public Anthropic API rejects.
+    router_body_extensions: bool,
 }
 
 impl AnthropicProvider {
@@ -154,7 +156,16 @@ impl AnthropicProvider {
             streaming_client,
             config,
             sse_for_all_models: false,
+            router_body_extensions: true,
         })
+    }
+
+    /// Send only fields the public Anthropic Messages API accepts, for
+    /// direct (non-router) endpoints.
+    #[must_use]
+    pub const fn without_router_body_extensions(mut self) -> Self {
+        self.router_body_extensions = false;
+        self
     }
 
     /// Use Anthropic SSE streaming for every model, not only Claude-family

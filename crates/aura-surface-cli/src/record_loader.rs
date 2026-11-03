@@ -1,17 +1,19 @@
 //! Loading and displaying historical records from the store.
 
 use crate::agent_registry::AgentRegistry;
+use crate::event_loop::agent_events::call_usage;
 use crate::event_loop::run_command::is_user_tool_use;
 use aura_agent_kernel::decode_tool_effect;
 use aura_core_types::{
     ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
     RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
 };
+use aura_model_reasoner::Usage;
 use aura_store_db::{ReadStore, StoreError};
 use aura_terminal::{
     events::{
-        ActivityData, AgentSummary, MessageData, MessageRole, PolicyDetail, RecordStatus,
-        RecordSummary,
+        ActivityData, AgentSummary, CallUsage, MessageData, MessageRole, PolicyDetail,
+        RecordStatus, RecordSummary,
     },
     UiCommand,
 };
@@ -91,10 +93,31 @@ pub fn conversation_history(
     let mut history: Vec<MessageData> = Vec::new();
     // Tool use id -> (index in `history`, proposal time)
     let mut tool_calls: HashMap<String, (usize, u64)> = HashMap::new();
+    // Model, tokens and cost of the latest model call in the current turn
+    let mut reply_model: Option<String> = None;
+    let mut reply_usage: Option<CallUsage> = None;
     for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
         let tx = &entry.tx;
         match tx.tx_type {
-            TransactionType::Reasoning => history.extend(thinking_message(tx)),
+            TransactionType::UserPrompt => {
+                reply_model = None;
+                reply_usage = None;
+                history.extend(history_message(tx));
+            }
+            TransactionType::Reasoning => {
+                if let Some(model) = reasoning_model(tx) {
+                    reply_usage = reasoning_usage(tx, &model);
+                    reply_model = Some(model);
+                }
+                history.extend(thinking_message(tx));
+            }
+            TransactionType::AgentMsg => {
+                history.extend(history_message(tx).map(|message| MessageData {
+                    model: reply_model.clone(),
+                    usage: reply_usage,
+                    ..message
+                }));
+            }
             TransactionType::ToolProposal if !is_user_proposal(tx) => {
                 match serde_json::from_slice::<ToolProposal>(&tx.payload) {
                     Ok(proposal) => {
@@ -121,6 +144,28 @@ pub fn conversation_history(
     }
     let skip = history.len().saturating_sub(HISTORY_MESSAGE_LIMIT);
     Ok(history.into_iter().skip(skip).collect())
+}
+
+/// The model that answered the call a `Reasoning` entry records.
+fn reasoning_model(tx: &Transaction) -> Option<String> {
+    json_payload(tx)?
+        .get("model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty() && *model != "unknown")
+        .map(str::to_string)
+}
+
+/// Tokens and cost of the call a `Reasoning` entry records, answered by `model`.
+fn reasoning_usage(tx: &Transaction, model: &str) -> Option<CallUsage> {
+    let payload = json_payload(tx)?;
+    let tokens = |key: &str| payload.get(key).and_then(Value::as_u64);
+    let usage = Usage {
+        input_tokens: tokens("input_tokens").unwrap_or(0),
+        output_tokens: tokens("output_tokens").unwrap_or(0),
+        cache_creation_input_tokens: tokens("cache_creation_input_tokens"),
+        cache_read_input_tokens: tokens("cache_read_input_tokens"),
+    };
+    call_usage(model, &usage)
 }
 
 /// The model's thinking from a `Reasoning` entry, when it thought.
@@ -209,24 +254,22 @@ pub fn agent_summaries(
         .map(|(agent, depth)| {
             let agent_id = agent.agent_id();
             let record_count = store.get_head_seq(agent_id).unwrap_or(0);
-            let last_active = if record_count == 0 {
-                "-".to_string()
-            } else {
-                store
-                    .get_record_entry(agent_id, record_count)
-                    .map(|entry| format_local_time(entry.tx.ts_ms))
-                    .unwrap_or_else(|_| "-".to_string())
-            };
+            let last_active_ms = (record_count > 0)
+                .then(|| store.get_record_entry(agent_id, record_count).ok())
+                .flatten()
+                .map(|entry| entry.tx.ts_ms);
             AgentSummary {
                 id: agent_id.to_hex(),
                 name: agent.name.clone(),
                 zns_id: agent.zns_id.clone(),
                 is_active: agent_id == active,
                 record_count,
-                last_active,
+                last_active: last_active_ms.map_or_else(|| "-".to_string(), format_local_time),
+                last_active_ms,
                 definition: agent.definition.clone(),
                 depth,
                 running: running.contains(&agent_id),
+                project: agent.project.clone(),
             }
         })
         .collect()
@@ -256,6 +299,8 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             timestamp_ms: Some(tx.ts_ms),
             command: Some(command),
             activity: None,
+            model: None,
+            usage: None,
         });
     }
     let (role, content) = match tx.tx_type {
@@ -293,6 +338,8 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
         timestamp_ms: Some(tx.ts_ms),
         command: None,
         activity: None,
+        model: None,
+        usage: None,
     })
 }
 

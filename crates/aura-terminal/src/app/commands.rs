@@ -3,7 +3,7 @@
 use super::{App, AppState, NotificationType, PanelFocus, PendingApproval};
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
-    events::{UiCommand, UiEvent},
+    events::{CallUsage, UiCommand, UiEvent},
     terminal::KeyResult,
 };
 use tracing::debug;
@@ -68,6 +68,13 @@ impl App {
                 }
             }
             "agent" | "a" => self.handle_agent_command(arg),
+            "name" => {
+                if arg.is_empty() {
+                    self.prompt_rename_project();
+                } else if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::RenameProject(arg.to_string()));
+                }
+            }
             "spawn" => self.handle_spawn_command(arg),
             "login" => self.handle_login_command(arg),
             "model" | "models" | "m" => {
@@ -343,6 +350,7 @@ impl App {
             UiCommand::StartStreaming => self.cmd_start_streaming(),
             UiCommand::AppendText(text) => self.cmd_append_text(&text),
             UiCommand::FinishStreaming => self.cmd_finish_streaming(),
+            UiCommand::SetReplyModel { model, usage } => self.cmd_set_reply_model(&model, usage),
             UiCommand::StartThinking => self.add_activity(Activity::thinking()),
             UiCommand::AppendThinking(thinking) => self.cmd_append_thinking(&thinking),
             UiCommand::FinishThinking => self.cmd_finish_thinking(),
@@ -460,11 +468,32 @@ impl App {
         self.streaming_content.clear();
     }
 
+    fn cmd_set_reply_model(&mut self, model: &str, usage: Option<CallUsage>) {
+        let replies = self
+            .messages
+            .iter_mut()
+            .rev()
+            .take_while(|m| m.role() != MessageRole::User)
+            .filter(|m| {
+                m.role() == MessageRole::Assistant
+                    && m.activity_step().is_none()
+                    && m.model().is_none()
+            });
+        for message in replies {
+            message.set_model(model);
+            message.set_usage(usage);
+        }
+    }
+
     fn cmd_show_message(&mut self, data: &crate::events::MessageData) {
         let mut msg = Message::new(data.role, &data.content);
         if data.is_streaming {
             msg.set_streaming(true);
         }
+        if let Some(model) = &data.model {
+            msg.set_model(model);
+        }
+        msg.set_usage(data.usage);
         self.add_message(msg);
     }
 
@@ -583,6 +612,10 @@ impl App {
             {
                 msg = msg.with_timestamp(ts);
             }
+            if let Some(model) = &data.model {
+                msg.set_model(model);
+            }
+            msg.set_usage(data.usage);
             self.messages.push_back(msg);
         }
         while self.messages.len() > super::MAX_MESSAGES {
@@ -603,14 +636,9 @@ impl App {
 
     fn cmd_set_agents(&mut self, agents: Vec<crate::events::AgentSummary>) {
         self.agents = agents;
-        if let Some(idx) = self
-            .agents
-            .iter()
-            .position(|a| a.id == self.active_agent_id)
-        {
-            self.selected_agent = idx;
-        }
-        self.selected_agent = self.selected_agent.min(self.agents.len());
+        self.collapsed_projects
+            .retain(|id| self.agents.iter().any(|agent| agent.id == *id));
+        self.select_visible_active();
     }
 
     fn cmd_set_active_agent(&mut self, agent_id: String) {
@@ -618,9 +646,7 @@ impl App {
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }
-        if let Some(idx) = self.agents.iter().position(|a| a.is_active) {
-            self.selected_agent = idx;
-        }
+        self.select_visible_active();
     }
 }
 

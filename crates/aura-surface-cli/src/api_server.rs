@@ -161,6 +161,8 @@ pub async fn start_api_server(
                             timestamp_ms: None,
                             command: None,
                             activity: None,
+                            model: None,
+                            usage: None,
                         },
                     ));
                 }

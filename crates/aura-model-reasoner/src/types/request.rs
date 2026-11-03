@@ -332,6 +332,10 @@ pub struct ModelRequest {
     /// (e.g. `anthropic-beta` flags). `anthropic-beta` values are merged
     /// into the provider's own beta header.
     pub extra_headers: Vec<(String, String)>,
+    /// Identity line a direct subscription route requires ahead of
+    /// `system`. Anthropic plans only accept it as its own first system
+    /// block, never merged into the rest of the prompt.
+    pub system_preamble: Option<String>,
     /// Project ID for X-Aura-Project-Id billing header.
     pub aura_project_id: Option<String>,
     /// Project-agent UUID for X-Aura-Agent-Id billing header.
@@ -568,6 +572,7 @@ impl ModelRequestBuilder {
             auth_token: self.auth_token,
             upstream_provider_family: self.upstream_provider_family,
             extra_headers: Vec::new(),
+            system_preamble: None,
             aura_project_id: self.aura_project_id,
             aura_agent_id: self.aura_agent_id,
             aura_session_id: self.aura_session_id,

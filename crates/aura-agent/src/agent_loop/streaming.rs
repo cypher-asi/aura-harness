@@ -118,6 +118,8 @@ fn emit_debug_llm_call(
             model,
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
+            cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: response.usage.cache_read_input_tokens,
             duration_ms,
             task_id: None,
             agent_instance_id: None,

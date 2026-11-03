@@ -1,6 +1,7 @@
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::panels::truncate_record_info;
 use super::text::{centered_rect, display_width, wrap_words};
+use crate::events::CallUsage;
 use crate::Theme;
 use ratatui::{
     layout::Rect,
@@ -185,6 +186,13 @@ fn test_centered_rect_with_offset() {
 fn test_default_layout_shows_agents_column() {
     use crate::events::{AgentDefinitionSummary, AgentSummary, UiCommand};
 
+    let now_ms = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetAgents(vec![
         AgentSummary {
@@ -194,6 +202,7 @@ fn test_default_layout_shows_agents_column() {
             is_active: true,
             record_count: 12,
             last_active: "-".to_string(),
+            last_active_ms: Some(now_ms - 3 * 60 * 1000),
             ..Default::default()
         },
         AgentSummary {
@@ -203,6 +212,7 @@ fn test_default_layout_shows_agents_column() {
             is_active: false,
             record_count: 0,
             last_active: "-".to_string(),
+            running: true,
             ..Default::default()
         },
         AgentSummary {
@@ -222,7 +232,7 @@ fn test_default_layout_shows_agents_column() {
         },
     ]));
 
-    let rows = render_rows(&mut app, 120);
+    let rows = render_rows(&mut app, 200);
     let screen = rows.join("\n");
     assert!(!screen.contains("AGENTS"));
     assert!(screen.contains("CHAT"));
@@ -230,32 +240,96 @@ fn test_default_layout_shows_agents_column() {
     assert!(rows
         .iter()
         .any(|r| r.contains("Projects") && r.contains("Agents") && r.contains("←→")));
-    assert!(rows
-        .iter()
-        .any(|r| r.contains("●") && r.contains("# Terminal") && r.contains("12│")));
-    assert!(screen.contains("# Researcher"));
-    assert!(screen.contains("↳ @ reviewer #1"));
-    let column_of = |needle: &str| {
-        rows.iter()
-            .find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
-            .unwrap()
+    let char_col = |row: &str, needle: &str| {
+        let i = row
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
+        row[..i].chars().count()
     };
-    assert_eq!(column_of("New project"), column_of("Researcher"));
-    let hash_row = rows.iter().find(|r| r.contains("# Terminal")).unwrap();
-    let plus_row = rows.iter().find(|r| r.contains("New project")).unwrap();
-    let char_col = |row: &str, needle: char| row.chars().position(|c| c == needle);
-    assert_eq!(char_col(hash_row, '#'), char_col(plus_row, '+'));
-    assert!(screen.contains("Alt+↑↓ switch  ^N new"));
-    // Spawned agents sit under the project on a return-key hook.
-    assert_eq!(column_of("reviewer #1"), column_of("Researcher") + 2);
+    let rows_with = |needle: &str| -> Vec<usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, r)| r.contains(needle))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    // A project row and its first agent row share each name.
+    let [terminal_project, terminal_agent] = rows_with("Terminal Agent")[..] else {
+        panic!("expected a project row and an agent row for Terminal Agent");
+    };
+    let [researcher_project, researcher_agent] = rows_with("Researcher")[..] else {
+        panic!("expected a project row and an agent row for Researcher");
+    };
+    let new_project = rows_with("New project")[0];
+    assert!(rows[terminal_project].contains("▱  Terminal Agent"));
+    assert!(rows[terminal_agent].contains("●  Terminal Agent"));
+    assert!(rows[terminal_agent].contains(" 3m "));
+    assert!(rows[researcher_project].contains("▱  Researcher"));
+    assert!(!screen.contains("12│"));
+    assert!(!screen.contains("# ") && !screen.contains("@ "));
+    assert!(!screen.contains('↳') && !screen.contains('▾') && !screen.contains('▸'));
+
+    // A thinking agent shows the two-cell aura ring in the icon column.
+    let ring_col = char_col(&rows[terminal_agent], "●");
+    let ring: String = rows[researcher_agent]
+        .chars()
+        .skip(ring_col)
+        .take(crate::animation::AURA_WIDTH)
+        .collect();
+    assert!(
+        ring.chars().all(|c| ('\u{2800}'..='\u{28ff}').contains(&c))
+            && ring.chars().any(|c| c != '\u{2800}'),
+        "expected a braille ring, got {ring:?}"
+    );
+
+    // Icons and names line up down the list, with a blank row between projects.
+    assert_eq!(
+        char_col(&rows[terminal_project], "▱"),
+        char_col(&rows[new_project], "+")
+    );
+    assert_eq!(ring_col, char_col(&rows[terminal_project], "▱"));
+    assert_eq!(
+        char_col(&rows[new_project], "New project"),
+        char_col(&rows[researcher_project], "Researcher")
+    );
+    // Each project is a two-line cell: half blocks above and below its name.
+    assert_eq!(researcher_project, terminal_agent + 3);
+    let panel_text = |row: usize| rows[row].chars().skip(1).take(20).collect::<String>();
+    assert_eq!(panel_text(terminal_agent + 1).trim(), "");
+    assert!(panel_text(researcher_project - 1).chars().all(|c| c == '▄'));
+    assert!(panel_text(researcher_project + 1).chars().all(|c| c == '▀'));
+    assert_eq!(researcher_agent, researcher_project + 2);
+    // "+ New project" takes the panel's bottom row in place of a key hint.
+    assert!(!screen.contains("space fold") && !screen.contains("^N new"));
+    assert!(
+        rows[new_project + 1].starts_with('└'),
+        "New project should sit on the panel's last row: {:?}",
+        &rows[new_project..=new_project + 1]
+    );
+    assert!(new_project > rows_with("reviewer #1")[0] + 1);
+    // Spawned agents sit further in than the project's first agent.
+    assert!(
+        char_col(&rows[rows_with("reviewer #1")[0]], "reviewer #1")
+            > char_col(&rows[researcher_agent], "Researcher")
+    );
     assert!(!screen.contains("Reviews"));
 
-    // Tab to the agents panel, then over to the roster tab.
+    // Tab to the agents panel. Neither the selected row nor any other
+    // shows a cursor arrow.
     for _ in 0..3 {
         app.handle_key(crossterm::event::KeyEvent::from(
             crossterm::event::KeyCode::Tab,
         ));
     }
+    let rows = render_rows(&mut app, 200);
+    let panel: Vec<String> = rows
+        .iter()
+        .map(|r| r.chars().take(30).collect())
+        .collect();
+    assert!(
+        panel.iter().all(|r| !r.contains('>')),
+        "projects list should not show a cursor arrow: {panel:#?}"
+    );
     app.handle_key(crossterm::event::KeyEvent::from(
         crossterm::event::KeyCode::Right,
     ));
@@ -276,6 +350,23 @@ fn test_default_layout_shows_agents_column() {
 }
 
 #[test]
+fn test_format_ago_steps_up_at_each_unit() {
+    use super::panels::format_ago;
+    const MIN: u64 = 60_000;
+    let now = 100 * 7 * 24 * 60 * MIN;
+    let ago = |ms: u64| format_ago(now - ms, now);
+    assert_eq!(ago(0), "now");
+    assert_eq!(ago(MIN - 1), "now");
+    assert_eq!(ago(MIN), "1m");
+    assert_eq!(ago(60 * MIN - 1), "59m");
+    assert_eq!(ago(60 * MIN), "1h");
+    assert_eq!(ago(24 * 60 * MIN), "1d");
+    assert_eq!(ago(7 * 24 * 60 * MIN - 1), "6d");
+    assert_eq!(ago(7 * 24 * 60 * MIN), "1w");
+    assert_eq!(format_ago(now + MIN, now), "now");
+}
+
+#[test]
 fn test_agents_tab_bar_underlines_active_tab() {
     let mut app = crate::App::new();
     let rows = render_rows(&mut app, 120);
@@ -287,6 +378,167 @@ fn test_agents_tab_bar_underlines_active_tab() {
     let agents = rows[tabs].find("Agents").unwrap();
     let column = rows[tabs][..agents].chars().count();
     assert_eq!(rule.chars().nth(column), Some('─'));
+}
+
+#[test]
+fn test_project_rows_are_cells_with_a_blue_selection() {
+    use crate::app::ProjectListRow;
+    use crate::events::{AgentSummary, UiCommand};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = crate::App::new().with_event_sender(tx);
+    let agent = |id: &str, name: &str| AgentSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        zns_id: format!("0://terminal/{id}"),
+        ..AgentSummary::default()
+    };
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Terminal Agent"),
+        agent("bb", "Researcher"),
+    ]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    for _ in 0..3 {
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+    }
+
+    let buffer = render_buffer(&mut app, 120);
+    let selected = app.selected_agent();
+    assert_eq!(
+        app.project_rows()[selected],
+        ProjectListRow::Agent { index: 0 }
+    );
+    // Lines from the first project's name: its bottom edge, the selected
+    // agent, the gap, then the next project's top edge, name, bottom edge
+    // and its agent.
+    let project_row = row_of(&buffer, "Terminal Agent");
+    let selected_row = project_row + 2;
+    let gap_row = project_row + 3;
+    let researcher_project = project_row + 5;
+    let researcher_agent = project_row + 7;
+    assert!(find_cell(&buffer, selected_row, "Terminal Agent").is_some());
+    assert!(find_cell(&buffer, researcher_project, "Researcher").is_some());
+    assert!(find_cell(&buffer, researcher_agent, "Researcher").is_some());
+    let hover = |app: &mut crate::App, row: u16| {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 4,
+            row,
+            modifiers: KeyModifiers::empty(),
+        });
+    };
+
+    let theme = test_theme();
+    let colors = &theme.colors;
+    hover(&mut app, researcher_agent);
+    let buffer = render_buffer(&mut app, 120);
+    let (_, hovered) = find_cell(&buffer, researcher_agent, "Researcher").unwrap();
+    assert_eq!(hovered.fg, Some(colors.secondary));
+    assert_eq!(hovered.bg, Some(Color::Reset));
+    let (_, selected) = find_cell(&buffer, selected_row, "Terminal Agent").unwrap();
+    assert_eq!(selected.fg, Some(colors.on_selection));
+    assert_eq!(selected.bg, Some(colors.selection));
+    assert!(selected.add_modifier.contains(Modifier::BOLD));
+
+    // Projects never show a hover.
+    hover(&mut app, researcher_project);
+    let buffer = render_buffer(&mut app, 120);
+    assert_eq!(app.hover(), None);
+    let (_, project) = find_cell(&buffer, researcher_project, "Researcher").unwrap();
+    assert_eq!(project.bg, Some(colors.surface));
+
+    // Cells run from one panel border to the other, and a project's half
+    // blocks make its cell two lines tall.
+    let right_border = (1..buffer.area.width)
+        .find(|&x| buffer[(x, selected_row)].symbol() == "│")
+        .unwrap();
+    let (left, right) = (1, right_border - 1);
+    let bg = |x: u16, y: u16| buffer[(x, y)].style().bg;
+    for x in left..=right {
+        assert_eq!(bg(x, selected_row), Some(colors.selection), "column {x}");
+        assert_eq!(bg(x, project_row), Some(colors.surface), "column {x}");
+        for (y, half) in [(project_row - 1, "▄"), (project_row + 1, "▀")] {
+            let cell = &buffer[(x, y)];
+            assert_eq!(cell.symbol(), half, "column {x}");
+            assert_eq!(cell.style().fg, Some(colors.surface), "column {x}");
+        }
+    }
+    assert_eq!(bg(left, gap_row), Some(Color::Reset));
+    assert_eq!(
+        app.project_rows()[app.selected_agent() + 1],
+        ProjectListRow::Gap
+    );
+
+    // A selected project stays gray, lighter and bold; only agents go blue.
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::empty()));
+    assert_eq!(
+        app.project_rows()[app.selected_agent()],
+        ProjectListRow::Project {
+            root: 0,
+            expanded: true
+        }
+    );
+    let buffer = render_buffer(&mut app, 120);
+    let (_, project) = find_cell(&buffer, project_row, "Terminal Agent").unwrap();
+    assert_eq!(project.bg, Some(colors.surface_hover));
+    assert_eq!(project.fg, Some(colors.foreground));
+    assert!(project.add_modifier.contains(Modifier::BOLD));
+    let (_, agent) = find_cell(&buffer, selected_row, "Terminal Agent").unwrap();
+    assert_eq!(agent.bg, Some(Color::Reset));
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+
+    // Away from the panel the selection goes, and the active agent is a
+    // plain row with white text.
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: right + 10,
+        row: researcher_agent,
+        modifiers: KeyModifiers::empty(),
+    });
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+    let buffer = render_buffer(&mut app, 120);
+    let (_, active) = find_cell(&buffer, selected_row, "Terminal Agent").unwrap();
+    assert_eq!(active.bg, Some(Color::Reset));
+    assert_eq!(active.fg, Some(colors.foreground));
+    let (_, agent) = find_cell(&buffer, researcher_agent, "Researcher").unwrap();
+    assert_eq!(agent.bg, Some(Color::Reset));
+}
+
+#[test]
+fn test_hovered_activity_header_keeps_status_color() {
+    use crate::events::{ToolData, UiCommand};
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::ShowTool(ToolData {
+        id: "t1".to_string(),
+        name: "read_file".to_string(),
+        args: String::new(),
+    }));
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: "ok".to_string(),
+        success: true,
+    });
+
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "read_file");
+    let (column, _) = find_cell(&buffer, row, "read_file").unwrap();
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    });
+
+    let theme = test_theme();
+    let buffer = render_buffer(&mut app, 120);
+    let (_, name) = find_cell(&buffer, row, "read_file").unwrap();
+    assert_eq!(name.fg, Some(theme.colors.secondary));
+    assert!(!name.add_modifier.contains(Modifier::UNDERLINED));
+    let (_, mark) = find_cell(&buffer, row, "✓").unwrap();
+    assert_eq!(mark.fg, Some(theme.colors.success));
 }
 
 #[test]
@@ -477,6 +729,28 @@ fn app_with_auth(user: Option<&str>, plans: &[&str]) -> crate::App {
     app
 }
 
+#[test]
+fn test_folder_picker_overlay_lists_the_launch_directory() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::App::new();
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    let rows = render_rows(&mut app, 120);
+    let screen = rows.join("\n");
+    assert!(screen.contains("Select project folder"));
+    assert!(screen.contains("› ✓ Use this folder"));
+    assert!(screen.contains("▰ src"));
+    assert!(screen.contains("n new folder"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    for c in "demo".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("New folder: demo"));
+    assert!(screen.contains("Enter create  Esc stop"));
+}
+
 fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
@@ -658,6 +932,44 @@ fn test_outer_text_is_inset_to_panel_borders() {
 }
 
 #[test]
+fn test_copy_notice_is_centered_on_the_aura_cli_line() {
+    let mut app = app_with_model(None);
+    app.notify_copied(4, &Ok(()));
+    let rows = render_rows(&mut app, 120);
+
+    assert!(
+        !rows[0].contains("Copied"),
+        "notice belongs on the AURA CLI row: {:?}",
+        rows[0]
+    );
+    let row = &rows[1];
+    assert!(row.starts_with(" AURA CLI "), "{row:?}");
+    let notice = "✓ Copied 4 characters";
+    let start = row[..row.find(notice).expect(row)].chars().count();
+    let width = notice.chars().count();
+    assert_eq!(start, (120 - width) / 2, "{row:?}");
+    assert!(
+        row.trim_end().ends_with("● local  http://127.0.0.1:8080"),
+        "{row:?}"
+    );
+}
+
+#[test]
+fn test_copy_notice_is_skipped_when_it_would_cover_the_header() {
+    let mut app = app_with_model(None);
+    app.notify_copied(4, &Ok(()));
+    let rows = render_rows(&mut app, 60);
+
+    let row = &rows[1];
+    assert!(!row.contains("Copied"), "{row:?}");
+    assert!(row.starts_with(" AURA CLI "), "{row:?}");
+    assert!(
+        row.trim_end().ends_with("● local  http://127.0.0.1:8080"),
+        "{row:?}"
+    );
+}
+
+#[test]
 fn test_header_shows_logged_in_user() {
     let rows = render_with_user(Some("alice"), 120);
     assert!(rows[1]
@@ -772,6 +1084,111 @@ fn test_chat_shows_working_indicator_until_reply_streams() {
     assert!(app.working_label().is_none());
 }
 
+/// The chat row of the reply header, after a turn whose reply came from
+/// `model` with `usage`, drawn `width` columns wide.
+fn reply_header_row(model: &str, usage: Option<CallUsage>, width: u16) -> String {
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "hi");
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("hello".to_string()));
+    app.process_command(UiCommand::SetReplyModel {
+        model: model.to_string(),
+        usage,
+    });
+    app.process_command(UiCommand::Complete);
+
+    let rows = render_rows(&mut app, width);
+    let you = rows.iter().find(|r| r.contains("YOU  ")).unwrap();
+    assert!(!you.contains(" · "), "{you:?}");
+    let aura = rows.iter().find(|r| r.contains("AURA  ")).unwrap();
+    let time = app.messages().back().unwrap().timestamp_local();
+    assert!(aura.contains(&format!("AURA  {time}")), "{aura:?}");
+    let header = &aura[aura.find("AURA  ").unwrap()..];
+    header[..header.find('│').unwrap()].to_string()
+}
+
+#[test]
+fn test_reply_header_shows_model_tokens_and_cost_at_the_right() {
+    let usage = CallUsage {
+        tokens: 12_400,
+        cost_usd: Some(0.0418),
+    };
+    let header = reply_header_row("claude-opus-4-7", Some(usage), 200);
+    let meta = "claude-opus-4-7 · 12.4k tok · $0.042";
+    assert!(header.trim_end().ends_with(meta), "{header:?}");
+    assert!(
+        header.contains(&format!("    {meta}")),
+        "meta should sit apart from the time: {header:?}"
+    );
+}
+
+#[test]
+fn test_reply_header_without_usage_or_cost() {
+    let header = reply_header_row("qwen3:4b", None, 200);
+    assert!(header.trim_end().ends_with("qwen3:4b"), "{header:?}");
+
+    let local = CallUsage {
+        tokens: 900,
+        cost_usd: None,
+    };
+    let header = reply_header_row("qwen3:4b", Some(local), 200);
+    assert!(
+        header.trim_end().ends_with("qwen3:4b · 900 tok"),
+        "{header:?}"
+    );
+}
+
+#[test]
+fn test_reply_header_drops_cost_then_tokens_when_narrow() {
+    use super::segments::{message_header, reply_meta};
+
+    let usage = CallUsage {
+        tokens: 1_250_000,
+        cost_usd: Some(3.5),
+    };
+    let meta = reply_meta(Some("claude-opus-4-7"), Some(usage));
+    let header = |width| {
+        let line = message_header(
+            "AURA",
+            ratatui::style::Color::Reset,
+            "12:00:00",
+            &meta,
+            width,
+            &test_theme(),
+        );
+        line.spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>()
+    };
+    assert_eq!(
+        header(50),
+        "AURA  12:00:00  claude-opus-4-7 · 1.2M tok · $3.50"
+    );
+    assert!(header(45).ends_with(" claude-opus-4-7 · 1.2M tok"));
+    assert!(header(35).ends_with(" claude-opus-4-7"));
+    assert!(header(25).ends_with(" claude-o…"));
+    for width in [45, 35, 25] {
+        assert_eq!(display_width(&header(width)), width, "{:?}", header(width));
+    }
+    assert_eq!(header(17), "AURA  12:00:00");
+}
+
+#[test]
+fn test_reply_meta_formats_tokens_and_cost() {
+    use super::segments::reply_meta;
+
+    let meta =
+        |tokens, cost_usd| reply_meta(Some("m"), Some(CallUsage { tokens, cost_usd })).join(" · ");
+    assert_eq!(meta(842, Some(0.004)), "m · 842 tok · <$0.01");
+    assert_eq!(meta(12_449, Some(0.0418)), "m · 12.4k tok · $0.042");
+    assert_eq!(meta(240_000, Some(1.234)), "m · 240k tok · $1.23");
+    assert_eq!(meta(3_400_000, None), "m · 3.4M tok");
+    assert_eq!(reply_meta(None, None), Vec::<String>::new());
+}
+
 #[test]
 fn test_working_indicator_names_running_tool() {
     use crate::events::{ToolData, UiCommand};
@@ -860,6 +1277,13 @@ fn render_buffer(app: &mut crate::App, width: u16) -> ratatui::buffer::Buffer {
         .draw(|frame| super::render(frame, app, &test_theme()))
         .unwrap();
     terminal.backend().buffer().clone()
+}
+
+/// First row that contains `needle`.
+fn row_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
+    (0..buffer.area.height)
+        .find(|&y| find_cell(buffer, y, needle).is_some())
+        .unwrap_or_else(|| panic!("{needle:?} not on screen"))
 }
 
 /// Column of `needle` in row `y`, and the cell style there.

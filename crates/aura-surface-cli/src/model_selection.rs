@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use aura_agent::AgentLoopConfig;
-use aura_auth::{AuthSummary, ProviderKind};
+use aura_auth::{AuthSummary, CredentialResolver, ProviderKind};
 use aura_model_reasoner::model_catalog::{
     self, backend_for, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
 };
@@ -43,6 +43,9 @@ pub struct ModelSelection {
     local_url: String,
     local_status: LocalServerStatus,
     auth: AuthSummary,
+    /// Models reported live by linked plans; empty means use the
+    /// built-in lists.
+    plan_models: Vec<ModelOption>,
     router_limits: RouterLimits,
     prefs_path: Option<PathBuf>,
 }
@@ -73,6 +76,7 @@ impl ModelSelection {
             local_url: model_catalog::local_base_url(),
             local_status: LocalServerStatus::Unreachable,
             auth,
+            plan_models: Vec::new(),
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -105,6 +109,29 @@ impl ModelSelection {
         usable(&self.auth, id)
     }
 
+    /// Reload the model lists of linked plans. Returns a user-facing
+    /// note when a linked plan's list could not be loaded.
+    pub async fn refresh_plans(&mut self, resolver: &dyn CredentialResolver) -> Option<String> {
+        if !self.auth.can_use(ProviderKind::Claude) {
+            self.plan_models.clear();
+            return None;
+        }
+        match aura_model_reasoner::plan_models::fetch_claude_models(resolver).await {
+            Ok(models) => {
+                self.plan_models = models;
+                None
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to list Claude plan models");
+                self.plan_models.clear();
+                Some(format!(
+                    "Couldn't load your Claude plan's model list ({e}); showing the built-in \
+                     list. Any model works with /model claude/<model-id>."
+                ))
+            }
+        }
+    }
+
     /// Re-probe the local model server.
     pub async fn refresh_local(&mut self) {
         self.local_status = model_catalog::probe_local_server(&self.local_url).await;
@@ -119,7 +146,11 @@ impl ModelSelection {
 
     /// Selector entries, always including the current model.
     pub fn options(&self) -> Vec<ModelOptionView> {
-        let mut options = model_catalog::catalog(&self.default_local, self.installed_local());
+        let mut options = model_catalog::catalog_with_plans(
+            &self.default_local,
+            self.installed_local(),
+            &self.plan_models,
+        );
         if !options.iter().any(|o| o.id == self.current) {
             let backend = backend_for(&self.current);
             options.push(ModelOption {
@@ -414,6 +445,7 @@ mod tests {
                 models: vec!["qwen3:4b".to_string()],
             },
             auth: signed_in(user, &[]),
+            plan_models: Vec::new(),
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -504,6 +536,16 @@ mod tests {
         assert!(selection
             .local_hint()
             .is_some_and(|hint| hint.contains("ollama pull qwen3:4b")));
+    }
+
+    #[test]
+    fn cloud_model_has_no_local_hint_when_ollama_is_down() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        selection
+            .select(&mut config, "aura-claude-sonnet-4-6")
+            .expect("signed-in cloud model");
+        selection.local_status = LocalServerStatus::Unreachable;
+        assert_eq!(selection.local_hint(), None);
     }
 
     #[test]

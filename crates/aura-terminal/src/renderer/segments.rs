@@ -1,31 +1,97 @@
 //! Text and code segment rendering for the chat panel.
 
 use super::markdown::render_markdown;
-use super::text::wrap_words;
+use super::text::{display_width, wrap_words};
 use crate::components::{CodeBlock, MessageRole};
+use crate::events::CallUsage;
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
 
-/// `AURA  12:00:00` — the line above a message's body.
+/// `AURA  12:00:00      claude-opus-4-7 · 12.4k tok · $0.042` — the line
+/// above a message's body. `meta` (see [`reply_meta`]) sits at the right
+/// edge of `width`; its trailing parts are dropped when it doesn't fit.
 pub(super) fn message_header<'a>(
     nick: &str,
     nick_color: ratatui::style::Color,
     timestamp: &str,
+    meta: &[String],
+    width: usize,
     theme: &Theme,
 ) -> Line<'a> {
-    Line::from(vec![
+    let muted = Style::default().fg(theme.colors.muted);
+    let detail = format!("  {timestamp}");
+    let used = display_width(nick) + display_width(&detail);
+    let mut spans = vec![
         Span::styled(
             nick.to_string(),
             Style::default().fg(nick_color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("  {timestamp}"),
-            Style::default().fg(theme.colors.muted),
-        ),
-    ])
+        Span::styled(detail, muted),
+    ];
+    if let Some(right) = fit_meta(meta, width.saturating_sub(used + 2)) {
+        let gap = width.saturating_sub(used + display_width(&right));
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(right, muted));
+    }
+    Line::from(spans)
+}
+
+/// The longest leading run of `meta` that fits in `room` columns, joined
+/// with ` · `; failing that, the first part cut short.
+fn fit_meta(meta: &[String], room: usize) -> Option<String> {
+    for len in (1..=meta.len()).rev() {
+        let text = meta[..len].join(" · ");
+        if display_width(&text) <= room {
+            return Some(text);
+        }
+    }
+    let first = meta.first()?;
+    if room < 2 {
+        return None;
+    }
+    let mut cut = String::new();
+    for ch in first.chars() {
+        if display_width(&cut) + display_width(ch.encode_utf8(&mut [0; 4])) + 1 > room {
+            break;
+        }
+        cut.push(ch);
+    }
+    cut.push('…');
+    Some(cut)
+}
+
+/// Right-hand header parts for a reply, most important first: the model,
+/// then the call's tokens and cost when known.
+pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<String> {
+    let mut parts: Vec<String> = model.map(str::to_string).into_iter().collect();
+    if let Some(usage) = usage {
+        parts.push(format!("{} tok", format_tokens(usage.tokens)));
+        parts.extend(usage.cost_usd.map(format_cost));
+    }
+    parts
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn format_tokens(tokens: u64) -> String {
+    match tokens {
+        0..1_000 => tokens.to_string(),
+        1_000..100_000 => format!("{:.1}k", tokens as f64 / 1_000.0),
+        100_000..1_000_000 => format!("{}k", tokens / 1_000),
+        _ => format!("{:.1}M", tokens as f64 / 1_000_000.0),
+    }
+}
+
+fn format_cost(usd: f64) -> String {
+    if usd < 0.01 {
+        "<$0.01".to_string()
+    } else if usd < 1.0 {
+        format!("${usd:.3}")
+    } else {
+        format!("${usd:.2}")
+    }
 }
 
 pub(super) const fn message_style<'a>(

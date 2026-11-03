@@ -193,18 +193,20 @@ impl AgentHub {
             )));
         };
 
-        let instance = {
+        let (instance, folder) = {
             let mut registry = lock(&self.registry);
             let parent = registry
                 .find(request.parent_agent_id)
                 .map(|a| a.zns_id.clone());
-            registry
+            let instance = registry
                 .create_instance(&definition.name, parent)
-                .map_err(|e| format!("registering {} instance: {e:#}", definition.name))?
+                .map_err(|e| format!("registering {} instance: {e:#}", definition.name))?;
+            let folder = registry.project_folder(instance.agent_id());
+            (instance, folder)
         };
         let mut session = self
             .factory
-            .open(&instance, request.parent_chain.clone())
+            .open(&instance, request.parent_chain.clone(), folder)
             .map_err(|e| format!("opening {}: {e:#}", instance.name))?;
         let child_id = session.agent_id();
         info!(child = %instance.name, definition = %definition.name, "Spawning permanent agent");

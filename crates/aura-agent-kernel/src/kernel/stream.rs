@@ -92,6 +92,7 @@ impl ReasonStreamHandle {
             "output_tokens": usage.output_tokens,
             "tool_uses": tool_uses,
         });
+        add_cache_usage(&mut reasoning_payload, usage);
         add_thinking(&mut reasoning_payload, thinking, thinking_ms);
         let payload_bytes = serde_json::to_vec(&reasoning_payload)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
@@ -129,6 +130,17 @@ impl ReasonStreamHandle {
         );
 
         self.append(tx)
+    }
+}
+
+/// Add the prompt-cache token counts to a `Reasoning` payload when the
+/// provider reported them.
+pub(crate) fn add_cache_usage(payload: &mut serde_json::Value, usage: &Usage) {
+    if let Some(tokens) = usage.cache_creation_input_tokens {
+        payload["cache_creation_input_tokens"] = serde_json::Value::from(tokens);
+    }
+    if let Some(tokens) = usage.cache_read_input_tokens {
+        payload["cache_read_input_tokens"] = serde_json::Value::from(tokens);
     }
 }
 

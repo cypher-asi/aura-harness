@@ -201,13 +201,9 @@ impl AnthropicConfig {
     /// Cloudflare retries, fallback model) are disabled.
     #[must_use]
     pub fn anthropic_direct() -> Self {
-        let base_url = std::env::var("AURA_ANTHROPIC_API_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
         let defaults = Self::from_env();
         Self {
-            base_url,
+            base_url: anthropic_api_base(),
             fallback_model: None,
             emergency_body_cap_bytes: 0,
             cloudflare_max_retries: 0,
@@ -233,6 +229,16 @@ impl AnthropicConfig {
             cloudflare_max_retries: 3,
         }
     }
+}
+
+/// Public Anthropic API base: `AURA_ANTHROPIC_API_URL`, else
+/// `https://api.anthropic.com`.
+#[must_use]
+pub fn anthropic_api_base() -> String {
+    std::env::var("AURA_ANTHROPIC_API_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "https://api.anthropic.com".to_string())
 }
 
 #[cfg(test)]

@@ -31,6 +31,7 @@ mod kernel_propose;
 mod mock;
 pub mod model_catalog;
 pub mod openai_responses;
+pub mod plan_models;
 pub mod provider_factory;
 pub mod response_stream;
 mod routed;

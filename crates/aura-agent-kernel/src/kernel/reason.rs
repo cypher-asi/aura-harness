@@ -76,6 +76,7 @@ impl Kernel {
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
         });
+        super::stream::add_cache_usage(&mut reasoning_payload, &response.usage);
         let thinking: String = response
             .message
             .content

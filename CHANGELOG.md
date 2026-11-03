@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal — model, tokens and cost on each reply
+
+##### Added
+
+- Each AURA reply header shows, at the right edge, the model that
+  wrote it, the tokens of that model call (whole prompt, cached or not,
+  plus output) and its cost at API list prices. Replies restored from
+  the record show the same. Local models show no cost; Claude and
+  ChatGPT plan models show the API-equivalent estimate. On narrow
+  chats the cost, then the tokens, are dropped first.
+- `debug.llm_call` frames and `Reasoning` record entries carry
+  `cache_creation_input_tokens` and `cache_read_input_tokens` when the
+  provider reports them.
+
 ### Designers — Cursor terminal fonts
 
 ##### Changed
@@ -14,6 +28,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Seeded `ui-designer` and `web-designer` tokens use Cursor's workbench
   sans for UI content and Cursor's terminal monospace for terminal
   output, error messages and code. Headings stay on the sans scale.
+
+### Permanent agents — AURA's default roster
+
+##### Added
+
+- AURA's default specialists are seeded as permanent agents alongside
+  `explorer` and `reviewer`: `engineer`, `rust-engineer`,
+  `frontend-engineer`, `ui-designer`, `web-designer` and
+  `product-manager`. Each keeps AURA's role, routing ("spawn it for")
+  and guidelines; the two designers carry AURA's design tokens.
+
+##### Changed
+
+- Seeding adds each built-in definition once, also to an existing
+  `agent_defs/`, and records it in `agent_defs/.seeded`. A deleted
+  built-in is never re-added, and one whose name is already taken is
+  skipped.
 
 ### Terminal — agent activity in the chat
 

@@ -14,8 +14,13 @@ use crate::{ContentBlock, ModelRequest, Role, ToolChoice, ToolResultContent};
 pub(super) fn request_body(request: &ModelRequest) -> Value {
     let mut body = Map::new();
     body.insert("model".into(), json!(request.model.as_str()));
-    if !request.system.is_empty() {
-        body.insert("instructions".into(), json!(request.system));
+    let instructions = match request.system_preamble.as_deref() {
+        Some(preamble) if request.system.is_empty() => preamble.to_string(),
+        Some(preamble) => format!("{preamble}\n\n{}", request.system),
+        None => request.system.clone(),
+    };
+    if !instructions.is_empty() {
+        body.insert("instructions".into(), json!(instructions));
     }
     body.insert("input".into(), Value::Array(input_items(request)));
     if !request.tools.is_empty() {

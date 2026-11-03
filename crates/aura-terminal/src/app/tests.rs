@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{Activity, Message, MessageRole, ToolStatus};
-use crate::events::{ActivityData, MessageData, ModelOptionView, UiCommand, UiEvent};
+use crate::events::{ActivityData, CallUsage, MessageData, ModelOptionView, UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -364,6 +364,8 @@ fn test_enter_in_agents_column_selects_agent() {
     let (mut app, mut rx) = app_with_agents();
     app.focus = PanelFocus::Swarm;
 
+    // Down off the first agent lands on the next project, then its agent.
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
     app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
 
@@ -420,6 +422,56 @@ fn test_agent_new_command_emits_create_agent() {
 
     app.handle_command("/agent new");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+}
+
+#[test]
+fn test_project_folds_its_first_agent() {
+    use super::ProjectListRow;
+
+    let (mut app, mut rx) = app_with_agents();
+    assert_eq!(
+        app.project_rows(),
+        vec![
+            ProjectListRow::Project {
+                root: 0,
+                expanded: true,
+            },
+            ProjectListRow::Agent { index: 0 },
+            ProjectListRow::Gap,
+            ProjectListRow::Project {
+                root: 1,
+                expanded: true,
+            },
+            ProjectListRow::Agent { index: 1 },
+            ProjectListRow::NewProject,
+        ]
+    );
+
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Char(' ')));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        app.project_rows(),
+        vec![
+            ProjectListRow::Project {
+                root: 0,
+                expanded: false,
+            },
+            ProjectListRow::Gap,
+            ProjectListRow::Project {
+                root: 1,
+                expanded: true,
+            },
+            ProjectListRow::Agent { index: 1 },
+            ProjectListRow::NewProject,
+        ]
+    );
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app
+        .project_rows()
+        .iter()
+        .any(|row| matches!(row, ProjectListRow::Agent { index: 0 })));
 }
 
 // ========================================================================
@@ -617,6 +669,62 @@ fn test_clicking_tab_bar_switches_tabs() {
 }
 
 #[test]
+fn test_mouse_move_hovers_clickable_items() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut app, _rx) = app_with_agent_areas();
+    app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
+
+    // A project cell spans three lines and never shows a hover.
+    for y in 4..7 {
+        app.handle_mouse(mouse(MouseEventKind::Moved, 5, y));
+        assert_eq!(app.hover(), None, "line {y}");
+    }
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 7));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 8));
+    assert_eq!(app.project_rows()[2], ProjectListRow::Gap);
+    assert_eq!(app.hover(), None);
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 2, 1));
+    assert_eq!(
+        app.hover(),
+        Some(HoverTarget::AgentTab(AgentsTab::Projects))
+    );
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 0, 0));
+    assert_eq!(app.hover(), None);
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 7));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 7));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 7));
+    assert_eq!(app.hover(), None);
+
+    app.state = AppState::AwaitingApproval;
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 7));
+    assert_eq!(app.hover(), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes.md"), "").unwrap();
+    let mut app = App::new();
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    app.set_sandbox_rows_area(Rect::new(81, 11, 28, 8), 0);
+    app.handle_mouse(mouse(MouseEventKind::Moved, 85, 11));
+    assert_eq!(app.hover(), Some(HoverTarget::SandboxRow(0)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 0, 0));
+    assert_eq!(app.hover(), None);
+
+    app.process_command(tool_data("t1", "read_file"));
+    app.process_command(tool_data("t2", "read_file"));
+    let ids: Vec<u64> = app.messages().iter().map(|m| m.version().0).collect();
+    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
+    app.set_chat_layout(vec![(0, ids[0]), (1, ids[1])], 0);
+    app.handle_mouse(mouse(MouseEventKind::Moved, 10, 2));
+    assert_eq!(app.hover(), Some(HoverTarget::Activity(ids[1])));
+}
+
+#[test]
 fn test_hidden_tab_ignores_clicks_on_its_old_rows() {
     let (mut app, mut rx) = app_with_definitions();
     app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
@@ -636,6 +744,7 @@ fn test_arrow_in_agents_column_switches_immediately() {
     app.focus = PanelFocus::Swarm;
 
     app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Down));
 
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
 }
@@ -648,21 +757,102 @@ fn test_enter_on_new_agent_row_creates_agent() {
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
     let _ = rx.try_recv();
-    assert_eq!(app.selected_agent(), 2);
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.selected_agent(), 5);
     assert!(rx.try_recv().is_err());
 
     app.handle_key(key(KeyCode::Enter));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+    assert_eq!(app.state(), AppState::SelectingFolder);
+    assert!(rx.try_recv().is_err());
+}
+
+/// Open the folder browser with Ctrl+N, pointed at `dir` instead of the
+/// launch directory.
+fn open_folder_picker(app: &mut App, dir: &std::path::Path) {
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert_eq!(app.state(), AppState::SelectingFolder);
+    app.folder_picker = Some(FolderPicker::open(dir.to_path_buf()).unwrap());
 }
 
 #[test]
-fn test_ctrl_n_creates_agent_from_chat() {
+fn test_ctrl_n_picks_a_folder_then_names_the_project() {
+    let (mut app, mut rx) = app_with_agents();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("website")).unwrap();
+    open_folder_picker(&mut app, dir.path());
+
+    app.handle_key(key(KeyCode::End));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        app.folder_picker().unwrap().dir(),
+        dir.path().join("website")
+    );
+    app.handle_key(key(KeyCode::Home));
+    app.handle_key(key(KeyCode::Enter));
+
+    assert_eq!(app.state(), AppState::ProjectName);
+    assert!(app.folder_picker().is_none());
+    assert_eq!(app.input(), "website");
+    assert!(rx.try_recv().is_err());
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_chars(&mut app, "Website");
+    app.handle_key(key(KeyCode::Enter));
+    let expected = dir.path().join("website");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateProject { name, folder }) if name == "Website" && folder == expected
+    ));
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn test_folder_picker_creates_a_folder_and_space_picks_it() {
+    let (mut app, mut rx) = app_with_agents();
+    let dir = tempfile::tempdir().unwrap();
+    open_folder_picker(&mut app, dir.path());
+
+    app.handle_key(key(KeyCode::Char('n')));
+    type_chars(&mut app, "new-app");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(dir.path().join("new-app").is_dir());
+    assert_eq!(app.state(), AppState::SelectingFolder);
+
+    app.handle_key(key(KeyCode::Char(' ')));
+    assert_eq!(app.state(), AppState::ProjectName);
+    assert_eq!(app.input(), "new-app");
+    app.handle_key(key(KeyCode::Enter));
+    let expected = dir.path().join("new-app");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateProject { folder, .. }) if folder == expected
+    ));
+}
+
+#[test]
+fn test_esc_closes_the_folder_picker() {
+    let (mut app, mut rx) = app_with_agents();
+    let dir = tempfile::tempdir().unwrap();
+    open_folder_picker(&mut app, dir.path());
+
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.state(), AppState::Idle);
+    assert!(app.folder_picker().is_none());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_name_command_renames_the_current_project() {
     let (mut app, mut rx) = app_with_agents();
 
-    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    app.handle_command("/name Research");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::RenameProject(name)) if name == "Research"));
 
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
-    assert!(app.input().is_empty());
+    app.handle_command("/name");
+    assert_eq!(app.state(), AppState::ProjectName);
+    type_chars(&mut app, "Notes");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::RenameProject(name)) if name == "Notes"));
 }
 
 #[test]
@@ -688,14 +878,15 @@ fn mouse(kind: crossterm::event::MouseEventKind, column: u16, row: u16) -> Mouse
 
 fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
     let (mut app, rx) = app_with_agents();
-    let swarm = Rect::new(0, 3, 20, 10);
+    let swarm = Rect::new(0, 3, 20, 13);
     app.set_panel_areas(crate::app::PanelAreas {
         swarm: Some(swarm),
         agent_rows: None,
-        chat: Some(Rect::new(20, 3, 60, 10)),
+        chat: Some(Rect::new(20, 3, 60, 13)),
         ..crate::app::PanelAreas::default()
     });
-    app.set_agent_rows_area(Rect::new(1, 4, 18, 7));
+    app.set_agent_rows_area(Rect::new(1, 4, 18, 10));
+    app.set_new_project_area(Rect::new(1, 14, 18, 1));
     (app, rx)
 }
 
@@ -738,14 +929,41 @@ fn test_click_agent_row_switches_and_new_row_creates() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let (mut app, mut rx) = app_with_agent_areas();
 
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+    // Projects take lines 4-6 and 9-11, agents 7 and 12, the gap 8.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 12));
     assert_eq!(app.focus(), PanelFocus::Swarm);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
 
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 6));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 8));
+    assert_eq!(app.selected_agent(), 4);
 
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 9));
+    // Clicking a project folds it and leaves the highlighted agent alone.
+    let bb = ProjectListRow::Agent { index: 1 };
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+    assert!(matches!(
+        app.project_rows()[0],
+        ProjectListRow::Project {
+            expanded: false,
+            ..
+        }
+    ));
+    assert_eq!(app.project_rows()[app.selected_agent()], bb);
+    assert_eq!(app.hover(), None);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 6));
+    assert_eq!(app.selected_agent(), 4);
+    assert_eq!(app.project_rows()[4], bb);
+    assert!(rx.try_recv().is_err());
+
+    // "+ New project" is pinned to the bottom, not drawn after the last agent.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 13));
+    assert_eq!(app.selected_agent(), 4);
+    assert_ne!(app.state(), AppState::SelectingFolder);
+    assert!(rx.try_recv().is_err());
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 14));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(5)));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 14));
+    assert_eq!(app.state(), AppState::SelectingFolder);
     assert!(rx.try_recv().is_err());
 }
 
@@ -777,6 +995,32 @@ fn test_drag_selects_chat_text_and_requests_copy() {
 }
 
 #[test]
+fn test_copy_notice_sits_then_expires() {
+    let mut app = App::new();
+    app.notify_copied(4, &Ok(()));
+    assert_eq!(
+        app.copy_notice(),
+        Some(("Copied 4 characters", NotificationType::Success))
+    );
+
+    app.tick();
+    assert!(app.copy_notice().is_some());
+
+    let notice = app.copy_notice.as_mut().unwrap();
+    notice.2 = std::time::Instant::now() - std::time::Duration::from_millis(1);
+    app.tick();
+    assert!(app.copy_notice().is_none());
+}
+
+#[test]
+fn test_keypress_clears_copy_notice() {
+    let mut app = App::new();
+    app.notify_copied(1, &Ok(()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
+    assert!(app.copy_notice().is_none());
+}
+
+#[test]
 fn test_click_without_drag_selects_nothing() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let (mut app, _rx) = app_with_agent_areas();
@@ -793,6 +1037,9 @@ fn test_wheel_over_agents_switches_without_focus() {
     use crossterm::event::MouseEventKind;
     let (mut app, mut rx) = app_with_agent_areas();
 
+    // The first tick lands on the next project header; the next reaches its agent.
+    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+    assert!(rx.try_recv().is_err());
     app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
 
     assert_eq!(app.focus(), PanelFocus::Chat);
@@ -802,10 +1049,20 @@ fn test_wheel_over_agents_switches_without_focus() {
 
 #[test]
 fn test_agents_scroll_keeps_selection_visible() {
+    // Lines: project 0-2, agent 3, gap 4, project 5-7, agent 8.
     let (mut app, _rx) = app_with_agents();
-    app.selected_agent = 2;
+    app.selected_agent = 1;
     app.sync_agents_scroll(2);
-    assert_eq!(app.agents_scroll(), 1);
+    assert_eq!(app.agents_scroll(), 2);
+
+    app.selected_agent = 4;
+    app.sync_agents_scroll(2);
+    assert_eq!(app.agents_scroll(), 7);
+
+    // A project taller than the list keeps its top line in view.
+    app.selected_agent = 3;
+    app.sync_agents_scroll(2);
+    assert_eq!(app.agents_scroll(), 5);
 
     app.selected_agent = 0;
     app.sync_agents_scroll(2);
@@ -923,6 +1180,52 @@ fn test_load_conversation_replaces_messages() {
     assert!(!app.has_live_activity());
     assert!(app.messages().iter().all(|m| !m.is_streaming()));
     assert_eq!(app.scroll_offset(), 0);
+}
+
+#[test]
+fn test_reply_model_names_only_replies_since_last_user_message() {
+    let mut app = App::new();
+    app.add_message(Message::new(MessageRole::Assistant, "earlier reply"));
+    app.add_message(Message::new(MessageRole::User, "question"));
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::FinishThinking);
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("first part".to_string()));
+    app.process_command(UiCommand::FinishStreaming);
+    app.process_command(UiCommand::SetReplyModel {
+        model: "qwen3:4b".to_string(),
+        usage: Some(CallUsage {
+            tokens: 900,
+            cost_usd: None,
+        }),
+    });
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("second part".to_string()));
+    let opus = CallUsage {
+        tokens: 12_400,
+        cost_usd: Some(0.042),
+    };
+    app.process_command(UiCommand::SetReplyModel {
+        model: "claude-opus-4-7".to_string(),
+        usage: Some(opus),
+    });
+
+    let models: Vec<(&str, Option<&str>, Option<u64>)> = app
+        .messages()
+        .iter()
+        .map(|m| (m.content(), m.model(), m.usage().map(|u| u.tokens)))
+        .collect();
+    assert_eq!(
+        models,
+        [
+            ("earlier reply", None, None),
+            ("question", None, None),
+            ("", None, None),
+            ("first part", Some("qwen3:4b"), Some(900)),
+            ("second part", Some("claude-opus-4-7"), Some(12_400)),
+        ]
+    );
+    assert_eq!(app.messages().back().unwrap().usage(), Some(opus));
 }
 
 // ========================================================================

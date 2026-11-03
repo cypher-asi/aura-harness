@@ -59,6 +59,9 @@ async fn publish_auth(state: &mut LoopState<'_>) {
         state.agent_loop.config_mut().auth_token.as_deref(),
     );
     state.models.set_auth(summary);
+    if let Some(note) = state.models.refresh_plans(state.auth.as_ref()).await {
+        show_system_message(state, note).await;
+    }
     if state.models.ensure_usable(state.agent_loop.config_mut()) {
         show_system_message(
             state,

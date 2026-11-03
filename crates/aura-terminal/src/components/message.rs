@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::components::Activity;
-use crate::events::MessageRole;
+use crate::events::{CallUsage, MessageRole};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(0);
@@ -37,6 +37,10 @@ pub struct Message {
     activity: Option<Activity>,
     /// Whether an activity block shows its full detail
     expanded: bool,
+    /// Model that wrote an assistant reply
+    model: Option<String>,
+    /// Tokens and cost of the model call that wrote an assistant reply
+    usage: Option<CallUsage>,
     /// Unique to this message, clones included
     id: u64,
     /// Bumped on every change
@@ -53,6 +57,8 @@ impl Clone for Message {
             shell: self.shell.clone(),
             activity: self.activity.clone(),
             expanded: self.expanded,
+            model: self.model.clone(),
+            usage: self.usage,
             id: next_message_id(),
             revision: 0,
         }
@@ -82,6 +88,8 @@ impl Message {
             shell: None,
             activity: None,
             expanded: false,
+            model: None,
+            usage: None,
             id: next_message_id(),
             revision: 0,
         }
@@ -181,6 +189,34 @@ impl Message {
         self.timestamp = timestamp;
         self.touch();
         self
+    }
+
+    /// Model that wrote this reply, if known.
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    /// Record the model that wrote this reply.
+    pub fn set_model(&mut self, model: &str) {
+        if self.model.as_deref() != Some(model) {
+            self.model = Some(model.to_string());
+            self.touch();
+        }
+    }
+
+    /// Tokens and cost of the model call that wrote this reply, if known.
+    #[must_use]
+    pub const fn usage(&self) -> Option<CallUsage> {
+        self.usage
+    }
+
+    /// Record the tokens and cost of the model call that wrote this reply.
+    pub fn set_usage(&mut self, usage: Option<CallUsage>) {
+        if self.usage != usage {
+            self.usage = usage;
+            self.touch();
+        }
     }
 
     /// Get the message role.

@@ -14,6 +14,8 @@ fn llm_call_serializes_with_debug_llm_call_type_and_counter_fields() {
         model: "claude-opus-4-6".into(),
         input_tokens: 1024,
         output_tokens: 512,
+        cache_creation_input_tokens: Some(256),
+        cache_read_input_tokens: Some(4096),
         duration_ms: 1_337,
         task_id: Some("task-42".into()),
         agent_instance_id: Some("inst-1".into()),
@@ -30,6 +32,8 @@ fn llm_call_serializes_with_debug_llm_call_type_and_counter_fields() {
     // but we carry them here so the channel file is analytic-ready.
     assert_eq!(v["input_tokens"], 1024);
     assert_eq!(v["output_tokens"], 512);
+    assert_eq!(v["cache_creation_input_tokens"], 256);
+    assert_eq!(v["cache_read_input_tokens"], 4096);
     assert_eq!(v["duration_ms"], 1_337);
     assert_eq!(v["task_id"], "task-42");
     assert_eq!(v["agent_instance_id"], "inst-1");
@@ -49,6 +53,8 @@ fn llm_call_omits_none_option_fields() {
         model: "claude-opus-4-6".into(),
         input_tokens: 0,
         output_tokens: 0,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
         duration_ms: 0,
         task_id: None,
         agent_instance_id: None,
@@ -56,6 +62,8 @@ fn llm_call_omits_none_option_fields() {
         message_id: None,
     };
     let v = serde_json::to_value(&ev).expect("serialize");
+    assert!(v.get("cache_creation_input_tokens").is_none());
+    assert!(v.get("cache_read_input_tokens").is_none());
     assert!(v.get("task_id").is_none());
     assert!(v.get("agent_instance_id").is_none());
     assert!(v.get("provider_request_id").is_none());
@@ -177,6 +185,8 @@ fn serialized_type_strings_match_aura_os_counter_constants() {
                 model: "m".into(),
                 input_tokens: 0,
                 output_tokens: 0,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
                 duration_ms: 0,
                 task_id: None,
                 agent_instance_id: None,

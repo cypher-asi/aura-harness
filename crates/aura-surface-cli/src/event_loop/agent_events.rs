@@ -7,16 +7,35 @@
 //! `mpsc::Sender<UiCommand>` that feeds the terminal.
 
 use async_trait::async_trait;
-use aura_agent::{map_agent_loop_event, AgentLoopEvent, TurnEventSink};
-use aura_terminal::{events::ToolData, UiCommand};
+use aura_agent::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink};
+use aura_model_reasoner::{model_catalog, Usage};
+use aura_terminal::{
+    events::{CallUsage, ToolData},
+    UiCommand,
+};
 use tokio::sync::mpsc;
 use tracing::debug;
 
 /// Tracks forwarder lifecycle so the caller can finalize streaming/thinking.
+#[derive(Default)]
 pub(crate) struct ForwarderState {
     pub streaming_active: bool,
     pub thinking_active: bool,
     pub had_text: bool,
+    /// Model that answered the latest model call of the turn
+    pub reply_model: Option<String>,
+    /// Tokens and cost of the latest model call of the turn
+    pub reply_usage: Option<CallUsage>,
+}
+
+/// Tokens and estimated cost of one model call, for the reply header.
+/// `None` when the provider reported no usage at all.
+pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
+    let tokens = model_catalog::call_tokens(model, usage);
+    (tokens > 0).then(|| CallUsage {
+        tokens,
+        cost_usd: model_catalog::estimate_cost_usd(model, usage),
+    })
 }
 
 /// Sink implementation that drains [`AgentLoopEvent`]s from the agent
@@ -164,9 +183,43 @@ impl TurnEventSink for UiCommandSink {
         let _ = self.commands.send(UiCommand::ShowWarning(message)).await;
     }
 
-    // `IterationComplete`, `StepComplete`, `ToolComplete`, `Debug` —
-    // intentionally use the default no-op impls; the TUI derives UI
-    // transitions from the events above.
+    async fn on_debug(&mut self, event: DebugEvent) {
+        if let DebugEvent::LlmCall {
+            model,
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            ..
+        } = event
+        {
+            if model.is_empty() {
+                return;
+            }
+            let usage = call_usage(
+                &model,
+                &Usage {
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
+                },
+            );
+            let _ = self
+                .commands
+                .send(UiCommand::SetReplyModel {
+                    model: model.clone(),
+                    usage,
+                })
+                .await;
+            self.state.reply_model = Some(model);
+            self.state.reply_usage = usage;
+        }
+    }
+
+    // `IterationComplete`, `StepComplete`, `ToolComplete` — intentionally
+    // use the default no-op impls; the TUI derives UI transitions from the
+    // events above.
 }
 
 /// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s.
@@ -176,11 +229,7 @@ pub(crate) async fn forward_agent_events(
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         commands,
-        state: ForwarderState {
-            streaming_active: false,
-            thinking_active: false,
-            had_text: false,
-        },
+        state: ForwarderState::default(),
     };
 
     while let Some(event) = rx.recv().await {

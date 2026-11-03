@@ -435,6 +435,85 @@ fn reasoning_with_thinking_becomes_a_thinking_block() {
 }
 
 #[test]
+fn reply_names_the_model_of_its_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let entries = [
+        text_tx(agent, TransactionType::UserPrompt, "first"),
+        text_tx(agent, TransactionType::Reasoning, r#"{"model":"qwen3:4b"}"#),
+        text_tx(
+            agent,
+            TransactionType::Reasoning,
+            r#"{"model":"claude-opus-4-7"}"#,
+        ),
+        text_tx(agent, TransactionType::AgentMsg, "answer one"),
+        text_tx(agent, TransactionType::UserPrompt, "second"),
+        text_tx(agent, TransactionType::Reasoning, r#"{"status":"failed"}"#),
+        text_tx(agent, TransactionType::AgentMsg, "answer two"),
+    ];
+    for (seq, tx) in (1..).zip(entries) {
+        append(&store, seq, tx);
+    }
+
+    let history = conversation_history(&store, agent).unwrap();
+    let models: Vec<(&str, Option<&str>)> = history
+        .iter()
+        .map(|m| (m.content.as_str(), m.model.as_deref()))
+        .collect();
+    assert_eq!(
+        models,
+        [
+            ("first", None),
+            ("answer one", Some("claude-opus-4-7")),
+            ("second", None),
+            ("answer two", None),
+        ]
+    );
+}
+
+#[test]
+fn reply_restores_the_tokens_and_cost_of_its_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let opus = json!({
+        "model": "claude-opus-4-7",
+        "input_tokens": 1_000,
+        "output_tokens": 1_000,
+        "cache_creation_input_tokens": 2_000,
+        "cache_read_input_tokens": 1_000_000,
+    });
+    let local = json!({"model": "qwen3:4b", "input_tokens": 300, "output_tokens": 600});
+    let entries = [
+        text_tx(agent, TransactionType::UserPrompt, "first"),
+        text_tx(agent, TransactionType::Reasoning, &opus.to_string()),
+        text_tx(agent, TransactionType::AgentMsg, "answer one"),
+        text_tx(agent, TransactionType::UserPrompt, "second"),
+        text_tx(agent, TransactionType::Reasoning, &local.to_string()),
+        text_tx(agent, TransactionType::AgentMsg, "answer two"),
+    ];
+    for (seq, tx) in (1..).zip(entries) {
+        append(&store, seq, tx);
+    }
+
+    let history = conversation_history(&store, agent).unwrap();
+    let usage = |content: &str| {
+        history
+            .iter()
+            .find(|m| m.content == content)
+            .and_then(|m| m.usage)
+            .unwrap()
+    };
+    let opus = usage("answer one");
+    assert_eq!(opus.tokens, 1_004_000);
+    assert!((opus.cost_usd.unwrap() - 0.5425).abs() < 1e-9, "{opus:?}");
+    let local = usage("answer two");
+    assert_eq!(local.tokens, 900);
+    assert_eq!(local.cost_usd, None);
+}
+
+#[test]
 fn policy_line_is_hidden_only_for_allowed_user_commands() {
     let (t, _) = policy_decision_tx(AgentId::generate());
     let mut decision: PolicyDecision = serde_json::from_slice(&t.payload).unwrap();

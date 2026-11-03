@@ -55,6 +55,10 @@ impl Theme {
                 error: Color::Red,
                 pending: Color::Rgb(136, 136, 136),
                 muted: Color::Rgb(136, 136, 136),
+                surface: Color::Rgb(38, 38, 38),
+                surface_hover: Color::Rgb(52, 52, 52),
+                selection: Color::White,
+                on_selection: Color::Rgb(26, 26, 26),
             },
         )
     }
@@ -74,6 +78,10 @@ impl Theme {
                 error: Color::Rgb(200, 0, 0),
                 pending: Color::Rgb(0, 180, 0),
                 muted: Color::Rgb(0, 100, 0),
+                surface: Color::Rgb(0, 20, 0),
+                surface_hover: Color::Rgb(0, 36, 0),
+                selection: Color::Rgb(0, 255, 0),
+                on_selection: Color::Black,
             },
         )
     }
@@ -93,6 +101,10 @@ impl Theme {
                 error: Color::Rgb(255, 20, 147),    // deep pink
                 pending: Color::Rgb(180, 100, 255), // lavender
                 muted: Color::Rgb(136, 136, 136),
+                surface: Color::Rgb(38, 38, 64),
+                surface_hover: Color::Rgb(52, 52, 84),
+                selection: Color::Rgb(255, 46, 151),
+                on_selection: Color::Rgb(26, 26, 46),
             },
         )
     }
@@ -142,7 +154,10 @@ impl Default for Theme {
 /// | Red         | #f4012a  | Errors, danger                     |
 /// | White       | #ffffff  | Primary text                       |
 /// | Gray        | #888888  | Muted text, secondary info         |
-/// | Black       | #0d0d0d  | Background                         |
+/// | Black       | #0d0d0d  | Background, text on selection      |
+/// | Sky         | #7cd4ff  | Selected list row                  |
+/// | Dark gray   | #1e1e1e  | List cell                          |
+/// | Graphite    | #2a2a2a  | List cell under the cursor         |
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeColors {
     /// Background color (#0d0d0d black)
@@ -163,6 +178,14 @@ pub struct ThemeColors {
     pub pending: Color,
     /// Muted text color - gray (#888888)
     pub muted: Color,
+    /// Background of a list cell - dark gray (#1e1e1e)
+    pub surface: Color,
+    /// Background of a list cell under the keyboard cursor - gray (#2a2a2a)
+    pub surface_hover: Color,
+    /// Background of the selected list row - sky blue (#7cd4ff)
+    pub selection: Color,
+    /// Text on the selected list row - black (#0d0d0d)
+    pub on_selection: Color,
 }
 
 /// Border style for UI elements.
@@ -301,6 +324,10 @@ mod tests {
             error: Color::Red,
             pending: Color::Magenta,
             muted: Color::Gray,
+            surface: Color::DarkGray,
+            surface_hover: Color::Gray,
+            selection: Color::LightBlue,
+            on_selection: Color::Black,
         };
 
         let theme = Theme::new("custom", colors);

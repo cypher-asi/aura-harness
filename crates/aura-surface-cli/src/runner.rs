@@ -359,6 +359,7 @@ async fn run_terminal(
     let registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
     let active_agent = registry.active().clone();
     let identity = active_agent.identity();
+    let active_folder = registry.project_folder(identity.agent_id);
     let definitions =
         AgentDefinitions::load_or_seed(&data_dir).context("loading permanent agents")?;
 
@@ -451,18 +452,22 @@ async fn run_terminal(
         move |dispatcher| {
             event_loop::KernelFactory::new(
                 store,
-                Box::new(move |agent_id, parent_chain| {
+                Box::new(move |agent_id, parent_chain, folder| {
                     let executor = ToolExecutor::new(tool_config.clone())
                         .with_caller_permissions(AgentPermissions::full_access())
                         .with_parent_chain(parent_chain)
                         .with_subagent_dispatch_hook(Arc::clone(&dispatcher));
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
+                    let mut config = kernel_config.clone();
+                    if let Some(folder) = folder {
+                        config.workspace_base = folder;
+                    }
                     Ok(Kernel::new(
                         Arc::clone(&kernel_store),
                         Arc::clone(&provider),
                         executor_router,
-                        kernel_config.clone(),
+                        config,
                         agent_id,
                     )?)
                 }),
@@ -472,7 +477,7 @@ async fn run_terminal(
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
-    let session = hub.factory.open(&active_agent, Vec::new())?;
+    let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;
 
     let cmd_tx_clone = cmd_tx.clone();
     let process_manager_clone = Arc::clone(&process_manager);

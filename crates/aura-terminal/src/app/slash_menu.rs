@@ -31,6 +31,12 @@ const fn command(name: &'static str, description: &'static str) -> SlashCommand 
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("help", "Show help"),
     command("new", "New session (reset context)"),
+    SlashCommand {
+        name: "name",
+        args: "[name]",
+        description: "Rename the current project",
+        needs_args: false,
+    },
     command("clear", "Clear messages"),
     SlashCommand {
         name: "agent",

@@ -272,6 +272,27 @@ pub(super) fn build_system_block(
     }
 }
 
+/// [`build_system_block`] for `request`, with its `system_preamble` (if
+/// any) as a separate first block.
+pub(super) fn build_request_system(
+    request: &ModelRequest,
+    prompt_caching_enabled: bool,
+) -> Option<serde_json::Value> {
+    let system = build_system_block(&request.system, prompt_caching_enabled);
+    let Some(preamble) = request
+        .system_preamble
+        .as_deref()
+        .filter(|p| !p.trim().is_empty())
+    else {
+        return system;
+    };
+    let mut blocks = vec![serde_json::json!({"type": "text", "text": preamble})];
+    if let Some(serde_json::Value::Array(rest)) = system {
+        blocks.extend(rest);
+    }
+    Some(serde_json::Value::Array(blocks))
+}
+
 pub(super) fn convert_messages_to_api(
     messages: &[Message],
     prompt_caching_enabled: bool,

@@ -8,6 +8,7 @@ impl App {
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         self.notification = None;
+        self.copy_notice = None;
         self.clear_selection();
 
         if self.showing_record_detail {
@@ -23,12 +24,94 @@ impl App {
                 self.state = AppState::Idle;
                 KeyResult::continue_running()
             }
-            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
-                self.handle_login_key(key)
-            }
+            AppState::LoginEmail
+            | AppState::LoginPassword
+            | AppState::LinkCode
+            | AppState::ProjectName => self.handle_login_key(key),
             AppState::SelectingModel => self.handle_model_selector_key(key),
+            AppState::SelectingFolder => self.handle_folder_picker_key(key),
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
         }
+    }
+
+    /// Handle key while the new-project folder browser is open.
+    fn handle_folder_picker_key(&mut self, key: KeyEvent) -> KeyResult {
+        let Some(picker) = self.folder_picker.as_mut() else {
+            self.state = AppState::Idle;
+            return KeyResult::continue_running();
+        };
+        if picker.new_folder().is_some() {
+            match key.code {
+                KeyCode::Esc => picker.cancel_new_folder(),
+                KeyCode::Enter => {
+                    if let Err(problem) = picker.create_new_folder() {
+                        self.notification = Some((problem, NotificationType::Warning));
+                    }
+                }
+                KeyCode::Backspace => picker.pop_new_folder_char(),
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    picker.push_new_folder_char(c);
+                }
+                _ => {}
+            }
+            return KeyResult::continue_running();
+        }
+        let moved = match key.code {
+            KeyCode::Esc => {
+                self.cancel_folder_picker();
+                return KeyResult::continue_running();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                picker.move_by(-1);
+                Ok(None)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                picker.move_by(1);
+                Ok(None)
+            }
+            KeyCode::PageUp => {
+                picker.move_by(-10);
+                Ok(None)
+            }
+            KeyCode::PageDown => {
+                picker.move_by(10);
+                Ok(None)
+            }
+            KeyCode::Home => {
+                picker.select_first();
+                Ok(None)
+            }
+            KeyCode::End => {
+                picker.select_last();
+                Ok(None)
+            }
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => picker.activate(),
+            KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => {
+                picker.go_up().map(|()| None)
+            }
+            KeyCode::Char(' ') => Ok(picker.highlighted_folder()),
+            KeyCode::Char('~') => picker.go_home().map(|()| None),
+            KeyCode::Char('.') => {
+                picker.toggle_hidden();
+                Ok(None)
+            }
+            KeyCode::Char('n') => {
+                picker.start_new_folder();
+                Ok(None)
+            }
+            _ => Ok(None),
+        };
+        match moved {
+            Ok(Some(folder)) => self.choose_project_folder(folder),
+            Ok(None) => {}
+            Err(e) => {
+                self.notification = Some((
+                    format!("Cannot open folder: {e}"),
+                    NotificationType::Warning,
+                ));
+            }
+        }
+        KeyResult::continue_running()
     }
 
     /// Handle key in approval mode.
@@ -65,14 +148,22 @@ impl App {
     fn handle_login_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Esc => {
+                let naming = self.state == AppState::ProjectName;
                 self.state = AppState::Idle;
                 self.status = "Ready".to_string();
                 self.input.clear();
                 self.cursor_pos = 0;
                 self.login_email.clear();
                 self.pending_model = None;
-                self.notification =
-                    Some(("Login cancelled".to_string(), NotificationType::Warning));
+                self.project_name_purpose = None;
+                self.notification = Some((
+                    if naming {
+                        "Cancelled".to_string()
+                    } else {
+                        "Login cancelled".to_string()
+                    },
+                    NotificationType::Warning,
+                ));
             }
             KeyCode::Enter => {
                 let value = std::mem::take(&mut self.input);
@@ -108,6 +199,7 @@ impl App {
                             let _ = tx.try_send(UiEvent::LinkCode(value.trim().to_string()));
                         }
                     }
+                    AppState::ProjectName => self.submit_project_name(value),
                     _ => {}
                 }
             }
@@ -156,7 +248,7 @@ impl App {
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
-            self.create_agent();
+            self.prompt_new_project();
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
@@ -186,6 +278,15 @@ impl App {
             && !word_motion
             && self.handle_definitions_shortcut(key)
         {
+            return KeyResult::continue_running();
+        }
+        if self.focus == PanelFocus::Swarm
+            && self.agents_tab == AgentsTab::Projects
+            && self.input.is_empty()
+            && !word_motion
+            && key.code == KeyCode::Char(' ')
+        {
+            self.toggle_selected_project();
             return KeyResult::continue_running();
         }
         match key.code {
@@ -368,8 +469,8 @@ impl App {
     }
 
     /// Handle key when the agents panel shows Projects. Moving the
-    /// highlight onto an agent switches to it; Enter on "+ New project"
-    /// creates one.
+    /// highlight onto an agent switches to it. Enter folds the highlighted
+    /// project, or creates one from "+ New project".
     fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Left | KeyCode::Right => self.toggle_agents_tab(),
@@ -379,7 +480,7 @@ impl App {
             KeyCode::PageUp => self.select_agent_row(self.selected_agent.saturating_sub(5)),
             KeyCode::PageDown => self.select_agent_row(self.selected_agent + 5),
             KeyCode::Home => self.select_agent_row(0),
-            KeyCode::End => self.select_agent_row(self.agents.len().saturating_sub(1)),
+            KeyCode::End => self.select_last_agent_row(),
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor_pos, c);
                 self.cursor_pos += 1;

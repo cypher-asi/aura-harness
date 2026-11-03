@@ -132,7 +132,8 @@ pub fn routed_provider(
     let router = AnthropicProvider::new(router_cfg)?;
     let mut routed = RoutedProvider::new(Arc::new(local), Arc::new(router));
     if let Some(resolver) = subscriptions {
-        let claude = AnthropicProvider::new(AnthropicConfig::anthropic_direct())?;
+        let claude = AnthropicProvider::new(AnthropicConfig::anthropic_direct())?
+            .without_router_body_extensions();
         let chatgpt = OpenAiResponsesProvider::from_env()?;
         routed = routed
             .with_claude(Arc::new(CredentialedProvider::new(

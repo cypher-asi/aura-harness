@@ -1,9 +1,10 @@
 //! Sandbox panel: file tree of the active agent's workspace.
 
-use super::panels::truncate_record_info;
+use super::panels::{hover_style, truncate_record_info};
 use super::text::display_width;
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
-use crate::{app::PanelFocus, App, Theme};
+use crate::app::{HoverTarget, PanelFocus};
+use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -58,6 +59,10 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     };
     let visible = rows_area.height as usize;
     let scroll = app.sync_sandbox_scroll(visible);
+    let hovered = match app.hover() {
+        Some(HoverTarget::SandboxRow(index)) => Some(index),
+        _ => None,
+    };
     let tree = app.sandbox();
     let selected = tree.selected();
 
@@ -71,6 +76,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             sandbox_line(
                 row,
                 is_focused && i == selected,
+                hovered == Some(i),
                 inner.width as usize,
                 theme,
             )
@@ -96,7 +102,13 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     }
 }
 
-fn sandbox_line<'a>(row: &SandboxRow, highlighted: bool, width: usize, theme: &Theme) -> Line<'a> {
+fn sandbox_line<'a>(
+    row: &SandboxRow,
+    highlighted: bool,
+    hovered: bool,
+    width: usize,
+    theme: &Theme,
+) -> Line<'a> {
     let prefix = if highlighted { " > " } else { "   " };
     let indent = "  ".repeat(row.depth);
     let (marker, label, color) = match row.kind {
@@ -117,15 +129,22 @@ fn sandbox_line<'a>(row: &SandboxRow, highlighted: bool, width: usize, theme: &T
         Style::default()
             .fg(theme.colors.primary)
             .add_modifier(Modifier::BOLD)
+    } else if hovered {
+        hover_style(theme)
     } else {
         Style::default().fg(color)
+    };
+    let marker_style = if hovered && !highlighted {
+        hover_style(theme)
+    } else {
+        Style::default().fg(theme.colors.muted)
     };
     let used = display_width(prefix) + indent.len() + display_width(marker);
     let label = truncate_record_info(&label, width.saturating_sub(used));
     Line::from(vec![
         Span::styled(prefix, style),
         Span::raw(indent),
-        Span::styled(marker, Style::default().fg(theme.colors.muted)),
+        Span::styled(marker, marker_style),
         Span::styled(label, style),
     ])
 }
@@ -146,7 +165,7 @@ mod tests {
     }
 
     fn label_color(row: &SandboxRow, theme: &Theme) -> Option<ratatui::style::Color> {
-        sandbox_line(row, false, 40, theme).spans[3].style.fg
+        sandbox_line(row, false, false, 40, theme).spans[3].style.fg
     }
 
     #[test]

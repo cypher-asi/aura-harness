@@ -23,33 +23,39 @@ const MAX_NAME_LEN: usize = 40;
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const NEW_DEFINITION_NAME: &str = "new-agent";
 
+/// Names of the seeded definitions already added once, one per line.
+const SEEDED_FILE: &str = ".seeded";
+
+/// Built-in definitions, each added once to a roster; deleting one never
+/// re-adds it. The specialists match AURA's default agent roster.
 const SEED_DEFINITIONS: &[(&str, &str)] = &[
+    ("explorer", include_str!("agent_definitions/explorer.md")),
+    ("reviewer", include_str!("agent_definitions/reviewer.md")),
+    ("engineer", include_str!("agent_definitions/engineer.md")),
     (
-        "explorer.md",
-        "---
-name: explorer
-description: Read-only codebase exploration. Spawn it to find files, symbols, and how something works before changing it.
-tools: [list_files, read_file, stat_file, find_files, search_code, run_command]
----
-Explore the codebase using read and search tools and safe verification commands only.
-Do not modify files.
-Return the relevant files, symbols, and conclusions.
-",
+        "rust-engineer",
+        include_str!("agent_definitions/rust-engineer.md"),
     ),
     (
-        "reviewer.md",
-        "---
-name: reviewer
-description: Reviews code for bugs, regressions, and missing tests. Spawn it after making changes.
-tools: [list_files, read_file, stat_file, find_files, search_code, run_command]
----
-Review the requested code for correctness risks.
-Lead with findings and cite concrete files and lines.
-Point out behavior that is not covered by tests.
-Do not modify files.
-",
+        "frontend-engineer",
+        include_str!("agent_definitions/frontend-engineer.md"),
+    ),
+    (
+        "ui-designer",
+        include_str!("agent_definitions/ui-designer.md"),
+    ),
+    (
+        "web-designer",
+        include_str!("agent_definitions/web-designer.md"),
+    ),
+    (
+        "product-manager",
+        include_str!("agent_definitions/product-manager.md"),
     ),
 ];
+
+/// Seeds written by versions that seeded only when creating the directory.
+const LEGACY_SEEDS: &[&str] = &["explorer", "reviewer"];
 
 #[derive(Debug, Deserialize)]
 struct Frontmatter {
@@ -203,24 +209,45 @@ pub struct AgentDefinitions {
 }
 
 impl AgentDefinitions {
-    /// Load the definitions, creating the directory with starter
-    /// definitions the first time.
+    /// Load the definitions, first adding each built-in definition this
+    /// directory has never had. One whose name is already taken is skipped
+    /// for good.
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created or seeded.
     pub fn load_or_seed(data_dir: &Path) -> anyhow::Result<Self> {
         let dir = data_dir.join(DEFINITIONS_DIR);
-        if !dir.exists() {
+        let mut seeded = if dir.exists() {
+            read_seeded(&dir)
+        } else {
             fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-            for (file, content) in SEED_DEFINITIONS {
-                let path = dir.join(file);
-                fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
-            }
-        }
+            Vec::new()
+        };
         let mut definitions = Self {
             dir,
             definitions: Vec::new(),
         };
+        definitions.reload();
+
+        let mut added = false;
+        for (name, content) in SEED_DEFINITIONS {
+            if seeded.iter().any(|s| s == name) {
+                continue;
+            }
+            seeded.push((*name).to_string());
+            added = true;
+            let path = definitions.dir.join(format!("{name}.md"));
+            if definitions.get(name).is_none() && !path.exists() {
+                fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+            }
+        }
+        if added {
+            let path = definitions.dir.join(SEEDED_FILE);
+            let mut list = seeded.join("\n");
+            list.push('\n');
+            fs::write(&path, list).with_context(|| format!("writing {}", path.display()))?;
+        }
+
         for problem in definitions.reload() {
             warn!(%problem, "Skipping agent definition");
         }
@@ -341,6 +368,20 @@ impl AgentDefinitions {
     }
 }
 
+/// The seeds `dir` has already had. A directory without the list was
+/// created by a version that seeded only [`LEGACY_SEEDS`].
+fn read_seeded(dir: &Path) -> Vec<String> {
+    match fs::read_to_string(dir.join(SEEDED_FILE)) {
+        Ok(list) => list
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Err(_) => LEGACY_SEEDS.iter().map(|s| (*s).to_string()).collect(),
+    }
+}
+
 fn read_definition(path: &Path) -> anyhow::Result<AgentDefinition> {
     let size = fs::metadata(path)?.len();
     if size > MAX_FILE_BYTES {
@@ -395,18 +436,80 @@ mod tests {
         assert!(validate_name(&"a".repeat(MAX_NAME_LEN + 1)).is_err());
     }
 
+    const SEEDED_NAMES: [&str; 8] = [
+        "engineer",
+        "explorer",
+        "frontend-engineer",
+        "product-manager",
+        "reviewer",
+        "rust-engineer",
+        "ui-designer",
+        "web-designer",
+    ];
+
+    fn names(defs: &AgentDefinitions) -> Vec<&str> {
+        defs.all().iter().map(|d| d.name.as_str()).collect()
+    }
+
+    #[test]
+    fn every_seed_parses_under_its_own_name() {
+        for (name, content) in SEED_DEFINITIONS {
+            let def = AgentDefinition::parse(content, Path::new("seed.md"))
+                .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!(def.name, *name);
+            assert!(!def.description.is_empty(), "{name} has no description");
+            assert!(!def.rules.is_empty(), "{name} has no rules");
+        }
+    }
+
     #[test]
     fn seeds_starter_definitions_once() {
         let dir = tempfile::tempdir().unwrap();
-        let defs = AgentDefinitions::load_or_seed(dir.path()).unwrap();
-        let names: Vec<&str> = defs.all().iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, ["explorer", "reviewer"]);
+        let mut defs = AgentDefinitions::load_or_seed(dir.path()).unwrap();
+        assert_eq!(names(&defs), SEEDED_NAMES);
 
-        let mut defs = defs;
         defs.delete("explorer").unwrap();
+        defs.delete("ui-designer").unwrap();
         let reloaded = AgentDefinitions::load_or_seed(dir.path()).unwrap();
-        assert_eq!(reloaded.all().len(), 1);
+        assert_eq!(reloaded.all().len(), SEEDED_NAMES.len() - 2);
+        assert!(reloaded.get("explorer").is_none());
+        assert!(reloaded.get("ui-designer").is_none());
         assert!(reloaded.get("REVIEWER").is_some());
+    }
+
+    #[test]
+    fn seeds_new_defaults_into_a_directory_from_before_the_seed_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let defs_dir = dir.path().join(DEFINITIONS_DIR);
+        fs::create_dir_all(&defs_dir).unwrap();
+        fs::write(
+            defs_dir.join("reviewer.md"),
+            "---\nname: reviewer\n---\nMine.\n",
+        )
+        .unwrap();
+        fs::write(
+            defs_dir.join("web.md"),
+            "---\nname: web-designer\n---\nMine.\n",
+        )
+        .unwrap();
+
+        let defs = AgentDefinitions::load_or_seed(dir.path()).unwrap();
+        assert!(
+            defs.get("explorer").is_none(),
+            "a deleted legacy seed came back"
+        );
+        assert_eq!(defs.get("reviewer").unwrap().rules, "Mine.");
+        assert_eq!(defs.get("web-designer").unwrap().rules, "Mine.");
+        assert!(!defs_dir.join("web-designer.md").exists());
+        for name in [
+            "engineer",
+            "rust-engineer",
+            "frontend-engineer",
+            "ui-designer",
+            "product-manager",
+        ] {
+            assert!(defs.get(name).is_some(), "missing {name}");
+        }
     }
 
     #[test]
@@ -435,7 +538,7 @@ mod tests {
 
         let problems = defs.reload();
         assert_eq!(problems.len(), 2, "{problems:?}");
-        assert_eq!(defs.all().len(), 2);
+        assert_eq!(defs.all().len(), SEEDED_NAMES.len());
     }
 
     #[test]

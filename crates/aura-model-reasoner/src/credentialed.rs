@@ -41,13 +41,7 @@ impl CredentialedProvider {
             .map_err(auth_to_reasoner)?;
 
         request.model = ModelName::from(upstream_model_name(request.model.as_str()));
-        if let Some(preamble) = credential.system_preamble.as_deref() {
-            request.system = if request.system.is_empty() {
-                preamble.to_string()
-            } else {
-                format!("{preamble}\n\n{}", request.system)
-            };
-        }
+        request.system_preamble = credential.system_preamble;
         request.auth_token = Some(credential.bearer);
         request.extra_headers = credential.headers;
         // Aura billing and routing metadata must not leak to a third party.
@@ -179,7 +173,8 @@ mod tests {
         let seen = recorder.0.lock().unwrap().take().expect("forwarded");
         assert_eq!(seen.model.as_str(), "claude-sonnet-4-6");
         assert_eq!(seen.auth_token.as_deref(), Some("sub-token"));
-        assert_eq!(seen.system, "You are Claude Code.\n\nbe helpful");
+        assert_eq!(seen.system, "be helpful");
+        assert_eq!(seen.system_preamble.as_deref(), Some("You are Claude Code."));
         assert_eq!(seen.extra_headers.len(), 1);
         assert!(seen.aura_project_id.is_none());
         assert!(seen.upstream_provider_family.is_none());

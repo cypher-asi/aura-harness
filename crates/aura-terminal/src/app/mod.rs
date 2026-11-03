@@ -5,6 +5,7 @@
 
 mod commands;
 mod definitions;
+pub mod folder_picker;
 pub(crate) mod format;
 mod keys;
 mod line_edit;
@@ -27,13 +28,14 @@ use crate::{
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
+use folder_picker::FolderPicker;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
 };
 use sandbox::SandboxTree;
 pub use selection::Selection;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -46,6 +48,9 @@ const DEFAULT_COMMAND_COLUMNS: u16 = 80;
 
 /// Narrowest terminal a command is given.
 const MIN_COMMAND_COLUMNS: u16 = 20;
+
+/// How long "Copied…" stays centered on the AURA CLI line.
+const COPY_NOTICE_TTL: Duration = Duration::from_secs(2);
 
 /// How long typed input must sit unchanged before it is shown as a shell
 /// command, so a half-typed word doesn't flash green while passing through a
@@ -86,8 +91,21 @@ pub enum AppState {
     LoginPassword,
     /// Plan link flow: waiting for the pasted sign-in code
     LinkCode,
+    /// Waiting for a project name (create or rename)
+    ProjectName,
     /// Model selector overlay is open
     SelectingModel,
+    /// Folder browser for a new project is open
+    SelectingFolder,
+}
+
+/// Why the project-name prompt is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProjectNamePurpose {
+    /// Name a project that does not exist yet, kept in this folder
+    Create(PathBuf),
+    /// Rename the project that contains the active agent
+    Rename,
 }
 
 /// Pending approval request.
@@ -106,6 +124,8 @@ pub struct PendingApproval {
 pub struct App {
     /// Current application state
     pub(super) state: AppState,
+    /// What submitting the project-name prompt will do
+    pub(super) project_name_purpose: Option<ProjectNamePurpose>,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
     /// Current input text
@@ -141,6 +161,8 @@ pub struct App {
     pub(super) streaming_content: String,
     /// Notification message (ephemeral)
     pub(super) notification: Option<(String, NotificationType)>,
+    /// Copy confirmation drawn in the middle of the AURA CLI line until `Instant`.
+    pub(super) copy_notice: Option<(String, NotificationType, Instant)>,
     /// Which panel has focus
     pub(super) focus: PanelFocus,
     /// Whether the Record panel is visible
@@ -163,8 +185,10 @@ pub struct App {
     pub(super) showing_record_detail: bool,
     /// List of agents in the swarm
     pub(super) agents: Vec<AgentSummary>,
-    /// Selected agent index in the swarm panel
+    /// Highlighted row of the projects list (headers, agents, "+ New project")
     pub(super) selected_agent: usize,
+    /// Root-agent ids whose project row is folded shut
+    pub(super) collapsed_projects: HashSet<String>,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
     /// API URL for the swarm
@@ -191,6 +215,8 @@ pub struct App {
     pub(super) sandbox_scroll: usize,
     /// Screen areas from the last frame, for mouse hit-testing
     pub(super) areas: PanelAreas,
+    /// Clickable item under the mouse pointer
+    hover: Option<HoverTarget>,
     /// When the in-flight turn started (`None` unless processing)
     pub(super) processing_since: Option<Instant>,
     /// `[user@host dir]$ ` shown before the input line
@@ -227,6 +253,8 @@ pub struct App {
     pub(super) editor_request: Option<PathBuf>,
     /// Permanent agent waiting for `y` to confirm its deletion
     pub(super) pending_delete: Option<String>,
+    /// Folder browser for a new project, while it is open
+    pub(super) folder_picker: Option<FolderPicker>,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -236,6 +264,8 @@ pub struct PanelAreas {
     pub swarm: Option<Rect>,
     /// Rows of the agents list inside the panel
     pub agent_rows: Option<Rect>,
+    /// "+ New project", pinned to the bottom of the agents panel
+    pub new_project_row: Option<Rect>,
     /// Tab bar row of the agents panel
     pub agent_tabs: Option<Rect>,
     /// Rows of the roster inside the agents panel
@@ -252,6 +282,21 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
+}
+
+/// Clickable item under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoverTarget {
+    /// A label in the agents tab bar.
+    AgentTab(AgentsTab),
+    /// A row in the projects list, including "+ New project".
+    ProjectRow(usize),
+    /// A row in the roster, including "+ New agent".
+    DefinitionRow(usize),
+    /// A row in the sandbox tree.
+    SandboxRow(usize),
+    /// Header line of an activity block, by message id.
+    Activity(u64),
 }
 
 fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
@@ -279,6 +324,32 @@ pub(super) fn follow_selection(
     scroll.min(total.saturating_sub(visible))
 }
 
+/// One row of the projects list. A project is its own row; its first
+/// agent, and any agents that agent spawned, hang underneath while the
+/// project is expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectListRow {
+    /// Foldable header. `root` is the index of the project's first agent.
+    Project { root: usize, expanded: bool },
+    /// An agent under a project.
+    Agent { index: usize },
+    /// The "+ New project" row.
+    NewProject,
+    /// Blank row between two projects. Never selected.
+    Gap,
+}
+
+impl ProjectListRow {
+    /// Lines the row takes in the panel. A project is a cell two lines
+    /// tall: its name line between a lower and an upper half-block line.
+    pub(crate) const fn height(self) -> usize {
+        match self {
+            Self::Project { .. } => 3,
+            Self::Agent { .. } | Self::NewProject | Self::Gap => 1,
+        }
+    }
+}
+
 /// Type of notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationType {
@@ -296,6 +367,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             state: AppState::Idle,
+            project_name_purpose: None,
             messages: VecDeque::new(),
             input: String::new(),
             input_history: InputHistory::new(),
@@ -313,6 +385,7 @@ impl App {
             command_rx: None,
             streaming_content: String::new(),
             notification: None,
+            copy_notice: None,
             focus: PanelFocus::default(),
             record_panel_visible: true,
             swarm_panel_visible: true,
@@ -325,6 +398,7 @@ impl App {
             showing_record_detail: false,
             agents: Vec::new(),
             selected_agent: 0,
+            collapsed_projects: HashSet::new(),
             active_agent_id: String::new(),
             api_url: None,
             api_active: false,
@@ -338,6 +412,7 @@ impl App {
             agents_scroll: 0,
             sandbox_scroll: 0,
             areas: PanelAreas::default(),
+            hover: None,
             processing_since: None,
             shell_prompt: shell_prompt::detect(),
             chat_width: 0,
@@ -356,6 +431,7 @@ impl App {
             definitions_scroll: 0,
             editor_request: None,
             pending_delete: None,
+            folder_picker: None,
         }
     }
 
@@ -635,27 +711,159 @@ impl App {
         }
     }
 
-    /// Highlight agents-list row `row` (the last row is "+ New project") and
-    /// switch to the agent on it.
+    /// Highlight projects-list row `row`. Landing on an agent switches to it.
+    /// Project headers and "+ New project" only move the highlight. A gap
+    /// between projects is stepped over in the direction of travel.
     pub(super) fn select_agent_row(&mut self, row: usize) {
-        self.selected_agent = row.min(self.agents.len());
-        if let Some(agent_id) = self.agents.get(self.selected_agent).map(|a| a.id.clone()) {
+        let rows = self.project_rows();
+        if rows.is_empty() {
+            self.selected_agent = 0;
+            return;
+        }
+        let mut row = row.min(rows.len() - 1);
+        while rows[row] == ProjectListRow::Gap {
+            row = if row < self.selected_agent || row + 1 == rows.len() {
+                row.saturating_sub(1)
+            } else {
+                row + 1
+            };
+        }
+        self.selected_agent = row;
+        if let Some(ProjectListRow::Agent { index }) = rows.get(self.selected_agent) {
+            let agent_id = self.agents[*index].id.clone();
             self.request_agent_switch(agent_id);
         }
     }
 
-    /// Act on the highlighted agents-list row: switch to it, or create an
-    /// agent when it is the "+ New project" row.
+    /// Act on the highlighted projects-list row: fold a project, switch to
+    /// an agent, or create one from "+ New project".
     pub(super) fn activate_agent_row(&mut self) {
-        match self.agents.get(self.selected_agent).map(|a| a.id.clone()) {
-            Some(agent_id) => self.request_agent_switch(agent_id),
-            None => self.create_agent(),
+        match self.project_rows().get(self.selected_agent).copied() {
+            Some(ProjectListRow::Project { root, .. }) => self.toggle_project(root),
+            Some(ProjectListRow::Agent { index }) => {
+                let agent_id = self.agents[index].id.clone();
+                self.request_agent_switch(agent_id);
+            }
+            Some(ProjectListRow::NewProject) | None => self.prompt_new_project(),
+            Some(ProjectListRow::Gap) => {}
         }
     }
 
-    /// Create a new agent and switch to it.
-    pub(super) fn create_agent(&mut self) {
-        let _ = self.handle_command("/agent new");
+    /// Highlight the last agent, opening its project if it was folded.
+    pub(super) fn select_last_agent_row(&mut self) {
+        let Some(index) = self.agents.len().checked_sub(1) else {
+            self.select_agent_row(0);
+            return;
+        };
+        self.reveal_agent(index);
+        let row = self.row_of_agent(index).unwrap_or(0);
+        self.select_agent_row(row);
+    }
+
+    /// Ask for a folder and then a name, then create a project with a
+    /// default agent under it. Browsing starts in the launch directory.
+    pub(super) fn prompt_new_project(&mut self) {
+        let start = std::env::current_dir()
+            .ok()
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        match FolderPicker::open(start) {
+            Ok(picker) => {
+                self.folder_picker = Some(picker);
+                self.state = AppState::SelectingFolder;
+                self.status = "Project folder".to_string();
+            }
+            Err(e) => {
+                self.notification = Some((
+                    format!("Cannot browse folders: {e}"),
+                    NotificationType::Error,
+                ));
+            }
+        }
+    }
+
+    /// Close the folder browser and ask for the new project's name,
+    /// starting from the folder's own name.
+    pub(super) fn choose_project_folder(&mut self, folder: PathBuf) {
+        self.folder_picker = None;
+        let name = folder
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.project_name_purpose = Some(ProjectNamePurpose::Create(folder));
+        self.begin_project_name();
+        self.cursor_pos = name.len();
+        self.input = name;
+    }
+
+    /// Close the folder browser without creating a project.
+    pub(super) fn cancel_folder_picker(&mut self) {
+        self.folder_picker = None;
+        self.state = AppState::Idle;
+        self.status = "Ready".to_string();
+        self.notification = Some(("Cancelled".to_string(), NotificationType::Warning));
+    }
+
+    /// Folder browser for a new project, while it is open.
+    #[must_use]
+    pub const fn folder_picker(&self) -> Option<&FolderPicker> {
+        self.folder_picker.as_ref()
+    }
+
+    /// Keep the folder browser's highlight inside a list `visible_rows`
+    /// tall, returning the first row to show.
+    pub fn sync_folder_picker_scroll(&mut self, visible_rows: usize) -> usize {
+        self.folder_picker
+            .as_mut()
+            .map_or(0, |picker| picker.sync_scroll(visible_rows))
+    }
+
+    /// Ask for a new name for the project that contains the active agent.
+    pub(super) fn prompt_rename_project(&mut self) {
+        self.project_name_purpose = Some(ProjectNamePurpose::Rename);
+        self.begin_project_name();
+    }
+
+    fn begin_project_name(&mut self) {
+        self.state = AppState::ProjectName;
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.status = "Project name".to_string();
+    }
+
+    /// Finish the project-name prompt. An empty name leaves the prompt open.
+    pub(super) fn submit_project_name(&mut self, name: String) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            self.notification = Some((
+                "Project name cannot be empty".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        let purpose = self.project_name_purpose.take();
+        self.state = AppState::Idle;
+        self.status = "Ready".to_string();
+        let event = match purpose {
+            Some(ProjectNamePurpose::Create(folder)) => UiEvent::CreateProject { name, folder },
+            Some(ProjectNamePurpose::Rename) | None => UiEvent::RenameProject(name),
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(event);
+        }
+    }
+
+    /// Fold or open the project under the highlight. An agent row folds the
+    /// project that contains it.
+    pub(super) fn toggle_selected_project(&mut self) {
+        let root = match self.project_rows().get(self.selected_agent).copied() {
+            Some(ProjectListRow::Project { root, .. }) => Some(root),
+            Some(ProjectListRow::Agent { index }) => self.project_root(index),
+            Some(ProjectListRow::NewProject | ProjectListRow::Gap) | None => None,
+        };
+        if let Some(root) = root {
+            self.toggle_project(root);
+        }
     }
 
     /// Switch to the agent `delta` rows away from the active one.
@@ -667,26 +875,43 @@ impl App {
             .agents
             .iter()
             .position(|a| a.id == self.active_agent_id)
-            .unwrap_or(self.selected_agent);
+            .unwrap_or(0);
         let last = self.agents.len() - 1;
         let target = current.saturating_add_signed(delta).min(last);
-        self.select_agent_row(target);
+        self.reveal_agent(target);
+        let row = self.row_of_agent(target).unwrap_or(0);
+        self.select_agent_row(row);
     }
 
-    /// First visible row of the agents list.
+    /// First visible line of the agents list.
     #[must_use]
     pub const fn agents_scroll(&self) -> usize {
         self.agents_scroll
     }
 
-    /// Keep the highlighted agents-list row inside a list `visible_rows` tall.
-    pub fn sync_agents_scroll(&mut self, visible_rows: usize) {
-        self.agents_scroll = follow_selection(
-            self.agents_scroll,
-            self.selected_agent,
-            visible_rows,
-            self.agents.len() + 1,
-        );
+    /// Keep the highlighted projects-list row inside a list `visible_lines`
+    /// tall. "+ New project" is pinned below the list, so it never scrolls.
+    /// When the row is taller than the list, its top stays in view.
+    pub fn sync_agents_scroll(&mut self, visible_lines: usize) {
+        let rows = self.project_rows();
+        let listed = &rows[..rows.len().saturating_sub(1)];
+        let total: usize = listed.iter().map(|row| row.height()).sum();
+        let selected = self.selected_agent.min(listed.len().saturating_sub(1));
+        let top: usize = listed
+            .iter()
+            .take(selected)
+            .map(|row| row.height())
+            .sum();
+        let bottom = top + listed.get(selected).map_or(1, |row| row.height());
+        let visible = visible_lines.max(1);
+        let scroll = if top < self.agents_scroll {
+            top
+        } else if bottom > self.agents_scroll + visible {
+            (bottom - visible).min(top)
+        } else {
+            self.agents_scroll
+        };
+        self.agents_scroll = scroll.min(total.saturating_sub(visible));
     }
 
     /// Keep the selected record inside a list `visible_rows` tall, returning
@@ -728,6 +953,11 @@ impl App {
         self.areas.agent_rows = Some(area);
     }
 
+    /// Record where "+ New project" was drawn this frame.
+    pub fn set_new_project_area(&mut self, area: Rect) {
+        self.areas.new_project_row = Some(area);
+    }
+
     /// Record where the sandbox tree rows were drawn this frame and which
     /// tree row is at the top.
     pub fn set_sandbox_rows_area(&mut self, area: Rect, scroll: usize) {
@@ -749,18 +979,27 @@ impl App {
         }
     }
 
+    /// Clickable item under the pointer, if it is over one.
+    #[must_use]
+    pub(crate) const fn hover(&self) -> Option<HoverTarget> {
+        self.hover
+    }
+
     /// Handle a mouse event: the wheel scrolls the panel under the pointer,
     /// a left click focuses it, clicking an agent row switches to it, and
     /// clicking a sandbox row selects it and opens or closes a directory.
     /// Dragging with the left button selects text inside the panel the
     /// drag started in and copies it when the button is released.
+    /// Moving over a clickable item highlights it until the pointer leaves.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
         if self.state != AppState::Idle && self.state != AppState::Processing {
+            self.hover = None;
             return;
         }
         let at = Position::new(mouse.column, mouse.row);
         match mouse.kind {
             MouseEventKind::Drag(MouseButton::Left) => {
+                self.hover = None;
                 if let Some(selection) = self.selection.as_mut().filter(|_| self.selecting) {
                     selection.extend_to(at);
                 }
@@ -775,6 +1014,11 @@ impl App {
                         self.toggle_activity_at(mouse.column, mouse.row);
                     }
                 }
+                self.hover = self.hover_target(mouse.column, mouse.row);
+                return;
+            }
+            MouseEventKind::Moved => {
+                self.hover = self.hover_target(mouse.column, mouse.row);
                 return;
             }
             _ => {}
@@ -806,6 +1050,88 @@ impl App {
             }
             _ => {}
         }
+        self.hover = self.hover_target(mouse.column, mouse.row);
+    }
+
+    /// Clickable item at a screen cell, using the areas from the last frame.
+    fn hover_target(&self, column: u16, row: u16) -> Option<HoverTarget> {
+        if contains(self.areas.agent_tabs, column, row) {
+            return self.hovered_tab(column);
+        }
+        if self.agents_tab == AgentsTab::Projects {
+            if let Some(index) = self.project_row_at(column, row) {
+                let is_project = matches!(
+                    self.project_rows().get(index),
+                    Some(ProjectListRow::Project { .. })
+                );
+                return (!is_project).then_some(HoverTarget::ProjectRow(index));
+            }
+        }
+        if self.agents_tab == AgentsTab::Roster && contains(self.areas.definition_rows, column, row)
+        {
+            return self.hovered_definition_row(row);
+        }
+        if contains(self.areas.sandbox_rows, column, row) {
+            return self.hovered_sandbox_row(row);
+        }
+        self.hovered_activity(column, row)
+    }
+
+    fn hovered_tab(&self, column: u16) -> Option<HoverTarget> {
+        let bar = self.areas.agent_tabs?;
+        let offset = column.saturating_sub(bar.x);
+        AgentsTab::layout()
+            .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
+            .map(|(tab, _, _)| HoverTarget::AgentTab(tab))
+    }
+
+    /// Projects-list row drawn at a screen cell: a listed project or agent,
+    /// or the pinned "+ New project". Gaps are not rows to act on.
+    fn project_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let rows = self.project_rows();
+        let new_project = rows.len().checked_sub(1)?;
+        if contains(self.areas.new_project_row, column, row) {
+            return Some(new_project);
+        }
+        let list = self.areas.agent_rows?;
+        if !contains(Some(list), column, row) {
+            return None;
+        }
+        let mut line = self.agents_scroll + usize::from(row - list.y);
+        let index = rows[..new_project].iter().position(|listed| {
+            let inside = line < listed.height();
+            line = line.saturating_sub(listed.height());
+            inside
+        })?;
+        matches!(
+            rows[index],
+            ProjectListRow::Project { .. } | ProjectListRow::Agent { .. }
+        )
+        .then_some(index)
+    }
+
+    fn hovered_definition_row(&self, row: u16) -> Option<HoverTarget> {
+        let rows = self.areas.definition_rows?;
+        let index = self.definitions_scroll + usize::from(row.saturating_sub(rows.y));
+        (index <= self.definitions.len()).then_some(HoverTarget::DefinitionRow(index))
+    }
+
+    fn hovered_sandbox_row(&self, row: u16) -> Option<HoverTarget> {
+        let rows = self.areas.sandbox_rows?;
+        let index = self.areas.sandbox_scroll + usize::from(row.saturating_sub(rows.y));
+        (index < self.sandbox.rows().len()).then_some(HoverTarget::SandboxRow(index))
+    }
+
+    fn hovered_activity(&self, column: u16, row: u16) -> Option<HoverTarget> {
+        let area = self
+            .areas
+            .chat_text
+            .filter(|area| contains(Some(*area), column, row))?;
+        let line = self.chat_first_line + usize::from(row.saturating_sub(area.y));
+        self.activity_headers
+            .iter()
+            .find(|(header, _)| *header == line)
+            .map(|&(_, id)| HoverTarget::Activity(id))
     }
 
     /// Cells of `panel` that hold text: inside its border, and for the chat
@@ -862,8 +1188,10 @@ impl App {
     }
 
     /// Report the outcome of copying `chars` characters to the clipboard.
+    ///
+    /// Shown centered on the AURA CLI line, then cleared after a couple of seconds.
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
-        self.notification = Some(match result {
+        let (message, kind) = match result {
             Ok(()) => (
                 format!(
                     "Copied {chars} character{}",
@@ -872,7 +1200,16 @@ impl App {
                 NotificationType::Success,
             ),
             Err(e) => (format!("Copy failed: {e}"), NotificationType::Error),
-        });
+        };
+        self.copy_notice = Some((message, kind, Instant::now() + COPY_NOTICE_TTL));
+    }
+
+    /// Copy confirmation currently shown on the AURA CLI line.
+    #[must_use]
+    pub fn copy_notice(&self) -> Option<(&str, NotificationType)> {
+        self.copy_notice
+            .as_ref()
+            .map(|(message, kind, _)| (message.as_str(), *kind))
     }
 
     fn click_sandbox_row(&mut self, column: u16, row: u16) {
@@ -890,19 +1227,18 @@ impl App {
         self.sandbox.toggle_selected();
     }
 
+    /// Clicking a project folds or opens it and leaves the highlight where
+    /// it was; clicking an agent or "+ New project" highlights and acts on it.
     fn click_agent_row(&mut self, column: u16, row: u16) {
-        let Some(rows) = self.areas.agent_rows else {
+        let Some(index) = self.project_row_at(column, row) else {
             return;
         };
-        if !contains(Some(rows), column, row) {
-            return;
+        if let Some(ProjectListRow::Project { root, .. }) = self.project_rows().get(index) {
+            self.toggle_project(*root);
+        } else {
+            self.selected_agent = index;
+            self.activate_agent_row();
         }
-        let index = self.agents_scroll + usize::from(row - rows.y);
-        if index > self.agents.len() {
-            return;
-        }
-        self.selected_agent = index;
-        self.activate_agent_row();
     }
 
     /// Get the pending approval.
@@ -951,6 +1287,122 @@ impl App {
     #[must_use]
     pub fn agents(&self) -> &[AgentSummary] {
         &self.agents
+    }
+
+    /// Visible projects-list rows. Every project contributes a header and,
+    /// while expanded, its first agent plus the agents spawned under it.
+    /// A gap row separates each project from the one above it.
+    #[must_use]
+    pub(crate) fn project_rows(&self) -> Vec<ProjectListRow> {
+        let mut rows = Vec::new();
+        let mut index = 0;
+        while index < self.agents.len() {
+            if self.agents[index].depth == 0 {
+                let root = index;
+                if !rows.is_empty() {
+                    rows.push(ProjectListRow::Gap);
+                }
+                let end = self.project_end(root);
+                let expanded = !self.collapsed_projects.contains(&self.agents[root].id);
+                rows.push(ProjectListRow::Project { root, expanded });
+                if expanded {
+                    for agent_index in root..end {
+                        rows.push(ProjectListRow::Agent { index: agent_index });
+                    }
+                }
+                index = end;
+            } else {
+                rows.push(ProjectListRow::Agent { index });
+                index += 1;
+            }
+        }
+        rows.push(ProjectListRow::NewProject);
+        rows
+    }
+
+    /// Index just past the agents that belong to the project rooted at `root`.
+    fn project_end(&self, root: usize) -> usize {
+        self.agents
+            .iter()
+            .skip(root + 1)
+            .position(|agent| agent.depth == 0)
+            .map_or(self.agents.len(), |offset| root + 1 + offset)
+    }
+
+    /// Root agent of the project that contains `index`.
+    fn project_root(&self, index: usize) -> Option<usize> {
+        (0..=index).rev().find(|&i| self.agents[i].depth == 0)
+    }
+
+    /// Open a folded project so `index` has a visible row.
+    fn reveal_agent(&mut self, index: usize) {
+        if let Some(root) = self.project_root(index) {
+            self.collapsed_projects.remove(&self.agents[root].id);
+        }
+    }
+
+    /// Visible row of agent `index`, when its project is expanded.
+    fn row_of_agent(&self, index: usize) -> Option<usize> {
+        self.project_rows().iter().position(
+            |row| matches!(row, ProjectListRow::Agent { index: found } if *found == index),
+        )
+    }
+
+    /// Fold or open the project rooted at `root`. Folding it parks the
+    /// highlight on the header when the highlight was inside that project;
+    /// otherwise the highlight stays on the same row as rows above it come
+    /// and go.
+    fn toggle_project(&mut self, root: usize) {
+        let Some(id) = self.agents.get(root).map(|agent| agent.id.clone()) else {
+            return;
+        };
+        let span = root..self.project_end(root);
+        let before = self.project_rows().get(self.selected_agent).copied();
+        let selected_inside = before.is_some_and(|row| match row {
+            ProjectListRow::Project { root: found, .. } => found == root,
+            ProjectListRow::Agent { index } => span.contains(&index),
+            ProjectListRow::NewProject | ProjectListRow::Gap => false,
+        });
+        if !self.collapsed_projects.remove(&id) {
+            self.collapsed_projects.insert(id);
+        }
+        let rows = self.project_rows();
+        let kept = if selected_inside {
+            rows.iter().position(
+                |row| matches!(row, ProjectListRow::Project { root: found, .. } if *found == root),
+            )
+        } else {
+            before.and_then(|before| rows.iter().position(|row| *row == before))
+        };
+        if let Some(pos) = kept {
+            self.selected_agent = pos;
+        }
+        let len = self.project_rows().len();
+        self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
+    }
+
+    /// Move the highlight to the active agent, or to its project when folded.
+    fn select_visible_active(&mut self) {
+        if let Some(index) = self
+            .agents
+            .iter()
+            .position(|agent| agent.id == self.active_agent_id)
+        {
+            if let Some(row) = self.row_of_agent(index) {
+                self.selected_agent = row;
+                return;
+            }
+            if let Some(root) = self.project_root(index) {
+                if let Some(row) = self.project_rows().iter().position(|row| {
+                    matches!(row, ProjectListRow::Project { root: found, .. } if *found == root)
+                }) {
+                    self.selected_agent = row;
+                    return;
+                }
+            }
+        }
+        let len = self.project_rows().len();
+        self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
     }
 
     /// Get the selected agent index.
@@ -1034,7 +1486,11 @@ impl App {
     pub fn sync_input_kind(&mut self) {
         if matches!(
             self.state,
-            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
+            AppState::LoginEmail
+                | AppState::LoginPassword
+                | AppState::LinkCode
+                | AppState::ProjectName
+                | AppState::SelectingFolder
         ) {
             self.input_is_command = false;
             return;
@@ -1081,6 +1537,12 @@ impl App {
         SPINNER_FRAMES[self.animation_frame % SPINNER_FRAMES.len()]
     }
 
+    /// Current frame of the ring shown beside thinking agents.
+    #[must_use]
+    pub fn aura_frame(&self) -> (String, ratatui::style::Color) {
+        crate::animation::aura_ring(self.animation_frame)
+    }
+
     /// Get the records list.
     #[must_use]
     pub const fn records(&self) -> &VecDeque<RecordSummary> {
@@ -1114,6 +1576,17 @@ impl App {
     /// Clear the current notification.
     pub fn clear_notification(&mut self) {
         self.notification = None;
+    }
+
+    /// Drop the copy confirmation, if it has expired.
+    fn expire_copy_notice(&mut self) {
+        if self
+            .copy_notice
+            .as_ref()
+            .is_some_and(|(_, _, until)| Instant::now() >= *until)
+        {
+            self.copy_notice = None;
+        }
     }
 
     /// Cancel the current operation.
@@ -1161,6 +1634,7 @@ impl App {
     /// Process pending updates from the command channel.
     pub fn tick(&mut self) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
+        self.expire_copy_notice();
 
         if let Some(mut rx) = self.command_rx.take() {
             while let Ok(cmd) = rx.try_recv() {

@@ -19,6 +19,7 @@ use aura_agent::{AgentLoop, ProcessManager};
 use aura_agent_kernel::Kernel;
 use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
+use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::Message;
 use aura_terminal::{UiCommand, UiEvent};
 use std::collections::HashMap;
@@ -238,6 +239,10 @@ async fn handle_ui_event(
         UiEvent::NewSession => handlers::handle_new_session(state).await,
         UiEvent::SelectAgent(agent_hex) => agents::handle_select_agent(state, &agent_hex).await,
         UiEvent::CreateAgent(name) => agents::handle_create_agent(state, name).await,
+        UiEvent::CreateProject { name, folder } => {
+            agents::handle_create_project(state, &name, &folder).await;
+        }
+        UiEvent::RenameProject(name) => agents::handle_rename_project(state, &name).await,
         UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,
         UiEvent::InstantiateDefinition(name) => {
             agents::handle_instantiate_definition(state, &name).await;
@@ -262,6 +267,13 @@ async fn handle_ui_event(
 
 async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     info!(text = %text, "Processing user message");
+
+    // The UI already flipped to "Thinking…" when the message was sent.
+    // A local model with no server used to sit there until the 10-minute
+    // request timeout; the probe answers in well under a second.
+    if local_model_unavailable(state).await {
+        return;
+    }
 
     let _ = state
         .commands
@@ -318,22 +330,41 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     state.sync_turn_base();
     let (config, tools) = state.hub.turn(state.session.definition.as_deref());
     let turn_loop = AgentLoop::new(config);
-    let (process_result, streamed_text) = handlers::run_agent_turn(state, &turn_loop, tools).await;
+    let (process_result, forwarded) = handlers::run_agent_turn(state, &turn_loop, tools).await;
     state.park_finished_spawns();
 
     match process_result {
         Ok(result) => {
-            handlers::handle_agent_success(state, result, streamed_text).await;
+            handlers::handle_agent_success(state, result, &forwarded).await;
         }
         Err(e) => {
             error!(error = %e, "Agent loop failed");
-            let _ = state
-                .commands
-                .send(UiCommand::ShowError(e.to_string()))
-                .await;
-            let _ = state.commands.send(UiCommand::Complete).await;
+            if !local_model_unavailable(state).await {
+                let _ = state
+                    .commands
+                    .send(UiCommand::ShowError(e.to_string()))
+                    .await;
+                let _ = state.commands.send(UiCommand::Complete).await;
+            }
         }
     }
+}
+
+/// Re-probe Ollama when the selected model is local. Returns `true` after
+/// telling the user why it can't run and clearing the in-flight turn.
+async fn local_model_unavailable(state: &mut LoopState<'_>) -> bool {
+    if local_model_name(state.models.current()).is_none() {
+        return false;
+    }
+    state.models.refresh_local().await;
+    let _ = state.commands.send(state.models.ui_command()).await;
+    let Some(hint) = state.models.local_hint() else {
+        return false;
+    };
+    info!("Skipping local turn; model server is not ready");
+    handlers::show_system_message(state, hint).await;
+    let _ = state.commands.send(UiCommand::Complete).await;
+    true
 }
 
 async fn drain_stale_inbox(state: &mut LoopState<'_>) {

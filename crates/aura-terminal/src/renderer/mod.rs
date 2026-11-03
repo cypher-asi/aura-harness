@@ -68,6 +68,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     input::render_input(frame, input_row, app, theme, chat_left);
 
     slash_menu::render_slash_menu(frame, chat, app, theme);
+    overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
 }
 

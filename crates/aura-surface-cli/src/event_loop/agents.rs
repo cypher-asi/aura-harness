@@ -16,7 +16,7 @@ use aura_core_types::{AgentId, Identity};
 use aura_model_reasoner::Message;
 use aura_store_db::ReadStore;
 use aura_terminal::UiCommand;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -40,8 +40,10 @@ impl AgentSession {
 }
 
 /// Constructs the kernel for one agent, given the agents that spawned it
-/// (nearest first).
-pub type KernelBuilder = Box<dyn Fn(AgentId, Vec<AgentId>) -> anyhow::Result<Kernel> + Send + Sync>;
+/// (nearest first) and its project's folder (`None` uses the launch
+/// directory).
+pub type KernelBuilder =
+    Box<dyn Fn(AgentId, Vec<AgentId>, Option<PathBuf>) -> anyhow::Result<Kernel> + Send + Sync>;
 
 /// Opens per-agent sessions and reads agent records for the UI.
 pub struct KernelFactory {
@@ -58,7 +60,8 @@ impl KernelFactory {
         }
     }
 
-    /// Open a session (kernel + gateways) for `agent`.
+    /// Open a session (kernel + gateways) for `agent`, working in `folder`
+    /// (its project's folder, `None` for the launch directory).
     ///
     /// # Errors
     /// Returns an error if the kernel cannot be constructed (e.g. the
@@ -67,9 +70,14 @@ impl KernelFactory {
         &self,
         agent: &RegisteredAgent,
         parent_chain: Vec<AgentId>,
+        folder: Option<PathBuf>,
     ) -> anyhow::Result<AgentSession> {
         let identity = agent.identity();
-        let kernel = Arc::new((self.build_kernel)(identity.agent_id, parent_chain)?);
+        let kernel = Arc::new((self.build_kernel)(
+            identity.agent_id,
+            parent_chain,
+            folder,
+        )?);
         Ok(AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
@@ -88,6 +96,40 @@ pub(super) async fn handle_select_agent(state: &mut LoopState<'_>, agent_hex: &s
             warn!(agent = agent_hex, error = %e, "Invalid agent id from UI");
             show_error(state, format!("Invalid agent id: {e}")).await;
         }
+    }
+}
+
+pub(super) async fn handle_create_project(state: &mut LoopState<'_>, name: &str, folder: &Path) {
+    let created = lock(&state.hub.registry).create_project(name, folder);
+    match created {
+        Ok(agent) => {
+            let project = agent
+                .project
+                .clone()
+                .unwrap_or_else(|| name.trim().to_string());
+            let folder = agent
+                .folder
+                .as_deref()
+                .unwrap_or(folder)
+                .display()
+                .to_string();
+            info!(zns_id = %agent.zns_id, %project, %folder, "Created project");
+            activate_agent(state, agent.agent_id()).await;
+            show_success(state, format!("Created project {project} in {folder}")).await;
+        }
+        Err(e) => show_error(state, format!("Could not create project: {e}")).await,
+    }
+}
+
+pub(super) async fn handle_rename_project(state: &mut LoopState<'_>, name: &str) {
+    let agent_id = lock(&state.hub.registry).active().agent_id();
+    let renamed = lock(&state.hub.registry).rename_project(agent_id, name);
+    match renamed {
+        Ok(()) => {
+            state.hub.send_agent_list().await;
+            show_success(state, format!("Renamed project to {}", name.trim())).await;
+        }
+        Err(e) => show_error(state, format!("Could not rename project: {e}")).await,
     }
 }
 
@@ -195,7 +237,13 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
         state.hub.send_agent_list().await;
         return;
     }
-    let registered = lock(&state.hub.registry).find(agent_id).cloned();
+    let (registered, folder) = {
+        let registry = lock(&state.hub.registry);
+        (
+            registry.find(agent_id).cloned(),
+            registry.project_folder(agent_id),
+        )
+    };
     let Some(registered) = registered else {
         show_error(state, "Unknown agent".to_string()).await;
         return;
@@ -203,7 +251,7 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
 
     let next = match state.parked.remove(&agent_id) {
         Some(session) => session,
-        None => match state.hub.factory.open(&registered, Vec::new()) {
+        None => match state.hub.factory.open(&registered, Vec::new(), folder) {
             Ok(session) => session,
             Err(e) => {
                 warn!(error = %e, "Failed to open agent kernel");

@@ -44,7 +44,14 @@ pub(super) fn shell_lines(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let (nick, nick_color, _) = message_style(MessageRole::User, theme);
-    let mut lines = vec![message_header(nick, nick_color, timestamp, theme)];
+    let mut lines = vec![message_header(
+        nick,
+        nick_color,
+        timestamp,
+        &[],
+        width,
+        theme,
+    )];
 
     let echo = owned(command_spans(&run.command, theme));
     lines.extend(wrap_spans(echo, width).into_iter().map(Line::from));

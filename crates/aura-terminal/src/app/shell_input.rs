@@ -96,9 +96,13 @@ pub(super) fn parse_with(text: &str, resolves: impl FnOnce(&str) -> bool) -> Opt
     Some(text.to_string())
 }
 
-/// A question, or a line of plain words and numbers (no flags, paths,
-/// quotes or operators) with at least three words, is treated as a
-/// message to the agent.
+/// A question, a line of plain words and numbers (no flags, paths,
+/// quotes or operators) with at least three words, or `test` written
+/// without an expression, is treated as a message to the agent.
+///
+/// `test` is on `PATH`, but `test` and `test something` are the English
+/// word. The utility needs a flag or operator (`test -f Cargo.toml`,
+/// `test a = b`), or a `!` prefix, to run.
 fn looks_like_prose(text: &str) -> bool {
     if text.ends_with('?') {
         return true;
@@ -107,8 +111,12 @@ fn looks_like_prose(text: &str) -> bool {
         .split_whitespace()
         .map(|word| word.trim_end_matches(['.', ',', '!']))
         .collect();
-    words.iter().all(|word| is_word(word) || is_number(word))
-        && words.iter().filter(|word| is_word(word)).count() >= 3
+    let plain = words.iter().all(|word| is_word(word) || is_number(word));
+    if !plain {
+        return false;
+    }
+    words.iter().filter(|word| is_word(word)).count() >= 3
+        || words.first().is_some_and(|word| *word == "test")
 }
 
 fn is_word(word: &str) -> bool {
@@ -126,7 +134,7 @@ mod tests {
     fn on_path(program: &str) -> bool {
         matches!(
             program,
-            "ls" | "git" | "make" | "echo" | "cargo" | "write" | "seq" | "kill"
+            "ls" | "git" | "make" | "echo" | "cargo" | "write" | "seq" | "kill" | "test"
         )
     }
 
@@ -169,6 +177,21 @@ mod tests {
         assert_eq!(parse(""), None);
         assert_eq!(parse("write a 5 paragrah story"), None);
         assert_eq!(parse("make 3 small examples."), None);
+        assert_eq!(parse("test"), None);
+        assert_eq!(parse("test test"), None);
+        assert_eq!(parse("test the build"), None);
+    }
+
+    #[test]
+    fn test_utility_still_runs_with_an_expression() {
+        assert_eq!(
+            parse("test -f Cargo.toml").as_deref(),
+            Some("test -f Cargo.toml")
+        );
+        assert_eq!(parse("test a = b").as_deref(), Some("test a = b"));
+        assert_eq!(parse("!test").as_deref(), Some("test"));
+        assert_eq!(parse("!test test").as_deref(), Some("test test"));
+        assert_eq!(parse("cargo test").as_deref(), Some("cargo test"));
     }
 
     #[test]

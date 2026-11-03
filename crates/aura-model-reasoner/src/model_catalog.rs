@@ -19,6 +19,8 @@ use serde::Deserialize;
 
 use aura_core_auth::ProviderKind;
 
+use crate::Usage;
+
 /// Prefix that marks a model as served by the local endpoint.
 pub const LOCAL_PREFIX: &str = "local/";
 
@@ -154,6 +156,151 @@ pub fn upstream_model_name(model: &str) -> &str {
         .unwrap_or(model)
 }
 
+/// API list price of a model, in USD per million tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Price {
+    input: f64,
+    output: f64,
+    cache_write: f64,
+    cache_read: f64,
+}
+
+const fn price(input: f64, output: f64, cache_write: f64, cache_read: f64) -> Price {
+    Price {
+        input,
+        output,
+        cache_write,
+        cache_read,
+    }
+}
+
+/// Standard short-context list prices (Anthropic and OpenAI, November
+/// 2026). Keys write `.` as `-`; a key also covers its dated snapshots.
+/// Anthropic cache writes are the 5-minute rate.
+const PRICES: &[(&str, Price)] = &[
+    ("claude-fable-5-1", price(10.0, 50.0, 12.5, 0.25)),
+    ("claude-fable-5", price(10.0, 50.0, 12.5, 1.0)),
+    ("claude-mythos-5-1", price(10.0, 50.0, 12.5, 0.25)),
+    ("claude-mythos-5", price(10.0, 50.0, 12.5, 1.0)),
+    ("claude-opus-5-5", price(4.0, 20.0, 5.0, 0.2)),
+    ("claude-opus-5", price(5.0, 25.0, 6.25, 0.5)),
+    ("claude-opus-4-8", price(5.0, 25.0, 6.25, 0.5)),
+    ("claude-opus-4-7", price(5.0, 25.0, 6.25, 0.5)),
+    ("claude-opus-4-6", price(5.0, 25.0, 6.25, 0.5)),
+    ("claude-opus-4-5", price(5.0, 25.0, 6.25, 0.5)),
+    ("claude-opus-4-1", price(15.0, 75.0, 18.75, 1.5)),
+    ("claude-opus-4", price(15.0, 75.0, 18.75, 1.5)),
+    ("claude-sonnet-5-5", price(2.0, 10.0, 2.5, 0.1)),
+    ("claude-sonnet-5", price(2.0, 10.0, 2.5, 0.2)),
+    ("claude-sonnet-4-6", price(3.0, 15.0, 3.75, 0.3)),
+    ("claude-sonnet-4-5", price(3.0, 15.0, 3.75, 0.3)),
+    ("claude-sonnet-4", price(3.0, 15.0, 3.75, 0.3)),
+    ("claude-haiku-5-5", price(0.1, 0.5, 0.125, 0.01)),
+    ("claude-haiku-4-5", price(1.0, 5.0, 1.25, 0.1)),
+    ("claude-3-5-haiku", price(0.8, 4.0, 1.0, 0.08)),
+    ("gpt-6-astra", price(10.0, 50.0, 12.5, 1.0)),
+    ("gpt-6-1-sol", price(2.0, 10.0, 2.5, 0.1)),
+    ("gpt-6-1-terra", price(1.0, 5.0, 1.25, 0.05)),
+    ("gpt-6-sol", price(2.0, 10.0, 2.5, 0.2)),
+    ("gpt-6-luna", price(0.1, 0.5, 0.125, 0.01)),
+    ("gpt-5-6-sol", price(4.0, 20.0, 5.0, 0.4)),
+    ("gpt-5-6-terra", price(2.0, 12.0, 2.5, 0.2)),
+    ("gpt-5-6-luna", price(0.2, 1.2, 0.25, 0.02)),
+    ("gpt-5-5-pro", price(30.0, 180.0, 30.0, 30.0)),
+    ("gpt-5-5", price(5.0, 30.0, 5.0, 0.5)),
+    ("gpt-5-4-pro", price(30.0, 180.0, 30.0, 30.0)),
+    ("gpt-5-4-mini", price(0.75, 4.5, 0.75, 0.075)),
+    ("gpt-5-4-nano", price(0.2, 1.25, 0.2, 0.02)),
+    ("gpt-5-4", price(2.5, 15.0, 2.5, 0.25)),
+    ("gpt-5-2-pro", price(21.0, 168.0, 21.0, 21.0)),
+    ("gpt-5-2", price(1.75, 14.0, 1.75, 0.175)),
+    ("gpt-5-1", price(1.25, 10.0, 1.25, 0.125)),
+    ("gpt-5-pro", price(15.0, 120.0, 15.0, 15.0)),
+    ("gpt-5-mini", price(0.25, 2.0, 0.25, 0.025)),
+    ("gpt-5-nano", price(0.05, 0.4, 0.05, 0.005)),
+    ("gpt-5", price(1.25, 10.0, 1.25, 0.125)),
+];
+
+/// `model` without its route or router prefix, lowercased, `.` as `-`
+/// (`aura-gpt-5-4`, `chatgpt/gpt-5.4` -> `gpt-5-4`).
+fn price_key(model: &str) -> String {
+    let name = upstream_model_name(model);
+    let name = name.strip_prefix("aura-").unwrap_or(name);
+    name.to_ascii_lowercase().replace('.', "-")
+}
+
+/// Whether `name` is `key` or one of its dated snapshots
+/// (`claude-haiku-4-5-20251001`, `gpt-5-4-2026-03-05`).
+fn is_snapshot_of(name: &str, key: &str) -> bool {
+    match name.strip_prefix(key) {
+        Some("") => true,
+        Some(rest) => rest.strip_prefix('-').is_some_and(|date| {
+            date.len() >= 8 && date.bytes().take(4).all(|b| b.is_ascii_digit())
+        }),
+        None => false,
+    }
+}
+
+fn list_price(model: &str) -> Option<Price> {
+    if backend_for(model) == ModelBackend::Local {
+        return None;
+    }
+    let key = price_key(model);
+    PRICES
+        .iter()
+        .find(|(name, _)| is_snapshot_of(&key, name))
+        .map(|(_, price)| *price)
+}
+
+/// A call's prompt and output tokens, split the way they are billed.
+struct BilledTokens {
+    uncached_input: u64,
+    cache_write: u64,
+    cache_read: u64,
+    output: u64,
+}
+
+fn billed_tokens(model: &str, usage: &Usage) -> BilledTokens {
+    let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+    let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
+    // OpenAI counts cached tokens inside `input_tokens`; Anthropic-format
+    // responses report them on top of it.
+    let openai =
+        backend_for(model) == ModelBackend::Chatgpt || price_key(model).starts_with("gpt-");
+    let uncached_input = if openai {
+        usage.input_tokens.saturating_sub(cache_read)
+    } else {
+        usage.input_tokens
+    };
+    BilledTokens {
+        uncached_input,
+        cache_write,
+        cache_read,
+        output: usage.output_tokens,
+    }
+}
+
+/// Tokens a model call used: its whole prompt (cached or not) plus output.
+#[must_use]
+pub fn call_tokens(model: &str, usage: &Usage) -> u64 {
+    let tokens = billed_tokens(model, usage);
+    tokens.uncached_input + tokens.cache_write + tokens.cache_read + tokens.output
+}
+
+/// What a model call costs at API list prices, in USD. `None` for local
+/// models and models without a known price.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn estimate_cost_usd(model: &str, usage: &Usage) -> Option<f64> {
+    let price = list_price(model)?;
+    let tokens = billed_tokens(model, usage);
+    let micro_usd = tokens.uncached_input as f64 * price.input
+        + tokens.cache_write as f64 * price.cache_write
+        + tokens.cache_read as f64 * price.cache_read
+        + tokens.output as f64 * price.output;
+    Some(micro_usd / 1_000_000.0)
+}
+
 /// Model name as the local server knows it (`local/qwen3:4b` -> `qwen3:4b`).
 #[must_use]
 pub fn local_model_name(model: &str) -> Option<&str> {
@@ -206,6 +353,17 @@ pub fn local_context_tokens() -> u64 {
 /// gated by [`ModelOption::required_provider`]).
 #[must_use]
 pub fn catalog(default_local: &str, installed_local: &[String]) -> Vec<ModelOption> {
+    catalog_with_plans(default_local, installed_local, &[])
+}
+
+/// [`catalog`], with each plan's curated list replaced by `plan_models`
+/// (fetched live from the provider) for every plan backend it covers.
+#[must_use]
+pub fn catalog_with_plans(
+    default_local: &str,
+    installed_local: &[String],
+    plan_models: &[ModelOption],
+) -> Vec<ModelOption> {
     let mut options = Vec::new();
     let default_name = local_model_name(default_local).unwrap_or(DEFAULT_LOCAL_MODEL);
     options.push(ModelOption {
@@ -229,6 +387,14 @@ pub fn catalog(default_local: &str, installed_local: &[String]) -> Vec<ModelOpti
         (CLAUDE_MODELS, ModelBackend::Claude),
         (CHATGPT_MODELS, ModelBackend::Chatgpt),
     ] {
+        let live: Vec<&ModelOption> = plan_models
+            .iter()
+            .filter(|m| m.backend == backend)
+            .collect();
+        if !live.is_empty() {
+            options.extend(live.into_iter().cloned());
+            continue;
+        }
         for (id, label) in models {
             options.push(ModelOption {
                 id: (*id).to_string(),
@@ -351,6 +517,25 @@ mod tests {
     }
 
     #[test]
+    fn live_plan_models_replace_the_built_in_list() {
+        let live = [ModelOption {
+            id: "claude/claude-opus-5-5".to_string(),
+            label: "Claude Opus 5.5".to_string(),
+            backend: ModelBackend::Claude,
+            installed: true,
+        }];
+        let options = catalog_with_plans("local/qwen3:4b", &[], &live);
+        let claude: Vec<&str> = options
+            .iter()
+            .filter(|o| o.backend == ModelBackend::Claude)
+            .map(|o| o.id.as_str())
+            .collect();
+        assert_eq!(claude, ["claude/claude-opus-5-5"]);
+        assert!(options.iter().any(|o| o.backend == ModelBackend::Router));
+        assert!(options.iter().any(|o| o.backend == ModelBackend::Chatgpt));
+    }
+
+    #[test]
     fn upstream_name_strips_route_prefix() {
         assert_eq!(
             upstream_model_name("claude/claude-opus-4-7"),
@@ -372,6 +557,64 @@ mod tests {
             .iter()
             .any(|o| o.id == "claude/claude-opus-4-7" && o.backend == ModelBackend::Claude));
         assert!(options.iter().any(|o| o.backend == ModelBackend::Chatgpt));
+    }
+
+    fn usage(input: u64, cache_write: u64, cache_read: u64, output: u64) -> Usage {
+        Usage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_creation_input_tokens: Some(cache_write),
+            cache_read_input_tokens: Some(cache_read),
+        }
+    }
+
+    fn assert_cost(model: &str, usage: &Usage, expected: f64) {
+        let cost = estimate_cost_usd(model, usage).unwrap_or_else(|| panic!("no price: {model}"));
+        assert!(
+            (cost - expected).abs() < 1e-9,
+            "{model}: {cost} != {expected}"
+        );
+    }
+
+    #[test]
+    fn cost_is_priced_the_same_on_every_route() {
+        let usage = usage(1_000, 2_000, 1_000_000, 1_000);
+        for model in [
+            "claude-opus-4-7",
+            "claude/claude-opus-4-7",
+            "aura-claude-opus-4-7",
+        ] {
+            assert_cost(model, &usage, 0.5425);
+            assert_eq!(call_tokens(model, &usage), 1_004_000);
+        }
+    }
+
+    #[test]
+    fn openai_cached_tokens_are_part_of_the_input() {
+        let usage = usage(10_000, 0, 8_000, 1_000);
+        for model in ["gpt-5.4", "chatgpt/gpt-5.4", "aura-gpt-5-4"] {
+            assert_cost(model, &usage, 0.022);
+            assert_eq!(call_tokens(model, &usage), 11_000);
+        }
+    }
+
+    #[test]
+    fn dated_snapshots_share_their_model_price() {
+        let usage = usage(1_000_000, 0, 0, 0);
+        assert_cost("claude-haiku-4-5-20251001", &usage, 1.0);
+        assert_cost("claude-opus-4-20250514", &usage, 15.0);
+        assert_cost("gpt-5.4-2026-03-05", &usage, 2.5);
+        assert_cost("claude-opus-5-5", &usage, 4.0);
+    }
+
+    #[test]
+    fn local_and_unknown_models_have_no_cost() {
+        let usage = usage(1_000, 0, 0, 1_000);
+        assert_eq!(estimate_cost_usd("local/qwen3:4b", &usage), None);
+        assert_eq!(estimate_cost_usd("qwen3:4b", &usage), None);
+        assert_eq!(estimate_cost_usd("gpt-5-3", &usage), None);
+        assert_eq!(estimate_cost_usd("claude-opus-9", &usage), None);
+        assert_eq!(call_tokens("qwen3:4b", &usage), 2_000);
     }
 
     #[test]

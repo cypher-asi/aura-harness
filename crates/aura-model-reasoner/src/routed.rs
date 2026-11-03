@@ -224,6 +224,75 @@ mod tests {
         assert!(!raw_request.contains("cache_control"));
     }
 
+    #[tokio::test]
+    async fn direct_claude_requests_omit_router_only_fields() {
+        use crate::{AnthropicConfig, AnthropicProvider, ThinkingEffort};
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-opus-4-7\",\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut buf = vec![0u8; 65536];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                    if raw.len() >= end + 4 + length || n == 0 {
+                        break;
+                    }
+                }
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&raw).to_string()
+        });
+
+        let config = AnthropicConfig {
+            base_url: format!("http://{addr}"),
+            max_retries: 0,
+            ..AnthropicConfig::anthropic_direct()
+        };
+        let claude = AnthropicProvider::new(config)
+            .unwrap()
+            .without_router_body_extensions();
+        let mut req = request("claude-opus-4-7");
+        req.thinking_effort = Some(ThinkingEffort::Medium);
+        req.system_preamble = Some("You are Claude Code.".to_string());
+        let mut stream = claude.complete_streaming(req).await.unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+
+        let raw = server.await.unwrap();
+        assert!(raw.contains(r#""model":"claude-opus-4-7""#), "{raw}");
+        assert!(!raw.contains("reasoning_effort"), "{raw}");
+        assert!(
+            raw.contains(r#""system":[{"type":"text","text":"You are Claude Code."},{"type":"text","text":"system""#),
+            "{raw}"
+        );
+    }
+
     #[test]
     fn router_requests_keep_model_and_jwt() {
         let provider = routed();

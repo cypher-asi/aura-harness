@@ -208,6 +208,12 @@ pub enum AutomatonEvent {
         model: String,
         input_tokens: u64,
         output_tokens: u64,
+        /// Prompt tokens written to the provider's prompt cache.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_creation_input_tokens: Option<u64>,
+        /// Prompt tokens read from the provider's prompt cache.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_read_input_tokens: Option<u64>,
         duration_ms: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
@@ -348,6 +354,8 @@ impl From<aura_agent::DebugEvent> for AutomatonEvent {
                 model,
                 input_tokens,
                 output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
                 duration_ms,
                 task_id,
                 agent_instance_id,
@@ -359,6 +367,8 @@ impl From<aura_agent::DebugEvent> for AutomatonEvent {
                 model,
                 input_tokens,
                 output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
                 duration_ms,
                 task_id,
                 agent_instance_id,

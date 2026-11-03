@@ -57,6 +57,18 @@ pub enum UiEvent {
     /// User requested a new agent (with optional display name)
     CreateAgent(Option<String>),
 
+    /// User picked a folder for a new project and named it. A default
+    /// agent is created under it, working in that folder.
+    CreateProject {
+        /// Project name
+        name: String,
+        /// Folder the project's agents work in
+        folder: PathBuf,
+    },
+
+    /// User renamed the project that contains the active agent.
+    RenameProject(String),
+
     /// User started an instance of the named permanent agent
     InstantiateDefinition(String),
 
@@ -119,6 +131,15 @@ pub enum UiCommand {
 
     /// Finalize the streaming message and display it.
     FinishStreaming,
+
+    /// The model that wrote the replies shown since the last user message
+    /// that don't name a model yet (sent once each model call finishes)
+    SetReplyModel {
+        /// Model that answered the call
+        model: String,
+        /// Tokens and cost of the call, when the provider reported usage
+        usage: Option<CallUsage>,
+    },
 
     /// Append text to the current thinking block.
     /// This is used for real-time display of extended thinking.
@@ -289,6 +310,22 @@ pub struct MessageData {
     /// Agent step (thinking or a tool call), shown as a collapsible block
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivityData>,
+    /// Model that wrote an assistant reply
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Tokens and cost of the model call that wrote an assistant reply
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<CallUsage>,
+}
+
+/// Tokens a model call used and what they cost.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CallUsage {
+    /// Whole prompt (cached or not) plus output
+    pub tokens: u64,
+    /// Estimated cost at API list prices; `None` for local or unpriced models
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 impl MessageData {
@@ -302,6 +339,8 @@ impl MessageData {
             timestamp_ms: None,
             command: None,
             activity: None,
+            model: None,
+            usage: None,
         }
     }
 }
@@ -465,6 +504,9 @@ pub struct AgentSummary {
     pub record_count: u64,
     /// Last activity timestamp (HH:MM:SS or date)
     pub last_active: String,
+    /// Time of its latest record, in Unix milliseconds
+    #[serde(default)]
+    pub last_active_ms: Option<u64>,
     /// Permanent agent this is an instance of
     #[serde(default)]
     pub definition: Option<String>,
@@ -474,6 +516,10 @@ pub struct AgentSummary {
     /// Whether it is running a task for the agent that spawned it
     #[serde(default)]
     pub running: bool,
+    /// Project this root agent heads. Empty when the project is unnamed
+    /// and the header should use [`Self::name`].
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 #[cfg(test)]

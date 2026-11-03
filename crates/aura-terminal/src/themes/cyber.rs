@@ -10,7 +10,10 @@
 //! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                      |
 //! | White       | #ffffff  | (255, 255, 255)| Text, secondary accent, pending     |
 //! | Gray        | #888888  | (136, 136, 136)| Muted text, secondary info          |
-//! | Black       | #0d0d0d  | (13, 13, 13)   | Background                          |
+//! | Black       | #0d0d0d  | (13, 13, 13)   | Background, text on selection       |
+//! | Sky         | #7cd4ff  | (124, 212, 255)| Selected list row                   |
+//! | Dark gray   | #1e1e1e  | (30, 30, 30)   | List cell                           |
+//! | Graphite    | #2a2a2a  | (42, 42, 42)   | List cell under the cursor          |
 
 use super::{BorderStyle, Theme, ThemeColors};
 use ratatui::style::Color;
@@ -40,6 +43,15 @@ pub const GRAY: Color = Color::Rgb(136, 136, 136);
 /// Black - Background (#0d0d0d)
 pub const BLACK: Color = Color::Rgb(13, 13, 13);
 
+/// Sky - Selected list row (#7cd4ff)
+pub const SKY: Color = Color::Rgb(124, 212, 255);
+
+/// Dark gray - List cell (#1e1e1e)
+pub const DARK_GRAY: Color = Color::Rgb(30, 30, 30);
+
+/// Graphite - List cell under the cursor (#2a2a2a)
+pub const GRAPHITE: Color = Color::Rgb(42, 42, 42);
+
 // ============================================================================
 // THEME
 // ============================================================================
@@ -52,6 +64,7 @@ pub const BLACK: Color = Color::Rgb(13, 13, 13);
 /// - Red (#f4012a): Errors, danger
 /// - White: Text, secondary accent, pending states
 /// - Gray/Black: Muted text and backgrounds
+/// - Sky/Dark gray: List rows (selected, project cells)
 ///
 /// Purple is reserved for syntax-highlighted keywords in code blocks.
 #[must_use]
@@ -75,6 +88,12 @@ pub fn cyber_theme() -> Theme {
 
             // Muted text
             muted: GRAY, // #888888 - gray
+
+            // List cells
+            surface: DARK_GRAY,      // #1e1e1e - dark gray
+            surface_hover: GRAPHITE, // #2a2a2a - graphite
+            selection: SKY,          // #7cd4ff - sky blue
+            on_selection: BLACK,     // #0d0d0d - black
         },
         border_style: BorderStyle::Rounded,
         show_icons: true,

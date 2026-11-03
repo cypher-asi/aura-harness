@@ -92,6 +92,7 @@ pub(super) fn render_input(
     let before_cursor = input.get(..cursor_pos).unwrap_or(input);
     let (prompt_str, display_input, cursor_col) = match app.state() {
         AppState::LoginEmail => ("Email: ", input.to_string(), display_width(before_cursor)),
+        AppState::ProjectName => ("Project: ", input.to_string(), display_width(before_cursor)),
         AppState::LinkCode => (
             "Code: ",
             "•".repeat(input.chars().count()),
