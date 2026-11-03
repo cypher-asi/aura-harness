@@ -7,6 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Designers — Cursor terminal fonts
+
+##### Changed
+
+- Seeded `ui-designer` and `web-designer` tokens use Cursor's workbench
+  sans for UI content and Cursor's terminal monospace for terminal
+  output, error messages and code. Headings stay on the sans scale.
+
 ### Terminal — agent activity in the chat
 
 The terminal chat shows what the agent is doing while it works: each
