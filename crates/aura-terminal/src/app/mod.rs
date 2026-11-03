@@ -5,6 +5,7 @@
 
 mod commands;
 mod definitions;
+pub mod file_view;
 pub mod folder_picker;
 pub(crate) mod format;
 mod keys;
@@ -15,6 +16,8 @@ pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
 
+#[cfg(test)]
+mod detail_tests;
 #[cfg(test)]
 mod tests;
 
@@ -28,12 +31,13 @@ use crate::{
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
+use file_view::FileView;
 use folder_picker::FolderPicker;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
 };
-use sandbox::SandboxTree;
+use sandbox::{SandboxEntryKind, SandboxTree};
 pub use selection::Selection;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -184,8 +188,12 @@ pub struct App {
     pub(super) selected_record: usize,
     /// Scroll offset for records list
     pub(super) records_scroll: usize,
-    /// Whether showing record detail view
-    pub(super) showing_record_detail: bool,
+    /// Record or file shown over the chat panel
+    pub(super) detail: Option<DetailView>,
+    /// First line of the detail view shown
+    pub(super) detail_scroll: usize,
+    /// Lines that fit in the detail view in the last frame
+    pub(super) detail_page_rows: usize,
     /// List of agents in the swarm
     pub(super) agents: Vec<AgentSummary>,
     /// Highlighted row of the projects list (headers, agents, "+ New project")
@@ -285,6 +293,15 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
+}
+
+/// What is shown over the chat panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailView {
+    /// The record highlighted in the Record panel.
+    Record,
+    /// A file from the sandbox.
+    File(FileView),
 }
 
 /// Clickable item under the pointer.
@@ -419,7 +436,9 @@ impl App {
             records: VecDeque::new(),
             selected_record: 0,
             records_scroll: 0,
-            showing_record_detail: false,
+            detail: None,
+            detail_scroll: 0,
+            detail_page_rows: 1,
             agents: Vec::new(),
             selected_agent: 0,
             collapsed_projects: HashSet::new(),
@@ -1043,7 +1062,8 @@ impl App {
 
     /// Handle a mouse event: the wheel scrolls the panel under the pointer,
     /// a left click focuses it, clicking an agent row switches to it, and
-    /// clicking a sandbox row selects it and opens or closes a directory.
+    /// clicking a sandbox row selects it and opens or closes a directory, or
+    /// shows a file over the chat panel.
     /// Dragging with the left button selects text inside the panel the
     /// drag started in and copies it when the button is released.
     /// Moving over a clickable item highlights it until the pointer leaves.
@@ -1067,7 +1087,9 @@ impl App {
                         self.copy_requested = true;
                     } else {
                         self.selection = None;
-                        self.toggle_activity_at(mouse.column, mouse.row);
+                        if self.detail.is_none() {
+                            self.toggle_activity_at(mouse.column, mouse.row);
+                        }
                     }
                 }
                 self.hover = self.hover_target(mouse.column, mouse.row);
@@ -1083,7 +1105,16 @@ impl App {
             return;
         };
         let step = if panel == PanelFocus::Swarm { 1 } else { 3 };
+        let over_detail = panel == PanelFocus::Chat && self.detail.is_some();
         match mouse.kind {
+            MouseEventKind::ScrollUp if over_detail => {
+                self.clear_selection();
+                self.scroll_detail_up(step);
+            }
+            MouseEventKind::ScrollDown if over_detail => {
+                self.clear_selection();
+                self.scroll_detail_down(step);
+            }
             MouseEventKind::ScrollUp => {
                 self.clear_selection();
                 self.scroll_panel_up(panel, step);
@@ -1179,14 +1210,18 @@ impl App {
     }
 
     fn hovered_activity(&self, column: u16, row: u16) -> Option<HoverTarget> {
+        if self.detail.is_some() {
+            return None;
+        }
         self.toggle_row_at(column, row)
             .map(|toggle| HoverTarget::Activity(toggle.target))
     }
 
     /// Cells of `panel` that hold text: inside its border, and for the chat
-    /// only the message area.
+    /// only the message area unless a record or file covers it.
     fn selectable_area(&self, panel: PanelFocus) -> Option<Rect> {
         let area = match panel {
+            PanelFocus::Chat if self.detail.is_some() => self.areas.chat,
             PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
             PanelFocus::Swarm => self.areas.swarm,
             PanelFocus::Records => self.areas.records,
@@ -1274,6 +1309,7 @@ impl App {
         }
         self.sandbox.select(index);
         self.sandbox.toggle_selected();
+        self.open_selected_sandbox_file();
     }
 
     /// Clicking a project folds or opens it and leaves the highlight where
@@ -1610,10 +1646,59 @@ impl App {
         self.records_scroll
     }
 
-    /// Check if showing record detail view.
+    /// Record or file shown over the chat panel, if any.
     #[must_use]
-    pub const fn showing_record_detail(&self) -> bool {
-        self.showing_record_detail
+    pub const fn detail_view(&self) -> Option<&DetailView> {
+        self.detail.as_ref()
+    }
+
+    /// Show `view` over the chat panel, starting at its top.
+    pub(super) fn open_detail(&mut self, view: DetailView) {
+        self.detail = Some(view);
+        self.detail_scroll = 0;
+    }
+
+    /// Close the view over the chat panel.
+    pub(super) fn close_detail(&mut self) {
+        self.detail = None;
+        self.detail_scroll = 0;
+    }
+
+    /// Open the highlighted sandbox row when it is a file.
+    pub(super) fn open_selected_sandbox_file(&mut self) {
+        let Some(row) = self.sandbox.rows().get(self.sandbox.selected()) else {
+            return;
+        };
+        if matches!(row.kind, SandboxEntryKind::File | SandboxEntryKind::Symlink) {
+            let view = FileView::load(&row.path, self.sandbox.root());
+            self.open_detail(DetailView::File(view));
+        }
+    }
+
+    pub(super) fn scroll_detail_up(&mut self, lines: usize) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(lines);
+    }
+
+    pub(super) fn scroll_detail_down(&mut self, lines: usize) {
+        self.detail_scroll = self.detail_scroll.saturating_add(lines);
+    }
+
+    /// Lines a page key moves the detail view.
+    pub(super) const fn detail_page_rows(&self) -> usize {
+        self.detail_page_rows
+    }
+
+    /// First line of the detail view to show.
+    #[must_use]
+    pub const fn detail_scroll(&self) -> usize {
+        self.detail_scroll
+    }
+
+    /// Clamp the detail view's scroll to `max_scroll` and let page keys
+    /// move `page_rows` lines, as measured by the last frame.
+    pub fn set_detail_bounds(&mut self, max_scroll: usize, page_rows: usize) {
+        self.detail_scroll = self.detail_scroll.min(max_scroll);
+        self.detail_page_rows = page_rows.max(1);
     }
 
     /// Get the currently selected record (if any).

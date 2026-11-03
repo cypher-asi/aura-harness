@@ -3,6 +3,7 @@
 mod activity;
 mod chat_lines;
 mod command;
+mod detail;
 mod input;
 mod markdown;
 mod overlays;
@@ -60,6 +61,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
+    detail::render_detail_view(frame, chat, app, theme);
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }

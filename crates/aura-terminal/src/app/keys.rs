@@ -11,10 +11,8 @@ impl App {
         self.copy_notice = None;
         self.clear_selection();
 
-        if self.showing_record_detail {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q')) {
-                self.showing_record_detail = false;
-            }
+        if self.detail.is_some() {
+            self.handle_detail_key(key);
             return KeyResult::continue_running();
         }
 
@@ -31,6 +29,22 @@ impl App {
             AppState::SelectingModel => self.handle_model_selector_key(key),
             AppState::SelectingFolder => self.handle_folder_picker_key(key),
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
+        }
+    }
+
+    /// Handle key while a record or file covers the chat panel: Esc, `q` or
+    /// Enter closes it, and the rest scroll it.
+    fn handle_detail_key(&mut self, key: KeyEvent) {
+        let page = self.detail_page_rows();
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_detail_up(1),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_detail_down(1),
+            KeyCode::PageUp => self.scroll_detail_up(page),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.scroll_detail_down(page),
+            KeyCode::Home | KeyCode::Char('g') => self.scroll_detail_up(usize::MAX),
+            KeyCode::End | KeyCode::Char('G') => self.scroll_detail_down(usize::MAX),
+            _ => {}
         }
     }
 
@@ -418,7 +432,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if !self.records.is_empty() {
-                    self.showing_record_detail = true;
+                    self.open_detail(super::DetailView::Record);
                 }
             }
             KeyCode::PageUp => {
@@ -454,14 +468,18 @@ impl App {
     }
 
     /// Handle key when sandbox panel is focused: arrows move through the
-    /// tree, Enter/Right toggles a directory, Left goes up a level.
+    /// tree, Enter/Right toggles a directory or opens a file over the chat,
+    /// Left goes up a level.
     fn handle_sandbox_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Up => self.sandbox.move_by(-1),
             KeyCode::Down => self.sandbox.move_by(1),
             KeyCode::PageUp => self.sandbox.move_by(-5),
             KeyCode::PageDown => self.sandbox.move_by(5),
-            KeyCode::Enter | KeyCode::Right => self.sandbox.toggle_selected(),
+            KeyCode::Enter | KeyCode::Right => {
+                self.sandbox.toggle_selected();
+                self.open_selected_sandbox_file();
+            }
             KeyCode::Left => self.sandbox.collapse_or_parent(),
             _ => {}
         }

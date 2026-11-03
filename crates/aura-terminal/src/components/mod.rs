@@ -16,7 +16,7 @@ mod tool_card;
 pub use crate::events::MessageRole;
 pub(crate) use activity::elapsed_ms;
 pub use activity::{Activity, ThinkingStep, ToolStep};
-pub use code_block::CodeBlock;
+pub use code_block::{highlight_code_line, CodeBlock};
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;
 pub use input::InputField;

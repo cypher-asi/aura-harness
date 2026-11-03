@@ -282,6 +282,20 @@ impl CodeBlock {
     }
 }
 
+/// Syntax-highlight one line of `language` source, without the code block
+/// frame. Languages without a keyword list come back in plain foreground.
+#[must_use]
+pub fn highlight_code_line(language: &str, line: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let keywords = get_keywords(language);
+    if keywords.is_empty() {
+        return vec![Span::styled(
+            line.to_string(),
+            Style::default().fg(theme.colors.foreground),
+        )];
+    }
+    highlight_line(line, keywords, &LanguageConfig::default(), theme)
+}
+
 /// Highlight a single line of code.
 fn highlight_line(
     line: &str,

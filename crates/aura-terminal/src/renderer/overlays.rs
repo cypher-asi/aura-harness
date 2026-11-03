@@ -1,4 +1,5 @@
-//! Overlay rendering: approval modal, help, record detail, notifications.
+//! Overlay rendering: approval modal, help, notifications, and the lines
+//! of a record's details.
 
 use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::text::{centered_rect, display_width, wrap_words};
@@ -18,10 +19,6 @@ use std::path::Path;
 
 /// Render overlay elements (modals, help).
 pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
-    if app.showing_record_detail() {
-        render_record_detail(frame, app, theme);
-    }
-
     if let Some(approval) = app.pending_approval() {
         render_approval_modal(frame, approval, theme);
     }
@@ -347,70 +344,37 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// Render the record detail overlay.
-fn render_record_detail(frame: &mut Frame, app: &App, theme: &Theme) {
+/// Status glyph and color shown in a record's title.
+pub(super) const fn record_status(
+    record: &crate::events::RecordSummary,
+    theme: &Theme,
+) -> (&'static str, Color) {
     use crate::events::RecordStatus;
+    match record.status {
+        RecordStatus::Ok => ("✓", theme.colors.success),
+        RecordStatus::Error => ("✗", theme.colors.error),
+        RecordStatus::Pending => ("◌", theme.colors.pending),
+        RecordStatus::None => ("·", theme.colors.muted),
+    }
+}
 
-    let Some(record) = app.selected_record_data() else {
-        return;
-    };
-
-    let area = frame.area();
-    let modal_width = 70.min(area.width.saturating_sub(4));
-    let has_error = !record.error_details.is_empty();
-    let base_height = 24u16;
-    #[allow(clippy::cast_possible_truncation)]
-    let error_lines = if has_error {
-        3 + (record.error_details.len() / 60) as u16
-    } else {
-        0
-    };
-    #[allow(clippy::cast_possible_truncation)]
-    let policy_lines = record
-        .policy
-        .as_ref()
-        .map_or(0, |policy| 10 + policy.trace.len() as u16);
-    let modal_height =
-        (base_height + error_lines + policy_lines).min(area.height.saturating_sub(4));
-
-    let modal_area = centered_rect(modal_width, modal_height, area);
-    frame.render_widget(Clear, modal_area);
-
-    let (status_icon, status_color) = match record.status {
-        RecordStatus::Ok => (" ✓ ", theme.colors.success),
-        RecordStatus::Error => (" ✗ ", theme.colors.error),
-        RecordStatus::Pending => (" ◌ ", theme.colors.pending),
-        RecordStatus::None => (" · ", theme.colors.muted),
-    };
-
-    let block = Block::default()
-        .title(format!(" Record #{} {} ", record.seq, status_icon))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(status_color));
-
+/// Every line of a record's details, with prose wrapped to `width`.
+pub(super) fn record_detail_lines<'a>(
+    record: &'a crate::events::RecordSummary,
+    width: u16,
+    theme: &Theme,
+) -> Vec<Line<'a>> {
     let mut content = build_record_header(record, theme);
     build_transaction_section(&mut content, record, theme);
     build_processing_section(&mut content, record, theme);
     if let Some(policy) = &record.policy {
         build_policy_section(&mut content, policy, theme);
     }
-
-    if has_error {
-        build_error_section(&mut content, record, modal_width, theme);
+    if !record.error_details.is_empty() {
+        build_error_section(&mut content, record, width, theme);
     }
-
-    build_message_section(&mut content, record, modal_width, theme);
-
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "Press Esc or Enter to close",
-        Style::default().fg(theme.colors.muted),
-    )));
-
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, modal_area);
+    build_message_section(&mut content, record, width, theme);
+    content
 }
 
 fn build_record_header<'a>(

@@ -1,6 +1,6 @@
 //! Slash command handling and UI command processing for the App.
 
-use super::{App, AppState, NotificationType, PanelFocus, PendingApproval};
+use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingApproval};
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
     events::{CallUsage, UiCommand, UiEvent},
@@ -419,7 +419,9 @@ impl App {
             UiCommand::ClearRecords => {
                 self.records.clear();
                 self.selected_record = 0;
-                self.showing_record_detail = false;
+                if self.detail == Some(DetailView::Record) {
+                    self.close_detail();
+                }
             }
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
