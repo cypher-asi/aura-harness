@@ -66,16 +66,19 @@ impl ToolAuditObserver for UiToolAuditObserver {
                 .ok()
                 .and_then(|decision| policy_chat_line(&decision));
             if let Some(content) = line {
-                self.send(UiCommand::ShowMessage(MessageData {
-                    role: MessageRole::System,
-                    content,
-                    is_streaming: false,
-                    timestamp_ms: Some(entry.tx.ts_ms),
-                    command: None,
-                    activity: None,
-                    model: None,
-                    usage: None,
-                }));
+                self.send(UiCommand::ForAgent {
+                    agent_id: entry.tx.agent_id.to_hex(),
+                    command: Box::new(UiCommand::ShowMessage(MessageData {
+                        role: MessageRole::System,
+                        content,
+                        is_streaming: false,
+                        timestamp_ms: Some(entry.tx.ts_ms),
+                        command: None,
+                        activity: None,
+                        model: None,
+                        usage: None,
+                    })),
+                });
             }
         }
     }

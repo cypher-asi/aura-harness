@@ -40,13 +40,12 @@ async fn record_auth_change(state: &LoopState<'_>, payload: serde_json::Value) {
         warn!("Failed to serialize auth change payload");
         return;
     };
-    let tx = Transaction::new_chained(
-        state.session.agent_id(),
-        TransactionType::System,
-        bytes,
-        None,
-    );
-    if let Err(e) = state.session.kernel.process_direct(tx).await {
+    let Some(kernel) = state.kernel_for(state.active) else {
+        warn!("No open kernel to record the auth change on");
+        return;
+    };
+    let tx = Transaction::new_chained(state.active, TransactionType::System, bytes, None);
+    if let Err(e) = kernel.process_direct(tx).await {
         warn!(error = %e, "Failed to record auth change via kernel");
     }
 }

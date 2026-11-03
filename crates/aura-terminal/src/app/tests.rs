@@ -192,7 +192,7 @@ fn test_prefixed_input_runs_as_command() {
 
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::RunCommand { command, cols: 80 }) if command == "echo hi"
+        Ok(UiEvent::RunCommand { command, cols: 80, .. }) if command == "echo hi"
     ));
     assert_eq!(app.state(), AppState::Processing);
     let run = app.messages()[0].shell_run().expect("shell message");
@@ -307,7 +307,10 @@ fn test_prose_is_sent_as_user_message() {
 
     submit(&mut app, "what is in here?");
 
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage(text)) if text == "what is in here?"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, shown: true, .. }) if text == "what is in here?"
+    ));
 }
 
 // ========================================================================
@@ -383,17 +386,128 @@ fn test_enter_on_active_agent_sends_nothing() {
 }
 
 #[test]
-fn test_agent_switch_refused_while_processing() {
+fn test_agent_switch_allowed_while_processing() {
     let (mut app, mut rx) = app_with_agents();
     app.state = AppState::Processing;
 
     app.handle_command("/agent 2");
 
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+}
+
+/// Stream `text` into agent `id`'s chat as a reply in progress.
+fn stream_to(app: &mut App, id: &str, text: &str) {
+    for command in [
+        UiCommand::TurnStarted {
+            prompt: Some(format!("ask {id}")),
+        },
+        UiCommand::StartStreaming,
+        UiCommand::AppendText(text.to_string()),
+    ] {
+        app.process_command(UiCommand::ForAgent {
+            agent_id: id.to_string(),
+            command: Box::new(command),
+        });
+    }
+}
+
+#[test]
+fn test_background_agent_streams_into_its_own_chat() {
+    let (mut app, _rx) = app_with_agents();
+    submit(&mut app, "hello aa");
+
+    stream_to(&mut app, "bb", "working on it");
+
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["hello aa"]);
+    assert!(app.agent_busy("bb"));
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["ask bb", "working on it"]);
+    assert_eq!(app.state(), AppState::Processing);
+    assert!(app.agent_busy("aa"));
+
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["hello aa"]);
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn test_switching_back_shows_a_turn_that_finished_meanwhile() {
+    let (mut app, _rx) = app_with_agents();
+    stream_to(&mut app, "aa", "first ");
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(app.state(), AppState::Idle);
+
+    for command in [
+        UiCommand::AppendText("draft".to_string()),
+        UiCommand::FinishStreaming,
+        UiCommand::Complete,
+    ] {
+        app.process_command(UiCommand::ForAgent {
+            agent_id: "aa".to_string(),
+            command: Box::new(command),
+        });
+    }
+    assert!(app.messages().is_empty());
+    assert!(!app.agent_busy("aa"));
     assert!(matches!(
         app.notification(),
-        Some((_, NotificationType::Warning))
+        Some((text, NotificationType::Success)) if text == "Terminal Agent finished"
     ));
+
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["ask aa", "first draft"]);
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn test_message_to_busy_agent_is_queued_not_shown() {
+    let (mut app, mut rx) = app_with_agents();
+    submit(&mut app, "first");
+    assert!(rx.try_recv().is_ok());
+
+    submit(&mut app, "second");
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { agent_id, text, shown: false })
+            if agent_id == "aa" && text == "second"
+    ));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["first"]);
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn test_records_of_background_agents_are_not_listed() {
+    let (mut app, _rx) = app_with_agents();
+    let record = |agent_id: &str| crate::events::RecordSummary {
+        seq: 1,
+        timestamp: String::new(),
+        full_hash: String::new(),
+        hash_suffix: String::new(),
+        tx_kind: "UserPrompt".to_string(),
+        sender: String::new(),
+        message: String::new(),
+        action_count: 0,
+        effect_status: String::new(),
+        status: crate::events::RecordStatus::Ok,
+        info: String::new(),
+        error_details: String::new(),
+        tx_id: String::new(),
+        agent_id: agent_id.to_string(),
+        ts_ms: 0,
+        policy: None,
+    };
+
+    app.process_command(UiCommand::NewRecord(record("bb")));
+    app.process_command(UiCommand::NewRecord(record("aa")));
+
+    assert_eq!(app.records().len(), 1);
 }
 
 #[test]
@@ -585,13 +699,16 @@ fn test_spawn_command_matches_name_case_insensitively() {
 }
 
 #[test]
-fn test_spawn_refused_while_processing() {
+fn test_spawn_allowed_while_processing() {
     let (mut app, mut rx) = app_with_definitions();
     app.state = AppState::Processing;
 
     app.handle_key(key(KeyCode::Enter));
 
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InstantiateDefinition(_))
+    ));
 }
 
 #[test]

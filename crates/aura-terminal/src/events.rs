@@ -10,11 +10,21 @@ use std::path::PathBuf;
 /// Events sent from the UI to the application logic.
 #[derive(Debug, Clone)]
 pub enum UiEvent {
-    /// User submitted a message
-    UserMessage(String),
+    /// User submitted a message to an agent
+    UserMessage {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Message text
+        text: String,
+        /// Whether the chat already shows the message. It doesn't when the
+        /// agent was busy and the message waits for its turn.
+        shown: bool,
+    },
 
     /// User typed a shell command to run in the agent's workspace
     RunCommand {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
         /// Command line
         command: String,
         /// Width of the terminal the command's output is shown in
@@ -42,8 +52,8 @@ pub enum UiEvent {
     /// User requested to clear the screen
     Clear,
 
-    /// User cancelled the current operation
-    Cancel,
+    /// User cancelled the turn of the agent with this hex id
+    Cancel(String),
 
     /// User requested a new session (reset context)
     NewSession,
@@ -214,6 +224,23 @@ pub enum UiCommand {
 
     /// Mark the current operation as complete
     Complete,
+
+    /// The agent started a turn the chat didn't start itself (a queued
+    /// message, or a task from the agent that spawned it)
+    TurnStarted {
+        /// Message to show as the user's, when the chat doesn't show it yet
+        prompt: Option<String>,
+    },
+
+    /// A command for the chat of one agent. Agents work in parallel, so
+    /// anything an agent's turn sends is addressed to it; the UI applies it
+    /// to that agent's chat whether or not it is on screen.
+    ForAgent {
+        /// Agent ID (hex encoded)
+        agent_id: String,
+        /// Command for that agent's chat
+        command: Box<UiCommand>,
+    },
 
     /// Clear the conversation
     ClearConversation,
@@ -513,7 +540,8 @@ pub struct AgentSummary {
     /// How many spawning agents it is nested under (0 for top-level agents)
     #[serde(default)]
     pub depth: usize,
-    /// Whether it is running a task for the agent that spawned it
+    /// Whether it is working right now: running a turn, a command, or a
+    /// task for the agent that spawned it
     #[serde(default)]
     pub running: bool,
     /// Project this root agent heads. Empty when the project is unnamed
@@ -528,8 +556,12 @@ mod tests {
 
     #[test]
     fn test_ui_event_variants() {
-        let event = UiEvent::UserMessage("hello".to_string());
-        assert!(matches!(event, UiEvent::UserMessage(_)));
+        let event = UiEvent::UserMessage {
+            agent_id: "aa".to_string(),
+            text: "hello".to_string(),
+            shown: true,
+        };
+        assert!(matches!(event, UiEvent::UserMessage { .. }));
 
         let event = UiEvent::Approve("tool-1".to_string());
         assert!(matches!(event, UiEvent::Approve(_)));

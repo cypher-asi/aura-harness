@@ -383,7 +383,7 @@ impl App {
         }
         match key.code {
             KeyCode::Enter => {
-                if !self.input.is_empty() && self.state != AppState::Processing {
+                if !self.input.is_empty() {
                     return self.submit_input();
                 }
             }
@@ -525,26 +525,54 @@ impl App {
             return self.handle_command(&text);
         }
 
+        let busy = self.state == AppState::Processing;
+        let agent_id = self.active_agent_id.clone();
         if let Some(command) = super::shell_input::parse(&text) {
+            if busy {
+                self.input = text;
+                self.cursor_pos = self.input.len();
+                self.notification = Some((
+                    "Wait for this agent's turn to finish before running a command".to_string(),
+                    NotificationType::Warning,
+                ));
+                return KeyResult::continue_running();
+            }
             self.add_message(crate::components::Message::shell(&command));
             self.state = AppState::Processing;
             self.status = "Running...".to_string();
             let cols = self.command_columns();
             if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::RunCommand { command, cols });
+                let _ = tx.try_send(UiEvent::RunCommand {
+                    agent_id,
+                    command,
+                    cols,
+                });
             }
             return KeyResult::continue_running();
         }
 
-        self.add_message(crate::components::Message::new(
-            crate::components::MessageRole::User,
-            &text,
-        ));
-        self.state = AppState::Processing;
-        self.status = "Thinking...".to_string();
+        // A busy agent takes the message once its turn ends; it is shown
+        // then, so it lands below the reply still streaming.
+        if busy {
+            self.notification = Some((
+                "Queued: sent once this agent's turn ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else {
+            self.add_message(crate::components::Message::new(
+                crate::components::MessageRole::User,
+                &text,
+            ));
+            self.state = AppState::Processing;
+            self.status = "Thinking...".to_string();
+        }
 
         if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(UiEvent::UserMessage(text));
+            let _ = tx.try_send(UiEvent::UserMessage {
+                agent_id,
+                text,
+                shown: !busy,
+            });
         }
         KeyResult::continue_running()
     }

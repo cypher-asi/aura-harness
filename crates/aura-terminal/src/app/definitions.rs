@@ -1,7 +1,7 @@
 //! The agents panel's tabs, and its roster of permanent agents: selecting,
 //! spawning, editing, and deleting them.
 
-use super::{contains, follow_selection, App, AppState, NotificationType};
+use super::{contains, follow_selection, App, NotificationType};
 use crate::events::{AgentDefinitionSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -167,9 +167,6 @@ impl App {
 
     /// Start an instance of the permanent agent `name` and switch to it.
     pub(super) fn instantiate_definition(&mut self, name: &str) {
-        if self.refuse_while_busy("starting a permanent agent") {
-            return;
-        }
         self.send(UiEvent::InstantiateDefinition(name.to_string()));
         // The new instance becomes the active agent, listed under Projects.
         self.show_agents_tab(AgentsTab::Projects);
@@ -177,9 +174,6 @@ impl App {
 
     /// Open the permanent agent `name` in the editor, or a new one for `None`.
     pub(super) fn edit_definition(&mut self, name: Option<String>) {
-        if self.refuse_while_busy("editing permanent agents") {
-            return;
-        }
         self.send(UiEvent::EditDefinition(name));
     }
 
@@ -188,9 +182,6 @@ impl App {
         let Some(name) = self.selected_definition_name() else {
             return;
         };
-        if self.refuse_while_busy("deleting permanent agents") {
-            return;
-        }
         self.notification = Some((
             format!("Delete permanent agent {name}? Press y to confirm"),
             NotificationType::Warning,
@@ -259,22 +250,6 @@ impl App {
         if index == self.definitions.len() {
             self.edit_definition(None);
         }
-    }
-
-    /// Warn and return `true` while a turn is in flight: the backend
-    /// handles one request at a time.
-    fn refuse_while_busy(&mut self, action: &str) -> bool {
-        let busy = matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        );
-        if busy {
-            self.notification = Some((
-                format!("Wait for the current turn to finish before {action}"),
-                NotificationType::Warning,
-            ));
-        }
-        busy
     }
 
     fn send(&self, event: UiEvent) {

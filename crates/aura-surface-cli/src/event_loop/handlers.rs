@@ -1,86 +1,63 @@
 //! Handler functions for agent turns, auth, and session lifecycle.
 
-use super::agent_events::ForwarderState;
+use super::agent_events::{AgentUi, ForwarderState};
+use super::agents::AgentSession;
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
 use aura_core_types::Transaction;
-use aura_terminal::{UiCommand, UiEvent};
+use aura_terminal::events::{MessageData, MessageRole};
+use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-/// Run one turn of the active agent on `agent_loop` with `tools`.
-///
-/// UI events keep flowing while the turn runs: Esc cancels it, quit
-/// cancels it and ends the session, and anything else waits in
-/// `state.deferred` until the turn is over. The returned flag is set
-/// when the user cancelled the turn.
+/// Run one turn of `session` on `agent_loop` with `tools`, streaming it
+/// into `ui`. `cancel` stops it early.
 pub(super) async fn run_agent_turn(
-    state: &mut LoopState<'_>,
+    session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
     tools: Vec<aura_model_reasoner::ToolDefinition>,
+    ui: &AgentUi,
+    cancel: &CancellationToken,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
-    bool,
 ) {
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
+    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, ui.clone()));
 
-    let fwd_commands = state.commands.clone();
-    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, fwd_commands));
-
-    let cancel_token = CancellationToken::new();
-    let cancel_for_turn = cancel_token.clone();
-    let mut cancelled = false;
-
-    let turn = tokio::time::timeout(
+    // A timeout stops the turn without it counting as cancelled by the user.
+    let turn_cancel = cancel.child_token();
+    let process_result = match tokio::time::timeout(
         TURN_TIMEOUT,
         agent_loop.run_with_events(
-            &state.session.model_gateway,
-            &state.session.tool_gateway,
-            state.session.messages.clone(),
+            &session.model_gateway,
+            &session.tool_gateway,
+            session.messages.clone(),
             tools,
             Some(agent_event_tx),
-            Some(cancel_token),
+            Some(turn_cancel.clone()),
         ),
-    );
-    tokio::pin!(turn);
-    let process_result = loop {
-        tokio::select! {
-            outcome = &mut turn => break match outcome {
-                Ok(result) => result,
-                Err(_) => {
-                    cancel_for_turn.cancel();
-                    Err(aura_agent::AgentError::Timeout(format!(
-                        "Agent turn timed out after {} minutes",
-                        TURN_TIMEOUT.as_secs() / 60
-                    )))
-                }
-            },
-            Some(event) = state.events.recv() => match event {
-                UiEvent::Cancel => {
-                    info!("Cancelling the running turn");
-                    cancel_for_turn.cancel();
-                    cancelled = true;
-                }
-                UiEvent::Quit => {
-                    info!("Quit during a turn; cancelling it");
-                    cancel_for_turn.cancel();
-                    cancelled = true;
-                    state.quit_requested = true;
-                }
-                other => state.deferred.push_back(other),
-            },
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            turn_cancel.cancel();
+            Err(aura_agent::AgentError::Timeout(format!(
+                "Agent turn timed out after {} minutes",
+                TURN_TIMEOUT.as_secs() / 60
+            )))
         }
     };
 
     let forwarded = match forwarder.await {
         Ok(fwd_state) => {
             if fwd_state.thinking_active {
-                let _ = state.commands.send(UiCommand::FinishThinking).await;
+                ui.send(UiCommand::FinishThinking).await;
             }
             if fwd_state.streaming_active {
-                let _ = state.commands.send(UiCommand::FinishStreaming).await;
+                ui.send(UiCommand::FinishStreaming).await;
             }
             fwd_state
         }
@@ -90,58 +67,44 @@ pub(super) async fn run_agent_turn(
         }
     };
 
-    (process_result, forwarded, cancelled)
+    (process_result, forwarded)
 }
 
 pub(super) async fn handle_agent_success(
-    state: &mut LoopState<'_>,
+    session: &mut AgentSession,
     result: aura_agent::AgentLoopResult,
     forwarded: &ForwarderState,
+    ui: &AgentUi,
 ) {
-    state.session.messages = result.messages.clone();
+    session.messages.clone_from(&result.messages);
 
-    persist_response_via_kernel(state, &result.total_text).await;
-    emit_response_to_ui(state, &result, forwarded).await;
+    persist_response_via_kernel(session, &result.total_text, ui).await;
+    emit_response_to_ui(&result, forwarded, ui).await;
 
     // Memory ingestion now fires automatically via TurnObserver inside
     // AgentLoop::run_with_events — no manual call needed here.
 
     if let Some(ref err) = result.llm_error {
-        let _ = state
-            .commands
-            .send(UiCommand::ShowWarning(format!("LLM error: {err}")))
+        ui.send(UiCommand::ShowWarning(format!("LLM error: {err}")))
             .await;
     }
     if result.timed_out {
-        let _ = state
-            .commands
-            .send(UiCommand::ShowWarning("Agent loop timed out".to_string()))
+        ui.send(UiCommand::ShowWarning("Agent loop timed out".to_string()))
             .await;
     }
-    let _ = state.commands.send(UiCommand::Complete).await;
+    ui.send(UiCommand::Complete).await;
 }
 
-async fn persist_response_via_kernel(state: &mut LoopState<'_>, total_text: &str) {
-    let response_tx = create_response_transaction(state.session.agent_id(), total_text);
+async fn persist_response_via_kernel(session: &AgentSession, total_text: &str, ui: &AgentUi) {
+    let response_tx = create_response_transaction(session.agent_id(), total_text);
 
-    match state
-        .session
-        .kernel
-        .process_direct(response_tx.clone())
-        .await
-    {
+    match session.kernel.process_direct(response_tx.clone()).await {
         Ok(result) => {
             debug!(
                 seq = result.entry.seq,
                 "Response record persisted via kernel"
             );
-            send_record_to_ui(
-                state.commands,
-                result.entry.seq,
-                &response_tx,
-                &result.entry,
-            )
-            .await;
+            send_record_to_ui(ui.commands(), result.entry.seq, &response_tx, &result.entry).await;
         }
         Err(e) => {
             error!(error = %e, "Failed to persist response record via kernel");
@@ -150,47 +113,54 @@ async fn persist_response_via_kernel(state: &mut LoopState<'_>, total_text: &str
 }
 
 async fn emit_response_to_ui(
-    state: &LoopState<'_>,
     result: &aura_agent::AgentLoopResult,
     forwarded: &ForwarderState,
+    ui: &AgentUi,
 ) {
     if !result.total_text.is_empty() {
         let preview: String = result.total_text.chars().take(100).collect();
         info!(response_preview = %preview, "Model response received");
 
         if !forwarded.had_text {
-            let _ = state
-                .commands
-                .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
-                    role: aura_terminal::events::MessageRole::Assistant,
-                    content: result.total_text.clone(),
-                    is_streaming: false,
-                    timestamp_ms: None,
-                    command: None,
-                    activity: None,
-                    model: forwarded.reply_model.clone(),
-                    usage: forwarded.reply_usage,
-                }))
-                .await;
+            ui.send(UiCommand::ShowMessage(MessageData {
+                role: MessageRole::Assistant,
+                content: result.total_text.clone(),
+                is_streaming: false,
+                timestamp_ms: None,
+                command: None,
+                activity: None,
+                model: forwarded.reply_model.clone(),
+                usage: forwarded.reply_usage,
+            }))
+            .await;
         }
     }
 }
 
-pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
+/// Start a new session on the active agent. Returns `false`, after
+/// saying why, while the agent is busy.
+pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
     debug!("New session requested");
 
-    let session_tx = Transaction::session_start(state.session.agent_id());
-    let store = state.session.kernel.store();
+    let agent_id = state.active;
+    let Some(session) = state.idle.get_mut(&agent_id) else {
+        let _ = state
+            .commands
+            .send(UiCommand::ShowWarning(
+                "Wait for this agent to finish (or press Esc) before starting a new session"
+                    .to_string(),
+            ))
+            .await;
+        return false;
+    };
+
+    let session_tx = Transaction::session_start(agent_id);
+    let store = session.kernel.store();
 
     if let Err(e) = store.enqueue_tx(&session_tx) {
         error!(error = %e, "Failed to enqueue session start");
-    } else if let Ok(Some((token, tx))) = store.dequeue_tx(state.session.agent_id()) {
-        match state
-            .session
-            .kernel
-            .process_dequeued(tx.clone(), token)
-            .await
-        {
+    } else if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
+        match session.kernel.process_dequeued(tx.clone(), token).await {
             Ok(result) => {
                 debug!(
                     seq = result.entry.seq,
@@ -204,28 +174,31 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
         }
     }
 
-    state.session.messages.clear();
+    session.messages.clear();
 
     let _ = state
         .commands
         .send(UiCommand::SetStatus("Ready".to_string()))
         .await;
+    true
+}
+
+/// A system line for the chat.
+pub(super) fn system_message(content: String) -> UiCommand {
+    UiCommand::ShowMessage(MessageData {
+        role: MessageRole::System,
+        content,
+        is_streaming: false,
+        timestamp_ms: None,
+        command: None,
+        activity: None,
+        model: None,
+        usage: None,
+    })
 }
 
 pub(super) async fn show_system_message(state: &LoopState<'_>, content: String) {
-    let _ = state
-        .commands
-        .send(UiCommand::ShowMessage(aura_terminal::events::MessageData {
-            role: aura_terminal::events::MessageRole::System,
-            content,
-            is_streaming: false,
-            timestamp_ms: None,
-            command: None,
-            activity: None,
-            model: None,
-            usage: None,
-        }))
-        .await;
+    let _ = state.commands.send(system_message(content)).await;
 }
 
 /// Probe the local model server, publish the model list, and explain how

@@ -273,16 +273,6 @@ impl App {
         let mut parts = arg.splitn(2, ' ');
         let first = parts.next().unwrap_or("");
         if first.eq_ignore_ascii_case("new") {
-            if matches!(
-                self.state,
-                AppState::Processing | AppState::AwaitingApproval
-            ) {
-                self.notification = Some((
-                    "Wait for the current turn to finish before creating an agent".to_string(),
-                    NotificationType::Warning,
-                ));
-                return;
-            }
             let name = parts
                 .next()
                 .map(str::trim)
@@ -410,10 +400,14 @@ impl App {
                 self.cmd_complete();
                 self.refresh_sandbox();
             }
+            UiCommand::TurnStarted { prompt } => self.cmd_turn_started(prompt),
+            UiCommand::ForAgent { agent_id, command } => {
+                self.process_agent_command(&agent_id, *command);
+            }
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
-            UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(agent_id),
+            UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),
             UiCommand::SetAgentDefinitions(definitions) => self.set_definitions(definitions),
             UiCommand::OpenEditor(path) => self.editor_request = Some(path),
             UiCommand::ClearRecords => {
@@ -590,6 +584,14 @@ impl App {
         self.status = "Ready".to_string();
     }
 
+    fn cmd_turn_started(&mut self, prompt: Option<String>) {
+        if let Some(prompt) = prompt {
+            self.add_message(Message::new(MessageRole::User, &prompt));
+        }
+        self.state = AppState::Processing;
+        self.status = "Thinking...".to_string();
+    }
+
     fn cmd_clear_conversation(&mut self) {
         self.messages.clear();
     }
@@ -627,6 +629,14 @@ impl App {
     }
 
     fn cmd_new_record(&mut self, record: crate::events::RecordSummary) {
+        // Agents running in the background write records too; the panel
+        // lists the active agent's.
+        if !record.agent_id.is_empty()
+            && !self.active_agent_id.is_empty()
+            && record.agent_id != self.active_agent_id
+        {
+            return;
+        }
         self.records.push_front(record);
         while self.records.len() > super::MAX_RECORDS {
             self.records.pop_back();
@@ -643,8 +653,8 @@ impl App {
         self.select_visible_active();
     }
 
-    fn cmd_set_active_agent(&mut self, agent_id: String) {
-        self.active_agent_id = agent_id;
+    fn cmd_set_active_agent(&mut self, agent_id: &str) {
+        self.show_agent_chat(agent_id);
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }

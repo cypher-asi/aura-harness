@@ -3,6 +3,7 @@
 //! Manages the overall application state, conversation history,
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
+mod agent_views;
 mod commands;
 mod definitions;
 pub mod file_view;
@@ -202,6 +203,8 @@ pub struct App {
     pub(super) collapsed_projects: HashSet<String>,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
+    /// Chats of the agents not on screen, by agent ID
+    pub(super) views: HashMap<String, agent_views::AgentView>,
     /// API URL for the swarm
     pub(super) api_url: Option<String>,
     /// Whether the API is currently active
@@ -443,6 +446,7 @@ impl App {
             selected_agent: 0,
             collapsed_projects: HashSet::new(),
             active_agent_id: String::new(),
+            views: HashMap::new(),
             api_url: None,
             api_active: false,
             login_email: String::new(),
@@ -1723,13 +1727,13 @@ impl App {
         }
     }
 
-    /// Cancel the current operation.
+    /// Cancel the turn of the agent on screen.
     pub fn cancel(&mut self) {
         if self.state == AppState::Processing {
             self.state = AppState::Idle;
             self.status = "Cancelled".to_string();
             if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::Cancel);
+                let _ = tx.try_send(UiEvent::Cancel(self.active_agent_id.clone()));
             }
         }
     }
@@ -1742,21 +1746,9 @@ impl App {
         }
     }
 
-    /// Request a switch to another agent.
-    ///
-    /// Refused while a turn is in flight, because the backend processes one
-    /// agent's turn at a time and the streamed output belongs to the current agent.
+    /// Request a switch to another agent. Agents keep working while
+    /// another one is shown.
     pub(super) fn request_agent_switch(&mut self, agent_id: String) {
-        if matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        ) {
-            self.notification = Some((
-                "Wait for the current turn to finish before switching agents".to_string(),
-                NotificationType::Warning,
-            ));
-            return;
-        }
         if agent_id == self.active_agent_id {
             return;
         }

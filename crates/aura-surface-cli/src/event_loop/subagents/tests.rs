@@ -19,6 +19,11 @@ struct Fixture {
 
 /// A hub over seeded permanent agents whose kernels all answer `reply`.
 fn fixture(reply: &str) -> Fixture {
+    slow_fixture(reply, 0)
+}
+
+/// [`fixture`] whose model takes `latency_ms` to answer.
+fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
     let data = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();
@@ -53,7 +58,7 @@ fn fixture(reply: &str) -> Fixture {
             store,
             Box::new(move |agent_id, _parent_chain, folder| {
                 let provider: Arc<dyn ModelProvider + Send + Sync> =
-                    Arc::new(MockProvider::simple_response(reply.clone()));
+                    Arc::new(MockProvider::simple_response(reply.clone()).with_latency(latency_ms));
                 Ok(Kernel::new(
                     Arc::clone(&kernel_store) as Arc<dyn aura_store_db::Store>,
                     provider,
@@ -200,12 +205,59 @@ async fn spawn_runs_an_instance_under_its_parent() {
     assert!(!child_row.running);
 
     let mut saw_running = false;
+    let mut child_chat = Vec::new();
     while let Ok(command) = fixture.commands.try_recv() {
-        if let UiCommand::SetAgents(rows) = command {
-            saw_running |= rows.iter().any(|r| r.name == "reviewer #1" && r.running);
+        match command {
+            UiCommand::SetAgents(rows) => {
+                saw_running |= rows.iter().any(|r| r.name == "reviewer #1" && r.running);
+            }
+            UiCommand::ForAgent { agent_id, command } if agent_id == child_id.to_hex() => {
+                child_chat.push(*command);
+            }
+            _ => {}
         }
     }
     assert!(saw_running);
+    assert!(matches!(
+        child_chat.first(),
+        Some(UiCommand::TurnStarted { prompt: Some(p) }) if p == "Review the diff"
+    ));
+    assert!(matches!(child_chat.last(), Some(UiCommand::Complete)));
+}
+
+#[tokio::test]
+async fn cancelling_a_spawn_fails_its_task() {
+    let fixture = slow_fixture("unused", 60_000);
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let hub = Arc::clone(&fixture.hub);
+
+    let dispatch = tokio::spawn({
+        let dispatcher = Arc::clone(&fixture.dispatcher);
+        async move {
+            dispatcher
+                .dispatch(request(parent, "reviewer", "Review it"))
+                .await
+                .unwrap()
+        }
+    });
+    let child = loop {
+        let running = lock(&hub.running).keys().next().copied();
+        if let Some(child) = running {
+            break child;
+        }
+        tokio::task::yield_now().await;
+    };
+    assert!(hub.cancel(child));
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), dispatch)
+        .await
+        .expect("cancel stops the spawn")
+        .unwrap();
+    assert!(
+        matches!(&result.exit, SubagentExit::Failed { reason } if reason == "cancelled by the user")
+    );
+    assert!(!hub.is_running(child));
+    assert_eq!(hub.take_finished().len(), 1);
 }
 
 #[tokio::test]
