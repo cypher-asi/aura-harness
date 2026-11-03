@@ -719,9 +719,12 @@ fn test_mouse_move_hovers_clickable_items() {
     app.process_command(tool_data("t2", "read_file"));
     let ids: Vec<u64> = app.messages().iter().map(|m| m.version().0).collect();
     app.set_chat_text_area(Rect::new(2, 1, 56, 18));
-    app.set_chat_layout(vec![(0, ids[0]), (1, ids[1])], 0);
+    app.set_chat_layout(step_rows(&ids), 0);
     app.handle_mouse(mouse(MouseEventKind::Moved, 10, 2));
-    assert_eq!(app.hover(), Some(HoverTarget::Activity(ids[1])));
+    assert_eq!(
+        app.hover(),
+        Some(HoverTarget::Activity(ToggleTarget::Step(ids[1])))
+    );
 }
 
 #[test]
@@ -1335,7 +1338,7 @@ fn test_clicking_a_block_header_toggles_only_it() {
     let ids: Vec<u64> = app.messages().iter().map(|m| m.version().0).collect();
     app.areas.chat = Some(Rect::new(0, 0, 60, 20));
     app.set_chat_text_area(Rect::new(2, 1, 56, 18));
-    app.set_chat_layout(vec![(0, ids[0]), (1, ids[1])], 0);
+    app.set_chat_layout(step_rows(&ids), 0);
 
     let click = |app: &mut App, kind| {
         app.handle_mouse(MouseEvent {
@@ -1350,6 +1353,56 @@ fn test_clicking_a_block_header_toggles_only_it() {
 
     assert!(!app.messages()[0].is_expanded());
     assert!(app.messages()[1].is_expanded());
+}
+
+#[test]
+fn test_clicking_a_group_summary_flips_what_it_shows() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = App::new();
+    app.areas.chat = Some(Rect::new(0, 0, 60, 20));
+    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
+    let click = |app: &mut App| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column: 10,
+                row: 1,
+                modifiers: KeyModifiers::empty(),
+            });
+        }
+    };
+    let group = |open| ToggleRow {
+        line: 0,
+        target: ToggleTarget::Group(7),
+        open,
+    };
+
+    app.set_chat_layout(vec![group(false)], 0);
+    click(&mut app);
+    assert_eq!(app.group_open.get(&7), Some(&true));
+
+    app.set_chat_layout(vec![group(true)], 0);
+    click(&mut app);
+    assert_eq!(app.group_open.get(&7), Some(&false));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    assert!(app.group_open.is_empty());
+}
+
+/// One collapsed step row per message id, on consecutive lines.
+fn step_rows(ids: &[u64]) -> Vec<ToggleRow> {
+    ids.iter()
+        .enumerate()
+        .map(|(line, &id)| ToggleRow {
+            line,
+            target: ToggleTarget::Step(id),
+            open: false,
+        })
+        .collect()
 }
 
 // ========================================================================

@@ -1,10 +1,9 @@
 //! Panel rendering: Chat, Swarm and Record.
 
-use super::chat_lines::gap_before;
 use super::text::display_width;
 use crate::{
     animation::AURA_WIDTH,
-    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow},
+    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow},
     App, Theme,
 };
 use ratatui::{
@@ -57,19 +56,20 @@ fn render_chat_lines(
 ) {
     let spinner = app.spinner_char();
     let hovered_activity = match app.hover() {
-        Some(HoverTarget::Activity(id)) => Some(id),
+        Some(HoverTarget::Activity(target)) => Some(target),
         _ => None,
     };
-    let (messages, cache) = app.chat_line_cache();
-    let reflowed = cache.update(messages, padded.width as usize, theme, spinner);
-    let mut activity_headers = Vec::new();
+    let (messages, cache, groups) = app.chat_line_cache();
+    let reflowed = cache.update(messages, padded.width as usize, theme, spinner, &groups);
+    let mut toggle_rows = Vec::new();
     let mut message_rows = 0;
-    for (i, message) in messages.iter().enumerate() {
-        message_rows += usize::from(gap_before(messages, i));
-        if message.activity_step().is_some() {
-            activity_headers.push((message_rows, message.version().0));
-        }
-        message_rows += cache.lines(message).len();
+    for (i, block) in cache.blocks().enumerate() {
+        message_rows += usize::from(i > 0);
+        toggle_rows.extend(block.toggles.iter().map(|toggle| ToggleRow {
+            line: message_rows + toggle.line,
+            ..*toggle
+        }));
+        message_rows += block.lines.len();
     }
     let working_rows = match working_line {
         Some(_) if message_rows > 0 => 2,
@@ -81,23 +81,28 @@ fn render_chat_lines(
         padded.height as usize,
         reflowed,
     );
-    app.set_chat_layout(activity_headers, start);
+    app.set_chat_layout(toggle_rows, start);
 
-    let (messages, cache) = app.chat_line_cache();
+    let (_, cache, _) = app.chat_line_cache();
     let blank = Line::default();
     let height = padded.height as usize;
     let mut visible = Vec::with_capacity(height);
     let mut line_index = 0usize;
-    for (i, message) in messages.iter().enumerate() {
-        if gap_before(messages, i) {
+    for (i, block) in cache.blocks().enumerate() {
+        if i > 0 {
             push_visible(&mut visible, &mut line_index, start, height, blank.clone());
         }
-        let hover_header =
-            message.activity_step().is_some() && hovered_activity == Some(message.version().0);
-        for (offset, line) in cache.lines(message).iter().enumerate() {
+        let hover_line = hovered_activity.and_then(|target| {
+            block
+                .toggles
+                .iter()
+                .find(|toggle| toggle.target == target)
+                .map(|toggle| toggle.line)
+        });
+        for (offset, line) in block.lines.iter().enumerate() {
             if line_index >= start && visible.len() < height {
                 let mut line = line.clone();
-                if hover_header && offset == 0 {
+                if hover_line == Some(offset) {
                     apply_activity_hover(&mut line, theme);
                 }
                 visible.push(line);
@@ -191,7 +196,7 @@ pub(super) fn centered_text_area(area: Rect) -> Rect {
 /// `AURA  ⠹ thinking… 12s` — shown below the conversation while a turn is
 /// in flight and no reply text is streaming.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
-    if app.has_live_activity() {
+    if app.has_live_activity() || app.ends_in_live_group() {
         return None;
     }
     let label = app.working_label()?;

@@ -15,7 +15,7 @@ mod text;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use chat_lines::ChatLineCache;
+pub(crate) use chat_lines::{ChatLineCache, GroupState};
 
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{

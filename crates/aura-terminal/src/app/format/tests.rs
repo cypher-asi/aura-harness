@@ -38,6 +38,51 @@ fn non_envelope_result_is_unchanged() {
 }
 
 #[test]
+fn tool_labels_say_what_the_call_did() {
+    let label = |name: &str, args: serde_json::Value| format_tool_label(name, &args.to_string());
+    assert_eq!(
+        label(
+            "read_file",
+            json!({ "path": "crates/a/src/provider.rs", "start_line": 1, "end_line": 383 })
+        ),
+        "Read provider.rs L1-383"
+    );
+    assert_eq!(
+        label("read_file", json!({ "path": "main.rs" })),
+        "Read main.rs"
+    );
+    assert_eq!(
+        label(
+            "search_code",
+            json!({ "pattern": "LinkedAccount", "path": "crates", "include": "*.rs" })
+        ),
+        "Grepped LinkedAccount in crates (*.rs)"
+    );
+    assert_eq!(
+        label("find_files", json!({ "pattern": "*.toml" })),
+        "Found *.toml"
+    );
+    assert_eq!(label("list_files", json!({})), "Listed .");
+    assert_eq!(
+        label(
+            "edit_file",
+            json!({ "path": "src/lib.rs", "old_text": "a" })
+        ),
+        "Edited lib.rs"
+    );
+    assert_eq!(
+        label("run_command", json!({ "command": "cargo test" })),
+        "Ran cargo test"
+    );
+    assert_eq!(label("git_push", json!({})), "git_push");
+}
+
+#[test]
+fn tool_label_waits_for_complete_args() {
+    assert_eq!(format_tool_label("read_file", r#"{"path":"ma"#), "");
+}
+
+#[test]
 fn other_tools_are_unchanged() {
     let result = envelope(true, 0, "x", "");
     assert_eq!(format_tool_result("read_file", &result), result);

@@ -326,7 +326,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "PgUp/PgDn  Scroll chat history",
         "Ctrl+Home/End  Chat top/bottom",
         "Ctrl+O     Expand/collapse thinking & tools",
-        "Click      Expand/collapse one step",
+        "Click      Open a summary, then a step's details",
         "Shift+Mouse Select text to copy",
         "Ctrl+C     Cancel/Exit",
         "",

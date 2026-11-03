@@ -1,11 +1,67 @@
 //! Tool summary formatting helpers.
 
-/// Format a tool summary from tool name and JSON args for display. Empty
-/// while the args are not yet valid JSON (they stream in piece by piece).
-pub(crate) fn format_tool_summary(tool_name: &str, args_json: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(args_json)
-        .map(|args| format_tool_summary_from_value(tool_name, &args))
-        .unwrap_or_default()
+/// What a tool call did, as a short phrase: `Read main.rs L1-80`,
+/// `Grepped TODO in src`, `Ran cargo test`. Empty while the args are not
+/// yet valid JSON (they stream in piece by piece).
+pub(crate) fn format_tool_label(tool_name: &str, args_json: &str) -> String {
+    let Ok(args) = serde_json::from_str::<serde_json::Value>(args_json) else {
+        return String::new();
+    };
+    let text = |key: &str| {
+        args.get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+    };
+    let file = |verb: &str| match text("path") {
+        Some(path) => format!("{verb} {}", file_name(path)),
+        None => verb.to_string(),
+    };
+    let in_path = |label: String| match text("path") {
+        Some(path) => format!("{label} in {path}"),
+        None => label,
+    };
+    match tool_name {
+        "read_file" => {
+            let line = |key: &str| args.get(key).and_then(serde_json::Value::as_u64);
+            match (line("start_line"), line("end_line")) {
+                (Some(start), Some(end)) => format!("{} L{start}-{end}", file("Read")),
+                (Some(start), None) => format!("{} from L{start}", file("Read")),
+                (None, Some(end)) => format!("{} L1-{end}", file("Read")),
+                (None, None) => file("Read"),
+            }
+        }
+        "write_file" => file("Wrote"),
+        "edit_file" => file("Edited"),
+        "delete_file" => file("Deleted"),
+        "stat_file" => file("Checked"),
+        "list_files" => format!("Listed {}", text("path").unwrap_or(".")),
+        "search_code" => {
+            let label = in_path(format!("Grepped {}", text("pattern").unwrap_or_default()));
+            match text("include") {
+                Some(include) => format!("{label} ({include})"),
+                None => label,
+            }
+        }
+        "find_files" => in_path(format!("Found {}", text("pattern").unwrap_or_default())),
+        "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, &args)),
+        _ => {
+            let summary = format_tool_summary_from_value(tool_name, &args);
+            if summary.is_empty() {
+                tool_name.to_string()
+            } else {
+                format!("{tool_name} {summary}")
+            }
+        }
+    }
+}
+
+/// Last component of `path`.
+pub(crate) fn file_name(path: &str) -> &str {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
 }
 
 /// Format a tool result for display.
@@ -81,26 +137,6 @@ fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> 
                 format!("{program} {cmd_args}")
             }
         }
-        "read_file" => args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "write_file" => args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "fs_list" | "list_dir" => args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".")
-            .to_string(),
-        "fs_search" | "search" | "glob" => args
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
         _ => {
             let summary: Vec<String> = args
                 .as_object()
@@ -110,8 +146,8 @@ fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> 
                         .map(|(k, v)| {
                             let val_str = match v {
                                 serde_json::Value::String(s) => {
-                                    if s.len() > 30 {
-                                        format!("{}...", &s[..27])
+                                    if s.chars().count() > 30 {
+                                        format!("{}...", s.chars().take(27).collect::<String>())
                                     } else {
                                         s.clone()
                                     }

@@ -518,8 +518,8 @@ fn test_hovered_activity_header_keeps_status_color() {
     }));
     app.process_command(UiCommand::CompleteTool {
         id: "t1".to_string(),
-        result: "ok".to_string(),
-        success: true,
+        result: "no such file".to_string(),
+        success: false,
     });
 
     let buffer = render_buffer(&mut app, 120);
@@ -537,8 +537,8 @@ fn test_hovered_activity_header_keeps_status_color() {
     let (_, name) = find_cell(&buffer, row, "read_file").unwrap();
     assert_eq!(name.fg, Some(theme.colors.secondary));
     assert!(!name.add_modifier.contains(Modifier::UNDERLINED));
-    let (_, mark) = find_cell(&buffer, row, "✓").unwrap();
-    assert_eq!(mark.fg, Some(theme.colors.success));
+    let (_, mark) = find_cell(&buffer, row, "✗").unwrap();
+    assert_eq!(mark.fg, Some(theme.colors.error));
 }
 
 #[test]
@@ -1246,22 +1246,83 @@ fn test_turn_activity_renders_inline_between_prompt_and_reply() {
             .position(|row| row.contains(needle))
             .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")))
     };
-    let thought = find("▸ Thought for");
-    let first = find("▸ ✓ read_file src/main.rs");
-    let second = find("▸ ✓ read_file src/lib.rs");
+    let summary = find("▸ Explored 2 files");
     let reply = find("Fixed.");
-    assert!(find("fix it") < thought);
-    assert_eq!((first, second), (thought + 1, thought + 2));
-    assert!(second < reply);
-    assert!(!rows.join("\n").contains("Look at main first."));
+    assert!(find("fix it") < summary);
+    assert!(summary < reply);
+    let text = rows.join("\n");
+    assert!(!text.contains("Read main.rs"), "{text}");
+    assert!(!text.contains("Look at main first."), "{text}");
 
     app.handle_key(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Char('o'),
         crossterm::event::KeyModifiers::CONTROL,
     ));
-    assert!(render_rows(&mut app, 120)
-        .join("\n")
-        .contains("│ Look at main first."));
+    let rows = render_rows(&mut app, 120);
+    let text = rows.join("\n");
+    assert!(text.contains("▾ Explored 2 files"), "{text}");
+    assert!(text.contains("Thought briefly"), "{text}");
+    assert!(text.contains("│ Look at main first."), "{text}");
+    assert!(text.contains("Read main.rs"), "{text}");
+    assert!(text.contains("Read lib.rs"), "{text}");
+}
+
+#[test]
+fn test_step_group_runs_open_then_collapses_and_clicks_open() {
+    use crate::events::{ToolData, UiCommand};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "look around");
+    for (id, path) in [("t1", "src/main.rs"), ("t2", "src/lib.rs")] {
+        app.process_command(UiCommand::ShowTool(ToolData {
+            id: id.to_string(),
+            name: "read_file".to_string(),
+            args: format!(r#"{{"path":"{path}"}}"#),
+        }));
+        app.process_command(UiCommand::CompleteTool {
+            id: id.to_string(),
+            result: "fn main() {}".to_string(),
+            success: true,
+        });
+    }
+    let live = render_rows(&mut app, 120).join("\n");
+    assert!(live.contains("Exploring 2 files"), "{live}");
+    assert!(live.contains("Read main.rs"), "{live}");
+    assert!(live.contains("Read lib.rs"), "{live}");
+    assert!(!live.contains("thinking…"), "{live}");
+
+    app.process_command(UiCommand::Complete);
+    let done = render_rows(&mut app, 120).join("\n");
+    assert!(done.contains("▸ Explored 2 files"), "{done}");
+    assert!(!done.contains("Read main.rs"), "{done}");
+
+    let click = |app: &mut crate::App, needle: &str| {
+        let buffer = render_buffer(app, 120);
+        let row = row_of(&buffer, needle);
+        let (column, _) = find_cell(&buffer, row, needle).unwrap();
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::empty(),
+            });
+        }
+    };
+    click(&mut app, "Explored");
+    let open = render_rows(&mut app, 120).join("\n");
+    assert!(open.contains("▾ Explored 2 files"), "{open}");
+    assert!(open.contains("Read lib.rs"), "{open}");
+    assert!(!open.contains("│ fn main() {}"), "{open}");
+
+    click(&mut app, "lib.rs");
+    let step = render_rows(&mut app, 120).join("\n");
+    assert!(step.contains("▾ Read lib.rs"), "{step}");
+    assert!(step.contains("│ fn main() {}"), "{step}");
 }
 
 #[test]

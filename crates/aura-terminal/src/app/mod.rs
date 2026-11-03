@@ -24,7 +24,7 @@ use crate::{
         AgentDefinitionSummary, AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent,
     },
     input::InputHistory,
-    renderer::ChatLineCache,
+    renderer::{ChatLineCache, GroupState},
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
@@ -144,13 +144,16 @@ pub struct App {
     pub(super) chat_lines: ChatLineCache,
     /// Total chat lines in the last frame
     pub(super) chat_line_count: usize,
-    /// Header line of each activity block in the last frame, with its
-    /// message id, for toggling a block by clicking it
-    pub(super) activity_headers: Vec<(usize, u64)>,
+    /// Chat rows of the last frame that expand or collapse a group of
+    /// steps or one step when clicked
+    pub(super) toggle_rows: Vec<ToggleRow>,
     /// First chat line shown in the last frame
     pub(super) chat_first_line: usize,
     /// Whether new activity blocks start expanded (`Ctrl+O` toggles)
     pub(super) activity_expanded: bool,
+    /// Groups of steps the user opened (`true`) or closed, by the id of
+    /// their first message
+    pub(super) group_open: HashMap<u64, bool>,
     /// Whether verbose mode is enabled
     pub(super) verbose: bool,
     /// Event sender (for sending events to kernel)
@@ -295,8 +298,28 @@ pub(crate) enum HoverTarget {
     DefinitionRow(usize),
     /// A row in the sandbox tree.
     SandboxRow(usize),
-    /// Header line of an activity block, by message id.
-    Activity(u64),
+    /// A chat row that expands or collapses agent activity.
+    Activity(ToggleTarget),
+}
+
+/// What clicking an activity row in the chat expands or collapses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ToggleTarget {
+    /// A group of steps, by the id of its first message
+    Group(u64),
+    /// One step, by message id
+    Step(u64),
+}
+
+/// A chat row that expands or collapses `target` when clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToggleRow {
+    /// Chat line of the row
+    pub line: usize,
+    /// What the row toggles
+    pub target: ToggleTarget,
+    /// Whether `target` is shown open
+    pub open: bool,
 }
 
 fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
@@ -377,9 +400,10 @@ impl App {
             scroll_offset: 0,
             chat_lines: ChatLineCache::default(),
             chat_line_count: 0,
-            activity_headers: Vec::new(),
+            toggle_rows: Vec::new(),
             chat_first_line: 0,
             activity_expanded: false,
+            group_open: HashMap::new(),
             verbose: false,
             event_tx: None,
             command_rx: None,
@@ -546,38 +570,63 @@ impl App {
     pub fn toggle_all_activity(&mut self) {
         self.activity_expanded = !self.activity_expanded;
         let expanded = self.activity_expanded;
+        self.group_open.clear();
         for message in &mut self.messages {
             message.set_expanded(expanded);
         }
     }
 
-    /// Record where activity blocks were drawn: `headers` holds the chat
-    /// line of each block's header and its message id, and `first_line`
-    /// is the chat line at the top of the view.
-    pub(crate) fn set_chat_layout(&mut self, headers: Vec<(usize, u64)>, first_line: usize) {
-        self.activity_headers = headers;
+    /// Whether the conversation ends in a group of steps that the turn in
+    /// flight may still add to. Its summary line spins in place of the
+    /// working indicator.
+    #[must_use]
+    pub fn ends_in_live_group(&self) -> bool {
+        self.state == AppState::Processing
+            && self.messages.len() >= 2
+            && self
+                .messages
+                .iter()
+                .rev()
+                .take(2)
+                .all(|m| m.activity_step().is_some())
+    }
+
+    /// Record where activity rows were drawn: `rows` holds the chat line
+    /// of each one, and `first_line` is the chat line at the top of the
+    /// view.
+    pub(crate) fn set_chat_layout(&mut self, rows: Vec<ToggleRow>, first_line: usize) {
+        self.toggle_rows = rows;
         self.chat_first_line = first_line;
     }
 
-    /// Expand or collapse the activity block whose header is at screen
-    /// `row`. Returns whether a block was toggled.
-    fn toggle_activity_at(&mut self, column: u16, row: u16) -> bool {
-        let Some(area) = self
+    /// The activity row at a screen cell, using the layout of the last frame.
+    fn toggle_row_at(&self, column: u16, row: u16) -> Option<ToggleRow> {
+        let area = self
             .areas
             .chat_text
-            .filter(|a| contains(Some(*a), column, row))
-        else {
-            return false;
-        };
+            .filter(|area| contains(Some(*area), column, row))?;
         let line = self.chat_first_line + usize::from(row - area.y);
-        let Some(&(_, id)) = self.activity_headers.iter().find(|(l, _)| *l == line) else {
+        self.toggle_rows.iter().find(|r| r.line == line).copied()
+    }
+
+    /// Open or close the group of steps, or the step, at screen `row`.
+    /// Returns whether anything was toggled.
+    fn toggle_activity_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(toggle) = self.toggle_row_at(column, row) else {
             return false;
         };
-        let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
-            return false;
-        };
-        let expanded = !message.is_expanded();
-        message.set_expanded(expanded);
+        match toggle.target {
+            ToggleTarget::Group(id) => {
+                self.group_open.insert(id, !toggle.open);
+            }
+            ToggleTarget::Step(id) => {
+                let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
+                    return false;
+                };
+                let expanded = !message.is_expanded();
+                message.set_expanded(expanded);
+            }
+        }
         true
     }
 
@@ -605,8 +654,15 @@ impl App {
     }
 
     /// Messages along with the cache of the lines they are drawn as.
-    pub(crate) fn chat_line_cache(&mut self) -> (&VecDeque<Message>, &mut ChatLineCache) {
-        (&self.messages, &mut self.chat_lines)
+    pub(crate) fn chat_line_cache(
+        &mut self,
+    ) -> (&VecDeque<Message>, &mut ChatLineCache, GroupState<'_>) {
+        let groups = GroupState {
+            open: &self.group_open,
+            expand_all: self.activity_expanded,
+            turn_live: self.state == AppState::Processing,
+        };
+        (&self.messages, &mut self.chat_lines, groups)
     }
 
     /// Fit the chat scroll position to a conversation `total_lines` long shown
@@ -1123,15 +1179,8 @@ impl App {
     }
 
     fn hovered_activity(&self, column: u16, row: u16) -> Option<HoverTarget> {
-        let area = self
-            .areas
-            .chat_text
-            .filter(|area| contains(Some(*area), column, row))?;
-        let line = self.chat_first_line + usize::from(row.saturating_sub(area.y));
-        self.activity_headers
-            .iter()
-            .find(|(header, _)| *header == line)
-            .map(|&(_, id)| HoverTarget::Activity(id))
+        self.toggle_row_at(column, row)
+            .map(|toggle| HoverTarget::Activity(toggle.target))
     }
 
     /// Cells of `panel` that hold text: inside its border, and for the chat
