@@ -898,17 +898,38 @@ fn build_record_lines<'a>(
             Style::default().fg(record_kind_color(&record.tx_kind, theme))
         };
 
-        let fixed_spans = vec![
+        let mut fixed_spans = vec![
             Span::styled(prefix, line_style),
             Span::styled(format!("#{:<3}", record.seq), line_style),
-            Span::styled(format!(" {} ", record.timestamp), line_style),
             Span::styled(status_text, status_style),
-            Span::styled(format!("{:<8}", record.tx_kind), kind_style),
+            Span::styled(fit_column(&record.tx_kind, KIND_WIDTH), kind_style),
         ];
+        // Records without columns show their one-line summary after the kind.
+        let detail = if record.what.is_empty() {
+            &record.info
+        } else {
+            let is_failure = matches!(record.what.as_str(), "error" | "failed");
+            let what_style = if is_selected && is_focused {
+                line_style
+            } else if is_failure {
+                Style::default().fg(theme.colors.error)
+            } else {
+                Style::default().fg(theme.colors.foreground)
+            };
+            fixed_spans.push(Span::styled(
+                format!(" {}", fit_column(&record.what, WHAT_WIDTH)),
+                what_style,
+            ));
+            fixed_spans.push(Span::styled(
+                format!(" {}", fit_column(&record.group, GROUP_WIDTH)),
+                Style::default().fg(theme.colors.muted),
+            ));
+            &record.detail
+        };
         let used: usize = fixed_spans.iter().map(|s| display_width(&s.content)).sum();
-        // One column for the separator space before the info text.
+        // One column for the separator space before the detail text.
         let available = (inner.width as usize).saturating_sub(used + 1);
-        let info_display = truncate_record_info(&record.info, available);
+        let info_display = truncate_record_info(detail, available);
 
         let mut spans = fixed_spans;
         if !info_display.is_empty() {
@@ -917,6 +938,18 @@ fn build_record_lines<'a>(
         lines.push(Line::from(spans));
     }
     lines
+}
+
+/// Widths of the Record panel's kind, what and group columns.
+const KIND_WIDTH: usize = 8;
+const WHAT_WIDTH: usize = 11;
+const GROUP_WIDTH: usize = 7;
+
+/// `text` upper-cased and padded or cut to exactly `width` columns.
+fn fit_column(text: &str, width: usize) -> String {
+    let fitted = truncate_record_info(&text.to_uppercase(), width);
+    let pad = width.saturating_sub(display_width(&fitted));
+    format!("{fitted}{}", " ".repeat(pad))
 }
 
 /// Color for the kind column, grouped so tool activity stands out from

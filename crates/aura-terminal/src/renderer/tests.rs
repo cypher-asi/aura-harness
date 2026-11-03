@@ -1550,6 +1550,55 @@ fn chat_track(rows: &[String]) -> String {
 }
 
 #[test]
+fn test_record_rows_align_kind_what_and_group_columns() {
+    use crate::events::{RecordStatus, RecordSummary, UiCommand};
+
+    let mut app = crate::App::new();
+    for (seq, kind, what, group, detail) in [
+        (1, "Policy", "read_file", "file", "allow · user_default"),
+        (2, "ToolCall", "run_command", "shell", "cargo test"),
+    ] {
+        app.process_command(UiCommand::NewRecord(RecordSummary {
+            seq,
+            timestamp: "12:00:00".to_string(),
+            full_hash: String::new(),
+            hash_suffix: String::new(),
+            tx_kind: kind.to_string(),
+            sender: String::new(),
+            message: String::new(),
+            action_count: 0,
+            effect_status: String::new(),
+            status: RecordStatus::Ok,
+            info: String::new(),
+            what: what.to_string(),
+            group: group.to_string(),
+            detail: detail.to_string(),
+            error_details: String::new(),
+            tx_id: String::new(),
+            agent_id: String::new(),
+            ts_ms: 0,
+            policy: None,
+        }));
+    }
+    let rows = render_rows(&mut app, 200);
+    let screen = rows.join("\n");
+    let row = |needle: &str| {
+        rows.iter()
+            .find(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not in:\n{screen}"))
+    };
+    let column = |row: &str, needle: &str| row[..row.find(needle).unwrap()].chars().count();
+    let policy = row("READ_FILE");
+    let call = row("RUN_COMMAND");
+
+    assert_eq!(column(policy, "POLICY"), column(call, "TOOLCALL"));
+    assert_eq!(column(policy, "READ_FILE"), column(call, "RUN_COMMAND"));
+    assert_eq!(column(policy, " FILE "), column(call, " SHELL "));
+    assert_eq!(column(policy, "allow"), column(call, "cargo test"));
+    assert!(!screen.contains("12:00:00"), "{screen}");
+}
+
+#[test]
 fn test_overflowing_panels_show_a_scrollbar() {
     use crate::components::{Message, MessageRole};
     use crate::events::{RecordStatus, RecordSummary, UiCommand};
@@ -1573,6 +1622,9 @@ fn test_overflowing_panels_show_a_scrollbar() {
             effect_status: String::new(),
             status: RecordStatus::Ok,
             info: format!("record {i}"),
+            what: String::new(),
+            group: String::new(),
+            detail: String::new(),
             error_details: String::new(),
             tx_id: String::new(),
             agent_id: String::new(),

@@ -615,3 +615,96 @@ fn unparseable_json_falls_back_to_text() {
     let binary = tx(TransactionType::ToolProposal, vec![0xff, 0xfe]);
     assert_eq!(summarize_record(&binary), "");
 }
+
+/// The Record panel's (what, group, detail) columns for `t`.
+fn columns(t: &Transaction) -> (String, String, String) {
+    let entry = RecordEntry::builder(1, t.clone()).build();
+    let summary = build_record_summary(1, t, &entry, "12:00:00".into());
+    (summary.what, summary.group, summary.detail)
+}
+
+fn cols(what: &str, group: &str, detail: &str) -> (String, String, String) {
+    (what.into(), group.into(), detail.into())
+}
+
+#[test]
+fn tool_records_split_into_tool_group_and_detail() {
+    let call = proposal_tx(&ToolProposal::new(
+        "t1",
+        "read_file",
+        json!({"path": "src/main.rs"}),
+    ));
+    assert_eq!(columns(&call), cols("read_file", "file", "src/main.rs"));
+
+    let result = execution(ToolGateVerdict::Approved, Some("hello"), false);
+    assert_eq!(columns(&result), cols("read_file", "file", "a.rs · ok 5B"));
+
+    let (policy, _) = policy_decision_tx(AgentId::generate());
+    assert_eq!(
+        columns(&policy),
+        cols("run_command", "shell", "allow · user.on")
+    );
+
+    let unknown = proposal_tx(&ToolProposal::new("t2", "frobnicate", json!({})));
+    assert_eq!(columns(&unknown), cols("frobnicate", "other", ""));
+}
+
+#[test]
+fn llm_records_show_stop_reason_and_model_or_error_class() {
+    let ok = json_tx(
+        TransactionType::Reasoning,
+        &json!({"model": "claude-opus-4-6", "stop_reason": "ToolUse",
+                "input_tokens": 1234, "output_tokens": 340,
+                "tool_uses": ["read_file", "grep"]}),
+    );
+    assert_eq!(
+        columns(&ok),
+        cols("ToolUse", "opus", "1.2k/340 tok · tools: read_file, grep")
+    );
+
+    let failed = json_tx(
+        TransactionType::Reasoning,
+        &json!({"status": "failed", "error": "HTTP 429 Too Many Requests"}),
+    );
+    assert_eq!(
+        columns(&failed),
+        cols("error", "rate", "HTTP 429 Too Many Requests")
+    );
+    assert_eq!(llm_error_class("stream dropped before completion"), "stream");
+    assert_eq!(llm_error_class("Overloaded"), "busy");
+    assert_eq!(llm_error_class("connection reset"), "other");
+}
+
+#[test]
+fn conversation_records_show_sender() {
+    let prompt = Transaction::user_prompt(AgentId::generate(), "hi there");
+    assert_eq!(columns(&prompt), cols("USER", "text", "hi there"));
+}
+
+#[test]
+fn unparseable_records_have_no_columns() {
+    let t = tx(TransactionType::Reasoning, "not json");
+    assert_eq!(columns(&t), cols("", "", ""));
+}
+
+#[test]
+fn group_labels_fit_group_column() {
+    let groups = [
+        "read_file",
+        "run_command",
+        "search_code",
+        "git_commit",
+        "web_fetch",
+        "create_spec",
+        "create_task",
+        "spawn_agent",
+        "frobnicate",
+    ]
+    .map(tool_group);
+    let errors = ["429", "529", "timed out", "401", "stream", "?"].map(llm_error_class);
+    for label in groups.iter().chain(&errors) {
+        assert!(label.len() <= 7, "{label} too long");
+    }
+    assert_eq!(model_family("claude-sonnet-4-5-20250929"), "sonnet");
+    assert_eq!(model_family("openrouter/mistral-large"), "mistral");
+}

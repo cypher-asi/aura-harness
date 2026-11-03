@@ -424,6 +424,17 @@ pub struct RecordSummary {
     pub status: RecordStatus,
     /// Additional info (e.g., tool name)
     pub info: String,
+    /// Record panel column: what the record is about (tool name, LLM stop
+    /// reason, sender). Empty means the panel shows `info` instead.
+    #[serde(default)]
+    pub what: String,
+    /// Record panel column: category of `what` (tool group, LLM error
+    /// class or model family).
+    #[serde(default)]
+    pub group: String,
+    /// Record panel text after the columns, without what they already show.
+    #[serde(default)]
+    pub detail: String,
     /// Error details if status is Error
     #[serde(default)]
     pub error_details: String,
