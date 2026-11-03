@@ -207,6 +207,12 @@ pub(super) async fn show_system_message(state: &LoopState<'_>, content: String) 
 /// to get the local default running when it isn't.
 pub(super) async fn announce_models(state: &mut LoopState<'_>) {
     state.models.refresh_local().await;
+    state.auth.refresh_plan_tiers().await;
+    let summary = super::auth::auth_summary(
+        &state.auth,
+        state.agent_loop.config_mut().auth_token.as_deref(),
+    );
+    state.models.set_auth(summary);
     if let Some(note) = state.models.refresh_plans(state.auth.as_ref()).await {
         show_system_message(state, note).await;
     }

@@ -193,7 +193,7 @@ fn describe_link(link: &LinkedAccount) -> String {
             )
         }
     };
-    format!("{}: linked{account} — {status}", link.provider.label())
+    format!("{}: linked{account} — {status}", link.plan_name())
 }
 
 pub(super) async fn handle_link(

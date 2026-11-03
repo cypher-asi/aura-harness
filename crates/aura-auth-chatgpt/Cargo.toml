@@ -10,6 +10,7 @@ license.workspace = true
 aura-core-auth = { path = "../aura-core-auth" }
 aura-auth-kit = { path = "../aura-auth-kit" }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 jsonwebtoken = "9.3"
 reqwest = { workspace = true }

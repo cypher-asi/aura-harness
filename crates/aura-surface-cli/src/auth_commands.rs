@@ -149,8 +149,9 @@ async fn logout_zos(auth: &AuthManager) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_whoami() -> anyhow::Result<()> {
+pub(crate) async fn cmd_whoami() -> anyhow::Result<()> {
     let auth = manager()?;
+    auth.refresh_plan_tiers().await;
     println!("{}", "Authentication".cyan().bold());
     match auth.vault().zos_session() {
         Some(session) => {
@@ -217,5 +218,5 @@ fn describe_link(link: &LinkedAccount) -> String {
             format!("run `aura login {}` again ({reason})", link.provider.id())
         }
     };
-    format!("{}: linked{account} — {status}", link.provider.label())
+    format!("{}: linked{account} — {status}", link.plan_name())
 }

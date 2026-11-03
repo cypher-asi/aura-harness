@@ -14,9 +14,11 @@ mod browser;
 pub mod http;
 mod loopback;
 mod pkce;
+mod plan;
 mod redact;
 
 pub use browser::open_browser;
 pub use loopback::{LoopbackListener, CALLBACK_TIMEOUT};
 pub use pkce::{new_attempt, parse_pasted_code, random_token};
+pub use plan::plan_label;
 pub use redact::redact_error;

@@ -32,5 +32,7 @@ pub const SCOPE: &str =
 pub const PLAN_SCOPE: &str = "chatgpt.tokens.use.direct";
 /// Placeholder client id that asks OpenAI to issue a per-install client.
 pub const DYNAMIC_CLIENT: &str = "dynamic_agent_client";
+/// id_token claim namespace that carries `chatgpt_plan_type`.
+pub const AUTH_CLAIM: &str = "https://api.openai.com/auth";
 /// Where users can check plan usage.
 pub const USAGE_URL: &str = "https://chatgpt.com/settings/usage";

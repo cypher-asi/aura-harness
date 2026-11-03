@@ -1,6 +1,7 @@
 //! id_token verification against the issuer's JWKS.
 
 use aura_core_auth::AuthError;
+use base64::Engine;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
@@ -59,4 +60,17 @@ pub(crate) fn verify(
         return Err(invalid());
     }
     Ok(claims)
+}
+
+/// `chatgpt_plan_type` (e.g. `plus`, `pro`) from an id_token. The
+/// signature is not checked: only pass tokens [`verify`] already accepted.
+pub(crate) fn plan_type(id_token: &str) -> Option<String> {
+    let payload = id_token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    claims[crate::AUTH_CLAIM]["chatgpt_plan_type"]
+        .as_str()
+        .map(str::to_owned)
 }

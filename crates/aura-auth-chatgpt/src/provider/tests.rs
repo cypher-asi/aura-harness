@@ -30,6 +30,7 @@ fn id_token(fixture: &Fixture, nonce: Option<&str>) -> String {
         "sub": fixture.subject,
         "email": "alice@example.com",
         "exp": Utc::now().timestamp() + 600,
+        crate::AUTH_CLAIM: {"chatgpt_plan_type": "pro"},
     });
     if let Some(nonce) = nonce {
         claims["nonce"] = json!(nonce);
@@ -120,6 +121,7 @@ fn account(provider: &ChatgptProvider, subject: &str) -> LinkedAccount {
         expires_at: Utc::now(),
         created_at: Utc::now(),
         status: aura_core_auth::LinkStatus::Active,
+        plan: None,
     }
 }
 
@@ -184,6 +186,11 @@ async fn exchange_verifies_identity_and_plan() {
     assert_eq!(grant.subject.as_deref(), Some("user-sub"));
     assert_eq!(grant.label.as_deref(), Some("alice@example.com"));
     assert!(grant.plan_enabled);
+    assert_eq!(
+        provider.plan_tier(&grant.tokens).await.as_deref(),
+        Some("Pro")
+    );
+    assert_eq!(provider.plan_tier(&tokens("r")).await, None);
     let form = shared.lock().unwrap().forms[0].clone();
     assert_eq!(form["client_id"], ISSUED);
     assert_eq!(form["code_verifier"], request.code_verifier);

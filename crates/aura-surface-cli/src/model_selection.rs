@@ -182,12 +182,7 @@ impl ModelSelection {
             options: self.options(),
             current: self.current.clone(),
             user: self.auth.zos_user.clone(),
-            plans: self
-                .auth
-                .subscriptions
-                .iter()
-                .map(|kind| kind.label().to_string())
-                .collect(),
+            plans: self.auth.plan_names.clone(),
         }
     }
 
@@ -431,6 +426,7 @@ mod tests {
         AuthSummary {
             zos_user: user.map(str::to_string),
             subscriptions: plans.to_vec(),
+            ..AuthSummary::default()
         }
     }
 

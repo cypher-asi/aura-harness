@@ -357,6 +357,7 @@ mod tests {
             expires_at: Utc::now(),
             created_at: Utc::now(),
             status: LinkStatus::Active,
+            plan: None,
         }
     }
 

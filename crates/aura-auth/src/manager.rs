@@ -72,6 +72,8 @@ pub struct AuthSummary {
     pub zos_user: Option<String>,
     /// Subscription providers with a usable link.
     pub subscriptions: Vec<ProviderKind>,
+    /// Display names of those links' plans, e.g. `Claude Max 20x`.
+    pub plan_names: Vec<String>,
 }
 
 impl AuthSummary {
@@ -216,16 +218,48 @@ impl AuthManager {
     #[must_use]
     pub fn summary(&self) -> AuthSummary {
         let identity = self.identity();
-        let subscriptions = self
+        let usable: Vec<LinkedAccount> = self
             .vault
             .links_for(&identity.owner())
             .into_iter()
             .filter(LinkedAccount::usable)
-            .map(|l| l.provider)
             .collect();
         AuthSummary {
             zos_user: identity.display_name().map(str::to_owned),
-            subscriptions,
+            subscriptions: usable.iter().map(|l| l.provider).collect(),
+            plan_names: usable.iter().map(LinkedAccount::plan_name).collect(),
+        }
+    }
+
+    /// Re-read each usable link's plan tier from its provider, so an
+    /// upgrade or a link made before tiers were recorded shows up.
+    /// Best-effort: links whose tier can't be read keep the stored one.
+    pub async fn refresh_plan_tiers(&self) {
+        for provider in self
+            .links()
+            .into_iter()
+            .filter(LinkedAccount::usable)
+            .map(|l| l.provider)
+        {
+            let Ok(adapter) = self.subscription(provider) else {
+                continue;
+            };
+            if self.credential_for(provider).await.is_err() {
+                continue;
+            }
+            let Some(mut link) = self.link(provider) else {
+                continue;
+            };
+            let Some(tokens) = self.vault.tokens(&link) else {
+                continue;
+            };
+            let tier = adapter.plan_tier(&tokens).await;
+            if tier.is_some() && tier != link.plan {
+                link.plan = tier;
+                if let Err(e) = self.vault.update_link(&link) {
+                    warn!(provider = %provider, error = %e, "Could not save plan tier");
+                }
+            }
         }
     }
 
@@ -327,6 +361,10 @@ impl AuthManager {
             }
         };
         let now = Utc::now();
+        let plan = adapter
+            .plan_tier(&grant.tokens)
+            .await
+            .or_else(|| existing.as_ref().and_then(|l| l.plan.clone()));
         let link = LinkedAccount {
             id: uuid::Uuid::new_v4().to_string(),
             provider: pending.provider,
@@ -344,6 +382,7 @@ impl AuthManager {
             expires_at: grant.tokens.expires_at,
             created_at: now,
             status: LinkStatus::Active,
+            plan,
         };
         self.vault.put_link(&link, &grant.tokens)?;
         self.vault

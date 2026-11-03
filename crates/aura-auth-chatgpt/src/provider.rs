@@ -368,6 +368,11 @@ impl SubscriptionProvider for ChatgptProvider {
         }
     }
 
+    async fn plan_tier(&self, tokens: &OAuthTokens) -> Option<String> {
+        let plan = identity::plan_type(tokens.id_token.as_deref()?)?;
+        aura_auth_kit::plan_label(&plan)
+    }
+
     fn credential(&self, tokens: &OAuthTokens) -> InferenceCredential {
         InferenceCredential {
             provider: ProviderKind::Chatgpt,

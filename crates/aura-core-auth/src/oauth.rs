@@ -90,6 +90,9 @@ pub struct LinkedAccount {
     /// Current health.
     #[serde(default)]
     pub status: LinkStatus,
+    /// Plan tier reported by the provider (e.g. `Max 20x`, `Plus`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 impl LinkedAccount {
@@ -97,6 +100,16 @@ impl LinkedAccount {
     #[must_use]
     pub fn usable(&self) -> bool {
         self.plan_enabled && self.status == LinkStatus::Active
+    }
+
+    /// Provider and tier, e.g. `Claude Max 20x`, or just `Claude` when
+    /// the tier is unknown.
+    #[must_use]
+    pub fn plan_name(&self) -> String {
+        match &self.plan {
+            Some(tier) => format!("{} {tier}", self.provider.label()),
+            None => self.provider.label().to_string(),
+        }
     }
 }
 

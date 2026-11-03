@@ -1,8 +1,8 @@
 //! [`SubscriptionProvider`] implementation for Claude plans.
 
 use crate::{
-    AUTHORIZE_URL, CLIENT_ID, MANUAL_REDIRECT, OAUTH_BETA, PLAN_SCOPE, SCOPE, SYSTEM_PREAMBLE,
-    TOKEN_URL,
+    AUTHORIZE_URL, CLIENT_ID, MANUAL_REDIRECT, OAUTH_BETA, PLAN_SCOPE, PROFILE_URL, SCOPE,
+    SYSTEM_PREAMBLE, TOKEN_URL,
 };
 use async_trait::async_trait;
 use aura_auth_kit::http;
@@ -42,10 +42,72 @@ struct TokenResponse {
     account: Option<TokenAccount>,
 }
 
+#[derive(Default, Deserialize)]
+struct Profile {
+    #[serde(default)]
+    account: ProfileAccount,
+    #[serde(default)]
+    organization: ProfileOrganization,
+}
+
+#[derive(Default, Deserialize)]
+struct ProfileAccount {
+    #[serde(default)]
+    has_claude_max: bool,
+    #[serde(default)]
+    has_claude_pro: bool,
+}
+
+#[derive(Default, Deserialize)]
+struct ProfileOrganization {
+    /// `claude_pro`, `claude_max`, `claude_team`, `claude_enterprise`, …
+    #[serde(default)]
+    organization_type: Option<String>,
+    /// e.g. `default_claude_max_20x`; the trailing `20x` is the usage multiple.
+    #[serde(default)]
+    rate_limit_tier: Option<String>,
+}
+
+impl Profile {
+    fn tier(&self) -> Option<String> {
+        let kind = self
+            .organization
+            .organization_type
+            .as_deref()
+            .map(|t| t.strip_prefix("claude_").unwrap_or(t))
+            .filter(|t| !t.is_empty())
+            .or(if self.account.has_claude_max {
+                Some("max")
+            } else if self.account.has_claude_pro {
+                Some("pro")
+            } else {
+                None
+            })?;
+        let mut label = aura_auth_kit::plan_label(kind)?;
+        let multiple = self
+            .organization
+            .rate_limit_tier
+            .as_deref()
+            .and_then(|t| t.rsplit('_').next())
+            .filter(|m| {
+                m.strip_suffix('x')
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            });
+        if let Some(multiple) = multiple {
+            if !label.ends_with(multiple) {
+                label.push(' ');
+                label.push_str(multiple);
+            }
+        }
+        Some(label)
+    }
+}
+
 /// Claude Pro/Max sign-in.
 pub struct ClaudeProvider {
     authorize_url: String,
     token_url: String,
+    profile_url: String,
 }
 
 impl Default for ClaudeProvider {
@@ -61,6 +123,7 @@ impl ClaudeProvider {
         Self {
             authorize_url: AUTHORIZE_URL.into(),
             token_url: TOKEN_URL.into(),
+            profile_url: PROFILE_URL.into(),
         }
     }
 
@@ -81,6 +144,7 @@ impl ClaudeProvider {
         Ok(Self {
             authorize_url: format!("{base}/oauth/authorize"),
             token_url: format!("{base}/v1/oauth/token"),
+            profile_url: format!("{base}/api/oauth/profile"),
         })
     }
 
@@ -242,6 +306,21 @@ impl SubscriptionProvider for ClaudeProvider {
         })
     }
 
+    async fn plan_tier(&self, tokens: &OAuthTokens) -> Option<String> {
+        let response = http::client()
+            .ok()?
+            .get(&self.profile_url)
+            .bearer_auth(&tokens.access_token)
+            .header("anthropic-beta", OAUTH_BETA)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json::<Profile>().await.ok()?.tier()
+    }
+
     fn credential(&self, tokens: &OAuthTokens) -> InferenceCredential {
         InferenceCredential {
             provider: ProviderKind::Claude,
@@ -255,7 +334,7 @@ impl SubscriptionProvider for ClaudeProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use serde_json::Value;
     use std::collections::HashMap;
@@ -268,31 +347,50 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         let seen: Seen = Arc::default();
         let log = seen.clone();
-        let app = Router::new().route(
-            "/v1/oauth/token",
-            post(move |Json(body): Json<Value>| {
-                let log = log.clone();
-                async move {
-                    log.lock().unwrap().push(body.clone());
-                    if body["refresh_token"] == "revoked" {
-                        return (
-                            axum::http::StatusCode::BAD_REQUEST,
-                            Json(json!({"error":"invalid_grant"})),
-                        );
+        let app = Router::new()
+            .route(
+                "/v1/oauth/token",
+                post(move |Json(body): Json<Value>| {
+                    let log = log.clone();
+                    async move {
+                        log.lock().unwrap().push(body.clone());
+                        if body["refresh_token"] == "revoked" {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                Json(json!({"error":"invalid_grant"})),
+                            );
+                        }
+                        (
+                            axum::http::StatusCode::OK,
+                            Json(json!({
+                                "access_token": "sk-ant-oat-1",
+                                "refresh_token": "sk-ant-ort-1",
+                                "expires_in": 28800,
+                                "scope": SCOPE,
+                                "account": {"uuid": "acct-1", "email_address": "bob@example.com"},
+                            })),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/api/oauth/profile",
+                get(|headers: axum::http::HeaderMap| async move {
+                    if headers["authorization"] != "Bearer sk-ant-oat-1" {
+                        return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({})));
                     }
                     (
                         axum::http::StatusCode::OK,
                         Json(json!({
-                            "access_token": "sk-ant-oat-1",
-                            "refresh_token": "sk-ant-ort-1",
-                            "expires_in": 28800,
-                            "scope": SCOPE,
-                            "account": {"uuid": "acct-1", "email_address": "bob@example.com"},
+                            "account": {"has_claude_max": true, "has_claude_pro": false},
+                            "organization": {
+                                "organization_type": "claude_max",
+                                "rate_limit_tier": "default_claude_max_20x",
+                            },
                         })),
                     )
-                }
-            }),
-        );
+                }),
+            );
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         (ClaudeProvider::fixture(&base).unwrap(), seen)
     }
@@ -309,7 +407,34 @@ mod tests {
             expires_at: Utc::now(),
             created_at: Utc::now(),
             status: aura_core_auth::LinkStatus::Active,
+            plan: None,
         }
+    }
+
+    fn tier(profile: Value) -> Option<String> {
+        serde_json::from_value::<Profile>(profile).unwrap().tier()
+    }
+
+    #[test]
+    fn profile_tier_names() {
+        let org = |kind: &str, limit: &str| json!({"organization": {"organization_type": kind, "rate_limit_tier": limit}});
+        assert_eq!(
+            tier(org("claude_max", "default_claude_max_5x")).as_deref(),
+            Some("Max 5x")
+        );
+        assert_eq!(
+            tier(org("claude_pro", "default_claude_ai")).as_deref(),
+            Some("Pro")
+        );
+        assert_eq!(
+            tier(org("claude_ultra", "default")).as_deref(),
+            Some("Ultra")
+        );
+        assert_eq!(
+            tier(json!({"account": {"has_claude_max": true}})).as_deref(),
+            Some("Max")
+        );
+        assert_eq!(tier(json!({})), None);
     }
 
     #[test]
@@ -358,6 +483,11 @@ mod tests {
         let sent = seen.lock().unwrap()[0].clone();
         assert_eq!(sent["code"], "the-code");
         assert_eq!(sent["code_verifier"], request.code_verifier.as_str());
+
+        assert_eq!(
+            provider.plan_tier(&grant.tokens).await.as_deref(),
+            Some("Max 20x")
+        );
 
         let mut tokens = grant.tokens.clone();
         let renewed = provider.refresh(&linked(CLIENT_ID), &tokens).await.unwrap();

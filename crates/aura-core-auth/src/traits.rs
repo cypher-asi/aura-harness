@@ -57,6 +57,12 @@ pub trait SubscriptionProvider: Send + Sync {
     /// Best-effort remote revocation on unlink.
     async fn revoke(&self, _account: &LinkedAccount, _tokens: &OAuthTokens) {}
 
+    /// Plan tier the account behind `tokens` is on (e.g. `Max 20x`).
+    /// Best-effort: `None` when the provider does not say.
+    async fn plan_tier(&self, _tokens: &OAuthTokens) -> Option<String> {
+        None
+    }
+
     /// Request credentials for model calls.
     fn credential(&self, tokens: &OAuthTokens) -> InferenceCredential;
 }

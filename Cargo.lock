@@ -315,6 +315,7 @@ dependencies = [
  "aura-auth-kit",
  "aura-core-auth",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "jsonwebtoken",
  "reqwest",

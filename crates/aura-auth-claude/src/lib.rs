@@ -35,6 +35,8 @@ pub const PLAN_SCOPE: &str = "user:inference";
 pub const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// Messages API base for subscription inference.
 pub const API_BASE: &str = "https://api.anthropic.com";
+/// Account profile, which reports the plan tier.
+pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 /// System prompt opening required for subscription tokens.
 pub const SYSTEM_PREAMBLE: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 /// Shown before sign-in so users accept the terms risk knowingly.

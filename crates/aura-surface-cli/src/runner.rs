@@ -71,7 +71,7 @@ pub async fn run() -> anyhow::Result<()> {
         }
         Some(Commands::Login(args)) => auth_commands::cmd_login(args).await,
         Some(Commands::Logout(args)) => auth_commands::cmd_logout(args).await,
-        Some(Commands::Whoami) => auth_commands::cmd_whoami(),
+        Some(Commands::Whoami) => auth_commands::cmd_whoami().await,
         Some(Commands::Auth(args)) => auth_commands::cmd_auth(args),
         Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Plugins(args)) => cmd_plugins(args),

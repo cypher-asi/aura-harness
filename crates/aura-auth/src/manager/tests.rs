@@ -30,6 +30,7 @@ struct FakeSub {
     refreshes: AtomicUsize,
     expires_in: i64,
     refresh_outcome: Mutex<Option<ProviderError>>,
+    tier: Mutex<Option<String>>,
 }
 
 fn grant(access: &str, expires_in: i64) -> LinkGrant {
@@ -101,6 +102,10 @@ impl SubscriptionProvider for FakeSub {
             return Err(e);
         }
         Ok(grant(&format!("access-{n}"), 3600))
+    }
+
+    async fn plan_tier(&self, _tokens: &OAuthTokens) -> Option<String> {
+        self.tier.lock().unwrap().clone()
     }
 
     fn credential(&self, tokens: &OAuthTokens) -> InferenceCredential {
@@ -305,6 +310,34 @@ async fn transient_refresh_failure_keeps_unexpired_token() {
         .unwrap();
     assert_eq!(credential.bearer, "access-0");
     assert!(manager.link(ProviderKind::Claude).unwrap().usable());
+}
+
+#[tokio::test]
+async fn plan_tier_is_recorded_and_refreshed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, sub) = manager(
+        dir.path(),
+        FakeSub {
+            expires_in: 3600,
+            tier: Mutex::new(Some("Pro".into())),
+            ..FakeSub::default()
+        },
+    );
+    let link = link_by_paste(&manager).await;
+    assert_eq!(link.plan.as_deref(), Some("Pro"));
+    assert_eq!(manager.summary().plan_names, ["Claude Pro"]);
+
+    *sub.tier.lock().unwrap() = Some("Max 20x".into());
+    manager.refresh_plan_tiers().await;
+    assert_eq!(manager.summary().plan_names, ["Claude Max 20x"]);
+
+    *sub.tier.lock().unwrap() = None;
+    manager.refresh_plan_tiers().await;
+    assert_eq!(
+        manager.summary().plan_names,
+        ["Claude Max 20x"],
+        "an unreadable tier keeps the stored one"
+    );
 }
 
 #[tokio::test]
