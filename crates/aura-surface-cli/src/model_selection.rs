@@ -151,6 +151,12 @@ impl ModelSelection {
             options: self.options(),
             current: self.current.clone(),
             user: self.auth.zos_user.clone(),
+            plans: self
+                .auth
+                .subscriptions
+                .iter()
+                .map(|kind| kind.label().to_string())
+                .collect(),
         }
     }
 

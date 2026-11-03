@@ -237,6 +237,8 @@ pub enum UiCommand {
         current: String,
         /// Display name of the logged-in user, `None` when browsing as guest
         user: Option<String>,
+        /// Labels of the linked plans that can serve requests (e.g. "Claude")
+        plans: Vec<String>,
     },
 
     /// Ask the user to paste the code shown by `provider`'s sign-in page

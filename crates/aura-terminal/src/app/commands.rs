@@ -225,10 +225,12 @@ impl App {
         options: Vec<crate::events::ModelOptionView>,
         current: String,
         user: Option<String>,
+        plans: Vec<String>,
     ) {
         self.models = options;
         self.current_model = current;
         self.user = user;
+        self.plans = plans;
         if self.model_cursor >= self.models.len() {
             self.model_cursor = self.models.len().saturating_sub(1);
         }
@@ -421,7 +423,8 @@ impl App {
                 options,
                 current,
                 user,
-            } => self.cmd_set_models(options, current, user),
+                plans,
+            } => self.cmd_set_models(options, current, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
         }

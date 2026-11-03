@@ -448,6 +448,10 @@ fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
 }
 
 fn app_with_model(user: Option<&str>) -> crate::App {
+    app_with_auth(user, &[])
+}
+
+fn app_with_auth(user: Option<&str>, plans: &[&str]) -> crate::App {
     use crate::events::{ModelOptionView, UiCommand};
 
     let mut app = crate::App::new();
@@ -464,6 +468,7 @@ fn app_with_model(user: Option<&str>) -> crate::App {
         }],
         current: "local/qwen3:4b".to_string(),
         user: user.map(str::to_string),
+        plans: plans.iter().map(|p| (*p).to_string()).collect(),
     });
     app.process_command(UiCommand::SetApiStatus {
         url: Some("http://127.0.0.1:8080".to_string()),
@@ -657,8 +662,36 @@ fn test_header_shows_logged_in_user() {
     let rows = render_with_user(Some("alice"), 120);
     assert!(rows[1]
         .trim_end()
-        .ends_with("● alice  http://127.0.0.1:8080"));
+        .ends_with("● alice (zOS)  http://127.0.0.1:8080"));
     assert!(!rows[..3].join("\n").contains("local"));
+}
+
+#[test]
+fn test_header_shows_linked_plans_without_zos() {
+    let rows = render_rows(&mut app_with_auth(None, &["Claude"]), 120);
+    assert!(
+        rows[1]
+            .trim_end()
+            .ends_with("● Claude  http://127.0.0.1:8080"),
+        "{:?}",
+        rows[1]
+    );
+    assert!(!rows[..3].join("\n").contains("local"));
+}
+
+#[test]
+fn test_header_shows_zos_user_and_plans() {
+    let rows = render_rows(
+        &mut app_with_auth(Some("alice"), &["ChatGPT", "Claude"]),
+        120,
+    );
+    assert!(
+        rows[1]
+            .trim_end()
+            .ends_with("● alice (zOS) · ChatGPT · Claude  http://127.0.0.1:8080"),
+        "{:?}",
+        rows[1]
+    );
 }
 
 #[test]

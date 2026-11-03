@@ -179,6 +179,8 @@ pub struct App {
     pub(super) current_model: String,
     /// Logged-in user's display name (`None` = guest)
     pub(super) user: Option<String>,
+    /// Labels of the usable linked plans
+    pub(super) plans: Vec<String>,
     /// Highlighted row in the model selector
     pub(super) model_cursor: usize,
     /// Cloud model to select once the in-chat login completes
@@ -330,6 +332,7 @@ impl App {
             models: Vec::new(),
             current_model: String::new(),
             user: None,
+            plans: Vec::new(),
             model_cursor: 0,
             pending_model: None,
             agents_scroll: 0,
@@ -996,6 +999,12 @@ impl App {
     #[must_use]
     pub fn user(&self) -> Option<&str> {
         self.user.as_deref()
+    }
+
+    /// Labels of the usable linked plans (e.g. "Claude").
+    #[must_use]
+    pub fn plans(&self) -> &[String] {
+        &self.plans
     }
 
     /// Bash-style `[user@host dir]$ ` prompt shown before the input line.

@@ -186,19 +186,31 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| text::display_width(&s.content)).sum()
 }
 
-/// `● local  http://127.0.0.1:8080`, or the user's name in place of `local`
-/// when logged in. The dot reflects API connectivity.
+/// `● local  http://127.0.0.1:8080` when signed out, otherwise where you are
+/// signed in: `● alice (zOS) · Claude · ChatGPT  http://...`. The dot
+/// reflects API connectivity.
 fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let (icon, icon_color) = if app.api_active() {
         ("● ", theme.colors.primary)
     } else {
         ("○ ", theme.colors.error)
     };
-    let who = app.user().map_or_else(
-        || Span::styled("local", Style::default().fg(theme.colors.muted)),
-        |user| Span::styled(user, Style::default().fg(theme.colors.primary)),
-    );
-    let mut spans = vec![Span::styled(icon, Style::default().fg(icon_color)), who];
+    let muted = Style::default().fg(theme.colors.muted);
+    let signed_in = Style::default().fg(theme.colors.primary);
+    let mut spans = vec![Span::styled(icon, Style::default().fg(icon_color))];
+    if let Some(user) = app.user() {
+        spans.push(Span::styled(user, signed_in));
+        spans.push(Span::styled(" (zOS)", muted));
+    }
+    for plan in app.plans() {
+        if spans.len() > 1 {
+            spans.push(Span::styled(" · ", muted));
+        }
+        spans.push(Span::styled(plan.as_str(), signed_in));
+    }
+    if spans.len() == 1 {
+        spans.push(Span::styled("local", muted));
+    }
     if let Some(url) = app.api_url() {
         spans.push(Span::styled(
             format!("  {url}"),
