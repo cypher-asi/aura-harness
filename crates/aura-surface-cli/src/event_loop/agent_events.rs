@@ -4,10 +4,11 @@
 //! [`aura_agent::map_agent_loop_event`]; this module only provides the
 //! [`UiCommandSink`] implementation that owns the TUI-specific state
 //! machine (streaming / thinking toggles, had-text tracking) and the
-//! `mpsc::Sender<UiCommand>` that feeds the terminal.
+//! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
 use async_trait::async_trait;
 use aura_agent::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink};
+use aura_core_types::AgentId;
 use aura_model_reasoner::{model_catalog, Usage};
 use aura_terminal::{
     events::{CallUsage, ToolData},
@@ -15,6 +16,40 @@ use aura_terminal::{
 };
 use tokio::sync::mpsc;
 use tracing::debug;
+
+/// The chat of one agent. Agents run in parallel, so everything a turn
+/// shows is addressed to its agent; the UI keeps it with that agent's chat
+/// whether or not it is on screen.
+#[derive(Clone)]
+pub(crate) struct AgentUi {
+    commands: mpsc::Sender<UiCommand>,
+    agent_id: String,
+}
+
+impl AgentUi {
+    pub(crate) fn new(commands: mpsc::Sender<UiCommand>, agent_id: AgentId) -> Self {
+        Self {
+            commands,
+            agent_id: agent_id.to_hex(),
+        }
+    }
+
+    /// Send `command` to this agent's chat.
+    pub(crate) async fn send(&self, command: UiCommand) {
+        let _ = self
+            .commands
+            .send(UiCommand::ForAgent {
+                agent_id: self.agent_id.clone(),
+                command: Box::new(command),
+            })
+            .await;
+    }
+
+    /// The UI's command channel, for panels that aren't per chat.
+    pub(crate) const fn commands(&self) -> &mpsc::Sender<UiCommand> {
+        &self.commands
+    }
+}
 
 /// Tracks forwarder lifecycle so the caller can finalize streaming/thinking.
 #[derive(Default)]
@@ -42,7 +77,7 @@ pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
 /// loop and fans them out to the TUI as [`UiCommand`]s while maintaining
 /// the streaming / thinking state machine the Ratatui layer depends on.
 struct UiCommandSink {
-    commands: mpsc::Sender<UiCommand>,
+    ui: AgentUi,
     state: ForwarderState,
     /// Tool calls shown in the chat that have no result yet
     open_tools: Vec<String>,
@@ -51,7 +86,7 @@ struct UiCommandSink {
 impl UiCommandSink {
     async fn finish_thinking_if_active(&mut self) {
         if self.state.thinking_active {
-            let _ = self.commands.send(UiCommand::FinishThinking).await;
+            self.ui.send(UiCommand::FinishThinking).await;
             self.state.thinking_active = false;
         }
     }
@@ -60,7 +95,7 @@ impl UiCommandSink {
     /// call or more thinking starts a new message below them.
     async fn finish_streaming_if_active(&mut self) {
         if self.state.streaming_active {
-            let _ = self.commands.send(UiCommand::FinishStreaming).await;
+            self.ui.send(UiCommand::FinishStreaming).await;
             self.state.streaming_active = false;
         }
     }
@@ -71,10 +106,10 @@ impl TurnEventSink for UiCommandSink {
     async fn on_thinking_delta(&mut self, text: String) {
         if !self.state.thinking_active {
             self.finish_streaming_if_active().await;
-            let _ = self.commands.send(UiCommand::StartThinking).await;
+            self.ui.send(UiCommand::StartThinking).await;
             self.state.thinking_active = true;
         }
-        let _ = self.commands.send(UiCommand::AppendThinking(text)).await;
+        self.ui.send(UiCommand::AppendThinking(text)).await;
     }
 
     async fn on_thinking_complete(&mut self) {
@@ -84,19 +119,18 @@ impl TurnEventSink for UiCommandSink {
     async fn on_text_delta(&mut self, text: String) {
         self.finish_thinking_if_active().await;
         if !self.state.streaming_active {
-            let _ = self.commands.send(UiCommand::StartStreaming).await;
+            self.ui.send(UiCommand::StartStreaming).await;
             self.state.streaming_active = true;
         }
         self.state.had_text = true;
-        let _ = self.commands.send(UiCommand::AppendText(text)).await;
+        self.ui.send(UiCommand::AppendText(text)).await;
     }
 
     async fn on_tool_start(&mut self, id: String, name: String) {
         self.finish_thinking_if_active().await;
         self.finish_streaming_if_active().await;
         self.open_tools.push(id.clone());
-        let _ = self
-            .commands
+        self.ui
             .send(UiCommand::ShowTool(ToolData {
                 id,
                 name,
@@ -106,8 +140,7 @@ impl TurnEventSink for UiCommandSink {
     }
 
     async fn on_tool_input_snapshot(&mut self, id: String, _name: String, input: String) {
-        let _ = self
-            .commands
+        self.ui
             .send(UiCommand::UpdateToolArgs { id, args: input })
             .await;
     }
@@ -121,8 +154,7 @@ impl TurnEventSink for UiCommandSink {
         _image: Option<aura_core_types::ToolResultImage>,
     ) {
         self.open_tools.retain(|id| *id != tool_use_id);
-        let _ = self
-            .commands
+        self.ui
             .send(UiCommand::CompleteTool {
                 id: tool_use_id,
                 result: content,
@@ -141,8 +173,7 @@ impl TurnEventSink for UiCommandSink {
         reason: String,
     ) {
         debug!(tool_id = %tool_use_id, %reason, "Tool call retrying");
-        let _ = self
-            .commands
+        self.ui
             .send(UiCommand::ToolRetrying {
                 id: tool_use_id,
                 attempt,
@@ -158,8 +189,7 @@ impl TurnEventSink for UiCommandSink {
         reason: String,
     ) {
         self.open_tools.retain(|id| *id != tool_use_id);
-        let _ = self
-            .commands
+        self.ui
             .send(UiCommand::CompleteTool {
                 id: tool_use_id,
                 result: reason,
@@ -181,8 +211,7 @@ impl TurnEventSink for UiCommandSink {
         // The model starts its response over, so calls it was still
         // writing will never get a result.
         for id in std::mem::take(&mut self.open_tools) {
-            let _ = self
-                .commands
+            self.ui
                 .send(UiCommand::CompleteTool {
                     id,
                     result: reason.clone(),
@@ -193,11 +222,11 @@ impl TurnEventSink for UiCommandSink {
     }
 
     async fn on_warning(&mut self, message: String) {
-        let _ = self.commands.send(UiCommand::ShowWarning(message)).await;
+        self.ui.send(UiCommand::ShowWarning(message)).await;
     }
 
     async fn on_error(&mut self, _code: String, message: String, _recoverable: bool) {
-        let _ = self.commands.send(UiCommand::ShowWarning(message)).await;
+        self.ui.send(UiCommand::ShowWarning(message)).await;
     }
 
     async fn on_debug(&mut self, event: DebugEvent) {
@@ -222,8 +251,7 @@ impl TurnEventSink for UiCommandSink {
                     cache_read_input_tokens,
                 },
             );
-            let _ = self
-                .commands
+            self.ui
                 .send(UiCommand::SetReplyModel {
                     model: model.clone(),
                     usage,
@@ -239,13 +267,14 @@ impl TurnEventSink for UiCommandSink {
     // events above.
 }
 
-/// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s.
+/// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s for
+/// the chat of `ui`'s agent.
 pub(crate) async fn forward_agent_events(
     mut rx: tokio::sync::mpsc::Receiver<AgentLoopEvent>,
-    commands: mpsc::Sender<UiCommand>,
+    ui: AgentUi,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
-        commands,
+        ui,
         state: ForwarderState::default(),
         open_tools: Vec::new(),
     };

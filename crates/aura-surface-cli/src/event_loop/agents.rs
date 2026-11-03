@@ -4,8 +4,10 @@
 //! Every registered agent gets its own kernel (and therefore its own
 //! record) plus its own model conversation. Kernels are opened lazily the
 //! first time an agent is selected and kept for the rest of the run, so
-//! switching back resumes the in-memory conversation.
+//! switching back resumes the in-memory conversation. Switching only
+//! changes which agent the UI shows; agents keep working meanwhile.
 
+use super::agent_events::AgentUi;
 use super::subagents::lock;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
@@ -239,11 +241,11 @@ pub(super) async fn handle_refresh_agents(state: &LoopState<'_>) {
     state.hub.send_definitions().await;
 }
 
-async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
-    if agent_id == state.session.agent_id() {
-        state.hub.send_agent_list().await;
-        return;
-    }
+/// Open a session for `agent_id` from its record.
+pub(super) fn open_session(
+    state: &LoopState<'_>,
+    agent_id: AgentId,
+) -> Result<AgentSession, String> {
     let (registered, folder) = {
         let registry = lock(&state.hub.registry);
         (
@@ -252,45 +254,55 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
         )
     };
     let Some(registered) = registered else {
-        show_error(state, "Unknown agent".to_string()).await;
-        return;
+        return Err("Unknown agent".to_string());
     };
+    state
+        .hub
+        .factory
+        .open(&registered, Vec::new(), folder)
+        .map_err(|e| {
+            warn!(error = %e, "Failed to open agent kernel");
+            format!("Could not open agent {}: {e}", registered.name)
+        })
+}
 
-    let next = match state.parked.remove(&agent_id) {
-        Some(session) => session,
-        None => match state.hub.factory.open(&registered, Vec::new(), folder) {
-            Ok(session) => session,
-            Err(e) => {
-                warn!(error = %e, "Failed to open agent kernel");
-                show_error(
-                    state,
-                    format!("Could not open agent {}: {e}", registered.name),
-                )
-                .await;
+/// Show `agent_id`. Agents keep working while another one is shown.
+async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
+    state.park_finished_spawns().await;
+    if agent_id == state.active {
+        state.hub.send_agent_list().await;
+        return;
+    }
+    if !state.idle.contains_key(&agent_id) && !state.hub.is_running(agent_id) {
+        match open_session(state, agent_id) {
+            Ok(session) => {
+                state.idle.insert(agent_id, session);
+            }
+            Err(problem) => {
+                show_error(state, problem).await;
                 return;
             }
-        },
-    };
-    let previous = std::mem::replace(&mut state.session, next);
-    state.parked.insert(previous.agent_id(), previous);
-    super::install_memory_observer(state);
+        }
+    }
+    state.active = agent_id;
 
     if let Err(e) = lock(&state.hub.registry).set_active(agent_id) {
         warn!(error = %e, "Failed to persist active agent");
     }
 
     show_active_agent(state).await;
-    let _ = state
-        .commands
-        .send(UiCommand::SetStatus("Ready".to_string()))
-        .await;
 }
 
-/// Replace the Record panel and chat with the active agent's history.
+/// Switch the UI to the active agent and fill the Record panel and chat
+/// with its history. A busy agent's chat is already live in the UI.
 pub(super) async fn show_active_agent(state: &LoopState<'_>) {
     let store = state.hub.factory.store.as_ref();
-    let agent_id = state.session.agent_id();
+    let agent_id = state.active;
 
+    let _ = state
+        .commands
+        .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
+        .await;
     let _ = state.commands.send(UiCommand::ClearRecords).await;
     match recent_record_summaries(store, agent_id) {
         Ok(summaries) => {
@@ -308,14 +320,15 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
         }
     }
 
-    let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
-        warn!(error = %e, "Failed to rebuild conversation from record");
-        Vec::new()
-    });
-    let _ = state
-        .commands
-        .send(UiCommand::LoadConversation(history))
-        .await;
+    if !state.hub.is_running(agent_id) {
+        let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
+            warn!(error = %e, "Failed to rebuild conversation from record");
+            Vec::new()
+        });
+        AgentUi::new(state.commands.clone(), agent_id)
+            .send(UiCommand::LoadConversation(history))
+            .await;
+    }
 
     send_sandbox_root(state).await;
     state.hub.send_agent_list().await;
@@ -324,7 +337,10 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
 /// Point the Sandbox panel at the active agent's workspace, creating it
 /// so the panel has something to show before the first tool call.
 pub(super) async fn send_sandbox_root(state: &LoopState<'_>) {
-    let workspace = state.session.kernel.agent_workspace();
+    let Some(kernel) = state.kernel_for(state.active) else {
+        return;
+    };
+    let workspace = kernel.agent_workspace();
     if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
         warn!(path = %workspace.display(), error = %e, "Failed to create agent workspace");
     }
