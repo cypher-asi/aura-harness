@@ -10,6 +10,8 @@ use super::agents::AgentSession;
 use super::handlers::{handle_agent_success, run_agent_turn};
 use super::record_ui::send_record_to_ui;
 use super::run_command::run_user_command;
+use super::steering::{SteerSource, Steering};
+use crate::long_run::LongRunSettings;
 use aura_agent::AgentLoop;
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::{Message, ToolDefinition};
@@ -29,11 +31,14 @@ pub(super) enum Work {
 
 /// Work ready to run.
 pub(super) enum Task {
-    /// A model turn answering `text`.
+    /// A model turn answering `text`, taking further messages through
+    /// `steering` while it runs.
     Turn {
         text: String,
         agent_loop: Box<AgentLoop>,
         tools: Vec<ToolDefinition>,
+        steering: Steering,
+        limits: LongRunSettings,
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
@@ -47,6 +52,8 @@ pub(super) struct WorkDone {
     pub session: Option<AgentSession>,
     /// Why a turn failed, for the event loop to report.
     pub failure: Option<String>,
+    /// Messages sent into the turn that the model never got, to run next.
+    pub unseen: Vec<(SteerSource, String)>,
 }
 
 /// Run `task` on `session` in the background, reporting to `ui`, and send
@@ -61,21 +68,35 @@ pub(super) fn spawn(
     let agent_id = session.agent_id();
     tokio::spawn(async move {
         let work = tokio::spawn(run(session, task, ui, cancel));
-        let (session, failure) = match work.await {
-            Ok((session, failure)) => (Some(session), failure),
+        let (session, outcome) = match work.await {
+            Ok((session, outcome)) => (Some(session), outcome),
             Err(e) => {
                 error!(%agent_id, error = %e, "Agent work panicked");
-                (None, Some(format!("Agent stopped unexpectedly: {e}")))
+                (
+                    None,
+                    Outcome {
+                        failure: Some(format!("Agent stopped unexpectedly: {e}")),
+                        unseen: Vec::new(),
+                    },
+                )
             }
         };
         let _ = done
             .send(WorkDone {
                 agent_id,
                 session,
-                failure,
+                failure: outcome.failure,
+                unseen: outcome.unseen,
             })
             .await;
     });
+}
+
+/// How a piece of work ended.
+#[derive(Default)]
+struct Outcome {
+    failure: Option<String>,
+    unseen: Vec<(SteerSource, String)>,
 }
 
 async fn run(
@@ -83,72 +104,101 @@ async fn run(
     task: Task,
     ui: AgentUi,
     cancel: CancellationToken,
-) -> (AgentSession, Option<String>) {
-    let failure = match task {
+) -> (AgentSession, Outcome) {
+    let outcome = match task {
         Task::Turn {
             text,
             agent_loop,
             tools,
-        } => run_prompt(&mut session, text, &agent_loop, tools, &ui, &cancel).await,
+            steering,
+            limits,
+        } => {
+            let turn = TurnParts {
+                agent_loop: &agent_loop,
+                tools,
+                steering: &steering,
+                limits,
+            };
+            run_prompt(&mut session, text, turn, &ui, &cancel).await
+        }
         Task::Command { command, cols } => {
             run_user_command(&mut session, &command, cols, &ui).await;
-            None
+            Outcome::default()
         }
     };
-    (session, failure)
+    (session, outcome)
+}
+
+/// What a turn runs on, besides the session.
+struct TurnParts<'a> {
+    agent_loop: &'a AgentLoop,
+    tools: Vec<ToolDefinition>,
+    steering: &'a Steering,
+    limits: LongRunSettings,
+}
+
+/// Record `text` on `session` as a prompt from the user and show the
+/// record entry.
+pub(super) async fn record_user_prompt(
+    session: &AgentSession,
+    text: String,
+    ui: &AgentUi,
+) -> Result<(), String> {
+    let prompt_tx = Transaction::user_prompt(session.agent_id(), text);
+    let (tx, token) = enqueue_and_dequeue(session, prompt_tx)?;
+    let result = session
+        .kernel
+        .process_dequeued(tx.clone(), token)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to persist prompt record via kernel");
+            format!("Kernel error: {e}")
+        })?;
+    send_record_to_ui(ui.commands(), result.entry.seq, &tx, &result.entry).await;
+    Ok(())
 }
 
 /// Record `text` as the user's prompt and run a turn answering it.
-/// Returns why the turn failed, if it did.
 async fn run_prompt(
     session: &mut AgentSession,
     text: String,
-    agent_loop: &AgentLoop,
-    tools: Vec<ToolDefinition>,
+    turn: TurnParts<'_>,
     ui: &AgentUi,
     cancel: &CancellationToken,
-) -> Option<String> {
+) -> Outcome {
     drain_stale_inbox(session).await;
 
-    let prompt_tx = Transaction::user_prompt(session.agent_id(), text.clone());
-    let (tx, token) = match enqueue_and_dequeue(session, prompt_tx) {
-        Ok(v) => v,
-        Err(problem) => {
-            ui.send(UiCommand::ShowError(problem)).await;
-            ui.send(UiCommand::Complete).await;
-            return None;
-        }
-    };
-    let prompt_result = match session.kernel.process_dequeued(tx.clone(), token).await {
-        Ok(result) => result,
-        Err(e) => {
-            error!(error = %e, "Failed to persist prompt record via kernel");
-            ui.send(UiCommand::ShowError(format!("Kernel error: {e}")))
-                .await;
-            ui.send(UiCommand::Complete).await;
-            return None;
-        }
-    };
-    send_record_to_ui(
-        ui.commands(),
-        prompt_result.entry.seq,
-        &tx,
-        &prompt_result.entry,
-    )
-    .await;
-
+    if let Err(problem) = record_user_prompt(session, text.clone(), ui).await {
+        ui.send(UiCommand::ShowError(problem)).await;
+        ui.send(UiCommand::Complete).await;
+        return Outcome::default();
+    }
     session.messages.push(Message::user(text));
 
-    let (process_result, forwarded) = run_agent_turn(session, agent_loop, tools, ui, cancel).await;
+    let (process_result, forwarded) = run_agent_turn(
+        session,
+        turn.agent_loop,
+        turn.tools,
+        ui,
+        cancel,
+        turn.steering,
+        turn.limits,
+    )
+    .await;
+    let (seen, unseen) = turn.steering.finish(
+        process_result
+            .as_ref()
+            .map_or(&[][..], |result| result.messages.as_slice()),
+    );
     let cancelled = cancel.is_cancelled();
     if cancelled {
         ui.send(UiCommand::ShowWarning("Turn cancelled".to_string()))
             .await;
     }
 
-    match process_result {
+    let failure = match process_result {
         Ok(result) => {
-            handle_agent_success(session, result, &forwarded, ui).await;
+            handle_agent_success(session, result, &forwarded, ui, &seen).await;
             None
         }
         Err(e) if cancelled => {
@@ -160,7 +210,8 @@ async fn run_prompt(
             error!(error = %e, "Agent loop failed");
             Some(e.to_string())
         }
-    }
+    };
+    Outcome { failure, unseen }
 }
 
 /// Clear transactions left in the agent's inbox by an earlier run.

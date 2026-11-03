@@ -38,10 +38,12 @@ pub(crate) mod fs_tools;
 pub mod git_tool;
 pub mod http_tool;
 pub mod intent_classifier;
+pub mod jobs;
 pub mod permissions;
 pub mod resolver;
 mod sandbox;
 pub mod schema;
+pub mod todo;
 pub(crate) mod tool;
 
 pub use catalog::ToolCatalog;

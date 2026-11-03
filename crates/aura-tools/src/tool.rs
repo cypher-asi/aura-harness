@@ -94,6 +94,9 @@ pub struct ToolContext {
     /// spawned subagent card to (`parent_tool_use_id`). `None` falls
     /// back to any caller-stamped dedupe key on the tool input.
     pub current_tool_use_id: Option<String>,
+    /// Registry for `run_command` with `background: true` and the job
+    /// tools. `None` means background commands are refused.
+    pub background_jobs: Option<Arc<crate::jobs::BackgroundJobs>>,
 }
 
 /// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
@@ -192,6 +195,7 @@ impl ToolContext {
             caller_kernel_mode: None,
             caller_model_id: None,
             current_tool_use_id: None,
+            background_jobs: None,
         }
     }
 }

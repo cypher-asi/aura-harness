@@ -660,7 +660,10 @@ async fn pump_streams_tool_input_while_the_block_is_open() {
         .iter()
         .filter(|e| matches!(e, AgentLoopEvent::ToolStart { id, .. } if id == "toolu_w"))
         .count();
-    assert_eq!(starts, 1, "ToolStart must not repeat at block close: {events:?}");
+    assert_eq!(
+        starts, 1,
+        "ToolStart must not repeat at block close: {events:?}"
+    );
     let snapshots: Vec<&str> = events
         .iter()
         .filter_map(|e| match e {

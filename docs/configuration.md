@@ -20,6 +20,7 @@ All cloud LLM traffic goes through the AURA router (proxy) with a per-request JW
 | `AURA_GENERATION_STREAM_IDLE_TIMEOUT_SECS` | `300` | Maximum quiet window while proxying generation SSE from the router before emitting `STREAM_IDLE_TIMEOUT`. |
 | `AURA_LLM_MAX_RETRIES` | `8` | Per-model retry budget before falling back. |
 | `AURA_DISABLE_PROMPT_CACHING` | — | `1` / `true` / `yes` disables prompt-caching directives. |
+| `AURA_PROMPT_CACHE_TTL` | `5m` | `1h` keeps Anthropic prompt-cache entries for an hour instead of five minutes, so a session that pauses between turns still gets cache hits. Writes cost more than with the 5-minute cache. Read once at startup. |
 
 Further optional tuning (read by `AnthropicConfig::from_env`): `AURA_LLM_BACKOFF_INITIAL_MS` (`250`), `AURA_LLM_BACKOFF_CAP_MS` (`30000`), `AURA_LLM_MIN_REQUEST_INTERVAL_MS` (`0` = disabled), `AURA_LLM_EMERGENCY_BODY_CAP_BYTES` (`524288`; `0` disables), `AURA_LLM_CLOUDFLARE_MAX_RETRIES` (`3`).
 
@@ -29,6 +30,16 @@ Further optional tuning (read by `AnthropicConfig::from_env`): `AURA_LLM_BACKOFF
 |----------|---------|-------------|
 | `AURA_DEFAULT_MODE` | `agent` | Session mode when the request (or `--mode`) does not set one: `agent`, `plan`, `ask` or `debug`. A non-`agent` default makes dev-loop and task-run requests fail with `400` unless they pass `mode: "agent"`. The older name `AURA_FLEET_DEFAULT_MODE` is still read when the new one is unset. |
 | `AURA_SUBAGENT_MAX_RUNNING` | `32` | Most spawned agents (from `task` or `spawn_agent`) that may run at once across the node. A spawn beyond the limit fails with an error the parent agent sees. |
+
+## Terminal long runs
+
+A terminal turn has no iteration cap and no time limit: it runs until the agent is done, you cancel it, or one of these limits stops it.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_TUI_TURN_TIMEOUT` | — (no limit) | Stop a turn that runs longer than this: `90s`, `45m`, `2h`, or a bare number of minutes. |
+| `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
+| `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
 
 ## Node runtime
 

@@ -47,6 +47,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
                 .collect(),
         },
         commands: tx,
+        long_run: crate::long_run::LongRunSettings::default(),
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();

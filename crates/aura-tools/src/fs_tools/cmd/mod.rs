@@ -167,7 +167,10 @@ pub fn cmd_spawn(
     // then on into the main chat.
     apply_plain_output_env(&mut cmd);
 
+    // A child reading the harness's stdin would steal keystrokes from the
+    // terminal UI; agent commands are never interactive.
     cmd.current_dir(&working_dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -281,6 +284,7 @@ fn cmd_spawn_shell_script(
     apply_plain_output_env(&mut cmd);
 
     cmd.current_dir(&working_dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -960,7 +964,7 @@ impl Tool for CmdRunTool {
                     },
                     "timeout_ms": {
                         "type": "integer",
-                        "description": "Timeout in milliseconds (default: 30000)"
+                        "description": "Timeout in milliseconds; the command is stopped when it runs longer (default set by the host, usually a few seconds to minutes)"
                     },
                     "timeout_secs": {
                         "type": "integer",
@@ -988,8 +992,43 @@ impl Tool for CmdRunTool {
     ) -> Result<ToolResult, ToolError> {
         let run_args = parse_run_args(&args, ctx);
         enforce_command_policy(&run_args, ctx)?;
+        if args["background"].as_bool().unwrap_or(false) {
+            return start_background_job(run_args, ctx).await;
+        }
         execute_run_command(run_args, ctx).await
     }
+}
+
+/// Spawn the command as a background job and return its id at once.
+async fn start_background_job(args: RunArgs, ctx: &ToolContext) -> Result<ToolResult, ToolError> {
+    let jobs = ctx.background_jobs.clone().ok_or_else(|| {
+        ToolError::ToolDisabled("background commands are not available here".into())
+    })?;
+    let sandbox = ctx.sandbox.clone();
+    let RunArgs {
+        cwd,
+        shell_script,
+        program,
+        cmd_args,
+        ..
+    } = args;
+    let (child, display) = tokio::task::spawn_blocking(move || match (shell_script, program) {
+        (Some(script), _) => cmd_spawn_shell_script(&sandbox, &script, cwd.as_deref()),
+        (None, Some(program)) => cmd_spawn(&sandbox, &program, &cmd_args, cwd.as_deref()),
+        (None, None) => Err(ToolError::InvalidArguments(
+            "missing 'program' argument; use 'shell_script' for shell commands".into(),
+        )),
+    })
+    .await
+    .map_err(|e| ToolError::CommandFailed(format!("spawn task panicked: {e}")))??;
+    let job_id = jobs.start(child, display.clone(), ctx.caller_agent_id);
+    Ok(ToolResult::success(
+        "run_command",
+        format!(
+            "Started background job {job_id} (`{display}`). You will be told when it exits; \
+             use job_output to check on it and job_kill to stop it."
+        ),
+    ))
 }
 
 /// Parsed `run_command` arguments after pulling them out of the JSON

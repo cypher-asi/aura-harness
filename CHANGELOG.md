@@ -7,6 +7,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal — long-running tasks
+
+##### Added
+
+- `todo_write` tool: the agent keeps a plan for multi-step work. The
+  loop tracks the list, puts it back after a history summary, and
+  carries it across turns and restarts.
+- A turn that ends with todo items still open is sent back to the next
+  one. It ends anyway when the agent asks the user something, says it
+  is blocked, or two nudges in a row leave the list unchanged.
+- A message sent to a busy agent goes into its running turn instead of
+  waiting for the turn to end. One that arrives too late runs next.
+- `run_command` takes `background: true` in the terminal, with
+  `job_output` and `job_kill` to manage the job. When a job exits, the
+  agent that started it is told, in its running turn or in a new one.
+  Quitting the terminal stops every job.
+- `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD` set optional
+  per-turn time and cost limits.
+- Anthropic requests mark the last two user messages for prompt
+  caching (four breakpoints with the system prompt and tools), so a
+  large batch of tool results no longer misses the cache.
+  `AURA_PROMPT_CACHE_TTL=1h` uses the one-hour cache.
+
+##### Changed
+
+- Terminal turns have no iteration cap and no 30-minute timeout.
+- The terminal compacts history only from 70% context use
+  (`AURA_COMPACTION_TRIGGER`). Below it, old tool results are no longer
+  trimmed every step, which rewrote the cached prefix.
+- Foreground `run_command` in the terminal defaults to a 2-minute
+  timeout (was 5 seconds), and agent commands get no stdin, so they
+  can't read keystrokes meant for the terminal UI.
+
 ### Terminal — model, tokens and cost on each reply
 
 ##### Added

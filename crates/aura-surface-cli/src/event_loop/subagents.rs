@@ -15,8 +15,10 @@
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::handlers::{handle_agent_success, run_agent_turn};
+use super::steering::Steering;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
+use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
@@ -30,6 +32,8 @@ use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::events::{AgentDefinitionSummary, AgentSummary};
 use aura_terminal::UiCommand;
 use aura_tools::agents::task::TASK_TOOL_NAME;
+use aura_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
+use aura_tools::todo::TODO_WRITE_TOOL_NAME;
 use aura_tools::SubagentDispatchHook;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -41,6 +45,8 @@ use tracing::{info, warn};
 struct Running {
     kernel: Arc<Kernel>,
     cancel: CancellationToken,
+    /// Input for its turn; `None` while it runs a typed shell command.
+    steering: Option<Steering>,
 }
 
 /// What every turn starts from before a permanent agent's settings apply.
@@ -68,6 +74,8 @@ pub struct AgentHub {
     pub(super) spawn_finished: Notify,
     pub(crate) factory: KernelFactory,
     commands: mpsc::Sender<UiCommand>,
+    /// Per-turn time and cost limits.
+    pub(crate) long_run: LongRunSettings,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -77,6 +85,7 @@ pub struct AgentHubParts {
     pub skills: SkillManager,
     pub base: TurnBase,
     pub commands: mpsc::Sender<UiCommand>,
+    pub(crate) long_run: LongRunSettings,
 }
 
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -103,6 +112,7 @@ impl AgentHub {
                 spawn_finished: Notify::new(),
                 factory: factory(dispatcher),
                 commands: parts.commands,
+                long_run: parts.long_run,
             }
         })
     }
@@ -110,6 +120,12 @@ impl AgentHub {
     /// Config and tools for a turn of an agent, applying the permanent
     /// agent `definition` when it names one.
     pub fn turn(&self, definition: Option<&str>) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        let (mut config, tools) = self.definition_turn(definition);
+        self.long_run.apply(&mut config);
+        (config, tools)
+    }
+
+    fn definition_turn(&self, definition: Option<&str>) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let base = lock(&self.base);
         let definitions = lock(&self.definitions);
         let mut config = base.config.clone();
@@ -127,7 +143,21 @@ impl AgentHub {
             );
             return (config, tools);
         };
-        tools = definition.filter_tools(&tools);
+        let filtered = definition.filter_tools(&tools);
+        // Planning and job tools only touch the agent's own state, so a
+        // permanent agent's tool list never needs to name them.
+        let keep_harness_tool = |tool: &ToolDefinition| {
+            tool.name == TODO_WRITE_TOOL_NAME
+                || ((tool.name == JOB_OUTPUT_TOOL_NAME || tool.name == JOB_KILL_TOOL_NAME)
+                    && filtered.iter().any(|t| t.name == "run_command"))
+        };
+        let harness: Vec<ToolDefinition> = tools
+            .iter()
+            .filter(|tool| keep_harness_tool(tool) && !filtered.iter().any(|t| t.name == tool.name))
+            .cloned()
+            .collect();
+        tools = filtered;
+        tools.extend(harness);
         definition.extend_system_prompt(&mut config.system_prompt, &lock(&self.skills));
         if let Some(model) = &definition.model {
             base.limits.configure(&mut config, model);
@@ -191,13 +221,29 @@ impl AgentHub {
     }
 
     /// Note that `agent_id` started work on `kernel` that `cancel` stops.
+    /// `steering` takes messages for it while it runs.
     pub(super) fn start_running(
         &self,
         agent_id: AgentId,
         kernel: Arc<Kernel>,
         cancel: CancellationToken,
+        steering: Option<Steering>,
     ) {
-        lock(&self.running).insert(agent_id, Running { kernel, cancel });
+        lock(&self.running).insert(
+            agent_id,
+            Running {
+                kernel,
+                cancel,
+                steering,
+            },
+        );
+    }
+
+    /// Input for the turn `agent_id` is running, if it is running one.
+    pub(super) fn steering(&self, agent_id: AgentId) -> Option<Steering> {
+        lock(&self.running)
+            .get(&agent_id)
+            .and_then(|running| running.steering.clone())
     }
 
     /// Note that `agent_id` has no work in flight any more.
@@ -266,10 +312,13 @@ impl AgentHub {
         info!(child = %instance.name, definition = %definition.name, "Spawning permanent agent");
 
         let cancel = CancellationToken::new();
-        self.start_running(child_id, Arc::clone(&session.kernel), cancel.clone());
+        // Messages for a spawn wait for its task to end: steering it
+        // mid-task would change the work its parent is waiting on.
+        self.start_running(child_id, Arc::clone(&session.kernel), cancel.clone(), None);
         self.send_agent_list().await;
 
         let (mut config, tools) = self.turn(Some(&definition.name));
+        config.initial_todos.clone_from(&session.todos);
         // Observers report on the agent they were installed for, not this one.
         config.observers.clear();
         if let Some(addendum) = request
@@ -288,6 +337,7 @@ impl AgentHub {
             &request.prompt,
             &ui,
             &cancel,
+            self.long_run,
         )
         .await;
 
@@ -364,6 +414,7 @@ async fn run_task_turn(
     prompt: &str,
     ui: &AgentUi,
     cancel: &CancellationToken,
+    limits: LongRunSettings,
 ) -> Result<String, String> {
     let agent_id = session.agent_id();
     let store = session.kernel.store();
@@ -385,7 +436,11 @@ async fn run_task_turn(
     })
     .await;
 
-    let (result, forwarded) = run_agent_turn(session, agent_loop, tools, ui, cancel).await;
+    // Nothing sends to a spawn mid-task, so its steering stays empty.
+    let steering = Steering::new(cancel);
+    let (result, forwarded) =
+        run_agent_turn(session, agent_loop, tools, ui, cancel, &steering, limits).await;
+    steering.finish(&[]);
     let result = match result {
         Ok(result) => result,
         Err(e) => {
@@ -401,7 +456,7 @@ async fn run_task_turn(
     };
     let text = result.total_text.clone();
     let llm_error = result.llm_error.as_ref().map(ToString::to_string);
-    handle_agent_success(session, result, &forwarded, ui).await;
+    handle_agent_success(session, result, &forwarded, ui, &[]).await;
     match llm_error {
         _ if cancel.is_cancelled() => Err("cancelled by the user".to_string()),
         Some(err) if text.trim().is_empty() => Err(err),

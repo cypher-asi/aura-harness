@@ -53,6 +53,7 @@ pub struct ToolExecutor {
     /// usually has no server-side configured model). `None` leaves the
     /// downstream null-model behavior unchanged.
     caller_model_id: Option<String>,
+    background_jobs: Option<Arc<crate::jobs::BackgroundJobs>>,
 }
 
 impl ToolExecutor {
@@ -81,7 +82,18 @@ impl ToolExecutor {
             caller_external_agent_id: None,
             caller_project_id: None,
             caller_model_id: None,
+            background_jobs: None,
         }
+    }
+
+    /// Let `run_command` start background jobs in `jobs`, and register the
+    /// `job_output` / `job_kill` tools that manage them.
+    #[must_use]
+    pub fn with_background_jobs(mut self, jobs: Arc<crate::jobs::BackgroundJobs>) -> Self {
+        self.background_jobs = Some(jobs);
+        self.register(Box::new(crate::jobs::JobOutputTool));
+        self.register(Box::new(crate::jobs::JobKillTool));
+        self
     }
 
     /// Phase 5: attach a [`SpawnHook`] that the `spawn_agent` tool will use
@@ -292,6 +304,7 @@ impl ToolExecutor {
         tool_ctx.agent_read_hook = self.agent_read_hook.clone();
         tool_ctx.subagent_dispatch = self.subagent_dispatch.clone();
         tool_ctx.current_tool_use_id = ctx.tool_use_id.clone();
+        tool_ctx.background_jobs = self.background_jobs.clone();
 
         match self.tools.get(tool_name.as_str()) {
             Some(tool) => tool.execute(&tool_ctx, tool_call.args.clone()).await,

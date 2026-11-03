@@ -401,6 +401,7 @@ impl App {
                 self.refresh_sandbox();
             }
             UiCommand::TurnStarted { prompt } => self.cmd_turn_started(prompt),
+            UiCommand::UserSteered(text) => self.cmd_user_steered(&text),
             UiCommand::ForAgent { agent_id, command } => {
                 self.process_agent_command(&agent_id, *command);
             }
@@ -436,6 +437,13 @@ impl App {
 
     fn cmd_start_streaming(&mut self) {
         self.streaming_content.clear();
+        if self
+            .messages
+            .back()
+            .is_some_and(|m| m.is_streaming() && m.content().is_empty())
+        {
+            return;
+        }
         let mut msg = Message::new(MessageRole::Assistant, "");
         msg.set_streaming(true);
         self.add_message(msg);
@@ -590,6 +598,19 @@ impl App {
         }
         self.state = AppState::Processing;
         self.status = "Thinking...".to_string();
+    }
+
+    /// Show a message sent into the running turn. A reply still streaming
+    /// is split around it, so the rest of the reply keeps streaming below.
+    fn cmd_user_steered(&mut self, text: &str) {
+        let was_streaming = self.messages.back().is_some_and(Message::is_streaming);
+        if was_streaming {
+            self.cmd_finish_streaming();
+        }
+        self.add_message(Message::new(MessageRole::User, text));
+        if was_streaming {
+            self.cmd_start_streaming();
+        }
     }
 
     fn cmd_clear_conversation(&mut self) {

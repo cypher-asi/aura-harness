@@ -15,6 +15,7 @@ use aura_terminal::{
     UiCommand,
 };
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 /// The chat of one agent. Agents run in parallel, so everything a turn
@@ -61,6 +62,14 @@ pub(crate) struct ForwarderState {
     pub reply_model: Option<String>,
     /// Tokens and cost of the latest model call of the turn
     pub reply_usage: Option<CallUsage>,
+    /// Estimated cost of every model call of the turn so far
+    pub turn_cost_usd: f64,
+}
+
+/// Stops a turn once its model calls cost more than `limit_usd`.
+pub(crate) struct CostCap {
+    pub limit_usd: f64,
+    pub stop: CancellationToken,
 }
 
 /// Tokens and estimated cost of one model call, for the reply header.
@@ -81,6 +90,7 @@ struct UiCommandSink {
     state: ForwarderState,
     /// Tool calls shown in the chat that have no result yet
     open_tools: Vec<String>,
+    cost_cap: Option<CostCap>,
 }
 
 impl UiCommandSink {
@@ -98,6 +108,22 @@ impl UiCommandSink {
             self.ui.send(UiCommand::FinishStreaming).await;
             self.state.streaming_active = false;
         }
+    }
+
+    async fn enforce_cost_cap(&mut self) {
+        let Some(cap) = &self.cost_cap else {
+            return;
+        };
+        if self.state.turn_cost_usd <= cap.limit_usd || cap.stop.is_cancelled() {
+            return;
+        }
+        cap.stop.cancel();
+        let message = format!(
+            "Stopping this turn: it has cost about ${:.2}, over the ${:.2} limit \
+             (AURA_TUI_MAX_TURN_COST_USD)",
+            self.state.turn_cost_usd, cap.limit_usd
+        );
+        self.ui.send(UiCommand::ShowWarning(message)).await;
     }
 }
 
@@ -259,6 +285,8 @@ impl TurnEventSink for UiCommandSink {
                 .await;
             self.state.reply_model = Some(model);
             self.state.reply_usage = usage;
+            self.state.turn_cost_usd += usage.and_then(|u| u.cost_usd).unwrap_or(0.0);
+            self.enforce_cost_cap().await;
         }
     }
 
@@ -272,11 +300,13 @@ impl TurnEventSink for UiCommandSink {
 pub(crate) async fn forward_agent_events(
     mut rx: tokio::sync::mpsc::Receiver<AgentLoopEvent>,
     ui: AgentUi,
+    cost_cap: Option<CostCap>,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         ui,
         state: ForwarderState::default(),
         open_tools: Vec::new(),
+        cost_cap,
     };
 
     while let Some(event) = rx.recv().await {

@@ -273,6 +273,19 @@ pub struct AgentLoopConfig {
     /// progress event is emitted either way so the client is never
     /// left guessing. Defaults to `true`.
     pub auto_continue_no_op_turns: bool,
+    /// Context pressure (0.0–1.0) below which compaction is skipped
+    /// entirely. `None` keeps the tiered behaviour, which starts
+    /// trimming old tool results at low pressure. Every trim rewrites
+    /// the start of the transcript, so long interactive sessions set
+    /// this to get cache hits until compaction is really needed.
+    pub compaction_trigger: Option<f64>,
+    /// Todo list carried in from the previous run of this session.
+    pub initial_todos: Vec<aura_tools::todo::TodoItem>,
+    /// When the model ends its turn while `todo_write` items are still
+    /// open, steer it back to the next item instead of stopping. Gives
+    /// up after [`super::turn::MAX_STALLED_TODO_NUDGES`] nudges that
+    /// leave the list unchanged.
+    pub continue_open_todos: bool,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -358,6 +371,9 @@ impl AgentLoopConfig {
             // Never-silent default: re-prompt once when a turn ends
             // having done nothing visible (see `turn::run_turn`).
             auto_continue_no_op_turns: true,
+            compaction_trigger: None,
+            initial_todos: Vec::new(),
+            continue_open_todos: false,
         }
     }
 }

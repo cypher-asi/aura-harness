@@ -184,6 +184,8 @@ impl AgentLoop {
                                 file_changes: Vec::new(),
                                 iterations: 0,
                                 messages,
+                                todos: self.config.initial_todos.clone(),
+                                summary_compactions: 0,
                             });
                         }
                         _ => {}

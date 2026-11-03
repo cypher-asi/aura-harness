@@ -1,10 +1,13 @@
 //! Handler functions for agent turns, auth, and session lifecycle.
 
-use super::agent_events::{AgentUi, ForwarderState};
+use super::agent_events::{AgentUi, CostCap, ForwarderState};
 use super::agents::AgentSession;
 use super::record_ui::{create_response_transaction, send_record_to_ui};
-use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
-use aura_agent::AgentLoopEvent;
+use super::steering::Steering;
+use super::turns::record_user_prompt;
+use super::{forward_agent_events, LoopState};
+use crate::long_run::LongRunSettings;
+use aura_agent::{AgentLoopEvent, RunOptions};
 use aura_core_types::Transaction;
 use aura_terminal::events::{MessageData, MessageRole};
 use aura_terminal::UiCommand;
@@ -12,43 +15,53 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Run one turn of `session` on `agent_loop` with `tools`, streaming it
-/// into `ui`. `cancel` stops it early.
+/// into `ui`. `cancel` stops it early, `steering` feeds it messages while
+/// it runs, and `limits` may stop it for time or cost.
 pub(super) async fn run_agent_turn(
     session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
     tools: Vec<aura_model_reasoner::ToolDefinition>,
     ui: &AgentUi,
     cancel: &CancellationToken,
+    steering: &Steering,
+    limits: LongRunSettings,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
 ) {
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
-    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, ui.clone()));
-
-    // A timeout stops the turn without it counting as cancelled by the user.
+    // A timeout or cost stop ends the turn without it counting as
+    // cancelled by the user.
     let turn_cancel = cancel.child_token();
-    let process_result = match tokio::time::timeout(
-        TURN_TIMEOUT,
-        agent_loop.run_with_events(
-            &session.model_gateway,
-            &session.tool_gateway,
-            session.messages.clone(),
-            tools,
-            Some(agent_event_tx),
-            Some(turn_cancel.clone()),
-        ),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            turn_cancel.cancel();
-            Err(aura_agent::AgentError::Timeout(format!(
-                "Agent turn timed out after {} minutes",
-                TURN_TIMEOUT.as_secs() / 60
-            )))
-        }
+    let cost_cap = limits.max_turn_cost_usd.map(|limit_usd| CostCap {
+        limit_usd,
+        stop: turn_cancel.clone(),
+    });
+    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, ui.clone(), cost_cap));
+
+    let run = agent_loop.run_with_session(
+        &session.model_gateway,
+        &session.tool_gateway,
+        session.messages.clone(),
+        tools,
+        RunOptions {
+            event_tx: Some(agent_event_tx),
+            cancellation_token: Some(turn_cancel.clone()),
+            handle: Some(steering.handle()),
+        },
+    );
+    let process_result = match limits.turn_timeout {
+        None => run.await,
+        Some(limit) => match tokio::time::timeout(limit, run).await {
+            Ok(result) => result,
+            Err(_) => {
+                turn_cancel.cancel();
+                Err(aura_agent::AgentError::Timeout(format!(
+                    "Agent turn timed out after {} minutes (AURA_TUI_TURN_TIMEOUT)",
+                    limit.as_secs() / 60
+                )))
+            }
+        },
     };
 
     let forwarded = match forwarder.await {
@@ -70,14 +83,24 @@ pub(super) async fn run_agent_turn(
     (process_result, forwarded)
 }
 
+/// Keep what the turn produced: its conversation, todo list and reply.
+/// `steered` are the messages the model got while the turn ran; they are
+/// recorded as prompts ahead of the reply.
 pub(super) async fn handle_agent_success(
     session: &mut AgentSession,
     result: aura_agent::AgentLoopResult,
     forwarded: &ForwarderState,
     ui: &AgentUi,
+    steered: &[String],
 ) {
     session.messages.clone_from(&result.messages);
+    session.todos.clone_from(&result.todos);
 
+    for text in steered {
+        if let Err(problem) = record_user_prompt(session, text.clone(), ui).await {
+            warn!(%problem, "Failed to record a mid-turn message");
+        }
+    }
     persist_response_via_kernel(session, &result.total_text, ui).await;
     emit_response_to_ui(&result, forwarded, ui).await;
 
@@ -175,6 +198,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
     }
 
     session.messages.clear();
+    session.todos.clear();
 
     let _ = state
         .commands

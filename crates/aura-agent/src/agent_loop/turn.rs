@@ -314,6 +314,17 @@ pub(crate) async fn run_turn(
             emit_no_op_progress(ctx.run.event_tx, "turn_ended_no_action");
         }
 
+        if ctx.run.agent.config.continue_open_todos {
+            if let Some(instruction) = open_todo_nudge(state) {
+                emit_no_op_progress(ctx.run.event_tx, "turn_open_todos_retry");
+                apply_user_inputs_to_messages(
+                    &mut state.messages,
+                    vec![UserInput::Steer { instruction }],
+                );
+                continue;
+            }
+        }
+
         terminated_cleanly = true;
         break;
     }
@@ -323,6 +334,73 @@ pub(crate) async fn run_turn(
         broke_for_error,
         sampling_count,
     })
+}
+
+/// How many open-todo nudges in a row may leave the todo list
+/// unchanged before the turn is allowed to end anyway.
+pub(super) const MAX_STALLED_TODO_NUDGES: u32 = 2;
+
+/// Steering text that sends the model back to its open todo items, or
+/// `None` when the turn should really end: nothing is open, the model
+/// is waiting on the user, or recent nudges changed nothing.
+fn open_todo_nudge(state: &mut LoopState) -> Option<String> {
+    use aura_tools::todo::TodoStatus;
+    let todos = &state.result.todos;
+    let next = todos
+        .iter()
+        .find(|item| item.status == TodoStatus::InProgress)
+        .or_else(|| todos.iter().find(|item| item.status == TodoStatus::Pending))?;
+    if waits_on_user(&state.messages) {
+        return None;
+    }
+    if state.todos_at_last_nudge.as_ref() == Some(todos) {
+        state.stalled_todo_nudges = state.stalled_todo_nudges.saturating_add(1);
+    } else {
+        state.stalled_todo_nudges = 0;
+    }
+    if state.stalled_todo_nudges >= MAX_STALLED_TODO_NUDGES {
+        return None;
+    }
+    let instruction = format!(
+        "Your todo list still has open items. Continue with \"{}\" (id: {}). Mark items \
+completed with todo_write as you finish them and cancel ones that are no longer needed. If you \
+are blocked or need a decision from the user, say so plainly and stop.",
+        next.content, next.id
+    );
+    state.todos_at_last_nudge = Some(todos.clone());
+    Some(instruction)
+}
+
+/// Whether the last assistant message asks the user something or says
+/// it is blocked, in which case ending the turn is the right call.
+fn waits_on_user(messages: &[Message]) -> bool {
+    use aura_model_reasoner::{ContentBlock, Role};
+    let Some(message) = messages.iter().rev().find(|m| m.role == Role::Assistant) else {
+        return false;
+    };
+    let text = message
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    text.trim_end().ends_with('?')
+        || [
+            "blocked",
+            "need your",
+            "waiting for",
+            "approval",
+            "permission",
+            "let me know",
+            "would you like",
+            "should i",
+        ]
+        .iter()
+        .any(|marker| text.contains(marker))
 }
 
 fn is_planning_request(messages: &[Message]) -> bool {
@@ -546,6 +624,9 @@ fn emit_no_op_progress(event_tx: Option<&Sender<AgentLoopEvent>>, stage: &str) {
         "turn_ended_tool_markup" => {
             "Model wrote a tool call as text, so nothing ran, and the retry budget is spent."
         }
+        "turn_open_todos_retry" => {
+            "Model stopped with todo items still open — steering it to the next one."
+        }
         _ => "Model ended its turn without responding or taking any action.",
     };
     streaming::emit(
@@ -584,4 +665,76 @@ pub(crate) async fn run_turn_stop_hooks(
     }
 
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_loop::AgentLoopConfig;
+    use aura_tools::todo::{TodoItem, TodoStatus};
+
+    fn state_with_todos(statuses: &[TodoStatus], last_reply: &str) -> LoopState {
+        let config = AgentLoopConfig {
+            initial_todos: statuses
+                .iter()
+                .enumerate()
+                .map(|(i, status)| TodoItem {
+                    id: i.to_string(),
+                    content: format!("step {i}"),
+                    status: *status,
+                })
+                .collect(),
+            ..AgentLoopConfig::for_agent("claude-test-model")
+        };
+        LoopState::new_for_tests(
+            &config,
+            vec![Message::user("do it"), Message::assistant(last_reply)],
+        )
+    }
+
+    #[test]
+    fn nudges_toward_in_progress_item_first() {
+        let mut state = state_with_todos(
+            &[
+                TodoStatus::Completed,
+                TodoStatus::Pending,
+                TodoStatus::InProgress,
+            ],
+            "Done with step 0.",
+        );
+        let nudge = open_todo_nudge(&mut state).expect("open items should nudge");
+        assert!(nudge.contains("step 2"), "{nudge}");
+    }
+
+    #[test]
+    fn no_nudge_when_everything_is_closed() {
+        let mut state =
+            state_with_todos(&[TodoStatus::Completed, TodoStatus::Cancelled], "All done.");
+        assert!(open_todo_nudge(&mut state).is_none());
+    }
+
+    #[test]
+    fn no_nudge_when_model_asks_the_user() {
+        let mut state = state_with_todos(&[TodoStatus::Pending], "Which database should I use?");
+        assert!(open_todo_nudge(&mut state).is_none());
+    }
+
+    #[test]
+    fn gives_up_after_unchanged_nudges() {
+        let mut state = state_with_todos(&[TodoStatus::Pending], "Working on it.");
+        for _ in 0..MAX_STALLED_TODO_NUDGES {
+            assert!(open_todo_nudge(&mut state).is_some());
+        }
+        assert!(open_todo_nudge(&mut state).is_none());
+    }
+
+    #[test]
+    fn progress_resets_the_stall_counter() {
+        let mut state = state_with_todos(&[TodoStatus::Pending, TodoStatus::Pending], "Ok.");
+        assert!(open_todo_nudge(&mut state).is_some());
+        assert!(open_todo_nudge(&mut state).is_some());
+        state.result.todos[0].status = TodoStatus::Completed;
+        assert!(open_todo_nudge(&mut state).is_some());
+        assert_eq!(state.stalled_todo_nudges, 0);
+    }
 }

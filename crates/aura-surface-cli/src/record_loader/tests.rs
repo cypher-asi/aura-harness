@@ -100,7 +100,9 @@ fn model_history_resumes_the_conversation_since_the_last_session_start() {
             (User, "a visualization"),
         ]
     );
-    assert!(model_history(&store, AgentId::generate()).unwrap().is_empty());
+    assert!(model_history(&store, AgentId::generate())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

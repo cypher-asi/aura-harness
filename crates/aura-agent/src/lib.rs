@@ -73,7 +73,10 @@ pub(crate) mod task_executor;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig, RunOptions, TaskId};
 pub use aura_config::{tool_result_cache_key, CACHEABLE_TOOLS};
-pub use events::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, TurnEventSink};
+pub use events::{
+    map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, TurnEventSink,
+    PROGRESS_CONTEXT_SUMMARIZED, PROGRESS_TODOS_UPDATED,
+};
 pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway, RecordingModelProvider};
 pub use runtime::{

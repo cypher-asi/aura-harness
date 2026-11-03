@@ -45,7 +45,7 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
     use ToolModeClass as C;
     let class = match tool {
         "read_file" | "list_files" | "stat_file" | "find_files" | "search_code"
-        | "get_agent_state" | "list_agents" => C::Read,
+        | "get_agent_state" | "list_agents" | "todo_write" | "job_output" => C::Read,
 
         "write_file" | "edit_file" | "delete_file" => C::FileWrite,
 
@@ -57,7 +57,7 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
 
         "git_commit" => C::WorkspaceMutation,
 
-        "run_command" => C::Subprocess,
+        "run_command" | "job_kill" => C::Subprocess,
 
         "git_push"
         | "git_commit_push"

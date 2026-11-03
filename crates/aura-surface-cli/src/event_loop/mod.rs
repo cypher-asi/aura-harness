@@ -3,7 +3,8 @@
 //! Agents work in parallel: each turn runs on its own task (see
 //! [`turns`]), so the loop keeps handling the UI while agents work, and the
 //! user can switch to another agent and give it work too. Each agent does
-//! one thing at a time; work sent to a busy agent waits for it.
+//! one thing at a time. A message for an agent in the middle of a turn
+//! goes into that turn (see [`steering`]); other work waits for it.
 
 pub(crate) mod agent_events;
 pub(crate) mod agents;
@@ -11,6 +12,7 @@ pub(crate) mod auth;
 pub(crate) mod handlers;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
+mod steering;
 pub(crate) mod subagents;
 mod turns;
 
@@ -29,15 +31,15 @@ use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
 use aura_terminal::{UiCommand, UiEvent};
+use aura_tools::jobs::JobFinished;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
+use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use turns::{Task, Work, WorkDone};
-
-const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -59,6 +61,8 @@ pub struct EventLoopContext<'a> {
     pub models: ModelSelection,
     /// Sign-in state shared with the model provider.
     pub auth: Arc<AuthManager>,
+    /// Background commands that exited.
+    pub job_finished: mpsc::Receiver<JobFinished>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -135,6 +139,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         memory_manager,
         models,
         auth,
+        mut job_finished,
     } = ctx;
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
     let (done_tx, mut done_rx) = mpsc::channel::<WorkDone>(64);
@@ -172,6 +177,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(completion_tx) = process_completions.recv() => {
                 handle_completion(&mut state, completion_tx).await;
             }
+            Some(finished) = job_finished.recv() => {
+                handle_job_finished(&mut state, finished).await;
+            }
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
             }
@@ -186,6 +194,64 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
 
     shut_down(&mut state, &mut done_rx).await;
     Ok(())
+}
+
+/// Tell the agent that started a background job that it exited: in its
+/// running turn if it has one, else as the start of a new turn. A job the
+/// agent stopped itself needs no reply.
+async fn handle_job_finished(state: &mut LoopState<'_>, finished: JobFinished) {
+    let Some(agent_id) = finished.agent_id else {
+        debug!(job = %finished.job_id, "Background job with no owner exited");
+        return;
+    };
+    if finished.killed {
+        debug!(job = %finished.job_id, "Stopped background job exited");
+        return;
+    }
+    deliver(
+        state,
+        agent_id,
+        SteerSource::Harness,
+        finished.notice(),
+        false,
+    )
+    .await;
+}
+
+/// Give `text` from `source` to `agent_id`: into its running turn if it
+/// has one that still takes input, else as a prompt. `shown` is whether
+/// the chat already shows it.
+async fn deliver(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    source: SteerSource,
+    text: String,
+    shown: bool,
+) {
+    if let Some(steering) = state.hub.steering(agent_id) {
+        if steering.send(source, text.clone()).await {
+            info!(%agent_id, ?source, "Sent message into the running turn");
+            if source == SteerSource::User && !shown {
+                AgentUi::new(state.commands.clone(), agent_id)
+                    .send(UiCommand::UserSteered(text))
+                    .await;
+            }
+            return;
+        }
+    }
+    submit(state, agent_id, prompt_work(source, text, shown)).await;
+}
+
+/// A prompt from `source`. Harness notices keep their label so the model
+/// can tell them from the user.
+fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
+    match source {
+        SteerSource::User => Work::Prompt { text, shown },
+        SteerSource::Harness => Work::Prompt {
+            text: format!("{}{text}", source.prefix()),
+            shown: false,
+        },
+    }
 }
 
 /// Cancel every agent's work and give it a moment to record how it ended.
@@ -263,7 +329,7 @@ async fn handle_ui_event(
             shown,
         } => {
             let agent_id = state.agent_or_active(&agent_id);
-            submit(state, agent_id, Work::Prompt { text, shown }).await;
+            deliver(state, agent_id, SteerSource::User, text, shown).await;
         }
         UiEvent::RunCommand {
             agent_id,
@@ -365,6 +431,8 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
         },
     };
 
+    let cancel = CancellationToken::new();
+    let mut steering = None;
     let task = match work {
         Work::Prompt { text, shown } => {
             info!(%agent_id, text = %text, "Processing user message");
@@ -380,19 +448,25 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             })
             .await;
             let (agent_loop, tools) = prepare_turn(state, &session).await;
+            let turn_steering = Steering::new(&cancel);
+            steering = Some(turn_steering.clone());
             Task::Turn {
                 text,
                 agent_loop: Box::new(agent_loop),
                 tools,
+                steering: turn_steering,
+                limits: state.hub.long_run,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
     };
 
-    let cancel = CancellationToken::new();
-    state
-        .hub
-        .start_running(agent_id, Arc::clone(&session.kernel), cancel.clone());
+    state.hub.start_running(
+        agent_id,
+        Arc::clone(&session.kernel),
+        cancel.clone(),
+        steering,
+    );
     state.in_flight += 1;
     turns::spawn(session, task, ui, cancel, state.work_done.clone());
     agents::send_agent_list(state).await;
@@ -409,6 +483,7 @@ async fn prepare_turn(
     state.hub.send_definitions().await;
     state.sync_turn_base();
     let (mut config, tools) = state.hub.turn(session.definition.as_deref());
+    config.initial_todos.clone_from(&session.todos);
     if let Some(ref mm) = state.memory_manager {
         mm.prepare_context(session.agent_id(), &mut config.system_prompt)
             .await;
@@ -427,13 +502,22 @@ async fn prepare_turn(
 }
 
 /// Take back the session of work that ended, report a failure, and start
-/// what was waiting for the agent.
+/// what was waiting for the agent: first any messages sent into the turn
+/// too late for the model to see, then the queue.
 async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
     let WorkDone {
         agent_id,
         session,
         failure,
+        unseen,
     } = done;
+    if !unseen.is_empty() {
+        let queue = state.queued.entry(agent_id).or_default();
+        for (source, text) in unseen.into_iter().rev() {
+            // A user message sent mid-turn is already in the chat.
+            queue.push_front(prompt_work(source, text, true));
+        }
+    }
     state.in_flight = state.in_flight.saturating_sub(1);
     if let Some(session) = session {
         state.idle.insert(agent_id, session);

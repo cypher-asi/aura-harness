@@ -81,6 +81,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
             tools,
         },
         commands: commands_tx.clone(),
+        long_run: crate::long_run::LongRunSettings::default(),
     };
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
@@ -262,8 +263,18 @@ async fn another_agent_works_while_the_first_is_busy() {
     );
 }
 
+/// Text of the user messages in `agent_id`'s idle session.
+fn user_texts(state: &LoopState<'_>, agent_id: AgentId) -> Vec<String> {
+    state.idle[&agent_id]
+        .messages
+        .iter()
+        .filter(|m| m.role == aura_model_reasoner::Role::User)
+        .map(aura_model_reasoner::Message::text_content)
+        .collect()
+}
+
 #[tokio::test]
-async fn message_to_a_busy_agent_runs_after_its_turn() {
+async fn message_to_a_busy_agent_goes_into_its_turn() {
     let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
@@ -273,29 +284,96 @@ async fn message_to_a_busy_agent_runs_after_its_turn() {
 
     handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
     handle_ui_event(&mut state, message(first, "follow-up", false), &links).await;
-    assert_eq!(state.queued[&first].len(), 1);
+    assert!(state.queued.is_empty(), "nothing waits for the turn to end");
 
     fixture.gate.add_permits(1);
     let finished = next_done(&mut done).await;
+    assert!(finished.unseen.is_empty());
     handle_work_done(&mut state, finished).await;
-    assert!(state.hub.is_running(first), "the queued message started");
-    assert!(state.queued.is_empty());
+    assert!(!state.hub.is_running(first), "one turn answered both");
 
-    let finished = next_done(&mut done).await;
-    handle_work_done(&mut state, finished).await;
-    let prompts: Vec<String> = state.idle[&first]
-        .messages
-        .iter()
-        .filter(|m| m.role == aura_model_reasoner::Role::User)
-        .map(aura_model_reasoner::Message::text_content)
-        .collect();
-    assert_eq!(prompts, ["slow start", "follow-up"]);
+    // Depending on timing the model gets the message with its first call
+    // or after it, so only the order is fixed.
+    let prompts = user_texts(&state, first).concat();
+    let steered = format!("{}follow-up", SteerSource::User.prefix());
+    assert!(prompts.starts_with("slow start"), "{prompts:?}");
+    assert!(prompts.ends_with(&steered), "{prompts:?}");
 
     let commands = drain(&mut commands);
     let echoed = commands
         .iter()
-        .any(|(_, c)| matches!(c, UiCommand::TurnStarted { prompt: Some(p) } if p == "follow-up"));
-    assert!(echoed, "the chat shows the queued message when it starts");
+        .any(|(_, c)| matches!(c, UiCommand::UserSteered(p) if p == "follow-up"));
+    assert!(echoed, "the chat shows the message when the turn takes it");
+}
+
+fn job_finished(agent_id: AgentId, killed: bool) -> JobFinished {
+    JobFinished {
+        job_id: "job-1".to_string(),
+        agent_id: Some(agent_id),
+        command: "cargo test".to_string(),
+        exit_code: Some(0),
+        killed,
+        elapsed: Duration::from_secs(3),
+        tail: "test result: ok".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn finished_job_starts_a_turn_for_an_idle_agent() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_job_finished(&mut state, job_finished(first, false)).await;
+    assert!(state.hub.is_running(first));
+
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    let prompts = user_texts(&state, first);
+    assert_eq!(prompts.len(), 1);
+    assert!(prompts[0].starts_with(SteerSource::Harness.prefix()));
+    assert!(prompts[0].contains("job-1") && prompts[0].contains("test result: ok"));
+}
+
+#[tokio::test]
+async fn stopped_job_needs_no_reply() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_job_finished(&mut state, job_finished(first, true)).await;
+
+    assert!(!state.hub.is_running(first));
+    assert!(state.queued.is_empty());
+}
+
+#[tokio::test]
+async fn messages_the_turn_never_saw_run_next() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let session = state.idle.remove(&first).unwrap();
+
+    handle_work_done(
+        &mut state,
+        WorkDone {
+            agent_id: first,
+            session: Some(session),
+            failure: None,
+            unseen: vec![(SteerSource::User, "late".to_string())],
+        },
+    )
+    .await;
+    assert!(state.hub.is_running(first), "the late message started");
+
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    assert_eq!(user_texts(&state, first), ["late"]);
 }
 
 #[tokio::test]

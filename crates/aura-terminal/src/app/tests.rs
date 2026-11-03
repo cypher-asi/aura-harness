@@ -412,6 +412,30 @@ fn stream_to(app: &mut App, id: &str, text: &str) {
 }
 
 #[test]
+fn test_steered_message_splits_the_streaming_reply() {
+    let (mut app, _rx) = app_with_agents();
+    for command in [
+        UiCommand::TurnStarted {
+            prompt: Some("start".to_string()),
+        },
+        UiCommand::StartStreaming,
+        UiCommand::AppendText("first half".to_string()),
+        UiCommand::UserSteered("also do x".to_string()),
+        UiCommand::StartStreaming,
+        UiCommand::AppendText("second half".to_string()),
+        UiCommand::FinishStreaming,
+    ] {
+        app.process_command(command);
+    }
+
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(
+        contents,
+        ["start", "first half", "also do x", "second half"]
+    );
+}
+
+#[test]
 fn test_background_agent_streams_into_its_own_chat() {
     let (mut app, _rx) = app_with_agents();
     submit(&mut app, "hello aa");

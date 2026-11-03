@@ -76,7 +76,11 @@ impl Liveness {
 
     /// Record a frame in `phase`. Pings are pure liveness and stay off
     /// the transcript.
-    fn beat(&mut self, phase: StreamPhase, event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>) {
+    fn beat(
+        &mut self,
+        phase: StreamPhase,
+        event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>,
+    ) {
         if phase != StreamPhase::Ping && self.logged_phase != Some(phase) {
             console::stream_phase_line(phase, self.started.elapsed());
             self.logged_phase = Some(phase);

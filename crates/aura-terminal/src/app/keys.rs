@@ -551,11 +551,12 @@ impl App {
             return KeyResult::continue_running();
         }
 
-        // A busy agent takes the message once its turn ends; it is shown
-        // then, so it lands below the reply still streaming.
+        // A busy agent reads the message before its next step, or once its
+        // current work ends; the chat shows it at that point, so it lands
+        // in order with the reply still streaming.
         if busy {
             self.notification = Some((
-                "Queued: sent once this agent's turn ends".to_string(),
+                "Sent: the agent reads it before its next step".to_string(),
                 NotificationType::Success,
             ));
         } else {

@@ -232,6 +232,9 @@ pub enum UiCommand {
         prompt: Option<String>,
     },
 
+    /// A message the user sent to a busy agent went into its running turn
+    UserSteered(String),
+
     /// A command for the chat of one agent. Agents work in parallel, so
     /// anything an agent's turn sends is addressed to it; the UI applies it
     /// to that agent's chat whether or not it is on screen.

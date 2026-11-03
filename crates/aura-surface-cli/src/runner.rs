@@ -7,6 +7,7 @@
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::cli::{Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode};
+use crate::long_run::add_long_run_tools;
 use crate::model_selection::ModelSelection;
 use crate::{api_server, auth_commands, event_loop, record_loader, session_helpers};
 
@@ -17,6 +18,8 @@ use aura_context_skills::{SkillLoader, SkillManager};
 use aura_core_types::{AgentPermissions, Transaction};
 use aura_model_reasoner::ModelProvider;
 use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
+use aura_tools::jobs::{BackgroundJobs, JobFinished};
+use aura_tools::todo::TodoWriteTool;
 use aura_tools::{ToolConfig, ToolExecutor};
 use clap::Parser;
 use std::path::PathBuf;
@@ -376,6 +379,7 @@ async fn run_terminal(
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
     let mut tool_config = ToolConfig::for_autonomous_dev_loop();
+    tool_config.sync_threshold_ms = crate::long_run::COMMAND_TIMEOUT_MS;
     if args.allow_unrestricted_full_access || unrestricted_full_access_from_env() {
         tool_config.command.allow_unrestricted_full_access = true;
         warn!("unrestricted full-access command allowlist bypass enabled by operator config");
@@ -388,7 +392,10 @@ async fn run_terminal(
             "run_command enabled"
         );
     }
-    let (_, tools) = session_helpers::build_executor_router_with_config(&tool_config);
+    let (_, mut tools) = session_helpers::build_executor_router_with_config(&tool_config);
+    add_long_run_tools(&mut tools);
+    let (job_tx, job_rx) = mpsc::channel::<JobFinished>(64);
+    let jobs = BackgroundJobs::new(job_tx);
 
     // The terminal harness is the one surface that resolves its model
     // locally (env, persisted `/model` choice, then the local default) —
@@ -434,6 +441,7 @@ async fn run_terminal(
         ..KernelConfig::default()
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
+    let factory_jobs = Arc::clone(&jobs);
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
             registry,
@@ -448,15 +456,18 @@ async fn run_terminal(
                 limits: models.limits(),
             },
             commands: cmd_tx.clone(),
+            long_run: crate::long_run::LongRunSettings::from_env(),
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(
                 store,
                 Box::new(move |agent_id, parent_chain, folder| {
-                    let executor = ToolExecutor::new(tool_config.clone())
+                    let mut executor = ToolExecutor::new(tool_config.clone())
                         .with_caller_permissions(AgentPermissions::full_access())
                         .with_parent_chain(parent_chain)
-                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher));
+                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
+                        .with_background_jobs(Arc::clone(&factory_jobs));
+                    executor.register(Box::new(TodoWriteTool));
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
                     let mut config = kernel_config.clone();
@@ -495,11 +506,16 @@ async fn run_terminal(
             memory_manager: None,
             models,
             auth,
+            job_finished: job_rx,
         };
         event_loop::run_event_loop(ctx).await
     });
 
-    terminal.run(&mut app)?;
+    let ran = terminal.run(&mut app);
+    // Jobs lead their own process groups, so nothing else stops them
+    // when the terminal exits.
+    jobs.kill_all();
+    ran?;
 
     // Phase 5 (error-handling polish): we used to call
     // `processor_handle.abort()` and return `Ok(())` unconditionally,

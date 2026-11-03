@@ -976,11 +976,7 @@ impl App {
         let listed = &rows[..rows.len().saturating_sub(1)];
         let total: usize = listed.iter().map(|row| row.height()).sum();
         let selected = self.selected_agent.min(listed.len().saturating_sub(1));
-        let top: usize = listed
-            .iter()
-            .take(selected)
-            .map(|row| row.height())
-            .sum();
+        let top: usize = listed.iter().take(selected).map(|row| row.height()).sum();
         let bottom = top + listed.get(selected).map_or(1, |row| row.height());
         let visible = visible_lines.max(1);
         let scroll = if top < self.agents_scroll {

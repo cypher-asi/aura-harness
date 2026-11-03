@@ -322,10 +322,7 @@ fn test_default_layout_shows_agents_column() {
         ));
     }
     let rows = render_rows(&mut app, 200);
-    let panel: Vec<String> = rows
-        .iter()
-        .map(|r| r.chars().take(30).collect())
-        .collect();
+    let panel: Vec<String> = rows.iter().map(|r| r.chars().take(30).collect()).collect();
     assert!(
         panel.iter().all(|r| !r.contains('>')),
         "projects list should not show a cursor arrow: {panel:#?}"

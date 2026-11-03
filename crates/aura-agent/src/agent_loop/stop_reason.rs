@@ -50,7 +50,7 @@ impl AgentLoop {
         &self,
         provider: &dyn ModelProvider,
         tools: &[ToolDefinition],
-        _event_tx: Option<&Sender<AgentLoopEvent>>,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
         state: &mut LoopState,
         input: compaction::SummaryInput,
@@ -81,7 +81,7 @@ impl AgentLoop {
             }
         };
 
-        let summary_text = response
+        let mut summary_text = response
             .message
             .content
             .iter()
@@ -97,8 +97,15 @@ impl AgentLoop {
             );
             return;
         }
+        // The summary replaces the `todo_write` calls; without the list
+        // the model would lose its plan mid-task.
+        if !state.result.todos.is_empty() {
+            summary_text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
+            summary_text.push_str(&aura_tools::todo::render_todos(&state.result.todos));
+        }
 
-        context::apply_summary_output(
+        let before = state.result.estimated_context_tokens;
+        let applied = context::apply_summary_output(
             &self.config,
             state,
             tools,
@@ -108,6 +115,21 @@ impl AgentLoop {
                 compact_end: input.compact_end,
             },
         );
+        if applied {
+            state.result.summary_compactions = state.result.summary_compactions.saturating_add(1);
+            super::streaming::emit(
+                event_tx,
+                AgentLoopEvent::Progress {
+                    stage: crate::events::PROGRESS_CONTEXT_SUMMARIZED.to_string(),
+                    tool_name: None,
+                    elapsed_ms: None,
+                    message: Some(format!(
+                        "Summarized older history: ~{before} → ~{} tokens",
+                        state.result.estimated_context_tokens
+                    )),
+                },
+            );
+        }
     }
 
     fn build_summary_request(

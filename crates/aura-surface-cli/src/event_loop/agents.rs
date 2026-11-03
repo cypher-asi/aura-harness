@@ -15,9 +15,10 @@ use crate::record_loader::{conversation_history, recent_record_summaries};
 use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
-use aura_model_reasoner::Message;
+use aura_model_reasoner::{ContentBlock, Message};
 use aura_store_db::ReadStore;
 use aura_terminal::UiCommand;
+use aura_tools::todo::{apply_todo_write, TodoItem, TODO_WRITE_TOOL_NAME};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -32,6 +33,8 @@ pub struct AgentSession {
     pub messages: Vec<Message>,
     /// Permanent agent this is an instance of; its turns follow its rules.
     pub definition: Option<String>,
+    /// The agent's `todo_write` list, carried from turn to turn.
+    pub todos: Vec<TodoItem>,
 }
 
 impl AgentSession {
@@ -39,6 +42,21 @@ impl AgentSession {
     pub const fn agent_id(&self) -> AgentId {
         self.identity.agent_id
     }
+}
+
+/// The todo list left by the `todo_write` calls in `messages`.
+pub(crate) fn todos_from_history(messages: &[Message]) -> Vec<TodoItem> {
+    let mut todos = Vec::new();
+    for block in messages.iter().flat_map(|m| m.content.iter()) {
+        if let ContentBlock::ToolUse { name, input, .. } = block {
+            if name == TODO_WRITE_TOOL_NAME {
+                if let Ok(next) = apply_todo_write(&todos, input) {
+                    todos = next;
+                }
+            }
+        }
+    }
+    todos
 }
 
 /// Constructs the kernel for one agent, given the agents that spawned it
@@ -81,17 +99,17 @@ impl KernelFactory {
             parent_chain,
             folder,
         )?);
-        let messages =
-            crate::record_loader::model_history(self.store.as_ref(), identity.agent_id)
-                .unwrap_or_else(|e| {
-                    warn!(error = %e, "Failed to rebuild model history from record");
-                    Vec::new()
-                });
+        let messages = crate::record_loader::model_history(self.store.as_ref(), identity.agent_id)
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to rebuild model history from record");
+                Vec::new()
+            });
         Ok(AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
             tool_gateway: KernelToolGateway::new(kernel.clone()),
             kernel,
+            todos: todos_from_history(&messages),
             messages,
             definition: agent.definition.clone(),
         })

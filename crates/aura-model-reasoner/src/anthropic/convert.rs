@@ -7,6 +7,30 @@ use crate::{
     ToolDefinition, ToolResultContent,
 };
 
+/// Beta header token that enables the one-hour cache lifetime.
+pub(super) const EXTENDED_CACHE_TTL_BETA: &str = "extended-cache-ttl-2025-04-11";
+
+/// Whether `AURA_PROMPT_CACHE_TTL=1h` asks for one-hour cache entries
+/// instead of the default five minutes. Read once: every breakpoint in a
+/// request must carry the same TTL, and it must not change between
+/// requests or the cached prefixes stop matching.
+pub(super) fn extended_cache_ttl() -> bool {
+    static EXTENDED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *EXTENDED.get_or_init(|| {
+        std::env::var("AURA_PROMPT_CACHE_TTL")
+            .is_ok_and(|value| value.trim().eq_ignore_ascii_case("1h"))
+    })
+}
+
+/// `cache_control` value for a prompt-cache breakpoint.
+pub(super) fn cache_marker() -> serde_json::Value {
+    if extended_cache_ttl() {
+        serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+    } else {
+        serde_json::json!({"type": "ephemeral"})
+    }
+}
+
 /// Resolve extended thinking config for a given model.
 ///
 /// Uses the caller-supplied config when present; otherwise auto-enables
@@ -262,7 +286,7 @@ pub(super) fn build_system_block(
         Some(serde_json::json!([{
             "type": "text",
             "text": system_prompt,
-            "cache_control": {"type": "ephemeral"}
+            "cache_control": cache_marker()
         }]))
     } else {
         Some(serde_json::json!([{
@@ -362,16 +386,23 @@ pub(super) fn convert_messages_to_api(
         .collect();
 
     if prompt_caching_enabled {
-        if let Some(last_user) = api_messages.iter_mut().rev().find(|m| m.role == "user") {
-            if let Some(last_block) = last_user.content.last_mut() {
-                let ephemeral = serde_json::json!({"type": "ephemeral"});
-                match last_block {
-                    ApiContent::Text { cache_control, .. }
-                    | ApiContent::ToolResult { cache_control, .. } => {
-                        *cache_control = Some(ephemeral);
-                    }
-                    _ => {}
-                }
+        // Breakpoints on the last two user messages (with the system
+        // prompt and the tool list, four in all — the API maximum). The
+        // API only looks about 20 blocks back from a breakpoint for an
+        // earlier cache entry, so after a large batch of parallel tool
+        // results the previous user message is what still matches.
+        for user in api_messages
+            .iter_mut()
+            .rev()
+            .filter(|m| m.role == "user")
+            .take(2)
+        {
+            if let Some(
+                ApiContent::Text { cache_control, .. }
+                | ApiContent::ToolResult { cache_control, .. },
+            ) = user.content.last_mut()
+            {
+                *cache_control = Some(cache_marker());
             }
         }
     }
@@ -541,7 +572,7 @@ pub(super) fn convert_tools_to_api(
 
     if prompt_caching_enabled && !has_any_cache_control {
         if let Some(last_tool) = api_tools.last_mut() {
-            last_tool.cache_control = Some(serde_json::json!({"type": "ephemeral"}));
+            last_tool.cache_control = Some(cache_marker());
         }
     }
 

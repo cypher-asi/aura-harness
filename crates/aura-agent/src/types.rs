@@ -272,6 +272,13 @@ pub struct AgentLoopResult {
     pub iterations: usize,
     /// Final message history.
     pub messages: Vec<aura_model_reasoner::Message>,
+    /// Todo list after the run: [`crate::AgentLoopConfig::initial_todos`]
+    /// with every `todo_write` call applied. Callers carry it into the
+    /// next run because summary compaction can drop the calls from
+    /// history.
+    pub todos: Vec<aura_tools::todo::TodoItem>,
+    /// Summary compactions performed during the run.
+    pub summary_compactions: u32,
 }
 
 impl AgentLoopResult {
