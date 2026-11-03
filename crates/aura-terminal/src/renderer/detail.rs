@@ -4,6 +4,7 @@
 //! line, and hard-wraps long lines so code keeps its indentation.
 
 use super::overlays::{record_detail_lines, record_status};
+use super::panels::{render_scrollbar, ScrollView};
 use super::text::display_width;
 use crate::app::file_view::{FileBody, FileView};
 use crate::app::DetailView;
@@ -87,6 +88,18 @@ fn draw_detail(
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), rows);
+    render_scrollbar(
+        frame,
+        area,
+        rows,
+        ScrollView {
+            total,
+            visible: shown,
+            first,
+        },
+        true,
+        theme,
+    );
     Some((max_scroll, shown))
 }
 
