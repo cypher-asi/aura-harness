@@ -10,7 +10,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 
@@ -41,19 +41,88 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         return;
     }
 
-    render_chat_lines(frame, padded, app, theme, working_line.as_ref());
+    let (total, first) = render_chat_lines(frame, padded, app, theme, working_line.as_ref());
+    render_scrollbar(
+        frame,
+        area,
+        padded,
+        ScrollView {
+            total,
+            visible: padded.height as usize,
+            first,
+        },
+        is_focused,
+        theme,
+    );
     render_lines_below_hint(frame, area, app.scroll_offset(), theme);
 }
 
+/// How much of a panel's list is on screen.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ScrollView {
+    /// Rows in the whole list
+    pub total: usize,
+    /// Rows that fit on screen
+    pub visible: usize,
+    /// First row on screen
+    pub first: usize,
+}
+
+/// A scrollbar on `panel`'s right border, beside the `rows` a list is drawn
+/// in, when the list is longer than fits. A list that fits keeps the plain
+/// border.
+pub(super) fn render_scrollbar(
+    frame: &mut Frame,
+    panel: Rect,
+    rows: Rect,
+    view: ScrollView,
+    is_focused: bool,
+    theme: &Theme,
+) {
+    if view.total <= view.visible || panel.width == 0 || rows.height == 0 {
+        return;
+    }
+    let border = if is_focused {
+        theme.colors.primary
+    } else {
+        theme.colors.muted
+    };
+    let thumb = if is_focused {
+        theme.colors.primary
+    } else {
+        theme.colors.secondary
+    };
+    let column = Rect {
+        x: panel.x + panel.width - 1,
+        y: rows.y,
+        width: 1,
+        height: rows.height,
+    };
+    // Positions run from 0 to the last first row, so the thumb reaches the
+    // bottom of the track when the list's last row is on screen.
+    let mut state = ScrollbarState::new(view.total - view.visible + 1)
+        .position(view.first)
+        .viewport_content_length(view.visible);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .track_style(Style::default().fg(border))
+        .thumb_symbol("┃")
+        .thumb_style(Style::default().fg(thumb));
+    frame.render_stateful_widget(scrollbar, column, &mut state);
+}
+
 /// Draw the rows of the conversation that fall in `padded` at the current
-/// scroll position, cloning only those rows out of the line cache.
+/// scroll position, cloning only those rows out of the line cache. Returns
+/// the conversation's length in rows and the first row drawn.
 fn render_chat_lines(
     frame: &mut Frame,
     padded: Rect,
     app: &mut App,
     theme: &Theme,
     working_line: Option<&Line<'static>>,
-) {
+) -> (usize, usize) {
     let spinner = app.spinner_char();
     let hovered_activity = match app.hover() {
         Some(HoverTarget::Activity(target)) => Some(target),
@@ -76,11 +145,8 @@ fn render_chat_lines(
         Some(_) => 1,
         None => 0,
     };
-    let start = app.sync_chat_scroll(
-        message_rows + working_rows,
-        padded.height as usize,
-        reflowed,
-    );
+    let total = message_rows + working_rows;
+    let start = app.sync_chat_scroll(total, padded.height as usize, reflowed);
     app.set_chat_layout(toggle_rows, start);
 
     let (_, cache, _) = app.chat_line_cache();
@@ -117,6 +183,7 @@ fn render_chat_lines(
         push_visible(&mut visible, &mut line_index, start, height, line.clone());
     }
     frame.render_widget(Paragraph::new(visible), padded);
+    (total, start)
 }
 
 /// Keep `line` when it falls inside the chat viewport.
@@ -310,13 +377,15 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             app.sync_agents_scroll(visible);
             let mut lines = build_swarm_lines(app, inner, theme);
             let new_project = lines.pop().unwrap_or_default();
-            let lines: Vec<Line> = lines
-                .into_iter()
-                .skip(app.agents_scroll())
-                .take(visible)
-                .collect();
+            let view = ScrollView {
+                total: lines.len(),
+                visible,
+                first: app.agents_scroll(),
+            };
+            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), rows_area);
             frame.render_widget(Paragraph::new(new_project), bottom_row);
+            render_scrollbar(frame, area, rows_area, view, is_focused, theme);
         }
         AgentsTab::Roster => {
             let show_hint = body.height >= 3;
@@ -327,12 +396,15 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             let visible = rows_area.height as usize;
             app.set_definition_rows_area(rows_area);
             app.sync_definitions_scroll(visible);
-            let lines: Vec<Line> = build_definition_lines(app, inner, theme)
-                .into_iter()
-                .skip(app.definitions_scroll())
-                .take(visible)
-                .collect();
+            let lines = build_definition_lines(app, inner, theme);
+            let view = ScrollView {
+                total: lines.len(),
+                visible,
+                first: app.definitions_scroll(),
+            };
+            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), rows_area);
+            render_scrollbar(frame, area, rows_area, view, is_focused, theme);
             if show_hint {
                 let hint =
                     truncate_agent_name(ROSTER_HINT, (inner.width as usize).saturating_sub(1));
@@ -746,6 +818,12 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     let scroll = app.sync_records_scroll(visible);
     let lines = build_record_lines(app, inner, scroll, visible, theme);
     frame.render_widget(Paragraph::new(lines), inner);
+    let view = ScrollView {
+        total: app.records().len(),
+        visible,
+        first: scroll,
+    };
+    render_scrollbar(frame, area, inner, view, is_focused, theme);
 }
 
 fn render_empty_records(frame: &mut Frame, inner: Rect, theme: &Theme) {

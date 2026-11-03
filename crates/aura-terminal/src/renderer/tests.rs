@@ -1495,3 +1495,110 @@ fn test_failed_command_shows_exit_code() {
     assert!(rows[echo].contains("false"), "{:?}", rows[echo]);
     assert!(rows[echo + 1].contains("exit 1"), "{:?}", rows[echo + 1]);
 }
+
+#[test]
+fn test_chat_opens_at_last_message_on_startup() {
+    use crate::components::MessageRole;
+    use crate::events::{MessageData, UiCommand};
+
+    let history = |tag: &str| {
+        (0..40)
+            .map(|i| MessageData::new(MessageRole::User, format!("{tag} {i}")))
+            .collect()
+    };
+    let shows = |rows: &[String], text: &str| rows.iter().any(|r| r.contains(&format!("{text} ")));
+
+    let (tx, rx) = tokio::sync::mpsc::channel(200);
+    let mut app = crate::App::new().with_command_receiver(rx);
+    tx.try_send(UiCommand::LoadConversation(history("first")))
+        .unwrap();
+    app.tick();
+    let rows = render_rows(&mut app, 120);
+    assert!(shows(&rows, "first 39"), "{}", rows.join("\n"));
+    assert!(!shows(&rows, "first 0"), "{}", rows.join("\n"));
+
+    // Opening another chat after scrolling this one up starts at its end too.
+    app.scroll_up(30);
+    render_rows(&mut app, 120);
+    tx.try_send(UiCommand::LoadConversation(history("second")))
+        .unwrap();
+    app.tick();
+    let rows = render_rows(&mut app, 120);
+    assert!(shows(&rows, "second 39"), "{}", rows.join("\n"));
+}
+
+/// The right border of the panel titled `title`, top to bottom, without
+/// its corners.
+fn right_border(rows: &[String], title: &str) -> String {
+    let top = rows.iter().position(|r| r.contains(title)).unwrap();
+    let start = rows[top][..rows[top].find(title).unwrap()].chars().count();
+    let column = start
+        + rows[top]
+            .chars()
+            .skip(start)
+            .position(|c| c == '┐')
+            .unwrap();
+    rows[top + 1..]
+        .iter()
+        .map(|r| r.chars().nth(column).unwrap())
+        .take_while(|&c| c != '┘')
+        .collect()
+}
+
+fn chat_track(rows: &[String]) -> String {
+    right_border(rows, "┌ CHAT").chars().skip(1).collect()
+}
+
+#[test]
+fn test_overflowing_panels_show_a_scrollbar() {
+    use crate::components::{Message, MessageRole};
+    use crate::events::{RecordStatus, RecordSummary, UiCommand};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "short"));
+    let rows = render_rows(&mut app, 120);
+    assert!(!rows.join("\n").contains('┃'), "{}", rows.join("\n"));
+
+    for i in 0..40 {
+        app.add_message(Message::new(MessageRole::User, &format!("message {i}")));
+        app.process_command(UiCommand::NewRecord(RecordSummary {
+            seq: i,
+            timestamp: "12:00:00".to_string(),
+            full_hash: String::new(),
+            hash_suffix: String::new(),
+            tx_kind: "Prompt".to_string(),
+            sender: String::new(),
+            message: String::new(),
+            action_count: 0,
+            effect_status: String::new(),
+            status: RecordStatus::Ok,
+            info: format!("record {i}"),
+            error_details: String::new(),
+            tx_id: String::new(),
+            agent_id: String::new(),
+            ts_ms: 0,
+            policy: None,
+        }));
+    }
+    let rows = render_rows(&mut app, 120);
+    let screen = rows.join("\n");
+
+    // The chat sits at its end, so the thumb is at the bottom of the track,
+    // which starts under the chat's blank top row.
+    let chat = chat_track(&rows);
+    assert!(
+        chat.starts_with('│') && chat.ends_with('┃'),
+        "{chat:?}\n{screen}"
+    );
+    // Records list newest first and start at the top.
+    let records = right_border(&rows, "┌ RECORD");
+    assert!(
+        records.starts_with('┃') && records.ends_with('│'),
+        "{records:?}\n{screen}"
+    );
+
+    app.scroll_chat_to_top();
+    let rows = render_rows(&mut app, 120);
+    let chat = chat_track(&rows);
+    assert!(chat.starts_with('┃') && chat.ends_with('│'), "{chat:?}");
+}

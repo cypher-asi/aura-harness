@@ -1,6 +1,6 @@
 //! Sandbox panel: file tree of the active agent's workspace.
 
-use super::panels::{hover_style, truncate_record_info};
+use super::panels::{hover_style, render_scrollbar, truncate_record_info, ScrollView};
 use super::text::display_width;
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
 use crate::app::{HoverTarget, PanelFocus};
@@ -82,8 +82,14 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             )
         })
         .collect();
+    let view = ScrollView {
+        total: tree.rows().len(),
+        visible,
+        first: scroll,
+    };
     app.set_sandbox_rows_area(rows_area, scroll);
     frame.render_widget(Paragraph::new(lines), rows_area);
+    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
 
     if show_hint {
         let hint_area = Rect {
