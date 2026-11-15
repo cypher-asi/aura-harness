@@ -10,10 +10,7 @@ use tracing::debug;
 /// Single source of truth lives in `aura_config::CACHEABLE_TOOLS`.
 use aura_config::CACHEABLE_TOOLS as READ_ONLY_DEDUP_TOOLS;
 
-use aura_config::{
-    CHARS_PER_TOKEN, COMPACTION_TIER_30, COMPACTION_TIER_60, COMPACTION_TIER_AGGRESSIVE,
-    COMPACTION_TIER_HISTORY, COMPACTION_TIER_MICRO,
-};
+use aura_config::CHARS_PER_TOKEN;
 const DEFAULT_SUMMARY_AT: f64 = 0.85;
 const DEV_LOOP_BOOTSTRAP_TOTAL_TEXT_MAX_BYTES: usize = 24 * 1024;
 const PROJECT_TOOL_TOTAL_TEXT_MAX_BYTES: usize = 48 * 1024;
@@ -450,15 +447,16 @@ pub fn select_tier(utilization: f64) -> Option<CompactionConfig> {
 }
 
 fn tier_for(pressure: f64) -> Option<CompactionConfig> {
-    if pressure >= COMPACTION_TIER_HISTORY {
+    let tiers = aura_config::agent().compaction;
+    if pressure >= tiers.tier_history {
         Some(CompactionConfig::micro())
-    } else if pressure >= COMPACTION_TIER_AGGRESSIVE {
+    } else if pressure >= tiers.tier_aggressive {
         Some(CompactionConfig::aggressive())
-    } else if pressure >= COMPACTION_TIER_60 {
+    } else if pressure >= tiers.tier_60 {
         Some(CompactionConfig::moderate())
-    } else if pressure >= COMPACTION_TIER_30 {
+    } else if pressure >= tiers.tier_30 {
         Some(CompactionConfig::light())
-    } else if pressure >= COMPACTION_TIER_MICRO {
+    } else if pressure >= tiers.tier_micro {
         Some(CompactionConfig::history())
     } else {
         None

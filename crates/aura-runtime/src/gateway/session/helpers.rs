@@ -993,7 +993,9 @@ pub(super) async fn apply_turn_result(
     session.cumulative_cache_creation_input_tokens += cache_creation_input_tokens;
     session.cumulative_cache_read_input_tokens += cache_read_input_tokens;
 
-    let stop_reason = if loop_result.timed_out {
+    let stop_reason = if loop_result.budget_exhausted {
+        "budget"
+    } else if loop_result.timed_out {
         "cancelled"
     } else if loop_result.insufficient_credits {
         "insufficient_credits"

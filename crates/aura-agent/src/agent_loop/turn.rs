@@ -44,7 +44,7 @@ use crate::{helpers, AgentError};
 
 use super::cx::TurnCtx;
 use super::sampling::{run_sampling_request, SamplingRequestResult};
-use super::{context, streaming, LoopState};
+use super::{context, decisions, streaming, LoopState};
 
 /// Hard cap on how many "you produced nothing visible" nudges one
 /// turn may inject before it terminates anyway. One is enough to
@@ -192,6 +192,9 @@ pub(crate) async fn run_turn(
         if ctx.run.agent.config.max_iterations != usize::MAX
             && iteration >= ctx.run.agent.config.max_iterations
         {
+            let decision = decisions::stop("iteration_budget_exceeded", "max_iterations", state);
+            state.decide(decision);
+            decisions::flush(state, ctx.run.event_tx, iteration);
             return Err(AgentError::IterationBudgetExceeded {
                 task_id: ctx.task_id,
                 limit: ctx.run.agent.config.max_iterations,
@@ -253,6 +256,8 @@ pub(crate) async fn run_turn(
                 && unfinished_action_nudges_used < MAX_NO_OP_TURN_NUDGES
             {
                 unfinished_action_nudges_used += 1;
+                let decision = decisions::turn_nudge("unfinished_action", state);
+                state.decide(decision);
                 emit_no_op_progress(ctx.run.event_tx, "turn_unfinished_action_retry");
                 apply_user_inputs_to_messages(
                     &mut state.messages,
@@ -278,6 +283,8 @@ pub(crate) async fn run_turn(
                 && markup_nudges_used < MAX_LEAKED_MARKUP_NUDGES
             {
                 markup_nudges_used = markup_nudges_used.saturating_add(1);
+                let decision = decisions::turn_nudge("leaked_tool_markup", state);
+                state.decide(decision);
                 emit_no_op_progress(ctx.run.event_tx, "turn_tool_markup_retry");
                 apply_user_inputs_to_messages(
                     &mut state.messages,
@@ -302,6 +309,8 @@ pub(crate) async fn run_turn(
                 && no_op_nudges_used < MAX_NO_OP_TURN_NUDGES
             {
                 no_op_nudges_used = no_op_nudges_used.saturating_add(1);
+                let decision = decisions::turn_nudge("no_op_turn", state);
+                state.decide(decision);
                 emit_no_op_progress(ctx.run.event_tx, "turn_no_action_retry");
                 apply_user_inputs_to_messages(
                     &mut state.messages,
@@ -317,6 +326,13 @@ pub(crate) async fn run_turn(
         terminated_cleanly = true;
         break;
     }
+
+    let last_iteration = usize::try_from(
+        ctx.iteration_offset
+            .saturating_add(sampling_count.saturating_sub(1)),
+    )
+    .unwrap_or(usize::MAX);
+    decisions::flush(state, ctx.run.event_tx, last_iteration);
 
     Ok(TurnOutcome {
         terminated_cleanly,
@@ -580,8 +596,17 @@ pub(crate) async fn run_turn_stop_hooks(
     context::check_budget_warnings(config, event_tx, state, iteration);
     if context::should_stop_for_budget(config, state, iteration) {
         state.result.timed_out = true;
+        state.result.budget_exhausted = true;
         outcome.should_break = true;
+        let decision = decisions::budget_stop(
+            state,
+            iteration + 1,
+            config.max_iterations,
+            config.credit_budget,
+        );
+        state.decide(decision);
     }
+    decisions::flush(state, event_tx, iteration);
 
     Ok(outcome)
 }

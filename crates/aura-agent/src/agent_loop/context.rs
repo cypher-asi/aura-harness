@@ -16,6 +16,7 @@ use crate::types::AgentContextBreakdown;
 use aura_config::CHARS_PER_TOKEN;
 
 use super::context_contents;
+use super::decisions;
 use super::streaming;
 use super::{AgentLoopConfig, LoopState};
 
@@ -224,6 +225,16 @@ pub(super) fn compact_if_needed(
         let compacted_tokens = heuristic_context_tokens(&state.messages);
         state.last_context_tokens_estimate = Some(compacted_tokens);
         state.result.estimated_context_tokens = compacted_tokens;
+        let tier = match &outcome {
+            CompactionOutcome::Applied(tier) => format!("{tier:?}"),
+            _ => "summary_requested".to_string(),
+        };
+        state.decide(decisions::compaction(
+            tier,
+            estimated_tokens,
+            compacted_tokens,
+            max_ctx,
+        ));
 
         // Phase 8: fire `PostCompact` hook (observer-only).
         if let Some(host) = config.plugin_hooks.as_ref() {
@@ -252,6 +263,7 @@ pub(super) fn apply_summary_output(
         recompute_breakdown(config, state, tools);
         return false;
     }
+    let before_tokens = current_context_tokens(state);
     let report = compaction::Compactor::new().apply_summary(&mut state.messages, summary);
     if !report.reduced() {
         recompute_breakdown(config, state, tools);
@@ -263,6 +275,12 @@ pub(super) fn apply_summary_output(
     let compacted_tokens = heuristic_context_tokens(&state.messages);
     state.last_context_tokens_estimate = Some(compacted_tokens);
     state.result.estimated_context_tokens = compacted_tokens;
+    state.decide(decisions::compaction(
+        "summary",
+        before_tokens,
+        compacted_tokens,
+        config.max_context_tokens.unwrap_or_default(),
+    ));
     recompute_breakdown(config, state, tools);
     true
 }
@@ -343,6 +361,8 @@ pub(super) fn check_budget_warnings(
         if let Some(warning) =
             budget::check_budget_warning(&mut state.budget_state, utilization, state.had_any_write)
         {
+            let decision = decisions::budget_warning(state, utilization, &warning);
+            state.decide(decision);
             helpers::append_warning(&mut state.messages, &warning);
             streaming::emit(event_tx, AgentLoopEvent::Warning(warning));
         }

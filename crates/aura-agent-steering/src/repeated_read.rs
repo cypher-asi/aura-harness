@@ -67,7 +67,7 @@ impl RepeatedReadTracker {
         }
         let count = self.counts.entry(content_hash.to_string()).or_insert(0);
         *count += 1;
-        if *count == aura_config::REPEATED_READ_THRESHOLD {
+        if *count == aura_config::agent().steering.repeated_read_threshold {
             self.pending.push(content_hash.to_string());
             true
         } else {

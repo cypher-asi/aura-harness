@@ -593,6 +593,8 @@ async fn handle_tool_use_event<'a, 'b>(
     let (blocked_reads, allowed_calls) =
         super::super::tool_pipeline::partition_circling_duplicate_reads(single, state);
     if let Some(blocked) = blocked_reads.into_iter().next() {
+        let decision = super::super::decisions::implement_now_block(&call, state);
+        state.decide(decision);
         spawned_indices.push(submission_index);
         preset_indices.push(submission_index);
         in_flight.push_back(spawn_tool_with_timeout(
@@ -629,6 +631,7 @@ async fn handle_tool_use_event<'a, 'b>(
                     .to_string(),
             )));
         };
+        state.decide(super::super::decisions::cache_hit(&call));
         spawned_indices.push(submission_index);
         preset_indices.push(submission_index);
         in_flight.push_back(spawn_tool_with_timeout(

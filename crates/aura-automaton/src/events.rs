@@ -262,6 +262,20 @@ pub enum AutomatonEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
     },
+    #[serde(rename = "debug.decision")]
+    DebugDecision {
+        timestamp: DateTime<Utc>,
+        decision: Box<aura_core_types::trace::HarnessDecision>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
+    #[serde(rename = "debug.model_exchange")]
+    DebugModelExchange {
+        timestamp: DateTime<Utc>,
+        exchange: Box<aura_core_types::trace::ModelExchange>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
 }
 
 impl AutomatonEvent {
@@ -311,6 +325,8 @@ impl AutomatonEvent {
             Self::DebugIteration { .. } => "debug.iteration",
             Self::DebugBlocker { .. } => "debug.blocker",
             Self::DebugRetry { .. } => "debug.retry",
+            Self::DebugDecision { .. } => "debug.decision",
+            Self::DebugModelExchange { .. } => "debug.model_exchange",
         }
     }
 
@@ -416,6 +432,24 @@ impl From<aura_agent::DebugEvent> for AutomatonEvent {
                 wait_ms,
                 provider,
                 model,
+                task_id,
+            },
+            aura_agent::DebugEvent::Decision {
+                timestamp,
+                decision,
+                task_id,
+            } => Self::DebugDecision {
+                timestamp,
+                decision,
+                task_id,
+            },
+            aura_agent::DebugEvent::ModelExchange {
+                timestamp,
+                exchange,
+                task_id,
+            } => Self::DebugModelExchange {
+                timestamp,
+                exchange,
                 task_id,
             },
         }

@@ -5,6 +5,7 @@
 //! `aura-os-server` forwarder routes on. See
 //! `apps/aura-os-server/src/loop_log.rs` for the consumer.
 
+use aura_core_types::trace::{HarnessDecision, ModelExchange};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -96,6 +97,26 @@ pub enum DebugEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
     },
+
+    /// A harness heuristic acted (or deliberately did not) at a
+    /// decision point. Consumed by the run-trace recorder.
+    #[serde(rename = "debug.decision")]
+    Decision {
+        timestamp: DateTime<Utc>,
+        decision: Box<HarnessDecision>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
+
+    /// One complete model call: what the model saw (as blob
+    /// references, when blob capture is on) and what it produced.
+    #[serde(rename = "debug.model_exchange")]
+    ModelExchange {
+        timestamp: DateTime<Utc>,
+        exchange: Box<ModelExchange>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+    },
 }
 
 impl DebugEvent {
@@ -108,6 +129,8 @@ impl DebugEvent {
             Self::Iteration { .. } => "debug.iteration",
             Self::Blocker { .. } => "debug.blocker",
             Self::Retry { .. } => "debug.retry",
+            Self::Decision { .. } => "debug.decision",
+            Self::ModelExchange { .. } => "debug.model_exchange",
         }
     }
 }

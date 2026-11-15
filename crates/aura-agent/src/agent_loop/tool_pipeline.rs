@@ -36,7 +36,7 @@ use crate::dup_audit;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
-use aura_config::{READS_AFTER_WRITE_ALLOWANCE, TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES};
+use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES};
 use aura_model_reasoner::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
@@ -356,13 +356,23 @@ pub(crate) async fn process_tool_results(
     let any_write_success = track_tool_effects(&tool_calls, &all_results, state);
     let repeated_edit_failure =
         guard_failed_edits(&tool_calls, &all_results, state, &mut side_messages);
+    state.decisions.extend(super::decisions::from_tool_results(
+        &tool_calls,
+        &all_results,
+    ));
 
     if any_write_success && state.build_cooldown == 0 {
+        let changed: Vec<String> = all_results
+            .iter()
+            .flat_map(|r| r.file_changes.iter().map(|c| c.path.clone()))
+            .collect();
         if let Some(build_text) = run_auto_build(
             &agent.config,
             ctx.executor,
             &mut state.build_cooldown,
             state.build_baseline.as_ref(),
+            &changed,
+            &mut state.decisions,
         )
         .await
         {
@@ -457,13 +467,17 @@ fn guard_failed_edits(
             continue;
         }
         let key = format!("{}\n{}", call.input, result.content);
+        let steering = aura_config::agent().steering;
         let count = state.failed_edit_attempts.entry(key).or_default();
         *count = count.saturating_add(1);
-        if *count == 3 {
-            side_messages.push("The identical edit has failed three times. Do not repeat it unchanged. Read the current file, inspect the error, and use a different matching edit; if blocked, explain the blocker.".to_string());
+        let count = *count;
+        if count == steering.failed_edit_warn_after {
+            side_messages.push(format!("The identical edit has failed {count} times. Do not repeat it unchanged. Read the current file, inspect the error, and use a different matching edit; if blocked, explain the blocker."));
+            state.decide(super::decisions::failed_edit_guard(call, count, false));
         }
-        if *count >= 4 {
-            return Some("Aura stopped a repeated failed edit loop after four identical failures. No successful edit was made by those attempts. Review the tool error and current file before restarting.".to_string());
+        if count >= steering.failed_edit_stop_after {
+            state.decide(super::decisions::failed_edit_guard(call, count, true));
+            return Some(format!("Aura stopped a repeated failed edit loop after {count} identical failures. No successful edit was made by those attempts. Review the tool error and current file before restarting."));
         }
     }
     None
@@ -953,9 +967,10 @@ fn track_tool_effects(
             if let Some(path) = path_arg {
                 let path_buf = PathBuf::from(path);
                 state.session_read_paths.remove(&path_buf);
-                state
-                    .read_after_write_allowances
-                    .insert(path_buf, READS_AFTER_WRITE_ALLOWANCE);
+                state.read_after_write_allowances.insert(
+                    path_buf,
+                    aura_config::agent().tools.reads_after_write_allowance,
+                );
                 any_write_success = true;
                 state.had_any_write = true;
                 for change in &exec_result.file_changes {
@@ -973,9 +988,10 @@ fn track_tool_effects(
                 for change in &exec_result.file_changes {
                     let path_buf = PathBuf::from(&change.path);
                     state.session_read_paths.remove(&path_buf);
-                    state
-                        .read_after_write_allowances
-                        .insert(path_buf, READS_AFTER_WRITE_ALLOWANCE);
+                    state.read_after_write_allowances.insert(
+                        path_buf,
+                        aura_config::agent().tools.reads_after_write_allowance,
+                    );
                     state.result.record_file_change(change.clone());
                     record_into_turn_diff(&mut state.turn_diff, change);
                 }
@@ -993,9 +1009,16 @@ async fn run_auto_build(
     executor: &dyn AgentToolExecutor,
     build_cooldown: &mut usize,
     build_baseline: Option<&BuildBaseline>,
+    changed_files: &[String],
+    decisions: &mut Vec<aura_core_types::trace::HarnessDecision>,
 ) -> Option<String> {
     if let Some(build_result) = executor.auto_build_check().await {
         *build_cooldown = config.auto_build_cooldown;
+        decisions.push(super::decisions::auto_build(
+            build_result.success,
+            build_result.error_count,
+            changed_files,
+        ));
         if !build_result.success {
             let annotated = build_baseline.map_or_else(
                 || build_result.output.clone(),
@@ -1349,7 +1372,7 @@ mod track_tool_effects_tests {
             state
                 .read_after_write_allowances
                 .get(&PathBuf::from("src/inbox.rs")),
-            Some(&READS_AFTER_WRITE_ALLOWANCE)
+            Some(&aura_config::READS_AFTER_WRITE_ALLOWANCE)
         );
     }
 }

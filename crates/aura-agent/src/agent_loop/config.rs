@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_config::{
-    EarlyTestOracleConfig, AUTO_BUILD_COOLDOWN, MAX_ITERATIONS, THINKING_MIN_BUDGET,
-    THINKING_TAPER_AFTER, THINKING_TAPER_FACTOR,
+    EarlyTestOracleConfig, MAX_ITERATIONS, THINKING_MIN_BUDGET, THINKING_TAPER_AFTER,
+    THINKING_TAPER_FACTOR,
 };
 use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
 use aura_tools::IntentClassifier;
@@ -273,6 +273,11 @@ pub struct AgentLoopConfig {
     /// progress event is emitted either way so the client is never
     /// left guessing. Defaults to `true`.
     pub auto_continue_no_op_turns: bool,
+    /// Content-addressed store for run-trace blobs: the exact model
+    /// request (system prompt, tools, messages) and the response's
+    /// message and thinking text. `None` emits model exchanges with
+    /// summaries and usage only.
+    pub trace_blobs: Option<Arc<dyn aura_store_snapshot::SnapshotStore>>,
 }
 
 impl std::fmt::Debug for AgentLoopConfig {
@@ -314,7 +319,7 @@ impl AgentLoopConfig {
             model_override: None,
             max_context_tokens: Some(200_000),
             credit_budget: None,
-            auto_build_cooldown: AUTO_BUILD_COOLDOWN,
+            auto_build_cooldown: aura_config::agent().thinking.auto_build_cooldown,
             thinking_taper_after: THINKING_TAPER_AFTER,
             thinking_taper_factor: THINKING_TAPER_FACTOR,
             thinking_min_budget: THINKING_MIN_BUDGET,
@@ -358,6 +363,7 @@ impl AgentLoopConfig {
             // Never-silent default: re-prompt once when a turn ends
             // having done nothing visible (see `turn::run_turn`).
             auto_continue_no_op_turns: true,
+            trace_blobs: None,
         }
     }
 }

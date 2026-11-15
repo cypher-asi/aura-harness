@@ -230,8 +230,12 @@ pub struct AgentLoopResult {
     pub output_truncated: bool,
     /// An actual task_done tool returned a successful terminal result.
     pub task_done_completed: bool,
-    /// Whether the loop timed out.
+    /// Whether the loop timed out. Also set on budget exhaustion for
+    /// callers that predate [`Self::budget_exhausted`].
     pub timed_out: bool,
+    /// Whether the loop stopped because the iteration or credit budget
+    /// ran out.
+    pub budget_exhausted: bool,
     /// Whether the loop stopped due to insufficient credits.
     pub insufficient_credits: bool,
     /// Whether the loop stopped due to stall detection.
@@ -275,6 +279,30 @@ pub struct AgentLoopResult {
 }
 
 impl AgentLoopResult {
+    /// Why the loop stopped, as a stable label: `llm_error`,
+    /// `insufficient_credits`, `stalled`, `budget`, `timed_out`,
+    /// `output_truncated`, `task_done` or `end_turn`.
+    #[must_use]
+    pub fn stop_reason(&self) -> &'static str {
+        if self.llm_error.is_some() {
+            "llm_error"
+        } else if self.insufficient_credits {
+            "insufficient_credits"
+        } else if self.stalled {
+            "stalled"
+        } else if self.budget_exhausted {
+            "budget"
+        } else if self.timed_out {
+            "timed_out"
+        } else if self.output_truncated {
+            "output_truncated"
+        } else if self.task_done_completed {
+            "task_done"
+        } else {
+            "end_turn"
+        }
+    }
+
     /// Record a file change, collapsing multiple mutations on the same path
     /// into a single net effect for turn-level reporting.
     ///
