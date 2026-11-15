@@ -802,6 +802,80 @@ fn test_slash_menu_spans_chat_width_above_input() {
 }
 
 #[test]
+fn test_mention_picker_lists_files_above_the_input() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+    let mut app = app_with_model(None);
+    app.process_command(crate::events::UiCommand::SetSandboxRoot(
+        dir.path().to_path_buf(),
+    ));
+    type_text(&mut app, "look at @ma");
+    let rows = render_rows(&mut app, 120);
+    let n = rows.len();
+    assert!(rows[n - 5].contains(" FILES "), "{:?}", rows[n - 5]);
+    assert!(rows[n - 4].contains("› @src/main.rs"), "{:?}", rows[n - 4]);
+    assert!(rows[n - 3].contains("Enter insert"), "{:?}", rows[n - 3]);
+
+    type_text(&mut app, " ");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(!screen.contains(" FILES "));
+}
+
+#[test]
+fn test_input_shows_image_chips_and_pasted_newlines() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    app.handle_paste("first\nsecond");
+    app.attach_image(b"\x89PNG\r\n\x1a\nimage").unwrap();
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+    assert!(
+        input_row.contains("first↵second [image 1]"),
+        "{input_row:?}"
+    );
+
+    let spans = super::input::prose_spans("see @src/a.rs and [image 2] me@x", &theme);
+    let picked: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.style.fg == Some(theme.colors.primary))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(picked, ["@src/a.rs", "[image 2]"]);
+
+    submit(&mut app, "");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("[image 1]"), "the chat shows the chip");
+}
+
+#[test]
+fn test_help_lists_the_input_keys_without_clipping() {
+    let mut app = crate::App::new();
+    submit(&mut app, "/help");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 50)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    for line in [
+        "@path      Attach a file or folder",
+        "Ctrl+V     Paste an image (or text)",
+        "Ctrl+G     Edit the input in $EDITOR",
+        "Press any key to close",
+    ] {
+        assert!(screen.contains(line), "{line:?} missing:\n{screen}");
+    }
+}
+
+#[test]
 fn test_header_shows_local_url_and_model_moves_to_input() {
     let rows = render_with_user(None, 120);
     assert!(rows[1]

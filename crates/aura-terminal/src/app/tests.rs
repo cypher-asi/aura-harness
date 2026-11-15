@@ -504,7 +504,7 @@ fn test_message_to_busy_agent_is_queued_not_shown() {
 
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::UserMessage { agent_id, text, shown: false })
+        Ok(UiEvent::UserMessage { agent_id, text, shown: false, .. })
             if agent_id == "aa" && text == "second"
     ));
     let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
@@ -2177,4 +2177,314 @@ fn a_long_turn_alerts_when_it_finishes_and_a_short_one_does_not() {
     let alerts = app.take_alerts();
     assert_eq!(alerts.len(), 1);
     assert!(alerts[0].contains("finished after 30s"), "{alerts:?}");
+}
+
+// ========================================================================
+// @ mentions
+// ========================================================================
+
+fn app_with_workspace() -> (tempfile::TempDir, App, mpsc::Receiver<UiEvent>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::create_dir_all(dir.path().join("target")).unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+    std::fs::write(dir.path().join("README.md"), "").unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    (dir, app, rx)
+}
+
+fn type_keys(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+}
+
+fn mention_paths(app: &App) -> Vec<String> {
+    app.mention_matches()
+        .iter()
+        .map(|c| c.path.clone())
+        .collect()
+}
+
+#[test]
+fn test_at_opens_the_file_picker_and_enter_inserts_the_path() {
+    let (_dir, mut app, mut rx) = app_with_workspace();
+    type_keys(&mut app, "explain @");
+    assert_eq!(
+        mention_paths(&app),
+        ["src/", "README.md", "src/lib.rs", "src/main.rs"],
+        "skips target/, shallowest first"
+    );
+
+    type_keys(&mut app, "mai");
+    assert_eq!(mention_paths(&app), ["src/main.rs"]);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.input(), "explain @src/main.rs ");
+    assert!(app.mention_matches().is_empty(), "inserting closes it");
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "explain @src/main.rs "
+    ));
+}
+
+#[test]
+fn test_tab_on_a_folder_stays_in_the_picker() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "@sr");
+    assert_eq!(mention_paths(&app)[0], "src/");
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@src/");
+    assert_eq!(mention_paths(&app), ["src/", "src/lib.rs", "src/main.rs"]);
+
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@src/main.rs ");
+    assert_eq!(app.cursor_pos(), app.input().len());
+}
+
+#[test]
+fn test_esc_closes_the_picker_for_that_word() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "@src");
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+    assert!(app.mention_matches().is_empty());
+    type_keys(&mut app, "/");
+    assert!(app.mention_matches().is_empty(), "same word stays closed");
+
+    type_keys(&mut app, " @READ");
+    assert_eq!(mention_paths(&app), ["README.md"], "a new word opens it");
+}
+
+#[test]
+fn test_an_approval_hides_the_picker_and_takes_y_a_n() {
+    let (_dir, mut app, mut rx) = app_with_workspace();
+    type_keys(&mut app, "@");
+    assert!(!app.mention_matches().is_empty());
+
+    app.process_command(approval_request("req-1", "`cargo test` commands"));
+    assert!(app.mention_matches().is_empty(), "the modal covers it");
+    app.handle_key(key(KeyCode::Char('a')));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::ApproveAlways(id)) if id == "req-1"));
+    assert_eq!(app.input(), "@", "the answer is not typed");
+    assert!(!app.mention_matches().is_empty(), "the picker comes back");
+}
+
+#[test]
+fn test_email_addresses_do_not_open_the_picker() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "mail me@src");
+    assert!(app.mention_matches().is_empty());
+}
+
+// ========================================================================
+// Pasted images
+// ========================================================================
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage";
+
+fn paste_image(app: &mut App) {
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(PNG.to_vec())));
+}
+
+fn sent_images(rx: &mut mpsc::Receiver<UiEvent>) -> Option<(String, usize)> {
+    match rx.try_recv() {
+        Ok(UiEvent::UserMessage { text, images, .. }) => Some((text, images.len())),
+        _ => None,
+    }
+}
+
+#[test]
+fn test_ctrl_v_asks_the_terminal_for_the_clipboard() {
+    let mut app = App::new();
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    assert!(app.take_paste_request());
+    assert!(!app.take_paste_request(), "once");
+    assert!(app.input().is_empty(), "Ctrl+V types nothing");
+}
+
+#[test]
+fn test_pasted_image_shows_a_chip_and_is_sent_with_the_message() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    type_keys(&mut app, "what is");
+    paste_image(&mut app);
+    assert_eq!(app.input(), "what is [image 1] ");
+    assert_eq!(app.attached_images(), 1);
+    type_keys(&mut app, "this?");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+
+    assert_eq!(
+        sent_images(&mut rx),
+        Some(("what is [image 1] this?".to_string(), 1))
+    );
+    let shown: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(shown, ["what is [image 1] this?"]);
+    assert_eq!(app.attached_images(), 0, "the next message starts empty");
+}
+
+#[test]
+fn test_deleting_the_chip_drops_the_image() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    paste_image(&mut app);
+    paste_image(&mut app);
+    assert_eq!(app.input(), "[image 1] [image 2] ");
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    paste_image(&mut app);
+    assert_eq!(
+        app.input(),
+        "[image 1] ",
+        "numbering restarts once chips are gone"
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_keys(&mut app, "no picture");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(sent_images(&mut rx), Some(("no picture".to_string(), 0)));
+}
+
+#[test]
+fn test_images_that_are_too_big_or_too_many_are_refused() {
+    let mut app = App::new();
+    let mut huge = PNG.to_vec();
+    huge.resize(images::MAX_IMAGE_BYTES + 1, 0);
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(huge)));
+    assert!(app.input().is_empty());
+    let (problem, _) = app.notification().unwrap();
+    assert!(problem.contains("the limit is 3.75 MiB"), "{problem}");
+
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(b"GIF8".to_vec())));
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("PNG, JPEG, GIF and WebP"));
+
+    for _ in 0..images::MAX_IMAGES {
+        paste_image(&mut app);
+    }
+    paste_image(&mut app);
+    assert_eq!(app.attached_images(), images::MAX_IMAGES);
+    assert!(app.notification().unwrap().0.contains("at most 5 images"));
+}
+
+#[test]
+fn test_images_for_a_busy_agent_are_queued() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.state = AppState::Processing;
+    paste_image(&mut app);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .starts_with("Queued: the agent gets the images"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { shown: false, images, .. }) if images.len() == 1
+    ));
+}
+
+#[test]
+fn test_pasting_an_image_path_attaches_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shot.png");
+    std::fs::write(&path, PNG).unwrap();
+    let mut app = App::new();
+    app.handle_paste(&format!("'{}'", path.display()));
+    assert_eq!(app.input(), "[image 1] ");
+    assert_eq!(app.attached_images(), 1);
+}
+
+#[test]
+fn test_pasted_text_keeps_its_newlines_instead_of_sending() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_paste("line one\r\nline two");
+    assert_eq!(app.input(), "line one\nline two");
+    assert!(rx.try_recv().is_err(), "nothing was sent");
+
+    app.state = AppState::LinkCode;
+    app.input.clear();
+    app.cursor_pos = 0;
+    app.handle_paste("  code-123\n");
+    assert_eq!(app.input(), "code-123");
+}
+
+#[test]
+fn test_clipboard_errors_are_reported() {
+    let mut app = App::new();
+    app.paste_clipboard(Err(std::io::Error::other("no tool")));
+    assert_eq!(
+        app.notification().unwrap().0,
+        "Cannot read the clipboard: no tool"
+    );
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Text("hi".into())));
+    assert_eq!(app.input(), "hi");
+}
+
+// ========================================================================
+// Ctrl+G editor
+// ========================================================================
+
+fn ctrl_g(app: &mut App) -> std::path::PathBuf {
+    app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    app.take_editor_request()
+        .expect("Ctrl+G asks for the editor")
+}
+
+#[test]
+fn test_ctrl_g_edits_the_input_in_the_editor() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    type_keys(&mut app, "draft");
+    let path = ctrl_g(&mut app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "draft");
+
+    std::fs::write(&path, "line one\nline two\n\n").unwrap();
+    app.editor_closed(path.clone(), &Ok(()));
+
+    assert_eq!(app.input(), "line one\nline two");
+    assert_eq!(app.cursor_pos(), app.input().len());
+    assert!(!path.exists(), "the temp file is removed");
+    assert!(rx.try_recv().is_err(), "not a permanent-agent edit");
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "line one\nline two"
+    ));
+}
+
+#[test]
+fn test_a_failed_editor_keeps_the_input() {
+    let mut app = App::new();
+    type_keys(&mut app, "keep me");
+    let path = ctrl_g(&mut app);
+    std::fs::write(&path, "half-written").unwrap();
+    app.editor_closed(path.clone(), &Err(std::io::Error::other("exit status: 1")));
+
+    assert_eq!(app.input(), "keep me");
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("the editor failed: exit status: 1"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_ctrl_g_with_empty_input_starts_an_empty_file() {
+    let mut app = App::new();
+    let path = ctrl_g(&mut app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    std::fs::write(&path, "@src/main.rs explain").unwrap();
+    app.editor_closed(path, &Ok(()));
+    assert_eq!(app.input(), "@src/main.rs explain");
 }

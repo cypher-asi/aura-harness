@@ -54,6 +54,16 @@ Terminal agents load `AGENTS.md`, `CLAUDE.md` and Cursor rules from their workin
 |----------|---------|-------------|
 | `AURA_PROJECT_INSTRUCTIONS` | on | Set to `off`, `0`, `false` or `no` to stop loading project instruction files into the terminal's system prompt. |
 
+## Terminal editor
+
+Ctrl+G in the input, and editing a permanent agent, open the user's editor.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VISUAL` | — | Editor command, tried first. It may carry arguments, e.g. `code --wait`. |
+| `EDITOR` | — | Editor command used when `VISUAL` is unset or empty. With neither set, the terminal runs `vi`. |
+| `TMPDIR` | system temp folder | Where Ctrl+G writes the input for the editor (on Unix, readable only by you). The file is removed when the editor exits. |
+
 ## Node runtime
 
 | Variable | Default | Description |

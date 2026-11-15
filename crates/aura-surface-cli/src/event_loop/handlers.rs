@@ -5,7 +5,7 @@ use super::agents::AgentSession;
 use super::hud::{context_view, send_session, todo_views};
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::steering::Steering;
-use super::turns::{record_user_prompt, Work};
+use super::turns::{record_user_prompt, Prompt, Work};
 use super::{forward_agent_events, LoopState};
 use crate::long_run::LongRunSettings;
 use crate::project_instructions::agents_md_in;
@@ -327,7 +327,11 @@ pub(super) async fn handle_init_project(state: &mut LoopState<'_>, agent_id: Age
         "Asking the agent to write AGENTS.md"
     );
     let text = init_project_prompt(&workspace.display().to_string(), existing.as_deref());
-    super::submit(state, agent_id, Work::Prompt { text, shown: false }).await;
+    let work = Work::Prompt {
+        prompt: Prompt::plain(text),
+        shown: false,
+    };
+    super::submit(state, agent_id, work).await;
 }
 
 /// The `/resume` list.

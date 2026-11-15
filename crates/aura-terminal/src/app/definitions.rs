@@ -132,6 +132,9 @@ impl App {
 
     /// Report that the editor opened for `path` exited.
     pub fn editor_closed(&mut self, path: PathBuf, result: &std::io::Result<()>) {
+        if self.input_editor_closed(&path, result) {
+            return;
+        }
         if let Err(e) = result {
             self.notification = Some((
                 format!("Could not open editor: {e}"),

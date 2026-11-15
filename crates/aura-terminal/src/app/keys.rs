@@ -16,6 +16,12 @@ impl App {
             return KeyResult::continue_running();
         }
 
+        let result = self.dispatch_key(key);
+        self.sync_mentions();
+        result
+    }
+
+    fn dispatch_key(&mut self, key: KeyEvent) -> KeyResult {
         match self.state {
             AppState::AwaitingApproval => self.handle_approval_key(key),
             AppState::ShowingHelp => {
@@ -253,6 +259,9 @@ impl App {
         if self.handle_pending_delete(key) {
             return KeyResult::continue_running();
         }
+        if let Some(result) = self.handle_mention_menu_key(key) {
+            return result;
+        }
         if let Some(result) = self.handle_slash_menu_key(key) {
             return result;
         }
@@ -272,6 +281,14 @@ impl App {
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             self.toggle_all_activity();
+            return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+            self.request_paste();
+            return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+            self.edit_input_in_editor();
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::ALT) {
@@ -524,6 +541,7 @@ impl App {
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
         self.input_history.add(&text);
+        let images = self.take_images(&text);
         self.scroll_chat_to_bottom();
 
         if text.starts_with('/') {
@@ -559,7 +577,13 @@ impl App {
         // A busy agent reads the message before its next step, or once its
         // current work ends; the chat shows it at that point, so it lands
         // in order with the reply still streaming.
-        if busy {
+        if busy && !images.is_empty() {
+            // A running turn only takes text, so images wait for the next.
+            self.notification = Some((
+                "Queued: the agent gets the images when its current work ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else if busy {
             self.notification = Some((
                 "Sent: the agent reads it before its next step".to_string(),
                 NotificationType::Success,
@@ -578,6 +602,7 @@ impl App {
                 agent_id,
                 text,
                 shown: !busy,
+                images,
             });
         }
         KeyResult::continue_running()

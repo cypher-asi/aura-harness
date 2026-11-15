@@ -10,8 +10,11 @@ pub mod file_view;
 pub mod folder_picker;
 pub(crate) mod format;
 pub mod hud;
+pub mod images;
+mod input_editor;
 mod keys;
 mod line_edit;
+pub mod mentions;
 pub mod sandbox;
 mod selection;
 pub(crate) mod shell_input;
@@ -254,6 +257,12 @@ pub struct App {
     pub(super) slash_cursor: usize,
     /// Whether Esc closed the slash menu (until the input is edited)
     pub(super) slash_dismissed: bool,
+    /// `@` file picker shown while an `@path` word is typed
+    pub(super) mentions: mentions::MentionMenu,
+    /// Images pasted into the input, each under an `[image N]` chip
+    pub(super) images: Vec<images::PendingImage>,
+    /// Whether Ctrl+V asked for the clipboard before the next frame
+    pub(super) paste_requested: bool,
     /// Text selected with the mouse, in screen cells
     pub(super) selection: Option<Selection>,
     /// Whether the left button is still held for `selection`
@@ -270,6 +279,8 @@ pub struct App {
     pub(super) definitions_scroll: usize,
     /// File to open in the editor before the next frame
     pub(super) editor_request: Option<PathBuf>,
+    /// Temp file holding the input while Ctrl+G has it in the editor
+    pub(super) input_editor_file: Option<PathBuf>,
     /// Permanent agent waiting for `y` to confirm its deletion
     pub(super) pending_delete: Option<String>,
     /// Folder browser for a new project, while it is open
@@ -482,6 +493,9 @@ impl App {
             input_edited_at: Instant::now(),
             slash_cursor: 0,
             slash_dismissed: false,
+            mentions: mentions::MentionMenu::default(),
+            images: Vec::new(),
+            paste_requested: false,
             selection: None,
             selecting: false,
             copy_requested: false,
@@ -490,6 +504,7 @@ impl App {
             selected_definition: 0,
             definitions_scroll: 0,
             editor_request: None,
+            input_editor_file: None,
             pending_delete: None,
             folder_picker: None,
             hud: Hud::default(),

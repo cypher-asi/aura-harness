@@ -9,6 +9,7 @@
 pub(crate) mod agent_events;
 pub(crate) mod agents;
 pub(crate) mod approvals;
+mod attachments;
 pub(crate) mod auth;
 pub(crate) mod handlers;
 mod hud;
@@ -35,6 +36,7 @@ use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
+use aura_terminal::events::ImageAttachment;
 use aura_terminal::{UiCommand, UiEvent};
 use aura_tools::jobs::{BackgroundJobs, JobFinished};
 use std::collections::{HashMap, VecDeque};
@@ -44,7 +46,7 @@ use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-use turns::{Task, Work, WorkDone};
+use turns::{Prompt, Task, Work, WorkDone};
 
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -250,8 +252,30 @@ async fn deliver(
     text: String,
     shown: bool,
 ) {
+    deliver_with_images(state, agent_id, source, text, Vec::new(), shown).await;
+}
+
+/// [`deliver`] for a user message with pasted `images`. A running turn
+/// only takes text, so a message with images waits for the next turn.
+async fn deliver_with_images(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    source: SteerSource,
+    text: String,
+    images: Vec<ImageAttachment>,
+    shown: bool,
+) {
+    if !images.is_empty() {
+        let work = Work::Prompt {
+            prompt: Prompt::typed(text, images),
+            shown,
+        };
+        submit(state, agent_id, work).await;
+        return;
+    }
     if let Some(steering) = state.hub.steering(agent_id) {
-        if steering.send(source, text.clone()).await {
+        let body = steered_body(state, agent_id, source, &text).await;
+        if steering.send(source, text.clone(), body).await {
             info!(%agent_id, ?source, "Sent message into the running turn");
             if source == SteerSource::User && !shown {
                 AgentUi::new(state.commands.clone(), agent_id)
@@ -264,13 +288,36 @@ async fn deliver(
     submit(state, agent_id, prompt_work(source, text, shown)).await;
 }
 
+/// What the model gets for `text` sent into a running turn: a user's
+/// message has the files it mentions appended, read from the agent's
+/// workspace.
+async fn steered_body(
+    state: &LoopState<'_>,
+    agent_id: AgentId,
+    source: SteerSource,
+    text: &str,
+) -> String {
+    if source != SteerSource::User || attachments::mentioned_paths(text).is_empty() {
+        return text.to_string();
+    }
+    let Some(kernel) = state.kernel_for(agent_id) else {
+        return text.to_string();
+    };
+    attachments::expand_mentions_in(kernel.agent_workspace(), text.to_string())
+        .await
+        .text
+}
+
 /// A prompt from `source`. Harness notices keep their label so the model
 /// can tell them from the user.
 fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
     match source {
-        SteerSource::User => Work::Prompt { text, shown },
+        SteerSource::User => Work::Prompt {
+            prompt: Prompt::typed(text, Vec::new()),
+            shown,
+        },
         SteerSource::Harness => Work::Prompt {
-            text: format!("{}{text}", source.prefix()),
+            prompt: Prompt::plain(format!("{}{text}", source.prefix())),
             shown: false,
         },
     }
@@ -350,9 +397,10 @@ async fn handle_ui_event(
             agent_id,
             text,
             shown,
+            images,
         } => {
             let agent_id = state.agent_or_active(&agent_id);
-            deliver(state, agent_id, SteerSource::User, text, shown).await;
+            deliver_with_images(state, agent_id, SteerSource::User, text, images, shown).await;
         }
         UiEvent::RunCommand {
             agent_id,
@@ -502,8 +550,8 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     let cancel = CancellationToken::new();
     let mut steering = None;
     let task = match work {
-        Work::Prompt { text, shown } => {
-            info!(%agent_id, text = %text, "Processing user message");
+        Work::Prompt { prompt, shown } => {
+            info!(%agent_id, text = %prompt.text, "Processing user message");
             // A local model with no server used to sit there until the
             // 10-minute request timeout; the probe answers in well under a
             // second.
@@ -512,14 +560,14 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 return;
             }
             ui.send(UiCommand::TurnStarted {
-                prompt: (!shown).then(|| text.clone()),
+                prompt: (!shown).then(|| prompt.text.clone()),
             })
             .await;
             let (agent_loop, tools) = prepare_turn(state, &session).await;
             let turn_steering = Steering::new(&cancel);
             steering = Some(turn_steering.clone());
             Task::Turn {
-                text,
+                prompt,
                 agent_loop: Box::new(agent_loop),
                 tools,
                 steering: turn_steering,
