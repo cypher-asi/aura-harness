@@ -617,10 +617,18 @@ fn record_columns(tx: &Transaction, entry: &RecordEntry, sender: &str) -> Option
         }
         TransactionType::ToolProposal => {
             let proposal = serde_json::from_slice::<ToolProposal>(&tx.payload).ok()?;
+            let detail: Vec<String> = [
+                Some(tool_target(&proposal.tool, &proposal.args)),
+                proposal.source.as_deref().and_then(proposal_source_label),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .collect();
             RecordColumns::new(
                 proposal.tool.as_str(),
                 tool_group(&proposal.tool),
-                tool_target(&proposal.tool, &proposal.args),
+                detail.join(" · "),
             )
         }
         TransactionType::ToolExecution => {
@@ -1107,6 +1115,22 @@ fn format_bytes(n: usize) -> String {
     } else {
         format!("{}MB", one_decimal(n, 1024 * 1024))
     }
+}
+
+/// Why a recorded call didn't go to the tool executor, for the TOOLCALL
+/// row. `None` for calls the panel already marks some other way (the
+/// sender column shows user commands).
+fn proposal_source_label(source: &str) -> Option<String> {
+    let label = match source {
+        crate::event_loop::run_command::USER_SOURCE => return None,
+        "cache" => "cached result",
+        "steering_block" => "blocked by steering",
+        "invalid_tool_use" => "invalid call",
+        "task_guard" => "blocked by task guard",
+        "task_executor" => "handled by task runner",
+        other => other,
+    };
+    Some(label.to_string())
 }
 
 fn format_duration_ms(ms: u64) -> String {

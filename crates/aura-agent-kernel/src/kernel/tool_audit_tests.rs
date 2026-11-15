@@ -202,7 +202,7 @@ async fn preset_call_is_gated_and_recorded_without_running_the_executor() {
         ToolProposal::new("tu-1", "read_file", serde_json::json!({})).with_source("cache");
     let results = h
         .kernel
-        .process_tools_with_presets(vec![(proposal, Some(preset("cached body")))])
+        .process_tool_runs(vec![(proposal, ToolRun::Preset(preset("cached body")))])
         .await
         .unwrap();
 
@@ -237,13 +237,61 @@ async fn denied_preset_call_returns_the_denial_not_the_preset() {
     let proposal = ToolProposal::new("tu-1", "read_file", serde_json::json!({}));
     let results = h
         .kernel
-        .process_tools_with_presets(vec![(proposal, Some(preset("cached body")))])
+        .process_tool_runs(vec![(proposal, ToolRun::Preset(preset("cached body")))])
         .await
         .unwrap();
 
     let output = results[0].tool_output.as_ref().unwrap();
     assert!(output.is_error);
     assert_ne!(output.content, "cached body");
+    assert_eq!(all_entries(&h).len(), 2);
+}
+
+#[tokio::test]
+async fn allowed_local_call_runs_its_handler_and_records_the_result() {
+    let h = harness(|_| {});
+    let proposal =
+        ToolProposal::new("tu-1", "task_done", serde_json::json!({})).with_source("task_executor");
+    let handler = Box::pin(async {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        preset("done")
+    });
+    let results = h
+        .kernel
+        .process_tool_runs(vec![(proposal, ToolRun::Local(handler))])
+        .await
+        .unwrap();
+
+    assert_eq!(results[0].tool_output.as_ref().unwrap().content, "done");
+    let entries = all_entries(&h);
+    assert_eq!(entries.len(), 3);
+    let exec: ToolExecution = serde_json::from_slice(&entries[2].tx.payload).unwrap();
+    assert!(exec.duration_ms.is_some_and(|ms| ms >= 5));
+    assert_eq!(h.observer.seqs(), vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn denied_local_call_never_polls_its_handler() {
+    let h = harness(|config| {
+        config.policy = config.policy.clone().with_agent_override(Some(
+            AgentToolPermissions::new().with("task_done", ToolState::Deny),
+        ));
+    });
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = ran.clone();
+    let handler = Box::pin(async move {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        preset("done")
+    });
+    let proposal = ToolProposal::new("tu-1", "task_done", serde_json::json!({}));
+    let results = h
+        .kernel
+        .process_tool_runs(vec![(proposal, ToolRun::Local(handler))])
+        .await
+        .unwrap();
+
+    assert!(results[0].tool_output.as_ref().unwrap().is_error);
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
     assert_eq!(all_entries(&h).len(), 2);
 }
 

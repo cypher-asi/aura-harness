@@ -85,37 +85,28 @@ impl TaskToolExecutor {
         self.tracked_file_ops.lock().await.push(op);
     }
 
-    pub(super) async fn handle_task_done(
-        &self,
-        tc: &ToolCallInfo,
-        results: &mut Vec<ToolCallResult>,
-        stop: &mut bool,
-    ) {
+    /// Returns `stop_loop: true` when the completion is accepted.
+    pub(super) async fn handle_task_done(&self, tc: &ToolCallInfo) -> ToolCallResult {
         self.extract_notes_and_follow_ups(tc).await;
 
         if let Some(error_prompt) = self.check_pervasive_errors().await {
-            results.push(Self::gate_rejection(tc, error_prompt));
-            return;
+            return Self::gate_rejection(tc, error_prompt);
         }
 
         if let Some(review_prompt) = self.check_self_review().await {
-            results.push(Self::gate_rejection(tc, review_prompt));
-            return;
+            return Self::gate_rejection(tc, review_prompt);
         }
 
         if let Some(no_write_prompt) = self.check_no_writes().await {
-            results.push(Self::gate_rejection(tc, no_write_prompt));
-            return;
+            return Self::gate_rejection(tc, no_write_prompt);
         }
 
         if let Some(stub_prompt) = self.check_stubs_and_reject().await {
-            results.push(Self::gate_rejection(tc, stub_prompt));
-            return;
+            return Self::gate_rejection(tc, stub_prompt);
         }
 
         if let Some(build_prompt) = self.check_build_before_completion().await {
-            results.push(Self::gate_rejection(tc, build_prompt));
-            return;
+            return Self::gate_rejection(tc, build_prompt);
         }
 
         if !self.should_skip_test_gate_for_no_change_completion().await {
@@ -127,13 +118,7 @@ impl TaskToolExecutor {
             self.run_test_suite_warning().await;
         }
 
-        results.push(Self::tool_result(
-            tc,
-            task_done_msgs::TASK_DONE_COMPLETED_JSON,
-            false,
-            true,
-        ));
-        *stop = true;
+        Self::tool_result(tc, task_done_msgs::TASK_DONE_COMPLETED_JSON, false, true)
     }
 
     pub(super) async fn extract_notes_and_follow_ups(&self, tc: &ToolCallInfo) {
@@ -384,11 +369,7 @@ impl TaskToolExecutor {
         }))
     }
 
-    pub(super) async fn handle_submit_plan(
-        &self,
-        tc: &ToolCallInfo,
-        results: &mut Vec<ToolCallResult>,
-    ) {
+    pub(super) async fn handle_submit_plan(&self, tc: &ToolCallInfo) -> ToolCallResult {
         let plan = TaskPlan::from_tool_input(&tc.input);
         match plan.validate() {
             Ok(()) => {
@@ -412,29 +393,21 @@ impl TaskToolExecutor {
                 // iteration so the implement phase has a fresh budget.
                 self.reset_explore_on_phase_change
                     .store(true, std::sync::atomic::Ordering::Release);
-                results.push(Self::tool_result(
+                Self::tool_result(
                     tc,
                     task_done_msgs::submit_plan_accepted_body(&context_string),
                     false,
                     false,
-                ));
+                )
             }
             Err(reason) => {
-                results.push(Self::gate_rejection(
-                    tc,
-                    task_done_msgs::submit_plan_rejected_body(&reason),
-                ));
+                Self::gate_rejection(tc, task_done_msgs::submit_plan_rejected_body(&reason))
             }
         }
     }
 
-    pub(super) fn handle_get_context(&self, tc: &ToolCallInfo, results: &mut Vec<ToolCallResult>) {
-        results.push(Self::tool_result(
-            tc,
-            self.task_context.clone(),
-            false,
-            false,
-        ));
+    pub(super) fn handle_get_context(&self, tc: &ToolCallInfo) -> ToolCallResult {
+        Self::tool_result(tc, self.task_context.clone(), false, false)
     }
 
     pub(super) fn emit_tool_status(&self, tc: &ToolCallInfo, result: &ToolCallResult) {

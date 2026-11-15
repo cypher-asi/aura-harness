@@ -437,26 +437,29 @@ async fn run_terminal(
     let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
 
     let record_panel = event_loop::RecordPanelAgent::default();
+    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
+        event_loop::UiRecordObserver::new(cmd_tx.clone(), record_panel.clone()),
+    );
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
         policy: aura_agent_kernel::PolicyConfig::default()
             .with_mode(aura_config::session_mode(requested_mode)),
-        record_observer: Some(Arc::new(event_loop::UiRecordObserver::new(
-            cmd_tx.clone(),
-            record_panel.clone(),
-        ))),
+        record_observer: Some(Arc::clone(&record_observer)),
         ..KernelConfig::default()
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
-    let scheduler = Arc::new(aura_engine::Scheduler::new(
-        Arc::clone(&kernel_store),
-        Arc::clone(&provider),
-        Vec::new(),
-        tools.clone(),
-        workspace_root.clone(),
-        None,
-    ));
+    let scheduler = Arc::new(
+        aura_engine::Scheduler::new(
+            Arc::clone(&kernel_store),
+            Arc::clone(&provider),
+            Vec::new(),
+            tools.clone(),
+            workspace_root.clone(),
+            None,
+        )
+        .with_record_observer(record_observer),
+    );
     let host = aura_engine::AgentHost::new(
         Arc::clone(&kernel_store),
         scheduler.clone(),

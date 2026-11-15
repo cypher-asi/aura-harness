@@ -7,24 +7,28 @@
 //! concurrently via `futures_util::join_all`, and their `ToolExecution`
 //! entries are appended in proposal order.
 //!
-//! A proposal may carry a [`PresetToolResult`]. It is recorded and gated
-//! like any other call; when policy allows it the preset stands in for the
-//! executor, and when policy denies it the denial wins.
+//! A call may bring its own result ([`ToolRun::Preset`]) or handler
+//! ([`ToolRun::Local`]). It is recorded and gated like any other call;
+//! when policy allows it the preset or handler stands in for the executor,
+//! and when policy denies it the denial wins and the handler never runs.
 
 use super::steps::{finish_tool_call, Authorized};
-use super::PresetToolResult;
+use super::{PresetToolResult, ToolRun};
 use crate::kernel::stream::elapsed_ms;
 use crate::kernel::{Kernel, ProcessResult};
-use aura_core_types::{
-    Action, ActionId, Effect, EffectKind, ToolProposal, ToolResult, Transaction,
-};
+use aura_core_types::{ActionId, Effect, EffectKind, ToolProposal, ToolResult, Transaction};
 use aura_exec_traits::ExecuteContext;
 use bytes::Bytes;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Instant;
 
-pub(super) async fn process_many(
-    kernel: &Kernel,
-    calls: Vec<(ToolProposal, Option<PresetToolResult>)>,
+type SlotFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(Effect, u64), crate::KernelError>> + Send + 'a>>;
+
+pub(super) async fn process_many<'a>(
+    kernel: &'a Kernel,
+    calls: Vec<(ToolProposal, ToolRun<'a>)>,
 ) -> Result<Vec<ProcessResult>, crate::KernelError> {
     if calls.is_empty() {
         return Ok(vec![]);
@@ -32,8 +36,8 @@ pub(super) async fn process_many(
 
     let runtime_capabilities = kernel.load_runtime_capabilities()?;
     let mut authorized: Vec<Authorized> = Vec::with_capacity(calls.len());
-    let mut presets: Vec<Option<PresetToolResult>> = Vec::with_capacity(calls.len());
-    for (proposal, preset) in calls {
+    let mut runs: Vec<ToolRun<'a>> = Vec::with_capacity(calls.len());
+    for (proposal, run) in calls {
         let tx = Transaction::tool_proposal(kernel.agent_id, &proposal)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
         let proposal_entry = kernel.record_tool_proposal(tx, None)?;
@@ -42,7 +46,7 @@ pub(super) async fn process_many(
                 .authorize_tool_proposal(proposal, &proposal_entry, runtime_capabilities.as_ref())
                 .await?,
         );
-        presets.push(preset);
+        runs.push(run);
     }
 
     let workspace = kernel.agent_workspace();
@@ -64,11 +68,9 @@ pub(super) async fn process_many(
     let total = authorized.len();
     let mut per_slot_effect: Vec<Option<(Effect, u64)>> = vec![None; total];
     let mut dispatch_indices: Vec<usize> = Vec::new();
-    let mut dispatch_contexts: Vec<ExecuteContext> = Vec::new();
-    let mut dispatch_actions: Vec<Action> = Vec::new();
-    let mut dispatch_tool_names: Vec<String> = Vec::new();
+    let mut dispatch_futures: Vec<SlotFuture<'a>> = Vec::new();
 
-    for (i, (slot, preset)) in authorized.iter().zip(presets).enumerate() {
+    for (i, (slot, run)) in authorized.iter().zip(runs).enumerate() {
         let Some(action) = slot.action.clone() else {
             continue;
         };
@@ -82,32 +84,38 @@ pub(super) async fn process_many(
             }
         }
 
-        if let Some(preset) = preset {
-            per_slot_effect[i] = Some((preset_effect(action_id, &proposal.tool, preset)?, 0));
-            continue;
-        }
-
-        let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace.clone())
-            .with_tool_use_id(proposal.tool_use_id.clone());
+        let tool_name = proposal.tool.clone();
+        let future: SlotFuture<'a> = match run {
+            ToolRun::Preset(preset) => {
+                per_slot_effect[i] = Some((preset_effect(action_id, &tool_name, preset)?, 0));
+                continue;
+            }
+            ToolRun::Local(handler) => Box::pin(async move {
+                let started = Instant::now();
+                let result = handler.await;
+                Ok((
+                    preset_effect(action_id, &tool_name, result)?,
+                    elapsed_ms(started),
+                ))
+            }),
+            ToolRun::Executor => {
+                let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace.clone())
+                    .with_tool_use_id(proposal.tool_use_id.clone());
+                Box::pin(async move {
+                    let started = Instant::now();
+                    let effect = kernel.execute_with_timeout(&ctx, &action, &tool_name).await;
+                    Ok((effect, elapsed_ms(started)))
+                })
+            }
+        };
         dispatch_indices.push(i);
-        dispatch_contexts.push(ctx);
-        dispatch_actions.push(action);
-        dispatch_tool_names.push(proposal.tool.clone());
+        dispatch_futures.push(future);
     }
 
-    let exec_futures = dispatch_contexts
-        .iter()
-        .zip(dispatch_actions.iter())
-        .zip(dispatch_tool_names.iter())
-        .map(|((ctx, action), tool_name)| async move {
-            let started = Instant::now();
-            let effect = kernel.execute_with_timeout(ctx, action, tool_name).await;
-            (effect, elapsed_ms(started))
-        });
-    let dispatched_effects = futures_util::future::join_all(exec_futures).await;
+    let dispatched_effects = futures_util::future::join_all(dispatch_futures).await;
 
     for (slot, effect) in dispatch_indices.iter().zip(dispatched_effects.into_iter()) {
-        per_slot_effect[*slot] = Some(effect);
+        per_slot_effect[*slot] = Some(effect?);
     }
 
     let mut results = Vec::with_capacity(total);
@@ -126,7 +134,7 @@ pub(super) async fn process_many(
     Ok(results)
 }
 
-/// Encode a preset result as the committed effect the executor would have
+/// Encode a preset or handler result as the committed effect the executor would have
 /// produced, so the agent loop decodes it the same way.
 fn preset_effect(
     action_id: ActionId,

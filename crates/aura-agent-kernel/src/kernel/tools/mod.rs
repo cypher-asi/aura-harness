@@ -28,16 +28,42 @@ mod steps;
 use super::{Kernel, ProcessResult};
 use aura_core_types::{ToolProposal, ToolResultKind, Transaction};
 use aura_store_db::DequeueToken;
+use std::future::Future;
+use std::pin::Pin;
 use tracing::instrument;
 
-/// A result the caller already has for a tool call (a cached read, a
-/// steering block, an invalid call). The call is still recorded and gated;
-/// the preset only stands in for the executor when policy allows the call.
+/// A tool result produced outside the executor router: one the caller
+/// already has, or one its own handler returned.
 #[derive(Debug, Clone)]
 pub struct PresetToolResult {
     pub content: String,
     pub is_error: bool,
     pub kind: ToolResultKind,
+}
+
+/// How an allowed tool call gets its result. Every variant is recorded
+/// and gated the same way; only the step after an allow differs.
+pub enum ToolRun<'a> {
+    /// Dispatch through the executor router.
+    Executor,
+    /// Use a result the caller already has (a cached read, a steering
+    /// block, an invalid call).
+    Preset(PresetToolResult),
+    /// Run a handler the caller owns (an engine tool such as
+    /// `task_done`). The future is polled only when policy allows the
+    /// call, and dropped unpolled otherwise, so it must not start work
+    /// before its first poll.
+    Local(Pin<Box<dyn Future<Output = PresetToolResult> + Send + 'a>>),
+}
+
+impl std::fmt::Debug for ToolRun<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Executor => f.write_str("Executor"),
+            Self::Preset(preset) => f.debug_tuple("Preset").field(preset).finish(),
+            Self::Local(_) => f.write_str("Local(..)"),
+        }
+    }
 }
 
 impl Kernel {
@@ -58,18 +84,21 @@ impl Kernel {
         &self,
         tool_proposals: Vec<ToolProposal>,
     ) -> Result<Vec<ProcessResult>, crate::KernelError> {
-        let calls = tool_proposals.into_iter().map(|p| (p, None)).collect();
+        let calls = tool_proposals
+            .into_iter()
+            .map(|p| (p, ToolRun::Executor))
+            .collect();
         batch::process_many(self, calls).await
     }
 
-    /// Process a batch of tool calls, some of which carry a
-    /// [`PresetToolResult`] that replaces execution once policy allows it.
+    /// Process a batch of tool calls, each saying how it runs once policy
+    /// allows it (see [`ToolRun`]).
     ///
     /// # Errors
     /// Returns error if serialization, execution, or storage fails.
-    pub async fn process_tools_with_presets(
+    pub async fn process_tool_runs(
         &self,
-        calls: Vec<(ToolProposal, Option<PresetToolResult>)>,
+        calls: Vec<(ToolProposal, ToolRun<'_>)>,
     ) -> Result<Vec<ProcessResult>, crate::KernelError> {
         batch::process_many(self, calls).await
     }

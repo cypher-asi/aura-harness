@@ -51,7 +51,7 @@ mod tool_audit_tests;
 mod tools;
 
 pub use stream::ReasonStreamHandle;
-pub use tools::PresetToolResult;
+pub use tools::{PresetToolResult, ToolRun};
 
 // ============================================================================
 // Configuration
@@ -568,6 +568,20 @@ pub fn write_system_record(
     agent_id: AgentId,
     tx: aura_core_types::Transaction,
 ) -> Result<u64, crate::KernelError> {
+    write_system_entry(store, agent_id, tx).map(|entry| entry.seq)
+}
+
+/// [`write_system_record`], returning the stored entry so the caller can
+/// hand it to a [`RecordObserver`].
+///
+/// # Errors
+///
+/// Returns [`KernelError::Store`] for any backend failure.
+pub fn write_system_entry(
+    store: &Arc<dyn Store>,
+    agent_id: AgentId,
+    tx: aura_core_types::Transaction,
+) -> Result<RecordEntry, crate::KernelError> {
     // The `seq` for a System record is derived from a `get_head_seq`
     // read that is NOT serialized with the actual `append_entry_direct`
     // write at the store level. When another writer for the same agent
@@ -580,7 +594,7 @@ pub fn write_system_record(
     const MAX_RETRIES: u32 = 16;
     for attempt in 0..=MAX_RETRIES {
         match append_system_record_once(store, agent_id, &tx) {
-            Ok(seq) => return Ok(seq),
+            Ok(entry) => return Ok(entry),
             Err(SystemRecordError::SequenceMismatch) if attempt < MAX_RETRIES => {
                 // Brief backoff so the racing writer can land before we
                 // recompute. Capped low because the audit append is on
@@ -616,7 +630,7 @@ fn append_system_record_once(
     store: &Arc<dyn Store>,
     agent_id: AgentId,
     tx: &aura_core_types::Transaction,
-) -> Result<u64, SystemRecordError> {
+) -> Result<RecordEntry, SystemRecordError> {
     let head = store.get_head_seq(agent_id).map_err(|e| {
         SystemRecordError::Other(crate::KernelError::Store(format!("get_head_seq: {e}")))
     })?;
@@ -636,7 +650,7 @@ fn append_system_record_once(
         .context_hash(context_hash)
         .build();
     match store.append_entry_direct(agent_id, seq, &entry) {
-        Ok(()) => Ok(seq),
+        Ok(()) => Ok(entry),
         Err(aura_store_db::StoreError::SequenceMismatch { .. }) => {
             Err(SystemRecordError::SequenceMismatch)
         }

@@ -217,6 +217,84 @@ async fn task_done_no_changes_still_passes_after_no_write_rejection() {
     assert!(done[0].stop_loop);
 }
 
+/// Inner executor that denies every engine tool and logs which settle
+/// path each call took.
+#[derive(Default)]
+struct DenyingInner {
+    settled: std::sync::Mutex<Vec<(String, &'static str)>>,
+}
+
+#[async_trait::async_trait]
+impl AgentToolExecutor for DenyingInner {
+    async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
+        tool_calls
+            .iter()
+            .map(|tc| ToolCallResult::success(&tc.id, "ok"))
+            .collect()
+    }
+
+    fn spawn_preset<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        result: ToolCallResult,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>> {
+        self.settled.lock().unwrap().push((call.name, source));
+        Box::pin(std::future::ready(result))
+    }
+
+    fn spawn_local<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        _run: std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>> {
+        self.settled
+            .lock()
+            .unwrap()
+            .push((call.name.clone(), source));
+        Box::pin(std::future::ready(ToolCallResult::error(
+            call.id,
+            "Policy denied: task_done",
+        )))
+    }
+}
+
+#[tokio::test]
+async fn engine_tools_and_guard_blocks_settle_through_the_inner_executor() {
+    let inner = Arc::new(DenyingInner::default());
+    let mut executor = make_executor();
+    executor.inner = inner.clone();
+
+    let denied = executor.execute(&[task_done_call("all done")]).await;
+    assert!(denied[0].is_error);
+    assert!(!denied[0].stop_loop);
+    assert!(executor.notes.lock().await.is_empty());
+    assert!(
+        !executor
+            .recent_tool_outcomes
+            .lock()
+            .await
+            .task_done_no_writes_rejected
+    );
+
+    executor
+        .recent_tool_outcomes
+        .lock()
+        .await
+        .task_done_no_writes_rejected = true;
+    let blocked = executor.execute(&[read_file_call("src/lib.rs")]).await;
+    assert!(blocked[0].is_error);
+
+    assert_eq!(
+        *inner.settled.lock().unwrap(),
+        vec![
+            ("task_done".to_string(), "task_executor"),
+            ("read_file".to_string(), "task_guard"),
+        ]
+    );
+}
+
 /// Parity check after the strip: an exploring-phase executor produces
 /// the same rejection as an implementing-phase one. The submit_plan
 /// gate is gone, so the wording must not regress to phase-specific

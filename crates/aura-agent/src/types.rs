@@ -404,6 +404,24 @@ pub trait AgentToolExecutor: Send + Sync {
         Box::pin(std::future::ready(result))
     }
 
+    /// Settle a tool call with a handler the caller owns (an engine tool
+    /// such as `task_done`) instead of the tool executor.
+    ///
+    /// Recording executors override this so the call is recorded and
+    /// passes the policy gate before `run` is polled; a denial drops
+    /// `run` unpolled and returns the denial, so `run` must not start
+    /// work before its first poll. The default just awaits `run`.
+    /// Wrapping executors must forward to their inner executor.
+    fn spawn_local<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        run: Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        let _ = (call, source);
+        run
+    }
+
     /// Run a lightweight build check (e.g., `cargo check --lib`).
     ///
     /// Returns `None` when build checking is not configured.

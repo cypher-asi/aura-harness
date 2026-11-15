@@ -3,7 +3,9 @@
 //!
 //! [`TaskToolExecutor`] wraps an inner [`AgentToolExecutor`] to intercept
 //! engine-level tools (`task_done`, `submit_plan`, `get_task_context`) and
-//! enforce the explore-then-implement workflow.
+//! enforce the explore-then-implement workflow. Engine tools and guard
+//! blocks still go through the inner executor (`spawn_local` /
+//! `spawn_preset`), so a kernel-backed inner records and gates them.
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -338,18 +340,22 @@ impl AgentToolExecutor for TaskToolExecutor {
 
         for (i, tc) in tool_calls.iter().enumerate() {
             if let Some(result) = blocked_results.remove(&i) {
-                results.push(result);
+                results.push(
+                    self.inner
+                        .spawn_preset(tc.clone(), "task_guard", result)
+                        .await,
+                );
                 continue;
             }
             match tc.name.as_str() {
-                "task_done" => {
-                    self.handle_task_done(tc, &mut results, &mut stop).await;
-                }
-                "get_task_context" => {
-                    self.handle_get_context(tc, &mut results);
-                }
-                "submit_plan" => {
-                    self.handle_submit_plan(tc, &mut results).await;
+                "task_done" | "get_task_context" | "submit_plan" => {
+                    let run = Box::pin(self.handle_engine_tool(tc));
+                    let result = self
+                        .inner
+                        .spawn_local(tc.clone(), "task_executor", run)
+                        .await;
+                    stop |= tc.name == "task_done" && result.stop_loop;
+                    results.push(result);
                 }
                 _ => {
                     if let Some(result) = delegated_iter.next() {
@@ -380,6 +386,15 @@ impl AgentToolExecutor for TaskToolExecutor {
         result: ToolCallResult,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>> {
         self.inner.spawn_preset(call, source, result)
+    }
+
+    fn spawn_local<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        run: std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>> {
+        self.inner.spawn_local(call, source, run)
     }
 
     async fn auto_build_check(&self) -> Option<AutoBuildResult> {
@@ -520,6 +535,16 @@ pub async fn run_project_build_check(
 }
 
 impl TaskToolExecutor {
+    /// Run an engine tool this executor answers itself. Only called once
+    /// the kernel has recorded and allowed the call.
+    async fn handle_engine_tool(&self, tc: &ToolCallInfo) -> ToolCallResult {
+        match tc.name.as_str() {
+            "task_done" => self.handle_task_done(tc).await,
+            "submit_plan" => self.handle_submit_plan(tc).await,
+            _ => self.handle_get_context(tc),
+        }
+    }
+
     /// Gate `task_done` when a build command is configured and the tree is red.
     pub(super) async fn check_build_before_completion(&self) -> Option<String> {
         run_project_build_check(&self.project_folder, self.build_command.as_deref())

@@ -9,13 +9,13 @@ use crate::helpers;
 use crate::recording_stream::RecordingStream;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
-use aura_agent_kernel::{Kernel, KernelError, PresetToolResult};
+use aura_agent_kernel::{Kernel, KernelError, PresetToolResult, ToolRun};
 use aura_model_reasoner::{
     ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream,
 };
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use tracing::warn;
 
 /// Translate a [`KernelError`] returned by `Kernel::reason*` back into
@@ -51,7 +51,8 @@ fn kernel_error_to_reasoner_error(e: KernelError) -> ReasonerError {
 /// Converts `ToolCallInfo` slices into `ToolProposal` vectors, delegates to
 /// `Kernel::process_tools_with_presets`, and maps the results back to
 /// `ToolCallResult`. Preset results (cache hits, steering blocks, invalid
-/// calls) go through the same path so the kernel records and gates them.
+/// calls) and locally handled engine tools go through the same path so the
+/// kernel records and gates them.
 pub struct KernelToolGateway {
     kernel: Arc<Kernel>,
 }
@@ -71,7 +72,7 @@ impl AgentToolExecutor for KernelToolGateway {
             .map(|tc| {
                 let proposal =
                     aura_core_types::ToolProposal::new(&tc.id, &tc.name, tc.input.clone());
-                (proposal, None)
+                (proposal, ToolRun::Executor)
             })
             .collect();
         self.process(tool_calls, calls).await
@@ -84,36 +85,79 @@ impl AgentToolExecutor for KernelToolGateway {
         result: ToolCallResult,
     ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
         Box::pin(async move {
-            let proposal =
-                aura_core_types::ToolProposal::new(&call.id, &call.name, call.input.clone())
-                    .with_source(source);
-            let preset = PresetToolResult {
-                content: result.content.clone(),
-                is_error: result.is_error,
-                kind: result.kind,
-            };
-            let mut gated = self
-                .process(std::slice::from_ref(&call), vec![(proposal, Some(preset))])
-                .await;
-            match gated.pop() {
-                Some(outcome) if outcome.is_error == result.is_error => ToolCallResult {
-                    content: outcome.content,
-                    ..result
-                },
-                Some(outcome) => outcome,
-                None => result,
-            }
+            let run = ToolRun::Preset(preset_of(&result));
+            let outcome = self.process_one(&call, source, run).await;
+            merge_outcome(outcome, Some(result))
+        })
+    }
+
+    fn spawn_local<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        run: Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(async move {
+            let handled: Arc<Mutex<Option<ToolCallResult>>> = Arc::default();
+            let slot = handled.clone();
+            let run = ToolRun::Local(Box::pin(async move {
+                let result = run.await;
+                let preset = preset_of(&result);
+                *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+                preset
+            }));
+            let outcome = self.process_one(&call, source, run).await;
+            let handled = handled
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            merge_outcome(outcome, handled)
         })
     }
 }
 
+fn preset_of(result: &ToolCallResult) -> PresetToolResult {
+    PresetToolResult {
+        content: result.content.clone(),
+        is_error: result.is_error,
+        kind: result.kind,
+    }
+}
+
+/// Keep the caller's result (its `stop_loop`, file changes, image) when
+/// the kernel let it through, and the kernel's outcome when it didn't
+/// (a policy denial or a hook block).
+fn merge_outcome(outcome: ToolCallResult, own: Option<ToolCallResult>) -> ToolCallResult {
+    match own {
+        Some(own) if own.is_error == outcome.is_error => ToolCallResult {
+            content: outcome.content,
+            ..own
+        },
+        _ => outcome,
+    }
+}
+
 impl KernelToolGateway {
+    async fn process_one(
+        &self,
+        call: &ToolCallInfo,
+        source: &'static str,
+        run: ToolRun<'_>,
+    ) -> ToolCallResult {
+        let proposal = aura_core_types::ToolProposal::new(&call.id, &call.name, call.input.clone())
+            .with_source(source);
+        self.process(std::slice::from_ref(call), vec![(proposal, run)])
+            .await
+            .pop()
+            .unwrap_or_else(|| ToolCallResult::error(&call.id, "No output from kernel"))
+    }
+
     async fn process(
         &self,
         tool_calls: &[ToolCallInfo],
-        calls: Vec<(aura_core_types::ToolProposal, Option<PresetToolResult>)>,
+        calls: Vec<(aura_core_types::ToolProposal, ToolRun<'_>)>,
     ) -> Vec<ToolCallResult> {
-        match self.kernel.process_tools_with_presets(calls).await {
+        match self.kernel.process_tool_runs(calls).await {
             Ok(results) => results
                 .into_iter()
                 .enumerate()
@@ -382,5 +426,82 @@ mod tests {
                 aura_core_types::TransactionType::ToolExecution,
             ]
         );
+    }
+
+    fn task_done_call() -> ToolCallInfo {
+        ToolCallInfo {
+            id: "td-1".into(),
+            name: "task_done".into(),
+            input: json!({ "notes": "done" }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_gateway_runs_an_allowed_local_handler_and_keeps_its_result() {
+        let ws_dir = TempDir::new().unwrap();
+        let (kernel, _db_dir) = create_tool_kernel(ws_dir.path(), true);
+        let gateway = KernelToolGateway::new(kernel.clone());
+        let run = Box::pin(async {
+            let mut result = ToolCallResult::success("td-1", "completed");
+            result.stop_loop = true;
+            result
+        });
+
+        let result = gateway
+            .spawn_local(task_done_call(), "task_executor", run)
+            .await;
+
+        assert_eq!(result.content, "completed");
+        assert!(result.stop_loop);
+        let entries = kernel.store().scan_record(kernel.agent_id, 1, 10).unwrap();
+        assert_eq!(entries.len(), 3);
+        let proposal: aura_core_types::ToolProposal =
+            serde_json::from_slice(&entries[0].tx.payload).unwrap();
+        assert_eq!(proposal.source.as_deref(), Some("task_executor"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_gateway_denied_local_handler_never_runs() {
+        let ws_dir = TempDir::new().unwrap();
+        let db_dir = TempDir::new().unwrap();
+        let store: Arc<dyn aura_store_db::Store> =
+            Arc::new(RocksStore::open(db_dir.path(), false).unwrap());
+        let config = KernelConfig {
+            workspace_base: ws_dir.path().to_path_buf(),
+            policy: aura_agent_kernel::PolicyConfig::default().with_agent_override(Some(
+                aura_core_types::AgentToolPermissions::new()
+                    .with("task_done", aura_core_types::ToolState::Deny),
+            )),
+            ..KernelConfig::default()
+        };
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("unused"));
+        let kernel = Arc::new(
+            Kernel::new(
+                store,
+                provider,
+                ExecutorRouter::new(),
+                config,
+                AgentId::generate(),
+            )
+            .unwrap(),
+        );
+        let gateway = KernelToolGateway::new(kernel);
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        let run = Box::pin(async move {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut result = ToolCallResult::success("td-1", "completed");
+            result.stop_loop = true;
+            result
+        });
+
+        let result = gateway
+            .spawn_local(task_done_call(), "task_executor", run)
+            .await;
+
+        assert!(result.is_error);
+        assert!(!result.stop_loop);
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Kernel — task-runner tools and agent-host records go through the kernel
+
+##### Changed
+
+- `task_done`, `submit_plan` and `get_task_context` are recorded and
+  gated like other tool calls (`ToolProposal` with `source`
+  `task_executor`). The task runner's handler only runs once policy
+  allows the call, so a denied `task_done` doesn't stop the loop or
+  save notes. Calls blocked after a `task_done` rejected for having
+  no writes are recorded with `source` `task_guard`.
+- The agent host's spawn records and recorded agent messages, and the
+  turns of agents it runs, reach the RECORD panel live: the scheduler
+  hands its kernels the terminal's record observer, and the host
+  notifies it after its own writes.
+- TOOLCALL rows say why a tool didn't run (`cached result`,
+  `blocked by steering`, `handled by task runner`, …).
+
+##### Added
+
+- `ToolRun` (`Executor`, `Preset`, `Local`) and
+  `Kernel::process_tool_runs`, replacing
+  `Kernel::process_tools_with_presets`. A `Local` handler is polled
+  only after policy allows the call and is timed like an executor run.
+- `AgentToolExecutor::spawn_local`.
+- `write_system_entry` (returns the stored entry),
+  `Scheduler::with_record_observer` and `Scheduler::record_observer`.
+
 ### Kernel — every tool call is gated and every entry is timed
 
 ##### Changed
@@ -31,8 +58,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preset result stood in for it). `Reasoning` payloads carry
   `duration_ms` for the whole model call. The RECORD panel shows both
   in the TOOLRES and LLM rows.
-- `Kernel::process_tools_with_presets`, `PresetToolResult` and
-  `AgentToolExecutor::spawn_preset`.
+- `PresetToolResult` and `AgentToolExecutor::spawn_preset`.
 
 ### Terminal — policy decisions stay with their tool calls
 

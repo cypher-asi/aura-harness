@@ -694,6 +694,21 @@ fn tool_records_split_into_tool_group_and_detail() {
 }
 
 #[test]
+fn tool_call_row_says_why_the_tool_did_not_run() {
+    let cached = proposal_tx(
+        &ToolProposal::new("t1", "read_file", json!({"path": "src/main.rs"})).with_source("cache"),
+    );
+    assert_eq!(
+        columns(&cached),
+        cols("read_file", "file", "src/main.rs · cached result")
+    );
+
+    let engine =
+        proposal_tx(&ToolProposal::new("t2", "task_done", json!({})).with_source("task_executor"));
+    assert_eq!(columns(&engine).2, "handled by task runner",);
+}
+
+#[test]
 fn llm_records_show_stop_reason_and_model_or_error_class() {
     let ok = json_tx(
         TransactionType::Reasoning,

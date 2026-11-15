@@ -33,7 +33,9 @@
 
 use crate::worker::{process_agent_with_timeout, ProcessedAgent, AGENT_LOOP_TIMEOUT};
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopEvent};
-use aura_agent_kernel::{Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig};
+use aura_agent_kernel::{
+    Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig, RecordObserver,
+};
 use aura_core_types::{AgentId, AgentStatus};
 use aura_model_reasoner::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
 use aura_store_db::Store;
@@ -346,6 +348,21 @@ impl Scheduler {
             kernel_config,
             memory_manager,
         }
+    }
+
+    /// Hand every kernel this scheduler builds an observer for the
+    /// entries it appends (see [`KernelConfig::record_observer`]).
+    #[must_use]
+    pub fn with_record_observer(mut self, observer: Arc<dyn RecordObserver>) -> Self {
+        self.kernel_config.record_observer = Some(observer);
+        self
+    }
+
+    /// The observer set by [`Self::with_record_observer`], for callers
+    /// that append entries outside a kernel.
+    #[must_use]
+    pub fn record_observer(&self) -> Option<&Arc<dyn RecordObserver>> {
+        self.kernel_config.record_observer.as_ref()
     }
 
     /// Borrow the shared identity registry — used by callers that own
