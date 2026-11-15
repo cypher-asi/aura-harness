@@ -75,6 +75,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
 
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
+    app.set_prose_rows(Vec::new());
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
     // The plan strip and the border strip show the same todo list; the
     // border strip only stands in while the plan strip has no room.
@@ -98,6 +99,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     mention_menu::render_mention_menu(frame, chat, app, theme);
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
+    app.drop_covered_prose(frame.buffer_mut());
 }
 
 /// Whether the right column (Record above Sandbox) has anything to show.

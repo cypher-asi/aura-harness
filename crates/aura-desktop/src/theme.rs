@@ -2,8 +2,9 @@
 //!
 //! The screen is a grid of Geist Mono cells, like a terminal. Every cell
 //! is 0.6 em wide (Geist Mono's advance) and 1.3 em tall (its ascender
-//! plus descender). `AURA_DESKTOP_MONO_FONT` names another installed
-//! monospace family, `AURA_DESKTOP_FONT_FILES` loads extra font files
+//! plus descender). The chat's prose is set in Geist, proportionally.
+//! `AURA_DESKTOP_MONO_FONT` and `AURA_DESKTOP_SANS_FONT` name other
+//! installed families, `AURA_DESKTOP_FONT_FILES` loads extra font files
 //! (separated like `PATH`) and `AURA_DESKTOP_FONT_SIZE` sets the size.
 
 use iced::font::{Family, Weight};
@@ -20,17 +21,31 @@ const ADVANCE_EM: f32 = 0.6;
 /// Line height of one row, in ems.
 const LINE_EM: f32 = 1.3;
 
-const BUNDLED: [&[u8]; 2] = [
+const BUNDLED: [&[u8]; 6] = [
     include_bytes!("../assets/fonts/GeistMono-Regular.ttf"),
     include_bytes!("../assets/fonts/GeistMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/Geist-Regular.ttf"),
+    include_bytes!("../assets/fonts/Geist-Bold.ttf"),
+    include_bytes!("../assets/fonts/Geist-Italic.ttf"),
+    include_bytes!("../assets/fonts/Geist-BoldItalic.ttf"),
 ];
+
+/// The family named by the environment variable `var`, else `default`.
+fn named(var: &str, default: &'static str) -> &'static str {
+    match std::env::var(var) {
+        Ok(name) if !name.trim().is_empty() => Box::leak(name.trim().to_owned().into()),
+        _ => default,
+    }
+}
 
 fn family() -> &'static str {
     static FAMILY: OnceLock<&'static str> = OnceLock::new();
-    FAMILY.get_or_init(|| match std::env::var("AURA_DESKTOP_MONO_FONT") {
-        Ok(name) if !name.trim().is_empty() => Box::leak(name.trim().to_owned().into()),
-        _ => "Geist Mono",
-    })
+    FAMILY.get_or_init(|| named("AURA_DESKTOP_MONO_FONT", "Geist Mono"))
+}
+
+fn sans_family() -> &'static str {
+    static FAMILY: OnceLock<&'static str> = OnceLock::new();
+    FAMILY.get_or_init(|| named("AURA_DESKTOP_SANS_FONT", "Geist"))
 }
 
 /// Font files to register at startup: the bundled faces, then any listed
@@ -69,6 +84,18 @@ pub fn mono_bold() -> Font {
     Font {
         weight: Weight::Bold,
         ..mono()
+    }
+}
+
+/// The proportional face the chat's prose is set in.
+pub fn sans() -> Font {
+    Font::with_name(sans_family())
+}
+
+pub fn sans_bold() -> Font {
+    Font {
+        weight: Weight::Bold,
+        ..sans()
     }
 }
 

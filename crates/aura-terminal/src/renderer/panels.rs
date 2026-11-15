@@ -1,12 +1,13 @@
 //! Panel rendering: Chat, Swarm and Record.
 
 use super::header::{self, HeaderInfo, PanelHeader};
+use super::markdown::is_inline_code;
 use super::text::display_width;
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow,
-        ToggleTarget,
+        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, PanelFocus, ProjectListRow, ProseRow,
+        ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -17,6 +18,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
+use std::ops::Range;
 
 /// Render the Chat panel: a CHAT | TERMINAL header bar over the
 /// conversation or the shell commands run this session.
@@ -221,6 +223,7 @@ fn render_chat_lines(
     let (_, cache, _) = app.chat_line_cache();
     let blank = Line::default();
     let mut visible = Vec::with_capacity(height);
+    let mut prose = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
         if i > 0 {
@@ -240,6 +243,9 @@ fn render_chat_lines(
                 if hovered(offset) {
                     apply_activity_hover(&mut line, theme);
                 }
+                if block.prose.get(offset) == Some(&true) && line.width() > 0 {
+                    prose.push(visible.len());
+                }
                 visible.push(line);
             }
             line_index += 1;
@@ -255,7 +261,24 @@ fn render_chat_lines(
         }
         push_visible(&mut visible, &mut line_index, start, height, line);
     }
+    let prose: Vec<(usize, u16, Vec<Range<u16>>)> = prose
+        .into_iter()
+        .map(|row| {
+            let (width, code) = prose_columns(&visible[row], padded, theme);
+            (row, width, code)
+        })
+        .collect();
     frame.render_widget(Paragraph::new(visible), padded);
+    let buffer = frame.buffer_mut();
+    let prose = prose
+        .into_iter()
+        .map(|(row, width, code)| {
+            #[allow(clippy::cast_possible_truncation)]
+            let y = padded.y + row as u16;
+            ProseRow::new(buffer, (padded.x, y), width, code)
+        })
+        .collect();
+    app.set_prose_rows(prose);
 
     ChatRows {
         total,
@@ -272,6 +295,26 @@ struct ChatRows {
     first: usize,
     /// Blank rows after the end
     padding: usize,
+}
+
+/// How many of `area`'s columns a prose `line` covers, and where its
+/// inline code falls.
+fn prose_columns(line: &Line<'_>, area: Rect, theme: &Theme) -> (u16, Vec<Range<u16>>) {
+    let mut code: Vec<Range<u16>> = Vec::new();
+    let mut column = area.x;
+    let end = area.right();
+    for span in &line.spans {
+        let width = u16::try_from(span.width()).unwrap_or(u16::MAX);
+        let next = column.saturating_add(width).min(end);
+        if is_inline_code(span.style, theme) && next > column {
+            match code.last_mut() {
+                Some(last) if last.end == column => last.end = next,
+                _ => code.push(column..next),
+            }
+        }
+        column = next;
+    }
+    (column - area.x, code)
 }
 
 /// Keep `line` when it falls inside the chat viewport.

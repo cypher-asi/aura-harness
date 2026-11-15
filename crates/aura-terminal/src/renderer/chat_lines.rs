@@ -85,6 +85,9 @@ pub(crate) struct BlockLines {
     /// Rows that expand or collapse something, `line` counted from the
     /// block's first line
     pub toggles: Vec<ToggleRow>,
+    /// Whether each line is prose, the user's or the agent's flowing text;
+    /// lines past the end are not
+    pub prose: Vec<bool>,
 }
 
 impl ChatLineCache {
@@ -168,18 +171,28 @@ impl ChatLineCache {
                     .is_none_or(|block| block.revision != revision)
             {
                 let shell = members[0].shell_run().filter(|_| self.terminal);
-                let (lines, toggles) = match (shell, view) {
-                    (Some(run), _) => (shell_lines(run, &self.prompt, width, theme), Vec::new()),
-                    (None, Some(view)) => {
-                        group_lines(members, view, live, place, width, theme, spinner)
-                    }
-                    (None, None) if members.len() > 1 => (
-                        members
-                            .iter()
-                            .flat_map(|m| message_lines(m, place, width, theme, spinner))
-                            .collect(),
+                let (lines, toggles, prose) = match (shell, view) {
+                    (Some(run), _) => (
+                        shell_lines(run, &self.prompt, width, theme),
+                        Vec::new(),
                         Vec::new(),
                     ),
+                    (None, Some(view)) => {
+                        let (lines, toggles) =
+                            group_lines(members, view, live, place, width, theme, spinner);
+                        (lines, toggles, Vec::new())
+                    }
+                    (None, None) if members.len() > 1 => {
+                        let mut lines = Vec::new();
+                        let mut prose = Vec::new();
+                        for member in members {
+                            let (more, flags) = message_lines(member, place, width, theme, spinner);
+                            prose.resize(lines.len(), false);
+                            prose.extend(flags);
+                            lines.extend(more);
+                        }
+                        (lines, Vec::new(), prose)
+                    }
                     (None, None) => single_lines(members[0], place, width, theme, spinner),
                 };
                 self.entries.insert(
@@ -191,6 +204,7 @@ impl ChatLineCache {
                             && members[0].role() == MessageRole::User,
                         lines,
                         toggles,
+                        prose,
                     },
                 );
             }
@@ -431,12 +445,10 @@ fn single_lines(
     width: usize,
     theme: &Theme,
     spinner: &str,
-) -> (Vec<Line<'static>>, Vec<ToggleRow>) {
+) -> (Vec<Line<'static>>, Vec<ToggleRow>, Vec<bool>) {
     let Some(step) = message.activity_step() else {
-        return (
-            message_lines(message, place, width, theme, spinner),
-            Vec::new(),
-        );
+        let (lines, prose) = message_lines(message, place, width, theme, spinner);
+        return (lines, Vec::new(), prose);
     };
     let mut lines: Vec<Line<'static>> = turn_header(message, place, width, theme)
         .into_iter()
@@ -462,10 +474,11 @@ fn single_lines(
         place,
         (width, theme),
     );
-    (lines, toggles)
+    (lines, toggles, Vec::new())
 }
 
-/// The header and body lines of one chat message. The agent's replies
+/// The header and body lines of one chat message, and whether each is
+/// prose. The agent's replies
 /// after the first block of a turn go without a header, under the turn's.
 fn message_lines(
     message: &Message,
@@ -473,20 +486,24 @@ fn message_lines(
     width: usize,
     theme: &Theme,
     spinner: &str,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<bool>) {
     if let Some(activity) = message.activity_step() {
-        return activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
+        let lines = activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
+        return (lines, Vec::new());
     }
     let timestamp = message.timestamp_local();
     if let Some(run) = message.shell_run() {
-        return shell_lines(run, &timestamp, width, theme);
+        return (shell_lines(run, &timestamp, width, theme), Vec::new());
     }
     if let Some(block) = message.diff_block() {
-        return diff_message_lines(block, &timestamp, width, theme);
+        return (
+            diff_message_lines(block, &timestamp, width, theme),
+            Vec::new(),
+        );
     }
     let (nick, nick_color, msg_color) = message_style(message.role(), theme);
     if is_notice(message) {
-        return notice_lines(
+        let lines = notice_lines(
             nick,
             nick_color,
             &timestamp,
@@ -495,6 +512,7 @@ fn message_lines(
             width,
             theme,
         );
+        return (lines, Vec::new());
     }
     let mut lines: Vec<Line<'static>> = if message.role() == MessageRole::Assistant {
         turn_header(message, place, width, theme)
@@ -506,15 +524,20 @@ fn message_lines(
             nick, nick_color, &timestamp, &meta, width, theme,
         )]
     };
+    let mut prose = Vec::new();
     for segment in parse_content_segments(message.content()) {
+        prose.resize(lines.len(), false);
         match segment {
             ContentSegment::Text(text) => {
-                render_text_segment(&mut lines, &text, msg_color, width, message.role(), theme);
+                let role = message.role();
+                prose.extend(render_text_segment(
+                    &mut lines, &text, msg_color, width, role, theme,
+                ));
             }
             ContentSegment::CodeBlock { language, code } => {
                 render_code_segment(&mut lines, &language, &code, width, theme);
             }
         }
     }
-    lines
+    (lines, prose)
 }

@@ -1,6 +1,6 @@
 //! Text and code segment rendering for the chat panel.
 
-use super::markdown::render_markdown;
+use super::markdown::render_markdown_flow;
 use super::text::{display_width, wrap_words};
 use crate::app::format::{format_cost, format_tokens};
 use crate::components::{CodeBlock, MessageRole};
@@ -117,6 +117,9 @@ pub(super) const fn message_style<'a>(
 
 /// Render a text segment. Assistant replies are rendered as markdown;
 /// user and system text is shown as written, word-wrapped.
+///
+/// Returns whether each added line is prose: the user's or the agent's
+/// flowing text, not a table, a rule or a system message.
 pub(super) fn render_text_segment(
     lines: &mut Vec<Line<'_>>,
     text: &str,
@@ -124,12 +127,17 @@ pub(super) fn render_text_segment(
     width: usize,
     role: MessageRole,
     theme: &Theme,
-) {
+) -> Vec<bool> {
     let base_style = Style::default().fg(msg_color);
     if role == MessageRole::Assistant {
-        lines.extend(render_markdown(text, width, base_style, theme));
+        let (markdown, flow) = render_markdown_flow(text, width, base_style, theme);
+        lines.extend(markdown);
+        flow
     } else {
-        lines.extend(plain_lines(text, width, base_style));
+        let plain = plain_lines(text, width, base_style);
+        let prose = vec![role == MessageRole::User; plain.len()];
+        lines.extend(plain);
+        prose
     }
 }
 

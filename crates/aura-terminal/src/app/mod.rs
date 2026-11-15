@@ -18,6 +18,7 @@ mod keys;
 mod line_edit;
 pub mod mentions;
 mod processes;
+mod prose;
 pub use aura_ui_core::sandbox;
 mod selection;
 pub(crate) mod shell_input;
@@ -50,6 +51,7 @@ use file_view::FileView;
 use folder_picker::FolderPicker;
 use hud::Hud;
 pub use processes::SidePanelTab;
+pub use prose::ProseRow;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -250,6 +252,8 @@ pub struct App {
     pub(super) sandbox_scroll: usize,
     /// Screen areas from the last frame, for mouse hit-testing
     pub(super) areas: PanelAreas,
+    /// The chat's prose rows from the last frame
+    prose_rows: Vec<ProseRow>,
     /// Clickable item under the mouse pointer
     hover: Option<HoverTarget>,
     /// When the in-flight turn started (`None` unless processing)
@@ -544,6 +548,7 @@ impl App {
             agents_scroll_detached: false,
             sandbox_scroll: 0,
             areas: PanelAreas::default(),
+            prose_rows: Vec::new(),
             hover: None,
             processing_since: None,
             shell_prompt: shell_prompt::detect(),

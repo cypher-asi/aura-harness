@@ -789,6 +789,61 @@ fn test_chat_renders_assistant_markdown() {
 }
 
 #[test]
+fn test_chat_prose_rows_leave_out_code_and_tables() {
+    use crate::components::{Message, MessageRole};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "run the tests"));
+    app.add_message(Message::new(
+        MessageRole::Assistant,
+        "Run `cargo test` now.\n\n```sh\ncargo test\n```\n\n\
+         | Crate | Tests |\n|---|---:|\n| aura-terminal | 231 |\n\n---\n\nAll green.",
+    ));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let text = |y: u16, columns: std::ops::Range<u16>| -> String {
+        columns.map(|x| buffer[(x, y)].symbol()).collect()
+    };
+    let prose: Vec<String> = app
+        .prose_rows()
+        .iter()
+        .map(|row| text(row.y, row.x..row.x + row.width))
+        .collect();
+    assert_eq!(
+        prose,
+        ["run the tests", "Run cargo test now.", "All green."],
+        "only flowing text is prose"
+    );
+    let run = &app.prose_rows()[1];
+    assert_eq!(run.code.len(), 1);
+    assert_eq!(text(run.y, run.code[0].clone()), "cargo test");
+}
+
+#[test]
+fn test_overlay_covers_chat_prose_rows() {
+    use crate::components::{Message, MessageRole};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "run the tests"));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    let draw = |terminal: &mut ratatui::Terminal<_>, app: &mut crate::App| {
+        terminal
+            .draw(|frame| super::render(frame, app, &test_theme()))
+            .unwrap();
+    };
+    draw(&mut terminal, &mut app);
+    assert_eq!(app.prose_rows().len(), 1);
+
+    submit(&mut app, "/help");
+    draw(&mut terminal, &mut app);
+    assert!(app.prose_rows().is_empty(), "help covers the prompt");
+}
+
+#[test]
 fn test_chat_names_sit_above_centered_text() {
     use crate::components::{Message, MessageRole};
 

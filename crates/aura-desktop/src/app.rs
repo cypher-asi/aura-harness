@@ -551,7 +551,8 @@ impl App {
             }
             Err(e) => tracing::warn!(error = %e, "render failed"),
         }
-        self.screen.update(tab.terminal.backend());
+        self.screen
+            .update(tab.terminal.backend(), tab.tui.prose_rows());
 
         let now = self.now;
         for tab in self.tabs.iter_mut() {

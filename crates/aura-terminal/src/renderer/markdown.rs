@@ -25,6 +25,18 @@ const BULLETS: [&str; 3] = ["•", "◦", "▪"];
 /// Render a markdown text segment (no fenced code) into lines that fit
 /// `width` display columns. A `width` of 0 disables wrapping.
 pub fn render_markdown(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<'static>> {
+    render_markdown_flow(text, width, base, theme).0
+}
+
+/// [`render_markdown`], with whether each line is flowing text
+/// (paragraphs, headings, list items, quotes) rather than a table or a
+/// rule, whose columns have to line up.
+pub fn render_markdown_flow(
+    text: &str,
+    width: usize,
+    base: Style,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<bool>) {
     let expanded: Vec<String> = text
         .lines()
         .map(|line| line.replace('\t', "    "))
@@ -32,18 +44,26 @@ pub fn render_markdown(text: &str, width: usize, base: Style, theme: &Theme) -> 
     let lines: Vec<&str> = expanded.iter().map(String::as_str).collect();
 
     let mut out = Vec::new();
+    let mut flow = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         if table::starts_at(&lines, i) {
             let end = table::end(&lines, i);
             out.extend(table::render(&lines[i..end], width, base, theme));
+            flow.resize(out.len(), false);
             i = end;
         } else {
             render_block_line(&mut out, lines[i], width, base, theme);
+            flow.resize(out.len(), !is_rule(lines[i].trim_start()));
             i += 1;
         }
     }
-    out
+    (out, flow)
+}
+
+/// Whether a span is inline code, which stays monospace in flowing text.
+pub(crate) fn is_inline_code(style: Style, theme: &Theme) -> bool {
+    style.bg == Some(theme.colors.surface)
 }
 
 fn render_block_line(

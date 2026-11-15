@@ -5,29 +5,39 @@
 //! background color, one text draw per run of same-styled ASCII, and
 //! box, block, braille and status characters drawn as shapes
 //! ([`crate::glyphs`]) so borders join and symbols the font lacks still
-//! look right. The painted grid is cached until a cell changes; the
-//! cursor is drawn on top every frame so it can blink.
+//! look right. The chat's prose rows are the exception: their text flows
+//! in a proportional face, each run as wide as it measures, with inline
+//! code and symbols still a cell per column. The painted grid is cached
+//! until a cell changes; the cursor is drawn on top every frame so it
+//! can blink.
 
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
 use crate::{glyphs, theme};
+use aura_terminal::ProseRow;
+use iced::advanced::text::Paragraph as _;
 use iced::alignment::Vertical;
 use iced::font::Style;
 use iced::widget::canvas::{self, Cache, Frame, Geometry};
-use iced::widget::text::{Alignment, LineHeight, Shaping};
+use iced::widget::text::{Alignment, LineHeight, Shaping, Wrapping};
 use iced::{mouse, Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size as GridSize};
 use ratatui::style::{Color as TermColor, Modifier};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
+use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
 
 /// Space kept clear around the grid, in pixels.
 const PAD: f32 = 6.0;
 /// Width of the bar cursor, in pixels.
 const CURSOR_WIDTH: f32 = 2.0;
+/// Prose runs whose widths are kept before the measurements start over.
+const MAX_MEASURED: usize = 4096;
 
 /// A ratatui backend that records cells instead of writing escape codes.
 pub struct GridBackend {
@@ -314,11 +324,15 @@ impl Look {
     }
 
     fn font(&self) -> Font {
-        let font = if self.bold {
-            theme::mono_bold()
-        } else {
-            theme::mono()
-        };
+        self.face(theme::mono(), theme::mono_bold())
+    }
+
+    fn prose_font(&self) -> Font {
+        self.face(theme::sans(), theme::sans_bold())
+    }
+
+    fn face(&self, regular: Font, bold: Font) -> Font {
+        let font = if self.bold { bold } else { regular };
         if self.italic {
             Font {
                 style: Style::Italic,
@@ -346,16 +360,26 @@ pub struct Screen {
     cols: u16,
     rows: u16,
     cursor: Option<Position>,
+    /// Rows of chat prose, set in the proportional face
+    prose: Vec<ProseRow>,
     cache: Cache,
+    /// Widths of prose runs, by text, face and font size
+    widths: RefCell<HashMap<(String, Font, u32), f32>>,
 }
 
 impl Screen {
-    /// Take the backend's cells; repaints only if any changed.
-    pub fn update(&mut self, backend: &GridBackend) {
+    /// Take the backend's cells and the UI's prose rows; repaints only if
+    /// any changed.
+    pub fn update(&mut self, backend: &GridBackend, prose: &[ProseRow]) {
         let buffer = backend.buffer();
         let (cols, rows) = (buffer.area.width, buffer.area.height);
-        if cols != self.cols || rows != self.rows || self.cells != buffer.content {
+        if cols != self.cols
+            || rows != self.rows
+            || self.cells != buffer.content
+            || self.prose != prose
+        {
             self.cells.clone_from(&buffer.content);
+            prose.clone_into(&mut self.prose);
             self.cols = cols;
             self.rows = rows;
             self.cache.clear();
@@ -438,88 +462,223 @@ impl Grid<'_> {
             return;
         }
         let cell = self.metrics.cell;
-        let x_at = |col: usize| origin.x + col as f32 * cell.width;
-        let edge = |col: usize| x_at(col).round();
-        for (row, cells) in self
+        for (index, cells) in self
             .screen
             .cells
             .chunks(usize::from(cols))
             .take(usize::from(rows))
             .enumerate()
         {
-            let y = origin.y + row as f32 * cell.height;
+            let y = origin.y + index as f32 * cell.height;
             let looks: Vec<Look> = cells.iter().map(|c| Look::of(c, self.palette)).collect();
-
-            // Backgrounds, one rectangle per run of the same color.
-            let mut start = 0;
-            while start < cells.len() {
-                let bg = looks[start].bg;
-                let end = (start..cells.len())
-                    .find(|&i| looks[i].bg != bg)
-                    .unwrap_or(cells.len());
-                if bg != self.palette.bg {
-                    let (x0, x1) = (edge(start), edge(end));
-                    frame.fill_rectangle(Point::new(x0, y), Size::new(x1 - x0, cell.height), bg);
-                }
-                start = end;
+            let row = Row {
+                cells,
+                looks: &looks,
+                y,
+                origin: origin.x,
+            };
+            let prose = self.screen.prose.iter().find(|p| usize::from(p.y) == index);
+            let columns = prose.map_or(0..0, |p| {
+                let start = usize::from(p.x).min(cells.len());
+                start..usize::from(p.x + p.width).clamp(start, cells.len())
+            });
+            for grid in [0..columns.start, columns.end..cells.len()] {
+                self.paint_backgrounds(frame, &row, grid.clone());
+                self.paint_cells(frame, &row, grid);
             }
-
-            // Foreground: runs of plain ASCII share one text draw; anything
-            // else is a built-in shape or a single centered glyph.
-            let mut col = 0;
-            while col < cells.len() {
-                let look = looks[col];
-                let symbol = cells[col].symbol();
-                if cells[col].skip || look.hidden {
-                    col += 1;
-                    continue;
-                }
-                if is_plain(symbol) {
-                    let end = (col..cells.len())
-                        .find(|&i| {
-                            looks[i] != look || cells[i].skip || !is_plain(cells[i].symbol())
-                        })
-                        .unwrap_or(cells.len());
-                    let run: String = cells[col..end].iter().map(Cell::symbol).collect();
-                    if !run.trim_end().is_empty() {
-                        self.text(
-                            frame,
-                            run.trim_end().to_owned(),
-                            Point::new(x_at(col), y),
-                            &look,
-                            Shaping::Basic,
-                            false,
-                        );
-                    }
-                    self.decorate(frame, &look, x_at(col), x_at(end), y);
-                    col = end;
-                    continue;
-                }
-                let width = symbol.width().max(1);
-                let area = Rectangle::new(
-                    Point::new(x_at(col), y),
-                    Size::new(cell.width * width as f32, cell.height),
-                );
-                let mut chars = symbol.chars();
-                let built_in = match (chars.next(), chars.next()) {
-                    (Some(c), None) if width == 1 => glyphs::draw(frame, c, area, look.fg),
-                    _ => false,
-                };
-                if !built_in && !symbol.trim().is_empty() {
-                    let center = Point::new(area.center_x(), y);
-                    self.text(
-                        frame,
-                        symbol.to_owned(),
-                        center,
-                        &look,
-                        Shaping::Advanced,
-                        true,
-                    );
-                }
-                self.decorate(frame, &look, area.x, area.x + area.width, y);
-                col += 1;
+            if let Some(prose) = prose {
+                self.paint_prose(frame, &row, columns, &prose.code);
             }
         }
+    }
+
+    /// Backgrounds of `columns`, one rectangle per run of the same color.
+    fn paint_backgrounds(&self, frame: &mut Frame, row: &Row<'_>, columns: Range<usize>) {
+        let edge = |col: usize| self.x_at(row, col).round();
+        let mut start = columns.start;
+        while start < columns.end {
+            let bg = row.looks[start].bg;
+            let end = (start..columns.end)
+                .find(|&i| row.looks[i].bg != bg)
+                .unwrap_or(columns.end);
+            self.fill_background(frame, bg, edge(start), edge(end), row.y);
+            start = end;
+        }
+    }
+
+    /// Foreground of `columns`: runs of plain ASCII share one text draw;
+    /// anything else is a built-in shape or a single centered glyph.
+    fn paint_cells(&self, frame: &mut Frame, row: &Row<'_>, columns: Range<usize>) {
+        let (cells, looks, y) = (row.cells, row.looks, row.y);
+        let mut col = columns.start;
+        while col < columns.end {
+            let look = looks[col];
+            let symbol = cells[col].symbol();
+            if cells[col].skip || look.hidden {
+                col += 1;
+                continue;
+            }
+            if is_plain(symbol) {
+                let end = (col..columns.end)
+                    .find(|&i| looks[i] != look || cells[i].skip || !is_plain(cells[i].symbol()))
+                    .unwrap_or(columns.end);
+                let run: String = cells[col..end].iter().map(Cell::symbol).collect();
+                let at = Point::new(self.x_at(row, col), y);
+                self.run_text(frame, &run, at, &look, look.font(), Shaping::Basic);
+                self.decorate(frame, &look, at.x, self.x_at(row, end), y);
+                col = end;
+                continue;
+            }
+            self.paint_symbol(frame, symbol, (self.x_at(row, col), y), &look);
+            col += 1;
+        }
+    }
+
+    /// One symbol that is not plain ASCII, in the cells from `at`;
+    /// returns how wide it is.
+    fn paint_symbol(&self, frame: &mut Frame, symbol: &str, at: (f32, f32), look: &Look) -> f32 {
+        let cell = self.metrics.cell;
+        let width = symbol.width().max(1);
+        let area = Rectangle::new(
+            Point::new(at.0, at.1),
+            Size::new(cell.width * width as f32, cell.height),
+        );
+        if !look.hidden {
+            let mut chars = symbol.chars();
+            let built_in = match (chars.next(), chars.next()) {
+                (Some(c), None) if width == 1 => glyphs::draw(frame, c, area, look.fg),
+                _ => false,
+            };
+            if !built_in && !symbol.trim().is_empty() {
+                self.text(
+                    frame,
+                    symbol.to_owned(),
+                    Point::new(area.center_x(), at.1),
+                    look,
+                    (look.font(), Shaping::Advanced),
+                    true,
+                );
+            }
+        }
+        self.decorate(frame, look, area.x, area.x + area.width, at.1);
+        area.width
+    }
+
+    /// A prose row's `columns`, laid out in flow: runs of text in the
+    /// proportional face, as wide as they measure; inline `code` and
+    /// symbols a cell per column, in the monospace face.
+    fn paint_prose(
+        &self,
+        frame: &mut Frame,
+        row: &Row<'_>,
+        columns: Range<usize>,
+        code: &[Range<u16>],
+    ) {
+        let (cells, looks, y) = (row.cells, row.looks, row.y);
+        let cell = self.metrics.cell;
+        let is_code =
+            |i: usize| u16::try_from(i).is_ok_and(|i| code.iter().any(|r| r.contains(&i)));
+        let mut x = self.x_at(row, columns.start);
+        let mut col = columns.start;
+        while col < columns.end {
+            let look = looks[col];
+            let symbol = cells[col].symbol();
+            if cells[col].skip {
+                col += 1;
+                continue;
+            }
+            if is_code(col) {
+                let end = (col..columns.end)
+                    .find(|&i| !is_code(i) || looks[i] != look)
+                    .unwrap_or(columns.end);
+                let run: String = cells[col..end].iter().map(Cell::symbol).collect();
+                let width = (end - col) as f32 * cell.width;
+                self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
+                if !look.hidden {
+                    let at = Point::new(x, y);
+                    self.run_text(frame, &run, at, &look, look.font(), Shaping::Advanced);
+                }
+                self.decorate(frame, &look, x, x + width, y);
+                x += width;
+                col = end;
+                continue;
+            }
+            if !is_plain(symbol) {
+                let width = symbol.width().max(1) as f32 * cell.width;
+                self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
+                x += self.paint_symbol(frame, symbol, (x, y), &look);
+                col += 1;
+                continue;
+            }
+            let end = (col..columns.end)
+                .find(|&i| {
+                    looks[i] != look || cells[i].skip || !is_plain(cells[i].symbol()) || is_code(i)
+                })
+                .unwrap_or(columns.end);
+            let run: String = cells[col..end].iter().map(Cell::symbol).collect();
+            let font = look.prose_font();
+            let width = self.measure(&run, font);
+            self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
+            if !look.hidden {
+                self.run_text(
+                    frame,
+                    &run,
+                    Point::new(x, y),
+                    &look,
+                    font,
+                    Shaping::Advanced,
+                );
+            }
+            self.decorate(frame, &look, x, x + width, y);
+            x += width;
+            col = end;
+        }
+    }
+
+    fn x_at(&self, row: &Row<'_>, col: usize) -> f32 {
+        row.origin + col as f32 * self.metrics.cell.width
+    }
+
+    fn fill_background(&self, frame: &mut Frame, bg: Color, x0: f32, x1: f32, y: f32) {
+        if bg != self.palette.bg && x1 > x0 {
+            frame.fill_rectangle(
+                Point::new(x0, y),
+                Size::new(x1 - x0, self.metrics.cell.height),
+                bg,
+            );
+        }
+    }
+
+    /// A run of text at `at`, unless it is only spaces.
+    fn run_text(
+        &self,
+        frame: &mut Frame,
+        run: &str,
+        at: Point,
+        look: &Look,
+        font: Font,
+        shaping: Shaping,
+    ) {
+        let text = run.trim_end();
+        if !text.is_empty() {
+            self.text(frame, text.to_owned(), at, look, (font, shaping), false);
+        }
+    }
+
+    /// How wide `run` is set in `font`, trailing spaces included.
+    fn measure(&self, run: &str, font: Font) -> f32 {
+        let size = self.metrics.font_size;
+        let mut widths = self.screen.widths.borrow_mut();
+        if widths.len() > MAX_MEASURED {
+            widths.clear();
+        }
+        let mut width = |text: &str| {
+            *widths
+                .entry((text.to_owned(), font, size.to_bits()))
+                .or_insert_with(|| text_width(text, font, size))
+        };
+        // A closing bar keeps trailing spaces in the measured line.
+        width(&format!("{run}|")) - width("|")
     }
 
     fn text(
@@ -528,7 +687,7 @@ impl Grid<'_> {
         content: String,
         at: Point,
         look: &Look,
-        shaping: Shaping,
+        (font, shaping): (Font, Shaping),
         centered: bool,
     ) {
         frame.fill_text(canvas::Text {
@@ -537,7 +696,7 @@ impl Grid<'_> {
             color: look.fg,
             size: Pixels(self.metrics.font_size),
             line_height: LineHeight::Absolute(Pixels(self.metrics.cell.height)),
-            font: look.font(),
+            font,
             align_x: if centered {
                 Alignment::Center
             } else {
@@ -564,6 +723,32 @@ impl Grid<'_> {
             frame.fill_rectangle(Point::new(x0, mid), Size::new(x1 - x0, t), look.fg);
         }
     }
+}
+
+/// One row of the screen as it is painted.
+struct Row<'a> {
+    cells: &'a [Cell],
+    looks: &'a [Look],
+    /// Top of the row, in pixels
+    y: f32,
+    /// Left edge of the grid, in pixels
+    origin: f32,
+}
+
+/// How wide `text` is laid out on one line in `font` at `size`.
+fn text_width(text: &str, font: Font, size: f32) -> f32 {
+    iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::text::Text {
+        content: text,
+        bounds: Size::INFINITE,
+        size: Pixels(size),
+        line_height: LineHeight::default(),
+        font,
+        align_x: Alignment::Left,
+        align_y: Vertical::Top,
+        shaping: Shaping::Advanced,
+        wrapping: Wrapping::None,
+    })
+    .min_width()
 }
 
 /// One printable ASCII character, which every monospace font has at the
