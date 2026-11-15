@@ -129,3 +129,21 @@ fn cli_golden_dataset_build_help() {
     let help = run_help(&["dataset", "build"]);
     insta::assert_snapshot!("dataset_build", help);
 }
+
+#[test]
+fn cli_golden_runs_branch_help() {
+    let help = run_help(&["runs", "branch"]);
+    insta::assert_snapshot!("runs_branch", help);
+}
+
+#[test]
+fn cli_golden_eval_run_help() {
+    let help = run_help(&["eval", "run"]);
+    insta::assert_snapshot!("eval_run", help);
+}
+
+#[test]
+fn cli_golden_eval_compare_help() {
+    let help = run_help(&["eval", "compare"]);
+    insta::assert_snapshot!("eval_compare", help);
+}

@@ -53,6 +53,8 @@ pub enum Commands {
     Runs(RunsCommand),
     /// Export recorded runs as training data.
     Dataset(DatasetCommand),
+    /// Run coding eval suites and compare harness arms.
+    Eval(EvalCommand),
 }
 
 /// `aura runs` parent command.
@@ -120,6 +122,85 @@ pub enum RunsSubcommand {
         /// Shell command whose exit status decides the outcome.
         #[arg(long)]
         cmd: String,
+    },
+    /// Re-run a recorded run from one of its steps.
+    ///
+    /// Model responses recorded before the step are replayed; the step
+    /// and everything after it run live against `--workspace`.
+    Branch {
+        /// Run id.
+        id: String,
+        /// Step whose decision is made again.
+        #[arg(long)]
+        from_step: u64,
+        /// Workspace to run in, in the state the original run started from
+        /// (for example a fresh checkout); tools run there for real.
+        #[arg(long)]
+        workspace: PathBuf,
+        #[command(flatten)]
+        harness: HarnessArgs,
+    },
+}
+
+/// Model and harness settings for headless runs.
+#[derive(Args, Debug, Clone, Default)]
+pub struct HarnessArgs {
+    /// Model id (default: the recorded run's model, or the terminal default).
+    #[arg(long)]
+    pub model: Option<String>,
+    /// `routed` (default) or `mock`.
+    #[arg(long, default_value = "routed")]
+    pub provider: String,
+    /// Harness parameter override `key=value`; repeatable.
+    #[arg(long = "set", value_name = "KEY=VALUE")]
+    pub set: Vec<String>,
+    /// Arm label recorded with the run (default: the `--set` overrides).
+    #[arg(long)]
+    pub arm: Option<String>,
+}
+
+/// `aura eval` parent command.
+#[derive(Args, Debug)]
+pub struct EvalCommand {
+    /// Eval subcommand to run.
+    #[command(subcommand)]
+    pub action: EvalSubcommand,
+}
+
+/// Subcommands under `aura eval`.
+#[derive(Subcommand, Debug)]
+pub enum EvalSubcommand {
+    /// Run a task suite and record each task as an eval run.
+    Run {
+        /// Suite directory (one `<task>/task.toml` per task).
+        #[arg(default_value = "evals/coding")]
+        suite: PathBuf,
+        /// Only run these tasks; repeatable.
+        #[arg(long)]
+        task: Vec<String>,
+        /// Runs per task.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
+        /// Where task workspaces are created (default `AURA_HOME/evals/work`).
+        #[arg(long)]
+        work_dir: Option<PathBuf>,
+        #[command(flatten)]
+        harness: HarnessArgs,
+    },
+    /// Compare recorded eval runs across arms.
+    Compare {
+        /// Only runs of this suite.
+        #[arg(long)]
+        suite: Option<String>,
+        /// Arms to compare, baseline first; repeatable (default: all).
+        #[arg(long = "arm")]
+        arms: Vec<String>,
+        /// Relative change tolerated before a metric counts as a regression.
+        #[arg(long, default_value_t = 0.1)]
+        tolerance: f64,
+        /// Exit with an error when any arm regresses against the baseline.
+        #[arg(long)]
+        fail_on_regression: bool,
     },
 }
 

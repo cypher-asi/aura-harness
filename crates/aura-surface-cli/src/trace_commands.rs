@@ -1,15 +1,27 @@
 //! `aura runs` and `aura dataset`.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
+use aura_agent::AgentLoopConfig;
 use aura_agent_trace::bundle::{list_runs, now_ms, RunBundle};
 use aura_agent_trace::dataset::{self, ExportFilter, ExportFormat};
 use aura_agent_trace::{report, scorecard, RunTrace};
+use aura_config::HarnessParams;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
+use aura_model_reasoner::ModelProvider;
+use aura_tools::ToolConfig;
 use serde_json::json;
 
-use crate::cli::{DatasetCommand, DatasetSubcommand, RunsCommand, RunsSubcommand};
+use crate::cli::{
+    DatasetCommand, DatasetSubcommand, EvalCommand, EvalSubcommand, HarnessArgs, RunsCommand,
+    RunsSubcommand,
+};
+use crate::evals::{self, EvalOptions};
+use crate::headless::{self, HeadlessRun};
+use crate::model_selection::ModelSelection;
+use crate::{event_loop, session_helpers};
 
 fn home() -> anyhow::Result<std::path::PathBuf> {
     Ok(aura_config::AuraHome::resolve()
@@ -28,7 +40,7 @@ fn load(home: &Path, id: &str) -> anyhow::Result<(RunBundle, RunTrace)> {
 /// # Errors
 ///
 /// Fails when a run can't be found or read.
-pub fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
+pub async fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
     let home = home()?;
     match args.action {
         RunsSubcommand::List { limit, json } => {
@@ -116,40 +128,56 @@ pub fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
             } else {
                 trace.meta.workspace.clone().into()
             };
-            let started = now_ms();
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&cmd)
-                .current_dir(&dir)
-                .output()
-                .with_context(|| format!("running `{cmd}` in {}", dir.display()))?;
-            let passed = output.status.success();
-            let tail = |b: &[u8]| {
-                let s = String::from_utf8_lossy(b);
-                let lines: Vec<&str> = s.lines().rev().take(20).collect();
-                lines.into_iter().rev().collect::<Vec<_>>().join("\n")
-            };
-            bundle.append_rewards(&[Reward {
-                target: RewardTarget::Run,
-                kind: RewardKind::Outcome,
-                name: "verify".into(),
-                value: if passed { 1.0 } else { 0.0 },
-                source: "cli".into(),
-                at_ms: now_ms(),
-                evidence: json!({
-                    "cmd": cmd,
-                    "exit_code": output.status.code(),
-                    "ms": now_ms().saturating_sub(started),
-                    "stdout_tail": tail(&output.stdout),
-                    "stderr_tail": tail(&output.stderr),
-                }),
-            }])?;
+            let (passed, reward) = evals::verify(&cmd, &dir, "cli")?;
+            bundle.append_rewards(&[reward])?;
             println!(
                 "{} {}: `{cmd}` {}",
                 if passed { "✓" } else { "✗" },
                 trace.meta.run_id,
                 if passed { "passed" } else { "failed" }
             );
+        }
+        RunsSubcommand::Branch {
+            id,
+            from_step,
+            workspace,
+            harness,
+        } => {
+            let (_, source) = load(&home, &id)?;
+            let arm = install_params(&harness)?;
+            let model = harness
+                .model
+                .clone()
+                .unwrap_or_else(|| source.meta.model.clone());
+            let (config, live) = loop_setup(&harness.provider, Some(&model))?;
+            let plan = headless::plan_branch(&source, from_step)?;
+            let mut meta = plan.meta;
+            meta.arm = arm;
+            let provider = headless::replay_provider(&home, &source, from_step, live)?;
+            let workspace = workspace
+                .canonicalize()
+                .with_context(|| format!("workspace {}", workspace.display()))?;
+            let outcome = headless::run(HeadlessRun {
+                home: home.clone(),
+                workspace,
+                provider,
+                config,
+                prompts: plan.prompts,
+                meta,
+                level: aura_config::trace().level,
+                tool_config: ToolConfig::for_autonomous_dev_loop(),
+            })
+            .await?;
+            println!(
+                "branch {} of {} from step {from_step}",
+                outcome.run_id, source.meta.run_id
+            );
+            if let Some(card) = &outcome.scorecard {
+                print!("{}", report::scorecard_text(card));
+            }
+            if let Some(e) = outcome.error {
+                println!("ended early: {e}");
+            }
         }
     }
     Ok(())
@@ -190,4 +218,123 @@ pub fn cmd_dataset(args: DatasetCommand) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `aura eval ...`
+///
+/// # Errors
+///
+/// Fails on an invalid suite, a provider that can't be built, or (with
+/// `--fail-on-regression`) a regressing arm.
+pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
+    let home = home()?;
+    match args.action {
+        EvalSubcommand::Run {
+            suite,
+            task,
+            repeat,
+            work_dir,
+            harness,
+        } => {
+            let mut tasks = evals::load_suite(&suite)?;
+            if !task.is_empty() {
+                tasks.retain(|t| task.contains(&t.id));
+                if tasks.is_empty() {
+                    bail!("no task in {} matches {task:?}", suite.display());
+                }
+            }
+            let arm = install_params(&harness)?;
+            let (config, provider) = loop_setup(&harness.provider, harness.model.as_deref())?;
+            let opts = EvalOptions {
+                home: home.clone(),
+                suite: evals::suite_name(&suite),
+                arm,
+                repeat,
+                level: aura_config::trace().level,
+                config,
+                tool_config: ToolConfig::for_autonomous_dev_loop(),
+                work_root: work_dir.unwrap_or_else(|| home.join("evals").join("work")),
+                provider: Box::new(move |_| Arc::clone(&provider)),
+            };
+            let results = evals::run_suite(&tasks, &opts).await?;
+            print!("{}", evals::results_table(&results));
+        }
+        EvalSubcommand::Compare {
+            suite,
+            arms,
+            tolerance,
+            fail_on_regression,
+        } => {
+            let runs = evals::runs_by_arm(&home, suite.as_deref());
+            let (report, regressions) = evals::compare(&runs, &arms, tolerance)?;
+            print!("{report}");
+            if fail_on_regression && regressions > 0 {
+                bail!(
+                    "{regressions} regression(s) beyond {:.0}%",
+                    tolerance * 100.0
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Apply `--set key=value` overrides to the process-wide harness
+/// parameters and return the arm label for the run.
+fn install_params(args: &HarnessArgs) -> anyhow::Result<Option<String>> {
+    if args.set.is_empty() {
+        return Ok(args.arm.clone());
+    }
+    let current = HarnessParams::current();
+    let known = serde_json::to_value(current)?;
+    let mut overrides = serde_json::Map::new();
+    for pair in &args.set {
+        let Some((key, value)) = pair.split_once('=') else {
+            bail!("`--set {pair}` is not key=value");
+        };
+        let key = key.trim();
+        if known.get(key).is_none() {
+            let names: Vec<&String> = known
+                .as_object()
+                .map(|o| o.keys().collect())
+                .unwrap_or_default();
+            bail!("unknown harness parameter `{key}` (known: {names:?})");
+        }
+        let value = serde_json::from_str(value.trim())
+            .unwrap_or_else(|_| serde_json::Value::String(value.trim().to_string()));
+        overrides.insert(key.to_string(), value);
+    }
+    current
+        .with_overrides(&serde_json::Value::Object(overrides))
+        .context("applying --set overrides")?
+        .install();
+    Ok(Some(args.arm.clone().unwrap_or_else(|| args.set.join(","))))
+}
+
+/// Loop configuration and provider for a headless run. The model is
+/// `model` or the terminal's startup model; the choice is not persisted.
+fn loop_setup(
+    provider: &str,
+    model: Option<&str>,
+) -> anyhow::Result<(AgentLoopConfig, Arc<dyn ModelProvider + Send + Sync>)> {
+    let mut config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
+    if provider == "mock" {
+        if let Some(model) = model {
+            config.model = model.to_string();
+        }
+        return Ok((config, aura_model_reasoner::mock_provider().provider));
+    }
+    let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
+    let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
+    let models = ModelSelection::init(&mut config, summary);
+    if let Some(model) = model {
+        if !models.usable(model) {
+            bail!("model `{model}` is not usable with the current sign-in");
+        }
+        models.limits().configure(&mut config, model);
+    }
+    let resolver: Arc<dyn aura_auth::CredentialResolver> = auth;
+    let selection =
+        aura_model_reasoner::routed_provider(Some(resolver)).context("building model provider")?;
+    Ok((config, selection.provider))
 }

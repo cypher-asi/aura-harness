@@ -12,6 +12,7 @@ Commands:
   diff    Compare two runs' scorecards and flag regressions
   label   Attach a human label to a run or one of its steps
   verify  Run a check in the run's workspace and record it as the outcome
+  branch  Re-run a recorded run from one of its steps
   help    Print this message or the help of the given subcommand(s)
 
 Options:

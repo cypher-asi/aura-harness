@@ -1,0 +1,20 @@
+title = "Build a small feature over three turns"
+prompt = "Write a POSIX shell script todo.sh that stores items in todo.txt, one per line. `sh todo.sh add <text>` appends an item; `sh todo.sh list` prints the items numbered from 1 as `1. <text>`."
+follow_ups = [
+  "Add `sh todo.sh done <n>` that removes item n; the remaining items are renumbered in `list`.",
+  "Make `sh todo.sh list` print `(empty)` when there are no items, and make an unknown command print usage to stderr and exit 2.",
+]
+verify = """
+set -e
+rm -f todo.txt
+[ "$(sh todo.sh list)" = "(empty)" ]
+sh todo.sh add milk
+sh todo.sh add eggs
+sh todo.sh add bread
+[ "$(sh todo.sh list | sed -n 2p)" = "2. eggs" ]
+sh todo.sh done 1
+[ "$(sh todo.sh list)" = "$(printf '1. eggs\\n2. bread')" ]
+if sh todo.sh frobnicate 2>/dev/null; then exit 1; fi
+sh todo.sh frobnicate 2>/dev/null || [ $? -eq 2 ]
+"""
+max_iterations = 20

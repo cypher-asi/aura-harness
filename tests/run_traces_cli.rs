@@ -140,3 +140,76 @@ fn runs_and_dataset_commands_work_on_a_recorded_run() {
     assert!(train.contains("write_file"));
     assert!(out_dir.join("dataset_card.json").is_file());
 }
+
+#[test]
+fn eval_and_branch_commands_run_with_the_mock_provider() {
+    let home = tempfile::tempdir().unwrap();
+    let suite = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/coding");
+    let mock = ["--provider", "mock"];
+
+    let mut args = vec![
+        "eval",
+        "run",
+        suite,
+        "--task",
+        "write-file",
+        "--task",
+        "fix-shell-bug",
+    ];
+    args.extend(mock);
+    let (ok, out) = aura(home.path(), &args);
+    assert!(ok, "{out}");
+    assert!(out.contains("fix-shell-bug"), "{out}");
+    assert!(out.contains("0/2 passed"), "{out}");
+
+    let mut args = vec!["eval", "run", suite, "--task", "write-file"];
+    args.extend(mock);
+    args.extend(["--set", "implement_now_threshold=4"]);
+    let (ok, out) = aura(home.path(), &args);
+    assert!(ok, "{out}");
+
+    let (ok, out) = aura(home.path(), &["eval", "compare", "--suite", "coding"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("default"), "{out}");
+    assert!(out.contains("implement_now_threshold=4"), "{out}");
+
+    let (ok, out) = aura(
+        home.path(),
+        &[
+            "eval",
+            "run",
+            suite,
+            "--provider",
+            "mock",
+            "--set",
+            "no_such_knob=1",
+        ],
+    );
+    assert!(!ok);
+    assert!(out.contains("unknown harness parameter"), "{out}");
+
+    let workspace = tempfile::tempdir().unwrap();
+    let id = record_run(home.path(), workspace.path());
+    let bundle = aura_agent_trace::RunBundle::find(home.path(), &id).unwrap();
+    let last = aura_agent_trace::RunTrace::load(&bundle)
+        .unwrap()
+        .steps
+        .last()
+        .unwrap()
+        .seq
+        .to_string();
+    let ws = workspace.path().to_string_lossy().to_string();
+    let mut args = vec![
+        "runs",
+        "branch",
+        id.as_str(),
+        "--from-step",
+        &last,
+        "--workspace",
+        &ws,
+    ];
+    args.extend(mock);
+    let (ok, out) = aura(home.path(), &args);
+    assert!(ok, "{out}");
+    assert!(out.contains(&format!("of {id} from step {last}")), "{out}");
+}

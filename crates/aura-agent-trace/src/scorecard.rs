@@ -286,22 +286,45 @@ pub fn diff(baseline: &RunScorecard, candidate: &RunScorecard, tolerance: f64) -
     headline(baseline)
         .into_iter()
         .zip(headline(candidate))
-        .filter(|((_, b, _), (_, c, _))| (b - c).abs() > f64::EPSILON)
-        .map(|((metric, b, higher_better), (_, c, _))| {
-            let worse = if higher_better { c < b } else { c > b };
-            let rel = if b.abs() > f64::EPSILON {
-                (c - b).abs() / b.abs()
-            } else {
-                1.0
-            };
-            MetricDelta {
-                metric: metric.to_string(),
-                baseline: b,
-                candidate: c,
-                regression: worse && rel > tolerance,
-            }
+        .filter_map(|((metric, b, higher_better), (_, c, _))| {
+            delta(metric, b, c, higher_better, tolerance)
         })
         .collect()
+}
+
+/// [`diff`] over per-arm means from [`mean`].
+#[must_use]
+pub fn diff_means(
+    baseline: &BTreeMap<String, f64>,
+    candidate: &BTreeMap<String, f64>,
+    tolerance: f64,
+) -> Vec<MetricDelta> {
+    headline(&RunScorecard::default())
+        .into_iter()
+        .filter_map(|(metric, _, higher_better)| {
+            let b = baseline.get(metric).copied().unwrap_or_default();
+            let c = candidate.get(metric).copied().unwrap_or_default();
+            delta(metric, b, c, higher_better, tolerance)
+        })
+        .collect()
+}
+
+fn delta(metric: &str, b: f64, c: f64, higher_better: bool, tolerance: f64) -> Option<MetricDelta> {
+    if (b - c).abs() <= f64::EPSILON {
+        return None;
+    }
+    let worse = if higher_better { c < b } else { c > b };
+    let rel = if b.abs() > f64::EPSILON {
+        (c - b).abs() / b.abs()
+    } else {
+        1.0
+    };
+    Some(MetricDelta {
+        metric: metric.to_string(),
+        baseline: b,
+        candidate: c,
+        regression: worse && rel > tolerance,
+    })
 }
 
 /// Mean of each headline metric across scorecards, for eval suites.

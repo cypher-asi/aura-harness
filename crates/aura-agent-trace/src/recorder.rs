@@ -515,6 +515,12 @@ impl RunRecorder {
         lock(&self.meta).run_id.clone()
     }
 
+    /// Bundle directory.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        self.bundle.dir()
+    }
+
     /// Current metadata.
     #[must_use]
     pub fn meta(&self) -> RunMeta {

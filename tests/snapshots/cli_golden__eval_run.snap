@@ -1,0 +1,51 @@
+---
+source: tests/cli_golden.rs
+expression: help
+---
+Run a task suite and record each task as an eval run
+
+Usage: aura eval run [OPTIONS] [SUITE]
+
+Arguments:
+  [SUITE]
+          Suite directory (one `<task>/task.toml` per task)
+          
+          [default: evals/coding]
+
+Options:
+      --mode <MODE>
+          Session mode for the interactive terminal. Overrides the daemon default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the mode does not allow
+
+          Possible values:
+          - agent: Full unrestricted operation subject to user permissions
+          - plan:  Read + markdown writes + read-only subprocesses
+          - ask:   Read-only
+          - debug: Read + sandboxed probes only
+
+      --task <TASK>
+          Only run these tasks; repeatable
+
+      --repeat <REPEAT>
+          Runs per task
+          
+          [default: 1]
+
+      --work-dir <WORK_DIR>
+          Where task workspaces are created (default `AURA_HOME/evals/work`)
+
+      --model <MODEL>
+          Model id (default: the recorded run's model, or the terminal default)
+
+      --provider <PROVIDER>
+          `routed` (default) or `mock`
+          
+          [default: routed]
+
+      --set <KEY=VALUE>
+          Harness parameter override `key=value`; repeatable
+
+      --arm <ARM>
+          Arm label recorded with the run (default: the `--set` overrides)
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -79,8 +79,9 @@ pub async fn run() -> anyhow::Result<()> {
         Some(Commands::Auth(args)) => auth_commands::cmd_auth(args),
         Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Plugins(args)) => cmd_plugins(args),
-        Some(Commands::Runs(args)) => crate::trace_commands::cmd_runs(args),
+        Some(Commands::Runs(args)) => crate::trace_commands::cmd_runs(args).await,
         Some(Commands::Dataset(args)) => crate::trace_commands::cmd_dataset(args),
+        Some(Commands::Eval(args)) => crate::trace_commands::cmd_eval(args).await,
         Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
         None => run_with_args(RunArgs::default(), requested_mode).await,
     }

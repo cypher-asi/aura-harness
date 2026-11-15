@@ -1,0 +1,4 @@
+title = "Make a failing Rust test pass"
+prompt = "`cargo test` fails in this crate. Find the bugs in src/lib.rs and fix the code (not the tests), then run the tests to confirm."
+verify = "cargo test --offline --quiet"
+max_iterations = 25
