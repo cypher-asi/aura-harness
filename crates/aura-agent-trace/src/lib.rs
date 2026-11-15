@@ -23,6 +23,7 @@ pub mod graph;
 pub mod normalize;
 pub mod recorder;
 pub mod replay;
+pub mod report;
 pub mod rewards;
 pub mod scorecard;
 

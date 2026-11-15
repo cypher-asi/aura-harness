@@ -234,6 +234,7 @@ aura-store-db = { path = "crates/aura-store-db" }
 aura-model-reasoner = { path = "crates/aura-model-reasoner" }
 aura-agent = { path = "crates/aura-agent" }
 aura-agent-trace = { path = "crates/aura-agent-trace" }
+chrono = { workspace = true }
 aura-automaton = { path = "crates/aura-automaton" }
 aura-tools = { path = "crates/aura-tools" }
 aura-protocol = { path = "crates/aura-protocol" }

@@ -66,6 +66,7 @@ pub mod event_loop;
 pub mod model_selection;
 pub mod record_loader;
 pub mod session_helpers;
+mod trace_commands;
 
 mod runner;
 

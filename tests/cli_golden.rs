@@ -111,3 +111,21 @@ fn cli_golden_plugins_disable_help() {
     let help = run_help(&["plugins", "disable"]);
     insta::assert_snapshot!("plugins_disable", help);
 }
+
+#[test]
+fn cli_golden_runs_help() {
+    let help = run_help(&["runs"]);
+    insta::assert_snapshot!("runs", help);
+}
+
+#[test]
+fn cli_golden_runs_label_help() {
+    let help = run_help(&["runs", "label"]);
+    insta::assert_snapshot!("runs_label", help);
+}
+
+#[test]
+fn cli_golden_dataset_build_help() {
+    let help = run_help(&["dataset", "build"]);
+    insta::assert_snapshot!("dataset_build", help);
+}

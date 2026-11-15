@@ -15,6 +15,8 @@ Commands:
   hello    Print "Hello, World!" and exit (Spec 01)
   migrate  Phase 4a stub: migrate aura state (no-op today)
   plugins  Manage declarative plugins (Phase 4b)
+  runs     Inspect, compare and label recorded runs (`AURA_HOME/runs/`)
+  dataset  Export recorded runs as training data
   help     Print this message or the help of the given subcommand(s)
 
 Options:

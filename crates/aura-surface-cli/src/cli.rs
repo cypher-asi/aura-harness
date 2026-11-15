@@ -49,6 +49,103 @@ pub enum Commands {
     /// agent-loop wiring lands until Phase 4c (hooks/MCP/connectors)
     /// and Phase 8 (full integration).
     Plugins(PluginsCommand),
+    /// Inspect, compare and label recorded runs (`AURA_HOME/runs/`).
+    Runs(RunsCommand),
+    /// Export recorded runs as training data.
+    Dataset(DatasetCommand),
+}
+
+/// `aura runs` parent command.
+#[derive(Args, Debug)]
+pub struct RunsCommand {
+    /// Runs subcommand to run.
+    #[command(subcommand)]
+    pub action: RunsSubcommand,
+}
+
+/// Subcommands under `aura runs`.
+#[derive(Subcommand, Debug)]
+pub enum RunsSubcommand {
+    /// List recorded runs, newest first.
+    List {
+        /// Show at most this many runs.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a run's scorecard and steps.
+    Show {
+        /// Run id, or a unique prefix or suffix of one.
+        id: String,
+        /// Also list every step.
+        #[arg(long)]
+        steps: bool,
+        /// Print the normalized trace as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare two runs' scorecards and flag regressions.
+    Diff {
+        /// Baseline run id.
+        baseline: String,
+        /// Candidate run id.
+        candidate: String,
+        /// Relative change tolerated before a metric counts as a regression.
+        #[arg(long, default_value_t = 0.1)]
+        tolerance: f64,
+    },
+    /// Attach a human label to a run or one of its steps.
+    Label {
+        /// Run id.
+        id: String,
+        /// Score; positive is good (for example 1 or -1).
+        #[arg(allow_hyphen_values = true)]
+        value: f64,
+        /// Step sequence number to label instead of the whole run.
+        #[arg(long)]
+        step: Option<u64>,
+        /// Label name.
+        #[arg(long, default_value = "human")]
+        name: String,
+        /// Free-text note stored with the label.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Run a check in the run's workspace and record it as the outcome.
+    Verify {
+        /// Run id.
+        id: String,
+        /// Shell command whose exit status decides the outcome.
+        #[arg(long)]
+        cmd: String,
+    },
+}
+
+/// `aura dataset` parent command.
+#[derive(Args, Debug)]
+pub struct DatasetCommand {
+    /// Dataset subcommand to run.
+    #[command(subcommand)]
+    pub action: DatasetSubcommand,
+}
+
+/// Subcommands under `aura dataset`.
+#[derive(Subcommand, Debug)]
+pub enum DatasetSubcommand {
+    /// Export runs as `train.jsonl` / `eval.jsonl` plus a dataset card.
+    Build {
+        /// `sft`, `preference`, `rl` or `harness-bandit`.
+        #[arg(long)]
+        format: String,
+        /// Comma-separated filter, e.g. `outcome>=0.5,model=claude-opus-4-6`.
+        #[arg(long, default_value = "")]
+        filter: String,
+        /// Output directory (default `AURA_HOME/datasets/<format>`).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 /// Arguments for `aura login`.
