@@ -16,6 +16,7 @@ aura-core-types = { path = "../aura-core-types" }
 aura-terminal = { path = "../aura-terminal" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-store-db = { path = "../aura-store-db" }
+aura-store-snapshot = { path = "../aura-store-snapshot" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-tools = { path = "../aura-tools" }
 aura-agent = { path = "../aura-agent" }
@@ -48,6 +49,9 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+similar = "2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

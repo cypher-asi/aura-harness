@@ -13,6 +13,7 @@ use aura_core_types::{
     SubagentDispatchRequest, SubagentResult, ToolDefinition, ToolResult, UserToolDefaults,
 };
 use aura_exec_traits::SpawnHook;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Context provided to tools during execution.
@@ -171,6 +172,23 @@ pub trait SubagentDispatchHook: Send + Sync {
     async fn dispatch(&self, request: SubagentDispatchRequest) -> Result<SubagentResult, String>;
 }
 
+/// Told about each file a tool call is about to change and again once the
+/// call is done, so a surface can checkpoint the file and show the change.
+///
+/// Only tools that name the file they change (see [`Tool::changed_path`])
+/// are reported; `run_command` and other tools with side effects the
+/// executor can't see are not.
+#[async_trait]
+pub trait FileChangeHook: Send + Sync {
+    /// `path` (resolved inside the sandbox) is about to be changed by the
+    /// call `tool_use_id`.
+    async fn before_change(&self, path: &Path, tool_use_id: Option<&str>);
+
+    /// The call that [`Self::before_change`] announced is done; `succeeded`
+    /// is whether the tool reported success.
+    async fn after_change(&self, path: &Path, tool_use_id: Option<&str>, succeeded: bool);
+}
+
 impl ToolContext {
     /// Construct a minimal context with only the fields required pre-phase-5.
     /// All new cross-agent fields default to `None` / empty.
@@ -230,6 +248,18 @@ pub trait Tool: Send + Sync {
     fn required_capabilities(&self) -> Vec<Capability> {
         Vec::new()
     }
+
+    /// The file a call with `args` writes, renames or deletes, as the model
+    /// gave it. Tools that change files return it so the executor can tell
+    /// a [`FileChangeHook`] before the change; the default is `None`.
+    fn changed_path<'a>(&self, _args: &'a serde_json::Value) -> Option<&'a str> {
+        None
+    }
+}
+
+/// The `path` argument of a file-changing tool call.
+pub(crate) fn path_arg(args: &serde_json::Value) -> Option<&str> {
+    args.get("path").and_then(serde_json::Value::as_str)
 }
 
 /// Returns all built-in tool instances.

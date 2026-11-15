@@ -184,6 +184,14 @@ async fn run_prompt(
         ui.send(UiCommand::Complete).await;
         return Outcome::default();
     }
+    if let Some(files) = &session.file_checkpoints {
+        files.begin_turn(
+            session.agent_id(),
+            session.started_ms,
+            session.messages.len(),
+            &text,
+        );
+    }
     session.messages.push(Message::user(text));
 
     let (process_result, forwarded) = run_agent_turn(
@@ -196,6 +204,9 @@ async fn run_prompt(
         turn.limits,
     )
     .await;
+    if let Some(files) = &session.file_checkpoints {
+        files.end_turn(session.agent_id());
+    }
     session.usage.add(&forwarded.usage);
     let (seen, unseen) = turn.steering.finish(
         process_result

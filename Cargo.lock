@@ -795,6 +795,7 @@ name = "aura-store-snapshot"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "tempfile",
  "thiserror 1.0.69",
 ]
 
@@ -818,9 +819,12 @@ dependencies = [
  "aura-plugin-core",
  "aura-runtime",
  "aura-store-db",
+ "aura-store-snapshot",
  "aura-terminal",
  "aura-tools",
  "axum",
+ "blake3",
+ "bytes",
  "chrono",
  "clap",
  "colored",
@@ -829,6 +833,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "similar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -856,6 +861,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "similar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

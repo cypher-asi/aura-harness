@@ -10,12 +10,13 @@ pub(crate) mod agent_events;
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod handlers;
-mod hud;
+pub(crate) mod hud;
 pub(crate) mod record_ui;
+mod rewind;
 pub(crate) mod run_command;
-mod steering;
+pub(crate) mod steering;
 pub(crate) mod subagents;
-mod turns;
+pub(crate) mod turns;
 
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
@@ -405,6 +406,18 @@ async fn handle_ui_event(
         UiEvent::Compact { agent_id, focus } => {
             let agent_id = state.agent_or_active(&agent_id);
             submit(state, agent_id, Work::Compact { focus }).await;
+        }
+        UiEvent::Rewind {
+            agent_id,
+            turn,
+            scope,
+        } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            rewind::handle_rewind(state, agent_id, turn, scope).await;
+        }
+        UiEvent::Diff { agent_id, session } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            rewind::handle_diff(state, agent_id, session).await;
         }
     }
     false

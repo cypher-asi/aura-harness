@@ -44,8 +44,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the checkpoint plus whatever the record holds after it, instead
   of from prompts and replies alone. `/resume` lists earlier sessions
   and `/resume <n>` continues one.
+- File checkpoints: before the file tools first change a file in a
+  turn, the terminal saves its content (or its absence) under
+  `<data_dir>/checkpoints/<agent>/`, content-addressed, with a manifest
+  per turn. Files changed by shell commands are not covered.
+- `/rewind` lists the session's turns; `/rewind <n> [code|chat|both]`
+  puts files back as they were before turn `n`, cuts the conversation
+  back to before its prompt, or both. The rewind is noted in the record
+  as a `rewind` system entry.
+- `/diff` shows how the files the latest turn changed differ from before
+  it; `/diff session` covers the whole session.
+- `ToolExecutor::with_file_change_hook` and the `FileChangeHook` trait
+  tell a surface before and after each file a tool changes; tools name
+  that file through `Tool::changed_path`. `aura-store-snapshot` gains
+  `DirSnapshotStore`, a directory-backed snapshot store.
 
 ##### Changed
+
+- `write_file`, `edit_file` and `delete_file` blocks in the chat show
+  their change as a diff (with line numbers) instead of the raw
+  arguments, and the block header counts added and removed lines.
 
 - Terminal turns have no iteration cap and no 30-minute timeout.
 - The terminal compacts history only from 70% context use

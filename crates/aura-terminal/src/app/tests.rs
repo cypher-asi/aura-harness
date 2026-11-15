@@ -176,6 +176,71 @@ fn test_clear_command_emits_clear_event() {
     assert!(matches!(rx.try_recv(), Ok(UiEvent::Clear)));
 }
 
+#[test]
+fn test_rewind_command_parses_turn_and_scope() {
+    use crate::events::RewindScope;
+
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/rewind");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Rewind {
+            turn: None,
+            scope: RewindScope::Both,
+            ..
+        })
+    ));
+    app.handle_command("/rewind 3");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Rewind {
+            turn: Some(3),
+            scope: RewindScope::Both,
+            ..
+        })
+    ));
+    app.handle_command("/rewind 2 code");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Rewind {
+            turn: Some(2),
+            scope: RewindScope::Code,
+            ..
+        })
+    ));
+
+    for bad in [
+        "/rewind 0",
+        "/rewind x",
+        "/rewind 2 files later",
+        "/rewind 2 nope",
+    ] {
+        app.handle_command(bad);
+        assert!(rx.try_recv().is_err(), "{bad} should not be sent");
+    }
+}
+
+#[test]
+fn test_diff_command_picks_turn_or_session() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/diff");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Diff { session: false, .. })
+    ));
+    app.handle_command("/diff session");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Diff { session: true, .. })
+    ));
+    app.handle_command("/diff everything");
+    assert!(rx.try_recv().is_err());
+}
+
 fn submit(app: &mut App, text: &str) {
     for c in text.chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));

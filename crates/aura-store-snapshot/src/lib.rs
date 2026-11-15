@@ -35,6 +35,7 @@
 #![warn(clippy::all)]
 
 use bytes::Bytes;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Errors surfaced by [`SnapshotStore`] implementations.
@@ -43,6 +44,10 @@ pub enum SnapshotError {
     /// Storage backend failure (I/O, corruption, transient unavailability).
     #[error("snapshot backend error: {0}")]
     Backend(String),
+    /// The hash can't name a stored object: it is empty or has characters
+    /// other than ASCII letters, digits, `-` and `_`.
+    #[error("invalid snapshot hash: {0:?}")]
+    InvalidHash(String),
 }
 
 /// Content-addressed snapshot store. See the crate docs for
@@ -91,9 +96,99 @@ impl SnapshotStore for NoopSnapshotStore {
     }
 }
 
+/// Snapshot store keeping each object in its own file under a directory,
+/// named by its hash.
+///
+/// Objects are written through a temporary file and renamed into place,
+/// so a crash never leaves a partial object under a valid name. Hashes are
+/// used as file names, so only `[A-Za-z0-9_-]` is accepted.
+#[derive(Clone, Debug)]
+pub struct DirSnapshotStore {
+    root: PathBuf,
+}
+
+impl DirSnapshotStore {
+    /// A store keeping its objects under `root`, which is created on the
+    /// first write.
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The directory holding the objects.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn object_path(&self, hash: &str) -> Result<PathBuf, SnapshotError> {
+        let valid = !hash.is_empty()
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if valid {
+            Ok(self.root.join(hash))
+        } else {
+            Err(SnapshotError::InvalidHash(hash.to_string()))
+        }
+    }
+}
+
+fn backend(context: &str, path: &Path, e: &std::io::Error) -> SnapshotError {
+    SnapshotError::Backend(format!("{context} {}: {e}", path.display()))
+}
+
+impl SnapshotStore for DirSnapshotStore {
+    fn put(&self, hash: &str, bytes: Bytes) -> Result<(), SnapshotError> {
+        let path = self.object_path(hash)?;
+        if path.exists() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.root).map_err(|e| backend("create", &self.root, &e))?;
+        let tmp = self.root.join(format!(".{hash}.tmp"));
+        std::fs::write(&tmp, &bytes).map_err(|e| backend("write", &tmp, &e))?;
+        std::fs::rename(&tmp, &path).map_err(|e| backend("rename", &path, &e))
+    }
+
+    fn get(&self, hash: &str) -> Result<Option<Bytes>, SnapshotError> {
+        let path = self.object_path(hash)?;
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(Bytes::from(bytes))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(backend("read", &path, &e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dir_store_round_trips_and_ignores_repeat_puts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DirSnapshotStore::new(dir.path().join("blobs"));
+        assert!(store.get("abc").unwrap().is_none());
+        store.put("abc", Bytes::from_static(b"first")).unwrap();
+        store.put("abc", Bytes::from_static(b"second")).unwrap();
+        assert_eq!(store.get("abc").unwrap().unwrap(), &b"first"[..]);
+    }
+
+    #[test]
+    fn dir_store_rejects_hashes_that_are_not_plain_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DirSnapshotStore::new(dir.path());
+        for hash in ["", "../x", "a/b", "a.b"] {
+            assert!(matches!(
+                store.put(hash, Bytes::new()),
+                Err(SnapshotError::InvalidHash(_))
+            ));
+            assert!(matches!(
+                store.get(hash),
+                Err(SnapshotError::InvalidHash(_))
+            ));
+        }
+    }
 
     #[test]
     fn noop_put_succeeds_and_get_returns_none() {

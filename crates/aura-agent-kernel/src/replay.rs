@@ -373,10 +373,12 @@ impl ReplayConsumer {
                 Ok(())
             }
             Ok(None) => Err(ReplayError::SnapshotMissing { seq, full_hash }),
-            Err(SnapshotError::Backend(message)) => Err(ReplayError::Store {
-                seq,
-                message: format!("snapshot_store.get({full_hash}): {message}"),
-            }),
+            Err(e @ (SnapshotError::Backend(_) | SnapshotError::InvalidHash(_))) => {
+                Err(ReplayError::Store {
+                    seq,
+                    message: format!("snapshot_store.get({full_hash}): {e}"),
+                })
+            }
         }
     }
 }

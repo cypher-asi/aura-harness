@@ -62,6 +62,9 @@ pub enum SystemKind {
     AuthChange,
     /// Config changes, schema migrations (future use)
     Infrastructure,
+    /// The user rewound an agent's files or conversation to before an
+    /// earlier turn
+    Rewind,
 }
 
 /// An immutable transaction input to the system.
