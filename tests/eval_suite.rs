@@ -63,6 +63,20 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert_eq!(trace.meta.task_id.as_deref(), Some("coding/write-file"));
     assert_eq!(trace.meta.arm.as_deref(), Some("good"));
     assert!(bundle.dir().join("record").is_dir());
+    let linked: Vec<u64> = trace
+        .steps
+        .iter()
+        .filter(|s| !s.links.record_seqs.is_empty())
+        .map(|s| s.seq)
+        .collect();
+    assert!(
+        trace
+            .steps
+            .iter()
+            .any(|s| matches!(s.action, StepAction::ToolResult { .. })
+                && !s.links.record_seqs.is_empty()),
+        "tool results are joined to the kernel record (linked steps: {linked:?})"
+    );
 
     let lazy = || MockProvider::simple_response("I'd rather not.");
     let bad = evals::run_suite(&tasks, &options(home.path(), "lazy", lazy))

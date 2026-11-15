@@ -36,7 +36,8 @@ impl RunTrace {
     /// Returns an error when `meta.json` is missing or malformed.
     pub fn load(bundle: &RunBundle) -> Result<Self, TraceError> {
         let meta = bundle.read_meta()?;
-        let steps = bundle.read_steps()?;
+        let mut steps = bundle.read_steps()?;
+        crate::records::join(&mut steps, &bundle.read_records()?);
         let stored = bundle.read_rewards()?;
         Ok(Self::from_parts(meta, steps, stored))
     }

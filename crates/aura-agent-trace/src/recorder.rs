@@ -627,6 +627,13 @@ impl RunRecorder {
         self.add_rewards(&[reward]);
     }
 
+    /// Append a kernel record row for the record-log join.
+    pub fn on_record(&self, row: &crate::records::RecordRow) {
+        if let Err(e) = self.bundle.append_records(std::slice::from_ref(row)) {
+            tracing::debug!(error = %e, "trace record write failed");
+        }
+    }
+
     /// Append external rewards (verification outcome, human labels).
     pub fn add_rewards(&self, rewards: &[Reward]) {
         if let Err(e) = self.bundle.append_rewards(rewards) {

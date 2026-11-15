@@ -293,11 +293,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "aura-agent",
+ "aura-agent-kernel",
  "aura-config",
  "aura-core-types",
  "aura-model-reasoner",
  "aura-store-snapshot",
  "blake3",
+ "bytes",
  "chrono",
  "regex",
  "serde",

@@ -22,6 +22,7 @@ pub mod dataset;
 pub mod graph;
 pub mod normalize;
 pub mod recorder;
+pub mod records;
 pub mod replay;
 pub mod report;
 pub mod rewards;
@@ -31,6 +32,7 @@ pub use bundle::{list_runs, RunBundle, RunMeta, RunSource};
 pub use graph::{EdgeKind, GraphEdge, GraphNode, NodeKind, RunGraph};
 pub use normalize::RunTrace;
 pub use recorder::{RunRecorder, StepBuilder};
+pub use records::{RecordRouter, RecordRow};
 pub use replay::ReplayProvider;
 pub use scorecard::RunScorecard;
 

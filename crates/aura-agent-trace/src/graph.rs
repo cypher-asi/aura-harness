@@ -286,6 +286,19 @@ impl RunGraph {
 
     /// Add one step.
     pub fn apply(&mut self, step: &Step) {
+        self.apply_action(step);
+        if step.links.record_seqs.is_empty() {
+            return;
+        }
+        if let Some(id) = self.by_seq.get(&step.seq).cloned() {
+            if let Some(node) = self.node_mut(&id) {
+                node.meta
+                    .insert("record_seqs".into(), json!(step.links.record_seqs));
+            }
+        }
+    }
+
+    fn apply_action(&mut self, step: &Step) {
         match &step.action {
             StepAction::UserPrompt { text } => {
                 let id = format!("t{}", step.turn);

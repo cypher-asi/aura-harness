@@ -29,6 +29,8 @@ pub const STEPS_FILE: &str = "steps.jsonl";
 pub const REWARDS_FILE: &str = "rewards.jsonl";
 /// Scorecard file name.
 pub const SUMMARY_FILE: &str = "summary.json";
+/// Kernel record rows file.
+pub const RECORD_FILE: &str = "record.jsonl";
 
 /// Where a run came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -286,6 +288,24 @@ impl RunBundle {
     /// Returns an I/O error when the file exists but can't be read.
     pub fn read_rewards(&self) -> Result<Vec<Reward>, TraceError> {
         read_jsonl(&self.path(REWARDS_FILE))
+    }
+
+    /// Read `record.jsonl` (missing file → empty).
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the file exists but can't be read.
+    pub fn read_records(&self) -> Result<Vec<crate::records::RecordRow>, TraceError> {
+        read_jsonl(&self.path(RECORD_FILE))
+    }
+
+    /// Append kernel record rows to `record.jsonl`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O or JSON error.
+    pub fn append_records(&self, rows: &[crate::records::RecordRow]) -> Result<(), TraceError> {
+        append_jsonl(&self.path(RECORD_FILE), rows)
     }
 
     /// Append rewards to `rewards.jsonl`.

@@ -17,7 +17,7 @@ pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
-pub use record_ui::{RecordPanelAgent, UiRecordObserver};
+pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
 use crate::model_selection::ModelSelection;
@@ -53,6 +53,8 @@ pub struct EventLoopContext<'a> {
     pub models: ModelSelection,
     /// Sign-in state shared with the model provider.
     pub auth: Arc<AuthManager>,
+    /// Routes kernel record entries to the run recording each agent.
+    pub record_router: Arc<aura_agent_trace::RecordRouter>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -81,6 +83,7 @@ pub(super) struct LoopState<'a> {
     pub(super) queued_notices: Vec<notices::Notice>,
     /// Open run traces, one per agent conversation.
     pub(super) traces: HashMap<AgentId, trace::LiveRun>,
+    pub(super) record_router: Arc<aura_agent_trace::RecordRouter>,
 }
 
 impl LoopState<'_> {
@@ -140,6 +143,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         memory_manager,
         models,
         auth,
+        record_router,
     } = ctx;
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
@@ -160,6 +164,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         pending_link: None,
         queued_notices: Vec::new(),
         traces: HashMap::new(),
+        record_router,
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();

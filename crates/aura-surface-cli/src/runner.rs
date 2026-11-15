@@ -440,9 +440,15 @@ async fn run_terminal(
     let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
 
     let record_panel = event_loop::RecordPanelAgent::default();
-    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
-        event_loop::UiRecordObserver::new(cmd_tx.clone(), record_panel.clone()),
-    );
+    let record_router = Arc::new(aura_agent_trace::RecordRouter::new());
+    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> =
+        Arc::new(event_loop::FanoutObserver(vec![
+            Arc::new(event_loop::UiRecordObserver::new(
+                cmd_tx.clone(),
+                record_panel.clone(),
+            )),
+            Arc::clone(&record_router) as Arc<dyn aura_agent_kernel::RecordObserver>,
+        ]));
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
@@ -548,6 +554,7 @@ async fn run_terminal(
             memory_manager: None,
             models,
             auth,
+            record_router,
         };
         event_loop::run_event_loop(ctx).await
     });

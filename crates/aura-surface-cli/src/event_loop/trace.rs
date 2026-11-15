@@ -96,6 +96,7 @@ pub(super) fn recorder(state: &mut LoopState<'_>, model: &str) -> Option<Arc<Run
     let recorder = RunRecorder::start_default(meta)?;
     let graph = Arc::new(Mutex::new(RunGraph::new(&recorder.meta())));
     subscribe_graph(&recorder, Arc::clone(&graph), state.commands.clone());
+    state.record_router.attach(agent_id, &recorder);
     state.traces.insert(
         agent_id,
         LiveRun {
@@ -153,6 +154,7 @@ pub(super) fn end_turn(
 
 /// Finish the run of `agent_id`, so its next turn starts a new run.
 pub(super) fn close(state: &mut LoopState<'_>, agent_id: AgentId) {
+    state.record_router.detach(agent_id);
     if let Some(live) = state.traces.remove(&agent_id) {
         live.recorder.finish();
     }
@@ -160,7 +162,8 @@ pub(super) fn close(state: &mut LoopState<'_>, agent_id: AgentId) {
 
 /// Finish every open run.
 pub(super) fn close_all(state: &mut LoopState<'_>) {
-    for (_, live) in state.traces.drain() {
+    for (agent_id, live) in state.traces.drain() {
+        state.record_router.detach(agent_id);
         live.recorder.finish();
     }
 }

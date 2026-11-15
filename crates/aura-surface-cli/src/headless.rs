@@ -11,7 +11,9 @@ use aura_agent::{
     AgentLoop, AgentLoopConfig, AgentLoopResult, KernelModelGateway, KernelToolGateway,
 };
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_agent_trace::{ReplayProvider, RunMeta, RunRecorder, RunScorecard, RunSource, RunTrace};
+use aura_agent_trace::{
+    RecordRouter, ReplayProvider, RunMeta, RunRecorder, RunScorecard, RunSource, RunTrace,
+};
 use aura_config::trace::TraceLevel;
 use aura_core_types::trace::StepAction;
 use aura_core_types::{AgentId, AgentPermissions};
@@ -79,6 +81,9 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
     let rec = RunRecorder::start(&spec.home, meta, level)?.context("tracing is off")?;
 
     let store = session_helpers::open_store(&rec.dir().join("record"))?;
+    let agent_id = AgentId::generate();
+    let records = Arc::new(RecordRouter::new());
+    records.attach(agent_id, &rec);
     let (_, tools) = session_helpers::build_executor_router_with_config(&spec.tool_config);
     let executor = ToolExecutor::new(spec.tool_config)
         .with_caller_permissions(AgentPermissions::full_access());
@@ -91,9 +96,10 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
         KernelConfig {
             workspace_base: spec.workspace.clone(),
             use_workspace_base_as_root: true,
+            record_observer: Some(records),
             ..KernelConfig::default()
         },
-        AgentId::generate(),
+        agent_id,
     )?);
     let model_gateway = KernelModelGateway::new(Arc::clone(&kernel));
     let tool_gateway = KernelToolGateway::new(kernel);
