@@ -69,6 +69,11 @@
 //! | `AURA_CONFLICT_ENABLED` | bool | `true` | [`ConflictConfig::enabled`] |
 //! | `AURA_CONFLICT_DEFAULT_WAIT_MS` | u64 | `30_000` | [`ConflictConfig::default_wait_ms`] |
 //! | `AURA_TRACE` | `off`/`decisions`/`full` | `decisions` | [`TraceConfig::level`] |
+//! | `AURA_GATE_POLICY` | path | `AURA_HOME/gate/policy.json` if present | [`gate::GateConfig::policy`] |
+//! | `AURA_GATE_EXPLORE` | f64 (0..1) | policy's rate | [`gate::GateConfig::explore_rate`] |
+//! | `AURA_GATE_EXPLORE_BUDGET_USD` | f64 | `1.0` | [`gate::GateConfig::explore_budget_usd`] |
+//! | `AURA_GATE_TIERS` | `fast=..,standard=..,frontier=..` | unset | [`gate::GateConfig::tiers`] |
+//! | `AURA_GATE_LEDGER` | `off` | `AURA_HOME/gate/ledger.jsonl` | [`gate::GateConfig::ledger`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
@@ -124,6 +129,7 @@ pub mod automaton;
 pub mod compaction;
 pub mod conflict;
 pub mod env;
+pub mod gate;
 pub mod plugins;
 pub mod prompts;
 pub mod reasoner;

@@ -14,9 +14,6 @@ use serde::{Deserialize, Serialize};
 use crate::block::{Attempt, BlockResult, BlockStatus, VerifyLevel};
 use crate::tier::Tier;
 
-/// File name of the ledger under the gate directory.
-pub const LEDGER_FILE: &str = "ledger.jsonl";
-
 /// One attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LedgerEntry {

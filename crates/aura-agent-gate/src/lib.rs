@@ -37,7 +37,7 @@ pub mod undo;
 pub mod verify;
 
 pub use block::{BlockKind, BlockResult, BlockSpec, BlockStatus, RunBlocksOutput, VerifyLevel};
-pub use ledger::{Ledger, LedgerEntry, LEDGER_FILE};
+pub use ledger::{Ledger, LedgerEntry};
 pub use policy::{GatePolicy, RULES_VERSION};
 pub use runner::{BlockRunner, GateSettings, GATE_BLOCK_AGENT, READ_TOOLS, WRITE_TOOLS};
 pub use tier::{frontier_of, gate_id, Tier, Tiers, GATE_PREFIX};

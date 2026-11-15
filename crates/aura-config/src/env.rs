@@ -60,6 +60,17 @@ pub const CODEX_HOME: &str = "CODEX_HOME";
 /// Consumed by [`crate::TraceConfig::level`].
 pub const AURA_TRACE: &str = "AURA_TRACE";
 
+/// Cost gate routing policy file. Consumed by [`crate::gate::GateConfig`].
+pub const AURA_GATE_POLICY: &str = "AURA_GATE_POLICY";
+/// Share of gate blocks started one tier cheaper to learn from (0..1).
+pub const AURA_GATE_EXPLORE: &str = "AURA_GATE_EXPLORE";
+/// Most USD gate exploration may spend per process.
+pub const AURA_GATE_EXPLORE_BUDGET_USD: &str = "AURA_GATE_EXPLORE_BUDGET_USD";
+/// Gate tier overrides, `fast=<id>,standard=<id>,frontier=<id>`.
+pub const AURA_GATE_TIERS: &str = "AURA_GATE_TIERS";
+/// Set to `off` to stop writing the gate attempt ledger.
+pub const AURA_GATE_LEDGER: &str = "AURA_GATE_LEDGER";
+
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
 /// any of these names.
@@ -90,6 +101,11 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_HOME,
     CODEX_HOME,
     AURA_TRACE,
+    AURA_GATE_POLICY,
+    AURA_GATE_EXPLORE,
+    AURA_GATE_EXPLORE_BUDGET_USD,
+    AURA_GATE_TIERS,
+    AURA_GATE_LEDGER,
 ];
 
 // ---------------------------------------------------------------------------

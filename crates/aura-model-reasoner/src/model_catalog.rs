@@ -30,6 +30,11 @@ pub const CLAUDE_PREFIX: &str = "claude/";
 /// Prefix that marks a model as served directly with a ChatGPT subscription.
 pub const CHATGPT_PREFIX: &str = "chatgpt/";
 
+/// Prefix of cost-gate model ids: `gate/<frontier id>` runs the frontier
+/// model as a coordinator that hands routine blocks to cheaper models on
+/// the same route. Billing and sign-in follow the frontier id.
+pub const GATE_PREFIX: &str = "gate/";
+
 /// Lightweight local model used when nothing else is configured: small
 /// enough for CPU-only laptops and supports native tool calling.
 pub const DEFAULT_LOCAL_MODEL: &str = "qwen3:4b";
@@ -134,6 +139,9 @@ const CHATGPT_MODELS: &[(&str, &str)] = &[("chatgpt/gpt-5.4", "GPT-5.4")];
 /// Backend serving `model`.
 #[must_use]
 pub fn backend_for(model: &str) -> ModelBackend {
+    if let Some(frontier) = gate_frontier(model) {
+        return backend_for(frontier);
+    }
     if model.starts_with(LOCAL_PREFIX) {
         ModelBackend::Local
     } else if model.starts_with(CLAUDE_PREFIX) {
@@ -145,10 +153,35 @@ pub fn backend_for(model: &str) -> ModelBackend {
     }
 }
 
+/// Frontier model of a gate id (`gate/claude/claude-opus-5-5` ->
+/// `claude/claude-opus-5-5`), `None` for other ids.
+#[must_use]
+pub fn gate_frontier(model: &str) -> Option<&str> {
+    model
+        .strip_prefix(GATE_PREFIX)
+        .filter(|rest| !rest.trim().is_empty())
+}
+
+/// Gate entries for the selector: one per Opus-class model in `options`.
+#[must_use]
+pub fn gate_options(options: &[ModelOption]) -> Vec<ModelOption> {
+    options
+        .iter()
+        .filter(|o| o.backend != ModelBackend::Local && upstream_model_name(&o.id).contains("opus"))
+        .map(|o| ModelOption {
+            id: format!("{GATE_PREFIX}{}", o.id),
+            label: format!("Gate · {}", o.label),
+            backend: o.backend,
+            installed: true,
+        })
+        .collect()
+}
+
 /// Model name as the serving backend knows it: strips the `local/`,
 /// `claude/` or `chatgpt/` route prefix; router aliases are unchanged.
 #[must_use]
 pub fn upstream_model_name(model: &str) -> &str {
+    let model = gate_frontier(model).unwrap_or(model);
     [LOCAL_PREFIX, CLAUDE_PREFIX, CHATGPT_PREFIX]
         .iter()
         .find_map(|prefix| model.strip_prefix(prefix))
@@ -507,6 +540,17 @@ pub fn is_installed(installed: &[String], name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gate_ids_bill_like_their_frontier() {
+        assert_eq!(super::backend_for("gate/claude/claude-opus-5-5"), super::ModelBackend::Claude);
+        assert_eq!(super::backend_for("gate/aura-claude-opus-4-7"), super::ModelBackend::Router);
+        assert_eq!(super::upstream_model_name("gate/claude/claude-opus-5-5"), "claude-opus-5-5");
+        assert_eq!(super::gate_frontier("gate/"), None);
+        let gates = super::gate_options(&super::catalog("qwen3:4b", &[]));
+        let ids: Vec<&str> = gates.iter().map(|o| o.id.as_str()).collect();
+        assert_eq!(ids, ["gate/aura-claude-opus-4-7", "gate/claude/claude-opus-4-7"]);
+    }
+
     use super::*;
 
     #[test]

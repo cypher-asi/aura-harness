@@ -34,7 +34,7 @@ pub use normalize::RunTrace;
 pub use recorder::{RunRecorder, StepBuilder};
 pub use records::{RecordRouter, RecordRow};
 pub use replay::ReplayProvider;
-pub use scorecard::RunScorecard;
+pub use scorecard::{child_cost_reward, RunScorecard, CHILD_COST_REWARD};
 
 /// Errors reading or writing run bundles.
 #[derive(Debug, thiserror::Error)]

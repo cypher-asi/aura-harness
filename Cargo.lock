@@ -1074,6 +1074,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-gate",
  "aura-agent-kernel",
  "aura-agent-trace",
  "aura-auth",

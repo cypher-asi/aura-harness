@@ -7,8 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Prefix of gate model ids.
-pub const GATE_PREFIX: &str = "gate/";
+pub use aura_model_reasoner::model_catalog::GATE_PREFIX;
 
 /// Capability tier of a model, cheapest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -73,9 +72,7 @@ impl std::fmt::Display for Tier {
 /// (`gate/claude/claude-opus-5-5` -> `claude/claude-opus-5-5`).
 #[must_use]
 pub fn frontier_of(model: &str) -> Option<&str> {
-    model
-        .strip_prefix(GATE_PREFIX)
-        .filter(|rest| !rest.trim().is_empty())
+    aura_model_reasoner::model_catalog::gate_frontier(model)
 }
 
 /// Gate id coordinating with `frontier`.
