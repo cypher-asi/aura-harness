@@ -54,6 +54,8 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **`/context`** shows how full the context window is and what fills it (system prompt, tools, skills, conversation) as of the last turn.
 - **`/cost`** lists the session's model calls, tokens (new input, cache reads and writes, output) and estimated cost.
 - **`/todos`** opens or closes the agent's full todo list above the input.
+- **Sessions survive restarts.** After every turn the terminal saves the agent's session (the conversation as the model saw it, tool calls included, plus its todo list and usage totals) under `<data_dir>/sessions/<agent>/`. On restart the agent continues from there, with anything the record holds after the checkpoint replayed on top. Without a usable checkpoint it falls back to the prompts and replies in the record. `/new` starts a fresh session; the old one stays saved.
+- **`/resume`** lists the agent's earlier sessions, newest first; **`/resume <n>`** continues number `n` (the agent must be idle). The chat shows the resumed conversation and the status line its usage.
 - **`/compact [focus]`** summarizes the older history now instead of waiting for context pressure, keeping the first message and the recent steps as they are. Text after the command tells the summary what to keep. A busy agent does it when its current work ends. The summary replaces history only in the running session; the record keeps every message.
 
 ## Global flags

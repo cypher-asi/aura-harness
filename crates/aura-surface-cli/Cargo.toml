@@ -19,6 +19,7 @@ aura-store-db = { path = "../aura-store-db" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-tools = { path = "../aura-tools" }
 aura-agent = { path = "../aura-agent" }
+aura-context-compaction = { path = "../aura-context-compaction" }
 aura-context-memory = { path = "../aura-context-memory" }
 aura-context-skills = { path = "../aura-context-skills" }
 aura-auth = { path = "../aura-auth" }

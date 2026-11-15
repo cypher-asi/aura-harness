@@ -7,6 +7,7 @@
 //! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
 use super::hud::{call_stats, todo_views};
+use crate::session_checkpoint::SessionUsage;
 use async_trait::async_trait;
 use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink, PROGRESS_CONTEXT_SUMMARIZED,
@@ -70,6 +71,8 @@ pub(crate) struct ForwarderState {
     pub turn_cost_usd: f64,
     /// Context window of the turn's model
     pub context_limit: Option<u64>,
+    /// Model calls and tokens of the turn
+    pub usage: SessionUsage,
 }
 
 /// Stops a turn once its model calls cost more than `limit_usd`.
@@ -280,13 +283,18 @@ impl TurnEventSink for UiCommandSink {
                 cache_creation_input_tokens,
                 cache_read_input_tokens,
             };
-            self.ui
-                .send(UiCommand::CallStats(call_stats(
-                    &model,
-                    &usage,
-                    self.state.context_limit,
-                )))
-                .await;
+            let stats = call_stats(&model, &usage, self.state.context_limit);
+            self.state.usage.add(&SessionUsage {
+                calls: 1,
+                input_tokens: stats.input_tokens,
+                cache_read_tokens: stats.cache_read_tokens,
+                cache_write_tokens: stats.cache_write_tokens,
+                output_tokens: stats.output_tokens,
+                cost_usd: stats.cost_usd.unwrap_or(0.0),
+                priced: stats.cost_usd.is_some(),
+                context_tokens: stats.prompt_tokens(),
+            });
+            self.ui.send(UiCommand::CallStats(stats)).await;
             let usage = call_usage(&model, &usage);
             self.ui
                 .send(UiCommand::SetReplyModel {

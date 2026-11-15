@@ -3,7 +3,7 @@
 //! `/todos` commands. Each agent has its own, swapped in with its chat.
 
 use super::format::{format_cost, format_tokens};
-use crate::events::{CallStats, ContextView, JobView, TodoState, TodoView};
+use crate::events::{CallStats, ContextView, JobView, SessionTotals, TodoState, TodoView};
 
 /// Model usage of an agent's session so far.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -46,6 +46,23 @@ impl SessionStats {
         if call.context_limit.is_some() {
             self.context_limit = call.context_limit;
         }
+    }
+
+    /// Take the totals of a session opened or resumed, keeping what is
+    /// known about the model's context window.
+    pub fn restore(&mut self, totals: &SessionTotals) {
+        *self = Self {
+            calls: totals.calls,
+            input_tokens: totals.input_tokens,
+            cache_read_tokens: totals.cache_read_tokens,
+            cache_write_tokens: totals.cache_write_tokens,
+            output_tokens: totals.output_tokens,
+            cost_usd: totals.cost_usd.unwrap_or(0.0),
+            priced: totals.cost_usd.is_some(),
+            context_tokens: totals.context_tokens,
+            context_limit: self.context_limit,
+            compactions: 0,
+        };
     }
 
     /// Share of prompt tokens served from the cache, in percent. `None`

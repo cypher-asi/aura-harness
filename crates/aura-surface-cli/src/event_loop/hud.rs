@@ -2,11 +2,13 @@
 //! `/todos` commands show, built from what agents report.
 
 use super::agent_events::AgentUi;
+use super::agents::AgentSession;
 use super::LoopState;
+use crate::session_checkpoint::SessionUsage;
 use aura_agent::AgentLoopResult;
 use aura_core_types::AgentId;
 use aura_model_reasoner::{model_catalog, Usage};
-use aura_terminal::events::{CallStats, ContextView, JobView, TodoState, TodoView};
+use aura_terminal::events::{CallStats, ContextView, JobView, SessionTotals, TodoState, TodoView};
 use aura_terminal::UiCommand;
 use aura_tools::jobs::JobSummary;
 use aura_tools::todo::{TodoItem, TodoStatus};
@@ -77,12 +79,31 @@ pub(super) async fn send_jobs(state: &LoopState<'_>) {
     }
 }
 
-/// Show `agent_id` its todo list, when its session is idle here.
-pub(super) async fn send_todos(state: &LoopState<'_>, agent_id: AgentId) {
+/// `usage` as the UI shows it.
+pub(super) fn session_totals(usage: &SessionUsage) -> SessionTotals {
+    SessionTotals {
+        calls: usage.calls,
+        input_tokens: usage.input_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        output_tokens: usage.output_tokens,
+        cost_usd: usage.priced.then_some(usage.cost_usd),
+        context_tokens: usage.context_tokens,
+    }
+}
+
+/// Show `session`'s todo list and usage in its chat.
+pub(super) async fn send_session(ui: &AgentUi, session: &AgentSession) {
+    ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
+        .await;
+    ui.send(UiCommand::SetSessionTotals(session_totals(&session.usage)))
+        .await;
+}
+
+/// Show `agent_id` its todo list and usage, when its session is idle here.
+pub(super) async fn send_session_of(state: &LoopState<'_>, agent_id: AgentId) {
     if let Some(session) = state.idle.get(&agent_id) {
-        AgentUi::new(state.commands.clone(), agent_id)
-            .send(UiCommand::SetTodos(todo_views(&session.todos)))
-            .await;
+        send_session(&AgentUi::new(state.commands.clone(), agent_id), session).await;
     }
 }
 

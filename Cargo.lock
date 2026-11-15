@@ -808,6 +808,7 @@ dependencies = [
  "aura-agent-kernel",
  "aura-auth",
  "aura-config",
+ "aura-context-compaction",
  "aura-context-memory",
  "aura-context-skills",
  "aura-core-modes",

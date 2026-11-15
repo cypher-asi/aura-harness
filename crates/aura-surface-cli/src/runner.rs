@@ -442,6 +442,7 @@ async fn run_terminal(
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
     let factory_jobs = Arc::clone(&jobs);
+    let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
             registry,
@@ -483,6 +484,7 @@ async fn run_terminal(
                     )?)
                 }),
             )
+            .with_checkpoints(checkpoints)
         },
     );
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));

@@ -32,6 +32,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("help", "Show help"),
     command("new", "New session (reset context)"),
     SlashCommand {
+        name: "resume",
+        args: "[n]",
+        description: "List earlier sessions, or resume one",
+        needs_args: false,
+    },
+    SlashCommand {
         name: "name",
         args: "[name]",
         description: "Rename the current project",

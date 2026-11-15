@@ -2,13 +2,16 @@
 
 use super::agent_events::{AgentUi, CostCap, ForwarderState};
 use super::agents::AgentSession;
-use super::hud::{context_view, todo_views};
+use super::hud::{context_view, send_session, todo_views};
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::steering::Steering;
 use super::turns::record_user_prompt;
 use super::{forward_agent_events, LoopState};
 use crate::long_run::LongRunSettings;
+use crate::record_loader::chat_from_messages;
+use crate::session_checkpoint::SessionListing;
 use aura_agent::{AgentLoopEvent, RunOptions};
+use aura_core_types::AgentId;
 use aura_core_types::Transaction;
 use aura_terminal::events::{MessageData, MessageRole};
 use aura_terminal::UiCommand;
@@ -115,6 +118,7 @@ pub(super) async fn handle_agent_success(
         }
     }
     persist_response_via_kernel(session, &result.total_text, ui).await;
+    session.save_checkpoint().await;
     emit_response_to_ui(&result, forwarded, ui).await;
 
     // Memory ingestion now fires automatically via TurnObserver inside
@@ -190,28 +194,8 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
         return false;
     };
 
-    let session_tx = Transaction::session_start(agent_id);
-    let store = session.kernel.store();
-
-    if let Err(e) = store.enqueue_tx(&session_tx) {
-        error!(error = %e, "Failed to enqueue session start");
-    } else if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
-        match session.kernel.process_dequeued(tx.clone(), token).await {
-            Ok(result) => {
-                debug!(
-                    seq = result.entry.seq,
-                    "Session start record persisted via kernel"
-                );
-                send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to persist session start record via kernel");
-            }
-        }
-    }
-
-    session.messages.clear();
-    session.todos.clear();
+    record_session_start(session, state.commands).await;
+    session.reset();
     let _ = state
         .commands
         .send(UiCommand::ForAgent {
@@ -225,6 +209,125 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
         .send(UiCommand::SetStatus("Ready".to_string()))
         .await;
     true
+}
+
+/// Mark a new session in `session`'s record, so a rebuild from the
+/// record starts after it.
+async fn record_session_start(
+    session: &AgentSession,
+    commands: &tokio::sync::mpsc::Sender<UiCommand>,
+) {
+    let agent_id = session.agent_id();
+    let session_tx = Transaction::session_start(agent_id);
+    let store = session.kernel.store();
+
+    if let Err(e) = store.enqueue_tx(&session_tx) {
+        error!(error = %e, "Failed to enqueue session start");
+    } else if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
+        match session.kernel.process_dequeued(tx.clone(), token).await {
+            Ok(result) => {
+                debug!(
+                    seq = result.entry.seq,
+                    "Session start record persisted via kernel"
+                );
+                send_record_to_ui(commands, result.entry.seq, &tx, &result.entry).await;
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to persist session start record via kernel");
+            }
+        }
+    }
+}
+
+/// `/resume`: list the earlier sessions of `agent_id`, or continue the one
+/// at 1-based `index` in that list.
+pub(super) async fn handle_resume(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    index: Option<usize>,
+) {
+    let ui = AgentUi::new(state.commands.clone(), agent_id);
+    let Some(session) = state.idle.get_mut(&agent_id) else {
+        ui.send(UiCommand::ShowWarning(
+            "Wait for this agent to finish before resuming a session".to_string(),
+        ))
+        .await;
+        return;
+    };
+    let Some(checkpoints) = session.checkpoints.clone() else {
+        ui.send(UiCommand::ShowWarning(
+            "Sessions are not saved in this terminal".to_string(),
+        ))
+        .await;
+        return;
+    };
+    let sessions = checkpoints.list(agent_id, Some(session.started_ms));
+    let Some(index) = index else {
+        ui.send(system_message(session_list(&sessions))).await;
+        return;
+    };
+    let Some(listing) = index.checked_sub(1).and_then(|i| sessions.get(i)) else {
+        ui.send(UiCommand::ShowWarning(format!(
+            "No session {index}; /resume lists them"
+        )))
+        .await;
+        return;
+    };
+    let Some(checkpoint) = checkpoints.load(agent_id, listing.started_ms) else {
+        ui.send(UiCommand::ShowWarning(
+            "Could not read that session".to_string(),
+        ))
+        .await;
+        return;
+    };
+
+    info!(%agent_id, started_ms = listing.started_ms, "Resuming an earlier session");
+    record_session_start(session, state.commands).await;
+    session.restore(checkpoint);
+    session.save_checkpoint().await;
+    ui.send(UiCommand::LoadConversation(chat_from_messages(
+        &session.messages,
+    )))
+    .await;
+    send_session(&ui, session).await;
+    ui.send(UiCommand::ShowSuccess(format!(
+        "Resumed: {}",
+        listing.title
+    )))
+    .await;
+}
+
+/// The `/resume` list.
+fn session_list(sessions: &[SessionListing]) -> String {
+    if sessions.is_empty() {
+        return "No earlier sessions for this agent".to_string();
+    }
+    let mut out = String::from("Earlier sessions (resume one with /resume <n>):");
+    for (i, session) in sessions.iter().enumerate() {
+        out.push_str(&format!(
+            "\n  {}. {} · {} messages · {}",
+            i + 1,
+            format_session_time(session.updated_ms),
+            session.messages,
+            session.title
+        ));
+    }
+    out
+}
+
+/// `Nov 02 14:03` in local time.
+fn format_session_time(ts_ms: u64) -> String {
+    i64::try_from(ts_ms)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map_or_else(
+            || "?".to_string(),
+            |dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%b %d %H:%M")
+                    .to_string()
+            },
+        )
 }
 
 /// A system line for the chat.

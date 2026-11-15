@@ -169,7 +169,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     };
 
     agents::send_sandbox_root(&state).await;
-    hud::send_todos(&state, active).await;
+    hud::send_session_of(&state, active).await;
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
@@ -398,6 +398,10 @@ async fn handle_ui_event(
         UiEvent::LinkCode(code) => auth::handle_link_code(state, &code).await,
         UiEvent::Unlink(provider) => auth::handle_unlink(state, &provider).await,
         UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
+        UiEvent::Resume { agent_id, index } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            handlers::handle_resume(state, agent_id, index).await;
+        }
         UiEvent::Compact { agent_id, focus } => {
             let agent_id = state.agent_or_active(&agent_id);
             submit(state, agent_id, Work::Compact { focus }).await;

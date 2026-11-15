@@ -196,6 +196,7 @@ async fn run_prompt(
         turn.limits,
     )
     .await;
+    session.usage.add(&forwarded.usage);
     let (seen, unseen) = turn.steering.finish(
         process_result
             .as_ref()
@@ -253,6 +254,7 @@ async fn run_compact(
                 "Compacted history on request"
             );
             session.messages = compacted.messages;
+            session.save_checkpoint().await;
             ui.send(UiCommand::Compacted(format!(
                 "Summarized older history: ~{} → ~{} tokens",
                 compacted.before_tokens, compacted.after_tokens

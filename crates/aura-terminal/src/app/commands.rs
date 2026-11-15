@@ -132,6 +132,7 @@ impl App {
                 }
             }
             "compact" => self.handle_compact_command(arg),
+            "resume" => self.handle_resume_command(arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
@@ -358,6 +359,27 @@ impl App {
         }
     }
 
+    /// `/resume [n]`: list the agent's earlier sessions, or resume number `n`.
+    fn handle_resume_command(&mut self, arg: &str) {
+        let index = if arg.is_empty() {
+            None
+        } else if let Some(n) = arg.parse::<usize>().ok().filter(|n| *n > 0) {
+            Some(n)
+        } else {
+            self.notification = Some((
+                "Usage: /resume [n] (n from the list /resume shows)".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Resume {
+                agent_id: self.active_agent_id.clone(),
+                index,
+            });
+        }
+    }
+
     /// `/compact [focus]`: summarize the agent's older history now. A busy
     /// agent does it once its current work ends.
     fn handle_compact_command(&mut self, focus: &str) {
@@ -465,6 +487,7 @@ impl App {
             }
             UiCommand::SetJobs(jobs) => self.hud.jobs = jobs,
             UiCommand::SetQueued(queued) => self.hud.queued = queued,
+            UiCommand::SetSessionTotals(totals) => self.hud.stats.restore(&totals),
             UiCommand::SetContext(context) => {
                 if context.limit_tokens.is_some() {
                     self.hud.stats.context_limit = context.limit_tokens;

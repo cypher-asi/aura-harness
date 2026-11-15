@@ -124,6 +124,15 @@ pub enum UiEvent {
     /// User selected a model by id
     SelectModel(String),
 
+    /// User asked for the agent's earlier sessions (`None`), or to resume
+    /// the one with this number in that list
+    Resume {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// 1-based position in the list
+        index: Option<usize>,
+    },
+
     /// User asked to summarize the older history of an agent now
     Compact {
         /// Agent the chat showed (hex id)
@@ -255,6 +264,8 @@ pub enum UiCommand {
     SetQueued(usize),
     /// What the agent's context is made of, as of its last turn
     SetContext(ContextView),
+    /// Usage of the agent's session so far, when it is opened or resumed
+    SetSessionTotals(SessionTotals),
 
     /// A command for the chat of one agent. Agents work in parallel, so
     /// anything an agent's turn sends is addressed to it; the UI applies it
@@ -402,6 +413,25 @@ impl CallStats {
     pub const fn prompt_tokens(&self) -> u64 {
         self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
     }
+}
+
+/// Usage of a session so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SessionTotals {
+    /// Model calls made
+    pub calls: u32,
+    /// Prompt tokens neither read from nor written to the cache
+    pub input_tokens: u64,
+    /// Prompt tokens read from the cache
+    pub cache_read_tokens: u64,
+    /// Prompt tokens written to the cache
+    pub cache_write_tokens: u64,
+    /// Output tokens
+    pub output_tokens: u64,
+    /// Estimated cost; `None` when no call had a price
+    pub cost_usd: Option<f64>,
+    /// Prompt of the latest call
+    pub context_tokens: u64,
 }
 
 /// Status of a todo item.

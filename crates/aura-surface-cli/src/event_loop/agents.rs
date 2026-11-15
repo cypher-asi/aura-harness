@@ -12,6 +12,9 @@ use super::subagents::lock;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::record_loader::{conversation_history, recent_record_summaries};
+use crate::session_checkpoint::{
+    is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
+};
 use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
@@ -35,12 +38,63 @@ pub struct AgentSession {
     pub definition: Option<String>,
     /// The agent's `todo_write` list, carried from turn to turn.
     pub todos: Vec<TodoItem>,
+    /// When the current session started; names its checkpoint
+    pub started_ms: u64,
+    /// Model calls and tokens of the current session
+    pub usage: SessionUsage,
+    /// Where the session is checkpointed after each turn, if anywhere
+    pub checkpoints: Option<Checkpoints>,
 }
 
 impl AgentSession {
     #[must_use]
     pub const fn agent_id(&self) -> AgentId {
         self.identity.agent_id
+    }
+
+    /// Start a new, empty session.
+    pub fn reset(&mut self) {
+        self.messages.clear();
+        self.todos.clear();
+        self.usage = SessionUsage::default();
+        self.started_ms = now_ms();
+    }
+
+    /// Continue the session saved in `checkpoint`.
+    pub fn restore(&mut self, checkpoint: SessionCheckpoint) {
+        self.messages = checkpoint.messages;
+        if !is_resumable(&self.messages) {
+            self.messages.pop();
+        }
+        self.todos = checkpoint.todos;
+        self.usage = checkpoint.usage;
+        self.started_ms = checkpoint.started_ms;
+    }
+
+    /// Checkpoint the session as of the head of its record. A failure is
+    /// logged; the record still has the conversation.
+    pub async fn save_checkpoint(&self) {
+        let Some(checkpoints) = &self.checkpoints else {
+            return;
+        };
+        let agent_id = self.agent_id();
+        let record_seq = match self.kernel.store().get_head_seq(agent_id) {
+            Ok(seq) => seq,
+            Err(e) => {
+                warn!(%agent_id, error = %e, "Skipping checkpoint: record head unknown");
+                return;
+            }
+        };
+        let checkpoint = SessionCheckpoint::new(
+            self.started_ms,
+            record_seq,
+            self.messages.clone(),
+            self.todos.clone(),
+            self.usage,
+        );
+        if let Err(e) = checkpoints.save(agent_id, &checkpoint).await {
+            warn!(%agent_id, error = %e, "Failed to save session checkpoint");
+        }
     }
 }
 
@@ -69,6 +123,7 @@ pub type KernelBuilder =
 pub struct KernelFactory {
     pub(super) store: Arc<dyn ReadStore>,
     build_kernel: KernelBuilder,
+    pub(super) checkpoints: Option<Checkpoints>,
 }
 
 impl KernelFactory {
@@ -77,7 +132,35 @@ impl KernelFactory {
         Self {
             store,
             build_kernel,
+            checkpoints: None,
         }
+    }
+
+    /// Checkpoint sessions in `checkpoints` and resume them from there.
+    #[must_use]
+    pub fn with_checkpoints(mut self, checkpoints: Checkpoints) -> Self {
+        self.checkpoints = Some(checkpoints);
+        self
+    }
+
+    /// The agent's current checkpoint with what the record holds beyond
+    /// it, when the checkpoint still applies.
+    fn restore(&self, agent_id: AgentId) -> Option<SessionCheckpoint> {
+        let mut checkpoint = self.checkpoints.as_ref()?.load_current(agent_id)?;
+        let newer = crate::record_loader::model_history_since(
+            self.store.as_ref(),
+            agent_id,
+            checkpoint.record_seq,
+        )
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "Failed to read the record past the checkpoint");
+            None
+        })?;
+        if !is_resumable(&checkpoint.messages) {
+            checkpoint.messages.pop();
+        }
+        checkpoint.messages.extend(newer);
+        Some(checkpoint)
     }
 
     /// Open a session (kernel + gateways) for `agent`, working in `folder`
@@ -99,20 +182,32 @@ impl KernelFactory {
             parent_chain,
             folder,
         )?);
-        let messages = crate::record_loader::model_history(self.store.as_ref(), identity.agent_id)
-            .unwrap_or_else(|e| {
-                warn!(error = %e, "Failed to rebuild model history from record");
-                Vec::new()
-            });
-        Ok(AgentSession {
+        let mut session = AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
             tool_gateway: KernelToolGateway::new(kernel.clone()),
             kernel,
-            todos: todos_from_history(&messages),
-            messages,
+            messages: Vec::new(),
             definition: agent.definition.clone(),
-        })
+            todos: Vec::new(),
+            started_ms: now_ms(),
+            usage: SessionUsage::default(),
+            checkpoints: self.checkpoints.clone(),
+        };
+        if let Some(checkpoint) = self.restore(session.agent_id()) {
+            info!(agent = %session.agent_id(), "Resuming session from checkpoint");
+            session.restore(checkpoint);
+        } else {
+            let messages =
+                crate::record_loader::model_history(self.store.as_ref(), session.agent_id())
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "Failed to rebuild model history from record");
+                        Vec::new()
+                    });
+            session.todos = todos_from_history(&messages);
+            session.messages = messages;
+        }
+        Ok(session)
     }
 }
 
@@ -346,7 +441,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
         AgentUi::new(state.commands.clone(), agent_id)
             .send(UiCommand::LoadConversation(history))
             .await;
-        super::hud::send_todos(state, agent_id).await;
+        super::hud::send_session_of(state, agent_id).await;
     }
 
     send_sandbox_root(state).await;
