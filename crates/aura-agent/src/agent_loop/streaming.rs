@@ -97,8 +97,9 @@ pub(super) fn emit_iteration_complete(
 
 /// Emit a [`DebugEvent::LlmCall`] frame. Called at the end of every
 /// completed provider call (streaming happy path, non-streaming
-/// fallback path, and the compact-and-retry path).
-fn emit_debug_llm_call(
+/// fallback path, the compact-and-retry path, and the pump transport's
+/// sampling request).
+pub(super) fn emit_debug_llm_call(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     provider_name: &str,
     model_name: &str,

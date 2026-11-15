@@ -64,6 +64,7 @@ mod auth_commands;
 pub mod cli;
 pub mod event_loop;
 pub mod file_checkpoints;
+mod headless;
 mod long_run;
 pub mod model_selection;
 pub mod record_loader;

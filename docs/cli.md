@@ -4,7 +4,7 @@
 
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
-| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the terminal UI by default, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
+| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the terminal UI by default, runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
 | `aura-node` | [`crates/aura-runtime/src/main.rs`](../crates/aura-runtime/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
 
 Older specs mention a separate `aura-cli` crate. It never shipped; read `aura-cli/src/...` paths as `src/...` in the root crate.
@@ -16,6 +16,7 @@ Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src
 | Command | Description |
 |---------|-------------|
 | `aura run` (default) | Run the agent. Flags below. |
+| `aura -p "prompt"` | Run one prompt without the terminal UI, print the result and exit. See [`aura -p`](#aura--p-one-prompt-without-the-terminal). |
 | `aura login [zos\|claude\|chatgpt] [--paste]` | `zos` (default) signs in with email and password and unlocks the aura-router models. `claude` and `chatgpt` link your own Claude Pro/Max or ChatGPT plan through the browser; `--paste` uses a code you paste instead of a local redirect (SSH, headless). `/login [provider] [paste]` in the TUI does the same. |
 | `aura logout [zos\|claude\|chatgpt] [--all]` | Sign out of zOS (linked plans are kept for when you sign back in), unlink one plan, or with `--all` unlink every plan and sign out. `/logout [provider]` in the TUI. |
 | `aura whoami` | Show the zOS sign-in and each plan link's status. |
@@ -61,11 +62,88 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **`/rewind`** lists the turns of the current session, newest first, with their time, prompt and how many files each changed. **`/rewind <n> [code|chat|both]`** undoes turn `n` and every turn after it (the agent must be idle). `code` puts back each file those turns changed as it was before turn `n`, and removes files that did not exist then. `chat` cuts the conversation the model sees back to just before turn `n`'s prompt and saves the session. `both` is the default. If turn `n` was summarized away by a history summary, only `code` is possible. The rewind is noted in the agent's record, and the record itself keeps every message.
 - **Diffs.** A `write_file`, `edit_file` or `delete_file` block in the chat shows the change as a diff with line numbers when you expand it, and its header counts the added and removed lines (`Edited main.rs · +3 -1`). `edit_file` blocks restored from history show the replaced text against its replacement. **`/diff`** shows how the files the latest turn changed differ now from before that turn; **`/diff session`** does the same for every file changed since the session started.
 
+## `aura -p`: one prompt without the terminal
+
+`aura -p "prompt"` (or `--print`) runs one prompt to the end, prints the result, and exits. It is meant for scripts, CI and evals.
+
+```sh
+aura -p "fix the failing test in src/parser.rs"
+git diff | aura -p "review this change" --output-format json
+aura -p - < task.md --max-time 30m --max-cost-usd 5
+aura -p "now add docs for it" --continue
+```
+
+- **Prompt.** The text after `-p`. `-p -`, or `-p` with no text, reads the prompt from stdin. When stdin is piped and a prompt is given too, stdin is appended to the prompt after a blank line. Scripts that pipe nothing should give stdin `/dev/null` so the run does not wait for input.
+- **Same agent machinery as the terminal.** The run uses the terminal's session code: long-run settings (no iteration cap, the todo list keeps the agent going), background jobs, history compaction, session checkpoints, and the permanent agents for `task`. It works in the current directory (or `--cwd`) and keeps its data in `AURA_DATA_DIR`, else `./aura_data`, like the terminal.
+- **Sessions.** Runs belong to a dedicated agent named "Headless" in the data directory's agent list, so they never replace the session of an agent the terminal shows. Each run starts a new session unless `--continue` (the Headless agent's latest session) or `--resume <session_id>` is given. A session id is `<agent id>:<session start ms>`, printed as `session_id` in the `json` and `stream-json` output; `--resume` also accepts ids of terminal agents' sessions, and a bare number names a session of the Headless agent. The terminal can open the Headless agent and `/resume` its sessions too.
+- **Background jobs.** When the agent ends its turn while jobs it started are still running, the run waits for them (up to `AURA_HEADLESS_JOB_WAIT`, default 10 minutes, and within `--max-time`) and gives the agent each exit notice as a new turn, as the terminal does. Jobs still running at the end are stopped.
+- **Permissions.** Nothing prompts. A tool call the policy would ask about is denied, and so is any tool outside `--allowed-tools` or inside `--disallowed-tools`; filtered tools are also left out of what the model is offered. `todo_write` is always allowed unless disallowed, and `job_output` / `job_kill` come with `run_command`. `--mode` applies as in the terminal.
+- **Limits.** `--max-turns` counts model calls across the whole run. `--max-time` and `--max-cost-usd` also apply to the whole run and default to `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD`. A limit stops the agent between steps, so the work done so far is kept in the session and `--resume` can continue it. A limit that is reached while the agent writes its final reply does not count as stopping it.
+- **Output.** stdout carries only the chosen format; logs go to stderr (warnings only by default, `--verbose` or `RUST_LOG` for more).
+- **Store lock.** RocksDB lets one process open a data directory at a time, so `aura -p` cannot share a data directory with a running terminal. Point `AURA_DATA_DIR` elsewhere to run both.
+
+### Flags for `-p`
+
+Each requires `-p`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output-format <text\|json\|stream-json>` | `text` | What is printed; see below. |
+| `--resume <SESSION_ID>` | — | Continue the saved session with this id. |
+| `-c, --continue` | off | Continue the Headless agent's latest session. |
+| `--allowed-tools <TOOLS>` | all | Only these tools may run (comma- or space-separated, repeatable). |
+| `--disallowed-tools <TOOLS>` | none | These tools may not run. Wins over `--allowed-tools`. |
+| `--max-turns <N>` | no limit | Stop after N model calls. |
+| `--max-time <DURATION>` | `AURA_TUI_TURN_TIMEOUT` | Stop after this long: `90s`, `45m`, `2h`, or a bare number of minutes. |
+| `--max-cost-usd <USD>` | `AURA_TUI_MAX_TURN_COST_USD` | Stop once model calls cost more than this at API list prices. |
+| `-d, --cwd <DIR>` | current directory | Work in this directory. |
+| `--model <MODEL>` | the terminal's choice | Model for this run only; the `/model` choice is not changed. A local model whose server is not ready fails the run at once. |
+| `--provider <anthropic\|mock>` | `anthropic` | `mock` answers without a model, for tests. |
+| `--verbose` | off | Debug logging to stderr. |
+| `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Global flag; the session mode. |
+
+### Output formats
+
+- **`text`** prints the agent's final reply. Errors go to stderr.
+- **`json`** prints one object:
+
+  | Field | Meaning |
+  |-------|---------|
+  | `type` | Always `"result"`. |
+  | `exit_reason` | `success`, `max_turns`, `max_time`, `max_cost`, `error` or `interrupted`. |
+  | `is_error` | `true` unless `exit_reason` is `success`. |
+  | `result` | The agent's final reply. |
+  | `session_id` | Pass to `--resume`. |
+  | `model` | Model the run used. |
+  | `num_turns` | Model calls made by this run. |
+  | `agent_turns` | Agent turns: the prompt plus one per background-job notice. |
+  | `duration_ms` | Wall time. |
+  | `usage` | `calls`, `input_tokens` (neither read from nor written to the cache), `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `cache_hit_rate` (cache reads over all prompt tokens) and `cost_usd`. |
+  | `total_cost_usd` | Estimated cost at API list prices, or `null` when no call had a price. |
+  | `compactions` | History summaries made to stay within the context window. |
+  | `todos` | The agent's todo list at the end (`id`, `content`, `status`). |
+  | `files_changed` | Files the agent wrote, edited or deleted with its file tools. |
+  | `error` | What went wrong, when `is_error`. |
+
+  A failure before the run starts (for example an unknown `--resume` id) is reported the same way with `exit_reason: "error"`.
+- **`stream-json`** prints one JSON object per line as the run goes, each with a `type`: `init` (session id, agent id, model, working directory, mode, offered tools, whether it resumed), `text_delta`, `thinking_delta`, `tool_use` (a call started: `id`, `name`), `tool_result` (`id`, `name`, `input`, `content`, `is_error`), `stream_reset` (drop text streamed since the last tool result), `todos`, `usage` (one model call's tokens and cost), `compacted`, `warning`, `error`, `notice` (a background-job notice starts another turn), and finally the `result` object above.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | The agent finished. |
+| 1 | The run failed (model error, unknown session, unreadable data directory, …). |
+| 2 | Bad command-line arguments. |
+| 3 | `--max-turns`, `--max-time` or `--max-cost-usd` stopped the run. |
+| 130 | Interrupted with Ctrl+C. |
+
 ## Global flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Session mode for the terminal UI. The kernel denies any tool call the mode does not allow. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` carries its own optional `mode`. |
+| `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Session mode for the terminal UI and `aura -p`. The kernel denies any tool call the mode does not allow. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` carries its own optional `mode`. |
+| `-p, --print [PROMPT]` | — | Run one prompt without the terminal UI; see [`aura -p`](#aura--p-one-prompt-without-the-terminal). |
 
 ## `aura run` flags
 

@@ -12,7 +12,7 @@ use crate::record_loader::chat_from_messages;
 use crate::session_checkpoint::SessionListing;
 use aura_agent::{AgentLoopEvent, RunOptions};
 use aura_core_types::AgentId;
-use aura_core_types::Transaction;
+use aura_core_types::{RecordEntry, Transaction};
 use aura_terminal::events::{MessageData, MessageRole};
 use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
@@ -48,30 +48,22 @@ pub(super) async fn run_agent_turn(
         agent_loop.config().max_context_tokens,
     ));
 
-    let run = agent_loop.run_with_session(
-        &session.model_gateway,
-        &session.tool_gateway,
-        session.messages.clone(),
+    let process_result = drive_turn(
+        session,
+        agent_loop,
         tools,
-        RunOptions {
-            event_tx: Some(agent_event_tx),
-            cancellation_token: Some(turn_cancel.clone()),
-            handle: Some(steering.handle()),
-        },
-    );
-    let process_result = match limits.turn_timeout {
-        None => run.await,
-        Some(limit) => match tokio::time::timeout(limit, run).await {
-            Ok(result) => result,
-            Err(_) => {
-                turn_cancel.cancel();
-                Err(aura_agent::AgentError::Timeout(format!(
-                    "Agent turn timed out after {} minutes (AURA_TUI_TURN_TIMEOUT)",
-                    limit.as_secs() / 60
-                )))
-            }
-        },
-    };
+        agent_event_tx,
+        &turn_cancel,
+        steering,
+        limits.turn_timeout,
+    )
+    .await
+    .unwrap_or_else(|| {
+        let minutes = limits.turn_timeout.map_or(0, |limit| limit.as_secs() / 60);
+        Err(aura_agent::AgentError::Timeout(format!(
+            "Agent turn timed out after {minutes} minutes (AURA_TUI_TURN_TIMEOUT)"
+        )))
+    });
 
     let forwarded = match forwarder.await {
         Ok(fwd_state) => {
@@ -90,6 +82,42 @@ pub(super) async fn run_agent_turn(
     };
 
     (process_result, forwarded)
+}
+
+/// Run one turn of `session` on `agent_loop` with `tools`, sending its
+/// events to `events`. `turn_cancel` stops it early and `steering` feeds
+/// it messages while it runs. Returns `None`, after cancelling
+/// `turn_cancel`, when it runs longer than `timeout`.
+pub(crate) async fn drive_turn(
+    session: &AgentSession,
+    agent_loop: &aura_agent::AgentLoop,
+    tools: Vec<aura_model_reasoner::ToolDefinition>,
+    events: tokio::sync::mpsc::Sender<AgentLoopEvent>,
+    turn_cancel: &CancellationToken,
+    steering: &Steering,
+    timeout: Option<std::time::Duration>,
+) -> Option<Result<aura_agent::AgentLoopResult, aura_agent::AgentError>> {
+    let run = agent_loop.run_with_session(
+        &session.model_gateway,
+        &session.tool_gateway,
+        session.messages.clone(),
+        tools,
+        RunOptions {
+            event_tx: Some(events),
+            cancellation_token: Some(turn_cancel.clone()),
+            handle: Some(steering.handle()),
+        },
+    );
+    match timeout {
+        None => Some(run.await),
+        Some(limit) => {
+            let result = tokio::time::timeout(limit, run).await.ok();
+            if result.is_none() {
+                turn_cancel.cancel();
+            }
+            result
+        }
+    }
 }
 
 /// Keep what the turn produced: its conversation, todo list and reply.
@@ -136,6 +164,17 @@ pub(super) async fn handle_agent_success(
 }
 
 async fn persist_response_via_kernel(session: &AgentSession, total_text: &str, ui: &AgentUi) {
+    if let Some((tx, entry)) = record_response(session, total_text).await {
+        send_record_to_ui(ui.commands(), entry.seq, &tx, &entry).await;
+    }
+}
+
+/// Record the model's reply `total_text` on `session`. A failure is
+/// logged; the checkpoint still holds the reply.
+pub(crate) async fn record_response(
+    session: &AgentSession,
+    total_text: &str,
+) -> Option<(Transaction, RecordEntry)> {
     let response_tx = create_response_transaction(session.agent_id(), total_text);
 
     match session.kernel.process_direct(response_tx.clone()).await {
@@ -144,10 +183,11 @@ async fn persist_response_via_kernel(session: &AgentSession, total_text: &str, u
                 seq = result.entry.seq,
                 "Response record persisted via kernel"
             );
-            send_record_to_ui(ui.commands(), result.entry.seq, &response_tx, &result.entry).await;
+            Some((response_tx, result.entry))
         }
         Err(e) => {
             error!(error = %e, "Failed to persist response record via kernel");
+            None
         }
     }
 }
@@ -217,26 +257,53 @@ async fn record_session_start(
     session: &AgentSession,
     commands: &tokio::sync::mpsc::Sender<UiCommand>,
 ) {
+    if let Some((tx, entry)) = mark_session_start(session).await {
+        send_record_to_ui(commands, entry.seq, &tx, &entry).await;
+    }
+}
+
+/// Mark a new session in `session`'s record, returning the transaction and
+/// its record entry. A failure is logged.
+pub(crate) async fn mark_session_start(
+    session: &AgentSession,
+) -> Option<(Transaction, RecordEntry)> {
     let agent_id = session.agent_id();
     let session_tx = Transaction::session_start(agent_id);
     let store = session.kernel.store();
 
     if let Err(e) = store.enqueue_tx(&session_tx) {
         error!(error = %e, "Failed to enqueue session start");
-    } else if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
-        match session.kernel.process_dequeued(tx.clone(), token).await {
-            Ok(result) => {
-                debug!(
-                    seq = result.entry.seq,
-                    "Session start record persisted via kernel"
-                );
-                send_record_to_ui(commands, result.entry.seq, &tx, &result.entry).await;
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to persist session start record via kernel");
-            }
+        return None;
+    }
+    let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) else {
+        return None;
+    };
+    match session.kernel.process_dequeued(tx.clone(), token).await {
+        Ok(result) => {
+            debug!(
+                seq = result.entry.seq,
+                "Session start record persisted via kernel"
+            );
+            Some((tx, result.entry))
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to persist session start record via kernel");
+            None
         }
     }
+}
+
+/// Make the saved session `checkpoint` the current session of `session`:
+/// mark the switch in the record, so a rebuild from it starts here, then
+/// continue from the checkpoint and save it as current.
+pub(crate) async fn resume_checkpoint(
+    session: &mut AgentSession,
+    checkpoint: crate::session_checkpoint::SessionCheckpoint,
+) -> Option<(Transaction, RecordEntry)> {
+    let marked = mark_session_start(session).await;
+    session.restore(checkpoint);
+    session.save_checkpoint().await;
+    marked
 }
 
 /// `/resume`: list the earlier sessions of `agent_id`, or continue the one
@@ -282,9 +349,9 @@ pub(super) async fn handle_resume(
     };
 
     info!(%agent_id, started_ms = listing.started_ms, "Resuming an earlier session");
-    record_session_start(session, state.commands).await;
-    session.restore(checkpoint);
-    session.save_checkpoint().await;
+    if let Some((tx, entry)) = resume_checkpoint(session, checkpoint).await {
+        send_record_to_ui(state.commands, entry.seq, &tx, &entry).await;
+    }
     ui.send(UiCommand::LoadConversation(chat_from_messages(
         &session.messages,
     )))

@@ -13,7 +13,7 @@ use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use crate::long_run::LongRunSettings;
 use aura_agent::{AgentLoop, CompactHistoryError};
-use aura_core_types::{AgentId, Transaction};
+use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::UiCommand;
 use tokio::sync::mpsc;
@@ -155,6 +155,17 @@ pub(super) async fn record_user_prompt(
     text: String,
     ui: &AgentUi,
 ) -> Result<(), String> {
+    let (tx, entry) = record_prompt(session, text).await?;
+    send_record_to_ui(ui.commands(), entry.seq, &tx, &entry).await;
+    Ok(())
+}
+
+/// Record `text` on `session` as a prompt from the user, returning the
+/// transaction and the record entry it became.
+pub(crate) async fn record_prompt(
+    session: &AgentSession,
+    text: String,
+) -> Result<(Transaction, RecordEntry), String> {
     let prompt_tx = Transaction::user_prompt(session.agent_id(), text);
     let (tx, token) = enqueue_and_dequeue(session, prompt_tx)?;
     let result = session
@@ -165,8 +176,7 @@ pub(super) async fn record_user_prompt(
             error!(error = %e, "Failed to persist prompt record via kernel");
             format!("Kernel error: {e}")
         })?;
-    send_record_to_ui(ui.commands(), result.entry.seq, &tx, &result.entry).await;
-    Ok(())
+    Ok((tx, result.entry))
 }
 
 /// Record `text` as the user's prompt and run a turn answering it.
@@ -294,7 +304,7 @@ async fn run_compact(
 }
 
 /// Clear transactions left in the agent's inbox by an earlier run.
-pub(super) async fn drain_stale_inbox(session: &AgentSession) {
+pub(crate) async fn drain_stale_inbox(session: &AgentSession) {
     let store = session.kernel.store();
     let mut stale_count = 0;
     while let Ok(Some((token, tx))) = store.dequeue_tx(session.agent_id()) {

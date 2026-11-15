@@ -41,6 +41,16 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
 
+## `aura -p` runs
+
+[`aura -p`](cli.md#aura--p-one-prompt-without-the-terminal) reads the variables above too. There, `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD` are the defaults for `--max-time` and `--max-cost-usd` and limit the whole run rather than each turn.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_DATA_DIR` | `./aura_data` in the working directory | Data directory: agent list, record store and session checkpoints. A running terminal holds the store's lock, so give `aura -p` its own directory to run both at once. |
+| `AURA_HEADLESS_JOB_WAIT` | `10m` | Longest wait for the agent's background jobs after it ends its turn (`90s`, `45m`, `2h`, or a bare number of minutes). Jobs still running then are stopped. |
+| `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
+
 ## Node runtime
 
 | Variable | Default | Description |
