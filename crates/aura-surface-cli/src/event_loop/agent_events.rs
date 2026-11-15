@@ -243,6 +243,7 @@ impl TurnEventSink for UiCommandSink {
 pub(crate) async fn forward_agent_events(
     mut rx: tokio::sync::mpsc::Receiver<AgentLoopEvent>,
     commands: mpsc::Sender<UiCommand>,
+    recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         commands,
@@ -251,6 +252,9 @@ pub(crate) async fn forward_agent_events(
     };
 
     while let Some(event) = rx.recv().await {
+        if let Some(rec) = &recorder {
+            rec.on_event(&event);
+        }
         map_agent_loop_event(event, &mut sink).await;
     }
 

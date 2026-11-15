@@ -22,6 +22,7 @@ pub(super) async fn run_agent_turn(
     agent_loop: &aura_agent::AgentLoop,
     tools: Vec<aura_model_reasoner::ToolDefinition>,
     model: &str,
+    recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
@@ -30,7 +31,7 @@ pub(super) async fn run_agent_turn(
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
 
     let fwd_commands = state.commands.clone();
-    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, fwd_commands));
+    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, fwd_commands, recorder));
 
     let cancel_token = CancellationToken::new();
     let cancel_for_turn = cancel_token.clone();
@@ -183,6 +184,8 @@ async fn emit_response_to_ui(
 
 pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
     debug!("New session requested");
+    let agent_id = state.session.agent_id();
+    super::trace::close(state, agent_id);
 
     let session_tx = Transaction::session_start(state.session.agent_id());
     let store = state.session.kernel.store();

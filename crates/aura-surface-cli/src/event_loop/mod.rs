@@ -11,6 +11,7 @@ pub(crate) mod processes;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
 pub(crate) mod subagents;
+pub(crate) mod trace;
 
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
@@ -78,6 +79,8 @@ pub(super) struct LoopState<'a> {
     pub(super) pending_link: Option<PendingLink>,
     /// Notices for agents that aren't on screen.
     pub(super) queued_notices: Vec<notices::Notice>,
+    /// Open run traces, one per agent conversation.
+    pub(super) traces: HashMap<AgentId, Arc<aura_agent_trace::RunRecorder>>,
 }
 
 impl LoopState<'_> {
@@ -156,6 +159,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         pending_link: None,
         queued_notices: Vec::new(),
+        traces: HashMap::new(),
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
@@ -193,6 +197,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         }
     }
     publisher.abort();
+    trace::close_all(&mut state);
 
     #[allow(unreachable_code)]
     Ok(())
@@ -394,9 +399,26 @@ async fn run_turn(state: &mut LoopState<'_>) {
         &config,
     );
     let model = config.model.clone();
+    let mut config = config;
+    let recorder = trace::recorder(state, &model);
+    if let Some(rec) = &recorder {
+        let prompt = state
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == aura_model_reasoner::Role::User)
+            .map(Message::text_content)
+            .unwrap_or_default();
+        rec.begin_turn(&prompt);
+        config.trace_blobs = rec.blob_store();
+    }
     let turn_loop = AgentLoop::new(config);
     let (process_result, forwarded, cancelled) =
-        handlers::run_agent_turn(state, &turn_loop, tools, &model).await;
+        handlers::run_agent_turn(state, &turn_loop, tools, &model, recorder.clone()).await;
+    if let Some(rec) = &recorder {
+        trace::end_turn(rec, &process_result, cancelled);
+    }
     state.park_finished_spawns();
     if cancelled {
         let _ = state
