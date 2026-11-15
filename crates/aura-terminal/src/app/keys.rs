@@ -1,7 +1,8 @@
 //! Key event handling for the App.
 
 use super::{
-    line_edit::LineEdit, AgentsTab, App, AppState, NotificationType, PanelFocus, SidePanelTab,
+    line_edit::LineEdit, AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus,
+    SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -338,6 +339,14 @@ impl App {
             self.toggle_selected_project();
             return KeyResult::continue_running();
         }
+        if self.focus == PanelFocus::Chat
+            && self.input.is_empty()
+            && key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+        {
+            self.toggle_chat_tab();
+            return KeyResult::continue_running();
+        }
         if self.focus == PanelFocus::Sandbox && self.input.is_empty() && !word_motion {
             if self.handle_side_tab_key(key) {
                 return KeyResult::continue_running();
@@ -385,9 +394,8 @@ impl App {
         }
     }
 
-    /// `$` on an empty line switches to the terminal; Esc, or Backspace on
-    /// an empty line, switches back to chat. Each pane opens at its bottom.
-    /// Returns whether the key was used.
+    /// `$` on an empty line opens the TERMINAL tab; Esc, or Backspace on an
+    /// empty line, goes back to CHAT. Returns whether the key was used.
     fn toggle_terminal_mode(&mut self, key: KeyEvent) -> bool {
         let entering = !self.terminal_mode
             && key.code == KeyCode::Char('$')
@@ -401,15 +409,17 @@ impl App {
         if !(entering || leaving) {
             return false;
         }
-        self.terminal_mode = entering;
-        self.history().reset();
-        self.scroll_chat_to_bottom();
+        self.show_chat_tab(if entering {
+            ChatTab::Terminal
+        } else {
+            ChatTab::Chat
+        });
         true
     }
 
     /// History for the current prompt: commands at the terminal prompt,
     /// messages otherwise.
-    fn history(&mut self) -> &mut InputHistory {
+    pub(super) fn history(&mut self) -> &mut InputHistory {
         if self.terminal_mode {
             &mut self.command_history
         } else {

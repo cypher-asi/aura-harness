@@ -3,18 +3,19 @@
 use super::text::display_width;
 use crate::{
     animation::AURA_WIDTH,
-    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow, ToggleTarget},
+    app::{AgentsTab, ChatTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow, ToggleTarget},
     App, Theme,
 };
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 
-/// Render the Chat panel.
+/// Render the Chat panel: a CHAT | TERMINAL tab bar over the conversation
+/// or the shell commands run this session.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let border_color = if is_focused {
@@ -24,40 +25,49 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     };
 
     let block = Block::default()
-        .title(if app.terminal_pane() {
-            " TERMINAL "
-        } else {
-            " CHAT "
-        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+
+    let (tabs, body) = tab_bar_split(inner);
+    app.set_chat_tabs_area(tabs);
+    let hovered = match app.hover() {
+        Some(HoverTarget::ChatTab(tab)) => Some(tab),
+        _ => None,
+    };
+    let line = tab_line(
+        ChatTab::layout().map(|(tab, _, _)| (tab, tab.label(), None)),
+        app.chat_tab(),
+        hovered,
+        is_focused,
+        theme,
+    );
+    frame.render_widget(Paragraph::new(line), tabs);
 
     let terminal = app.terminal_pane();
     let padded = if terminal {
-        terminal_text_area(inner)
+        terminal_text_area(body)
     } else {
-        centered_text_area(inner)
+        centered_text_area(body)
     };
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
-    let tail = if terminal {
-        live_prompt(app, padded.width as usize, theme)
+    let working_line = if terminal {
+        None
     } else {
-        let working_line = working_indicator_line(app, theme);
-        if app.pane_is_empty() && working_line.is_none() {
-            render_welcome(frame, padded, theme);
-            return;
-        }
-        Tail {
-            lines: working_line.into_iter().collect(),
-            gap: true,
-            cursor: None,
-        }
+        working_indicator_line(app, theme)
     };
+    if app.pane_is_empty() && working_line.is_none() {
+        render_welcome(frame, padded, terminal, theme);
+        return;
+    }
+    let tail: Vec<Line<'static>> = working_line.into_iter().collect();
 
     let rows = render_chat_lines(frame, padded, app, theme, &tail);
     render_scrollbar(
@@ -132,51 +142,15 @@ pub(super) fn render_scrollbar(
     frame.render_stateful_widget(scrollbar, column, &mut state);
 }
 
-/// Rows drawn after the pane's messages: the working indicator in the chat,
-/// the prompt being typed at in the terminal.
-struct Tail {
-    lines: Vec<Line<'static>>,
-    /// Whether a blank row separates the lines from the messages above
-    gap: bool,
-    /// Where the typing cursor sits, as (row of `lines`, column)
-    cursor: Option<(usize, u16)>,
-}
-
-/// The terminal's prompt and the command being typed, with the cursor in
-/// it. Empty while a command runs, as a shell shows no prompt until the
-/// command exits.
-fn live_prompt(app: &App, width: usize, theme: &Theme) -> Tail {
-    if !app.shows_live_prompt() {
-        return Tail {
-            lines: Vec::new(),
-            gap: false,
-            cursor: None,
-        };
-    }
-    let input = app.input();
-    let mut lines = super::command::prompt_line(app.shell_prompt(), input, width, theme);
-    let before_cursor = input.get(..app.cursor_pos()).unwrap_or(input);
-    let column = display_width(app.shell_prompt()) + display_width(before_cursor);
-    let (row, col) = (column / width.max(1), column % width.max(1));
-    while lines.len() <= row {
-        lines.push(Line::default());
-    }
-    Tail {
-        lines,
-        gap: false,
-        cursor: u16::try_from(col).ok().map(|col| (row, col)),
-    }
-}
-
 /// Draw the rows of the conversation that fall in `padded` at the current
 /// scroll position, cloning only those rows out of the line cache, then
-/// `tail`.
+/// `tail` (the working indicator) a blank row below them.
 fn render_chat_lines(
     frame: &mut Frame,
     padded: Rect,
     app: &mut App,
     theme: &Theme,
-    tail: &Tail,
+    tail: &[Line<'static>],
 ) -> ChatRows {
     let spinner = app.spinner_char();
     let hovered_activity = match app.hover() {
@@ -202,18 +176,17 @@ fn render_chat_lines(
         }));
         message_rows += block.lines.len();
     }
-    let tail_gap = usize::from(tail.gap && message_rows > 0 && !tail.lines.is_empty());
-    let tail_start = message_rows + tail_gap;
+    let tail_gap = usize::from(message_rows > 0 && !tail.is_empty());
     let tail_toggle = app
         .turn_started_ms()
-        .filter(|_| !app.terminal_pane() && !tail.lines.is_empty())
+        .filter(|_| !tail.is_empty())
         .map(|started| ToggleRow {
-            line: tail_start,
+            line: message_rows + tail_gap,
             target: ToggleTarget::TurnRecords(started),
             open: false,
         });
     toggle_rows.extend(tail_toggle);
-    let content = tail_start + tail.lines.len();
+    let content = message_rows + tail_gap + tail.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
     // bring the latest prompt to the top with the reply filling in below.
@@ -252,7 +225,7 @@ fn render_chat_lines(
     if tail_gap > 0 {
         push_visible(&mut visible, &mut line_index, start, height, blank);
     }
-    for (row, line) in tail.lines.iter().enumerate() {
+    for (row, line) in tail.iter().enumerate() {
         let mut line = line.clone();
         if row == 0 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target)) {
             apply_activity_hover(&mut line, theme);
@@ -261,13 +234,6 @@ fn render_chat_lines(
     }
     frame.render_widget(Paragraph::new(visible), padded);
 
-    if let Some((row, col)) = tail.cursor {
-        let row = tail_start + row;
-        if (start..start + height).contains(&row) && col < padded.width {
-            let y = padded.y + u16::try_from(row - start).unwrap_or(0);
-            frame.set_cursor_position((padded.x + col, y));
-        }
-    }
     ChatRows {
         total,
         first: start,
@@ -355,7 +321,7 @@ fn terminal_text_area(area: Rect) -> Rect {
     }
 }
 
-/// The chat text column, horizontally centered in `area` below a blank row.
+/// The chat text column, horizontally centered in `area`.
 pub(super) fn centered_text_area(area: Rect) -> Rect {
     let width = area
         .width
@@ -363,9 +329,8 @@ pub(super) fn centered_text_area(area: Rect) -> Rect {
         .min(CHAT_MAX_TEXT_WIDTH);
     Rect {
         x: area.x + (area.width - width) / 2,
-        y: area.y.saturating_add(1),
         width,
-        height: area.height.saturating_sub(1),
+        ..area
     }
 }
 
@@ -422,15 +387,14 @@ pub(crate) fn format_elapsed(elapsed: std::time::Duration) -> String {
     }
 }
 
-fn render_welcome(frame: &mut Frame, area: Rect, theme: &Theme) {
-    let welcome = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Type a message to start chatting, $ for a terminal, or /help for commands.",
-            Style::default().fg(theme.colors.muted),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(welcome), area);
+fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) {
+    let text = if terminal {
+        "Enter runs a command. Esc returns to chat."
+    } else {
+        "Type a message to start chatting, $ for a terminal, or /help for commands."
+    };
+    let welcome = Line::from(Span::styled(text, Style::default().fg(theme.colors.muted)));
+    frame.render_widget(Paragraph::new(welcome).wrap(Wrap { trim: true }), area);
 }
 
 /// Render the agents panel: a PROJECTS | AGENTS tab bar over either the
