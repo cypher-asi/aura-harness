@@ -882,7 +882,7 @@ fn test_sandbox_panel_sits_below_record() {
     assert_eq!(
         column(&rows[sandbox + 3], "▸ src/"),
         column(&rows[sandbox], "│ SANDBOX") + 2,
-        "tree rows share the Record panel's one-column `>` gutter"
+        "tree rows share the Record panel's one-column gutter"
     );
 }
 

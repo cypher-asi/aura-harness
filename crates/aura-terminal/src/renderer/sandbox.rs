@@ -144,7 +144,7 @@ fn sandbox_line<'a>(
     width: usize,
     theme: &Theme,
 ) -> Line<'a> {
-    let prefix = if highlighted { ">" } else { " " };
+    let prefix = " ";
     let indent = "  ".repeat(row.depth);
     let (marker, label, color) = match row.kind {
         SandboxEntryKind::Dir => (

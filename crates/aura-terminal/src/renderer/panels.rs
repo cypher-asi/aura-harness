@@ -892,7 +892,7 @@ fn build_record_lines<'a>(
 
     for (i, record) in app.records().iter().enumerate().skip(first).take(rows) {
         let is_selected = i == selected;
-        let prefix = if is_selected && is_focused { ">" } else { " " };
+        let prefix = " ";
 
         let line_style = if is_selected && is_focused {
             Style::default()
