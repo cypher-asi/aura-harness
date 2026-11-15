@@ -26,6 +26,12 @@ pub struct ToolExecution {
     /// Whether the execution failed (only relevant if approved)
     #[serde(default)]
     pub is_error: bool,
+    /// Wall-clock time the executor spent on the call. `Some(0)` when the
+    /// result was supplied without running the executor (a cached read,
+    /// a steering block); `None` on entries written before this field
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// Parent agent that initiated this delegate. Populated on every
     /// cross-agent tool invocation so the record log captures the full
     /// parent chain. Required field — no serde default.

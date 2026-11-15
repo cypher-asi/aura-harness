@@ -26,9 +26,19 @@ mod single;
 mod steps;
 
 use super::{Kernel, ProcessResult};
-use aura_core_types::{ToolProposal, Transaction};
+use aura_core_types::{ToolProposal, ToolResultKind, Transaction};
 use aura_store_db::DequeueToken;
 use tracing::instrument;
+
+/// A result the caller already has for a tool call (a cached read, a
+/// steering block, an invalid call). The call is still recorded and gated;
+/// the preset only stands in for the executor when policy allows the call.
+#[derive(Debug, Clone)]
+pub struct PresetToolResult {
+    pub content: String,
+    pub is_error: bool,
+    pub kind: ToolResultKind,
+}
 
 impl Kernel {
     #[instrument(skip(self, tx, token))]
@@ -48,6 +58,19 @@ impl Kernel {
         &self,
         tool_proposals: Vec<ToolProposal>,
     ) -> Result<Vec<ProcessResult>, crate::KernelError> {
-        batch::process_many(self, tool_proposals).await
+        let calls = tool_proposals.into_iter().map(|p| (p, None)).collect();
+        batch::process_many(self, calls).await
+    }
+
+    /// Process a batch of tool calls, some of which carry a
+    /// [`PresetToolResult`] that replaces execution once policy allows it.
+    ///
+    /// # Errors
+    /// Returns error if serialization, execution, or storage fails.
+    pub async fn process_tools_with_presets(
+        &self,
+        calls: Vec<(ToolProposal, Option<PresetToolResult>)>,
+    ) -> Result<Vec<ProcessResult>, crate::KernelError> {
+        batch::process_many(self, calls).await
     }
 }

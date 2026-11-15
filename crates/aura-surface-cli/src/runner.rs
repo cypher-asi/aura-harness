@@ -436,13 +436,15 @@ async fn run_terminal(
     }
     let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
 
+    let record_panel = event_loop::RecordPanelAgent::default();
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
         policy: aura_agent_kernel::PolicyConfig::default()
             .with_mode(aura_config::session_mode(requested_mode)),
-        tool_audit_observer: Some(Arc::new(event_loop::UiToolAuditObserver::new(
+        record_observer: Some(Arc::new(event_loop::UiRecordObserver::new(
             cmd_tx.clone(),
+            record_panel.clone(),
         ))),
         ..KernelConfig::default()
     };
@@ -487,6 +489,7 @@ async fn run_terminal(
             commands: cmd_tx.clone(),
             processes: Arc::clone(&processes),
             agents: Some(agents),
+            record_panel: record_panel.clone(),
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(
@@ -522,6 +525,7 @@ async fn run_terminal(
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
     let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;
+    record_panel.set(session.agent_id());
 
     let cmd_tx_clone = cmd_tx.clone();
 

@@ -44,6 +44,7 @@ fn fixture(reply: &str) -> Fixture {
         commands: tx,
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
+        record_panel: Default::default(),
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();

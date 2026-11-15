@@ -9,10 +9,12 @@ use crate::helpers;
 use crate::recording_stream::RecordingStream;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
-use aura_agent_kernel::{Kernel, KernelError};
+use aura_agent_kernel::{Kernel, KernelError, PresetToolResult};
 use aura_model_reasoner::{
     ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream,
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -47,7 +49,9 @@ fn kernel_error_to_reasoner_error(e: KernelError) -> ReasonerError {
 /// Routes [`AgentToolExecutor::execute`] through the kernel's batch tool processor.
 ///
 /// Converts `ToolCallInfo` slices into `ToolProposal` vectors, delegates to
-/// `Kernel::process_tools`, and maps the results back to `ToolCallResult`.
+/// `Kernel::process_tools_with_presets`, and maps the results back to
+/// `ToolCallResult`. Preset results (cache hits, steering blocks, invalid
+/// calls) go through the same path so the kernel records and gates them.
 pub struct KernelToolGateway {
     kernel: Arc<Kernel>,
 }
@@ -62,12 +66,54 @@ impl KernelToolGateway {
 #[async_trait]
 impl AgentToolExecutor for KernelToolGateway {
     async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
-        let proposals: Vec<aura_core_types::ToolProposal> = tool_calls
+        let calls = tool_calls
             .iter()
-            .map(|tc| aura_core_types::ToolProposal::new(&tc.id, &tc.name, tc.input.clone()))
+            .map(|tc| {
+                let proposal =
+                    aura_core_types::ToolProposal::new(&tc.id, &tc.name, tc.input.clone());
+                (proposal, None)
+            })
             .collect();
+        self.process(tool_calls, calls).await
+    }
 
-        match self.kernel.process_tools(proposals).await {
+    fn spawn_preset<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        result: ToolCallResult,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(async move {
+            let proposal =
+                aura_core_types::ToolProposal::new(&call.id, &call.name, call.input.clone())
+                    .with_source(source);
+            let preset = PresetToolResult {
+                content: result.content.clone(),
+                is_error: result.is_error,
+                kind: result.kind,
+            };
+            let mut gated = self
+                .process(std::slice::from_ref(&call), vec![(proposal, Some(preset))])
+                .await;
+            match gated.pop() {
+                Some(outcome) if outcome.is_error == result.is_error => ToolCallResult {
+                    content: outcome.content,
+                    ..result
+                },
+                Some(outcome) => outcome,
+                None => result,
+            }
+        })
+    }
+}
+
+impl KernelToolGateway {
+    async fn process(
+        &self,
+        tool_calls: &[ToolCallInfo],
+        calls: Vec<(aura_core_types::ToolProposal, Option<PresetToolResult>)>,
+    ) -> Vec<ToolCallResult> {
+        match self.kernel.process_tools_with_presets(calls).await {
             Ok(results) => results
                 .into_iter()
                 .enumerate()
@@ -303,5 +349,38 @@ mod tests {
         // handing content to the LLM, so the LLM no longer sees the
         // JSON-wrapped payload.
         assert_eq!(results[0].content, "This file lives in the workspace root.");
+    }
+
+    #[tokio::test]
+    async fn test_tool_gateway_records_a_preset_without_running_the_tool() {
+        let ws_dir = TempDir::new().unwrap();
+        let (kernel, _db_dir) = create_tool_kernel(ws_dir.path(), true);
+        let gateway = KernelToolGateway::new(kernel.clone());
+        let call = ToolCallInfo {
+            id: "tool-1".into(),
+            name: "read_file".into(),
+            input: json!({ "path": "missing.md" }),
+        };
+
+        let result = gateway
+            .spawn_preset(
+                call,
+                "cache",
+                ToolCallResult::success("tool-1", "cached body"),
+            )
+            .await;
+
+        assert!(!result.is_error);
+        assert_eq!(result.content, "cached body");
+        let entries = kernel.store().scan_record(kernel.agent_id, 1, 10).unwrap();
+        let types: Vec<_> = entries.iter().map(|e| e.tx.tx_type).collect();
+        assert_eq!(
+            types,
+            vec![
+                aura_core_types::TransactionType::ToolProposal,
+                aura_core_types::TransactionType::PolicyDecision,
+                aura_core_types::TransactionType::ToolExecution,
+            ]
+        );
     }
 }

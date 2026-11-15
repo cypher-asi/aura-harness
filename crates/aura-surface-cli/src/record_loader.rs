@@ -280,7 +280,7 @@ fn finish_tool_call(message: &mut MessageData, execution: &ToolExecution, took_m
         )),
         ToolGateVerdict::PendingApproval => Some("awaiting approval".to_string()),
     };
-    *duration_ms = Some(took_ms);
+    *duration_ms = Some(execution.duration_ms.unwrap_or(took_ms));
 }
 
 /// The tool execution in `entry`, with its output read from the entry's
@@ -626,12 +626,15 @@ fn record_columns(tx: &Transaction, entry: &RecordEntry, sender: &str) -> Option
         TransactionType::ToolExecution => {
             let execution = tool_execution(entry)?;
             let target = tool_target(&execution.tool, &execution.args);
-            let outcome = tool_outcome(&execution);
-            let detail = if target.is_empty() {
-                outcome
-            } else {
-                format!("{target} · {outcome}")
-            };
+            let detail: Vec<String> = [
+                Some(target).filter(|target| !target.is_empty()),
+                Some(tool_outcome(&execution)),
+                execution.duration_ms.map(format_duration_ms),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let detail = detail.join(" · ");
             RecordColumns::new(execution.tool.as_str(), tool_group(&execution.tool), detail)
         }
         TransactionType::PolicyDecision => {
@@ -688,7 +691,11 @@ fn reasoning_columns(payload: &Value) -> RecordColumns {
         .get("model")
         .and_then(Value::as_str)
         .map_or("", model_family);
-    let detail: Vec<String> = [reasoning_tokens(payload), reasoning_tools(payload)]
+    let took = payload
+        .get("duration_ms")
+        .and_then(Value::as_u64)
+        .map(format_duration_ms);
+    let detail: Vec<String> = [reasoning_tokens(payload), reasoning_tools(payload), took]
         .into_iter()
         .flatten()
         .collect();

@@ -15,7 +15,7 @@ use super::agents::{AgentSession, KernelFactory};
 use super::host::{agent_tool_definitions, TerminalAgents};
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
-use super::record_ui::create_response_transaction;
+use super::record_ui::{create_response_transaction, RecordPanelAgent};
 use super::TURN_TIMEOUT;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
@@ -68,6 +68,8 @@ pub struct AgentHub {
     pub(crate) notices: NoticeSender,
     notice_rx: Mutex<Option<mpsc::UnboundedReceiver<Notice>>>,
     pub(crate) agents: Option<TerminalAgents>,
+    /// The agent the RECORD panel follows.
+    pub(crate) record_panel: RecordPanelAgent,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -81,6 +83,8 @@ pub struct AgentHubParts {
     pub processes: Arc<ProcessTable>,
     /// Runs the agents `spawn_agent` starts; `None` leaves the tool out.
     pub agents: Option<TerminalAgents>,
+    /// Shared with the kernels' [`super::UiRecordObserver`].
+    pub record_panel: RecordPanelAgent,
 }
 
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -111,6 +115,7 @@ impl AgentHub {
                 notices,
                 notice_rx: Mutex::new(Some(notice_rx)),
                 agents: parts.agents,
+                record_panel: parts.record_panel,
             }
         })
     }

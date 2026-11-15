@@ -17,11 +17,13 @@
 //!    timeout, then append the `ToolExecution` entry.
 
 use super::steps::finish_tool_call;
+use crate::kernel::stream::elapsed_ms;
 use crate::kernel::{Kernel, ProcessResult};
 use aura_core_types::{ActionId, Effect, EffectKind, ToolProposal, Transaction};
 use aura_exec_traits::ExecuteContext;
 use aura_store_db::DequeueToken;
 use bytes::Bytes;
+use std::time::Instant;
 
 pub(super) async fn process_one(
     kernel: &Kernel,
@@ -57,8 +59,8 @@ pub(super) async fn process_one(
             None
         };
 
-        let effect = if let Some(effect) = blocked_effect {
-            effect
+        let (effect, duration_ms) = if let Some(effect) = blocked_effect {
+            (effect, 0)
         } else {
             let workspace = kernel.agent_workspace();
             tokio::fs::create_dir_all(&workspace)
@@ -66,9 +68,11 @@ pub(super) async fn process_one(
                 .map_err(|e| crate::KernelError::Internal(format!("create workspace: {e}")))?;
             let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace)
                 .with_tool_use_id(tool_use_id);
-            kernel.execute_with_timeout(&ctx, &action, &tool_name).await
+            let started = Instant::now();
+            let effect = kernel.execute_with_timeout(&ctx, &action, &tool_name).await;
+            (effect, elapsed_ms(started))
         };
-        Some(kernel.record_tool_execution(&authorized, action, effect)?)
+        Some(kernel.record_tool_execution(&authorized, action, effect, duration_ms)?)
     } else {
         None
     };

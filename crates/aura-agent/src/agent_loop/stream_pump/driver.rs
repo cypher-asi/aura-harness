@@ -76,7 +76,11 @@ impl Liveness {
 
     /// Record a frame in `phase`. Pings are pure liveness and stay off
     /// the transcript.
-    fn beat(&mut self, phase: StreamPhase, event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>) {
+    fn beat(
+        &mut self,
+        phase: StreamPhase,
+        event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>,
+    ) {
         if phase != StreamPhase::Ping && self.logged_phase != Some(phase) {
             console::stream_phase_line(phase, self.started.elapsed());
             self.logged_phase = Some(phase);
@@ -120,6 +124,7 @@ pub(super) async fn drive_stream(
 ) -> StreamPumpOutcome {
     let super::StreamPumpCtx {
         config,
+        executor,
         cancellation_token,
         event_tx,
         ..
@@ -141,18 +146,15 @@ pub(super) async fn drive_stream(
     let mut streamed_text_in_block = false;
     let mut streamed_thinking_in_block = false;
     let mut tool_calls_seen: Vec<ToolCallInfo> = Vec::new();
-    // E.4 tool-result cache: tracks tools that we DID NOT spawn
-    // because the per-run cache had a hit. The result is materialised
-    // synchronously here and merged into the final `tool_results` at
-    // drain time, preserving the FIFO submission order so the codex
-    // drain_in_flight contract still holds across the cache /
-    // spawn split.
-    let mut cached_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))> = Vec::new();
-    // Counter used to assign a stable submission index per tool —
-    // both spawned and cached arms append into the same logical
-    // FIFO. `tool_calls_seen.len()` after the push is the canonical
-    // index for each new call.
+    // Submission index of every future pushed into `in_flight`, in
+    // push order. `tool_calls_seen.len()` after the push is the
+    // canonical index for each new call.
     let mut spawned_indices: Vec<usize> = Vec::new();
+    // Calls whose result the loop already had (cache hit, steering
+    // block, invalid tool use). They still go through the executor so
+    // the kernel records and gates them, but they must not refresh the
+    // per-run cache.
+    let mut preset_indices: Vec<usize> = Vec::new();
     let mut end_turn: Option<bool> = None;
     let stop_reason;
     let mut usage = Usage::default();
@@ -184,7 +186,6 @@ pub(super) async fn drive_stream(
                     text_chunks: &text_chunks,
                     thinking_chunks: &thinking_chunks,
                     tool_calls_seen: &tool_calls_seen,
-                    cached_pairs: &cached_pairs,
                     spawned_indices: &spawned_indices,
                     end_turn,
                     usage: &usage,
@@ -238,7 +239,14 @@ pub(super) async fn drive_stream(
                     };
                     let index = tool_calls_seen.len();
                     tool_calls_seen.push(call.clone());
-                    cached_pairs.push((index, (call, ToolCallResult::error(id, reason))));
+                    spawned_indices.push(index);
+                    preset_indices.push(index);
+                    in_flight.push_back(spawn_tool_with_timeout(
+                        executor,
+                        call,
+                        Some(("invalid_tool_use", ToolCallResult::error(id, reason))),
+                        per_tool_timeout,
+                    ));
                 }
                 ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
                     let announced = open_tool.take().is_some_and(|tool| tool.id == id);
@@ -248,7 +256,7 @@ pub(super) async fn drive_stream(
                         announced,
                         DriveLocals {
                             tool_calls_seen: &mut tool_calls_seen,
-                            cached_pairs: &mut cached_pairs,
+                            preset_indices: &mut preset_indices,
                             spawned_indices: &mut spawned_indices,
                             in_flight: &mut in_flight,
                         },
@@ -420,7 +428,6 @@ pub(super) async fn drive_stream(
                     text_chunks: &text_chunks,
                     thinking_chunks: &thinking_chunks,
                     tool_calls_seen: &tool_calls_seen,
-                    cached_pairs: &cached_pairs,
                     spawned_indices: &spawned_indices,
                     end_turn,
                     usage: &usage,
@@ -440,26 +447,20 @@ pub(super) async fn drive_stream(
         }
     }
 
-    let mut tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
-        Vec::with_capacity(tool_calls_seen.len());
-    let mut merged: Vec<(usize, (ToolCallInfo, ToolCallResult))> =
-        Vec::with_capacity(cached_pairs.len() + spawned_pairs.len());
-    merged.append(&mut cached_pairs);
-    merged.append(&mut spawned_pairs);
-    merged.sort_by_key(|(idx, _)| *idx);
-    for (_, pair) in merged {
-        tool_results.push(pair);
-    }
+    spawned_pairs.sort_by_key(|(idx, _)| *idx);
+    let tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
+        spawned_pairs.into_iter().map(|(_, pair)| pair).collect();
 
     // Layer E.4: refresh the per-run cache with any newly-executed
     // results. Mirrors the buffered path's
     // `tool_execution::handle_tool_use` → `update_cache` step so the
     // pump path participates in the same memoization /
-    // invalidate-on-write contract. The "uncached" set is just the
-    // tools we spawned (cached hits were already accounted for at
+    // invalidate-on-write contract. The "uncached" set is the tools
+    // the executor actually ran (preset results were already known at
     // submission time).
     let spawned_calls: Vec<ToolCallInfo> = spawned_indices
         .iter()
+        .filter(|i| !preset_indices.contains(i))
         .filter_map(|i| tool_calls_seen.get(*i).cloned())
         .collect();
     let spawned_results: Vec<ToolCallResult> = tool_results
@@ -520,14 +521,14 @@ fn interrupted_outcome(
 
 /// Phase 8 wrapper bundling the four mutable cursor buffers that
 /// [`drive_stream`] hands to [`handle_tool_use_event`]: the running
-/// `tool_calls_seen` FIFO, the synchronously materialised cache
-/// hits, the per-call spawn-index trace, and the `FuturesOrdered`
+/// `tool_calls_seen` FIFO, the indices of calls with a preset result,
+/// the per-call spawn-index trace, and the `FuturesOrdered`
 /// itself. Grouping them keeps the helper under the clippy ceiling
 /// without splitting the FIFO ordering invariant across helpers —
 /// every field stays a borrowed mutation target.
 pub(super) struct DriveLocals<'a, 'b> {
     pub(super) tool_calls_seen: &'b mut Vec<ToolCallInfo>,
-    pub(super) cached_pairs: &'b mut Vec<(usize, (ToolCallInfo, ToolCallResult))>,
+    pub(super) preset_indices: &'b mut Vec<usize>,
     pub(super) spawned_indices: &'b mut Vec<usize>,
     pub(super) in_flight: &'b mut FuturesOrdered<ToolFuture<'a>>,
 }
@@ -537,9 +538,8 @@ pub(super) struct DriveLocals<'a, 'b> {
 /// input-queue drain. Returns `Some(StreamPumpOutcome)` only when an
 /// invariant-violation early-return must propagate to [`drive_stream`]
 /// (e.g. the per-run cache partition contract is broken). On the
-/// happy path returns `None` and pushes the call into the FIFO /
-/// cached_pairs bookkeeping. `announced` is set when `ToolStart` already
-/// went out at block start.
+/// happy path returns `None` and pushes the call into the FIFO.
+/// `announced` is set when `ToolStart` already went out at block start.
 async fn handle_tool_use_event<'a, 'b>(
     ctx: super::StreamPumpCtx<'a>,
     call: ToolCallInfo,
@@ -557,7 +557,7 @@ async fn handle_tool_use_event<'a, 'b>(
     } = ctx;
     let DriveLocals {
         tool_calls_seen,
-        cached_pairs,
+        preset_indices,
         spawned_indices,
         in_flight,
     } = locals;
@@ -593,15 +593,22 @@ async fn handle_tool_use_event<'a, 'b>(
     let (blocked_reads, allowed_calls) =
         super::super::tool_pipeline::partition_circling_duplicate_reads(single, state);
     if let Some(blocked) = blocked_reads.into_iter().next() {
-        cached_pairs.push((submission_index, (call, blocked)));
+        spawned_indices.push(submission_index);
+        preset_indices.push(submission_index);
+        in_flight.push_back(spawn_tool_with_timeout(
+            executor,
+            call,
+            Some(("steering_block", blocked)),
+            per_tool_timeout,
+        ));
         return None;
     }
 
     // Layer E.4 tool-result cache: consult the per-run cache before
-    // spawning the future. On a hit, materialise the synthetic
-    // [`ToolCallResult`] inline so the FIFO drain returns it in
-    // submission order; the executor is NOT invoked (codex parity
-    // for read-only tools).
+    // spawning the future. On a hit the cached [`ToolCallResult`] is
+    // handed to the executor as a preset, so the kernel still records
+    // and gates the call but the tool itself does NOT run again (codex
+    // parity for read-only tools).
     //
     // Cache invariant (Rule 4.1 / 4.3): `split_cached` partitions
     // `allowed_calls` (a single-element slice here) into
@@ -622,7 +629,14 @@ async fn handle_tool_use_event<'a, 'b>(
                     .to_string(),
             )));
         };
-        cached_pairs.push((submission_index, (call, first)));
+        spawned_indices.push(submission_index);
+        preset_indices.push(submission_index);
+        in_flight.push_back(spawn_tool_with_timeout(
+            executor,
+            call,
+            Some(("cache", first)),
+            per_tool_timeout,
+        ));
     } else if !uncached_calls.is_empty() {
         let Some(first) = uncached_calls.into_iter().next() else {
             return Some(StreamPumpOutcome::Error(AgentError::Internal(
@@ -632,7 +646,12 @@ async fn handle_tool_use_event<'a, 'b>(
             )));
         };
         spawned_indices.push(submission_index);
-        in_flight.push_back(spawn_tool_with_timeout(executor, first, per_tool_timeout));
+        in_flight.push_back(spawn_tool_with_timeout(
+            executor,
+            first,
+            None,
+            per_tool_timeout,
+        ));
     }
 
     // E.3 input-drain granularity: once per `OutputItemDone(tool_use)`.
@@ -742,7 +761,6 @@ struct CancelledSnapshot<'a> {
     text_chunks: &'a [String],
     thinking_chunks: &'a [(String, Option<String>)],
     tool_calls_seen: &'a [ToolCallInfo],
-    cached_pairs: &'a [(usize, (ToolCallInfo, ToolCallResult))],
     spawned_indices: &'a [usize],
     end_turn: Option<bool>,
     usage: &'a Usage,
@@ -758,18 +776,13 @@ fn cancelled_outcome(
         text_chunks,
         thinking_chunks,
         tool_calls_seen,
-        cached_pairs,
         spawned_indices,
         end_turn,
         usage,
         model_name,
     } = snap;
 
-    let already: HashSet<usize> = cached_pairs
-        .iter()
-        .map(|(idx, _)| *idx)
-        .chain(spawned_pairs.iter().map(|(idx, _)| *idx))
-        .collect();
+    let already: HashSet<usize> = spawned_pairs.iter().map(|(idx, _)| *idx).collect();
 
     let still_pending: HashSet<usize> = spawned_indices
         .iter()
@@ -794,16 +807,9 @@ fn cancelled_outcome(
         }
     }
 
-    let mut tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
-        Vec::with_capacity(tool_calls_seen.len());
-    let mut merged: Vec<(usize, (ToolCallInfo, ToolCallResult))> =
-        Vec::with_capacity(cached_pairs.len() + spawned_pairs.len());
-    merged.extend(cached_pairs.iter().cloned());
-    merged.append(&mut spawned_pairs);
-    merged.sort_by_key(|(idx, _)| *idx);
-    for (_, pair) in merged {
-        tool_results.push(pair);
-    }
+    spawned_pairs.sort_by_key(|(idx, _)| *idx);
+    let tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
+        spawned_pairs.into_iter().map(|(_, pair)| pair).collect();
 
     let response = synthesize_response(
         text_chunks,
@@ -820,16 +826,23 @@ fn cancelled_outcome(
     }
 }
 
-fn spawn_tool_with_timeout(
-    executor: &dyn AgentToolExecutor,
+/// `preset` is a result the loop already has for `call`, with the reason
+/// it has it; the executor records and gates it instead of running the
+/// tool.
+fn spawn_tool_with_timeout<'a>(
+    executor: &'a dyn AgentToolExecutor,
     call: ToolCallInfo,
+    preset: Option<(&'static str, ToolCallResult)>,
     per_tool_timeout: Duration,
-) -> ToolFuture<'_> {
+) -> ToolFuture<'a> {
     Box::pin(async move {
         let call_clone = call.clone();
         let id = call_clone.id.clone();
         let name = call_clone.name.clone();
-        let fut = executor.spawn_tool_call(call_clone);
+        let fut = match preset {
+            Some((source, result)) => executor.spawn_preset(call_clone, source, result),
+            None => executor.spawn_tool_call(call_clone),
+        };
         let result = match timeout(per_tool_timeout, fut).await {
             Ok(result) => result,
             Err(_elapsed) => {

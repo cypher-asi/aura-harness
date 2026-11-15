@@ -338,6 +338,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
     let store = state.hub.factory.store.as_ref();
     let agent_id = state.session.agent_id();
 
+    state.hub.record_panel.set(agent_id);
     let _ = state.commands.send(UiCommand::ClearRecords).await;
     match recent_record_summaries(store, agent_id) {
         Ok(summaries) => {

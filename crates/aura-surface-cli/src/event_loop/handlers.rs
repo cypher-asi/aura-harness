@@ -2,7 +2,7 @@
 
 use super::agent_events::ForwarderState;
 use super::processes::{now_ms, turn_id, warn_kill_failed};
-use super::record_ui::{create_response_transaction, send_record_to_ui};
+use super::record_ui::create_response_transaction;
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
 use aura_core_types::Transaction;
@@ -141,24 +141,12 @@ pub(super) async fn handle_agent_success(
 async fn persist_response_via_kernel(state: &mut LoopState<'_>, total_text: &str) {
     let response_tx = create_response_transaction(state.session.agent_id(), total_text);
 
-    match state
-        .session
-        .kernel
-        .process_direct(response_tx.clone())
-        .await
-    {
+    match state.session.kernel.process_direct(response_tx).await {
         Ok(result) => {
             debug!(
                 seq = result.entry.seq,
                 "Response record persisted via kernel"
             );
-            send_record_to_ui(
-                state.commands,
-                result.entry.seq,
-                &response_tx,
-                &result.entry,
-            )
-            .await;
         }
         Err(e) => {
             error!(error = %e, "Failed to persist response record via kernel");
@@ -202,18 +190,12 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) {
     if let Err(e) = store.enqueue_tx(&session_tx) {
         error!(error = %e, "Failed to enqueue session start");
     } else if let Ok(Some((token, tx))) = store.dequeue_tx(state.session.agent_id()) {
-        match state
-            .session
-            .kernel
-            .process_dequeued(tx.clone(), token)
-            .await
-        {
+        match state.session.kernel.process_dequeued(tx, token).await {
             Ok(result) => {
                 debug!(
                     seq = result.entry.seq,
                     "Session start record persisted via kernel"
                 );
-                send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
             }
             Err(e) => {
                 error!(error = %e, "Failed to persist session start record via kernel");

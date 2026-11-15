@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Kernel — every tool call is gated and every entry is timed
+
+##### Changed
+
+- Tool results the agent loop already has (per-run cache hits,
+  duplicate reads blocked by steering, invalid tool uses) now go
+  through the kernel instead of being returned inline. Each one is
+  recorded as `ToolProposal` (with `source` `cache`, `steering_block`
+  or `invalid_tool_use`), `PolicyDecision` and `ToolExecution`, and a
+  policy denial replaces the cached result. The tool itself still
+  doesn't run again.
+- `KernelConfig.tool_audit_observer` / `ToolAuditObserver::on_tool_entry`
+  is now `KernelConfig.record_observer` / `RecordObserver::on_entry`,
+  and is called for every entry the kernel appends (prompts, replies,
+  reasoning, session start, process completion), not only tool-call
+  entries. The RECORD panel no longer skips ids for reasoning entries,
+  only shows the active agent's entries, and receives rows in order.
+
+##### Added
+
+- `ToolExecution.duration_ms`: how long the executor ran (`0` when a
+  preset result stood in for it). `Reasoning` payloads carry
+  `duration_ms` for the whole model call. The RECORD panel shows both
+  in the TOOLRES and LLM rows.
+- `Kernel::process_tools_with_presets`, `PresetToolResult` and
+  `AgentToolExecutor::spawn_preset`.
+
 ### Terminal — policy decisions stay with their tool calls
 
 ##### Changed

@@ -42,6 +42,7 @@ impl Kernel {
                     "append_entry_direct_with_runtime_capabilities: {e}"
                 ))
             })?;
+        self.notify_entry(&result.entry);
         Ok(result)
     }
 
@@ -74,6 +75,7 @@ impl Kernel {
                     "append_entry_dequeued_with_runtime_capabilities: {e}"
                 ))
             })?;
+        self.notify_entry(&result.entry);
         Ok(result)
     }
 

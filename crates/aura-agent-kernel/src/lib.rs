@@ -42,9 +42,9 @@ pub use billing::walk_parent_chain;
 pub use context::{hash_tx_with_window, Context, ContextBuilder};
 pub use kernel::{
     write_system_record, ApprovalRequiredInfo, Kernel, KernelConfig, PendingToolPrompt,
-    PolicyDecisionRef, ProcessResult, ReasonResult, ReasonStreamHandle, ToolApprovalError,
-    ToolApprovalPrompter, ToolApprovalRemember, ToolApprovalResponse, ToolAuditObserver,
-    ToolDecision, ToolOutput,
+    PolicyDecisionRef, PresetToolResult, ProcessResult, ReasonResult, ReasonStreamHandle,
+    RecordObserver, ToolApprovalError, ToolApprovalPrompter, ToolApprovalRemember,
+    ToolApprovalResponse, ToolDecision, ToolOutput,
 };
 pub use policy::{
     gated_action, tool_mode_class, Policy, PolicyConfig, PolicyEvaluation, PolicyResult,

@@ -26,6 +26,7 @@ impl Kernel {
         // provider cannot stall the agent indefinitely. (Wave 5 / T2.6 +
         // T7.3.)
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
+        let started = std::time::Instant::now();
         let response = match tokio::time::timeout(timeout, self.provider.complete(request)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
@@ -75,6 +76,7 @@ impl Kernel {
             "stop_reason": format!("{:?}", response.stop_reason),
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
+            "duration_ms": super::stream::elapsed_ms(started),
         });
         super::stream::add_cache_usage(&mut reasoning_payload, &response.usage);
         let thinking: String = response
@@ -110,6 +112,7 @@ impl Kernel {
         self.store
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        self.notify_entry(&entry);
 
         Ok(ReasonResult { entry, response })
     }
@@ -145,6 +148,7 @@ impl Kernel {
         // the "provider hangs on handshake" failure mode. (Wave 5 /
         // T2.6 + T7.3.)
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
+        let started = std::time::Instant::now();
         let stream = match tokio::time::timeout(timeout, self.provider.complete_streaming(request))
             .await
         {
@@ -196,6 +200,8 @@ impl Kernel {
             agent_id: self.agent_id,
             seq_counter: self.seq.clone(),
             window,
+            observer: self.config.record_observer.clone(),
+            started,
         };
 
         Ok((handle, stream))
@@ -232,6 +238,7 @@ impl Kernel {
         self.store
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        self.notify_entry(&entry);
         Ok(())
     }
 }

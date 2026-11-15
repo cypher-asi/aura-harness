@@ -48,6 +48,7 @@ fn test_ctx<'a>(
 #[derive(Default)]
 struct CountingExecutor {
     invocations: tokio::sync::Mutex<Vec<ToolCallInfo>>,
+    presets: std::sync::Mutex<Vec<(String, &'static str)>>,
 }
 
 #[async_trait]
@@ -61,6 +62,22 @@ impl AgentToolExecutor for CountingExecutor {
             .iter()
             .map(|tc| ToolCallResult::success(tc.id.clone(), format!("ok:{}", tc.name)))
             .collect()
+    }
+
+    fn spawn_preset<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        result: ToolCallResult,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>> {
+        self.presets.lock().unwrap().push((call.id, source));
+        Box::pin(std::future::ready(result))
+    }
+}
+
+impl CountingExecutor {
+    fn presets(&self) -> Vec<(String, &'static str)> {
+        self.presets.lock().unwrap().clone()
     }
 }
 
@@ -125,6 +142,11 @@ async fn malformed_tool_json_is_rejected_without_execution() {
         other => panic!("unexpected outcome: {other:?}"),
     }
     assert!(executor.invocations.lock().await.is_empty());
+    assert_eq!(
+        executor.presets(),
+        vec![("partial".to_string(), "invalid_tool_use")],
+        "an invalid tool use must still reach the executor to be recorded"
+    );
 }
 
 #[tokio::test]
@@ -660,7 +682,10 @@ async fn pump_streams_tool_input_while_the_block_is_open() {
         .iter()
         .filter(|e| matches!(e, AgentLoopEvent::ToolStart { id, .. } if id == "toolu_w"))
         .count();
-    assert_eq!(starts, 1, "ToolStart must not repeat at block close: {events:?}");
+    assert_eq!(
+        starts, 1,
+        "ToolStart must not repeat at block close: {events:?}"
+    );
     let snapshots: Vec<&str> = events
         .iter()
         .filter_map(|e| match e {
@@ -795,9 +820,10 @@ async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
 
 /// `pump_cache_hit_short_circuits_tool_spawn` (E.4 mandatory):
 /// when `state.tool_cache.exact` already has a hit for a cacheable
-/// tool's input, the pump must serve the cached result inline
-/// *without* invoking the executor for that call. The other
-/// (uncached) call in the same model response is still spawned.
+/// tool's input, the pump must serve the cached result *without*
+/// running the tool, handing it to the executor as a preset so the
+/// call is still recorded and gated. The other (uncached) call in the
+/// same model response is still spawned.
 #[tokio::test(start_paused = true)]
 async fn pump_cache_hit_short_circuits_tool_spawn() {
     let executor = CountingExecutor::default();
@@ -854,6 +880,11 @@ async fn pump_cache_hit_short_circuits_tool_spawn() {
         invoked_ids,
         vec!["toolu_fresh".to_string()],
         "executor must be invoked ONLY for the uncached tool; cache hits short-circuit spawn"
+    );
+    assert_eq!(
+        executor.presets(),
+        vec![("toolu_cached".to_string(), "cache")],
+        "a cache hit must still reach the executor as a preset"
     );
 }
 

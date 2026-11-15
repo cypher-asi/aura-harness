@@ -385,6 +385,25 @@ pub trait AgentToolExecutor: Send + Sync {
         })
     }
 
+    /// Settle a tool call whose result the loop already has (a per-run
+    /// cache hit, a steering block, an invalid tool use) without running
+    /// the tool.
+    ///
+    /// Recording executors override this so the call is still recorded
+    /// (with `source` naming why the tool did not run) and passes the
+    /// policy gate; a denial replaces `result`. The default returns
+    /// `result` unchanged. Wrapping executors must forward to their
+    /// inner executor.
+    fn spawn_preset<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        result: ToolCallResult,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        let _ = (call, source);
+        Box::pin(std::future::ready(result))
+    }
+
     /// Run a lightweight build check (e.g., `cargo check --lib`).
     ///
     /// Returns `None` when build checking is not configured.

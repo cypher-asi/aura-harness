@@ -274,6 +274,7 @@ fn execution(decision: ToolGateVerdict, result: Option<&str>, is_error: bool) ->
         reason: Some("policy says no".into()),
         result: result.map(str::to_string),
         is_error,
+        duration_ms: None,
         parent_agent_id: AgentId::generate(),
         originating_user_id: "u".into(),
     };
@@ -404,6 +405,7 @@ fn tool_call_history_keeps_the_policy_with_its_tool_block() {
         reason: None,
         result: Some("fn main() {}".into()),
         is_error: false,
+        duration_ms: None,
         parent_agent_id: agent,
         originating_user_id: String::new(),
     };
@@ -458,6 +460,7 @@ fn denied_tool_call_history_is_an_error_block() {
         reason: Some("blocked by policy".into()),
         result: None,
         is_error: false,
+        duration_ms: None,
         parent_agent_id: agent,
         originating_user_id: String::new(),
     };

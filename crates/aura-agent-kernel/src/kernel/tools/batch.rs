@@ -6,24 +6,34 @@
 //! persisted before any tool runs. Approved proposals then execute
 //! concurrently via `futures_util::join_all`, and their `ToolExecution`
 //! entries are appended in proposal order.
+//!
+//! A proposal may carry a [`PresetToolResult`]. It is recorded and gated
+//! like any other call; when policy allows it the preset stands in for the
+//! executor, and when policy denies it the denial wins.
 
 use super::steps::{finish_tool_call, Authorized};
+use super::PresetToolResult;
+use crate::kernel::stream::elapsed_ms;
 use crate::kernel::{Kernel, ProcessResult};
-use aura_core_types::{Action, ActionId, Effect, EffectKind, ToolProposal, Transaction};
+use aura_core_types::{
+    Action, ActionId, Effect, EffectKind, ToolProposal, ToolResult, Transaction,
+};
 use aura_exec_traits::ExecuteContext;
 use bytes::Bytes;
+use std::time::Instant;
 
 pub(super) async fn process_many(
     kernel: &Kernel,
-    tool_proposals: Vec<ToolProposal>,
+    calls: Vec<(ToolProposal, Option<PresetToolResult>)>,
 ) -> Result<Vec<ProcessResult>, crate::KernelError> {
-    if tool_proposals.is_empty() {
+    if calls.is_empty() {
         return Ok(vec![]);
     }
 
     let runtime_capabilities = kernel.load_runtime_capabilities()?;
-    let mut authorized: Vec<Authorized> = Vec::with_capacity(tool_proposals.len());
-    for proposal in tool_proposals {
+    let mut authorized: Vec<Authorized> = Vec::with_capacity(calls.len());
+    let mut presets: Vec<Option<PresetToolResult>> = Vec::with_capacity(calls.len());
+    for (proposal, preset) in calls {
         let tx = Transaction::tool_proposal(kernel.agent_id, &proposal)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
         let proposal_entry = kernel.record_tool_proposal(tx, None)?;
@@ -32,6 +42,7 @@ pub(super) async fn process_many(
                 .authorize_tool_proposal(proposal, &proposal_entry, runtime_capabilities.as_ref())
                 .await?,
         );
+        presets.push(preset);
     }
 
     let workspace = kernel.agent_workspace();
@@ -51,13 +62,13 @@ pub(super) async fn process_many(
     // pairing loop walks the same `(proposal, action, effect)`
     // tuples without a side index map.
     let total = authorized.len();
-    let mut per_slot_effect: Vec<Option<Effect>> = vec![None; total];
+    let mut per_slot_effect: Vec<Option<(Effect, u64)>> = vec![None; total];
     let mut dispatch_indices: Vec<usize> = Vec::new();
     let mut dispatch_contexts: Vec<ExecuteContext> = Vec::new();
     let mut dispatch_actions: Vec<Action> = Vec::new();
     let mut dispatch_tool_names: Vec<String> = Vec::new();
 
-    for (i, slot) in authorized.iter().enumerate() {
+    for (i, (slot, preset)) in authorized.iter().zip(presets).enumerate() {
         let Some(action) = slot.action.clone() else {
             continue;
         };
@@ -66,9 +77,14 @@ pub(super) async fn process_many(
 
         if let Some(host) = kernel.config.plugin_hooks.as_ref() {
             if let Some(effect) = fire_pre_tool_use_for_batch(host, proposal, action_id)? {
-                per_slot_effect[i] = Some(effect);
+                per_slot_effect[i] = Some((effect, 0));
                 continue;
             }
+        }
+
+        if let Some(preset) = preset {
+            per_slot_effect[i] = Some((preset_effect(action_id, &proposal.tool, preset)?, 0));
+            continue;
         }
 
         let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace.clone())
@@ -83,8 +99,12 @@ pub(super) async fn process_many(
         .iter()
         .zip(dispatch_actions.iter())
         .zip(dispatch_tool_names.iter())
-        .map(|((ctx, action), tool_name)| kernel.execute_with_timeout(ctx, action, tool_name));
-    let dispatched_effects: Vec<Effect> = futures_util::future::join_all(exec_futures).await;
+        .map(|((ctx, action), tool_name)| async move {
+            let started = Instant::now();
+            let effect = kernel.execute_with_timeout(ctx, action, tool_name).await;
+            (effect, elapsed_ms(started))
+        });
+    let dispatched_effects = futures_util::future::join_all(exec_futures).await;
 
     for (slot, effect) in dispatch_indices.iter().zip(dispatched_effects.into_iter()) {
         per_slot_effect[*slot] = Some(effect);
@@ -94,8 +114,9 @@ pub(super) async fn process_many(
     for (slot, effect) in authorized.into_iter().zip(per_slot_effect) {
         let executed = match slot.action.clone() {
             Some(action) => {
-                let effect = effect.expect("allowed verdict must have produced an effect");
-                Some(kernel.record_tool_execution(&slot, action, effect)?)
+                let (effect, duration_ms) =
+                    effect.expect("allowed verdict must have produced an effect");
+                Some(kernel.record_tool_execution(&slot, action, effect, duration_ms)?)
             }
             None => None,
         };
@@ -103,6 +124,24 @@ pub(super) async fn process_many(
     }
 
     Ok(results)
+}
+
+/// Encode a preset result as the committed effect the executor would have
+/// produced, so the agent loop decodes it the same way.
+fn preset_effect(
+    action_id: ActionId,
+    tool: &str,
+    preset: PresetToolResult,
+) -> Result<Effect, crate::KernelError> {
+    let mut result = if preset.is_error {
+        ToolResult::failure(tool, preset.content)
+    } else {
+        ToolResult::success(tool, preset.content)
+    };
+    result.kind = preset.kind;
+    let payload = serde_json::to_vec(&result)
+        .map_err(|e| crate::KernelError::Serialization(format!("preset result: {e}")))?;
+    Ok(Effect::committed_agreement(action_id, payload))
 }
 
 /// Phase 10 carve-out 5a — `PreToolUse` pre-dispatch firing for the

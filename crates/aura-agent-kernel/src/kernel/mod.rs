@@ -51,6 +51,7 @@ mod tool_audit_tests;
 mod tools;
 
 pub use stream::ReasonStreamHandle;
+pub use tools::PresetToolResult;
 
 // ============================================================================
 // Configuration
@@ -138,10 +139,12 @@ pub struct KernelConfig {
     /// kernel never fires `PermissionRequest` hooks and the
     /// interactive prompt is always reached when configured.
     pub plugin_hooks: Option<Arc<PluginHookHost>>,
-    /// Notified with every tool-call record entry (`ToolProposal`,
-    /// `PolicyDecision`, `ToolExecution`) immediately after it is
-    /// persisted, so UIs can show the policy decision before the tool runs.
-    pub tool_audit_observer: Option<Arc<dyn ToolAuditObserver>>,
+    /// Notified with every record entry this kernel persists (tool
+    /// proposals, policy decisions, executions, reasoning, prompts,
+    /// replies, system entries) immediately after it is appended, so UIs
+    /// can show the policy decision before the tool runs and the record
+    /// feed stays gapless.
+    pub record_observer: Option<Arc<dyn RecordObserver>>,
 }
 
 impl Default for KernelConfig {
@@ -160,7 +163,7 @@ impl Default for KernelConfig {
             kernel_mode: KernelMode::Audited,
             audited_lite_threshold_bytes: DEFAULT_SUMMARY_CHUNK_BYTES,
             plugin_hooks: None,
-            tool_audit_observer: None,
+            record_observer: None,
         }
     }
 }
@@ -257,12 +260,13 @@ pub trait ToolApprovalPrompter: Send + Sync + std::fmt::Debug {
     ) -> Result<ToolApprovalResponse, ToolApprovalError>;
 }
 
-/// Receives tool-call record entries as the kernel persists them.
+/// Receives every record entry as the kernel persists it, in sequence
+/// order.
 ///
 /// Called synchronously on the kernel's processing task; implementations
 /// must not block (forward to a channel instead).
-pub trait ToolAuditObserver: Send + Sync + std::fmt::Debug {
-    fn on_tool_entry(&self, entry: &RecordEntry);
+pub trait RecordObserver: Send + Sync + std::fmt::Debug {
+    fn on_entry(&self, entry: &RecordEntry);
 }
 
 /// Where the policy decision for a tool call was recorded.
@@ -460,6 +464,12 @@ impl Kernel {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *seq = next + 1;
         Ok(next)
+    }
+
+    pub(super) fn notify_entry(&self, entry: &RecordEntry) {
+        if let Some(observer) = self.config.record_observer.as_ref() {
+            observer.on_entry(entry);
+        }
     }
 
     /// Directory the agent's tools run in.

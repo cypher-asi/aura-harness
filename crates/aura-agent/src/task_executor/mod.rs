@@ -373,6 +373,15 @@ impl AgentToolExecutor for TaskToolExecutor {
         results
     }
 
+    fn spawn_preset<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        result: ToolCallResult,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolCallResult> + Send + 'a>> {
+        self.inner.spawn_preset(call, source, result)
+    }
+
     async fn auto_build_check(&self) -> Option<AutoBuildResult> {
         let project_root = Path::new(&self.project_folder);
         let cmd = self

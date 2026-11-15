@@ -16,8 +16,7 @@ pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
-pub(crate) use record_ui::send_record_to_ui;
-pub use record_ui::UiToolAuditObserver;
+pub use record_ui::{RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
 use crate::model_selection::ModelSelection;
@@ -238,14 +237,13 @@ async fn record_completion(state: &mut LoopState<'_>, completion_tx: Transaction
     }
 
     if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
-        match kernel.process_dequeued(tx.clone(), token).await {
+        match kernel.process_dequeued(tx, token).await {
             Ok(result) => {
                 debug!(
                     seq = result.entry.seq,
                     "Completion record persisted via kernel"
                 );
                 if agent_id == state.session.agent_id() {
-                    send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
                     let _ = state
                         .commands
                         .send(UiCommand::SetStatus("Process completed".to_string()))
@@ -349,8 +347,9 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     }
 }
 
-/// Record `prompt_tx` through the active agent's kernel and show it in the
-/// Record panel. Reports failures itself and returns `false`.
+/// Record `prompt_tx` through the active agent's kernel; the kernel's
+/// record observer shows it in the Record panel. Reports failures itself
+/// and returns `false`.
 async fn record_prompt(state: &mut LoopState<'_>, prompt_tx: Transaction) -> bool {
     drain_stale_inbox(state).await;
 
@@ -359,30 +358,15 @@ async fn record_prompt(state: &mut LoopState<'_>, prompt_tx: Transaction) -> boo
         None => return false,
     };
 
-    let prompt_result = match state
-        .session
-        .kernel
-        .process_dequeued(tx.clone(), token)
-        .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            error!(error = %e, "Failed to persist prompt record via kernel");
-            let _ = state
-                .commands
-                .send(UiCommand::ShowError(format!("Kernel error: {e}")))
-                .await;
-            let _ = state.commands.send(UiCommand::Complete).await;
-            return false;
-        }
-    };
-    send_record_to_ui(
-        state.commands,
-        prompt_result.entry.seq,
-        &tx,
-        &prompt_result.entry,
-    )
-    .await;
+    if let Err(e) = state.session.kernel.process_dequeued(tx, token).await {
+        error!(error = %e, "Failed to persist prompt record via kernel");
+        let _ = state
+            .commands
+            .send(UiCommand::ShowError(format!("Kernel error: {e}")))
+            .await;
+        let _ = state.commands.send(UiCommand::Complete).await;
+        return false;
+    }
     true
 }
 
