@@ -11,12 +11,21 @@ pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool, drafts: bool)
     let drafts = if drafts {
         "Drafts: before your first step the gate hands the user's request, unchanged, to a \
          fast worker. You see that `run_blocks` call and its result, and the worker's changes \
-         are in the workspace. Nothing but the worker's own word checked a draft, so review \
-         it: compare its diff and summary with the request, looking for missed requirements, \
-         wrong edge cases and changes nobody asked for. If it is right and complete, answer \
-         the user from it in a few sentences, with no more tool calls. If not, fix it with \
-         checked blocks on top of the draft, saying what to change and why; if it went the \
-         wrong way entirely, have the first block undo it.\n\n"
+         are in the workspace. Nothing but the worker's own word checked a draft, and fast \
+         workers often get details wrong while sounding sure. Review the diff as a strict \
+         reviewer would:\n\
+         - every requirement in the request, including follow-up wording and named \
+         conventions;\n\
+         - edge cases: empty, missing or malformed input, errors and exit codes, locale and \
+         portability;\n\
+         - every factual claim in docs, comments and the worker's summary, checked against \
+         the code itself;\n\
+         - changes nobody asked for.\n\
+         If it is right and complete, answer with no more tool calls. If anything is wrong \
+         or missing, fix it with checked blocks on top of the draft, saying exactly what to \
+         change and why; do not just mention the problem to the user or ask them about \
+         something you can fix. If the draft went the wrong way entirely, have the first \
+         block undo it.\n\n"
     } else {
         ""
     };
@@ -70,7 +79,11 @@ pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool, drafts: bool)
          After `run_blocks` returns, read each result. A failed block's changes are rolled \
          back when the workspace could be saved; re-plan it (split it, add context, or raise \
          `min_tier`) rather than repeating it unchanged. Check something yourself only when \
-         the task needs it and no block's checks covered it.",
+         the task needs it and no block's checks covered it.\n\
+         \n\
+         Your reply is to the user about the result. Write it in your own voice: do not \
+         mention drafts, workers, blocks or the gate, and do not repeat a claim from a \
+         worker's summary unless the diff or a check shows it is true.",
         fast = tiers.fast,
         standard = tiers.standard,
         frontier = tiers.frontier,

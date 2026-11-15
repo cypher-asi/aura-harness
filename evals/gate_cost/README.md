@@ -30,6 +30,24 @@ with a 95% interval from resampling tasks, overall and per category.
 With 20 tasks and 3 repeats it can show a large cost drop and catch a
 large quality loss, not small ones.
 
+## Judging quality blind
+
+The hidden checks are pass/fail. To compare what they miss (scope, code
+quality, accuracy of the reply), `judge.py` shows a judge model each
+task's two attempts, the diff and the final reply, unlabeled and in
+random order, and asks which is better. Judge calls go through
+`aura -p`.
+
+```sh
+python3 evals/gate_cost/judge.py --reference opus --arm gate
+```
+
+Judgments go to `AURA_HOME/gate/judgments/<reference>-vs-<arm>.jsonl`
+with the judge's reasons; the summary gives wins, losses, ties and a
+sign test, overall and per category. The judge is a frontier model, so
+it may favour the reference's style; read the reasons, not just the
+count.
+
 ## Learning from runs
 
 Every gate attempt is appended to `AURA_HOME/gate/ledger.jsonl`.
