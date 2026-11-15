@@ -44,8 +44,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the checkpoint plus whatever the record holds after it, instead
   of from prompts and replies alone. `/resume` lists earlier sessions
   and `/resume <n>` continues one.
+- Tool calls that need approval pause the turn and ask in the agent's
+  chat. `y` allows the call once, `a` always allows that tool (and, for
+  `run_command`, that command, such as `cargo test`) in the current
+  project, and `n` or Esc denies it. Saved answers live in
+  `<data_dir>/approvals.json`. A prompt nobody answers is denied after
+  10 minutes (`AURA_TUI_APPROVAL_TIMEOUT_SECS`), and Ctrl+C denies it and
+  stops the turn. An agent that is not on screen asks in its own chat
+  and the terminal says which agent is waiting.
+- Permission modes: `/mode [name]` and Shift+Tab switch the agent on
+  screen between `default` (asks before edits and commands),
+  `accept-edits` (file edits run, commands still ask), `plan`
+  (read-only) and `unrestricted` (nothing asks). The status line
+  starts with the current mode. Each switch is written to the agent's
+  record before the next tool call uses it, and spawned agents start in
+  their parent's mode.
+- The terminal rings the bell when a turn that took at least 10 seconds
+  finishes (`AURA_TUI_NOTIFY_AFTER_SECS`) and when an agent needs
+  approval. `AURA_TUI_DESKTOP_NOTIFY=1` also sends a desktop
+  notification through `notify-send` on Linux or `osascript` on macOS,
+  and `AURA_TUI_BELL=0` turns the bell off.
 
 ##### Changed
+
+- The terminal now starts in `default` mode, so edits and commands the
+  agent proposes wait for approval. Commands you type in the chat still
+  run without asking. Set `AURA_TUI_MODE=unrestricted`, or pick that
+  mode with `/mode`, to get the old behaviour where nothing asks.
+- Ctrl+C while an approval prompt is open cancels the turn instead of
+  quitting the terminal.
 
 - Terminal turns have no iteration cap and no 30-minute timeout.
 - The terminal compacts history only from 70% context use

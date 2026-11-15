@@ -8,9 +8,11 @@
 
 pub(crate) mod agent_events;
 pub(crate) mod agents;
+pub(crate) mod approvals;
 pub(crate) mod auth;
 pub(crate) mod handlers;
 mod hud;
+pub(crate) mod modes;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
 mod steering;
@@ -19,12 +21,14 @@ mod turns;
 
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
+pub use approvals::TerminalApprovals;
 pub(crate) use record_ui::send_record_to_ui;
 pub use record_ui::UiToolAuditObserver;
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
 use crate::model_selection::ModelSelection;
 use agent_events::AgentUi;
+use approvals::Answer;
 use aura_agent::{AgentLoop, ProcessManager};
 use aura_agent_kernel::Kernel;
 use aura_auth::{AuthManager, PendingLink};
@@ -66,6 +70,8 @@ pub struct EventLoopContext<'a> {
     pub job_finished: mpsc::Receiver<JobFinished>,
     /// Every background command, for the status line.
     pub jobs: Arc<BackgroundJobs>,
+    /// Tool calls waiting for the user's answer.
+    pub approvals: Arc<TerminalApprovals>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -91,6 +97,7 @@ pub(super) struct LoopState<'a> {
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
     pub(super) jobs: Arc<BackgroundJobs>,
+    pub(super) approvals: Arc<TerminalApprovals>,
 }
 
 impl LoopState<'_> {
@@ -145,6 +152,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         mut job_finished,
         jobs,
+        approvals,
     } = ctx;
     let mut job_changes = jobs.subscribe();
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
@@ -166,10 +174,12 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         pending_link: None,
         jobs,
+        approvals,
     };
 
     agents::send_sandbox_root(&state).await;
     hud::send_session_of(&state, active).await;
+    modes::send_mode(&state, active).await;
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
@@ -268,6 +278,7 @@ fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
 /// Cancel every agent's work and give it a moment to record how it ended.
 async fn shut_down(state: &mut LoopState<'_>, done_rx: &mut mpsc::Receiver<WorkDone>) {
     state.queued.clear();
+    state.approvals.cancel_all();
     state.hub.cancel_all();
     let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
     while state.in_flight > 0 {
@@ -350,8 +361,18 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             submit(state, agent_id, Work::Command { command, cols }).await;
         }
-        UiEvent::Approve(_id) => debug!("Approval received"),
-        UiEvent::Deny(_id) => debug!("Denial received"),
+        UiEvent::Approve(id) => answer_approval(state, &id, Answer::Once).await,
+        UiEvent::ApproveAlways(id) => answer_approval(state, &id, Answer::Always).await,
+        UiEvent::Deny(id) => answer_approval(state, &id, Answer::Deny).await,
+        UiEvent::SetMode { agent_id, mode } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            modes::set_mode(state, agent_id, mode).await;
+        }
+        UiEvent::CycleMode(agent_id) => {
+            let agent_id = state.agent_or_active(&agent_id);
+            let next = state.hub.mode_of(agent_id).next();
+            modes::set_mode(state, agent_id, next).await;
+        }
         UiEvent::Quit => {
             debug!("Quit received");
             return true;
@@ -359,6 +380,9 @@ async fn handle_ui_event(
         UiEvent::Cancel(agent_id) => {
             let agent_id = state.agent_or_active(&agent_id);
             debug!(%agent_id, "Cancel received");
+            // A call waiting for an answer holds the turn; deny it so the
+            // turn sees the cancellation.
+            state.approvals.cancel_agent(agent_id).await;
             if !state.hub.cancel(agent_id) {
                 AgentUi::new(state.commands.clone(), agent_id)
                     .send(UiCommand::SetStatus("Cancelled".to_string()))
@@ -410,6 +434,17 @@ async fn handle_ui_event(
     false
 }
 
+/// Hand the user's answer to the tool call waiting as `request_id`.
+async fn answer_approval(state: &LoopState<'_>, request_id: &str, answer: Answer) {
+    debug!(request = %request_id, ?answer, "Approval answered");
+    if let Err(e) = state.approvals.answer(request_id, answer).await {
+        let _ = state
+            .commands
+            .send(UiCommand::ShowWarning(e.to_string()))
+            .await;
+    }
+}
+
 /// Give `work` to `agent_id`: now if it is idle, else once its current
 /// work ends.
 async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
@@ -452,6 +487,13 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
         },
     };
 
+    // A session opened from the record has a kernel built in the startup
+    // mode; the agent's own mode decides its calls.
+    modes::apply(
+        &session.kernel,
+        state.hub.mode_of(agent_id),
+        &state.hub.tool_names(),
+    );
     let cancel = CancellationToken::new();
     let mut steering = None;
     let task = match work {

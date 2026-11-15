@@ -42,36 +42,56 @@ pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
 
 /// Render the approval modal.
 fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApproval, theme: &Theme) {
-    let area = frame.area();
-    let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 6;
+    /// Most lines of the action's description shown.
+    const MAX_DESCRIPTION_LINES: usize = 6;
 
-    let modal_area = centered_rect(modal_width, modal_height, area);
+    let area = frame.area();
+    let modal_width = 64.min(area.width.saturating_sub(4));
+    let text_width = usize::from(modal_width.saturating_sub(2)).max(1);
+    let muted = Style::default().fg(theme.colors.muted);
+
+    let mut content = vec![Line::from(Span::styled(
+        format!("{} wants to:", approval.tool),
+        Style::default().fg(theme.colors.foreground),
+    ))];
+    let description = wrap_words(&approval.description, text_width);
+    let cut = description.len() > MAX_DESCRIPTION_LINES;
+    content.extend(
+        description
+            .into_iter()
+            .take(MAX_DESCRIPTION_LINES)
+            .map(|line| Line::from(Span::styled(line, muted))),
+    );
+    if cut {
+        content.push(Line::from(Span::styled("…", muted)));
+    }
+    content.push(Line::from(""));
+    content.push(Line::from(Span::styled(
+        "[Y] Allow once",
+        Style::default().fg(theme.colors.success),
+    )));
+    if !approval.always.is_empty() {
+        content.push(Line::from(Span::styled(
+            format!("[A] Always allow {}", approval.always),
+            Style::default().fg(theme.colors.primary),
+        )));
+    }
+    content.push(Line::from(Span::styled(
+        "[N] Deny (Esc)",
+        Style::default().fg(theme.colors.error),
+    )));
+
+    let height = u16::try_from(content.len() + 2).unwrap_or(u16::MAX);
+    let modal_area = centered_rect(modal_width, height.min(area.height), area);
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
         .title(" Approval Required ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.colors.warning));
-
-    let content = vec![
-        Line::from(vec![Span::styled(
-            format!("{} wants to: ", approval.tool),
-            Style::default().fg(theme.colors.foreground),
-        )]),
-        Line::from(Span::styled(
-            &approval.description,
-            Style::default().fg(theme.colors.muted),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("[Y] Yes", Style::default().fg(theme.colors.success)),
-            Span::raw("  "),
-            Span::styled("[N] No", Style::default().fg(theme.colors.error)),
-        ]),
-    ];
-
-    let paragraph = Paragraph::new(content).block(block);
+    let paragraph = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, modal_area);
 }
 
@@ -276,7 +296,7 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 41.min(area.height);
+    let modal_height = 43.min(area.height);
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -312,6 +332,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/record    Toggle Record panel",
         "/files     Toggle Sandbox panel",
         "/model     Choose model (local or cloud)",
+        "/mode [name]        What runs without asking",
         "/login     Login for cloud models",
         "/login claude|chatgpt [paste]  Link a plan",
         "/logout [claude|chatgpt]  Sign out / unlink",
@@ -320,6 +341,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "",
         "Enter      Send message",
         "Tab        Switch panels",
+        "Shift+Tab  Next mode (default→edits→plan→all)",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
         "Space      Fold the selected project",

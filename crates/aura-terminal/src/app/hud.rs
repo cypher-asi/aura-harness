@@ -4,6 +4,7 @@
 
 use super::format::{format_cost, format_tokens};
 use crate::events::{CallStats, ContextView, JobView, SessionTotals, TodoState, TodoView};
+use crate::mode_command::PermissionMode;
 
 /// Model usage of an agent's session so far.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -94,6 +95,9 @@ pub struct Hud {
     pub queued: usize,
     /// Make-up of the context as of the last turn
     pub context: Option<ContextView>,
+    /// Which tool calls run without asking; `None` until the event loop
+    /// says
+    pub mode: Option<PermissionMode>,
 }
 
 impl Hud {

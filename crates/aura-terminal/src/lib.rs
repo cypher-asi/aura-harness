@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+pub mod alerts;
 pub mod animation;
 pub mod ansi;
 pub mod components;
@@ -50,9 +51,10 @@ mod renderer;
 mod terminal;
 
 // Re-exports for convenience
+pub use alerts::AlertSettings;
 pub use app::{App, AppState};
 pub use events::{UiCommand, UiEvent};
-pub use mode_command::{ModeCommandError, SlashModeCommand};
+pub use mode_command::{ModeCommandError, PermissionMode, SlashModeCommand};
 pub use terminal::Terminal;
 pub use themes::Theme;
 

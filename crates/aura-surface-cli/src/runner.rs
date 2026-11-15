@@ -13,11 +13,11 @@ use crate::{api_server, auth_commands, event_loop, record_loader, session_helper
 
 use anyhow::Context;
 use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
-use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig, ToolApprovalPrompter};
 use aura_context_skills::{SkillLoader, SkillManager};
 use aura_core_types::{AgentPermissions, Transaction};
 use aura_model_reasoner::ModelProvider;
-use aura_terminal::{App, Terminal, Theme, UiCommand, UiEvent};
+use aura_terminal::{AlertSettings, App, PermissionMode, Terminal, Theme, UiCommand, UiEvent};
 use aura_tools::jobs::{BackgroundJobs, JobFinished};
 use aura_tools::todo::TodoWriteTool;
 use aura_tools::{ToolConfig, ToolExecutor};
@@ -339,7 +339,8 @@ async fn run_terminal(
 
     let mut app = App::new()
         .with_event_sender(ui_tx.clone())
-        .with_command_receiver(cmd_rx);
+        .with_command_receiver(cmd_rx)
+        .with_alert_settings(AlertSettings::from_env());
 
     if args.verbose {
         app.set_verbose(true);
@@ -430,11 +431,21 @@ async fn run_terminal(
     }
     let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
 
+    let mode = initial_permission_mode(requested_mode);
+    info!(%mode, "Terminal permission mode");
+    let mut tool_names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    tool_names.push(aura_tools::agents::task::TASK_TOOL_NAME.to_string());
+    let approvals = Arc::new(event_loop::TerminalApprovals::new(
+        cmd_tx.clone(),
+        &data_dir,
+    ));
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
         policy: aura_agent_kernel::PolicyConfig::default()
-            .with_mode(aura_config::session_mode(requested_mode)),
+            .with_mode(mode.agent_mode())
+            .with_user_default(event_loop::modes::user_defaults(mode, &tool_names)),
+        tool_approval_prompter: Some(Arc::clone(&approvals) as Arc<dyn ToolApprovalPrompter>),
         tool_audit_observer: Some(Arc::new(event_loop::UiToolAuditObserver::new(
             cmd_tx.clone(),
         ))),
@@ -442,6 +453,7 @@ async fn run_terminal(
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
     let factory_jobs = Arc::clone(&jobs);
+    let factory_approvals = Arc::clone(&approvals);
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
@@ -458,6 +470,7 @@ async fn run_terminal(
             },
             commands: cmd_tx.clone(),
             long_run: crate::long_run::LongRunSettings::from_env(),
+            mode,
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(
@@ -475,6 +488,7 @@ async fn run_terminal(
                     if let Some(folder) = folder {
                         config.workspace_base = folder;
                     }
+                    factory_approvals.set_folder(agent_id, config.workspace_base.clone());
                     Ok(Kernel::new(
                         Arc::clone(&kernel_store),
                         Arc::clone(&provider),
@@ -511,6 +525,7 @@ async fn run_terminal(
             auth,
             job_finished: job_rx,
             jobs: loop_jobs,
+            approvals,
         };
         event_loop::run_event_loop(ctx).await
     });
@@ -557,6 +572,21 @@ async fn run_headless(args: RunArgs) -> anyhow::Result<()> {
     config.allow_unrestricted_full_access |= args.allow_unrestricted_full_access;
 
     aura_runtime::Node::new(config).run().await
+}
+
+/// The permission mode terminal agents start in: `--mode`, else
+/// `AURA_TUI_MODE`, else the daemon default (`AURA_DEFAULT_MODE`).
+fn initial_permission_mode(requested: Option<aura_core_modes::AgentMode>) -> PermissionMode {
+    if let Some(mode) = requested {
+        return PermissionMode::from_agent_mode(mode);
+    }
+    if let Ok(raw) = std::env::var("AURA_TUI_MODE") {
+        match PermissionMode::parse(&raw) {
+            Ok(mode) => return mode,
+            Err(e) => warn!(error = %e, "Ignoring AURA_TUI_MODE"),
+        }
+    }
+    PermissionMode::from_agent_mode(aura_config::session_mode(None))
 }
 
 fn unrestricted_full_access_from_env() -> bool {

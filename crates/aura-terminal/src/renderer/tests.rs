@@ -1744,3 +1744,69 @@ fn test_todos_stay_with_their_agent() {
     let screen = render_rows(&mut app, 160).join("\n");
     assert!(screen.contains("[0/1] ▸ Background work"), "{screen}");
 }
+
+#[test]
+fn test_status_line_leads_with_the_mode() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = crate::App::new();
+    let rows = render_rows(&mut app, 160);
+    assert!(!rows.last().unwrap().contains("mode"), "unknown until told");
+
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::AcceptEdits));
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 10_000,
+        context_limit: Some(200_000),
+        ..CallStats::default()
+    }));
+    let rows = render_rows(&mut app, 160);
+    let status = rows.last().unwrap();
+    let mode = status.find("accept-edits mode").expect(status);
+    let ctx = status.find("ctx 5%").expect(status);
+    assert!(mode < ctx, "{status:?}");
+}
+
+#[test]
+fn test_approval_prompt_offers_three_answers() {
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::RequestApproval {
+        id: "req-1".to_string(),
+        tool: "run_command".to_string(),
+        description: "cargo test -p aura-terminal".to_string(),
+        always: "`cargo test` commands in this project".to_string(),
+    });
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("Approval Required"), "{screen}");
+    assert!(screen.contains("run_command wants to:"), "{screen}");
+    assert!(screen.contains("cargo test -p aura-terminal"), "{screen}");
+    assert!(screen.contains("[Y] Allow once"), "{screen}");
+    assert!(
+        screen.contains("[A] Always allow `cargo test` commands in this project"),
+        "{screen}"
+    );
+    assert!(screen.contains("[N] Deny (Esc)"), "{screen}");
+}
+
+#[test]
+fn test_help_lists_mode_command_and_shift_tab() {
+    let mut app = crate::App::new();
+    run_slash(&mut app, "/help");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 50)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    assert!(screen.contains("/mode [name]"), "{screen}");
+    assert!(screen.contains("Shift+Tab"), "{screen}");
+    assert!(screen.contains("Press any key to close"), "{screen}");
+}

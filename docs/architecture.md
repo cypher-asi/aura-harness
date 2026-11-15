@@ -125,7 +125,7 @@ How a request flows through the running system. The kernel boundary cuts at the 
 2. **Daemon default** — `aura_config::AgentConfig::default_mode` (`AURA_DEFAULT_MODE`; the older `AURA_FLEET_DEFAULT_MODE` is still read).
 3. **Fallback** — `AgentMode::Agent`.
 
-The gateway stores the resolved mode on the chat session and sets `PolicyConfig::mode` when it builds the session kernel; the CLI terminal runner does the same for its local kernel. Child agents take `SubagentSpec.mode` from `derive_subagent`, which can only narrow. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `Agent`, so automaton kernels always run in `Agent` mode. The TUI `/mode` slash command (`aura_terminal::SlashModeCommand`) is parsed but not wired; changing mode mid-session must first append a `System` record.
+The gateway stores the resolved mode on the chat session and sets `PolicyConfig::mode` when it builds the session kernel; the CLI terminal runner does the same for its local kernel. Child agents take `SubagentSpec.mode` from `derive_subagent`, which can only narrow. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `Agent`, so automaton kernels always run in `Agent` mode. In the TUI, `/mode` and Shift+Tab pick an `aura_terminal::PermissionMode` per agent. The event loop first appends a `System` record for the switch, then calls `Policy::reconfigure` to swap the kernel's `PolicyConfig` (the mode ceiling plus per-tool `user_default` states), so the next tool call is evaluated, and its decision recorded, under the new policy hash. Tools whose state is `Ask` go through the kernel's `ToolApprovalPrompter`, which the terminal implements with a prompt in that agent's chat.
 
 ### Tool authorization pipeline
 
@@ -449,7 +449,7 @@ The `DomainApi` *trait* continues to live in `aura-tools::domain_tools`; only th
 
 #### [`aura-terminal`](../crates/aura-terminal)
 
-Ratatui-based terminal UI library: themed rendering, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`), input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds the `SlashModeCommand` parser for `/mode <agent|plan|ask|debug>`, not yet wired into the input loop.
+Ratatui-based terminal UI library: themed rendering, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`), input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds `PermissionMode` (`default`, `accept-edits`, `plan`, `unrestricted`) and the `/mode` parser; `alerts.rs` rings the bell and sends optional desktop notifications.
 
 #### [`aura-automaton`](../crates/aura-automaton)
 

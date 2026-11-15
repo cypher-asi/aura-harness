@@ -57,12 +57,17 @@ fn test_approval_state() {
         id: "test".to_string(),
         tool: "fs.write".to_string(),
         description: "Write file".to_string(),
+        always: String::new(),
     });
     app.state = AppState::AwaitingApproval;
 
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
     assert!(app.pending_approval.is_none());
-    assert_eq!(app.state(), AppState::Idle);
+    assert_eq!(
+        app.state(),
+        AppState::Processing,
+        "the turn goes on with the denial"
+    );
 }
 
 // ========================================================================
@@ -89,6 +94,7 @@ fn test_state_transition_to_awaiting_approval() {
         id: "t1".to_string(),
         tool: "write_file".to_string(),
         description: "Write file".to_string(),
+        always: String::new(),
     });
     app.state = AppState::AwaitingApproval;
     assert_eq!(app.state(), AppState::AwaitingApproval);
@@ -1999,7 +2005,7 @@ fn test_slash_menu_esc_dismisses_until_next_edit() {
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus(), PanelFocus::Records);
     app.handle_key(key(KeyCode::Char('o')));
-    assert_eq!(slash_names(&app), ["model"]);
+    assert_eq!(slash_names(&app), ["model", "mode"]);
 }
 
 #[test]
@@ -2015,4 +2021,160 @@ fn test_recalled_slash_command_keeps_history_navigation() {
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.input(), "/clear");
     assert!(app.slash_matches().is_empty());
+}
+
+// ========================================================================
+// Approvals, modes and alerts
+// ========================================================================
+
+fn approval_request(id: &str, always: &str) -> UiCommand {
+    UiCommand::RequestApproval {
+        id: id.to_string(),
+        tool: "run_command".to_string(),
+        description: "cargo test".to_string(),
+        always: always.to_string(),
+    }
+}
+
+fn for_agent(agent_id: &str, command: UiCommand) -> UiCommand {
+    UiCommand::ForAgent {
+        agent_id: agent_id.to_string(),
+        command: Box::new(command),
+    }
+}
+
+#[test]
+fn approval_keys_answer_once_always_or_deny() {
+    for (key_char, expect) in [('y', "approve"), ('a', "always"), ('n', "deny")] {
+        let (tx, mut rx) = mpsc::channel(10);
+        let mut app = App::new().with_event_sender(tx);
+        app.process_command(approval_request("req-1", "`cargo test` commands"));
+        assert_eq!(app.state(), AppState::AwaitingApproval);
+
+        app.handle_key(key(KeyCode::Char(key_char)));
+
+        let event = rx.try_recv().unwrap();
+        let matched = match expect {
+            "approve" => matches!(event, UiEvent::Approve(ref id) if id == "req-1"),
+            "always" => matches!(event, UiEvent::ApproveAlways(ref id) if id == "req-1"),
+            _ => matches!(event, UiEvent::Deny(ref id) if id == "req-1"),
+        };
+        assert!(matched, "{key_char}: {event:?}");
+        assert_eq!(app.state(), AppState::Processing);
+        assert!(app.pending_approval().is_none());
+    }
+}
+
+#[test]
+fn always_is_not_offered_when_the_call_cannot_be_remembered() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(approval_request("req-1", ""));
+    app.handle_key(key(KeyCode::Char('a')));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+}
+
+#[test]
+fn a_closed_approval_drops_its_prompt() {
+    let mut app = App::new();
+    app.process_command(approval_request("req-1", ""));
+    app.process_command(UiCommand::CloseApproval("other".to_string()));
+    assert!(app.pending_approval().is_some());
+    app.process_command(UiCommand::CloseApproval("req-1".to_string()));
+    assert!(app.pending_approval().is_none());
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn cancel_while_awaiting_approval_cancels_the_turn() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(approval_request("req-1", ""));
+    assert!(app.is_busy());
+    app.cancel();
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Cancel(id)) if id == "aa"));
+    assert!(app.pending_approval().is_none());
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn approval_for_an_agent_off_screen_waits_in_its_chat() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(for_agent("bb", UiCommand::TurnStarted { prompt: None }));
+    app.process_command(for_agent("bb", approval_request("req-b", "")));
+
+    assert!(
+        app.pending_approval().is_none(),
+        "the shown chat is not asked"
+    );
+    assert_eq!(app.state(), AppState::Idle);
+    let (note, _) = app.notification().unwrap();
+    assert!(note.contains("needs your approval"), "{note}");
+    assert_eq!(app.take_alerts().len(), 1);
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+    assert_eq!(app.pending_approval().unwrap().id, "req-b");
+
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert!(app.pending_approval().is_none());
+    assert!(app.agent_busy("bb"));
+}
+
+#[test]
+fn shift_tab_and_mode_command_ask_the_event_loop() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+
+    app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CycleMode(id)) if id == "aa"));
+
+    app.handle_command("/mode accept-edits");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::AcceptEdits }) if agent_id == "aa"
+    ));
+
+    app.handle_command("/mode chaos");
+    assert!(rx.try_recv().is_err());
+    assert!(app.notification().unwrap().0.contains("unknown mode"));
+}
+
+#[test]
+fn mode_command_without_a_name_lists_the_modes() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+    app.handle_command("/mode");
+    let report = app.messages().back().unwrap().content().to_string();
+    assert!(report.starts_with("Mode: plan"), "{report}");
+    assert!(report.contains("unrestricted"), "{report}");
+}
+
+#[test]
+fn new_session_keeps_the_mode() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Unrestricted));
+    app.handle_command("/new");
+    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Unrestricted));
+}
+
+#[test]
+fn a_long_turn_alerts_when_it_finishes_and_a_short_one_does_not() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(for_agent("aa", UiCommand::TurnStarted { prompt: None }));
+    app.processing_since = Some(Instant::now());
+    app.process_command(for_agent("aa", UiCommand::Complete));
+    assert!(app.take_alerts().is_empty());
+
+    app.process_command(for_agent("aa", UiCommand::TurnStarted { prompt: None }));
+    app.processing_since = Instant::now().checked_sub(Duration::from_secs(30));
+    app.process_command(for_agent("aa", UiCommand::Complete));
+    let alerts = app.take_alerts();
+    assert_eq!(alerts.len(), 1);
+    assert!(alerts[0].contains("finished after 30s"), "{alerts:?}");
 }

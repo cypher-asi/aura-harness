@@ -34,7 +34,7 @@ pub(crate) fn is_user_tool_use(tool_use_id: &str) -> bool {
 }
 
 /// Characters that need a shell to interpret.
-const SHELL_SYNTAX: &[char] = &[
+pub(crate) const SHELL_SYNTAX: &[char] = &[
     '|', '&', ';', '<', '>', '(', ')', '$', '`', '\\', '"', '\'', '*', '?', '[', ']', '{', '}',
     '~', '#', '=', '%', '\n',
 ];

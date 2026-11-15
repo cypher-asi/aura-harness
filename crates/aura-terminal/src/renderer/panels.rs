@@ -297,7 +297,7 @@ pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Lin
 }
 
 /// `7s`, `2m 05s`.
-pub(super) fn format_elapsed(elapsed: std::time::Duration) -> String {
+pub(crate) fn format_elapsed(elapsed: std::time::Duration) -> String {
     let secs = elapsed.as_secs();
     if secs < 60 {
         format!("{secs}s")

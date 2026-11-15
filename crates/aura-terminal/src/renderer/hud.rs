@@ -6,6 +6,7 @@ use super::text::display_width;
 use crate::app::format::{format_cost, format_tokens};
 use crate::app::hud::Hud;
 use crate::events::{TodoState, TodoView};
+use crate::mode_command::PermissionMode;
 use crate::{App, Theme};
 use ratatui::{
     layout::{Alignment, Rect},
@@ -30,6 +31,17 @@ const SEPARATOR: &str = " · ";
 pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
     let stats = &hud.stats;
     let mut parts = Vec::new();
+    if let Some(mode) = hud.mode {
+        let color = match mode {
+            PermissionMode::Default => theme.colors.muted,
+            PermissionMode::AcceptEdits => theme.colors.primary,
+            PermissionMode::Plan | PermissionMode::Ask | PermissionMode::Debug => {
+                theme.colors.secondary
+            }
+            PermissionMode::Unrestricted => theme.colors.warning,
+        };
+        parts.push((format!("{mode} mode"), color));
+    }
     if stats.context_tokens > 0 {
         let mut text = format!("ctx {}", format_tokens(stats.context_tokens));
         let mut color = theme.colors.muted;

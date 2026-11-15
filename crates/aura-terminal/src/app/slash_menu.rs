@@ -74,6 +74,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Choose model (local or cloud)",
         needs_args: false,
     },
+    SlashCommand {
+        name: "mode",
+        args: "[default|accept-edits|plan|unrestricted]",
+        description: "Show or set what runs without asking",
+        needs_args: false,
+    },
     command("login", "Login for cloud models"),
     command("logout", "Clear credentials"),
     command("whoami", "Show auth status"),

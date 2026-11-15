@@ -6,7 +6,11 @@
 //! as [`AgentView`]s and swapped in when their agent becomes active.
 
 use super::{hud::Hud, App, AppState, NotificationType, PendingApproval};
-use crate::{components::Message, events::UiCommand, renderer::ChatLineCache};
+use crate::{
+    components::Message,
+    events::UiCommand,
+    renderer::{format_elapsed, ChatLineCache},
+};
 use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::time::Instant;
@@ -93,22 +97,63 @@ impl App {
         view.busy = is_busy(self.state);
         self.views.insert(previous, view);
         if !is_modal(self.state) {
-            self.state = if busy {
-                AppState::Processing
-            } else {
-                AppState::Idle
-            };
+            self.state = self.chat_state(busy);
         }
         self.close_detail();
         self.clear_selection();
     }
 
+    /// State of the chat swapped in, whose agent is `busy` or not. A turn
+    /// waiting for an approval shows its prompt.
+    const fn chat_state(&self, busy: bool) -> AppState {
+        if self.pending_approval.is_some() {
+            AppState::AwaitingApproval
+        } else if busy {
+            AppState::Processing
+        } else {
+            AppState::Idle
+        }
+    }
+
+    /// Note something about `agent_id` that the user should notice even
+    /// when looking elsewhere: it needs an approval, or a long turn ended.
+    fn queue_alert(&mut self, agent_id: &str, command: &UiCommand) {
+        let on_screen = agent_id == self.active_agent_id || self.active_agent_id.is_empty();
+        let message = match command {
+            UiCommand::RequestApproval { tool, .. } => {
+                format!("{} needs approval to run {tool}", self.agent_name(agent_id))
+            }
+            UiCommand::Complete => {
+                let since = if on_screen {
+                    self.processing_since
+                } else {
+                    self.views.get(agent_id).and_then(|v| v.processing_since)
+                };
+                let Some(elapsed) = since.map(|since| since.elapsed()) else {
+                    return;
+                };
+                if elapsed < self.alert_settings.notify_after {
+                    return;
+                }
+                format!(
+                    "{} finished after {}",
+                    self.agent_name(agent_id),
+                    format_elapsed(elapsed)
+                )
+            }
+            _ => return,
+        };
+        self.alerts.push(message);
+    }
+
     /// Apply `command` to the chat of `agent_id`, on screen or not.
     pub(super) fn process_agent_command(&mut self, agent_id: &str, command: UiCommand) {
+        self.queue_alert(agent_id, &command);
         if agent_id == self.active_agent_id || self.active_agent_id.is_empty() {
             self.process_command(command);
             return;
         }
+        let asks = matches!(command, UiCommand::RequestApproval { .. });
         if matches!(
             command,
             UiCommand::NewRecord(_) | UiCommand::ClearRecords | UiCommand::SetSandboxRoot(_)
@@ -122,11 +167,7 @@ impl App {
         let notification = self.notification.take();
         let was_busy = view.busy;
         self.swap_chat(&mut view);
-        self.state = if was_busy {
-            AppState::Processing
-        } else {
-            AppState::Idle
-        };
+        self.state = self.chat_state(was_busy);
 
         self.process_command(command);
 
@@ -145,6 +186,10 @@ impl App {
         let name = self.agent_name(agent_id);
         self.notification = match note {
             Some((message, kind)) => Some((format!("{name}: {message}"), kind)),
+            None if asks => Some((
+                format!("{name} needs your approval; switch to it to answer"),
+                NotificationType::Warning,
+            )),
             None if was_busy && !busy => {
                 Some((format!("{name} finished"), NotificationType::Success))
             }

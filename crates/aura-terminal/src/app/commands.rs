@@ -4,6 +4,7 @@ use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingAppr
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
     events::{CallUsage, UiCommand, UiEvent},
+    mode_command::{PermissionMode, SlashModeCommand},
     terminal::KeyResult,
 };
 use tracing::debug;
@@ -132,6 +133,7 @@ impl App {
                 }
             }
             "compact" => self.handle_compact_command(arg),
+            "mode" => self.handle_mode_command(arg),
             "resume" => self.handle_resume_command(arg),
             "new" | "n" => {
                 self.messages.clear();
@@ -140,6 +142,7 @@ impl App {
                 let jobs = std::mem::take(&mut self.hud.jobs);
                 self.hud = super::hud::Hud {
                     jobs,
+                    mode: self.hud.mode,
                     ..Default::default()
                 };
                 self.todos_open = false;
@@ -380,6 +383,41 @@ impl App {
         }
     }
 
+    /// `/mode`: show the agent's permission mode and the others; `/mode
+    /// <name>`: switch to one for the agent's next tool calls.
+    fn handle_mode_command(&mut self, arg: &str) {
+        if arg.is_empty() {
+            let current = self.hud.mode.unwrap_or_default();
+            let mut report = format!("Mode: {current} — {}", current.description());
+            for mode in [
+                PermissionMode::Default,
+                PermissionMode::AcceptEdits,
+                PermissionMode::Plan,
+                PermissionMode::Unrestricted,
+                PermissionMode::Ask,
+                PermissionMode::Debug,
+            ] {
+                report.push_str(&format!("\n  {:<14}{}", mode.name(), mode.description()));
+            }
+            report.push_str("\nShift+Tab cycles default → accept-edits → plan → unrestricted.");
+            self.add_message(Message::new(MessageRole::System, &report));
+            return;
+        }
+        match SlashModeCommand::parse(arg) {
+            Ok(command) => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::SetMode {
+                        agent_id: self.active_agent_id.clone(),
+                        mode: command.requested,
+                    });
+                }
+            }
+            Err(e) => {
+                self.notification = Some((e.to_string(), NotificationType::Warning));
+            }
+        }
+    }
+
     /// `/compact [focus]`: summarize the agent's older history now. A busy
     /// agent does it once its current work ends.
     fn handle_compact_command(&mut self, focus: &str) {
@@ -451,14 +489,19 @@ impl App {
                 id,
                 tool,
                 description,
+                always,
             } => {
+                self.status = format!("Waiting for approval to run {tool}");
                 self.pending_approval = Some(PendingApproval {
                     id,
                     tool,
                     description,
+                    always,
                 });
                 self.state = AppState::AwaitingApproval;
             }
+            UiCommand::CloseApproval(id) => self.cmd_close_approval(&id),
+            UiCommand::SetMode(mode) => self.hud.mode = Some(mode),
             UiCommand::ShowError(msg) => {
                 self.cmd_notification(&msg, "error: ", NotificationType::Error);
             }
@@ -682,6 +725,17 @@ impl App {
         self.finish_live_activity();
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
+    }
+
+    /// Drop the prompt for approval `id`, which stopped waiting; the turn
+    /// goes on without it.
+    fn cmd_close_approval(&mut self, id: &str) {
+        if self.pending_approval.as_ref().is_some_and(|a| a.id == id) {
+            self.pending_approval = None;
+            if self.state == AppState::AwaitingApproval {
+                self.state = AppState::Processing;
+            }
+        }
     }
 
     fn cmd_turn_started(&mut self, prompt: Option<String>) {

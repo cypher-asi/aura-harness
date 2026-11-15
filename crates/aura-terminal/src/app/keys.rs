@@ -128,33 +128,32 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Handle key in approval mode.
+    /// Handle key in approval mode: `y` allows the call once, `a` always
+    /// (in this project), `n` or Esc denies it. The turn goes on either
+    /// way; Ctrl+C cancels it instead.
     fn handle_approval_key(&mut self, key: KeyEvent) -> KeyResult {
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
-                if let Some(approval) = self.pending_approval.take() {
-                    if let Some(tx) = &self.event_tx {
-                        let _ = tx.try_send(UiEvent::Approve(approval.id));
-                    }
-                    self.state = AppState::Processing;
-                    self.status = "Approved, continuing...".to_string();
-                }
+        let always_offered = self
+            .pending_approval
+            .as_ref()
+            .is_some_and(|a| !a.always.is_empty());
+        let answer = match key.code {
+            KeyCode::Char('y' | 'Y') => "Approved",
+            KeyCode::Char('a' | 'A') if always_offered => "Always allowed",
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => "Denied",
+            _ => return KeyResult::continue_running(),
+        };
+        if let Some(approval) = self.pending_approval.take() {
+            let event = match key.code {
+                KeyCode::Char('y' | 'Y') => UiEvent::Approve(approval.id),
+                KeyCode::Char('a' | 'A') => UiEvent::ApproveAlways(approval.id),
+                _ => UiEvent::Deny(approval.id),
+            };
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(event);
             }
-            KeyCode::Char('n' | 'N') => {
-                if let Some(approval) = self.pending_approval.take() {
-                    if let Some(tx) = &self.event_tx {
-                        let _ = tx.try_send(UiEvent::Deny(approval.id));
-                    }
-                    self.state = AppState::Idle;
-                    self.status = "Denied".to_string();
-                }
-            }
-            KeyCode::Esc => {
-                self.pending_approval = None;
-                self.state = AppState::Idle;
-            }
-            _ => {}
+            self.status = format!("{answer}, continuing...");
         }
+        self.state = AppState::Processing;
         KeyResult::continue_running()
     }
 
@@ -259,6 +258,12 @@ impl App {
         }
         if key.code == KeyCode::Tab {
             self.focus = self.next_panel_focus();
+            return KeyResult::continue_running();
+        }
+        if key.code == KeyCode::BackTab {
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(UiEvent::CycleMode(self.active_agent_id.clone()));
+            }
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {

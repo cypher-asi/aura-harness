@@ -4,6 +4,7 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
+use crate::mode_command::PermissionMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -34,8 +35,24 @@ pub enum UiEvent {
     /// User approved a pending tool request
     Approve(String),
 
+    /// User approved a pending tool request and wants calls like it to run
+    /// without asking in this project from now on
+    ApproveAlways(String),
+
     /// User denied a pending tool request
     Deny(String),
+
+    /// User picked the permission mode of an agent (`/mode <name>`)
+    SetMode {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Mode for the agent's next tool calls
+        mode: PermissionMode,
+    },
+
+    /// User pressed Shift+Tab to move the agent with this hex id to the
+    /// next permission mode
+    CycleMode(String),
 
     /// User requested to quit
     Quit,
@@ -220,15 +237,26 @@ pub enum UiCommand {
         exit_code: Option<i32>,
     },
 
-    /// Request user approval for a tool
+    /// Request user approval for a tool. The agent's turn waits for the
+    /// answer.
     RequestApproval {
-        /// Tool use ID
+        /// Approval request ID, sent back with the answer
         id: String,
         /// Tool name
         tool: String,
         /// Description of the action
         description: String,
+        /// What "always allow" would allow from now on, e.g. "`cargo test`
+        /// commands in this project"
+        always: String,
     },
+
+    /// The approval with this ID stopped waiting (it timed out or the turn
+    /// was cancelled)
+    CloseApproval(String),
+
+    /// The agent's permission mode
+    SetMode(PermissionMode),
 
     /// Show an error notification
     ShowError(String),

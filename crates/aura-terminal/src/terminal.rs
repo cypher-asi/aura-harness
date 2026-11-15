@@ -2,7 +2,7 @@
 //!
 //! Provides a high-level interface for terminal operations using ratatui and crossterm.
 
-use crate::{clipboard, layout::LayoutMode, renderer, App, Theme};
+use crate::{alerts, clipboard, layout::LayoutMode, renderer, App, Theme};
 use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
@@ -12,11 +12,11 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Frame, Terminal as RatatuiTerminal};
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, warn};
 
 /// Most queued input events handled between two frames, so a flood of
 /// input still lets the screen update.
@@ -109,6 +109,7 @@ impl Terminal {
             // Process any pending updates from the command channel FIRST
             // This ensures records loaded at startup are displayed on the first frame
             app.tick();
+            self.raise_alerts(app);
 
             if let Some(path) = app.take_editor_request() {
                 let result = self.edit_file(&path);
@@ -148,6 +149,27 @@ impl Terminal {
         }
     }
 
+    /// Ring the bell once for everything `app` wants the user to notice,
+    /// and show each as a desktop notification when those are on.
+    fn raise_alerts(&mut self, app: &mut App) {
+        let alerts = app.take_alerts();
+        if alerts.is_empty() {
+            return;
+        }
+        let settings = *app.alert_settings();
+        if settings.bell {
+            let backend = self.inner.backend_mut();
+            if let Err(e) = backend.write_all(b"\x07").and_then(|()| backend.flush()) {
+                warn!(error = %e, "Failed to ring the terminal bell");
+            }
+        }
+        if settings.desktop {
+            for alert in &alerts {
+                alerts::desktop_notify(alert);
+            }
+        }
+    }
+
     /// Apply one terminal event to `app`. Returns `true` to quit.
     fn handle_event(&mut self, app: &mut App, event: &Event) -> bool {
         match *event {
@@ -166,7 +188,7 @@ impl Terminal {
                     if app.request_copy() {
                         return false;
                     }
-                    if !app.is_processing() {
+                    if !app.is_busy() {
                         return true;
                     }
                     app.cancel();

@@ -40,6 +40,11 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_TURN_TIMEOUT` | — (no limit) | Stop a turn that runs longer than this: `90s`, `45m`, `2h`, or a bare number of minutes. |
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
+| `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` (`agent` means `default`) | Permission mode the terminal starts in when `--mode` is not given: `default`, `accept-edits`, `plan` or `unrestricted`. Set `unrestricted` to run every tool call without asking. |
+| `AURA_TUI_APPROVAL_TIMEOUT_SECS` | `600` | Seconds an approval prompt waits for an answer. When it runs out, the tool call is denied and the turn goes on. |
+| `AURA_TUI_NOTIFY_AFTER_SECS` | `10` | A finished turn that took at least this many seconds rings the bell (and sends a desktop notification if those are on). `0` alerts after every turn. |
+| `AURA_TUI_BELL` | `1` | Set to `0` to stop the terminal bell for finished turns and approval prompts. |
+| `AURA_TUI_DESKTOP_NOTIFY` | `0` | Set to `1` to also send desktop notifications, through `notify-send` on Linux or `osascript` on macOS. A notifier that hangs is killed after 5 seconds. |
 
 ## Node runtime
 

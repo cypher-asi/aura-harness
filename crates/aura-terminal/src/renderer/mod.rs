@@ -18,6 +18,7 @@ mod text;
 mod tests;
 
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
+pub(crate) use panels::format_elapsed;
 
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{

@@ -30,7 +30,7 @@ use aura_core_types::{
 };
 use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::events::{AgentDefinitionSummary, AgentSummary};
-use aura_terminal::UiCommand;
+use aura_terminal::{PermissionMode, UiCommand};
 use aura_tools::agents::task::TASK_TOOL_NAME;
 use aura_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
 use aura_tools::todo::TODO_WRITE_TOOL_NAME;
@@ -76,6 +76,10 @@ pub struct AgentHub {
     commands: mpsc::Sender<UiCommand>,
     /// Per-turn time and cost limits.
     pub(crate) long_run: LongRunSettings,
+    /// Permission mode of each agent the user or a parent set one for
+    modes: Mutex<HashMap<AgentId, PermissionMode>>,
+    /// Mode of every other agent
+    default_mode: PermissionMode,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -86,6 +90,8 @@ pub struct AgentHubParts {
     pub base: TurnBase,
     pub commands: mpsc::Sender<UiCommand>,
     pub(crate) long_run: LongRunSettings,
+    /// Mode agents start in
+    pub mode: PermissionMode,
 }
 
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -113,8 +119,34 @@ impl AgentHub {
                 factory: factory(dispatcher),
                 commands: parts.commands,
                 long_run: parts.long_run,
+                modes: Mutex::new(HashMap::new()),
+                default_mode: parts.mode,
             }
         })
+    }
+
+    /// Permission mode of `agent_id`.
+    pub fn mode_of(&self, agent_id: AgentId) -> PermissionMode {
+        lock(&self.modes)
+            .get(&agent_id)
+            .copied()
+            .unwrap_or(self.default_mode)
+    }
+
+    /// Note that `agent_id` is in `mode` from now on.
+    pub(super) fn set_mode(&self, agent_id: AgentId, mode: PermissionMode) {
+        lock(&self.modes).insert(agent_id, mode);
+    }
+
+    /// Names of every tool a turn may offer, for the mode tables.
+    pub(crate) fn tool_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = lock(&self.base)
+            .tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        names.push(TASK_TOOL_NAME.to_string());
+        names
     }
 
     /// Config and tools for a turn of an agent, applying the permanent
@@ -310,6 +342,10 @@ impl AgentHub {
             .map_err(|e| format!("opening {}: {e:#}", instance.name))?;
         let child_id = session.agent_id();
         info!(child = %instance.name, definition = %definition.name, "Spawning permanent agent");
+        // A spawn asks no less than the agent that started it.
+        let mode = self.mode_of(request.parent_agent_id);
+        self.set_mode(child_id, mode);
+        super::modes::apply(&session.kernel, mode, &self.tool_names());
 
         let cancel = CancellationToken::new();
         // Messages for a spawn wait for its task to end: steering it

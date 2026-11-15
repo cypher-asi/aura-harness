@@ -48,6 +48,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         },
         commands: tx,
         long_run: crate::long_run::LongRunSettings::default(),
+        mode: aura_terminal::PermissionMode::Default,
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();

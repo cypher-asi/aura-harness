@@ -24,6 +24,7 @@ mod detail_tests;
 mod tests;
 
 use crate::{
+    alerts::AlertSettings,
     components::{Activity, Message},
     events::{
         AgentDefinitionSummary, AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent,
@@ -118,12 +119,14 @@ pub(super) enum ProjectNamePurpose {
 /// Pending approval request.
 #[derive(Debug, Clone)]
 pub struct PendingApproval {
-    /// Tool use ID
+    /// Approval request ID
     pub id: String,
     /// Tool name
     pub tool: String,
     /// Description of the action
     pub description: String,
+    /// What "always allow" would allow; empty when it isn't offered
+    pub always: String,
 }
 
 /// Main application struct managing UI state.
@@ -275,6 +278,10 @@ pub struct App {
     pub(super) hud: Hud,
     /// Whether the full todo list is shown above the input
     pub(super) todos_open: bool,
+    /// When to get the user's attention
+    pub(super) alert_settings: AlertSettings,
+    /// Messages for the user that the terminal should ring the bell for
+    pub(super) alerts: Vec<String>,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -487,7 +494,27 @@ impl App {
             folder_picker: None,
             hud: Hud::default(),
             todos_open: false,
+            alert_settings: AlertSettings::default(),
+            alerts: Vec::new(),
         }
+    }
+
+    /// Get the user's attention according to `settings`.
+    #[must_use]
+    pub const fn with_alert_settings(mut self, settings: AlertSettings) -> Self {
+        self.alert_settings = settings;
+        self
+    }
+
+    /// When the terminal gets the user's attention.
+    #[must_use]
+    pub const fn alert_settings(&self) -> &AlertSettings {
+        &self.alert_settings
+    }
+
+    /// Messages to get the user's attention for since the last call.
+    pub fn take_alerts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.alerts)
     }
 
     /// Set the event sender for communication with kernel.
@@ -525,6 +552,16 @@ impl App {
     #[must_use]
     pub fn is_processing(&self) -> bool {
         self.state == AppState::Processing
+    }
+
+    /// Whether the agent on screen has a turn in flight, including one
+    /// waiting for an approval.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        )
     }
 
     /// Get the current status message.
@@ -1745,7 +1782,10 @@ impl App {
 
     /// Cancel the turn of the agent on screen.
     pub fn cancel(&mut self) {
-        if self.state == AppState::Processing {
+        if self.is_busy() {
+            // The event loop denies the waiting call when it cancels the
+            // turn, so the prompt can go now.
+            self.pending_approval = None;
             self.state = AppState::Idle;
             self.status = "Cancelled".to_string();
             if let Some(tx) = &self.event_tx {
