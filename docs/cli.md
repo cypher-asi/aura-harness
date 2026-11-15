@@ -56,6 +56,19 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **`/todos`** opens or closes the agent's full todo list above the input.
 - **Sessions survive restarts.** After every turn the terminal saves the agent's session (the conversation as the model saw it, tool calls included, plus its todo list and usage totals) under `<data_dir>/sessions/<agent>/`. On restart the agent continues from there, with anything the record holds after the checkpoint replayed on top. Without a usable checkpoint it falls back to the prompts and replies in the record. `/new` starts a fresh session; the old one stays saved.
 - **`/resume`** lists the agent's earlier sessions, newest first; **`/resume <n>`** continues number `n` (the agent must be idle). The chat shows the resumed conversation and the status line its usage.
+- **Web tools.** `web_fetch` reads a public web page as markdown (scripts, styles and navigation dropped; headings, links, lists and code kept). It refuses binary files, non-HTTP URLs, and localhost or private-network addresses unless `AURA_WEB_FETCH_ALLOW_PRIVATE=1`. Long pages come back in parts the agent can page through. `web_search` returns titles, URLs and snippets from the provider set in [Terminal long runs](configuration.md#terminal-long-runs); without one, it says what to set. Plan and Ask modes allow both tools.
+- **Post-edit check.** If the project defines a check command, the terminal runs it after each step in which the agent edited files and gives the agent the last 80 lines of output when it fails. The chat shows a warning for a failure and a note when the check passes again. Several edits in one step run the check once, and a failure that repeats word for word is reported in one line. Set the command with `AURA_CHECK_COMMAND`, or put it in the project's `AGENTS.md`, either as a line or as a fenced block whose lines run in order and stop at the first failure:
+
+  ````markdown
+  check: cargo check --workspace
+
+  ```check
+  cargo fmt --check
+  cargo clippy -- -D warnings
+  ```
+  ````
+
+  The first `check:` line or `check` block wins; `check:` lines inside other code blocks are ignored. The command runs in the agent's project folder through the shell, with `AURA_CHECK_TIMEOUT` as its time limit. A check from `AGENTS.md` runs without asking, so read the `AGENTS.md` of a project you don't trust, or set `AURA_CHECK_COMMAND=off`.
 - **`/compact [focus]`** summarizes the older history now instead of waiting for context pressure, keeping the first message and the recent steps as they are. Text after the command tells the summary what to keep. A busy agent does it when its current work ends. The summary replaces history only in the running session; the record keeps every message.
 
 ## Global flags

@@ -40,6 +40,15 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_TURN_TIMEOUT` | — (no limit) | Stop a turn that runs longer than this: `90s`, `45m`, `2h`, or a bare number of minutes. |
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
+| `AURA_CHECK_COMMAND` | — (from `AGENTS.md`) | Command run after each step in which the agent edited files; a failure is given to the agent. Overrides any `check:` line or `check` block in the project's `AGENTS.md`. `off` disables the check entirely. |
+| `AURA_CHECK_TIMEOUT` | `120` | Time limit for one check run: seconds, or `90s` / `5m`. At most 30 minutes. |
+| `AURA_WEB_FETCH_ALLOW_PRIVATE` | `false` | Let `web_fetch` read `localhost` and private-network addresses (e.g. a local dev server). Redirects are checked the same way. |
+| `AURA_WEB_SEARCH_PROVIDER` | first configured | `brave`, `tavily`, `searxng` or `off`. Without it, `web_search` uses the first provider whose variable below is set. |
+| `BRAVE_API_KEY` (alias `BRAVE_SEARCH_API_KEY`) | — | Brave Search API key for `web_search`. |
+| `TAVILY_API_KEY` | — | Tavily API key for `web_search`. |
+| `AURA_SEARXNG_URL` | — | Root URL of a SearXNG instance for `web_search`, e.g. `http://localhost:8888`. Its `settings.yml` must list `json` under `search.formats`. |
+
+Web requests time out after 20 seconds (10 seconds to connect). Without a search provider, `web_search` is still offered and answers with what to set.
 
 ## Node runtime
 

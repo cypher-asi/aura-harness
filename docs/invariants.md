@@ -637,7 +637,8 @@ allows it:
 - `task` / `spawn_agent` / `delegate_task` and other agent-control tools →
   `SpawnAgent`
 - git push, Orbit and mutating domain tools, `computer` → `Network`
-- read-only domain tools and engine bookkeeping tools → `ToolInvoke`
+- read-only domain tools, engine bookkeeping tools, and the read-only web
+  tools (`web_search`, `web_fetch`) → `ToolInvoke`
 - **any unclassified tool (including installed tools) → `Network`**, so it
   is denied outside `Agent` mode
 
