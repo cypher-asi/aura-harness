@@ -82,6 +82,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         },
         commands: commands_tx.clone(),
         long_run: crate::long_run::LongRunSettings::default(),
+        instructions: crate::project_instructions::ProjectInstructions::only_in(workspace.path()),
     };
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
@@ -633,4 +634,45 @@ async fn a_new_session_drops_the_checkpoint_and_resume_brings_it_back() {
     let reopened = open_again(&fixture, first);
     assert_eq!(reopened.messages.len(), 3, "the resumed session is current");
     assert_eq!(reopened.started_ms, 1_000);
+}
+
+#[tokio::test]
+async fn init_asks_the_agent_to_improve_an_existing_agents_md() {
+    let (fixture, mut commands) = fixture();
+    std::fs::write(fixture._dirs[2].path().join("AGENTS.md"), "Old notes.").unwrap();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    let init = UiEvent::InitProject {
+        agent_id: first.to_hex(),
+    };
+    handle_ui_event(&mut state, init, &links).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    let prompts = user_texts(&state, first);
+    assert_eq!(prompts.len(), 1);
+    assert!(
+        prompts[0].contains("already has an AGENTS.md"),
+        "{prompts:?}"
+    );
+    let commands = drain(&mut commands);
+    assert!(
+        commands.iter().any(|(_, c)| matches!(
+            c,
+            UiCommand::TurnStarted { prompt: Some(p) } if p.contains("improve it")
+        )),
+        "the chat shows the request"
+    );
+    assert!(
+        commands.iter().any(|(_, c)| matches!(
+            c,
+            UiCommand::SetInstructions(files)
+                if files.iter().any(|f| f.path.ends_with("AGENTS.md"))
+        )),
+        "the agent's chat learns which instruction files it loads"
+    );
 }

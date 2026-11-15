@@ -140,6 +140,12 @@ pub enum UiEvent {
         /// What the summary should keep, in the user's words
         focus: Option<String>,
     },
+
+    /// User asked an agent to write (or improve) its project's `AGENTS.md`
+    InitProject {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+    },
 }
 
 /// Commands sent from the application logic to the UI.
@@ -266,6 +272,8 @@ pub enum UiCommand {
     SetContext(ContextView),
     /// Usage of the agent's session so far, when it is opened or resumed
     SetSessionTotals(SessionTotals),
+    /// The project instruction files the agent's turns load
+    SetInstructions(Vec<InstructionFileView>),
 
     /// A command for the chat of one agent. Agents work in parallel, so
     /// anything an agent's turn sends is addressed to it; the UI applies it
@@ -482,6 +490,33 @@ pub struct ContextView {
     pub total_tokens: u64,
     /// Context window of the model, when known
     pub limit_tokens: Option<u64>,
+}
+
+/// A project instruction file (`AGENTS.md`, `CLAUDE.md`, a Cursor rule)
+/// and how the agent's system prompt uses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionFileView {
+    /// Where it is, with the home directory shortened to `~`
+    pub path: String,
+    /// Bytes of it in the system prompt
+    pub bytes: usize,
+    /// Globs a scoped rule applies to
+    pub globs: Option<String>,
+    /// How it is used
+    pub status: InstructionStatus,
+}
+
+/// How the system prompt uses an instruction file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstructionStatus {
+    /// Included whole
+    Included,
+    /// Only its start is included; the whole file has this many bytes
+    Truncated(usize),
+    /// Listed for the agent to read when its description matches the work
+    OnRequest,
+    /// Left out because the size limit was reached
+    Omitted,
 }
 
 impl MessageData {

@@ -5,12 +5,14 @@ use super::agents::AgentSession;
 use super::hud::{context_view, send_session, todo_views};
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::steering::Steering;
-use super::turns::record_user_prompt;
+use super::turns::{record_user_prompt, Work};
 use super::{forward_agent_events, LoopState};
 use crate::long_run::LongRunSettings;
+use crate::project_instructions::agents_md_in;
 use crate::record_loader::chat_from_messages;
 use crate::session_checkpoint::SessionListing;
 use aura_agent::{AgentLoopEvent, RunOptions};
+use aura_context_prompts::model_messages::init_project::init_project_prompt;
 use aura_core_types::AgentId;
 use aura_core_types::Transaction;
 use aura_terminal::events::{MessageData, MessageRole};
@@ -295,6 +297,37 @@ pub(super) async fn handle_resume(
         listing.title
     )))
     .await;
+}
+
+/// `/init`: ask `agent_id` to study its project and write the `AGENTS.md`
+/// at its root, or improve the one already there. It runs as a normal
+/// turn, queued behind any work the agent is doing.
+pub(super) async fn handle_init_project(state: &mut LoopState<'_>, agent_id: AgentId) {
+    let workspace = match state.kernel_for(agent_id) {
+        Some(kernel) => kernel.agent_workspace(),
+        None => match super::agents::open_session(state, agent_id) {
+            Ok(session) => {
+                let workspace = session.kernel.agent_workspace();
+                state.idle.insert(agent_id, session);
+                workspace
+            }
+            Err(problem) => {
+                let ui = AgentUi::new(state.commands.clone(), agent_id);
+                ui.send(UiCommand::ShowError(problem)).await;
+                ui.send(UiCommand::Complete).await;
+                return;
+            }
+        },
+    };
+    let existing = agents_md_in(&workspace).map(|path| path.display().to_string());
+    info!(
+        %agent_id,
+        workspace = %workspace.display(),
+        existing = existing.is_some(),
+        "Asking the agent to write AGENTS.md"
+    );
+    let text = init_project_prompt(&workspace.display().to_string(), existing.as_deref());
+    super::submit(state, agent_id, Work::Prompt { text, shown: false }).await;
 }
 
 /// The `/resume` list.

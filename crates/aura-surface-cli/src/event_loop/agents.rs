@@ -443,6 +443,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
             .await;
         super::hud::send_session_of(state, agent_id).await;
     }
+    super::hud::send_instructions_of(state, agent_id).await;
 
     send_sandbox_root(state).await;
     state.hub.send_agent_list().await;

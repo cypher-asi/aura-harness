@@ -170,6 +170,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
 
     agents::send_sandbox_root(&state).await;
     hud::send_session_of(&state, active).await;
+    hud::send_instructions_of(&state, active).await;
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
@@ -406,6 +407,10 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             submit(state, agent_id, Work::Compact { focus }).await;
         }
+        UiEvent::InitProject { agent_id } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            handlers::handle_init_project(state, agent_id).await;
+        }
     }
     false
 }
@@ -482,7 +487,10 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
         Work::Command { command, cols } => Task::Command { command, cols },
         Work::Compact { focus } => {
             state.sync_turn_base();
-            let (config, _) = state.hub.turn(session.definition.as_deref());
+            let (config, _) = state.hub.turn(
+                session.definition.as_deref(),
+                &session.kernel.agent_workspace(),
+            );
             Task::Compact {
                 agent_loop: Box::new(AgentLoop::new(config)),
                 focus,
@@ -511,7 +519,12 @@ async fn prepare_turn(
     }
     state.hub.send_definitions().await;
     state.sync_turn_base();
-    let (mut config, tools) = state.hub.turn(session.definition.as_deref());
+    let workspace = session.kernel.agent_workspace();
+    let (mut config, tools) = state.hub.turn(session.definition.as_deref(), &workspace);
+    state
+        .hub
+        .send_instructions(session.agent_id(), &workspace)
+        .await;
     config.initial_todos.clone_from(&session.todos);
     if let Some(ref mm) = state.memory_manager {
         mm.prepare_context(session.agent_id(), &mut config.system_prompt)

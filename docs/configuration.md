@@ -41,6 +41,14 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
 
+## Project instructions
+
+Terminal agents load `AGENTS.md`, `CLAUDE.md` and Cursor rules from their working folder and the folders above it, plus `AGENTS.md` in `AURA_HOME` (default `~/.aura/AGENTS.md`) for instructions that apply to every project. See [Project instructions](cli.md#project-instructions).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_PROJECT_INSTRUCTIONS` | on | Set to `off`, `0`, `false` or `no` to stop loading project instruction files into the terminal's system prompt. |
+
 ## Node runtime
 
 | Variable | Default | Description |

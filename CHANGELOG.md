@@ -44,6 +44,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the checkpoint plus whatever the record holds after it, instead
   of from prompts and replies alone. `/resume` lists earlier sessions
   and `/resume <n>` continues one.
+- Terminal agents follow project instructions. Each turn loads
+  `AGENTS.md`, `CLAUDE.md`, `.cursor/rules.md` and `.cursor/rules/*.md`
+  / `*.mdc` from the agent's working folder and every folder above it
+  up to the home directory, plus the user's own `~/.aura/AGENTS.md`.
+  The nearest file wins when two disagree. Cursor rules with
+  `alwaysApply: true` are included, rules with `globs` are included
+  with their globs noted, and rules with only a `description` are
+  listed for the agent to read when relevant. The instructions are
+  capped at 32 KiB, cutting the most general files first and saying
+  so. Files are re-read only when they change, and the section sits
+  right after the base system prompt, so unchanged files keep the
+  prompt cache warm. `AURA_PROJECT_INSTRUCTIONS=off` turns this off.
+- `/init` asks the agent, as a normal turn, to study the project and
+  write an `AGENTS.md` at its root with the build and test commands,
+  layout and conventions. When the project already has one, the agent
+  improves it instead of starting over.
+- `/context` lists the instruction files the agent loads, with their
+  size and whether any were cut or left out.
 
 ##### Changed
 

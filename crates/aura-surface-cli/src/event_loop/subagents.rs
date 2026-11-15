@@ -20,6 +20,7 @@ use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
+use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
@@ -36,6 +37,7 @@ use aura_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
 use aura_tools::todo::TODO_WRITE_TOOL_NAME;
 use aura_tools::SubagentDispatchHook;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
@@ -76,6 +78,8 @@ pub struct AgentHub {
     commands: mpsc::Sender<UiCommand>,
     /// Per-turn time and cost limits.
     pub(crate) long_run: LongRunSettings,
+    /// `AGENTS.md`, `CLAUDE.md` and rules for each working folder.
+    pub(crate) instructions: ProjectInstructions,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -86,6 +90,7 @@ pub struct AgentHubParts {
     pub base: TurnBase,
     pub commands: mpsc::Sender<UiCommand>,
     pub(crate) long_run: LongRunSettings,
+    pub instructions: ProjectInstructions,
 }
 
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -113,22 +118,47 @@ impl AgentHub {
                 factory: factory(dispatcher),
                 commands: parts.commands,
                 long_run: parts.long_run,
+                instructions: parts.instructions,
             }
         })
     }
 
-    /// Config and tools for a turn of an agent, applying the permanent
-    /// agent `definition` when it names one.
-    pub fn turn(&self, definition: Option<&str>) -> (AgentLoopConfig, Vec<ToolDefinition>) {
-        let (mut config, tools) = self.definition_turn(definition);
+    /// Config and tools for a turn of an agent working in `workspace`,
+    /// applying the permanent agent `definition` when it names one.
+    pub fn turn(
+        &self,
+        definition: Option<&str>,
+        workspace: &Path,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        let instructions = self.instructions.for_workspace(workspace);
+        let (mut config, tools) = self.definition_turn(definition, &instructions.text);
         self.long_run.apply(&mut config);
         (config, tools)
     }
 
-    fn definition_turn(&self, definition: Option<&str>) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+    /// Show `agent_id` the instruction files its turns load from
+    /// `workspace`.
+    pub(super) async fn send_instructions(&self, agent_id: AgentId, workspace: &Path) {
+        let files = self.instructions.for_workspace(workspace).files.clone();
+        AgentUi::new(self.commands.clone(), agent_id)
+            .send(UiCommand::SetInstructions(files))
+            .await;
+    }
+
+    fn definition_turn(
+        &self,
+        definition: Option<&str>,
+        instructions: &str,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let base = lock(&self.base);
         let definitions = lock(&self.definitions);
         let mut config = base.config.clone();
+        // Right after the base prompt, ahead of anything that varies
+        // between agents or turns, so the cached prompt prefix covers it.
+        if !instructions.is_empty() {
+            config.system_prompt.push_str("\n\n");
+            config.system_prompt.push_str(instructions);
+        }
         let mut tools = base.tools.clone();
         if let Some(task) = task_tool_definition(&definitions) {
             tools.push(task);
@@ -317,7 +347,9 @@ impl AgentHub {
         self.start_running(child_id, Arc::clone(&session.kernel), cancel.clone(), None);
         self.send_agent_list().await;
 
-        let (mut config, tools) = self.turn(Some(&definition.name));
+        let workspace = session.kernel.agent_workspace();
+        self.send_instructions(child_id, &workspace).await;
+        let (mut config, tools) = self.turn(Some(&definition.name), &workspace);
         config.initial_todos.clone_from(&session.todos);
         // Observers report on the agent they were installed for, not this one.
         config.observers.clear();

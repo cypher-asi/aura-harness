@@ -9,6 +9,7 @@ use crate::agent_registry::AgentRegistry;
 use crate::cli::{Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode};
 use crate::long_run::add_long_run_tools;
 use crate::model_selection::ModelSelection;
+use crate::project_instructions::{InstructionSettings, ProjectInstructions};
 use crate::{api_server, auth_commands, event_loop, record_loader, session_helpers};
 
 use anyhow::Context;
@@ -458,6 +459,12 @@ async fn run_terminal(
             },
             commands: cmd_tx.clone(),
             long_run: crate::long_run::LongRunSettings::from_env(),
+            instructions: ProjectInstructions::new(InstructionSettings::from_env(
+                aura_config::AuraHome::resolve()
+                    .ok()
+                    .map(|home| home.path)
+                    .as_deref(),
+            )),
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(

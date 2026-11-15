@@ -14,7 +14,7 @@ struct Fixture {
     commands: mpsc::Receiver<UiCommand>,
     _data: TempDir,
     _db: TempDir,
-    _workspace: TempDir,
+    workspace: TempDir,
 }
 
 /// A hub over seeded permanent agents whose kernels all answer `reply`.
@@ -48,6 +48,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         },
         commands: tx,
         long_run: crate::long_run::LongRunSettings::default(),
+        instructions: ProjectInstructions::only_in(workspace.path()),
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();
@@ -80,7 +81,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         commands,
         _data: data,
         _db: db,
-        _workspace: workspace,
+        workspace,
     }
 }
 
@@ -135,11 +136,12 @@ fn no_task_tool_without_permanent_agents() {
 #[test]
 fn turn_applies_definition_rules_and_tools() {
     let fixture = fixture("unused");
+    let workspace = fixture.workspace.path();
 
-    let (_, plain_tools) = fixture.hub.turn(None);
+    let (_, plain_tools) = fixture.hub.turn(None, workspace);
     assert!(plain_tools.iter().any(|t| t.name == TASK_TOOL_NAME));
 
-    let (config, tools) = fixture.hub.turn(Some("explorer"));
+    let (config, tools) = fixture.hub.turn(Some("explorer"), workspace);
     assert!(config
         .system_prompt
         .contains("<agent_definition name=\"explorer\">"));
@@ -147,10 +149,38 @@ fn turn_applies_definition_rules_and_tools() {
     assert!(tools.iter().any(|t| t.name == "read_file"));
     assert!(tools.iter().all(|t| t.name != "write_file"));
 
-    let (config, tools) = fixture.hub.turn(Some("ui-designer"));
+    let (config, tools) = fixture.hub.turn(Some("ui-designer"), workspace);
     assert!(config.system_prompt.contains("--accent-ink: #1a1a1a;"));
     assert!(tools.iter().any(|t| t.name == "write_file"));
     assert!(tools.iter().all(|t| t.name != TASK_TOOL_NAME));
+}
+
+#[test]
+fn turn_puts_project_instructions_in_the_stable_prompt_prefix() {
+    let fixture = fixture("unused");
+    let workspace = fixture.workspace.path();
+    let base = lock(&fixture.hub.base).config.system_prompt.clone();
+    let (config, _) = fixture.hub.turn(Some("explorer"), workspace);
+    assert!(!config.system_prompt.contains("<project_instructions>"));
+
+    std::fs::write(
+        workspace.join("AGENTS.md"),
+        "Run `make check` before committing.",
+    )
+    .unwrap();
+    let (config, _) = fixture.hub.turn(Some("explorer"), workspace);
+    let prompt = config.system_prompt;
+    let instructions = prompt.find("<project_instructions>").unwrap();
+    let definition = prompt.find("<agent_definition").unwrap();
+    assert!(prompt.starts_with(&format!("{base}\n\n<project_instructions>")));
+    assert!(instructions < definition);
+    assert!(prompt.contains("Run `make check` before committing."));
+
+    let (again, _) = fixture.hub.turn(Some("explorer"), workspace);
+    assert_eq!(
+        again.system_prompt, prompt,
+        "unchanged files keep the prompt cacheable"
+    );
 }
 
 #[tokio::test]
@@ -221,6 +251,10 @@ async fn spawn_runs_an_instance_under_its_parent() {
     assert!(saw_running);
     assert!(matches!(
         child_chat.first(),
+        Some(UiCommand::SetInstructions(_))
+    ));
+    assert!(matches!(
+        child_chat.get(1),
         Some(UiCommand::TurnStarted { prompt: Some(p) }) if p == "Review the diff"
     ));
     assert!(matches!(child_chat.last(), Some(UiCommand::Complete)));

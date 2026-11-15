@@ -17,7 +17,9 @@ use super::sections::{
     chat_capabilities as chat_capabilities_section, dev_loop_workflow as dev_loop_workflow_section,
     editing_etiquette as editing_etiquette_section, frontend_design as frontend_design_section,
     output_style as output_style_section, planning_guidance as planning_guidance_section,
-    project_context as project_context_section, tool_discipline as tool_discipline_section,
+    project_context as project_context_section,
+    project_instructions as project_instructions_section,
+    tool_discipline as tool_discipline_section, ProjectInstructionsView,
 };
 
 pub use agents_md_section::{probe_agents_md, AgentsMdProbe};
@@ -97,6 +99,16 @@ impl SystemPromptBuilder {
             self.sections.push(buf);
         }
         self.last_agents_md_probe = Some(probe);
+        self
+    }
+
+    /// Append the `<project_instructions>` block (instruction files the
+    /// caller discovered and read), when there is anything to show.
+    #[must_use]
+    pub fn project_instructions(mut self, view: &ProjectInstructionsView<'_>) -> Self {
+        if let Some(text) = project_instructions_section::render(view) {
+            self.sections.push(text);
+        }
         self
     }
 

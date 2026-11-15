@@ -58,6 +58,25 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **`/resume`** lists the agent's earlier sessions, newest first; **`/resume <n>`** continues number `n` (the agent must be idle). The chat shows the resumed conversation and the status line its usage.
 - **`/compact [focus]`** summarizes the older history now instead of waiting for context pressure, keeping the first message and the recent steps as they are. Text after the command tells the summary what to keep. A busy agent does it when its current work ends. The summary replaces history only in the running session; the record keeps every message.
 
+## Project instructions
+
+Terminal agents follow the instructions a project keeps for coding agents. Before each turn the terminal looks for these files in the agent's working folder (its project's folder, or the folder the terminal was started in) and in every folder above it, stopping below your home directory:
+
+- `AGENTS.md` (or `agents.md`)
+- `CLAUDE.md`
+- `.cursor/rules.md` and the `.md` / `.mdc` files in `.cursor/rules/`
+
+Your own instructions for every project go in `~/.aura/AGENTS.md` (`$AURA_HOME/AGENTS.md` when `AURA_HOME` is set).
+
+- **Precedence.** The files go into the system prompt from the most general (yours, then the folders furthest up) to the most specific (the working folder). The prompt tells the agent that the later file wins when two disagree, and that what you say in the chat beats them all. A `CLAUDE.md` that is a symlink to `AGENTS.md` is read once.
+- **Cursor rules.** A rule with `alwaysApply: true`, or with no frontmatter, is always included. A rule with `globs` is included with its globs, and the agent applies it only to matching files. A rule with only a `description` is listed by path and description for the agent to read when it is relevant. A rule with none of these is meant to be named by hand and is skipped.
+- **Size limit.** Instructions are capped at 32 KiB in total. The nearest files are kept first; a file that no longer fits is cut at a line end with a note saying so, or left out and listed by path when too little room is left.
+- **Changes.** Files are re-read when their size or modification time changes, so an edit applies from the next turn. Unchanged files produce the same bytes every turn, right after the base system prompt, so they stay in the prompt cache.
+- **`/context`** lists the files the agent loads, with their size and whether each was cut, left out, or only listed.
+- **`/init`** asks the agent, as a normal turn, to study the repository and write an `AGENTS.md` at the project root: what the project is, build, run, lint and test commands, the layout, and conventions and pitfalls. If the project already has an `AGENTS.md`, the agent improves it instead of starting over. A busy agent starts it when its current work ends.
+
+Set `AURA_PROJECT_INSTRUCTIONS=off` to stop loading these files.
+
 ## Global flags
 
 | Flag | Default | Description |
