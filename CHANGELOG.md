@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal — plan mode
+
+##### Added
+
+- `/plan` (or Shift+Tab) puts the terminal in plan mode: the agent
+  researches, asks if the request is unclear, and saves a plan with the
+  new `create_plan` tool to `.aura/plans/<name>_<id>.plan.md` (YAML
+  frontmatter with todos, then Markdown). `/build [plan path]` switches
+  to agent mode and has the agent implement it, marking todos with the
+  new `todo_write` tool. The active plan's open todos show above the
+  input, and a mode badge sits next to the model name.
+- `/mode <agent|plan|ask|debug>` is now wired.
+- `Kernel::switch_mode` changes a live kernel's mode after appending a
+  `mode_change` `System` record; submitted `mode_change` transactions
+  are rejected as kernel-only. `Policy` keeps the mode (and its
+  snapshot hash) behind a lock.
+- `create_plan` and `todo_write` count as Markdown writes for the mode
+  gate, so plan mode can use them.
+
 ### Kernel — task-runner tools and agent-host records go through the kernel
 
 ##### Changed

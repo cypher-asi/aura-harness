@@ -276,7 +276,7 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 38;
+    let modal_height = 42;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -308,6 +308,9 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/kernel    Toggle Kernel panel",
         "/files     Toggle Sandbox panel",
         "/model     Choose model (local or cloud)",
+        "/plan      Plan mode: research, write a plan",
+        "/build [path]  Agent mode, implement the plan",
+        "/mode <agent|plan|ask|debug>  Switch mode",
         "/login     Login for cloud models",
         "/login claude|chatgpt [paste]  Link a plan",
         "/logout [claude|chatgpt]  Sign out / unlink",
@@ -318,6 +321,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "$          Terminal (run commands, see past ones)",
         "Esc        Back to chat from the terminal",
         "Tab        Switch panels",
+        "Shift+Tab  Toggle plan mode",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
         "Space      Fold the selected project",

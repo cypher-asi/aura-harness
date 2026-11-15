@@ -39,7 +39,7 @@ pub use tool::{
     ToolAuth, ToolCall, ToolCallContext, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
     ToolResultImage, ToolResultKind,
 };
-pub use transaction::{SystemKind, Transaction, TransactionType};
+pub use transaction::{ModeChangePayload, SystemKind, Transaction, TransactionType};
 
 #[cfg(test)]
 mod tests {

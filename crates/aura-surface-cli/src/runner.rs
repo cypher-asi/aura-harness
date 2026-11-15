@@ -545,6 +545,7 @@ async fn run_terminal(
             memory_manager: None,
             models,
             auth,
+            mode: aura_config::session_mode(requested_mode),
         };
         event_loop::run_event_loop(ctx).await
     });

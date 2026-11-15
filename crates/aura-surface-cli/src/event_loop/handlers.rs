@@ -30,7 +30,11 @@ pub(super) async fn run_agent_turn(
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
 
     let fwd_commands = state.commands.clone();
-    let forwarder = tokio::spawn(forward_agent_events(agent_event_rx, fwd_commands));
+    let forwarder = tokio::spawn(forward_agent_events(
+        agent_event_rx,
+        fwd_commands,
+        state.session.kernel.agent_workspace(),
+    ));
 
     let cancel_token = CancellationToken::new();
     let cancel_for_turn = cancel_token.clone();

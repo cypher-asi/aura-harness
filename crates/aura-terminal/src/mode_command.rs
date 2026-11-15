@@ -1,8 +1,8 @@
 //! Typed `/mode <name>` slash-command parser.
 //!
-//! Not wired into the TUI input loop yet: changing mode mid-session
-//! must append a System record before the next tool proposal, so the
-//! `/mode` command is not part of the documented resolution chain.
+//! The terminal sends the parsed mode as `UiEvent::SetMode`; the event
+//! loop switches through `Kernel::switch_mode`, which records the change
+//! before the next tool proposal sees it.
 
 use aura_core_modes::AgentMode;
 use thiserror::Error;

@@ -16,7 +16,7 @@ use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
 use aura_tools::agents::task::TASK_TOOL_NAME;
 use aura_tools::{BackgroundProcessHook, ToolCatalog, ToolConfig};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Tools for working with background agents. `delegate_task` is left out:
 /// for agents in this host it is `send_to_agent` under another name. `task`
@@ -85,7 +85,8 @@ pub struct TerminalAgents {
     host: AgentHost,
     scheduler: Arc<Scheduler>,
     factory: Arc<dyn ChildKernelFactory>,
-    mode: AgentMode,
+    /// Session mode the roots run in; the agents they spawn inherit it
+    mode: Arc<Mutex<AgentMode>>,
 }
 
 impl TerminalAgents {
@@ -100,8 +101,13 @@ impl TerminalAgents {
             host,
             scheduler,
             factory,
-            mode,
+            mode: Arc::new(Mutex::new(mode)),
         }
+    }
+
+    /// Run roots registered from now on in `mode`.
+    pub fn set_mode(&self, mode: AgentMode) {
+        *super::subagents::lock(&self.mode) = mode;
     }
 
     #[must_use]
@@ -136,7 +142,7 @@ impl TerminalAgents {
             name: name.to_string(),
             permissions: AgentPermissions::full_access(),
             tool_permissions: None,
-            mode: self.mode,
+            mode: *super::subagents::lock(&self.mode),
             model: config.model.clone(),
             env,
             inbox: Some(Arc::new(TerminalInbox { notices })),

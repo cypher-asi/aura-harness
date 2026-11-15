@@ -11,7 +11,9 @@
 
 use super::{Kernel, ProcessResult};
 use crate::context::hash_tx_with_window;
-use aura_core_types::{RecordEntry, RuntimeCapabilityInstall, Transaction, TransactionType};
+use aura_core_types::{
+    AgentMode, RecordEntry, RuntimeCapabilityInstall, Transaction, TransactionType,
+};
 use aura_store_db::DequeueToken;
 
 impl Kernel {
@@ -79,9 +81,36 @@ impl Kernel {
         Ok(result)
     }
 
+    /// Switch the session mode, recording a `mode_change` System entry
+    /// before the new mode takes effect. Returns `None` when the kernel
+    /// already enforces `mode`.
+    ///
+    /// # Errors
+    /// Returns error if processing or storage fails; the mode is then
+    /// unchanged.
+    pub async fn switch_mode(
+        &self,
+        mode: AgentMode,
+    ) -> Result<Option<ProcessResult>, crate::KernelError> {
+        let from = self.policy.mode();
+        if from == mode {
+            return Ok(None);
+        }
+        let tx = Transaction::mode_change(self.agent_id, from, mode);
+        let seq = self.next_seq()?;
+        let result = self.process_tx(&tx, seq).await?;
+        self.store
+            .append_entry_direct(self.agent_id, seq, &result.entry)
+            .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        self.notify_entry(&result.entry);
+        self.policy.set_mode(mode);
+        Ok(Some(result))
+    }
+
     /// `PolicyDecision` and `ToolExecution` entries are written only by the
-    /// kernel's tool pipeline; accepting them from callers would let a
-    /// submitter forge the audit trail of what policy allowed a call.
+    /// kernel's tool pipeline, and mode changes only by [`Self::switch_mode`];
+    /// accepting them from callers would let a submitter forge the audit
+    /// trail of what policy allowed a call.
     fn reject_kernel_only(tx: &Transaction) -> Result<(), crate::KernelError> {
         if matches!(
             tx.tx_type,
@@ -91,6 +120,11 @@ impl Kernel {
                 "{:?} transactions are written only by the kernel tool pipeline",
                 tx.tx_type
             )));
+        }
+        if tx.mode_change_payload().is_some() {
+            return Err(crate::KernelError::Internal(
+                "mode_change transactions are written only by Kernel::switch_mode".to_string(),
+            ));
         }
         Ok(())
     }

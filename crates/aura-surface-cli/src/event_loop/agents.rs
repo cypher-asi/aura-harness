@@ -9,7 +9,7 @@
 use super::subagents::lock;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
-use crate::record_loader::{conversation_history, recent_record_summaries};
+use crate::record_loader::{conversation_history, latest_plan_path, recent_record_summaries};
 use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
@@ -30,6 +30,9 @@ pub struct AgentSession {
     pub messages: Vec<Message>,
     /// Permanent agent this is an instance of; its turns follow its rules.
     pub definition: Option<String>,
+    /// Workspace-relative path of the plan this agent last wrote, which
+    /// `/build` implements.
+    pub active_plan: Option<String>,
 }
 
 impl AgentSession {
@@ -84,6 +87,7 @@ impl KernelFactory {
                 warn!(error = %e, "Failed to rebuild model history from record");
                 Vec::new()
             });
+        let active_plan = latest_plan_path(self.store.as_ref(), identity.agent_id);
         Ok(AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
@@ -91,6 +95,7 @@ impl KernelFactory {
             kernel,
             messages,
             definition: agent.definition.clone(),
+            active_plan,
         })
     }
 }
@@ -326,6 +331,8 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
     }
 
     show_active_agent(state).await;
+    super::plan_mode::apply_mode(state, state.mode).await;
+    super::plan_mode::send_active_plan(state).await;
     let _ = state
         .commands
         .send(UiCommand::SetStatus("Ready".to_string()))

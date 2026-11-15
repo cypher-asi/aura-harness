@@ -7,6 +7,7 @@ pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod notices;
 pub(crate) mod os_processes;
+pub(crate) mod plan_mode;
 pub(crate) mod processes;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
@@ -23,7 +24,7 @@ use crate::model_selection::ModelSelection;
 use aura_agent::AgentLoop;
 use aura_agent_kernel::Kernel;
 use aura_auth::{AuthManager, PendingLink};
-use aura_core_types::{AgentId, Transaction};
+use aura_core_types::{AgentId, AgentMode, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::Message;
 use aura_terminal::{UiCommand, UiEvent};
@@ -52,6 +53,8 @@ pub struct EventLoopContext<'a> {
     pub models: ModelSelection,
     /// Sign-in state shared with the model provider.
     pub auth: Arc<AuthManager>,
+    /// Session mode `session`'s kernel was built with.
+    pub mode: AgentMode,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -78,6 +81,8 @@ pub(super) struct LoopState<'a> {
     pub(super) pending_link: Option<PendingLink>,
     /// Notices for agents that aren't on screen.
     pub(super) queued_notices: Vec<notices::Notice>,
+    /// Session mode; the active agent's kernel enforces it.
+    pub(super) mode: AgentMode,
 }
 
 impl LoopState<'_> {
@@ -137,6 +142,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         memory_manager,
         models,
         auth,
+        mode,
     } = ctx;
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
@@ -156,11 +162,14 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         pending_link: None,
         queued_notices: Vec::new(),
+        mode,
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
     install_memory_observer(&mut state);
 
+    plan_mode::apply_mode(&mut state, mode).await;
+    plan_mode::send_active_plan(&state).await;
     agents::send_sandbox_root(&state).await;
     handlers::announce_models(&mut state).await;
 
@@ -321,6 +330,11 @@ async fn handle_ui_event(
         UiEvent::Unlink(provider) => auth::handle_unlink(state, &provider).await,
         UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
+        UiEvent::SetMode(mode) => plan_mode::handle_set_mode(state, mode).await,
+        UiEvent::BuildPlan(path) => {
+            plan_mode::handle_build_plan(state, path).await;
+            agents::send_agent_list(state).await;
+        }
     }
     false
 }
@@ -386,7 +400,13 @@ async fn run_turn(state: &mut LoopState<'_>) {
     }
     state.hub.send_definitions().await;
     state.sync_turn_base();
-    let (config, tools) = state.hub.turn(state.session.definition.as_deref());
+    let (mut config, tools) = state.hub.turn(state.session.definition.as_deref());
+    if state.mode == AgentMode::Plan {
+        config.system_prompt.push_str("\n\n");
+        config
+            .system_prompt
+            .push_str(&aura_context_prompts::system::sections::plan_mode::render());
+    }
     state.hub.register_root(
         state.session.agent_id(),
         &state.session.identity.name,
@@ -398,6 +418,9 @@ async fn run_turn(state: &mut LoopState<'_>) {
     let (process_result, forwarded, cancelled) =
         handlers::run_agent_turn(state, &turn_loop, tools, &model).await;
     state.park_finished_spawns();
+    if let Some(path) = &forwarded.plan_path {
+        state.session.active_plan = Some(path.clone());
+    }
     if cancelled {
         let _ = state
             .commands

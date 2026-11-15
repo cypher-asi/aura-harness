@@ -274,6 +274,10 @@ impl App {
             self.focus = self.next_panel_focus();
             return KeyResult::continue_running();
         }
+        if key.code == KeyCode::BackTab {
+            self.toggle_plan_mode();
+            return KeyResult::continue_running();
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
             self.prompt_new_project();
             return KeyResult::continue_running();

@@ -17,6 +17,7 @@ pub mod dev_loop_workflow;
 pub mod editing_etiquette;
 pub mod frontend_design;
 pub mod output_style;
+pub mod plan_mode;
 pub mod planning_guidance;
 pub mod project_context;
 pub mod tool_discipline;

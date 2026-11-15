@@ -60,6 +60,22 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Choose model (local or cloud)",
         needs_args: false,
     },
+    command(
+        "plan",
+        "Plan mode: research and write a plan, no code edits",
+    ),
+    SlashCommand {
+        name: "build",
+        args: "[plan path]",
+        description: "Switch to agent mode and implement the latest plan",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "mode",
+        args: "<agent|plan|ask|debug>",
+        description: "Switch session mode (Shift+Tab toggles plan)",
+        needs_args: true,
+    },
     command("login", "Login for cloud models"),
     command("logout", "Clear credentials"),
     command("whoami", "Show auth status"),

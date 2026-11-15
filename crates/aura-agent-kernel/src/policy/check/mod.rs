@@ -30,11 +30,11 @@ pub use verdict::{PolicyEvaluation, PolicyResult, PolicyVerdict};
 use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
 use aura_core_types::{
-    ActionKind, PermissionLayer, PolicyCheck, PolicyCheckOutcome, PolicyRule, PolicySource,
-    Proposal, RuntimeCapabilityInstall, ToolState,
+    ActionKind, AgentMode, PermissionLayer, PolicyCheck, PolicyCheckOutcome, PolicyRule,
+    PolicySource, Proposal, RuntimeCapabilityInstall, ToolState,
 };
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError, RwLock};
 use tracing::{debug, warn};
 use verdict::outcome_of;
 
@@ -51,8 +51,19 @@ use verdict::outcome_of;
 /// callers.
 #[derive(Debug)]
 pub struct Policy {
+    /// Configuration this policy was built from. Its `mode` is the initial
+    /// mode only; read the current one through [`Self::mode`].
     pub(super) config: PolicyConfig,
     session_tool_states: Mutex<HashMap<String, ToolState>>,
+    mode: RwLock<ModeState>,
+}
+
+/// The current session mode and the snapshot hash of the configuration
+/// with that mode, swapped together so a decision never pairs one mode
+/// with the other's hash.
+#[derive(Debug)]
+struct ModeState {
+    mode: AgentMode,
     snapshot_hash: String,
 }
 
@@ -60,12 +71,36 @@ impl Policy {
     /// Create a new policy with the given config.
     #[must_use]
     pub fn new(config: PolicyConfig) -> Self {
-        let snapshot_hash = config.snapshot_hash();
+        let mode = ModeState {
+            mode: config.mode,
+            snapshot_hash: config.snapshot_hash(),
+        };
         Self {
             config,
             session_tool_states: Mutex::new(HashMap::new()),
-            snapshot_hash,
+            mode: RwLock::new(mode),
         }
+    }
+
+    /// The session mode this policy currently enforces.
+    #[must_use]
+    pub fn mode(&self) -> AgentMode {
+        self.mode
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .mode
+    }
+
+    /// Enforce `mode` from now on. Only the kernel calls this, after it has
+    /// recorded the change.
+    pub(crate) fn set_mode(&self, mode: AgentMode) {
+        let mut config = self.config.clone();
+        config.mode = mode;
+        let next = ModeState {
+            mode,
+            snapshot_hash: config.snapshot_hash(),
+        };
+        *self.mode.write().unwrap_or_else(PoisonError::into_inner) = next;
     }
 
     /// Create a policy with default config.
@@ -355,14 +390,18 @@ impl Policy {
     /// Hash of the policy configuration snapshot, recorded on every
     /// `PolicyDecision` so auditors can tell which configuration decided.
     #[must_use]
-    pub fn snapshot_hash(&self) -> &str {
-        &self.snapshot_hash
+    pub fn snapshot_hash(&self) -> String {
+        self.mode
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .snapshot_hash
+            .clone()
     }
 
     /// Lower-case label of the session mode this policy enforces.
     #[must_use]
     pub fn mode_label(&self) -> String {
-        delegate_gate::mode_label(self.config.mode)
+        delegate_gate::mode_label(self.mode())
     }
 
     /// Get maximum allowed proposals.

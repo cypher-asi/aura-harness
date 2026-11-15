@@ -1957,7 +1957,7 @@ fn test_slash_menu_esc_dismisses_until_next_edit() {
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus(), PanelFocus::Records);
     app.handle_key(key(KeyCode::Char('o')));
-    assert_eq!(slash_names(&app), ["model"]);
+    assert_eq!(slash_names(&app), ["model", "mode"]);
 }
 
 fn agent_pick_names(app: &App) -> Vec<&str> {
@@ -2116,4 +2116,114 @@ fn test_records_cap_drops_oldest_and_keeps_selection() {
     assert_eq!(app.records().front().unwrap().seq, 1);
     assert_eq!(app.records().back().unwrap().seq, cap);
     assert_eq!(selected_seq(&app), 10);
+}
+
+// ========================================================================
+// Session modes and plans
+// ========================================================================
+
+fn app_with_events() -> (App, mpsc::Receiver<UiEvent>) {
+    let (tx, rx) = mpsc::channel(8);
+    (App::new().with_event_sender(tx), rx)
+}
+
+fn sample_plan() -> crate::events::PlanView {
+    use crate::events::{PlanView, TodoState, TodoView};
+    PlanView {
+        path: ".aura/plans/auth_0a1b2c3d.plan.md".to_string(),
+        name: "Auth".to_string(),
+        todos: vec![TodoView {
+            content: "Add login".to_string(),
+            status: TodoState::Pending,
+        }],
+    }
+}
+
+#[test]
+fn test_mode_commands_request_a_switch() {
+    let (mut app, mut rx) = app_with_events();
+
+    app.handle_command("/plan");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode(AgentMode::Plan))
+    ));
+    assert_eq!(app.mode(), AgentMode::Agent, "badge waits for the kernel");
+
+    app.process_command(UiCommand::SetMode(AgentMode::Plan));
+    assert_eq!(app.mode(), AgentMode::Plan);
+
+    app.handle_command("/mode ask");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode(AgentMode::Ask))
+    ));
+
+    app.handle_command("/mode nonsense");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((_, NotificationType::Warning))
+    ));
+}
+
+#[test]
+fn test_switching_to_the_current_mode_sends_nothing() {
+    let (mut app, mut rx) = app_with_events();
+    app.handle_command("/mode agent");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((text, NotificationType::Warning)) if text.contains("Already in agent mode")
+    ));
+}
+
+#[test]
+fn test_shift_tab_toggles_plan_mode() {
+    let (mut app, mut rx) = app_with_events();
+    app.handle_key(key(KeyCode::BackTab));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode(AgentMode::Plan))
+    ));
+
+    app.process_command(UiCommand::SetMode(AgentMode::Plan));
+    app.handle_key(key(KeyCode::BackTab));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode(AgentMode::Agent))
+    ));
+}
+
+#[test]
+fn test_mode_and_build_refused_mid_turn() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+    app.state = AppState::Processing;
+
+    app.handle_command("/plan");
+    app.handle_command("/build");
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_build_needs_a_plan() {
+    let (mut app, mut rx) = app_with_events();
+    app.handle_command("/build");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((text, NotificationType::Warning)) if text.contains("No plan")
+    ));
+
+    app.handle_command("/build .aura/plans/x_00000000.plan.md");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::BuildPlan(Some(path))) if path == ".aura/plans/x_00000000.plan.md"
+    ));
+
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+    assert_eq!(app.active_plan().map(|p| p.name.as_str()), Some("Auth"));
+    app.handle_command("/build");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::BuildPlan(None))));
 }

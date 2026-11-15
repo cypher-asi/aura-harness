@@ -4,8 +4,10 @@ use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingAppr
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
     events::{CallUsage, UiCommand, UiEvent},
+    mode_command::SlashModeCommand,
     terminal::KeyResult,
 };
+use aura_core_modes::AgentMode;
 use tracing::debug;
 
 impl App {
@@ -76,6 +78,17 @@ impl App {
                 }
             }
             "spawn" => self.handle_spawn_command(arg),
+            "mode" => match SlashModeCommand::parse(arg) {
+                Ok(command) => self.request_mode(command.requested),
+                Err(e) => {
+                    self.notification = Some((
+                        format!("{e} (now in {} mode)", mode_name(self.mode)),
+                        NotificationType::Warning,
+                    ));
+                }
+            },
+            "plan" => self.request_mode(AgentMode::Plan),
+            "build" => self.request_build(arg),
             "login" => self.handle_login_command(arg),
             "model" | "models" | "m" => {
                 if arg.is_empty() {
@@ -322,6 +335,68 @@ impl App {
         }
     }
 
+    /// Whether a turn owns the session, so the mode can't change under it.
+    fn turn_running(&self) -> bool {
+        matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        )
+    }
+
+    /// Ask the kernel to switch to `mode`. The badge changes once the
+    /// switch is recorded and [`UiCommand::SetMode`] comes back.
+    pub(super) fn request_mode(&mut self, mode: AgentMode) {
+        if self.turn_running() {
+            self.notification = Some((
+                "Wait for the current turn to finish before changing mode".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if mode == self.mode {
+            self.notification = Some((
+                format!("Already in {} mode", mode_name(mode)),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetMode(mode));
+        }
+    }
+
+    /// Shift+Tab: plan mode from any other mode, agent mode from plan.
+    pub(super) fn toggle_plan_mode(&mut self) {
+        let next = if self.mode == AgentMode::Plan {
+            AgentMode::Agent
+        } else {
+            AgentMode::Plan
+        };
+        self.request_mode(next);
+    }
+
+    /// Handle `/build [path]`: run the given plan, or the latest one.
+    fn request_build(&mut self, arg: &str) {
+        if self.turn_running() {
+            self.notification = Some((
+                "Wait for the current turn to finish before building".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        let path = (!arg.is_empty()).then(|| arg.to_string());
+        if path.is_none() && self.active_plan.is_none() {
+            self.notification = Some((
+                "No plan to build yet. Switch to plan mode with /plan and ask for one.".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::BuildPlan(path));
+        }
+    }
+
     /// Handle `/spawn <permanent agent>`.
     fn handle_spawn_command(&mut self, arg: &str) {
         let name = self
@@ -449,6 +524,8 @@ impl App {
             } => self.cmd_set_models(options, current, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
+            UiCommand::SetMode(mode) => self.mode = mode,
+            UiCommand::SetPlan(plan) => self.active_plan = plan,
         }
     }
 
@@ -679,6 +756,16 @@ impl App {
         }
         self.agents_scroll_detached = false;
         self.select_visible_active();
+    }
+}
+
+/// Lower-case name of `mode`, as `/mode` takes it.
+pub(crate) const fn mode_name(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Agent => "agent",
+        AgentMode::Plan => "plan",
+        AgentMode::Ask => "ask",
+        AgentMode::Debug => "debug",
     }
 }
 

@@ -17,6 +17,7 @@ use aura_terminal::{
     },
     UiCommand,
 };
+use aura_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME, TODO_WRITE_TOOL_NAME};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
@@ -295,6 +296,35 @@ fn tool_execution(entry: &RecordEntry) -> Option<ToolExecution> {
         }
     }
     Some(execution)
+}
+
+/// Path of the plan `agent_id` last wrote with `create_plan` or
+/// `todo_write`, from its recent record.
+#[must_use]
+pub fn latest_plan_path(store: &dyn ReadStore, agent_id: AgentId) -> Option<String> {
+    let entries = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)
+        .inspect_err(|e| warn!(error = %e, "Failed to scan record for plans"))
+        .ok()?;
+    entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.tx.tx_type == TransactionType::ToolExecution)
+        .filter_map(tool_execution)
+        .filter(|execution| {
+            !execution.is_error
+                && execution.decision == ToolGateVerdict::Approved
+                && matches!(
+                    execution.tool.as_str(),
+                    CREATE_PLAN_TOOL_NAME | TODO_WRITE_TOOL_NAME
+                )
+        })
+        .find_map(|execution| {
+            execution
+                .result
+                .as_deref()
+                .and_then(plan_path_from_output)
+                .map(str::to_string)
+        })
 }
 
 /// Build the agents-column rows for every registered agent, each followed
@@ -957,6 +987,10 @@ fn reasoning_tools(payload: &Value) -> Option<String> {
 
 fn summarize_system(payload: &Value) -> String {
     let kind = system_kind(payload);
+    let mode = |key: &str| payload.get(key).and_then(Value::as_str);
+    if let (Some(from), Some(to)) = (mode("from"), mode("to")) {
+        return format!("{kind} · {from} → {to}");
+    }
     let detail = system_detail(payload);
     if detail.is_empty() {
         kind.to_string()

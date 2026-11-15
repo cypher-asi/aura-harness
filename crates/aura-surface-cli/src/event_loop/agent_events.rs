@@ -6,13 +6,16 @@
 //! machine (streaming / thinking toggles, had-text tracking) and the
 //! `mpsc::Sender<UiCommand>` that feeds the terminal.
 
+use super::plan_mode::plan_view;
 use async_trait::async_trait;
 use aura_agent::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink};
 use aura_model_reasoner::{model_catalog, Usage};
 use aura_terminal::{
-    events::{CallUsage, ToolData},
+    events::{CallUsage, MessageData, MessageRole, ToolData},
     UiCommand,
 };
+use aura_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME, TODO_WRITE_TOOL_NAME};
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -26,6 +29,8 @@ pub(crate) struct ForwarderState {
     pub reply_model: Option<String>,
     /// Tokens and cost of the latest model call of the turn
     pub reply_usage: Option<CallUsage>,
+    /// Plan the turn last wrote with `create_plan` or `todo_write`
+    pub plan_path: Option<String>,
 }
 
 /// Tokens and estimated cost of one model call, for the reply header.
@@ -46,9 +51,38 @@ struct UiCommandSink {
     state: ForwarderState,
     /// Tool calls shown in the chat that have no result yet
     open_tools: Vec<String>,
+    /// Folder the agent's tools resolve paths against
+    workspace: PathBuf,
 }
 
 impl UiCommandSink {
+    /// Refresh the plan strip after a plan tool wrote `output`.
+    async fn plan_written(&mut self, tool_name: &str, output: &str) {
+        let Some(path) = plan_path_from_output(output) else {
+            return;
+        };
+        self.state.plan_path = Some(path.to_string());
+        let Some(view) = plan_view(&self.workspace, path) else {
+            return;
+        };
+        let note = (tool_name == CREATE_PLAN_TOOL_NAME).then(|| {
+            format!(
+                "Plan ready: {} ({path}). Keep chatting to revise it, or run /build to implement it.",
+                view.name
+            )
+        });
+        let _ = self.commands.send(UiCommand::SetPlan(Some(view))).await;
+        if let Some(note) = note {
+            let _ = self
+                .commands
+                .send(UiCommand::ShowMessage(MessageData::new(
+                    MessageRole::System,
+                    note,
+                )))
+                .await;
+        }
+    }
+
     async fn finish_thinking_if_active(&mut self) {
         if self.state.thinking_active {
             let _ = self.commands.send(UiCommand::FinishThinking).await;
@@ -115,12 +149,18 @@ impl TurnEventSink for UiCommandSink {
     async fn on_tool_result(
         &mut self,
         tool_use_id: String,
-        _tool_name: String,
+        tool_name: String,
         content: String,
         is_error: bool,
         _image: Option<aura_core_types::ToolResultImage>,
     ) {
         self.open_tools.retain(|id| *id != tool_use_id);
+        let plan_output = (!is_error
+            && matches!(
+                tool_name.as_str(),
+                CREATE_PLAN_TOOL_NAME | TODO_WRITE_TOOL_NAME
+            ))
+        .then(|| content.clone());
         let _ = self
             .commands
             .send(UiCommand::CompleteTool {
@@ -129,6 +169,9 @@ impl TurnEventSink for UiCommandSink {
                 success: !is_error,
             })
             .await;
+        if let Some(output) = plan_output {
+            self.plan_written(&tool_name, &output).await;
+        }
     }
 
     async fn on_tool_call_retrying(
@@ -240,14 +283,17 @@ impl TurnEventSink for UiCommandSink {
 }
 
 /// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s.
+/// `workspace` is the folder of the agent whose turn this is.
 pub(crate) async fn forward_agent_events(
     mut rx: tokio::sync::mpsc::Receiver<AgentLoopEvent>,
     commands: mpsc::Sender<UiCommand>,
+    workspace: PathBuf,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         commands,
         state: ForwarderState::default(),
         open_tools: Vec::new(),
+        workspace,
     };
 
     while let Some(event) = rx.recv().await {

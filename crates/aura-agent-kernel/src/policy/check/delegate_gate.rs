@@ -37,7 +37,7 @@ impl Policy {
             );
         };
 
-        let mode_rule = PolicyRule::new(PolicySource::Mode, mode_label(self.config.mode));
+        let mode_rule = PolicyRule::new(PolicySource::Mode, mode_label(self.mode()));
         if let Some(verdict) = self.check_mode(&tool_call) {
             trace.push(PolicyCheck {
                 rule: mode_rule.clone(),

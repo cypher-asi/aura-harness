@@ -27,12 +27,13 @@ mod tests;
 use crate::{
     components::{Activity, Message},
     events::{
-        AgentDefinitionSummary, AgentSummary, ModelOptionView, ProcessSummary, RecordSummary,
-        UiCommand, UiEvent,
+        AgentDefinitionSummary, AgentSummary, ModelOptionView, PlanView, ProcessSummary,
+        RecordSummary, UiCommand, UiEvent,
     },
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
+use aura_core_modes::AgentMode;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
@@ -219,6 +220,10 @@ pub struct App {
     pub(super) user: Option<String>,
     /// Labels of the usable linked plans
     pub(super) plans: Vec<String>,
+    /// Session mode the kernel enforces
+    pub(super) mode: AgentMode,
+    /// The active agent's current plan
+    pub(super) active_plan: Option<PlanView>,
     /// Highlighted row in the model selector
     pub(super) model_cursor: usize,
     /// Cloud model to select once the in-chat login completes
@@ -489,6 +494,8 @@ impl App {
             current_model: String::new(),
             user: None,
             plans: Vec::new(),
+            mode: AgentMode::Agent,
+            active_plan: None,
             model_cursor: 0,
             pending_model: None,
             agents_scroll: 0,
@@ -1665,6 +1672,18 @@ impl App {
     #[must_use]
     pub fn plans(&self) -> &[String] {
         &self.plans
+    }
+
+    /// Session mode the kernel enforces.
+    #[must_use]
+    pub const fn mode(&self) -> AgentMode {
+        self.mode
+    }
+
+    /// The active agent's current plan.
+    #[must_use]
+    pub const fn active_plan(&self) -> Option<&PlanView> {
+        self.active_plan.as_ref()
     }
 
     /// Bash-style `[user@host dir]$ ` prompt shown before the input line at

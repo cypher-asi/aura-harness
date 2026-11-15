@@ -125,7 +125,7 @@ How a request flows through the running system. The kernel boundary cuts at the 
 2. **Daemon default** — `aura_config::AgentConfig::default_mode` (`AURA_DEFAULT_MODE`; the older `AURA_FLEET_DEFAULT_MODE` is still read).
 3. **Fallback** — `AgentMode::Agent`.
 
-The gateway stores the resolved mode on the chat session and sets `PolicyConfig::mode` when it builds the session kernel; the CLI terminal runner does the same for its local kernel. Child agents take `SubagentSpec.mode` from `derive_subagent`, which can only narrow. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `Agent`, so automaton kernels always run in `Agent` mode. The TUI `/mode` slash command (`aura_terminal::SlashModeCommand`) is parsed but not wired; changing mode mid-session must first append a `System` record.
+The gateway stores the resolved mode on the chat session and sets `PolicyConfig::mode` when it builds the session kernel; the CLI terminal runner does the same for its local kernel. Child agents take `SubagentSpec.mode` from `derive_subagent`, which can only narrow. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `Agent`, so automaton kernels always run in `Agent` mode. The TUI changes mode mid-session (`/mode`, `/plan`, Shift+Tab, `/build`) through `Kernel::switch_mode`, which appends a `mode_change` `System` record before the new mode takes effect; submitted `mode_change` transactions are rejected as kernel-only.
 
 ### Tool authorization pipeline
 
@@ -462,7 +462,7 @@ The `DomainApi` *trait* continues to live in `aura-tools::domain_tools`; only th
 
 #### [`aura-terminal`](../crates/aura-terminal)
 
-Ratatui-based terminal UI library: themed rendering, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`), input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds the `SlashModeCommand` parser for `/mode <agent|plan|ask|debug>`, not yet wired into the input loop.
+Ratatui-based terminal UI library: themed rendering, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`), input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds the `SlashModeCommand` parser for `/mode <agent|plan|ask|debug>`; the app sends `UiEvent::SetMode` and shows the mode badge once `UiCommand::SetMode` confirms it. `renderer/plan.rs` draws the active plan's todos above the input while any are open.
 
 #### [`aura-automaton`](../crates/aura-automaton)
 
@@ -501,6 +501,8 @@ Here **MP** is the `RoutedProvider`, which picks a backend from the model id pre
 For the two plan routes, a `CredentialedProvider` asks `AuthManager` for the plan credential on each request. It strips the route prefix, adds the provider's headers and system prompt opening, and removes the Aura billing headers. There is no fallback between routes.
 
 The session starts on the local default model (`local/qwen3:4b`), so no login is required. `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models, and `/login claude` or `/login chatgpt` links a plan. Browser sign-ins finish in a background task that reports back to the EL. Paste sign-ins prompt for the code.
+
+The session mode belongs to the terminal (`LoopState.mode`, starting from `--mode`). `UiEvent::SetMode` switches the active agent's kernel through `Kernel::switch_mode`, and an agent opened later is switched when it becomes active. In `Plan` mode each turn's system prompt gets the `plan_mode` section, which tells the model to research and save a plan with `create_plan` (`.aura/plans/<slug>_<id>.plan.md`, YAML frontmatter with todos, then Markdown). The forwarder reloads the plan after each successful `create_plan` or `todo_write` and sends `UiCommand::SetPlan`; the session keeps the latest plan path and restores it from the record when the agent is reopened. `/build` (`UiEvent::BuildPlan`) switches to `Agent` mode and sends the `build_plan` prompt, so the model works through the todos and reports progress with `todo_write`.
 
 ```text
  User       TUI         EL            AL              MP           KTG         Tools

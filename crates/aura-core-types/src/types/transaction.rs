@@ -3,6 +3,7 @@
 use crate::error::AuraError;
 #[allow(deprecated)]
 use crate::ids::{AgentId, Hash, TxId};
+use aura_core_modes::AgentMode;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,20 @@ pub enum SystemKind {
     AuthChange,
     /// Config changes, schema migrations (future use)
     Infrastructure,
+    /// Session mode switch. Kernel-only: written by `Kernel::switch_mode`,
+    /// never accepted from external submitters.
+    ModeChange,
+}
+
+/// Payload of a [`SystemKind::ModeChange`] transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModeChangePayload {
+    /// Always [`SystemKind::ModeChange`].
+    pub system_kind: SystemKind,
+    /// Mode enforced before the change.
+    pub from: AgentMode,
+    /// Mode enforced from this entry on.
+    pub to: AgentMode,
 }
 
 /// An immutable transaction input to the system.
@@ -198,6 +213,29 @@ impl Transaction {
             Bytes::from_static(b"session_start"),
             None,
         )
+    }
+
+    /// Create a [`SystemKind::ModeChange`] transaction.
+    #[must_use]
+    pub fn mode_change(agent_id: AgentId, from: AgentMode, to: AgentMode) -> Self {
+        let payload = ModeChangePayload {
+            system_kind: SystemKind::ModeChange,
+            from,
+            to,
+        };
+        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        Self::new_chained(agent_id, TransactionType::System, bytes, None)
+    }
+
+    /// The mode change this transaction records, if it is one.
+    #[must_use]
+    pub fn mode_change_payload(&self) -> Option<ModeChangePayload> {
+        if self.tx_type != TransactionType::System {
+            return None;
+        }
+        serde_json::from_slice::<ModeChangePayload>(&self.payload)
+            .ok()
+            .filter(|p| p.system_kind == SystemKind::ModeChange)
     }
 
     /// Create a tool proposal transaction.

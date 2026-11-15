@@ -8,6 +8,7 @@ mod input;
 mod markdown;
 mod overlays;
 mod panels;
+mod plan;
 mod processes;
 mod sandbox;
 mod segments;
@@ -20,9 +21,10 @@ mod tests;
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
 
 use crate::{app::PanelAreas, App, Theme};
+use aura_core_modes::AgentMode;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -50,17 +52,19 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .constraints([
             Constraint::Length(2),
             Constraint::Min(3),
+            Constraint::Length(plan::strip_height(app, area.height)),
             Constraint::Length(2),
         ])
         .split(area);
     let input_row = Rect {
         height: 1,
-        ..main_chunks[2]
+        ..main_chunks[3]
     };
 
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
+    plan::render_plan_strip(frame, main_chunks[2], app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
@@ -223,13 +227,33 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     spans
 }
 
-/// `qwen3:4b` — empty until the kernel reports a model.
+/// `qwen3:4b`, after a `PLAN` / `ASK` / `DEBUG` badge outside agent mode.
+/// The model is left out until the kernel reports it.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+    let mut spans = Vec::new();
+    let badge = match app.mode() {
+        AgentMode::Agent => None,
+        AgentMode::Plan => Some("PLAN"),
+        AgentMode::Ask => Some("ASK"),
+        AgentMode::Debug => Some("DEBUG"),
+    };
+    if let Some(badge) = badge {
+        spans.push(Span::styled(
+            badge,
+            Style::default()
+                .fg(theme.colors.warning)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if app.current_model().is_empty() {
-        return Vec::new();
+        return spans;
+    }
+    if !spans.is_empty() {
+        spans.push(Span::styled(" · ", Style::default().fg(theme.colors.muted)));
     }
     let label = app
         .current_model_option()
         .map_or_else(|| app.current_model(), |m| m.label.as_str());
-    vec![Span::styled(label, Style::default().fg(theme.colors.muted))]
+    spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
+    spans
 }

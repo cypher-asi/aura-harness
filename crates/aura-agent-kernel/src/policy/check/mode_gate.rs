@@ -53,7 +53,9 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "update_spec"
         | "update_spec_section"
         | "append_to_spec"
-        | "delete_spec" => C::MarkdownDocument,
+        | "delete_spec"
+        | "create_plan"
+        | "todo_write" => C::MarkdownDocument,
 
         "git_commit" => C::WorkspaceMutation,
 
@@ -133,7 +135,7 @@ impl Policy {
     /// Run the session mode gate for `tool_call`. `None` means the
     /// mode permits the call and later stages decide.
     pub(super) fn check_mode(&self, tool_call: &ToolCall) -> Option<PolicyVerdict> {
-        let mode = self.config.mode;
+        let mode = self.mode();
         if mode == AgentMode::Agent {
             return None;
         }

@@ -16,6 +16,7 @@
 //! model-facing strings under `aura-prompts/`".
 
 pub mod auto_build;
+pub mod build_plan;
 pub mod chunk_guard;
 pub mod implement_now;
 pub mod max_tokens;

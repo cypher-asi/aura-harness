@@ -648,9 +648,22 @@ The mode is resolved once per session as **request (`RuntimeRequest.mode` or
 the CLI `--mode` flag) → daemon default (`AURA_DEFAULT_MODE`) →
 `Agent`** (`aura_config::session_mode`). Children take the mode from their
 derived `SubagentSpec`, which can only narrow. Dev-loop and task-run
-requests are rejected unless the resolved mode is `Agent`. The TUI `/mode`
-slash command is parsed but not wired: changing mode mid-session must first
-append a `System` record.
+requests are rejected unless the resolved mode is `Agent`.
+
+**Mid-session mode changes are recorded first.** The only way to change a
+live kernel's mode is
+[`Kernel::switch_mode`](../crates/aura-agent-kernel/src/kernel/process.rs),
+which appends a `System` entry with `system_kind: "mode_change"` and the
+`from` / `to` modes, then applies the new mode to `Policy` (and its
+snapshot hash). Switching to the current mode writes nothing. A submitted
+transaction carrying a `mode_change` payload is rejected as kernel-only, so
+no client can lift a session out of `Plan` or `Ask` by writing the record.
+The TUI uses this for `/mode`, `/plan`, Shift+Tab, and `/build`; the gateway
+keeps one mode per run.
+
+`create_plan` and `todo_write` map to `WriteMarkdown`: they only write
+`.aura/plans/*.plan.md` files in the agent's workspace, so `Plan` mode can
+save its plan.
 
 `Plan` mode allows `Subprocess` per the gate table, so the mode gate does
 not block `run_command` in `Plan`; the per-tool layer and the `aura-tools`
@@ -709,6 +722,9 @@ matrix (`mode_matrix_matches_the_gate_table`,
 [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs)
 (`plan_mode_denial_is_recorded_and_markdown_write_passes_the_gate`) proves a
 mode denial lands in the record.
+[`crates/aura-agent-kernel/src/kernel/mode_switch_tests.rs`](../crates/aura-agent-kernel/src/kernel/mode_switch_tests.rs)
+proves a mode switch is recorded before it is enforced, a no-op switch
+writes nothing, and a submitted `mode_change` is rejected.
 [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs)
 fails if a catalog tool has no explicit mode classification.
 [`crates/aura-runtime/src/gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs)

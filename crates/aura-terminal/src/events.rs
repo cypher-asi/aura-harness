@@ -4,6 +4,7 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
+use aura_core_modes::AgentMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -120,6 +121,13 @@ pub enum UiEvent {
 
     /// User confirmed killing the process with this [`ProcessSummary::id`]
     KillProcess(String),
+
+    /// User switched the session mode (`/mode`, `/plan`, Shift+Tab)
+    SetMode(AgentMode),
+
+    /// User asked to build a plan: the given workspace-relative path, or
+    /// the active agent's latest plan
+    BuildPlan(Option<String>),
 }
 
 /// Commands sent from the application logic to the UI.
@@ -295,6 +303,66 @@ pub enum UiCommand {
     /// A plan link attempt finished (successfully or not); drop any model
     /// pick that was waiting on it
     EndLink,
+
+    /// The session mode the kernel now enforces
+    SetMode(AgentMode),
+
+    /// The active agent's current plan, `None` when it has none
+    SetPlan(Option<PlanView>),
+}
+
+/// A plan the agent wrote, as the todo list above the input shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanView {
+    /// Workspace-relative path of the plan file
+    pub path: String,
+    /// Plan title
+    pub name: String,
+    /// Steps, in order
+    pub todos: Vec<TodoView>,
+}
+
+impl PlanView {
+    /// `(closed, total)` todo counts.
+    #[must_use]
+    pub fn progress(&self) -> (usize, usize) {
+        let closed = self.todos.iter().filter(|t| t.status.is_closed()).count();
+        (closed, self.todos.len())
+    }
+
+    /// Whether some todo is still pending or in progress.
+    #[must_use]
+    pub fn has_open_todos(&self) -> bool {
+        self.todos.iter().any(|t| !t.status.is_closed())
+    }
+}
+
+/// One step of a [`PlanView`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TodoView {
+    /// What to do
+    pub content: String,
+    /// How far along it is
+    pub status: TodoState,
+}
+
+/// Progress of a [`TodoView`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoState {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+impl TodoState {
+    /// Done or dropped: nothing left to do.
+    #[must_use]
+    pub const fn is_closed(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
 }
 
 /// One entry in the model selector.
