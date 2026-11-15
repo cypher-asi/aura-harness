@@ -849,6 +849,33 @@ fn test_input_shows_image_chips_and_pasted_newlines() {
 }
 
 #[test]
+fn test_help_lists_the_input_keys_without_clipping() {
+    let mut app = crate::App::new();
+    submit(&mut app, "/help");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 50)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    for line in [
+        "@path      Attach a file or folder",
+        "Ctrl+V     Paste an image (or text)",
+        "Ctrl+G     Edit the input in $EDITOR",
+        "Press any key to close",
+    ] {
+        assert!(screen.contains(line), "{line:?} missing:\n{screen}");
+    }
+}
+
+#[test]
 fn test_header_shows_local_url_and_model_moves_to_input() {
     let rows = render_with_user(None, 120);
     assert!(rows[1]

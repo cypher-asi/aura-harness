@@ -276,7 +276,7 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 43.min(area.height);
+    let modal_height = 44.min(area.height);
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -321,6 +321,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "Enter      Send message",
         "@path      Attach a file or folder",
         "Ctrl+V     Paste an image (or text)",
+        "Ctrl+G     Edit the input in $EDITOR",
         "Tab        Switch panels",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",

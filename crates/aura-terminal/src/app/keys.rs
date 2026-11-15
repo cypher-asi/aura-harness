@@ -282,6 +282,10 @@ impl App {
             self.request_paste();
             return KeyResult::continue_running();
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+            self.edit_input_in_editor();
+            return KeyResult::continue_running();
+        }
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
                 KeyCode::Up => {

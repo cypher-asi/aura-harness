@@ -2252,3 +2252,63 @@ fn test_clipboard_errors_are_reported() {
     app.paste_clipboard(Ok(crate::clipboard::Clipboard::Text("hi".into())));
     assert_eq!(app.input(), "hi");
 }
+
+// ========================================================================
+// Ctrl+G editor
+// ========================================================================
+
+fn ctrl_g(app: &mut App) -> std::path::PathBuf {
+    app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    app.take_editor_request()
+        .expect("Ctrl+G asks for the editor")
+}
+
+#[test]
+fn test_ctrl_g_edits_the_input_in_the_editor() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    type_keys(&mut app, "draft");
+    let path = ctrl_g(&mut app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "draft");
+
+    std::fs::write(&path, "line one\nline two\n\n").unwrap();
+    app.editor_closed(path.clone(), &Ok(()));
+
+    assert_eq!(app.input(), "line one\nline two");
+    assert_eq!(app.cursor_pos(), app.input().len());
+    assert!(!path.exists(), "the temp file is removed");
+    assert!(rx.try_recv().is_err(), "not a permanent-agent edit");
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "line one\nline two"
+    ));
+}
+
+#[test]
+fn test_a_failed_editor_keeps_the_input() {
+    let mut app = App::new();
+    type_keys(&mut app, "keep me");
+    let path = ctrl_g(&mut app);
+    std::fs::write(&path, "half-written").unwrap();
+    app.editor_closed(path.clone(), &Err(std::io::Error::other("exit status: 1")));
+
+    assert_eq!(app.input(), "keep me");
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("the editor failed: exit status: 1"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_ctrl_g_with_empty_input_starts_an_empty_file() {
+    let mut app = App::new();
+    let path = ctrl_g(&mut app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    std::fs::write(&path, "@src/main.rs explain").unwrap();
+    app.editor_closed(path, &Ok(()));
+    assert_eq!(app.input(), "@src/main.rs explain");
+}

@@ -11,6 +11,7 @@ pub mod folder_picker;
 pub(crate) mod format;
 pub mod hud;
 pub mod images;
+mod input_editor;
 mod keys;
 mod line_edit;
 pub mod mentions;
@@ -275,6 +276,8 @@ pub struct App {
     pub(super) definitions_scroll: usize,
     /// File to open in the editor before the next frame
     pub(super) editor_request: Option<PathBuf>,
+    /// Temp file holding the input while Ctrl+G has it in the editor
+    pub(super) input_editor_file: Option<PathBuf>,
     /// Permanent agent waiting for `y` to confirm its deletion
     pub(super) pending_delete: Option<String>,
     /// Folder browser for a new project, while it is open
@@ -494,6 +497,7 @@ impl App {
             selected_definition: 0,
             definitions_scroll: 0,
             editor_request: None,
+            input_editor_file: None,
             pending_delete: None,
             folder_picker: None,
             hud: Hud::default(),

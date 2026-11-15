@@ -41,6 +41,16 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
 
+## Terminal editor
+
+Ctrl+G in the input, and editing a permanent agent, open the user's editor.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VISUAL` | — | Editor command, tried first. It may carry arguments, e.g. `code --wait`. |
+| `EDITOR` | — | Editor command used when `VISUAL` is unset or empty. With neither set, the terminal runs `vi`. |
+| `TMPDIR` | system temp folder | Where Ctrl+G writes the input for the editor (on Unix, readable only by you). The file is removed when the editor exits. |
+
 ## Node runtime
 
 | Variable | Default | Description |
