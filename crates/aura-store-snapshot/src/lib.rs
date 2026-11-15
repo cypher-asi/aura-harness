@@ -2,11 +2,11 @@
 //!
 //! Layer: store
 //!
-//! Content-addressed payload storage. [`FsSnapshotStore`] keeps blobs
-//! on disk and backs run-trace observations (see
-//! `aura_core_types::trace`); [`NoopSnapshotStore`] stays the kernel
-//! default for `KernelMode::AuditedLite` until replay is wired to a
-//! real store.
+//! Content-addressed payload storage. [`FsSnapshotStore`] keeps
+//! zstd-compressed blobs on disk; it backs run-trace observations (see
+//! `aura_core_types::trace`) and the full payloads behind
+//! `KernelMode::AuditedLite` summaries, which kernel replay resolves.
+//! [`NoopSnapshotStore`] is the kernel default when no store is wired.
 //!
 //! ## Invariants (per `.cursor/rules.md` §13)
 //!
@@ -78,11 +78,13 @@ pub trait SnapshotStore: std::fmt::Debug + Send + Sync {
 
 /// Filesystem-backed content-addressed store.
 ///
-/// Blobs live at `<root>/<first two hex chars>/<full hash>`. Writes go
-/// to a temporary sibling and are renamed into place, so a crash never
-/// leaves a truncated blob under a valid address. `put` verifies that
-/// `hash` is the BLAKE3 digest of `bytes`, which keeps the store usable
-/// as a replay source.
+/// Blobs live at `<root>/<first two hex chars>/<full hash>`, zstd-
+/// compressed; the address is the BLAKE3 digest of the uncompressed
+/// bytes. Writes go to a temporary sibling and are renamed into place,
+/// so a crash never leaves a truncated blob under a valid address. `put`
+/// verifies that `hash` is the BLAKE3 digest of `bytes`, which keeps the
+/// store usable as a replay source. Blobs written uncompressed by older
+/// versions still read back unchanged.
 #[derive(Debug)]
 pub struct FsSnapshotStore {
     root: PathBuf,
@@ -163,7 +165,9 @@ impl SnapshotStore for FsSnapshotStore {
             std::fs::create_dir_all(dir)
                 .map_err(|e| SnapshotError::Backend(format!("create {}: {e}", dir.display())))?;
             let tmp = dir.join(format!(".{hash}.{}.tmp", std::process::id()));
-            std::fs::write(&tmp, &bytes)
+            let stored = zstd::bulk::compress(&bytes, ZSTD_LEVEL)
+                .map_err(|e| SnapshotError::Backend(format!("compress {hash}: {e}")))?;
+            std::fs::write(&tmp, &stored)
                 .map_err(|e| SnapshotError::Backend(format!("write {}: {e}", tmp.display())))?;
             std::fs::rename(&tmp, &path)
                 .map_err(|e| SnapshotError::Backend(format!("rename {}: {e}", path.display())))?;
@@ -175,13 +179,27 @@ impl SnapshotStore for FsSnapshotStore {
     fn get(&self, hash: &str) -> Result<Option<Bytes>, SnapshotError> {
         let path = self.path_for(hash)?;
         match std::fs::read(&path) {
-            Ok(bytes) => Ok(Some(Bytes::from(bytes))),
+            Ok(stored) => Ok(Some(Bytes::from(decode(hash, stored)))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(SnapshotError::Backend(format!(
                 "read {}: {e}",
                 path.display()
             ))),
         }
+    }
+}
+
+const ZSTD_LEVEL: i32 = 3;
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+/// Decompress a stored blob, or return it as-is when it was stored raw.
+fn decode(hash: &str, stored: Vec<u8>) -> Vec<u8> {
+    if !stored.starts_with(&ZSTD_MAGIC) {
+        return stored;
+    }
+    match zstd::stream::decode_all(stored.as_slice()) {
+        Ok(raw) if blake3::hash(&raw).to_hex().as_str() == hash => raw,
+        _ => stored,
     }
 }
 
@@ -223,6 +241,28 @@ mod tests {
         // Stub does not retain bytes, so we cannot assert content; the
         // important property is that repeated puts do not fail.
         assert!(s.get("hash-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn fs_store_compresses_and_reads_raw_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsSnapshotStore::open(dir.path()).unwrap();
+        let text = "fn main() {}\n".repeat(400);
+        let id = store.put_bytes(text.as_bytes()).unwrap();
+        let on_disk = std::fs::read(store.path_for(&id).unwrap()).unwrap();
+        assert!(on_disk.starts_with(&ZSTD_MAGIC));
+        assert!(on_disk.len() < text.len() / 10);
+        assert_eq!(store.get(&id).unwrap().unwrap().as_ref(), text.as_bytes());
+
+        let raw = b"written by an older version".to_vec();
+        let raw_id = blake3::hash(&raw).to_hex().to_string();
+        let path = store.path_for(&raw_id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &raw).unwrap();
+        assert_eq!(
+            store.get(&raw_id).unwrap().unwrap().as_ref(),
+            raw.as_slice()
+        );
     }
 
     #[test]

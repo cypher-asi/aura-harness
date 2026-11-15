@@ -97,6 +97,7 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
             workspace_base: spec.workspace.clone(),
             use_workspace_base_as_root: true,
             record_observer: Some(records),
+            snapshot_store: aura_agent_trace::kernel_snapshot_store(&spec.home)?,
             ..KernelConfig::default()
         },
         agent_id,

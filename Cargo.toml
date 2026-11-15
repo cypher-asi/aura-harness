@@ -118,6 +118,7 @@ crossterm = "0.28"
 
 # Hashing
 blake3 = "1.5"
+zstd = { version = "0.13", default-features = false }
 
 # YAML
 serde_yaml = "0.9"

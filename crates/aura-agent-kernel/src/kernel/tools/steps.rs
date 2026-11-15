@@ -157,7 +157,11 @@ impl Kernel {
         effect: Effect,
         duration_ms: u64,
     ) -> Result<Executed, crate::KernelError> {
-        let effect = maybe_summarise_effect_payload(effect, self.lite_payload_threshold());
+        let effect = maybe_summarise_effect_payload(
+            effect,
+            self.lite_payload_threshold(),
+            self.config.snapshot_store.as_ref(),
+        );
         let decoded = decode_tool_effect(&effect);
         let had_failures = effect.status == EffectStatus::Failed || decoded.is_error;
 

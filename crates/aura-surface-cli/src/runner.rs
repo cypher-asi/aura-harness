@@ -449,7 +449,7 @@ async fn run_terminal(
             )),
             Arc::clone(&record_router) as Arc<dyn aura_agent_kernel::RecordObserver>,
         ]));
-    let kernel_config = KernelConfig {
+    let mut kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
         policy: aura_agent_kernel::PolicyConfig::default()
@@ -457,6 +457,12 @@ async fn run_terminal(
         record_observer: Some(Arc::clone(&record_observer)),
         ..KernelConfig::default()
     };
+    if let Some(store) = aura_config::AuraHome::resolve()
+        .ok()
+        .and_then(|home| aura_agent_trace::kernel_snapshot_store(&home.path).ok())
+    {
+        kernel_config.snapshot_store = store;
+    }
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
     let scheduler = Arc::new(
         aura_engine::Scheduler::new(
@@ -467,7 +473,8 @@ async fn run_terminal(
             workspace_root.clone(),
             None,
         )
-        .with_record_observer(record_observer),
+        .with_record_observer(record_observer)
+        .with_snapshot_store(Arc::clone(&kernel_config.snapshot_store)),
     );
     let host = aura_engine::AgentHost::new(
         Arc::clone(&kernel_store),

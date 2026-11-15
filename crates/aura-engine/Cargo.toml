@@ -10,6 +10,7 @@ license.workspace = true
 aura-core-types = { path = "../aura-core-types" }
 aura-protocol = { path = "../aura-protocol" }
 aura-store-db = { path = "../aura-store-db" }
+aura-store-snapshot = { path = "../aura-store-snapshot" }
 aura-tools = { path = "../aura-tools" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }

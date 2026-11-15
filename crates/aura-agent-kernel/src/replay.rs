@@ -45,9 +45,10 @@
 //!   reads up to that watermark.
 //! - The snapshot store is content-addressed by the same digest
 //!   algorithm the original kernel used when summarising
-//!   (`BLAKE3` hex). Phase 6b ships with the no-op
-//!   [`aura_store_snapshot::NoopSnapshotStore`]; backends gain
-//!   verification later.
+//!   (`BLAKE3` hex). The kernel writes the full payload to its
+//!   configured store when it summarises, so replay resolves it when
+//!   the same store (e.g. [`aura_store_snapshot::FsSnapshotStore`]) is
+//!   configured; the length and digest are verified on fetch.
 //!
 //! ## Failure modes
 //!

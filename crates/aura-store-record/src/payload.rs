@@ -41,9 +41,8 @@
 //!
 //! ## Failure modes
 //!
-//! - None at the type level. Replay-time `SnapshotMissing` errors
-//!   surface in Phase 6b when `aura-store-snapshot` gains a real
-//!   backend.
+//! - None at the type level. Replay surfaces `SnapshotMissing` when
+//!   the kernel's snapshot store does not hold the `full_hash` bytes.
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};

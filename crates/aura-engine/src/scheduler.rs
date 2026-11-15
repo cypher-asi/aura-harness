@@ -358,6 +358,17 @@ impl Scheduler {
         self
     }
 
+    /// Store the full payloads of AuditedLite effects in `store` (see
+    /// [`KernelConfig::snapshot_store`]).
+    #[must_use]
+    pub fn with_snapshot_store(
+        mut self,
+        store: Arc<dyn aura_store_snapshot::SnapshotStore>,
+    ) -> Self {
+        self.kernel_config.snapshot_store = store;
+        self
+    }
+
     /// The observer set by [`Self::with_record_observer`], for callers
     /// that append entries outside a kernel.
     #[must_use]

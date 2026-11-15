@@ -12,6 +12,7 @@ use aura_core_types::{
     PolicySource, Proposal, ToolCall, ToolProposal, ToolState, UserDefaultMode, UserToolDefaults,
 };
 use aura_exec_traits::ExecuteContext;
+use aura_store_snapshot::SnapshotStore;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -292,15 +293,25 @@ fn fold_tool_state_into_defaults(
 /// JSON bytes so existing `Bytes`-typed payload fields downstream do
 /// not need to learn about the new shape.
 ///
+/// The full payload is written to `snapshots` under its `full_hash` so
+/// replay can resolve the summary; a failed write is logged and the
+/// summary is still recorded.
+///
 /// In [`aura_core_modes::KernelMode::Audited`] mode (`None`), or for
 /// payloads below the threshold, the effect is returned unchanged.
 pub(super) fn maybe_summarise_effect_payload(
     mut effect: Effect,
     lite_threshold: Option<usize>,
+    snapshots: &dyn SnapshotStore,
 ) -> Effect {
     if let Some(threshold) = lite_threshold {
         if effect.payload.len() > threshold {
             let summary = aura_store_record::summarize_payload(&effect.payload, threshold);
+            if let aura_store_record::RecordPayload::Summary { full_hash, .. } = &summary {
+                if let Err(e) = snapshots.put(full_hash, effect.payload.clone()) {
+                    tracing::warn!(%full_hash, error = %e, "failed to store full effect payload");
+                }
+            }
             let encoded = serde_json::to_vec(&summary).unwrap_or_else(|_| effect.payload.to_vec());
             effect.payload = bytes::Bytes::from(encoded);
         }
@@ -313,6 +324,7 @@ mod summarisation_tests {
     use super::*;
     use aura_core_types::{Effect, EffectStatus};
     use aura_store_record::RecordPayload;
+    use aura_store_snapshot::{FsSnapshotStore, NoopSnapshotStore};
 
     #[test]
     fn run_command_owns_its_timeout_budget() {
@@ -333,21 +345,30 @@ mod summarisation_tests {
     #[test]
     fn audited_mode_preserves_payload_verbatim() {
         let original = vec![0xABu8; 4096];
-        let out = maybe_summarise_effect_payload(effect_with(original.clone()), None);
+        let out =
+            maybe_summarise_effect_payload(effect_with(original.clone()), None, &NoopSnapshotStore);
         assert_eq!(out.payload.as_ref(), original.as_slice());
     }
 
     #[test]
     fn audited_lite_below_threshold_is_inline() {
         let payload = vec![0x42u8; 256];
-        let out = maybe_summarise_effect_payload(effect_with(payload.clone()), Some(1024));
+        let out = maybe_summarise_effect_payload(
+            effect_with(payload.clone()),
+            Some(1024),
+            &NoopSnapshotStore,
+        );
         assert_eq!(out.payload.as_ref(), payload.as_slice());
     }
 
     #[test]
     fn audited_lite_above_threshold_is_summary_json() {
         let payload = vec![0x37u8; 8192];
-        let out = maybe_summarise_effect_payload(effect_with(payload.clone()), Some(1024));
+        let out = maybe_summarise_effect_payload(
+            effect_with(payload.clone()),
+            Some(1024),
+            &NoopSnapshotStore,
+        );
         let decoded: RecordPayload = serde_json::from_slice(out.payload.as_ref())
             .expect("payload should round-trip as RecordPayload JSON in AuditedLite mode");
         match decoded {
@@ -363,5 +384,22 @@ mod summarisation_tests {
                 panic!("payload above threshold must summarise, not stay inline")
             }
         }
+    }
+
+    #[test]
+    fn audited_lite_stores_full_payload_under_its_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsSnapshotStore::open(dir.path()).unwrap();
+        let payload = b"line of tool output\n".repeat(500);
+        let out = maybe_summarise_effect_payload(effect_with(payload.clone()), Some(1024), &store);
+        let RecordPayload::Summary { full_hash, .. } =
+            serde_json::from_slice(out.payload.as_ref()).unwrap()
+        else {
+            panic!("expected a summary");
+        };
+        assert_eq!(
+            store.get(&full_hash).unwrap().unwrap().as_ref(),
+            payload.as_slice()
+        );
     }
 }

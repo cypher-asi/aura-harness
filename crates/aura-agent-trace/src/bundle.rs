@@ -13,9 +13,11 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use aura_config::HarnessParams;
 use aura_core_types::trace::{Reward, Step, TRACE_SCHEMA_VERSION};
+use aura_store_snapshot::{FsSnapshotStore, SnapshotStore};
 use serde::{Deserialize, Serialize};
 
 use crate::scorecard::RunScorecard;
@@ -187,6 +189,12 @@ pub fn runs_dir(home: &Path) -> PathBuf {
 #[must_use]
 pub fn blobs_dir(home: &Path) -> PathBuf {
     home.join("blobs")
+}
+
+/// Kernel snapshot store over the shared blob directory, so full
+/// AuditedLite effect payloads dedupe with trace blobs.
+pub fn kernel_snapshot_store(home: &Path) -> Result<Arc<dyn SnapshotStore>, TraceError> {
+    Ok(Arc::new(FsSnapshotStore::open(blobs_dir(home))?))
 }
 
 /// A run directory on disk.

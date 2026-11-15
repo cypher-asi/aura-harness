@@ -28,7 +28,7 @@ pub mod report;
 pub mod rewards;
 pub mod scorecard;
 
-pub use bundle::{list_runs, RunBundle, RunMeta, RunSource};
+pub use bundle::{kernel_snapshot_store, list_runs, RunBundle, RunMeta, RunSource};
 pub use graph::{EdgeKind, GraphEdge, GraphNode, NodeKind, RunGraph};
 pub use normalize::RunTrace;
 pub use recorder::{RunRecorder, StepBuilder};
