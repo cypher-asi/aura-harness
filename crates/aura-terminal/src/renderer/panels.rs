@@ -1,9 +1,13 @@
 //! Panel rendering: Chat, Swarm and Record.
 
+use super::header::{self, HeaderInfo, PanelHeader};
 use super::text::display_width;
 use crate::{
     animation::AURA_WIDTH,
-    app::{AgentsTab, ChatTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow, ToggleTarget},
+    app::{
+        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow,
+        ToggleTarget,
+    },
     App, Theme,
 };
 use ratatui::{
@@ -14,40 +18,38 @@ use ratatui::{
     Frame,
 };
 
-/// Render the Chat panel: a CHAT | TERMINAL tab bar over the conversation
-/// or the shell commands run this session.
+/// Render the Chat panel: a CHAT | TERMINAL header bar over the
+/// conversation or the shell commands run this session.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let (tabs, body) = tab_bar_split(inner);
-    app.set_chat_tabs_area(tabs);
+    let (bar, area) = header::split(area);
+    app.set_chat_tabs_area(bar);
     let hovered = match app.hover() {
         Some(HoverTarget::ChatTab(tab)) => Some(tab),
         _ => None,
     };
-    let line = tab_line(
-        ChatTab::layout().map(|(tab, _, _)| (tab, tab.label(), None)),
-        app.chat_tab(),
+    let agent = app
+        .agents()
+        .iter()
+        .find(|agent| agent.id == app.active_agent_id())
+        .map(|agent| agent.name.to_uppercase());
+    let header = PanelHeader {
+        layout: ChatTab::layout(bar.width),
+        active: Some(app.chat_tab()),
         hovered,
-        is_focused,
-        theme,
-    );
-    frame.render_widget(Paragraph::new(line), tabs);
+        title: None,
+        info: agent.map(|name| HeaderInfo {
+            short: name.clone(),
+            text: name,
+            color: theme.colors.foreground,
+        }),
+        focused: is_focused,
+    };
+    header::render_panel_header(frame, bar, &header, theme);
+
+    let Some(body) = render_body_block(frame, area, is_focused, theme) else {
+        return;
+    };
 
     let terminal = app.terminal_pane();
     let padded = if terminal {
@@ -84,6 +86,27 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     );
     let below = app.scroll_offset().saturating_sub(rows.padding);
     render_lines_below_hint(frame, area, below, theme);
+}
+
+/// Draw a panel's bordered body in `area`, below its header bar, returning
+/// the area inside the border when it has any rows.
+pub(super) fn render_body_block(
+    frame: &mut Frame,
+    area: Rect,
+    is_focused: bool,
+    theme: &Theme,
+) -> Option<Rect> {
+    let border_color = if is_focused {
+        theme.colors.primary
+    } else {
+        theme.colors.muted
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    (inner.height > 0).then_some(inner)
 }
 
 /// How much of a panel's list is on screen.
@@ -397,45 +420,42 @@ fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) 
     frame.render_widget(Paragraph::new(welcome).wrap(Wrap { trim: true }), area);
 }
 
-/// Render the agents panel: a PROJECTS | AGENTS tab bar over either the
-/// live agents or the roster of permanent agents. The tabs take the first
-/// line, with an empty line below them when the panel has room.
+/// Render the agents panel: a PROJECTS | AGENTS header bar over either the
+/// live agents or the roster of permanent agents.
 pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let (tabs, body) = tab_bar_split(inner);
-    app.set_agent_tabs_area(tabs);
+    let (bar, area) = header::split(area);
+    app.set_agent_tabs_area(bar);
     let hovered = match app.hover() {
         Some(HoverTarget::AgentTab(tab)) => Some(tab),
         _ => None,
     };
-    let line = tab_line(
-        AgentsTab::layout().map(|(tab, _, _)| (tab, tab.label(), None)),
-        app.agents_tab(),
+    let info = match app.agents_tab() {
+        AgentsTab::Projects => {
+            let projects = app
+                .project_rows()
+                .iter()
+                .filter(|row| matches!(row, ProjectListRow::Project { .. }))
+                .count();
+            HeaderInfo::count(projects, "PROJECTS", theme.colors.foreground)
+        }
+        AgentsTab::Roster => {
+            HeaderInfo::count(app.definitions().len(), "AGENTS", theme.colors.foreground)
+        }
+    };
+    let header = PanelHeader {
+        layout: AgentsTab::layout(bar.width),
+        active: Some(app.agents_tab()),
         hovered,
-        is_focused,
-        theme,
-    );
-    frame.render_widget(Paragraph::new(line), tabs);
+        title: None,
+        info: Some(info),
+        focused: is_focused,
+    };
+    header::render_panel_header(frame, bar, &header, theme);
 
-    if body.height == 0 {
+    let Some(body) = render_body_block(frame, area, is_focused, theme) else {
         return;
-    }
+    };
     let bottom_row = Rect {
         y: body.y + body.height - 1,
         height: 1,
@@ -451,7 +471,7 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             app.set_agent_rows_area(rows_area);
             app.set_new_project_area(bottom_row);
             app.sync_agents_scroll(visible);
-            let mut lines = build_swarm_lines(app, inner, theme);
+            let mut lines = build_swarm_lines(app, body, theme);
             let new_project = lines.pop().unwrap_or_default();
             let view = ScrollView {
                 total: lines.len(),
@@ -472,7 +492,7 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             app.set_definition_rows_area(rows_area);
             app.set_new_agent_area(bottom_row);
             app.sync_definitions_scroll(visible);
-            let mut lines = build_definition_lines(app, inner, theme);
+            let mut lines = build_definition_lines(app, body, theme);
             let new_agent = lines.pop().unwrap_or_default();
             let view = ScrollView {
                 total: lines.len(),
@@ -485,57 +505,6 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             render_scrollbar(frame, area, rows_area, view, is_focused, theme);
         }
     }
-}
-
-/// Split a tabbed panel's inner area into its tab bar (the first line) and
-/// the body below, leaving an empty line between them when there is room.
-pub(super) fn tab_bar_split(inner: Rect) -> (Rect, Rect) {
-    let header_height = if inner.height >= 6 { 2 } else { 1 }.min(inner.height);
-    let tabs = Rect {
-        height: inner.height.min(1),
-        ..inner
-    };
-    let body = Rect {
-        y: inner.y + header_height,
-        height: inner.height - header_height,
-        ..inner
-    };
-    (tabs, body)
-}
-
-/// A panel's tab labels: the active one bold in the accent color (primary
-/// while the panel has focus), the hovered one highlighted, the rest gray.
-/// A tab's count follows its label in the same color, not bold.
-pub(super) fn tab_line<'a, T: Copy + PartialEq>(
-    tabs: impl Iterator<Item = (T, &'static str, Option<String>)>,
-    active: T,
-    hovered: Option<T>,
-    focused: bool,
-    theme: &Theme,
-) -> Line<'a> {
-    let active_color = if focused {
-        theme.colors.primary
-    } else {
-        theme.colors.secondary
-    };
-    let labels: Vec<Span> = tabs
-        .flat_map(|(tab, label, count)| {
-            let style = if tab == active {
-                Style::default()
-                    .fg(active_color)
-                    .add_modifier(Modifier::BOLD)
-            } else if hovered == Some(tab) {
-                hover_style(theme)
-            } else {
-                Style::default().fg(theme.colors.muted)
-            };
-            let count = count.map(|count| {
-                Span::styled(format!("{count} "), style.remove_modifier(Modifier::BOLD))
-            });
-            std::iter::once(Span::styled(format!(" {label} "), style)).chain(count)
-        })
-        .collect();
-    Line::from(labels)
 }
 
 /// A project is its own row under a folder icon, with its first agent
@@ -840,22 +809,28 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
     format!("{truncated}…")
 }
 
-/// Render the Kernel panel, which lists the kernel's records.
+/// Render the Kernel panel, which lists the kernel's records under a
+/// header bar with no tabs.
 pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
+    let (bar, area) = header::split(area);
+    let header = PanelHeader {
+        layout: TabLayout::untabbed(bar.width),
+        active: None,
+        hovered: None,
+        title: Some("KERNEL"),
+        info: Some(HeaderInfo::count(
+            app.records().len(),
+            "RECORDS",
+            theme.colors.muted,
+        )),
+        focused: is_focused,
     };
+    header::render_panel_header(frame, bar, &header, theme);
 
-    let block = Block::default()
-        .title(" KERNEL ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let Some(inner) = render_body_block(frame, area, is_focused, theme) else {
+        return;
+    };
 
     let records = app.records();
     if records.is_empty() {

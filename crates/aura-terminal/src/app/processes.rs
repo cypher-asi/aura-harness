@@ -1,7 +1,10 @@
 //! The right-hand panel's tabs, and its Processes list: everything agents
 //! and the user have running, with the agent that started each one.
 
-use super::{contains, follow_selection, App, DetailView, HoverTarget, NotificationType};
+use super::{
+    contains, follow_selection, tab_at, tab_bar::TabLayout, App, DetailView, HoverTarget,
+    NotificationType,
+};
 use crate::app::file_view::FileView;
 use crate::app::sandbox::MAX_COUNTED_FILES;
 use crate::events::{ProcessSummary, UiEvent};
@@ -32,6 +35,23 @@ impl SidePanelTab {
         }
     }
 
+    /// Label for header bars too narrow for `label`.
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Sandbox => "SBX",
+            Self::Processes => "PRC",
+            Self::Trace => "TRC",
+        }
+    }
+
+    /// The tabs' cells in a header bar `width` columns wide, as drawn and
+    /// as clicks are mapped back.
+    #[must_use]
+    pub fn layout(width: u16) -> TabLayout<Self> {
+        TabLayout::new(Self::ALL, Self::label, Self::short_label, width)
+    }
+
     pub(super) const fn next(self) -> Self {
         match self {
             Self::Sandbox => Self::Processes,
@@ -56,8 +76,9 @@ impl App {
         self.side_tab
     }
 
-    /// The count shown beside `tab`'s label: files in the sandbox, or
-    /// processes still running. `None` before there is a sandbox.
+    /// The count shown in the header's info cell while `tab` is open:
+    /// files in the sandbox, processes still running, or trace issues.
+    /// `None` before there is a sandbox, and while the trace has no issues.
     #[must_use]
     pub fn side_tab_count(&self, tab: SidePanelTab) -> Option<String> {
         match tab {
@@ -77,18 +98,9 @@ impl App {
             ),
             SidePanelTab::Trace => {
                 let issues = self.trace_feed.issues();
-                (issues > 0).then(|| format!("{issues}!"))
+                (issues > 0).then(|| issues.to_string())
             }
         }
-    }
-
-    /// Each tab with the first column and width of its ` label count `
-    /// cell in the tab bar, as drawn and as clicks are mapped back.
-    pub fn side_tab_layout(&self) -> impl Iterator<Item = (SidePanelTab, u16, u16)> + '_ {
-        super::tab_layout(SidePanelTab::ALL, |tab| match self.side_tab_count(tab) {
-            Some(count) => format!("{} {count}", tab.label()),
-            None => tab.label().to_string(),
-        })
     }
 
     /// Rows of the Processes tab, in display order.
@@ -103,7 +115,7 @@ impl App {
         self.selected_process
     }
 
-    /// Record where the side panel's tab bar was drawn this frame.
+    /// Record where the side panel's header bar was drawn this frame.
     pub fn set_side_tabs_area(&mut self, area: Rect) {
         self.areas.side_tabs = Some(area);
     }
@@ -325,14 +337,7 @@ impl App {
     }
 
     fn side_tab_at(&self, column: u16, row: u16) -> Option<SidePanelTab> {
-        let bar = self
-            .areas
-            .side_tabs
-            .filter(|&bar| contains(Some(bar), column, row))?;
-        let offset = column - bar.x;
-        self.side_tab_layout()
-            .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
-            .map(|(tab, _, _)| tab)
+        tab_at(self.areas.side_tabs, column, row, SidePanelTab::layout)
     }
 
     fn trace_row_at(&self, column: u16, row: u16) -> Option<usize> {

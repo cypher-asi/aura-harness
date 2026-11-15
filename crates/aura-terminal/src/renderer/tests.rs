@@ -380,27 +380,58 @@ fn test_format_ago_steps_up_at_each_unit() {
     assert_eq!(format_ago(now + MIN, now), "now");
 }
 
-#[test]
-fn test_agents_tabs_are_one_line_then_a_blank_line() {
-    let mut app = crate::App::new();
-    let rows = render_rows(&mut app, 120);
+/// The tab row of the header bar holding `label`, and the widths of the
+/// bar's cells between its frame and dividers. Checks that the bar is
+/// framed, with each divider joining the frame, and that the panel's body
+/// starts right below it.
+fn header_bar(rows: &[String], label: &str) -> (usize, Vec<usize>) {
     let grid: Vec<Vec<char>> = rows.iter().map(|r| r.chars().collect()).collect();
-    let tabs = rows.iter().position(|r| r.contains("PROJECTS")).unwrap();
-    let panel_left = grid[tabs].iter().position(|&c| c == '│').unwrap();
-    let panel_right = panel_left
-        + 1
-        + grid[tabs][panel_left + 1..]
+    let tabs = rows
+        .iter()
+        .position(|r| r.contains(label))
+        .unwrap_or_else(|| panic!("no {label} in:\n{}", rows.join("\n")));
+    let at = rows[tabs][..rows[tabs].find(label).unwrap()]
+        .chars()
+        .count();
+    let left = grid[tabs][..=at].iter().rposition(|&c| c == '│').unwrap();
+    let right = left
+        + grid[tabs - 1][left..]
             .iter()
-            .position(|&c| c == '│')
+            .position(|&c| c == '┐')
             .unwrap();
 
-    // Right under the panel's top border, with nothing drawn around them.
-    assert_eq!(grid[tabs - 1][panel_left], '┌');
-    let labels: String = grid[tabs][panel_left + 1..panel_right].iter().collect();
-    assert_eq!(labels.trim_end(), " PROJECTS  AGENTS");
-    assert!(grid[tabs + 1][panel_left + 1..panel_right]
-        .iter()
-        .all(|&c| c == ' '));
+    assert_eq!(grid[tabs - 1][left], '┌');
+    assert_eq!(grid[tabs + 1][left], '└');
+    assert_eq!(grid[tabs + 1][right], '┘');
+    assert_eq!(grid[tabs + 2][left], '┌', "body right below the bar");
+    let mut widths = Vec::new();
+    let mut start = left + 1;
+    for x in left + 1..=right {
+        if grid[tabs][x] == '│' {
+            if x < right {
+                assert_eq!(grid[tabs - 1][x], '┬', "column {x}");
+                assert_eq!(grid[tabs + 1][x], '┴', "column {x}");
+            }
+            widths.push(x - start);
+            start = x + 1;
+        }
+    }
+    (tabs, widths)
+}
+
+#[test]
+fn test_agents_header_is_a_bar_of_equal_tabs() {
+    let mut app = crate::App::new();
+    let rows = render_rows(&mut app, 120);
+    let (tabs, widths) = header_bar(&rows, "PROJECTS");
+    assert!(rows[tabs].contains("AGENTS"));
+    assert_eq!(widths.len(), 2, "no room for the info cell: {widths:?}");
+    assert!(widths[0].abs_diff(widths[1]) <= 1, "{widths:?}");
+
+    let rows = render_rows(&mut app, 160);
+    let (_, widths) = header_bar(&rows, "PROJECTS");
+    assert_eq!(widths.len(), 3, "tabs then the info cell: {widths:?}");
+    assert_eq!(widths[0], widths[1]);
 }
 
 #[test]
@@ -515,7 +546,8 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
     let (_, project) = find_cell(&buffer, project_row, "Terminal Agent").unwrap();
     assert_eq!(project.bg, Some(Color::Reset));
     assert_eq!(project.fg, Some(colors.muted));
-    assert!((0..buffer.area.height).all(|y| buffer[(left, y)].style().bg != Some(colors.selection)));
+    assert!((project_row..buffer.area.height)
+        .all(|y| buffer[(left, y)].style().bg != Some(colors.selection)));
     app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()));
     assert_eq!(app.selected_agent(), cursor);
     let buffer = render_buffer(&mut app, 120);
@@ -836,37 +868,49 @@ fn test_sandbox_panel_sits_below_record() {
     ));
     let rows = render_rows(&mut app, 120);
 
-    let record = rows.iter().position(|r| r.contains(" KERNEL ")).unwrap();
-    let sandbox = rows.iter().position(|r| r.contains(" SANDBOX ")).unwrap();
+    let (record, _) = header_bar(&rows, "│ KERNEL");
+    let (sandbox, _) = header_bar(&rows, "│ SANDBOX");
     assert!(sandbox > record + 10, "record={record} sandbox={sandbox}");
     let column = |row: &str, title: &str| row[..row.find(title).unwrap()].chars().count();
     assert_eq!(
-        column(&rows[record], " KERNEL "),
-        column(&rows[sandbox], " SANDBOX ")
+        column(&rows[record], "│ KERNEL"),
+        column(&rows[sandbox], "│ SANDBOX")
     );
-    assert!(rows[sandbox].contains(" PROCESSES "));
-    assert!(rows[sandbox + 2].contains("▸ src/"));
-    assert!(rows[sandbox + 3].contains("Cargo.toml"));
+    assert!(rows[sandbox].contains("PROCESSES"));
+    assert!(rows[sandbox + 3].contains("▸ src/"));
+    assert!(rows[sandbox + 4].contains("Cargo.toml"));
     assert_eq!(
-        column(&rows[sandbox + 2], "▸ src/"),
-        column(&rows[sandbox], " SANDBOX ") + 1,
+        column(&rows[sandbox + 3], "▸ src/"),
+        column(&rows[sandbox], "│ SANDBOX") + 2,
         "tree rows share the Record panel's one-column `>` gutter"
     );
 }
 
 #[test]
-fn test_side_panel_tabs_match_the_agents_tabs() {
+fn test_side_panel_header_matches_the_agents_header() {
     let mut app = crate::App::new();
     let rows = render_rows(&mut app, 120);
-    let grid: Vec<Vec<char>> = rows.iter().map(|r| r.chars().collect()).collect();
-    let tabs = rows.iter().position(|r| r.contains(" SANDBOX ")).unwrap();
-    let start = rows[tabs][..rows[tabs].find(" SANDBOX ").unwrap()]
-        .chars()
-        .count();
-    assert_eq!(grid[tabs - 1][start - 1], '┌');
-    let labels: String = grid[tabs][start..].iter().collect();
-    assert!(labels.starts_with(" SANDBOX  PROCESSES "), "{labels}");
-    assert!(grid[tabs + 1][start..start + 20].iter().all(|&c| c == ' '));
+    let (tabs, widths) = header_bar(&rows, "SANDBOX");
+    assert!(
+        rows[tabs].contains("│PROCESSES│"),
+        "tight cells: {}",
+        rows[tabs]
+    );
+    assert_eq!(widths[..3], [9, 9, 9]);
+    assert_eq!(
+        header_bar(&rows, "PROJECTS").0,
+        header_bar(&rows, "KERNEL").0,
+        "top bars line up"
+    );
+
+    let rows = render_rows(&mut app, 160);
+    let (tabs, widths) = header_bar(&rows, "SANDBOX");
+    assert!(
+        rows[tabs].contains("│ PROCESSES │"),
+        "padded cells: {}",
+        rows[tabs]
+    );
+    assert_eq!(widths[..3], [11, 11, 11]);
 }
 
 #[test]
@@ -894,28 +938,42 @@ fn test_side_panel_tabs_count_files_and_running_processes() {
         process("c", ProcessStatus::Exited),
     ]));
 
-    let buffer = render_buffer(&mut app, 120);
-    let row = row_of(&buffer, " SANDBOX 3  PROCESSES 2 ");
+    let theme = test_theme();
+    let buffer = render_buffer(&mut app, 160);
+    let row = row_of(&buffer, "│ PROCESSES │");
     let (label, label_style) = find_cell(&buffer, row, "SANDBOX").unwrap();
-    let (_, count_style) = find_cell(&buffer, row, "3  PROC").unwrap();
+    let (_, count_style) = find_cell(&buffer, row, "3 FILES").unwrap();
     assert!(label_style.add_modifier.contains(Modifier::BOLD));
-    assert!(!count_style.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(
+        label_style.bg,
+        Some(theme.colors.muted),
+        "active, unfocused"
+    );
+    assert_eq!(label_style.fg, Some(theme.colors.background));
+    assert_eq!(count_style.bg, Some(theme.colors.surface));
 
-    let (processes, _) = find_cell(&buffer, row, "PROCESSES 2").unwrap();
+    let (processes, process_style) = find_cell(&buffer, row, "PROCESSES").unwrap();
     assert!(processes > label);
-    let count = processes + 10;
+    assert_eq!(process_style.bg, Some(Color::Reset));
     for kind in [
         MouseEventKind::Down(MouseButton::Left),
         MouseEventKind::Up(MouseButton::Left),
     ] {
         app.handle_mouse(MouseEvent {
             kind,
-            column: count,
-            row,
+            column: processes,
+            row: row - 1,
             modifiers: KeyModifiers::empty(),
         });
     }
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("2 LIVE"), "{screen}");
+    let short = render_rows(&mut app, 120).join("\n");
+    assert!(
+        !short.contains("2 LIVE") && short.contains("│ 2  │"),
+        "{short}"
+    );
 }
 
 #[test]
@@ -986,8 +1044,8 @@ fn test_trace_tab_lists_live_steps() {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    let screen = render_rows(&mut app, 140).join("\n");
-    assert!(screen.contains("TRACE 1!"), "{screen}");
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("1 ISSUES"), "{screen}");
     let row = screen
         .lines()
         .find(|r| r.contains("implement_now"))
@@ -1084,14 +1142,14 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
         .collect()
 }
 
-/// The chat panel's top border row and its left and right border columns,
-/// found from its CHAT | TERMINAL tab bar.
+/// The chat panel's header tab row and its left and right border columns,
+/// found from its CHAT | TERMINAL header bar.
 fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
-    const TABS: &str = "│ CHAT  TERMINAL ";
+    const TABS: &str = "│   CHAT   │ TERMINAL │";
     let tabs = rows
         .iter()
         .position(|r| r.contains(TABS))
-        .unwrap_or_else(|| panic!("no chat tab bar in:\n{}", rows.join("\n")));
+        .unwrap_or_else(|| panic!("no chat header bar in:\n{}", rows.join("\n")));
     let row = &rows[tabs];
     let left = row[..row.find(TABS).unwrap()].chars().count();
     let right = left
@@ -1101,7 +1159,7 @@ fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
             .skip(left + 1)
             .position(|c| c == '┐')
             .unwrap();
-    (tabs - 1, left, right)
+    (tabs, left, right)
 }
 
 #[test]
@@ -1247,11 +1305,10 @@ fn test_agent_space_shows_permanent_agents_to_add() {
 #[test]
 fn test_header_shows_local_url_and_model_moves_to_input() {
     let rows = render_with_user(None, 120);
-    assert!(rows[1]
+    assert!(rows[0]
         .trim_end()
         .ends_with("● local  http://127.0.0.1:8080"));
-    let header = rows[..3].join("\n");
-    assert!(!header.contains("qwen3:4b"));
+    assert!(!rows[0].contains("qwen3:4b"));
 
     let n = rows.len();
     assert!(rows[n - 3].contains('└'), "panel border above input");
@@ -1404,24 +1461,25 @@ fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
 
     let mut app = app_with_model(None);
     let rows = render_rows(&mut app, 120);
-    let (top, left, _) = chat_panel(&rows);
-    let tabs = top + 1;
-    let labels: String = rows[tabs].chars().skip(left + 1).take(16).collect();
-    assert_eq!(labels, " CHAT  TERMINAL ");
+    let (tabs, left, _) = chat_panel(&rows);
+    assert_eq!(rows[tabs - 1].chars().nth(left + 11), Some('┬'));
+    assert_eq!(rows[tabs + 1].chars().nth(left + 11), Some('┴'));
+    assert_eq!(rows[tabs + 2].chars().nth(left), Some('┌'), "body below");
 
+    let theme = test_theme();
     let active = |app: &mut crate::App, label: &str| {
         let buffer = render_buffer(app, 120);
         let y = u16::try_from(tabs).unwrap();
         let (_, style) = find_cell(&buffer, y, label).unwrap();
-        style.add_modifier.contains(Modifier::BOLD)
+        style.bg == Some(theme.colors.primary) && style.fg == Some(theme.colors.background)
     };
-    assert!(active(&mut app, "CHAT  T"));
+    assert!(active(&mut app, "CHAT"));
     assert!(!active(&mut app, "TERMINAL"));
 
     type_text(&mut app, "$");
     assert_eq!(app.chat_tab(), ChatTab::Terminal);
     assert!(active(&mut app, "TERMINAL"));
-    assert!(!active(&mut app, "CHAT  T"));
+    assert!(!active(&mut app, "CHAT"));
 
     app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.chat_tab(), ChatTab::Chat);
@@ -1533,8 +1591,8 @@ fn test_outer_text_is_inset_to_panel_borders() {
     let last_col = |row: &str| row.trim_end().chars().count() - 1;
     let inner_right = usize::from(width) - 2;
 
-    assert!(rows[1].starts_with(" AURA"), "{:?}", rows[1]);
-    assert_eq!(last_col(&rows[1]), inner_right, "{:?}", rows[1]);
+    assert!(rows[0].starts_with(" AURA"), "{:?}", rows[0]);
+    assert_eq!(last_col(&rows[0]), inner_right, "{:?}", rows[0]);
     let input_row = &rows[rows.len() - 2];
     assert_eq!(last_col(input_row), inner_right, "{input_row:?}");
 }
@@ -1545,12 +1603,7 @@ fn test_copy_notice_is_centered_on_the_aura_cli_line() {
     app.notify_copied(4, &Ok(()));
     let rows = render_rows(&mut app, 120);
 
-    assert!(
-        !rows[0].contains("Copied"),
-        "notice belongs on the AURA CLI row: {:?}",
-        rows[0]
-    );
-    let row = &rows[1];
+    let row = &rows[0];
     assert!(row.starts_with(" AURA CLI "), "{row:?}");
     let notice = "✓ Copied 4 characters";
     let start = row[..row.find(notice).expect(row)].chars().count();
@@ -1568,7 +1621,7 @@ fn test_copy_notice_is_skipped_when_it_would_cover_the_header() {
     app.notify_copied(4, &Ok(()));
     let rows = render_rows(&mut app, 60);
 
-    let row = &rows[1];
+    let row = &rows[0];
     assert!(!row.contains("Copied"), "{row:?}");
     assert!(row.starts_with(" AURA CLI "), "{row:?}");
     assert!(
@@ -1580,23 +1633,23 @@ fn test_copy_notice_is_skipped_when_it_would_cover_the_header() {
 #[test]
 fn test_header_shows_logged_in_user() {
     let rows = render_with_user(Some("alice"), 120);
-    assert!(rows[1]
+    assert!(rows[0]
         .trim_end()
         .ends_with("● alice (zOS)  http://127.0.0.1:8080"));
-    assert!(!rows[..3].join("\n").contains("local"));
+    assert!(!rows[0].contains("local"));
 }
 
 #[test]
 fn test_header_shows_linked_plans_without_zos() {
     let rows = render_rows(&mut app_with_auth(None, &["Claude"]), 120);
     assert!(
-        rows[1]
+        rows[0]
             .trim_end()
             .ends_with("● Claude  http://127.0.0.1:8080"),
         "{:?}",
-        rows[1]
+        rows[0]
     );
-    assert!(!rows[..3].join("\n").contains("local"));
+    assert!(!rows[0].contains("local"));
 }
 
 #[test]
@@ -1606,11 +1659,11 @@ fn test_header_shows_zos_user_and_plans() {
         120,
     );
     assert!(
-        rows[1]
+        rows[0]
             .trim_end()
             .ends_with("● alice (zOS) · ChatGPT · Claude  http://127.0.0.1:8080"),
         "{:?}",
-        rows[1]
+        rows[0]
     );
 }
 
@@ -2302,7 +2355,7 @@ fn test_chat_bottom_leaves_room_below_latest_prompt() {
             .position(|row| row.contains(needle))
             .unwrap_or_else(|| panic!("{needle:?} not in:\n{screen}"))
     };
-    assert!(row("latest prompt") <= row(" CHAT ") + 3, "{screen}");
+    assert!(row("latest prompt") <= row(" CHAT ") + 4, "{screen}");
     assert!(screen.contains("short reply"), "{screen}");
     assert!(!screen.contains("note 39"), "{screen}");
     assert!(!screen.contains("lines below"), "{screen}");
@@ -2434,11 +2487,14 @@ fn test_chat_opens_at_last_message_on_startup() {
     assert!(shows(&rows, "second 39"), "{}", rows.join("\n"));
 }
 
-/// The right border of the panel titled `title`, top to bottom, without
-/// its corners.
+/// The right border of the body of the panel whose header bar holds
+/// `title`, top to bottom, without its corners.
 fn right_border(rows: &[String], title: &str) -> String {
-    let top = rows.iter().position(|r| r.contains(title)).unwrap();
-    let start = rows[top][..rows[top].find(title).unwrap()].chars().count();
+    let header = rows.iter().position(|r| r.contains(title)).unwrap();
+    let start = rows[header][..rows[header].find(title).unwrap()]
+        .chars()
+        .count();
+    let top = header + 2;
     let column = start
         + rows[top]
             .chars()
@@ -2452,11 +2508,11 @@ fn right_border(rows: &[String], title: &str) -> String {
         .collect()
 }
 
-/// The chat panel's right border beside its text, below the tab bar and
-/// the blank row under it.
+/// The chat panel's right border beside its text, below the header bar and
+/// the body's top border.
 fn chat_track(rows: &[String]) -> String {
-    let (top, _, right) = chat_panel(rows);
-    rows[top + 3..]
+    let (tabs, _, right) = chat_panel(rows);
+    rows[tabs + 3..]
         .iter()
         .map(|r| r.chars().nth(right).unwrap())
         .take_while(|&c| c != '┘')
@@ -2557,7 +2613,7 @@ fn test_overflowing_panels_show_a_scrollbar() {
         "{chat:?}\n{screen}"
     );
     // Records list oldest first and follow the newest at the bottom.
-    let records = right_border(&rows, "┌ KERNEL");
+    let records = right_border(&rows, "│ KERNEL");
     assert!(
         records.starts_with('│') && records.ends_with('┃'),
         "{records:?}\n{screen}"

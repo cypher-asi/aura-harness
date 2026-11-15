@@ -1,7 +1,7 @@
 //! The agents panel's tabs, and its roster of permanent agents: selecting,
 //! spawning, editing, and deleting them.
 
-use super::{contains, follow_selection, App, NotificationType};
+use super::{contains, follow_selection, tab_at, tab_bar::TabLayout, App, NotificationType};
 use crate::events::{AgentDefinitionSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -28,6 +28,15 @@ impl AgentsTab {
         }
     }
 
+    /// Label for header bars too narrow for `label`.
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Projects => "PRJ",
+            Self::Roster => "AGT",
+        }
+    }
+
     const fn other(self) -> Self {
         match self {
             Self::Projects => Self::Roster,
@@ -35,11 +44,11 @@ impl AgentsTab {
         }
     }
 
-    /// Each tab with the first column and width of its ` label ` cell in
-    /// the tab bar. The renderer draws the bar with this layout and clicks
-    /// are mapped back through it.
-    pub fn layout() -> impl Iterator<Item = (Self, u16, u16)> {
-        super::tab_layout(Self::ALL, |tab| tab.label().to_string())
+    /// The tabs' cells in a header bar `width` columns wide. The renderer
+    /// draws the bar with this layout and clicks are mapped back through it.
+    #[must_use]
+    pub fn layout(width: u16) -> TabLayout<Self> {
+        TabLayout::new(Self::ALL, Self::label, Self::short_label, width)
     }
 }
 
@@ -50,7 +59,7 @@ impl App {
         self.agents_tab
     }
 
-    /// Record where the agents panel's tab bar was drawn this frame.
+    /// Record where the agents panel's header bar was drawn this frame.
     pub fn set_agent_tabs_area(&mut self, area: Rect) {
         self.areas.agent_tabs = Some(area);
     }
@@ -66,15 +75,8 @@ impl App {
 
     /// Clicking a tab shows it; clicking a row acts on the visible list.
     pub(super) fn click_agents_panel(&mut self, column: u16, row: u16) {
-        if let Some(bar) = self
-            .areas
-            .agent_tabs
-            .filter(|&bar| contains(Some(bar), column, row))
-        {
-            let offset = column - bar.x;
-            if let Some((tab, _, _)) = AgentsTab::layout()
-                .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
-            {
+        if contains(self.areas.agent_tabs, column, row) {
+            if let Some(tab) = tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout) {
                 self.show_agents_tab(tab);
             }
             return;

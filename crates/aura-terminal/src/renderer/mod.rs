@@ -6,6 +6,7 @@ mod command;
 mod detail;
 mod diff;
 mod graph;
+mod header;
 mod hud;
 mod input;
 mod markdown;
@@ -56,7 +57,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(plan::strip_height(app, area.height)),
             Constraint::Length(2),
@@ -105,7 +106,7 @@ const fn right_column_visible(app: &App) -> bool {
 }
 
 /// Render the content panels (Swarm, Chat, Record, Sandbox) based on visibility,
-/// returning where the Chat panel was drawn.
+/// returning where the Chat panel's body was drawn, below its header bar.
 fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) -> Rect {
     let swarm_visible = app.swarm_panel_visible();
     let right_visible = right_column_visible(app);
@@ -160,7 +161,7 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
     if let Some(sandbox) = areas.sandbox {
         sandbox::render_sandbox_panel(frame, sandbox, app, theme);
     }
-    chat
+    header::split(chat).1
 }
 
 /// Record on the top half and Sandbox on the bottom half; either one takes
@@ -194,16 +195,13 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .constraints([Constraint::Min(10), Constraint::Length(right_width)])
         .split(area);
 
-    let title = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("AURA", Style::default().fg(theme.colors.foreground)),
-            Span::styled(" CLI", Style::default().fg(theme.colors.muted)),
-        ]),
-    ];
+    let title = Line::from(vec![
+        Span::styled("AURA", Style::default().fg(theme.colors.foreground)),
+        Span::styled(" CLI", Style::default().fg(theme.colors.muted)),
+    ]);
     frame.render_widget(Paragraph::new(title), header_layout[0]);
 
-    let right = vec![Line::from(""), Line::from(status_spans)];
+    let right = Line::from(status_spans);
     frame.render_widget(
         Paragraph::new(right).alignment(Alignment::Right),
         header_layout[1],

@@ -586,21 +586,22 @@ mod tests {
         ((top, left), (bottom, right))
     }
 
-    /// Corners of the chat panel, the box whose first row holds the
-    /// CHAT | TERMINAL tabs.
+    /// The chat panel's CHAT | TERMINAL header bar.
+    const CHAT_TABS: &str = "   CHAT   │ TERMINAL │";
+
+    /// Corners of the chat panel's body, the box right below the header
+    /// bar holding its tabs.
     fn chat_corners(rows: &[Vec<String>]) -> ((usize, usize), (usize, usize)) {
-        let tabs = " CHAT  TERMINAL ";
-        let len = tabs.chars().count();
+        let len = CHAT_TABS.chars().count();
         let (top, left) = rows
             .iter()
             .enumerate()
-            .skip(1)
             .find_map(|(y, row)| {
                 let x = (0..row.len().saturating_sub(len))
-                    .find(|&x| row[x] == "│" && row[x + 1..=x + len].concat() == tabs)?;
-                Some((y - 1, x))
+                    .find(|&x| row[x] == "│" && row[x + 1..=x + len].concat() == CHAT_TABS)?;
+                Some((y + 2, x))
             })
-            .expect("no chat tab bar");
+            .expect("no chat header bar");
         assert_eq!(rows[top][left], "┌");
         let right = (left + 1..rows[top].len())
             .find(|&x| rows[top][x] == "┐")
@@ -612,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn record_view_covers_exactly_the_chat_panel() {
+    fn record_view_covers_exactly_the_chat_body() {
         use crate::events::{RecordStatus, RecordSummary, UiCommand};
         use crossterm::event::{KeyCode, KeyEvent};
 
@@ -651,17 +652,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(box_corners(&rows, " Record #60 ✓ "), chat, "{text}");
-        assert!(!text.contains(" CHAT  TERMINAL "), "{text}");
+        assert!(text.contains(CHAT_TABS), "header bar stays: {text}");
         assert!(text.contains("Sequence:    60"), "{text}");
         assert!(text.contains("Esc close"), "{text}");
-
-        app.handle_key(KeyEvent::from(KeyCode::Esc));
-        let text = screen(&mut app)
-            .iter()
-            .map(|r| r.concat())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains(" CHAT  TERMINAL "), "{text}");
     }
 
     #[test]

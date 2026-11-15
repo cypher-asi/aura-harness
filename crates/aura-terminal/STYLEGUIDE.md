@@ -53,6 +53,30 @@ Use theme colors semantically via `theme.colors.*`:
 - **Unfocused panel**: Use `theme.colors.muted` (gray) for border
 - **Error highlight**: Use `theme.colors.error` (red) for border
 
+### Panel Headers
+
+Every panel has its own header bar above its body: a bordered frame of
+equal-width tab cells, then an info cell filling the rest of the width.
+Panels without tabs (Kernel) show a title on the left of the info cell.
+
+```text
+┌──────────┬──────────┬───────────┐
+│   CHAT   │▓TERMINAL▓│  PLANNER  │
+└──────────┴──────────┴───────────┘
+┌─────────────────────────────────┐
+│ body                            │
+```
+
+- **Frame and dividers**: the panel's border color
+- **Active tab**: filled `primary` while the panel is focused, `muted` otherwise, with its label in `background` (inverted) and bold
+- **Hovered tab**: `surface_hover` fill with a `secondary` label
+- **Other tabs**: `muted` label, no fill
+- **Info cell**: `surface` fill; counts in `foreground`, problems (trace issues) in `error`
+
+Narrow bars drop the tab padding, then switch to three-letter labels
+(`short_label`), and give the info cell's room to the tabs when it would be
+under three columns.
+
 ### Messages
 
 - **User messages**: Gray text with white nickname

@@ -1,8 +1,10 @@
-//! The panel below the Record panel: a SANDBOX | PROCESSES tab bar over the
-//! file tree of the active agent's workspace or the Processes list.
+//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE header
+//! bar over the file tree of the active agent's workspace, the Processes
+//! list, or the trace feed.
 
+use super::header::{self, HeaderInfo, PanelHeader};
 use super::panels::{
-    hover_style, render_scrollbar, tab_bar_split, tab_line, truncate_record_info, ScrollView,
+    hover_style, render_body_block, render_scrollbar, truncate_record_info, ScrollView,
 };
 use super::text::display_width;
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
@@ -12,51 +14,41 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
 /// Hint shown at the bottom of the panel when it has focus.
 const SANDBOX_HINT: &str = "↑↓ move  ⏎ open  ← up";
 
-/// Render the panel: its tab bar, then the open tab.
+/// Render the panel: its header bar, then the open tab.
 pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let (tabs, body) = tab_bar_split(inner);
-    app.set_side_tabs_area(tabs);
+    let (bar, area) = header::split(area);
+    app.set_side_tabs_area(bar);
     let hovered = match app.hover() {
         Some(HoverTarget::SideTab(tab)) => Some(tab),
         _ => None,
     };
-    let line = tab_line(
-        SidePanelTab::ALL
-            .map(|tab| (tab, tab.label(), app.side_tab_count(tab)))
-            .into_iter(),
-        app.side_tab(),
+    let tab = app.side_tab();
+    let info = app.side_tab_count(tab).map(|count| match tab {
+        SidePanelTab::Sandbox => HeaderInfo::count(count, "FILES", theme.colors.foreground),
+        SidePanelTab::Processes => HeaderInfo::count(count, "LIVE", theme.colors.foreground),
+        SidePanelTab::Trace => HeaderInfo::count(count, "ISSUES", theme.colors.error),
+    });
+    let header = PanelHeader {
+        layout: SidePanelTab::layout(bar.width),
+        active: Some(tab),
         hovered,
-        is_focused,
-        theme,
-    );
-    frame.render_widget(Paragraph::new(line), tabs);
-    if body.height == 0 {
+        title: None,
+        info,
+        focused: is_focused,
+    };
+    header::render_panel_header(frame, bar, &header, theme);
+
+    let Some(body) = render_body_block(frame, area, is_focused, theme) else {
         return;
-    }
+    };
 
     match app.side_tab() {
         SidePanelTab::Sandbox => render_tree(frame, area, body, app, theme),

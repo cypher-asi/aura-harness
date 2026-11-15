@@ -912,20 +912,26 @@ fn test_spawning_from_roster_shows_projects() {
 fn test_clicking_tab_bar_switches_tabs() {
     let (mut app, _rx) = app_with_agents();
     app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
-    app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
-    let (_, roster_start, _) = AgentsTab::layout()
-        .find(|&(tab, _, _)| tab == AgentsTab::Roster)
+    app.set_agent_tabs_area(Rect::new(0, 0, 24, 3));
+    let roster = AgentsTab::layout(24)
+        .cells
+        .into_iter()
+        .find(|cell| cell.tab == AgentsTab::Roster)
         .unwrap();
 
     app.handle_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
-        1 + roster_start,
-        1,
+        roster.start,
+        0,
     ));
     assert_eq!(app.agents_tab(), AgentsTab::Roster);
     assert_eq!(app.focus(), PanelFocus::Swarm);
 
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+    let divider = roster.start - 1;
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), divider, 1));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 2));
     assert_eq!(app.agents_tab(), AgentsTab::Projects);
 }
 
@@ -934,7 +940,7 @@ fn test_mouse_move_hovers_clickable_items() {
     use crossterm::event::{MouseButton, MouseEventKind};
 
     let (mut app, _rx) = app_with_agent_areas();
-    app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
+    app.set_agent_tabs_area(Rect::new(0, 0, 24, 3));
 
     app.handle_mouse(mouse(MouseEventKind::Moved, 5, 4));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(0)));
@@ -989,7 +995,7 @@ fn test_mouse_move_hovers_clickable_items() {
 fn test_hidden_tab_ignores_clicks_on_its_old_rows() {
     let (mut app, mut rx) = app_with_definitions();
     app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
-    app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
+    app.set_agent_tabs_area(Rect::new(0, 0, 24, 3));
     app.set_agent_rows_area(Rect::new(1, 3, 22, 10));
     app.set_definition_rows_area(Rect::new(1, 3, 22, 10));
 

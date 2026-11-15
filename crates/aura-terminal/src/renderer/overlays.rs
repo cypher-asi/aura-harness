@@ -655,7 +655,7 @@ fn build_message_section(
     }
 }
 
-/// Render a notification.
+/// Render a notification over the right end of the header row.
 fn render_notification(
     frame: &mut Frame,
     msg: &str,
@@ -681,8 +681,8 @@ fn render_notification(
         Span::styled(msg, Style::default().fg(theme.colors.foreground)),
     ]);
 
-    let paragraph = Paragraph::new(content);
-    frame.render_widget(paragraph, toast_area);
+    frame.render_widget(Clear, toast_area);
+    frame.render_widget(Paragraph::new(content), toast_area);
 }
 
 const fn notification_icon(kind: NotificationType, theme: &Theme) -> (&'static str, Color) {
@@ -703,7 +703,7 @@ fn render_copy_notice(
     theme: &Theme,
 ) {
     let area = frame.area();
-    if area.height < 2 {
+    if area.height == 0 {
         return;
     }
 
@@ -728,7 +728,7 @@ fn render_copy_notice(
     let centered = area.x + (area.width - width) / 2;
     let notice = Rect {
         x: centered.clamp(min_x, max_end - width),
-        y: area.y + 1,
+        y: area.y,
         width,
         height: 1,
     };

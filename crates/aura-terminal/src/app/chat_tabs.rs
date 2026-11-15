@@ -1,7 +1,7 @@
 //! The chat panel's tabs: the conversation, or the terminal that runs the
 //! session's shell commands.
 
-use super::{contains, App, HoverTarget};
+use super::{tab_at, tab_bar::TabLayout, App, HoverTarget};
 use ratatui::layout::Rect;
 
 /// Views of the chat panel.
@@ -25,6 +25,15 @@ impl ChatTab {
         }
     }
 
+    /// Label for header bars too narrow for `label`.
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Chat => "CHT",
+            Self::Terminal => "TRM",
+        }
+    }
+
     const fn other(self) -> Self {
         match self {
             Self::Chat => Self::Terminal,
@@ -32,10 +41,11 @@ impl ChatTab {
         }
     }
 
-    /// Each tab with the first column and width of its ` label ` cell in
-    /// the tab bar, as drawn and as clicks are mapped back.
-    pub fn layout() -> impl Iterator<Item = (Self, u16, u16)> {
-        super::tab_layout(Self::ALL, |tab| tab.label().to_string())
+    /// The tabs' cells in a header bar `width` columns wide, as drawn and
+    /// as clicks are mapped back.
+    #[must_use]
+    pub fn layout(width: u16) -> TabLayout<Self> {
+        TabLayout::new(Self::ALL, Self::label, Self::short_label, width)
     }
 }
 
@@ -50,7 +60,7 @@ impl App {
         }
     }
 
-    /// Record where the chat panel's tab bar was drawn this frame.
+    /// Record where the chat panel's header bar was drawn this frame.
     pub fn set_chat_tabs_area(&mut self, area: Rect) {
         self.areas.chat_tabs = Some(area);
     }
@@ -79,14 +89,7 @@ impl App {
     }
 
     fn chat_tab_at(&self, column: u16, row: u16) -> Option<ChatTab> {
-        let bar = self
-            .areas
-            .chat_tabs
-            .filter(|&bar| contains(Some(bar), column, row))?;
-        let offset = column - bar.x;
-        ChatTab::layout()
-            .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
-            .map(|(tab, _, _)| tab)
+        tab_at(self.areas.chat_tabs, column, row, ChatTab::layout)
     }
 
     /// The chat panel's tab under the pointer.

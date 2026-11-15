@@ -23,6 +23,7 @@ mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
+pub mod tab_bar;
 pub mod trace_feed;
 mod turn;
 pub mod vim;
@@ -330,7 +331,7 @@ pub struct PanelAreas {
     pub agent_rows: Option<Rect>,
     /// "+ New project", pinned to the bottom of the agents panel
     pub new_project_row: Option<Rect>,
-    /// Tab bar row of the agents panel
+    /// Header bar of the agents panel
     pub agent_tabs: Option<Rect>,
     /// Rows of the roster inside the agents panel
     pub definition_rows: Option<Rect>,
@@ -338,7 +339,7 @@ pub struct PanelAreas {
     pub new_agent_row: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
-    /// Tab bar row of the chat panel
+    /// Header bar of the chat panel
     pub chat_tabs: Option<Rect>,
     /// Message text area inside the chat panel
     pub chat_text: Option<Rect>,
@@ -352,7 +353,7 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
-    /// Tab bar row of the panel below the Record panel
+    /// Header bar of the panel below the Record panel
     pub side_tabs: Option<Rect>,
     /// Rows of the Processes tab inside the panel
     pub process_rows: Option<Rect>,
@@ -422,19 +423,16 @@ pub(crate) struct ToggleRow {
     pub open: bool,
 }
 
-/// Each of `tabs` with the first column and width of its ` text ` cell
-/// in a tab bar.
-fn tab_layout<T: Copy, const N: usize>(
-    tabs: [T; N],
-    text: impl Fn(T) -> String,
-) -> impl Iterator<Item = (T, u16, u16)> {
-    let mut x = 0u16;
-    tabs.into_iter().map(move |tab| {
-        let width = u16::try_from(text(tab).len() + 2).unwrap_or(u16::MAX);
-        let start = x;
-        x = x.saturating_add(width);
-        (tab, start, width)
-    })
+/// The tab of the header bar drawn at `bar` under a screen cell, laid out
+/// by `layout` for the bar's width.
+fn tab_at<T: Copy + PartialEq>(
+    bar: Option<Rect>,
+    column: u16,
+    row: u16,
+    layout: impl Fn(u16) -> tab_bar::TabLayout<T>,
+) -> Option<T> {
+    let bar = bar.filter(|&bar| contains(Some(bar), column, row))?;
+    layout(bar.width).tab_at(column - bar.x)
 }
 
 fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
@@ -1348,7 +1346,8 @@ impl App {
     /// Clickable item at a screen cell, using the areas from the last frame.
     fn hover_target(&self, column: u16, row: u16) -> Option<HoverTarget> {
         if contains(self.areas.agent_tabs, column, row) {
-            return self.hovered_tab(column);
+            return tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout)
+                .map(HoverTarget::AgentTab);
         }
         if let Some(target) = self.hovered_chat_tab(column, row) {
             return Some(target);
@@ -1374,14 +1373,6 @@ impl App {
             return self.hovered_sandbox_row(row);
         }
         self.hovered_activity(column, row)
-    }
-
-    fn hovered_tab(&self, column: u16) -> Option<HoverTarget> {
-        let bar = self.areas.agent_tabs?;
-        let offset = column.saturating_sub(bar.x);
-        AgentsTab::layout()
-            .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
-            .map(|(tab, _, _)| HoverTarget::AgentTab(tab))
     }
 
     /// Projects-list row drawn at a screen cell: a listed project or agent,
