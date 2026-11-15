@@ -8,6 +8,7 @@ mod definitions;
 pub mod file_view;
 pub mod folder_picker;
 pub(crate) mod format;
+pub mod graph;
 mod keys;
 mod line_edit;
 mod processes;
@@ -280,6 +281,8 @@ pub struct App {
     pub(super) processes_scroll: usize,
     /// Process waiting for `y` to confirm killing it
     pub(super) pending_kill: Option<String>,
+    /// Run graph shown by `/graph`
+    pub(super) graph: graph::GraphState,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -328,6 +331,8 @@ pub enum DetailView {
     File(Box<FileView>),
     /// A process from the Processes tab, refreshed while it stays listed.
     Process(Box<ProcessSummary>),
+    /// The run graph (`/graph`).
+    Graph,
 }
 
 /// Clickable item under the pointer.
@@ -518,6 +523,7 @@ impl App {
             selected_process: 0,
             processes_scroll: 0,
             pending_kill: None,
+            graph: graph::GraphState::default(),
         }
     }
 

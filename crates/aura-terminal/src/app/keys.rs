@@ -45,6 +45,12 @@ impl App {
             }
             return;
         }
+        if self.detail == Some(super::DetailView::Graph) {
+            if self.handle_graph_key(key) {
+                self.close_detail();
+            }
+            return;
+        }
         let page = self.detail_page_rows();
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),

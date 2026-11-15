@@ -46,6 +46,8 @@ struct UiCommandSink {
     state: ForwarderState,
     /// Tool calls shown in the chat that have no result yet
     open_tools: Vec<String>,
+    /// Tokens used by the turn's finished model calls
+    turn_tokens: u64,
 }
 
 impl UiCommandSink {
@@ -234,9 +236,50 @@ impl TurnEventSink for UiCommandSink {
         }
     }
 
-    // `IterationComplete`, `StepComplete`, `ToolComplete` — intentionally
-    // use the default no-op impls; the TUI derives UI transitions from the
-    // events above.
+    async fn on_iteration_complete(
+        &mut self,
+        iteration: usize,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        self.turn_tokens += input_tokens + output_tokens;
+        let _ = self
+            .commands
+            .send(UiCommand::SetStatus(iteration_status(
+                iteration,
+                self.turn_tokens,
+            )))
+            .await;
+    }
+
+    async fn on_progress(
+        &mut self,
+        stage: String,
+        tool_name: Option<String>,
+        _elapsed_ms: Option<u64>,
+        message: Option<String>,
+    ) {
+        let status = match (message, tool_name) {
+            (Some(message), _) => message,
+            (None, Some(tool)) => format!("{stage}: {tool}"),
+            (None, None) => stage,
+        };
+        let _ = self.commands.send(UiCommand::SetStatus(status)).await;
+    }
+
+    // `StepComplete` and `ToolComplete` use the default no-op impls; the
+    // TUI derives UI transitions from the events above.
+}
+
+/// Status line after a model call: `Iteration 3 · 41.2k tokens`.
+fn iteration_status(iteration: usize, tokens: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let tokens = if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    };
+    format!("Iteration {} · {tokens} tokens", iteration + 1)
 }
 
 /// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s.
@@ -249,6 +292,7 @@ pub(crate) async fn forward_agent_events(
         commands,
         state: ForwarderState::default(),
         open_tools: Vec::new(),
+        turn_tokens: 0,
     };
 
     while let Some(event) = rx.recv().await {

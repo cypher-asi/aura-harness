@@ -4,6 +4,7 @@ mod activity;
 mod chat_lines;
 mod command;
 mod detail;
+mod graph;
 mod input;
 mod markdown;
 mod overlays;

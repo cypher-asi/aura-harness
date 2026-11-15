@@ -107,6 +107,12 @@ impl App {
                     let _ = tx.try_send(event);
                 }
             }
+            "graph" | "g" => self.request_graph(arg),
+            "runs" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::ListRuns);
+                }
+            }
             "whoami" | "me" => {
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::Whoami);
@@ -437,6 +443,8 @@ impl App {
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
+            UiCommand::GraphLoad { run_id, nodes } => self.load_graph(run_id, nodes),
+            UiCommand::GraphUpsert { run_id, nodes } => self.upsert_graph(&run_id, nodes),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;

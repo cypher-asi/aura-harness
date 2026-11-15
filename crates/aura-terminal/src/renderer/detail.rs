@@ -26,6 +26,10 @@ const TAB: &str = "    ";
 
 /// Draw the open record or file over `area`, the chat panel.
 pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+    if app.detail_view() == Some(&DetailView::Graph) {
+        super::graph::render_graph(frame, area, app, theme);
+        return;
+    }
     let rows = Rect {
         x: area.x.saturating_add(2),
         y: area.y.saturating_add(1),
@@ -71,7 +75,7 @@ fn draw_record(
                 color,
             )
         }
-        DetailView::File(_) => return None,
+        DetailView::File(_) | DetailView::Graph => return None,
     };
     let width = usize::from(rows.width).max(1);
     let visible = usize::from(rows.height);

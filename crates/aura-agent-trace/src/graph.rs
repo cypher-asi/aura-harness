@@ -188,6 +188,36 @@ impl RunGraph {
         self.by_seq.get(&seq).map(String::as_str)
     }
 
+    /// Nodes that changed since the graph had `before` nodes and step
+    /// `seq` was applied: the new nodes, the step's node and their
+    /// ancestors, parents before children.
+    #[must_use]
+    pub fn changed_since(&self, before: usize, seq: u64) -> Vec<&GraphNode> {
+        let mut ids: Vec<&str> = self.nodes[before.min(self.nodes.len())..]
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect();
+        if let Some(id) = self.node_for_seq(seq) {
+            ids.push(id);
+        }
+        let mut out: Vec<&GraphNode> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            let mut chain = Vec::new();
+            let mut cursor = self.node(id);
+            while let Some(node) = cursor {
+                chain.push(node);
+                cursor = node.parent.as_deref().and_then(|p| self.node(p));
+            }
+            for node in chain.into_iter().rev() {
+                if seen.insert(node.id.as_str()) {
+                    out.push(node);
+                }
+            }
+        }
+        out
+    }
+
     /// Edges touching `id`, in either direction, excluding containment.
     #[must_use]
     pub fn links(&self, id: &str) -> Vec<&GraphEdge> {
@@ -723,11 +753,32 @@ mod tests {
         for s in &t.steps {
             live.apply(s);
         }
-        let mut full = RunGraph::new(&t.meta);
-        for s in &t.steps {
-            full.apply(s);
-        }
-        assert_eq!(live.nodes, full.nodes);
+        let full = t.graph();
+        let shape = |g: &RunGraph| -> Vec<(String, Option<String>)> {
+            g.nodes
+                .iter()
+                .filter(|n| n.kind != NodeKind::Reward)
+                .map(|n| (n.id.clone(), n.parent.clone()))
+                .collect()
+        };
+        assert_eq!(shape(&live), shape(&full));
         assert_eq!(live.nodes.len(), 7);
+    }
+
+    #[test]
+    fn changed_since_returns_new_nodes_and_their_ancestors() {
+        let t = trace();
+        let mut g = RunGraph::new(&t.meta);
+        for s in &t.steps[..3] {
+            g.apply(s);
+        }
+        let before = g.nodes.len();
+        g.apply(&t.steps[3]);
+        let ids: Vec<&str> = g
+            .changed_since(before, t.steps[3].seq)
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["run", "t1", "s3", "tc:a"]);
     }
 }

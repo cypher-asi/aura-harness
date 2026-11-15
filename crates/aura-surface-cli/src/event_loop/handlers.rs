@@ -81,6 +81,9 @@ pub(super) async fn run_agent_turn(
                     handle_kill_process(state, &id).await;
                     cancelled |= cancel_for_turn.is_cancelled();
                 }
+                UiEvent::OpenGraph(id) => super::trace::open_graph(state, id).await,
+                UiEvent::ListRuns => super::trace::list(state).await,
+                UiEvent::ShowStatus => super::trace::status_report(state).await,
                 other => state.deferred.push_back(other),
             },
         }

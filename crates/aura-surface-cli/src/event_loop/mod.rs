@@ -80,7 +80,7 @@ pub(super) struct LoopState<'a> {
     /// Notices for agents that aren't on screen.
     pub(super) queued_notices: Vec<notices::Notice>,
     /// Open run traces, one per agent conversation.
-    pub(super) traces: HashMap<AgentId, Arc<aura_agent_trace::RunRecorder>>,
+    pub(super) traces: HashMap<AgentId, trace::LiveRun>,
 }
 
 impl LoopState<'_> {
@@ -292,7 +292,10 @@ async fn handle_ui_event(
                 .send(UiCommand::SetStatus("Cancelled".to_string()))
                 .await;
         }
-        UiEvent::ShowStatus | UiEvent::ShowHelp | UiEvent::ShowHistory(_) => {}
+        UiEvent::ShowStatus => trace::status_report(state).await,
+        UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
+        UiEvent::ListRuns => trace::list(state).await,
+        UiEvent::ShowHelp | UiEvent::ShowHistory(_) => {}
         UiEvent::Clear => {
             handlers::handle_new_session(state).await;
             let _ = state.commands.send(UiCommand::ClearConversation).await;
